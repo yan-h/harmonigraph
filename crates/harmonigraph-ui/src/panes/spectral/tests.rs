@@ -620,10 +620,14 @@ fn the_heatmap_image_is_built_at_device_pixels() {
 fn the_now_line_paints_over_the_roll_that_arrives_at_it() {
     // Both the roll and the label batch are paint callbacks (the roll's notes
     // are instanced quads, not shapes), and a callback carries no identity a
-    // test can read off the shape. So the roll is pinned by the note instead:
-    // with no note the roll adds no callback at all, which is what makes the
-    // FIRST callback the roll's rather than a guess. Testing the LAST one
-    // finds the labels and passes whichever order the pane draws in.
+    // test can read off the shape — so the roll is pinned by the note instead.
+    // The count of callbacks BEFORE the line is what the note has to move, and
+    // that holds however many other layers become callbacks and wherever in
+    // the order they land. Two weaker versions of this both pass under either
+    // draw order: testing the LAST callback finds the label batch, and
+    // indexing the FIRST one assumes nothing before the roll ever emits a
+    // callback, which the spectrogram would break the day it stops being a
+    // mesh.
     let frame = |sounding: bool| {
         let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
         state.spectrum_config.orientation = SpectralOrientation::Left;
@@ -660,22 +664,104 @@ fn the_now_line_paints_over_the_roll_that_arrives_at_it() {
             matches!(&s.shape, egui::Shape::LineSegment { stroke, .. }
                 if stroke.color == theme::hairline())
         });
-        (callbacks, hairline)
+        let hairline = hairline.expect("expected a now-line in the frame");
+        (callbacks.len(), callbacks.iter().filter(|&&c| c < hairline).count())
     };
 
-    let (quiet, _) = frame(false);
-    let (sounding, hairline) = frame(true);
-    let hairline = hairline.expect("expected a now-line in the frame");
+    let (quiet_total, quiet_early) = frame(false);
+    let (sounding_total, sounding_early) = frame(true);
     assert_eq!(
-        sounding.len(),
-        quiet.len() + 1,
-        "the sounding note did not add the roll's paint callback, so nothing below \
-         identifies the roll",
+        sounding_total,
+        quiet_total + 1,
+        "the sounding note did not add the roll's paint callback, so there is no \
+         roll here to have drawn in either order",
     );
-    assert!(
-        hairline > sounding[0],
+    assert_eq!(
+        sounding_early,
+        quiet_early + 1,
         "the roll paints over the line it arrives at, biting half its width out \
          under every sounding note",
+    );
+}
+
+/// Whole-song mode's playhead is painted after the roll, for the same reason
+/// the now-line is — and it needs it harder.
+///
+/// This mode hands the roll the WHOLE depth axis (`split` is 0), so the
+/// playhead crosses every ribbon on the pane rather than meeting a row of
+/// them end-on: under the roll it comes out dashed, notched once per note it
+/// passes over. It is the one moving mark in a static picture, and it is what
+/// `--playhead` bakes into an exported video.
+#[test]
+fn the_whole_song_playhead_paints_over_the_roll_it_sweeps_across() {
+    // Same trick as the now-line's: the note is what identifies the roll's
+    // paint callback, and the count of callbacks BEFORE the playhead is what
+    // it has to move.
+    let frame = |sounding: bool| {
+        let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
+        state.spectrum_config.orientation = SpectralOrientation::Left;
+        state.spectrum_config.low_midi = 60.0;
+        state.spectrum_config.high_midi = 72.0;
+        if sounding {
+            state.tracker.handle_event(NoteEvent {
+                time: 0.0,
+                channel: 0,
+                note: 69,
+                kind: NoteEventKind::On { velocity: 1.0 },
+            });
+        }
+        // The take laid out statically, the way the offline renderer sets it
+        // up. No columns: the heatmap is not what this is about, and the roll
+        // reads `whole_song.roll` rather than the live tracker here.
+        state.whole_song = Some(crate::WholeSong {
+            start: 0.0,
+            span: 2.0,
+            columns: Vec::new(),
+            roll: state.tracker.roll().clone(),
+        });
+        let ctx = egui::Context::default();
+        crate::theme::apply_theme(&ctx);
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(500.0, 500.0));
+        let out = ctx.run_ui(
+            egui::RawInput { screen_rect: Some(screen), ..Default::default() },
+            |ui| {
+                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(WIDE));
+                spectral_pane(&mut child, &mut state, 1.0, 0);
+            },
+        );
+        let callbacks = out
+            .shapes
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| matches!(&s.shape, egui::Shape::Callback(_)))
+            .map(|(i, _)| i);
+        // The playhead is the accent-colored segment across the pitch axis;
+        // the now-line is not drawn in this mode at all.
+        let playhead = out
+            .shapes
+            .iter()
+            .position(|s| {
+                matches!(&s.shape, egui::Shape::LineSegment { stroke, .. }
+                    if stroke.color == theme::accent())
+            })
+            .expect("expected a playhead in a whole-song frame");
+        let callbacks: Vec<usize> = callbacks.collect();
+        (callbacks.len(), callbacks.iter().filter(|&&c| c < playhead).count())
+    };
+
+    let (quiet_total, quiet_early) = frame(false);
+    let (sounding_total, sounding_early) = frame(true);
+    assert_eq!(
+        sounding_total,
+        quiet_total + 1,
+        "the note did not add the roll's paint callback, so there is no roll here \
+         to have drawn in either order",
+    );
+    assert_eq!(
+        sounding_early,
+        quiet_early + 1,
+        "the roll paints over the playhead sweeping across it, notching the mark \
+         once per note it passes",
     );
 }
 

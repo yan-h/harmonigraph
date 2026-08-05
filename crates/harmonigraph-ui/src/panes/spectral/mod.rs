@@ -167,21 +167,14 @@ pub(crate) fn spectral_pane(
     // The far share of the depth axis: a spectrogram heatmap of the audio
     // and/or the piano roll of what has been played, both on the same
     // `now`-anchored time axis. The spectrogram lays down first (it's a
-    // background); the roll's ribbons sit over it, and the live spectrum
-    // curve over everything. Turning the ribbons off (`show_roll`) with the
-    // spectrogram on leaves the heatmap alone.
+    // background) and the roll's ribbons sit over it. The spectrum curve is
+    // drawn between the two and does not come into that order at all: it has
+    // the near share of the axis to itself, so the only place anything it
+    // paints can meet anything the roll paints is ON the line dividing them —
+    // which is why the marks for `now` go after all three. Turning the ribbons
+    // off (`show_roll`) with the spectrogram on leaves the heatmap alone.
     if split < 1.0 && cfg.show_spectrogram {
         spectrogram::draw_spectrogram(&painter, &axes, &scale, state, split, now, surface);
-    }
-
-    // The playhead: in whole-song mode, the one moving mark sweeping across the
-    // static spectrogram and roll (it replaces the roll's fixed now-line).
-    if whole_song {
-        let time = TimeAxis::new(state, split, now);
-        painter.line_segment(
-            axes.across_pitch(time.playhead_depth()),
-            egui::Stroke::new(1.5, theme::accent()),
-        );
     }
 
     // Audio spectrum: the FFT of the shell's audio source, every partial
@@ -317,12 +310,27 @@ pub(crate) fn spectral_pane(
     // picture to read across, and a line chewed away wherever a note crosses
     // reads as a drawing error rather than as the note.
     //
-    // Whole-song mode sweeps a playhead across a static layout instead, and
-    // draws its own mark above. Always drawn (there is no setting): the
-    // handover is what the pane is built around, so the boundary is marked
-    // whether or not anything is sounding on it.
+    // Always drawn (there is no setting): the handover is what the pane is
+    // built around, so the boundary is marked whether or not anything is
+    // sounding on it.
     if !whole_song && split < 1.0 && split > 0.0 {
         painter.line_segment(axes.across_pitch(split), egui::Stroke::new(1.0, theme::hairline()));
+    }
+
+    // Whole-song mode marks `now` with a playhead instead — the one moving
+    // thing sweeping across a static spectrogram and roll — and it goes here,
+    // beside the line it replaces, for the identical reason. This mode gives
+    // the roll the WHOLE depth axis (`split` is 0), so the playhead crosses
+    // every ribbon on the pane rather than meeting them end-on: drawn under
+    // the roll it comes out dashed, notched by each note it passes, and this
+    // is the mark the mode is built around. It is also the render behind
+    // `--playhead` video export, where a notched sweep is baked into a file.
+    if whole_song {
+        let time = TimeAxis::new(state, split, now);
+        painter.line_segment(
+            axes.across_pitch(time.playhead_depth()),
+            egui::Stroke::new(1.5, theme::accent()),
+        );
     }
 
     // Axis labels last, riding on top of the spectrogram, spectrum, and
