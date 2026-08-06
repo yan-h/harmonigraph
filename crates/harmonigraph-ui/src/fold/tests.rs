@@ -1633,16 +1633,22 @@ fn a_separator_moves_the_panes_it_is_drawn_between_and_nothing_else() {
     }
 }
 
-/// Past the nearest pane's floor the drag carries on into the pane behind it.
+/// At the floor of the pane it is drawn against, the boundary STOPS — it does
+/// not carry on by taking the width off the pane behind that one.
 ///
-/// A boundary that simply stopped at the first floor could not be pushed past
-/// one while panes with room to give sat right behind it — and the pointer,
-/// which is what the boundary follows, would go on walking away from a handle
-/// that had nothing left to answer with. So the floor stops a PANE, not the
-/// gesture: what the analyzer cannot give up comes off the lattice, which is
-/// what every other resize handle does.
+/// Pushing through is what a row of sashes does elsewhere, and here it is the
+/// rule read backwards: the analyzer, already as narrow as it goes, would slide
+/// sideways at a fixed width while the LATTICE paid for a gesture aimed at the
+/// settings edge. From the outside that is the other handle moving on its own,
+/// which is what it was reported as.
+///
+/// Stopping costs the gesture nothing: the boundary follows the pointer's travel
+/// from where it took hold ([`Grip`]), so the points a floor refuses are owed
+/// and repaid on the way back rather than lost —
+/// `a_boundary_dragged_past_a_floor_waits_for_the_pointer_to_come_back` is that
+/// property, and this is the floor it now stops at.
 #[test]
-fn a_drag_past_the_nearest_panes_floor_reaches_the_one_behind_it() {
+fn a_drag_stops_at_the_floor_of_the_pane_it_is_drawn_against() {
     let mut dock = dock();
     let mut folds = Folds::default();
     let mut window = Window::new(1000.0);
@@ -1650,8 +1656,8 @@ fn a_drag_past_the_nearest_panes_floor_reaches_the_one_behind_it() {
     let (lattice, spectral) = (width(&dock, LATTICE), width(&dock, SPECTRAL));
     // A leaf's floor, as `drags` prices it off egui_dock's own separator limit.
     let floor = style().separator.extra - style().separator.width * 0.5;
-    // Further than the analyzer alone can pay for, and well short of what the
-    // two of them can.
+    // Further than the analyzer can pay for, and well short of what it and the
+    // lattice could pay for between them.
     let travel = (spectral - floor) + 90.0;
     for _ in 0..(travel / 20.0).ceil() as usize {
         drag(&mut window.dial, &mut dock, NodeIndex::root(), -20.0);
@@ -1662,11 +1668,9 @@ fn a_drag_past_the_nearest_panes_floor_reaches_the_one_behind_it() {
         "the analyzer should be sitting on its floor, and is {:.1}",
         width(&dock, SPECTRAL),
     );
-    let spent = (travel / 20.0).ceil() * 20.0;
-    let owed = spent - (spectral - floor);
     assert!(
-        (width(&dock, LATTICE) - (lattice - owed)).abs() < 1.0,
-        "the lattice should have given up the {owed:.1}pt the analyzer could not, and gave {:.1}",
+        (width(&dock, LATTICE) - lattice).abs() < 1.0,
+        "the lattice is not what the separator is drawn against, and gave up {:.1}pt",
         lattice - width(&dock, LATTICE),
     );
 }

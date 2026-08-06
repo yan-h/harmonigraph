@@ -114,13 +114,15 @@
 //! either: hand them to one and every frame of a drag pushes the boundary
 //! another separator into whichever subtree holds the more of them, so a
 //! separator wiggled back and forth walks out from under the pointer
-//! ([`Points::lean`]). Of what does trade, the pane the separator is DRAWN
-//! against goes first, and the ones behind it only once it has reached its own
-//! floor: a separator divides the two panes either side of it, whatever the
-//! tree says those panes' siblings are. Shared out in proportion instead, a
-//! drag on the settings edge moves the lattice too — 70 points of the 100 the
-//! settings column takes, in the plugin's own arrangement — which is the whole
-//! picture re-laid-out for a gesture aimed at one edge of it.
+//! ([`Points::lean`]). What trades is the two panes the separator is DRAWN
+//! between and only those, whatever the tree says their siblings are: shared out
+//! in proportion instead, a drag on the settings edge moves the lattice too — 70
+//! points of the 100 the settings column takes, in the plugin's own arrangement
+//! — which is the whole picture re-laid-out for a gesture aimed at one edge of
+//! it. At the floor of the pane it is drawn against the boundary stops
+//! ([`Points::slack`]) rather than pushing on into the pane behind, which is the
+//! same rule read backwards: it would leave a pane already as narrow as it goes
+//! sliding sideways while a pane nobody pointed at paid for it.
 //!
 //! The separators a fold has PINNED cannot resize what they divide at all: the
 //! one the rail sits against, and, where panes have folded side by side, the ones
@@ -993,12 +995,19 @@ impl Points {
     /// points takes 70 of them off the LATTICE and 30 off the analyzer, so a
     /// gesture aimed at one edge of the picture re-lays-out the whole of it.
     ///
-    /// Inward is where the rest goes once the nearest pane has reached its own
-    /// floor — the pane behind it gives up what that one cannot, and so on
-    /// outward. A boundary that simply stopped at the first floor would be
-    /// unable to move while panes with room to give sat right behind it, and
-    /// would owe the pointer a debt no clamp ever collects. Every other resize
-    /// handle pushes through.
+    /// At that pane's floor the boundary STOPS, rather than pushing on into the
+    /// pane behind it. Pushing on is what a row of sashes does elsewhere, and it
+    /// is the same rule read the other way round: the settings edge would go on
+    /// travelling by taking width off the LATTICE, with the analyzer sliding
+    /// sideways at a fixed width between them — a handle nobody grabbed moving,
+    /// which is what a drag that has run out of room looks like from the outside
+    /// anyway. Stopping owes the pointer nothing it cannot pay: the boundary
+    /// follows the pointer's travel from where it took hold ([`Grip`]), so an
+    /// overshoot is repaid on the way back rather than lost.
+    ///
+    /// What it does pass OVER is a folded subtree, which is not on screen for
+    /// the separator to be drawn against at all — the rails between a boundary
+    /// and the nearest open pane are chrome, and the drag reaches through them.
     ///
     /// Named as a difference rather than as a width, because the width a subtree
     /// COMES OUT at is not the width its panes hold between them: the separators
@@ -1010,8 +1019,8 @@ impl Points {
     ///
     /// `floors` is per node and in the same points as `by`: what the panes under
     /// it need between them, rails and separators left out. Returns what the
-    /// floors refused, which for a drag is nothing — [`drags`] clamps the delta
-    /// to the room the whole subtree has before it asks for any of it.
+    /// floor refused, which for a drag is nothing — [`drags`] clamps the delta to
+    /// [`Points::slack`], the same pane's room, before it asks for any of it.
     fn lean(
         &mut self,
         tree: &Tree<Tab>,
@@ -1048,14 +1057,51 @@ impl Points {
                 self.lean(tree, holds, floors, right, take, edge);
                 by - take
             }
-            _ => {
-                let (near, far) = match edge {
-                    Side::Left => (left, right),
-                    Side::Right => (right, left),
-                };
-                let rest = self.lean(tree, holds, floors, near, by, edge);
-                self.lean(tree, holds, floors, far, rest, edge)
-            }
+            _ => self.lean(tree, holds, floors, self.facing(tree, holds, node, edge), by, edge),
+        }
+    }
+
+    /// How far the pane a separator is drawn against can be squeezed: what it
+    /// holds over its own floor, and nothing the panes behind it hold.
+    ///
+    /// [`drags`] clamps the drag to this, so [`Points::lean`] is always asked
+    /// for something it can spend in full — a boundary that stopped where the
+    /// floor is while the gesture went on believing it had moved would leave the
+    /// two sides of it trading different numbers of points, and the layout no
+    /// longer summing to the window it is drawn in.
+    fn slack(
+        &self,
+        tree: &Tree<Tab>,
+        holds: &[Hold],
+        floors: &[f32],
+        node: NodeIndex,
+        edge: Side,
+    ) -> f32 {
+        if holds.get(node.0).is_some_and(|hold| hold.inside) {
+            return 0.0;
+        }
+        let floor = floors.get(node.0).copied().unwrap_or(0.0);
+        let room = |width: f32| (width - floor).max(0.0);
+        match &tree[node] {
+            Node::Leaf(_) => room(self.at.get(node.0).copied().unwrap_or(0.0)),
+            _ if node.right().0 >= tree.len() => 0.0,
+            Node::Empty => 0.0,
+            Node::Vertical(_) => room(self.visible(tree, holds, node)),
+            _ => self.slack(tree, holds, floors, self.facing(tree, holds, node, edge), edge),
+        }
+    }
+
+    /// Which child of a horizontal split the separator on `edge` is drawn
+    /// against: the near one, unless it is folded away to rails and has no pane
+    /// on screen to be drawn against at all.
+    fn facing(&self, tree: &Tree<Tab>, holds: &[Hold], node: NodeIndex, edge: Side) -> NodeIndex {
+        let (near, far) = match edge {
+            Side::Left => (node.left(), node.right()),
+            Side::Right => (node.right(), node.left()),
+        };
+        match self.visible(tree, holds, near) > 0.0 {
+            true => near,
+            false => far,
         }
     }
 
@@ -1342,11 +1388,14 @@ fn drags(
                 standing + travelled * dialled / whole
             }
         };
-        // Held to what the panes on either side need, which egui_dock's own
-        // limit does not know: it holds the two CHILDREN of the split apart and
-        // nothing deeper in either of them (see [`min_widths`]).
-        let room = |span: f32, min: f32| (span - min).max(0.0);
-        let (spare, take) = (room(before, floors[left.0]), room(after, floors[right.0]));
+        // Held to what the two panes it is DRAWN between can give up, which is
+        // neither what egui_dock's own limit holds — that one holds the split's
+        // two CHILDREN apart and nothing deeper in either of them (see
+        // [`min_widths`]) — nor what those two subtrees hold between them.
+        let (spare, take) = (
+            points.slack(tree, holds, &floors, left, Side::Right),
+            points.slack(tree, holds, &floors, right, Side::Left),
+        );
         let delta = (asked - standing).clamp(-spare, take);
         if delta.abs() < 1e-4 {
             continue;
