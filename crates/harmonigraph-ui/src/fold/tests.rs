@@ -827,14 +827,6 @@ fn reclamp(dock: &mut DockState<Tab>) {
     }
 }
 
-/// The one resize a folded pane's own separator can mean, where there is no
-/// boundary outward to pass a drag to: the pane coming back at the width it
-/// is pulled out to. `paint` reads the pull off the pointer; this is the half
-/// that prices it.
-fn pull(dial: &mut Dial, node: NodeIndex, side: Side, leaf: NodeIndex, width: f32) {
-    dial.pull = Some(Pull { surface: 0, node: node.0, side, leaf: leaf.0, width });
-}
-
 /// Four panes in a row: `split_right` down the right, so every split is a
 /// horizontal one and the two in the middle can be folded independently.
 fn row() -> DockState<Tab> {
@@ -1108,74 +1100,6 @@ fn the_clamp_egui_dock_applies_to_every_separator_is_not_a_drag() {
         let now = width(&dock, *node);
         assert!((now - was).abs() < 0.5, "{node:?} walked from {was} to {now}");
     }
-}
-
-/// Pulling a rail out is the fold run backwards at a width the user chose:
-/// the pane comes back that wide, the window pays what the fold took, and
-/// the pane's own sibling pays the difference between the two — which is
-/// what a separator dragged between two panes always costs.
-#[test]
-fn a_rail_pulled_open_comes_back_at_the_width_it_was_pulled_to() {
-    let mut dock = dock();
-    let mut folds = Folds::default();
-    let mut dial = Dial::default();
-    let _ = frame(&mut folds, &mut dock, &mut dial, 1000.0);
-    let (lattice, analyzer) = (width(&dock, LATTICE), width(&dock, SPECTRAL));
-    collapse(&mut dock, Tab::Spectral, true);
-    let folded = settle(&mut folds, &mut dock, &mut dial, 1000.0);
-    pull(&mut dial, PICTURES, Side::Right, SPECTRAL, 300.0);
-    let window = settle(&mut folds, &mut dock, &mut dial, folded);
-    assert!(
-        !collapsed_tab(&dock, Tab::Spectral),
-        "a rail pulled out past its own width is a pane again",
-    );
-    assert!(
-        (width(&dock, SPECTRAL) - 300.0).abs() < 1.0,
-        "it should come back at the 300 it was pulled to, not the {} it folded from",
-        width(&dock, SPECTRAL),
-    );
-    assert!(
-        (window - 1000.0).abs() < 1.0,
-        "the window pays back what the fold took it down by, and no more: {window}",
-    );
-    assert!(
-        (width(&dock, LATTICE) - (lattice - (300.0 - analyzer))).abs() < 1.0,
-        "the pane it was pulled out over pays the rest: {} from {lattice}",
-        width(&dock, LATTICE),
-    );
-    // Outside the split nothing moves, which is what a pull has in common
-    // with the arrow: neither is a re-layout of the panes beside it.
-    assert!((width(&dock, SETTINGS) - 298.0).abs() < 1.0, "the column keeps its width");
-}
-
-/// A pull on one pane of a folded PAIR brings that pane back and leaves the
-/// other where it was: a rail can hold panes that were folded separately, and
-/// a pull is the pane's own arrow with a width on it, not the subtree's.
-#[test]
-fn a_pull_on_a_folded_pair_opens_the_pane_it_was_aimed_at() {
-    let mut dock = dock();
-    let mut folds = Folds::default();
-    let mut dial = Dial::default();
-    let _ = frame(&mut folds, &mut dock, &mut dial, 1000.0);
-    for tab in [Tab::Lattice, Tab::Spectral] {
-        collapse(&mut dock, tab, true);
-    }
-    let folded = settle(&mut folds, &mut dock, &mut dial, 1000.0);
-    pull(&mut dial, NodeIndex::root(), Side::Left, LATTICE, 500.0);
-    let _ = settle(&mut folds, &mut dock, &mut dial, folded);
-    assert!(!collapsed_tab(&dock, Tab::Lattice), "the lattice was the one pulled out");
-    assert!(collapsed_tab(&dock, Tab::Spectral), "the analyzer was not, so it is still a rail");
-    assert!(
-        (width(&dock, PICTURES) - 500.0).abs() < 1.5,
-        "the pair should come back at the 500 it was pulled to, and is {}",
-        width(&dock, PICTURES),
-    );
-    // Which the still-folded analyzer takes a rail's worth of.
-    assert!(
-        (width(&dock, LATTICE) - (500.0 - 26.0 - 4.0)).abs() < 1.5,
-        "the lattice should have all of it but the analyzer's rail, and has {}",
-        width(&dock, LATTICE),
-    );
 }
 
 /// Every sequence of `length` clicks over `tabs`.

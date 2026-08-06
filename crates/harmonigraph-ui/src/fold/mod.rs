@@ -132,13 +132,10 @@
 //! panes, which is the only thing they could all mean.
 //!
 //! Where there is nothing outward to pass it to — a fold holding the whole of one
-//! side of the window, one open pane and the window's own edge — the only width
-//! that can move is the folded pane's, out of the window. So the separator the
-//! rail sits against offers exactly that (`grab`): pull it and
-//! the pane comes
-//! back at the width it was pulled to, a pane at a time, as its own arrow would
-//! have. A band between two rails there has nothing left to offer and is inert
-//! (`deaden`).
+//! side of the window, one open pane and the window's own edge — there is no
+//! second pane for the boundary to trade against, so the separators that fold
+//! pinned have nothing to offer and are inert (`deaden`). What brings the pane
+//! back there is the arrow on its rail, and only that.
 //!
 //! Whether a pane is folded stays egui_dock's own `collapsed` flag, set by its
 //! own arrow: nothing here duplicates that bookkeeping, it only reads it.
@@ -228,31 +225,6 @@ impl Side {
     }
 }
 
-/// A rail the user has pulled out into a pane again, and how wide they pulled
-/// it (see `grab`).
-///
-/// Carried from the pull to the next frame rather than acted on where it
-/// happens, because [`Folds::apply`] is where the layout is, and a width that
-/// is not measured against the layout is not a width anything can be dialled to.
-#[derive(Clone, Copy)]
-struct Pull {
-    surface: usize,
-    /// The split holding the fold, which is what the width is a share of: a
-    /// whole subtree can have folded into the one rail being pulled.
-    node: usize,
-    side: Side,
-    /// The pane to bring back — the one whose stretch of the rail the pull
-    /// started on, exactly as its own arrow would have.
-    ///
-    /// One pane rather than the subtree: a rail can hold panes that were folded
-    /// separately, and down a column one of them may have been a tab bar long
-    /// before the column folded sideways. Opening all of them would hand back
-    /// panes nobody closed.
-    leaf: usize,
-    /// What the pane is to come back at, in points.
-    width: f32,
-}
-
 impl Folds {
     /// Bring the layout up to date with what the user did to it, and write the
     /// fractions that draw it in the window there is.
@@ -300,9 +272,6 @@ impl Folds {
         let separator = style.separator.width;
         let mut ask = 0.0;
         let mut reached = Vec::new();
-        // A rail the user pulled open on the frame before this one (see
-        // [`grab`]), which is where the width it was pulled to becomes layout.
-        let pull = dial.pull.take();
         let (gesturing, pointer) = (dial.gesturing, dial.pointer);
         dial.panes.resize(dock.surfaces_count(), Points::default());
         dial.flags.resize(dock.surfaces_count(), Vec::new());
@@ -362,61 +331,18 @@ impl Folds {
                 let gesture = Gesture { surface: index, at: pointer, grip: &mut dial.grip };
                 drags(tree, points, &holds, &want, &fixed, style, gesture);
             }
-            // The pull opens its pane first, so the width it was pulled to is
-            // priced against the layout that will hold it.
-            let mine = pull.filter(|pull| {
-                pull.surface == index
-                    && folded_side(tree, NodeIndex(pull.node)) == Some(pull.side)
-                    && collapsed(tree, NodeIndex(pull.leaf))
-            });
-            if let Some(pull) = &mine {
-                let split = NodeIndex(pull.node);
-                // What the whole rail was worth before it folded, which is what
-                // the pull is measured against: the width names the subtree on
-                // screen, and a rail can hold panes that stay folded.
-                let was = self
-                    .0
-                    .iter()
-                    .find(|fold| fold.is(surface, split))
-                    .map_or(0.0, |fold| fold.width);
-                uncollapse(tree, NodeIndex(pull.leaf));
-                let holds = self::holds(tree);
-                let (_, fixed) = wants(tree, &holds, &points.at, rail, separator);
-                let child = pull.side.of(split);
-                // Whatever inside the rail is still a rail keeps its points, so
-                // the pane that opened makes up the rest of the width pulled to.
-                points.share(tree, &holds, child, pull.width - fixed[child.0]);
-                // The window pays the difference between the rail and the pane
-                // it stood in for, as it does for the arrow; the panes beside it
-                // inside the split pay the rest, exactly as they would have had
-                // the pane been dragged wider once it was a pane again. Asking
-                // the window for the whole of a pull would let a gesture inside
-                // one split grow the editor without limit.
-                let beside = match pull.side {
-                    Side::Left => Side::Right,
-                    Side::Right => Side::Left,
-                }
-                .of(split);
-                let spare = points.visible(tree, &holds, beside);
-                points.share(tree, &holds, beside, spare - (pull.width - was));
-            }
             // An arrow's fold or unfold, which waits for the window the layout
-            // is going to need before the flag that needs it lands. A pull does
-            // NOT wait: it names the width the pane is to come back at, so the
-            // layout it lands in is one the user is drawing, and holding it
-            // shut would fight the drag it is part of.
+            // is going to need before the flag that needs it lands.
             //
             // Caught by comparing flags against the pass before, rather than by
             // intercepting the click that did it: the click is not always ours
-            // to intercept (see [`Wait`]). The pull's own uncollapse is right
-            // above and is excluded for exactly that reason — it is a wait
-            // nobody wants.
+            // to intercept (see [`Wait`]).
+            //
             // Only the main surface. A floating dock window has no window of
             // its own to ask for, so a hold there would never be released —
             // and `dial.wait` is one slot, so it would take the main surface's
             // holds down with it and hand #121's flicker straight back.
             let moving = main
-                && mine.is_none()
                 && dial.wait.is_none()
                 && dial.flags.get(index).is_some_and(|was| {
                     if was.len() != tree.len() {
@@ -471,9 +397,9 @@ impl Folds {
                 }
                 dial.wait = None;
             }
-            // Folds are re-read after the pull or the held gesture, any of
-            // which has just moved flags.
-            let holds = if mine.is_some() || moving || lands {
+            // Folds are re-read after a held gesture either way, which has
+            // just moved flags.
+            let holds = if moving || lands {
                 self::holds(tree)
             } else {
                 holds
@@ -492,7 +418,7 @@ impl Folds {
             // Priced from `from`, every unfold would ratchet the ceiling down.
             let before =
                 holding.as_ref().filter(|wait| lands && wait.shuts).map_or(area, |wait| wait.from);
-            let moved = self.reconcile(tree, surface, &holds, points, before) || mine.is_some();
+            let moved = self.reconcile(tree, surface, &holds, points, before);
             // The widest this window has been, for a session that was not there
             // to watch it get that wide: the folds came off the persist blob,
             // and each one remembers the window it was taken at.
@@ -633,9 +559,8 @@ impl Folds {
             }
             // What this pass is leaving the flags at, which is what the next
             // one tells a fold or an unfold from. Taken at the END, so
-            // everything the pass itself did — a pull's uncollapse, a hold put
-            // back, a hold let go — is already in it and cannot read as
-            // somebody else's gesture.
+            // everything the pass itself did — a hold put back, a hold let go
+            // — is already in it and cannot read as somebody else's gesture.
             dial.flags[index] = snapshot(tree);
         }
         // Entries naming a surface the dock no longer has.
@@ -777,10 +702,6 @@ pub struct Dial {
     pointer: Option<f32>,
     /// The boundary this gesture has hold of, if it has hold of one.
     grip: Option<Grip>,
-    /// A rail pulled open, waiting for the frame that can price it. Set by
-    /// [`paint`](fn@paint), which is where the pull is let go of, and taken by
-    /// [`Folds::apply`], which is where a width becomes layout.
-    pull: Option<Pull>,
     /// A fold or an unfold waiting for the window its layout needs.
     wait: Option<Wait>,
     /// The collapsed flags each surface was left with, so the next pass can
@@ -1020,8 +941,8 @@ impl Points {
     }
 
     /// Scale every pane under `node` so the subtree comes out `width` points
-    /// wide — how a width names a layout, whether it came off a pull, a drag or
-    /// a persist blob.
+    /// wide — how a width names a layout, whether it came off a drag or a
+    /// persist blob.
     fn scale(&mut self, tree: &Tree<Tab>, node: NodeIndex, width: f32) {
         let was = self.span(tree, node);
         if was <= 0.0 || !width.is_finite() || width <= 0.0 {
@@ -1054,17 +975,6 @@ impl Points {
             Node::Horizontal(_) => self.span(tree, left) + self.span(tree, right),
             Node::Empty => 0.0,
         }
-    }
-
-    /// Scale the panes ON SCREEN under `node` so they come to `width` points
-    /// between them, leaving anything folded exactly where it is — which is
-    /// what makes a drag, like a resize, the visible panes' business alone.
-    fn share(&mut self, tree: &Tree<Tab>, holds: &[Hold], node: NodeIndex, width: f32) {
-        let was = self.visible(tree, holds, node);
-        if was <= 0.0 || !width.is_finite() || width <= 0.0 {
-            return;
-        }
-        self.stretch_visible(tree, holds, node, width / was);
     }
 
     /// Move `by` points into the panes ON SCREEN under `node` — the half of a
@@ -1163,25 +1073,6 @@ impl Points {
                 self.visible(tree, holds, left) + self.visible(tree, holds, right)
             }
             Node::Empty => 0.0,
-        }
-    }
-
-    fn stretch_visible(&mut self, tree: &Tree<Tab>, holds: &[Hold], node: NodeIndex, by: f32) {
-        if holds.get(node.0).is_some_and(|hold| hold.inside) {
-            return;
-        }
-        let (left, right) = (node.left(), node.right());
-        match &tree[node] {
-            Node::Leaf(_) => {
-                if let Some(at) = self.at.get_mut(node.0) {
-                    *at *= by;
-                }
-            }
-            _ if right.0 >= tree.len() => {}
-            _ => {
-                self.stretch_visible(tree, holds, left, by);
-                self.stretch_visible(tree, holds, right, by);
-            }
         }
     }
 

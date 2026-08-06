@@ -231,9 +231,9 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
         .show_inside(ui, &mut panes::Viewer { state, params, now });
     let cpu_ms = cpu_start.elapsed().as_secs_f32() * 1000.0;
     // After it: the rails the folds left behind, which only this frame's
-    // rectangles can place — and the handles that pull them back open, which
-    // land on `dial` for the next frame to price (see `fold::grab`).
-    fold::paint(ui, &mut dock, &dock_style, &mut state.dial);
+    // rectangles can place — and the separators those folds pinned, which
+    // resize the panes a user sees them dividing (see `fold::shove_target`).
+    fold::paint(ui, &mut dock, &dock_style, &state.dial);
     state.dock = dock;
     // Deferred from the Panel pane's button: replacing the dock BEFORE the
     // write-back above would be silently undone.
