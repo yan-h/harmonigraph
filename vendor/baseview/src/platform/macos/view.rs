@@ -42,6 +42,12 @@ pub(crate) struct BaseviewView {
     notification_center_observer: Cell<Option<NotificationCenterObserver>>,
     occlusion_observer: Cell<Option<NotificationCenterObserver>>,
 
+    /// Occlusion as this view last saw it, so a notification repeating the
+    /// current state is dropped rather than acted on. Starts visible, which
+    /// is what a window a view is being added to almost always is, and costs
+    /// only a missed no-op event if it isn't.
+    window_visible: Cell<bool>,
+
     keyboard_state: KeyboardState,
 
     parenting: ViewParentingType,
@@ -70,6 +76,7 @@ impl BaseviewView {
             window_handler: None.into(),
             notification_center_observer: None.into(),
             occlusion_observer: None.into(),
+            window_visible: true.into(),
             parenting,
 
             #[cfg(feature = "opengl")]
@@ -225,8 +232,12 @@ impl BaseviewView {
     /// paints from inside a notification, and a notification can in principle
     /// be delivered while a frame holds the handler. Taking the borrow
     /// fallibly rather than with `borrow_mut` is what makes that safe: a
-    /// panicking borrow would turn a re-entrant delivery into a crash, and the
-    /// frame already in flight is about to paint the same content anyway.
+    /// panicking borrow would turn a re-entrant delivery into a crash.
+    ///
+    /// What the dropped frame costs in that case is a tick, not more: the
+    /// frame in flight paints, and the event queued behind it is drained when
+    /// it finishes. It is only this direction that is covered — `trigger_event`
+    /// still borrows infallibly, and says so.
     fn trigger_frame(this: ViewRef<Self>) {
         // Before the frame, so a pointer that has quietly stopped being ours is
         // gone by the time anything is drawn from where it was.
@@ -282,6 +293,14 @@ impl BaseviewView {
         }
 
         let visible = window.occlusionState().contains(NSWindowOcclusionState::Visible);
+        // A notification that reports the state we are already in costs a
+        // whole off-cadence frame below, so it stops here. macOS posts this on
+        // change, but "change" is the WINDOW's, and the notification is
+        // delivered to every observer of it — nothing promises the state read
+        // back differs from the last one this view saw.
+        if this.window_visible.replace(visible) == visible {
+            return;
+        }
         Self::trigger_deferrable_event(this, Event::Window(WindowEvent::Occluded(!visible)));
 
         if visible {
