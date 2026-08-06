@@ -2287,11 +2287,17 @@ fn an_indicator_is_drawn_at_its_own_pitchs_angle() {
 /// backdrop and the lit glyph off one envelope, so both land at nothing
 /// together and any discontinuity between them has no coverage left to show
 /// in; here the held octave pins the backdrop at full strength while the
-/// released one runs out against it. A lit slot painted in PLACE of its ghost
-/// — coverage by a max(), color by a `level > 0` switch — fails both halves
-/// below: the coverage floors while the color is still the lit pitch, so the
-/// fade stalls, and then the color steps to the ghost's in one frame at no
-/// change in coverage at all.
+/// released one runs out against it.
+///
+/// A slot painted in PLACE of its ghost — opacity by a max(), color by a
+/// `level > 0` switch — fails the first two checks below, and which one goes
+/// first is worth knowing. The ghost is the WHITENED node color, so the final
+/// frame's switch is a step up in light and the never-brightens loop is what
+/// actually fires; the tail-spread check catches the same fault, and is the
+/// one that would still hold if a ghost ever came out darker than the pitch it
+/// takes over from. The last check is neither: at level 0 both shaders run the
+/// same line, so it can only say the finished ring is one backdrop, not how it
+/// got there.
 #[test]
 fn a_released_octave_lands_on_its_ghost_without_a_step() {
     use harmonigraph_scene::octave_layout;
@@ -2305,6 +2311,14 @@ fn a_released_octave_lands_on_its_ghost_without_a_step() {
     let layout = octave_layout(5, 60.0, 0, 1.0, 0.0);
     let held = harmonigraph_scene::MIDDLE_C_SLOT;
     let (releasing, silent) = (held + 1, held + 2);
+    // All three inside the ring this wheel draws. `sector` CLAMPS a slot
+    // outside it rather than refusing, so a wheel that stopped reaching them
+    // would leave the neighbour reading below comparing one slice against
+    // itself — passing for a reason that has nothing to do with the fade.
+    let (low, high) = layout.slots(0.0);
+    for slot in [held, releasing, silent] {
+        assert!((low..=high).contains(&(slot as i32)), "slot {slot} is outside {low}..={high}");
+    }
     let scene = |level: f32| {
         let mut scene = octave_wheel_scene(layout, 0.0);
         let node = &mut scene.nodes[0];
@@ -2331,11 +2345,17 @@ fn a_released_octave_lands_on_its_ghost_without_a_step() {
         (0.5 * (e0 + e1), e0 - e1)
     };
     let (mid, wedge) = middle(releasing);
-    let full = gpu.shot(&scene(1.0));
+    // Down the envelope past the ghost's own level, to the smallest the 8-bit
+    // packing carries, and then off it. The first of these is also the shot
+    // the radii are calibrated from, taken once and read twice so the two can
+    // never drift onto different pictures.
+    const TAIL: [f32; 9] = [1.0, 0.5, 0.25, 0.16, 0.12, 0.08, 0.04, 0.02, 1.0 / 255.0];
+    let full = gpu.shot(&scene(TAIL[0]));
     let on_band: Vec<f32> = (4..SIZE[0] / 2)
         .map(|r| r as f32)
         .filter(|&r| at(&full, r, mid).iter().sum::<f32>() > 24.0)
         .collect();
+    assert!(!on_band.is_empty(), "nothing lit along the ray through slot {releasing}");
     let (inner, outer) = (on_band[0], on_band[on_band.len() - 1]);
     assert!(outer - inner > 8.0, "no band to sample: {inner}..{outer}");
 
@@ -2357,11 +2377,8 @@ fn a_released_octave_lands_on_its_ghost_without_a_step() {
         sum.map(|s| s / n)
     };
 
-    // Down the envelope past the ghost's own level, to the smallest the 8-bit
-    // packing carries, and then off it.
-    const TAIL: [f32; 9] = [1.0, 0.5, 0.25, 0.16, 0.12, 0.08, 0.04, 0.02, 1.0 / 255.0];
-    let mut steps: Vec<[f32; 3]> =
-        TAIL.iter().map(|&level| mean(&gpu.shot(&scene(level)), mid, wedge)).collect();
+    let mut steps: Vec<[f32; 3]> = vec![mean(&full, mid, wedge)];
+    steps.extend(TAIL[1..].iter().map(|&level| mean(&gpu.shot(&scene(level)), mid, wedge)));
     let ended = gpu.shot(&scene(0.0));
     steps.push(mean(&ended, mid, wedge));
 
@@ -2379,19 +2396,17 @@ fn a_released_octave_lands_on_its_ghost_without_a_step() {
         );
     }
     // And the last stretch of it — from the ghost's own level down to
-    // nothing, which is where a coverage that floors and a color that
-    // switches would part — is SPREAD across the frames rather than spent in
-    // one. No single step carries much of it; painted in place of its ghost
-    // instead, the slice sits still for the whole stretch and then makes the
-    // entire journey in the final frame.
+    // nothing, which is where an opacity that floors and a color that
+    // switches part company — is SPREAD across the frames rather than spent
+    // in one. Painted in place of its ghost instead, the slice sits still for
+    // that whole stretch and then makes the entire journey in one frame.
     //
-    // Asserted as a share of the travel rather than as a run of strict
-    // decreases: a continuous ramp this shallow moves the last few frames by
-    // less than an 8-bit channel, and the pair either side of zero reads
-    // identically here BECAUSE the handoff is smooth.
-    // From the ghost's own level (GHOST_LEVEL in lattice.wgsl) downward. A
-    // stale value here only widens or narrows the stretch measured, so this
-    // reads the sweep rather than asserting the constant.
+    // A share of the travel rather than a run of strict decreases: a ramp
+    // this shallow moves the last few frames by less than an 8-bit channel,
+    // and the pair either side of zero reads identically here BECAUSE the
+    // handoff is smooth. The cut is GHOST_LEVEL in lattice.wgsl; a stale
+    // value only widens or narrows the stretch measured, so this reads the
+    // sweep rather than asserting the constant.
     let tail = &steps[TAIL.iter().position(|&level| level <= 0.16).expect("a tail to measure")..];
     let travel = apart(&tail[0], &tail[tail.len() - 1]);
     assert!(travel > 10.0, "the tail hardly moves at all ({travel:.1}), so its shape says little");
