@@ -844,8 +844,13 @@ fn shimmer_terms(mode: u32, field: vec2<f32>, footprint: f32) -> vec2<f32> {
 fn slice_gap_half() -> f32 {
     return max(u.misc5.z, 0.0) * 0.5;
 }
-// Ghost coverage of a silent slot, scaled by the note's activation so the
-// backdrop fades out with the pitch class.
+// The backdrop's own opacity, scaled by the note's activation so it fades
+// out with the pitch class. It is what a SILENT slot draws at, and it sits
+// under the lit ones too — a sounding glyph is painted over its own ghost
+// rather than in place of it (see the slot loop), so this reaches the
+// opacity and the color of every indicator on the ring, not just the quiet
+// ones. Moving it moves how a note attacks and releases as well as how
+// loudly the silent octaves carry the ring's shape.
 const GHOST_LEVEL: f32 = 0.16;
 // The classic disc-edge radius: normalizes the field paint to the sized
 // orb, and stands in for the core radius where a coreless node still needs
@@ -1346,8 +1351,11 @@ fn node_paint(in: VsOut) -> vec4<f32> {
 
     // Octave indicators, composited over the disc/glow. Each slot fades on
     // its own envelope. Whichever element covers a pixel most strongly owns
-    // its color there: sounding glyphs are tinted by their own pitch;
-    // ghosts and the rest use the whitened node color.
+    // its color there, and within one slot the color is a CONTINUUM rather
+    // than a pair: a fully sounding glyph is its own pitch exactly, a silent
+    // one is the whitened node color, and a slot part way through its
+    // envelope is the two mixed by however much of it is lit — which is
+    // what a fade between them IS.
     // The octave layer always draws — one glyph shape, no on/off. Which
     // octaves it shows is the per-node bitmask, and how much of the band it
     // covers is the band radii; there is nothing left for a switch to say.
@@ -1384,6 +1392,10 @@ fn node_paint(in: VsOut) -> vec4<f32> {
     // outside it the loop below can be skipped entirely rather than run to
     // reach zero `span` times over.
     let band = glyph_band(d, band_in, band_out, aa);
+    // The backdrop's opacity, which every slot on the ring is drawn on and
+    // none of them varies — so it is taken here beside the band rather than
+    // rebuilt per slot inside the loop.
+    let ghost_a = GHOST_LEVEL * presence;
     // The slots a melody or bass ring is pointing at (in.marks, the same
     // bitmasks `mark_ring` reads below), which is where the MARK layer's
     // sheet reaches into this one.
@@ -1416,28 +1428,70 @@ fn node_paint(in: VsOut) -> vec4<f32> {
                 select(0.0, in.params.z, (in.marks.y & bit) != 0u),
             ));
         }
-        // Ghosts carry the ring's shape in the note's own color; a sounding
-        // slot never dips below its ghost, so a fading octave hands off to it
-        // instead of leaving a hole.
-        var cov = shape * GHOST_LEVEL * presence;
+        // Ghosts carry the ring's shape in the note's own color, and a lit
+        // slot is that ghost with its pitch painted OVER it — never one in
+        // place of the other.
+        var opacity = ghost_a;
         var slot_rgb = node_glyph_rgb;
         if level > 0.0 {
             // Straight off the octave's own envelope, so the glyph eases in
-            // over the attack and ends at nothing on release. The max() hands
-            // a backdrop slot off to its ghost as the lit coverage sinks
-            // through it.
-            cov = max(cov, shape * level);
+            // over the attack and ends on its ghost at release: the same grey
+            // at the same opacity as the silent slices beside it.
+            //
+            // Over in BOTH terms together, which is what makes the end of a
+            // release one continuous thing. Taking the opacity as a max() and
+            // the color by a `level > 0` switch instead parts them — the
+            // opacity floors at the ghost while the color is still the lit
+            // pitch, so the fade visibly stops, and then the color steps to
+            // the ghost's in one frame at no change in opacity at all. That is
+            // visible only where a node's presence OUTLIVES this slot's level,
+            // which is another instance of the pitch class still held: a lone
+            // note drives both off one envelope, so the ghost never catches
+            // the fade and the switch lands at nothing.
+            //
+            // The ghost takes what is left of the node's PRESENCE after this
+            // slot's own level, rather than a share of the whole of it. That
+            // is what makes both releases straight lines:
+            //
+            //     opacity = level * (1 - GHOST_LEVEL) + GHOST_LEVEL * presence
+            //
+            // is linear in each of them separately, so a slot fading under a
+            // held instance runs 1 down to its ghost evenly, and a slot whose
+            // node is going with it — `level` and `presence` one envelope —
+            // runs to nothing evenly. Scaling the ghost by `1 - level`
+            // instead, which is the same thing wherever presence is 1, counts
+            // the note's own presence twice in that second case: it bulges
+            // to 1.16e - 0.16e², four points over the straight line at the
+            // middle of the fade.
+            let ghost_rest = max(GHOST_LEVEL * (presence - level), 0.0);
+            opacity = level + ghost_rest;
             // Slot s is MIDI octave s - 1, whose C is MIDI 12*s; add this
             // node's pitch class for the glyph's true pitch.
             let pitch = oct_slot_pitch(slot, in.cents);
-            // Exactly the color that pitch lights everywhere else. The LUT is
-            // the pitch ramp (pitch_ramp_lch in harmonigraph-scene), and the
-            // core disc and the piano roll sample that same table — so all
-            // three read as one color. A white mix here would be a second
-            // definition of what a lit pitch looks like, and it would drift
-            // off the disc the moment the gradient's brightness moved.
-            slot_rgb = pitch_lut_color(pitch);
+            // A glyph as lit as its node is present is exactly the color that
+            // pitch lights everywhere else, which `ghost_rest` is what holds:
+            // it is nothing where `level` reaches `presence`, so a fully lit
+            // slot AND a lone note's whole release wear the pitch alone. The
+            // LUT is the pitch ramp (pitch_ramp_lch in harmonigraph-scene),
+            // and the core disc and the piano roll sample that same table — so
+            // all three read as one color where the note is sounding. A white
+            // mix there would be a second definition of what a lit pitch looks
+            // like, and it would drift off the disc the moment the gradient's
+            // brightness moved. Where the node OUTLIVES the slot, the mix
+            // toward the whitened node color is the ghost coming through as
+            // that one octave goes, which is the fade itself rather than a
+            // second definition of anything.
+            //
+            // The divide un-premultiplies, and wants no floor under it: this
+            // branch has `level > 0`, the packing's smallest step is 1/255,
+            // and `ghost_rest` is never negative, so `opacity >= level`.
+            slot_rgb = (pitch_lut_color(pitch) * level + node_glyph_rgb * ghost_rest) / opacity;
         }
+        // The wedge enters ONCE, after the two layers are resolved: they are
+        // the same shape at different opacities, and compositing their COVERED
+        // FRACTIONS instead would count the antialiased edge twice and leave a
+        // lit slice a brighter fringe than the silent ones it meets.
+        let cov = shape * opacity;
         if cov > glyph {
             glyph = cov;
             glyph_rgb = slot_rgb;
