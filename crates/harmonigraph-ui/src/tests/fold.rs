@@ -547,8 +547,10 @@ fn reset_layout_puts_the_dialled_pane_widths_back() {
     h.frame(&mut state, vec![press(target, false)]);
     h.settle_folds(&mut state);
     let dragged: Vec<f32> = LAID_OUT_TABS.iter().map(|tab| pane_width(&state, *tab)).collect();
+    // The analyzer, since that is the pane the settings boundary is drawn
+    // against and a separator resizes what it divides (see `fold::Points::lean`).
     assert!(
-        (dragged[0] - fresh[0]).abs() > 10.0,
+        (dragged[1] - fresh[1]).abs() > 10.0,
         "the drag has to actually move a boundary for the reset to have something to undo: \
          {fresh:?} -> {dragged:?}"
     );
@@ -585,7 +587,9 @@ fn loading_a_saved_layout_brings_its_pane_widths_with_it() {
     h.frame(&mut state, vec![press(target, false)]);
     h.settle_folds(&mut state);
     let dragged: Vec<f32> = LAID_OUT_TABS.iter().map(|tab| pane_width(&state, *tab)).collect();
-    assert!((dragged[0] - fresh[0]).abs() > 10.0, "the drag has to move a boundary: {dragged:?}");
+    // The analyzer, since that is the pane the settings boundary is drawn
+    // against and a separator resizes what it divides (see `fold::Points::lean`).
+    assert!((dragged[1] - fresh[1]).abs() > 10.0, "the drag has to move a boundary: {dragged:?}");
 
     state.load_persist(&saved);
     h.settle_folds(&mut state);

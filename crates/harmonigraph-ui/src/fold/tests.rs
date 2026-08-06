@@ -1587,3 +1587,125 @@ fn resetting_the_layout_does_not_re_fold_the_pane_it_just_opened() {
     );
 }
 
+
+/// A separator resizes the two panes it is DRAWN between and leaves every other
+/// pane exactly where it was.
+///
+/// The plugin's own arrangement is the case: the settings column's boundary has
+/// the analyzer on the other side of it and the lattice further along, and what
+/// the tree says is that the boundary divides the settings column from the
+/// PICTURE PAIR. Shared out over that pair in proportion, 100 points handed to
+/// the settings column come 70 off the lattice and 30 off the analyzer — the
+/// picture re-laid-out for a gesture aimed at one edge of it, and the pane the
+/// user was pointing at moving least of the two.
+///
+/// Both ways, since each direction is a different pane's floor to stop at and
+/// neither is anywhere near it here.
+#[test]
+fn a_separator_moves_the_panes_it_is_drawn_between_and_nothing_else() {
+    for step in [-20.0f32, 20.0] {
+        let mut dock = dock();
+        let mut folds = Folds::default();
+        let mut window = Window::new(1000.0);
+        window.settle(&mut folds, &mut dock);
+        let (lattice, spectral, settings) =
+            (width(&dock, LATTICE), width(&dock, SPECTRAL), width(&dock, SETTINGS));
+        for _ in 0..5 {
+            drag(&mut window.dial, &mut dock, NodeIndex::root(), step);
+            window.frame(&mut folds, &mut dock);
+        }
+        let moved = step * 5.0;
+        assert!(
+            (width(&dock, LATTICE) - lattice).abs() < 1.0,
+            "the lattice is not on either side of the separator, and moved {:.1}pt",
+            width(&dock, LATTICE) - lattice,
+        );
+        assert!(
+            (width(&dock, SPECTRAL) - (spectral + moved)).abs() < 1.0,
+            "the analyzer is what the separator is drawn against, and moved {:.1}pt of {moved:.1}",
+            width(&dock, SPECTRAL) - spectral,
+        );
+        assert!(
+            (width(&dock, SETTINGS) - (settings - moved)).abs() < 1.0,
+            "the settings column should have paid for it, and moved {:.1}pt",
+            width(&dock, SETTINGS) - settings,
+        );
+    }
+}
+
+/// Past the nearest pane's floor the drag carries on into the pane behind it.
+///
+/// A boundary that simply stopped at the first floor could not be pushed past
+/// one while panes with room to give sat right behind it — and the pointer,
+/// which is what the boundary follows, would go on walking away from a handle
+/// that had nothing left to answer with. So the floor stops a PANE, not the
+/// gesture: what the analyzer cannot give up comes off the lattice, which is
+/// what every other resize handle does.
+#[test]
+fn a_drag_past_the_nearest_panes_floor_reaches_the_one_behind_it() {
+    let mut dock = dock();
+    let mut folds = Folds::default();
+    let mut window = Window::new(1000.0);
+    window.settle(&mut folds, &mut dock);
+    let (lattice, spectral) = (width(&dock, LATTICE), width(&dock, SPECTRAL));
+    // A leaf's floor, as `drags` prices it off egui_dock's own separator limit.
+    let floor = style().separator.extra - style().separator.width * 0.5;
+    // Further than the analyzer alone can pay for, and well short of what the
+    // two of them can.
+    let travel = (spectral - floor) + 90.0;
+    for _ in 0..(travel / 20.0).ceil() as usize {
+        drag(&mut window.dial, &mut dock, NodeIndex::root(), -20.0);
+        window.frame(&mut folds, &mut dock);
+    }
+    assert!(
+        (width(&dock, SPECTRAL) - floor).abs() < 1.0,
+        "the analyzer should be sitting on its floor, and is {:.1}",
+        width(&dock, SPECTRAL),
+    );
+    let spent = (travel / 20.0).ceil() * 20.0;
+    let owed = spent - (spectral - floor);
+    assert!(
+        (width(&dock, LATTICE) - (lattice - owed)).abs() < 1.0,
+        "the lattice should have given up the {owed:.1}pt the analyzer could not, and gave {:.1}",
+        lattice - width(&dock, LATTICE),
+    );
+}
+
+/// A pair either side of one boundary, so both sides have a pane BEHIND the one
+/// the separator is drawn against — the shape that can tell the two rules apart
+/// in both directions at once. The plugin's own dock is a pair against a single
+/// column, where the right-hand side agrees whatever the rule is.
+fn pairs() -> DockState<Tab> {
+    let mut dock = DockState::new(vec![Tab::Lattice]);
+    let surface = dock.main_surface_mut();
+    let [left, right] = surface.split_right(NodeIndex::root(), 0.5, vec![Tab::Notes]);
+    surface.split_right(left, 0.5, vec![Tab::Spectral]);
+    surface.split_right(right, 0.5, vec![Tab::Tuning]);
+    dock
+}
+
+/// Four panes, one boundary: the two it is drawn between move and the outer two
+/// do not, on both sides of it.
+#[test]
+fn a_separator_between_two_pairs_moves_the_inner_pane_of_each() {
+    let mut dock = pairs();
+    let mut folds = Folds::default();
+    let mut window = Window::new(1000.0);
+    window.settle(&mut folds, &mut dock);
+    let at = |dock: &DockState<Tab>, tab| {
+        width(dock, dock.find_tab(&tab).expect("the tab is docked").node)
+    };
+    // Left to right, which is not the order the tree nests them in.
+    let row = [Tab::Lattice, Tab::Spectral, Tab::Notes, Tab::Tuning];
+    let before = row.map(|tab| at(&dock, tab));
+    for _ in 0..3 {
+        drag(&mut window.dial, &mut dock, NodeIndex::root(), 20.0);
+        window.frame(&mut folds, &mut dock);
+    }
+    let after = row.map(|tab| at(&dock, tab));
+    let moved: Vec<f32> = after.iter().zip(&before).map(|(a, b)| a - b).collect();
+    assert!(moved[0].abs() < 1.0, "the outer left pane moved {:.1}pt", moved[0]);
+    assert!((moved[1] - 60.0).abs() < 1.0, "the pane left of the separator took {:.1}pt", moved[1]);
+    assert!((moved[2] + 60.0).abs() < 1.0, "the pane right of it paid {:.1}pt", -moved[2]);
+    assert!(moved[3].abs() < 1.0, "the outer right pane moved {:.1}pt", moved[3]);
+}
