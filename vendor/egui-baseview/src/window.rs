@@ -1065,6 +1065,10 @@ where
                         .focused = Some(false);
                 }
                 baseview::WindowEvent::Occluded(occluded) => {
+                    // The renderer's half of it: what the window shows for the
+                    // frame between coming back and having something fresh to
+                    // show. See the wgpu renderer's `layer_present`.
+                    self.renderer.window_occluded(*occluded);
                     if !occluded {
                         // Re-exposed after occlusion: the compositor may
                         // have kept showing a stale snapshot of the

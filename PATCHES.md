@@ -197,7 +197,7 @@ in the workspace `Cargo.toml`. Keep this file current when bumping either.
   `update_buffers` itself measured 0.3 ms. The term is now gated on
   `msaa_samples > 1`; `width`/`height` start at 0, so the first frame still
   configures.
-- **Patch 10** (`src/renderer/wgpu/renderer.rs` `fold_present` module +
+- **Patch 10** (`src/renderer/wgpu/renderer.rs` `layer_present` module +
   hooks, `Cargo.toml` objc2 deps): present a resize without the flash
   (issue #121's fold flicker). Two artifacts, one layer: wgpu presents into
   a `CAMetalLayer` that raw-window-metal adds as a plain (not view-backed)
@@ -215,6 +215,21 @@ in the workspace `Cargo.toml`. Keep this file current when bumping either.
   frame from the frame that arms it; set before the acquire — the flag is
   captured there), folds new content and new bounds into one commit. Costs a
   main-thread wait per present, so it is not left on.
+- **Patch 12** (`src/renderer/{wgpu,opengl}/renderer.rs`, `src/window.rs`):
+  the same layer, across the other discontinuity — a window coming back
+  from occlusion. Nothing can present while it is hidden, so the layer
+  still holds the frame from before it went away and the compositor puts
+  that back on screen the instant the window is visible again, before this
+  process is told anything. `Renderer::window_occluded` hides the layer for
+  as long as the window is occluded, so the re-expose composites the host's
+  background instead of a picture that has stopped being true; the unhide
+  waits for the frame that has something fresh to show, and rides one frame
+  of `presentsWithTransaction` so it and that drawable land in one commit.
+  A black hole for that frame rather than a lie — this buys honesty, not
+  invisibility, and one frame is the floor either way (see the baseview
+  occlusion patch). The unhide is gated only on the window being exposed,
+  so the layer cannot stay hidden past the exposure that should end it.
+  The GL renderer draws into the view's own context and takes the no-op.
 - **Patch 11** (1 line, `src/window.rs`): keep the last pointer position when
   the pointer leaves. A press and a release are the two baseview events that
   carry no position of their own, so both are sent at
