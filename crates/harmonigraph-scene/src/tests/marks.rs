@@ -22,6 +22,20 @@ fn marked_scene(notes: &[u8], mark_melody: bool, mark_bass: bool) -> Scene {
     scene_of(&tracker, &Tuning::default(), &view, &FrameParams::default(), 0.0)
 }
 
+/// A note-on and a note-off on channel 0, for the timed sequences below.
+fn on(time: f64, note: u8) -> NoteEvent {
+    NoteEvent { time, channel: 0, note, kind: NoteEventKind::On { velocity: 1.0 } }
+}
+
+fn off(time: f64, note: u8) -> NoteEvent {
+    NoteEvent { time, channel: 0, note, kind: NoteEventKind::Off }
+}
+
+/// Both ends marked, with the Delay bar at `mark_delay`.
+fn delayed_view(mark_delay: f32) -> ViewConfig {
+    ViewConfig { mark_melody: true, mark_bass: true, mark_delay, ..ViewConfig::default() }
+}
+
 /// Union of a mask across every node, and the nodes carrying it.
 fn marked_slots(scene: &Scene, melody: bool) -> (u32, usize) {
     let mut bits = 0u32;
@@ -223,6 +237,156 @@ fn an_inherited_end_eases_in_from_the_handoff_not_from_its_note_on() {
 }
 
 #[test]
+fn a_delay_holds_the_ring_off_until_its_note_has_worn_the_end_that_long() {
+    // The wait sits in FRONT of the ease rather than stretching it: the ring
+    // is at nothing for the whole delay and then arrives on the same ramp it
+    // always did, so the two settings say when and how fast independently.
+    const DELAY: f64 = 0.25;
+    let tracker = held(60); // C4: the origin node, in middle C's octave slot
+    let view = delayed_view(DELAY as f32);
+    let at = |now: f64| {
+        let scene = scene_of(&tracker, &Tuning::default(), &view, &FrameParams::default(), now);
+        let n = origin_node(&scene);
+        (n.melody_level, n.bass_level, n.octaves[MIDDLE_C_SLOT])
+    };
+
+    // Not `assert_eq!(.., 0.0)` at the delay itself: the claim is one-sided
+    // ("has not started"), and the ramp's own zero sits exactly there. These
+    // constants are binary-exact so the equality would in fact hold, but a
+    // later reader retuning DELAY to 0.3 would land a hair past the corner
+    // and fail on a smoothstep of about 1e-32, which is nothing drawn.
+    assert!(at(DELAY * 0.5).0 < 1e-6, "half way through the wait, nothing has started");
+    assert!(at(DELAY).0 < 1e-6, "the ease starts AT the delay, not before it");
+
+    let (melody, bass, octave) = at(DELAY + ATTACK_TIME * 0.5);
+    assert!((melody - 0.5).abs() < 1e-5, "half way in, got {melody}");
+    assert_eq!(melody, bass, "a lone note's two ends wait together");
+    assert_eq!(at(DELAY + ATTACK_TIME).0, 1.0, "full one attack after the wait");
+
+    // The layer UNDER the ring keeps its own timing: a sector eases from its
+    // note-on whatever this bar says, so the delay reads as the ring arriving
+    // late over a lit octave rather than as the whole outer layer being late.
+    assert_eq!(octave, 1.0, "the octave sector is not delayed with the ring");
+}
+
+#[test]
+fn an_end_given_up_inside_the_delay_never_rings_at_all() {
+    // The flicker the setting exists for. Playing fast, the top of what is
+    // down changes every few notes, and a ring easing in on each of them
+    // reads as flicker over the band rather than as the line being traced.
+    // A note that has lost the end again before its wait is up draws no ring
+    // at any point: a mark is held-only, so its level is still 0 when the key
+    // comes up and there is nothing left to fade out.
+    const DELAY: f64 = 0.25;
+    let mut tracker = NoteTracker::new();
+    tracker.handle_event(on(0.0, 60)); // C4, held right through
+    tracker.handle_event(on(0.05, 67)); // G4 takes the melody...
+    tracker.handle_event(off(0.15, 67)); // ...and hands it back inside the wait
+    let view = delayed_view(DELAY as f32);
+    let frame = FrameParams { fade_time: 2.0, ..FrameParams::default() };
+    let ring = |now: f64| {
+        let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, now);
+        // The loudest melody ring ANYWHERE: G4 and C4 light different nodes,
+        // and the claim is about the whole picture, not one node of it.
+        scene.nodes.iter().fold(0.0f32, |peak, n| peak.max(n.melody_level))
+    };
+
+    for step in 0..=10 {
+        let now = 0.15 + DELAY * f64::from(step) / 10.0;
+        assert!(ring(now) < 1e-6, "a ring rang at {now}, inside C4's own wait");
+    }
+    // C4 re-took the melody at the handoff, so its ring is due one wait and
+    // one attack after THAT — not after its own note-on, which is older than
+    // both put together.
+    assert_eq!(ring(0.15 + DELAY + ATTACK_TIME), 1.0, "and then C4's ring arrives");
+    // The bass end never changed hands through any of it, so it is measured
+    // from C4's note-on and has been up since well before.
+    let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, 0.15 + DELAY);
+    assert_eq!(origin_node(&scene).bass_level, 1.0, "the end that never moved is unaffected");
+}
+
+#[test]
+fn a_delay_past_the_note_fade_still_measures_from_the_handoff() {
+    // The handoff moment has to outlive the note that made it. Lift the top
+    // of a held chord and the note below inherits the melody AT THAT MOMENT
+    // — but the note that handed it over is pruned one Fade later, and the
+    // default fade is 0.1s, shorter than most of this bar. Read the moment
+    // off the released tail and any longer delay would lose it mid-wait and
+    // land the ring at full in a single frame, which is the pop the wait was
+    // set to avoid. The tracker's own stamp is what survives the pruning.
+    const DELAY: f64 = 0.5;
+    const FADE: f32 = 0.1;
+    let mut tracker = NoteTracker::new();
+    tracker.handle_event(on(0.0, 60)); // C4 and C5 share a pitch class, so
+    tracker.handle_event(on(0.0, 72)); // both land on the origin node
+    tracker.handle_event(off(1.0, 72));
+    // The frame order the UI runs in: prune, then derive.
+    tracker.prune(1.2, FADE);
+    assert_eq!(tracker.voices().count(), 1, "the C5 that handed the end over is gone");
+
+    let view = delayed_view(DELAY as f32);
+    let frame = FrameParams { fade_time: FADE, ..FrameParams::default() };
+    let at = |now: f64| {
+        let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, now);
+        origin_node(&scene).melody_level
+    };
+
+    assert!(at(1.0 + DELAY * 0.99) < 1e-6, "still waiting, long after the C5 was pruned");
+    assert!((at(1.0 + DELAY + ATTACK_TIME * 0.5) - 0.5).abs() < 1e-5, "then it eases in");
+    assert_eq!(at(1.0 + DELAY + ATTACK_TIME), 1.0);
+}
+
+/// The Delay's range is held in `derive_scene` and nowhere else — `sanitize`
+/// deliberately does range work for nothing, only finiteness — so a view out
+/// of range comes from a file and lands here. Both ends matter and they fail
+/// in opposite directions: a negative delay starts the ramp BEFORE the note
+/// took the end, which is every ring at full the frame it is claimed, exactly
+/// what easing them in exists to prevent; a huge one is the mark layer gone
+/// for as long as the take lasts, from a bar that cannot say so.
+///
+/// Asserted on the LEVEL rather than on a scene field, because unlike every
+/// other clamp in `derive_scene` this one reaches the picture only through
+/// the ring's ease — there is no `Scene::mark_delay` to read back.
+#[test]
+fn the_mark_delay_is_clamped_to_the_bar_its_own_ends() {
+    let tracker = held(60);
+    let level = |mark_delay: f32, now: f64| {
+        let view = delayed_view(mark_delay);
+        let scene = scene_of(&tracker, &Tuning::default(), &view, &FrameParams::default(), now);
+        origin_node(&scene).melody_level
+    };
+
+    // A settable delay passes through untouched, which is what makes the two
+    // clamps below a range rather than a constant.
+    assert!(level(0.5, 0.5 + ATTACK_TIME * 0.5) > 0.4, "a delay inside the bar still eases");
+
+    // Below the bar: floored at 0, the ring arriving with its note as it
+    // always did — not ahead of it.
+    assert_eq!(level(-5.0, 0.0), 0.0, "a negative delay must not pre-start the ramp");
+    assert_eq!(level(-5.0, ATTACK_TIME), 1.0, "it is the undelayed ramp, not a broken one");
+
+    // Above it: capped at the bar's end, so the rings still arrive.
+    assert_eq!(level(1e9, MARK_DELAY_MAX as f64 + ATTACK_TIME), 1.0, "a huge delay stops at 1s");
+}
+
+/// A non-finite delay is the one value that would take the mark layer down
+/// silently: `clamp` passes a NaN straight through (every comparison against
+/// it is false), the ease comes out NaN, and `Mark::add`'s `>=` then leaves
+/// the level at 0 with the slot bit set — no ring anywhere, and nothing to
+/// say why. `ViewConfig::sanitize` is the only guard, and this is the test
+/// that keeps it from being deleted as redundant with the clamp above.
+#[test]
+fn a_non_finite_delay_loads_as_no_delay_at_all() {
+    let tracker = held(60);
+    let mut view = delayed_view(f32::NAN);
+    view.sanitize();
+    assert_eq!(view.mark_delay, 0.0, "the blob's door is where a NaN is repaired");
+
+    let scene = scene_of(&tracker, &Tuning::default(), &view, &FrameParams::default(), ATTACK_TIME);
+    assert_eq!(origin_node(&scene).melody_level, 1.0, "and the rings draw as they always did");
+}
+
+#[test]
 fn held_extremes_never_names_a_released_voice() {
     // A released voice wears no mark at all (above), and it is likewise out
     // of the running for the LIVE ends: letting it stay "the melody" would
@@ -244,8 +408,12 @@ fn held_extremes_never_names_a_released_voice() {
         kind: NoteEventKind::Off,
     });
     let (melody, bass) = held_extremes(&tracker, true, true);
-    assert_eq!(melody, Some((0, 60)), "the released G must not stay the melody");
-    assert_eq!(bass, Some((0, 60)));
+    assert_eq!(melody.map(|e| e.key), Some((0, 60)), "the released G must not stay the melody");
+    assert_eq!(bass.map(|e| e.key), Some((0, 60)));
+    // And C took the melody at the handoff, not at its own note-on: the ring
+    // grows from the moment it moved (see `an_inherited_end_eases_in_...`).
+    assert_eq!(melody.map(|e| e.since), Some(0.1));
+    assert_eq!(bass.map(|e| e.since), Some(0.0), "the end that never moved keeps its stamp");
 
     // Nothing held at all: nothing to mark.
     tracker.handle_event(NoteEvent {

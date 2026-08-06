@@ -9,13 +9,10 @@ use crate::trail::TrailField;
 use crate::view::{FrameParams, ViewConfig};
 use crate::{
     lattice_to_world, EdgeInstance, NodeInstance, Pulse, Scene, ATTACK_TIME,
-    NODE_RADIUS_FACTOR, OCTAVE_SLOTS,
+    MARK_DELAY_MAX, NODE_RADIUS_FACTOR, OCTAVE_SLOTS,
 };
 use glam::Vec4;
-use harmonigraph_core::{ChannelRole, LatticePos, NoteTracker, Time, Tuning, VoiceState};
-
-/// Identifies one voice, matching `NoteTracker`'s own held-voice key.
-type VoiceKey = (u8, u8);
+use harmonigraph_core::{ChannelRole, HeldEnd, LatticePos, NoteTracker, Time, Tuning};
 
 /// A melody- or bass-ring accumulator for one node: which octave slots it
 /// marks, plus the color and drawn level of the strongest marking voice seen
@@ -39,39 +36,25 @@ impl Mark {
     }
 }
 
-/// The highest and lowest HELD voices, as the caller asked for them —
-/// either is `None` when that end isn't being marked or nothing is held.
+/// The highest and lowest HELD voices with the moment each took its end, as
+/// the caller asked for them — either is `None` when that end isn't being
+/// marked or nothing is held.
 ///
-/// Held only: the melody/bass rings live on the notes actually down. A
-/// released voice is no longer part of the chord and wears no mark at all —
-/// its ring comes off the instant the key does, even as its disc fades out
-/// (see [`marks`]). This is what keeps a chord's release from smearing a
-/// fading melody/bass ring across every note as the keys lift one by one.
-///
-/// Compared on `pitch` rather than the raw key, because MPE and per-note
-/// tuning can bend a voice past its neighbor — the same reason the notes
-/// pane sorts on pitch.
+/// Held only, which is the tracker's own answer ([`HeldEnd`]): the
+/// melody/bass rings live on the notes actually down. A released voice is no
+/// longer part of the chord and wears no mark at all — its ring comes off the
+/// instant the key does, even as its disc fades out (see [`marks`]). This is
+/// what keeps a chord's release from smearing a fading melody/bass ring
+/// across every note as the keys lift one by one.
 pub(crate) fn held_extremes(
     tracker: &NoteTracker,
     mark_melody: bool,
     mark_bass: bool,
-) -> (Option<VoiceKey>, Option<VoiceKey>) {
-    if !mark_melody && !mark_bass {
-        return (None, None);
-    }
-    let held = || {
-        tracker
-            .voices()
-            .filter(|v| v.state == harmonigraph_core::VoiceState::Held)
-    };
-    let key = |v: &harmonigraph_core::Voice| (v.channel, v.note);
-    let melody = mark_melody
-        .then(|| held().max_by(|a, b| a.pitch.total_cmp(&b.pitch)).map(key))
-        .flatten();
-    let bass = mark_bass
-        .then(|| held().min_by(|a, b| a.pitch.total_cmp(&b.pitch)).map(key))
-        .flatten();
-    (melody, bass)
+) -> (Option<HeldEnd>, Option<HeldEnd>) {
+    (
+        mark_melody.then(|| tracker.highest_held()).flatten(),
+        mark_bass.then(|| tracker.lowest_held()).flatten(),
+    )
 }
 
 /// Which ends `voice` currently wears, as `(melody, bass)`. Only a HELD
@@ -81,13 +64,14 @@ pub(crate) fn held_extremes(
 /// a lone held note is its own melody and bass.
 fn marks(
     voice: &harmonigraph_core::Voice,
-    live: (Option<VoiceKey>, Option<VoiceKey>),
+    live: (Option<HeldEnd>, Option<HeldEnd>),
 ) -> (bool, bool) {
     match voice.state {
         // `live` is already filtered by `which` (see held_extremes).
         harmonigraph_core::VoiceState::Held => {
-            let key = Some((voice.channel, voice.note));
-            (live.0 == key, live.1 == key)
+            let key = (voice.channel, voice.note);
+            let wears = |end: Option<HeldEnd>| end.is_some_and(|end| end.key == key);
+            (wears(live.0), wears(live.1))
         }
         harmonigraph_core::VoiceState::Released { .. } => (false, false),
     }
@@ -96,44 +80,15 @@ fn marks(
 /// How far an indicator that arrived at `since` has eased in, 0..1:
 /// smoothstep over the first [`ATTACK_TIME`] seconds. Shared by the octave
 /// sectors and the melody/bass rings, so a note's whole outer layer arrives
-/// as one gesture.
+/// on one ramp.
+///
+/// One ramp, not always one moment: a ring can be handed a `since` the Delay
+/// setting has pushed later than the note-on its sector eases from (see
+/// [`ViewConfig::mark_delay`]), which is the ring arriving after the layer it
+/// brackets rather than with it — the whole point of that setting.
 fn attack(now: Time, since: Time) -> f32 {
     let t = ((now - since) / ATTACK_TIME).clamp(0.0, 1.0) as f32;
     t * t * (3.0 - 2.0 * t)
-}
-
-/// When the voice keyed `key` TOOK the end it now wears — the instant its
-/// ring should start easing in. Its own note-on, unless it INHERITED the
-/// end from a note that has since come off: then the moment that note was
-/// released, which is when this one became the outer voice. `outranks` says
-/// which direction beats it (a higher note for the melody, a lower one for
-/// the bass).
-///
-/// Without the inherited case, lifting the top of a held chord would drop
-/// the melody ring onto the note below at full strength in a single frame —
-/// the ring has moved, but the note it moved to is old, so its note-on is
-/// long past and there is nothing left to ease.
-///
-/// Read off the tracker rather than remembered between frames: a released
-/// voice sticks around for the whole of its fade, which outlasts this ramp
-/// unless the Fade param is turned down near zero — and at that setting
-/// nothing else eases either.
-fn end_taken_at(
-    tracker: &NoteTracker,
-    key: Option<VoiceKey>,
-    outranks: fn(f32, f32) -> bool,
-) -> Option<Time> {
-    let key = key?;
-    let voice = tracker.voices().find(|v| (v.channel, v.note) == key)?;
-    let mut taken = voice.on_time;
-    for other in tracker.voices() {
-        if let VoiceState::Released { at } = other.state {
-            if outranks(other.pitch, voice.pitch) && at > taken {
-                taken = at;
-            }
-        }
-    }
-    Some(taken)
 }
 
 /// Build the frame's scene. `hovered` comes from last frame's picking (the
@@ -158,10 +113,16 @@ pub fn derive_scene(
     // Each ring's ease-in, resolved once per frame: which note wears an end
     // and how long it has worn it are properties of the CHORD, identical on
     // every node the note lights.
-    let melody_attack = end_taken_at(tracker, live_extremes.0, |other, own| other > own)
-        .map_or(1.0, |taken| attack(now, taken));
-    let bass_attack = end_taken_at(tracker, live_extremes.1, |other, own| other < own)
-        .map_or(1.0, |taken| attack(now, taken));
+    //
+    // The delay simply moves the ramp's start later, so an end held for less
+    // than it never draws a ring at all — a mark is held-only, and the level
+    // is still 0 when the key comes up. That is what the setting is for: at
+    // speed the ends change hands every few frames, and a ring that eases in
+    // on each of them reads as flicker rather than as the top line.
+    let mark_delay = view.mark_delay.clamp(0.0, MARK_DELAY_MAX) as f64;
+    let ease = |end: Option<HeldEnd>| end.map_or(1.0, |end| attack(now, end.since + mark_delay));
+    let melody_attack = ease(live_extremes.0);
+    let bass_attack = ease(live_extremes.1);
     // Sanitized once, outside the node loop. Capped at 1: this axis makes
     // off-sheet nodes SMALLER, never larger, so the home sheet stays the
     // biggest thing on screen (see `ViewConfig::sevens_size`). The floor
@@ -291,9 +252,11 @@ pub fn derive_scene(
                     //
                     // Strongest marking voice wins the color; the slots still
                     // collect every one of them, since a release crossfades
-                    // two. The ring eases in on the SAME ramp as that sector
-                    // — from when the note took the end, which is not always
-                    // its note-on (see `end_taken_at`).
+                    // two. The ring eases in on the SAME ramp as that sector,
+                    // from when the note took the end — which is not always
+                    // its note-on, and is the tracker's own answer rather
+                    // than anything derived here (`HeldEnd`, stamped by
+                    // `NoteTracker::restamp_ends`).
                     let mark_color = pitch_lut_color(
                         octave_layout.slot_pitch(slot as i32, node_cents),
                         frame.darkest_pitch,

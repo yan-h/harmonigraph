@@ -67,13 +67,35 @@ const NODE_RADIUS_FACTOR: f32 = 0.25;
 ///
 /// ONE time for both, because a ring and the sector it links back to belong
 /// to the same note: easing them in at different rates would have the two
-/// halves of one arrival disagree about when it happened.
+/// halves of one arrival disagree about how fast it happened.
+///
+/// One RATE, note, not one moment. [`ViewConfig::mark_delay`] can hold a ring
+/// back until its note has worn the end a while, which is the ring arriving
+/// later than the sector under it — deliberately, and on this same ramp when
+/// it does.
 ///
 /// Note that this is an attack on the *appearance*, not on the note — a
 /// staccato note still reaches full brightness, since its release fades the
 /// envelope over `fade_time` while this ramp is still climbing, and the
 /// product peaks shortly after the key comes up.
 const ATTACK_TIME: f64 = 0.15;
+
+/// The longest wait the Delay bar offers before a melody/bass ring starts
+/// easing in ([`ViewConfig::mark_delay`]), and the clamp `derive_scene` holds
+/// a hand-edited view to. ONE constant for the two so the bar's end and the
+/// picture's cannot drift apart — which is not the same as saying a view out
+/// of range reads correctly: the bar fills to its end and reads out the value
+/// it actually holds, so a blob carrying five seconds says "5.00 s" over a
+/// full bar while the rings behave as one. Dragging it writes a value in
+/// range and the two agree again.
+///
+/// A second, because that is where the setting stops being about flicker and
+/// starts being about tempo: at 120bpm it rings only what is held for a whole
+/// beat, and the useful settings — a passing sixteenth is 125ms — sit in the
+/// first quarter of the bar. Past a second a chord would have to be held
+/// deliberately still before its ends read at all, which is a different
+/// instrument rather than more of this one.
+pub const MARK_DELAY_MAX: f32 = 1.0;
 
 /// Samples in the pitch->color lookup EVERYTHING pitch-colored reads: the
 /// disc, the trail and the piano roll on the CPU, the octave glyphs and their
@@ -189,7 +211,8 @@ pub struct NodeInstance {
     /// they simply both draw. See [`ViewConfig::mark_melody`].
     pub bass_slots: u32,
     /// How far each mark has eased in, 0..1: a ring grows on over
-    /// [`ATTACK_TIME`] from the moment its note TOOK that end, rather than
+    /// [`ATTACK_TIME`] from the moment its note TOOK that end (plus whatever
+    /// wait [`ViewConfig::mark_delay`] asks for first), rather than
     /// appearing at full the frame it is claimed. Separate from
     /// `activation` because a mark can be arriving while the node it sits
     /// on has been fully lit for a while — the ring has to follow its own

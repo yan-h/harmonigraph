@@ -135,6 +135,50 @@ impl Voice {
     }
 }
 
+/// One end of the chord that is DOWN — the highest or lowest held voice —
+/// and the moment that voice took it.
+///
+/// HELD is the load-bearing word, and it is this type's guarantee rather than
+/// its caller's: the scene rings these two ends and documents that a released
+/// voice wears no mark at all (`derive::held_extremes`), which now rests on
+/// the ends being read off `held` alone and restamped from every mutation of
+/// it. A released voice must never appear here.
+///
+/// The "when" is state rather than a per-frame derivation because the answer
+/// is not in the current voices: a voice that takes an end by INHERITING it,
+/// when the note outside it comes up, took it at that note's release, and
+/// that note is pruned a fade after its key does (see
+/// [`NoteTracker::prune`]). Read off the released tail instead, the handoff
+/// moment vanishes mid-ramp — so any ramp longer than the Fade param loses
+/// its own start and lands at full in one frame, which is precisely the pop
+/// a slow ease exists to avoid.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct HeldEnd {
+    /// The voice holding this end, keyed as the tracker keys it:
+    /// `(channel, note)`.
+    pub key: (u8, u8),
+    /// When this voice took the end — its own note-on when it arrived as
+    /// the outer note of the chord, or the moment the voice outside it was
+    /// released, whichever made it the end.
+    pub since: Time,
+}
+
+/// The end `voice` now holds, carrying `prev`'s stamp forward when it is the
+/// same voice still holding it and stamping `now` when it is not.
+///
+/// "The same voice" is the key AND the note-on behind it: a retrigger with no
+/// off in between replaces the voice on a key it already had (see
+/// [`NoteTracker::handle_event`]), and that is a new note taking the end, not
+/// the old one keeping it.
+fn took(prev: Option<HeldEnd>, voice: Option<&Voice>, now: Time) -> Option<HeldEnd> {
+    let voice = voice?;
+    let key = (voice.channel, voice.note);
+    match prev {
+        Some(end) if end.key == key && end.since >= voice.on_time => Some(end),
+        _ => Some(HeldEnd { key, since: now }),
+    }
+}
+
 /// The display octave containing MIDI note `midi`, in Bitwig's convention
 /// where middle C (MIDI 60) is C3. The inverse of [`octave_start_midi`].
 /// Matches [`Voice::display_octave`]; use these rather than rewriting the
@@ -167,6 +211,10 @@ pub struct NoteTracker {
     released: Vec<Voice>,
     history: NoteHistory,
     roll: NoteRoll,
+    /// The two ends of the held chord, restamped as the held set changes
+    /// (see [`HeldEnd`] for why they are remembered rather than derived).
+    high_end: Option<HeldEnd>,
+    low_end: Option<HeldEnd>,
 }
 
 impl NoteTracker {
@@ -178,7 +226,11 @@ impl NoteTracker {
         match event.kind {
             // Control event: applies regardless of the event's channel.
             NoteEventKind::AllOff => self.all_notes_off(event.time),
-            _ if ChannelRole::of(event.channel) == ChannelRole::Ignored => {}
+            // Returns rather than falling through to the restamp below: this
+            // channel is not tracked at all, so nothing it carries can have
+            // moved an end, and a per-note expression stream on it would
+            // otherwise pay two scans of the held chord to conclude that.
+            _ if ChannelRole::of(event.channel) == ChannelRole::Ignored => return,
             NoteEventKind::On { velocity } => {
                 // A retrigger without an Off silently replaces the held
                 // voice (same key); the old voice gets no release fade.
@@ -207,6 +259,29 @@ impl NoteTracker {
                 }
             }
         }
+        // Every arm reaching here can move the chord's ends: two change which
+        // voices are held, and a tuning can bend one past its neighbour. An
+        // arm that changes nothing (an off for a key that is not down)
+        // restamps to the same answer, `restamp_ends` being a re-read rather
+        // than a reset — which is also why the `AllOff` arm having already
+        // restamped inside `all_notes_off` costs nothing. That call is for the
+        // shells that reach the transport reset directly, not through here.
+        self.restamp_ends(event.time);
+    }
+
+    /// Re-read the two ends, keeping a `since` for as long as the SAME voice
+    /// holds the end it stamped.
+    ///
+    /// Called from every mutation of the held set, and deliberately NOT from
+    /// [`prune`](Self::prune): a released voice finishing its fade is not a
+    /// change of ends, and it must not disturb a ramp that is still climbing.
+    fn restamp_ends(&mut self, now: Time) {
+        // Compared on `pitch` rather than the raw key, because MPE and
+        // per-note tuning can bend a voice past its neighbour — the same
+        // reason the notes pane sorts on pitch.
+        let by_pitch = |a: &&Voice, b: &&Voice| a.pitch.total_cmp(&b.pitch);
+        self.high_end = took(self.high_end, self.held.values().max_by(by_pitch), now);
+        self.low_end = took(self.low_end, self.held.values().min_by(by_pitch), now);
     }
 
     /// Drop released voices whose fade has fully completed, folding each
@@ -267,6 +342,18 @@ impl NoteTracker {
         self.held.len()
     }
 
+    /// The highest held voice and when it took that end — the chord's top
+    /// line, which the scene marks as the melody. `None` while nothing is
+    /// down. See [`HeldEnd`].
+    pub fn highest_held(&self) -> Option<HeldEnd> {
+        self.high_end
+    }
+
+    /// The lowest held voice, the same way: the bass end.
+    pub fn lowest_held(&self) -> Option<HeldEnd> {
+        self.low_end
+    }
+
     pub fn all_notes_off(&mut self, now: Time) {
         self.roll.all_off(now);
         // Key order into `released`, which keeps its own order stable too —
@@ -276,6 +363,7 @@ impl NoteTracker {
             voice.state = VoiceState::Released { at: now };
             self.released.push(voice);
         }
+        self.restamp_ends(now);
     }
 }
 
@@ -359,6 +447,63 @@ mod tests {
         // ...gone after the fade time has fully elapsed.
         tracker.prune(2.1, 1.0);
         assert_eq!(tracker.voices().count(), 0);
+    }
+
+    /// The chord's two ends, and the moment each one changed hands. The
+    /// scene rings them and eases each ring in from the stamp, so a stamp
+    /// that moves when nothing changed hands is a ring that restarts under a
+    /// note nobody touched.
+    #[test]
+    fn the_ends_are_stamped_when_they_change_hands_and_not_otherwise() {
+        let mut tracker = NoteTracker::new();
+        let ends = |t: &NoteTracker| (t.highest_held(), t.lowest_held());
+        assert_eq!(ends(&tracker), (None, None), "nothing down, no ends");
+
+        // A lone note is both ends, taken at its own note-on.
+        tracker.handle_event(on(1.0, 60));
+        assert_eq!(tracker.highest_held(), Some(HeldEnd { key: (0, 60), since: 1.0 }));
+        assert_eq!(tracker.lowest_held(), Some(HeldEnd { key: (0, 60), since: 1.0 }));
+
+        // A note inside the chord moves neither end, and must not restamp
+        // the ends it did not take.
+        tracker.handle_event(on(2.0, 55));
+        tracker.handle_event(on(3.0, 57));
+        assert_eq!(tracker.highest_held(), Some(HeldEnd { key: (0, 60), since: 1.0 }));
+        assert_eq!(tracker.lowest_held(), Some(HeldEnd { key: (0, 55), since: 2.0 }));
+
+        // Lifting the top hands the melody DOWN, at the moment of the lift
+        // rather than at the note-on of the voice that inherits it — which is
+        // older than the chord and would leave nothing to ease.
+        tracker.handle_event(off(4.0, 60));
+        assert_eq!(tracker.highest_held(), Some(HeldEnd { key: (0, 57), since: 4.0 }));
+
+        // Pruning the voice that handed it over is not a change of ends. This
+        // is the whole reason the stamp is kept here rather than read back off
+        // the released tail, which the prune empties.
+        tracker.prune(5.0, 0.1);
+        assert_eq!(tracker.voices().count(), 2, "the released C4 is gone");
+        assert_eq!(tracker.highest_held(), Some(HeldEnd { key: (0, 57), since: 4.0 }));
+
+        // A retrigger with no off in between replaces the voice on a key it
+        // already had, and that is a new note taking the end, not the old one
+        // keeping it.
+        tracker.handle_event(on(6.0, 57));
+        assert_eq!(tracker.highest_held(), Some(HeldEnd { key: (0, 57), since: 6.0 }));
+
+        // A bend past a neighbour moves the end without any key changing:
+        // MPE and per-note tuning are why the ends are compared on pitch.
+        tracker.handle_event(NoteEvent {
+            time: 7.0,
+            channel: 0,
+            note: 55,
+            kind: NoteEventKind::Tuning { semitones: 6.0 },
+        });
+        assert_eq!(tracker.highest_held(), Some(HeldEnd { key: (0, 55), since: 7.0 }));
+        assert_eq!(tracker.lowest_held(), Some(HeldEnd { key: (0, 57), since: 7.0 }));
+
+        // A transport reset takes every held voice, so it takes both ends.
+        tracker.all_notes_off(8.0);
+        assert_eq!(ends(&tracker), (None, None));
     }
 
     #[test]
