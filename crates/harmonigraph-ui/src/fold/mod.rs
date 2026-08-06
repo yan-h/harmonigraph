@@ -109,7 +109,8 @@
 //! Only what is on screen can trade. A rail is a fixed number of points
 //! whichever side of the boundary it sits, and a folded pane is holding the
 //! width it comes back at rather than any width the drag can see — so the drag
-//! moves the visible panes on each side and leaves the rest exactly where it is.
+//! reaches through them to the nearest pane that IS on screen, and leaves the
+//! rest exactly where it is.
 //! The separators drawn between those panes are on neither side of the boundary
 //! either: hand them to one and every frame of a drag pushes the boundary
 //! another separator into whichever subtree holds the more of them, so a
@@ -983,10 +984,9 @@ impl Points {
         }
     }
 
-    /// Move `by` points into the panes ON SCREEN under `node`, nearest first —
-    /// the half of a drag that lands on one side of the boundary. `edge` is the
-    /// side of `node` the boundary sits on, so `Side::Right` for the subtree to
-    /// the LEFT of it.
+    /// Move `by` points into the pane under `node` that FACES the boundary — the
+    /// half of a drag that lands on one side of it. `edge` is the side of `node`
+    /// the boundary sits on, so `Side::Right` for the subtree to the LEFT of it.
     ///
     /// What a separator resizes is the two panes it is drawn between, whatever
     /// the tree says those panes' siblings are. Shared out over the subtree in
@@ -1037,11 +1037,15 @@ impl Points {
             return by;
         }
         let (left, right) = (node.left(), node.right());
-        let floor = floors.get(node.0).copied().unwrap_or(0.0);
         match &tree[node] {
             Node::Leaf(_) => {
+                let floor = floors.get(node.0).copied().unwrap_or(0.0);
                 let Some(at) = self.at.get_mut(node.0) else { return by };
-                let take = by.max(floor - *at);
+                // Its floor bounds how far it can be SQUEEZED and nothing else:
+                // lifting a pane already under its floor would spend more than
+                // the drag asked for, which the other side of the boundary is
+                // not giving up and the window has nowhere to take from.
+                let take = by.max((floor - *at).min(0.0));
                 *at += take;
                 by - take
             }
@@ -1049,10 +1053,12 @@ impl Points {
             Node::Empty => by,
             // Stacked, so both children are the same width and both of them
             // reach the boundary: the column moves as one, and no further than
-            // the shallower of the two can go — which is the floor held here,
-            // since a vertical split's is the greater of its children's.
+            // the shallower of the two can go. Which is [`Points::slack`] and
+            // NOT this node's own floor: where a row is a side-by-side pair,
+            // what faces the boundary is half a row, and it runs out of room
+            // long before the row it is in does.
             Node::Vertical(_) => {
-                let take = by.max(floor - self.visible(tree, holds, node));
+                let take = by.max(-self.slack(tree, holds, floors, node, edge));
                 self.lean(tree, holds, floors, left, take, edge);
                 self.lean(tree, holds, floors, right, take, edge);
                 by - take
@@ -1069,6 +1075,14 @@ impl Points {
     /// floor is while the gesture went on believing it had moved would leave the
     /// two sides of it trading different numbers of points, and the layout no
     /// longer summing to the window it is drawn in.
+    ///
+    /// A COLUMN is worth the least of its rows, because all of them are drawn at
+    /// one width and all of them face the boundary: the row that runs out first
+    /// is where the column stops. Not the column's own floor, which is a
+    /// different number — `floors` is `min_widths` less what a fold has fixed,
+    /// and a vertical split takes the greater of its rows for each of those two
+    /// separately, so where the greater comes from different rows the difference
+    /// is a width no pane in the column is holding.
     fn slack(
         &self,
         tree: &Tree<Tab>,
@@ -1080,13 +1094,17 @@ impl Points {
         if holds.get(node.0).is_some_and(|hold| hold.inside) {
             return 0.0;
         }
-        let floor = floors.get(node.0).copied().unwrap_or(0.0);
-        let room = |width: f32| (width - floor).max(0.0);
+        let (left, right) = (node.left(), node.right());
         match &tree[node] {
-            Node::Leaf(_) => room(self.at.get(node.0).copied().unwrap_or(0.0)),
-            _ if node.right().0 >= tree.len() => 0.0,
+            Node::Leaf(_) => {
+                let floor = floors.get(node.0).copied().unwrap_or(0.0);
+                (self.at.get(node.0).copied().unwrap_or(0.0) - floor).max(0.0)
+            }
+            _ if right.0 >= tree.len() => 0.0,
             Node::Empty => 0.0,
-            Node::Vertical(_) => room(self.visible(tree, holds, node)),
+            Node::Vertical(_) => self
+                .slack(tree, holds, floors, left, edge)
+                .min(self.slack(tree, holds, floors, right, edge)),
             _ => self.slack(tree, holds, floors, self.facing(tree, holds, node, edge), edge),
         }
     }
@@ -1401,9 +1419,13 @@ fn drags(
             continue;
         }
         // Each side's own edge of the boundary, so the panes the separator is
-        // drawn between are the ones that move.
-        points.lean(tree, holds, &floors, left, delta, Side::Right);
-        points.lean(tree, holds, &floors, right, -delta, Side::Left);
+        // drawn between are the ones that move. Both sides spend the drag in
+        // full, since it was priced at what each of them had: a side that
+        // silently spent less is one trading fewer points than the other across
+        // the same boundary, and a layout that stops summing to its window.
+        let unspent = points.lean(tree, holds, &floors, left, delta, Side::Right).abs()
+            + points.lean(tree, holds, &floors, right, -delta, Side::Left).abs();
+        debug_assert!(unspent < 1e-3, "{unspent}pt of a {delta}pt drag went unspent");
         if let Some(grip) = grip {
             grip.left = points.visible(tree, holds, left);
         }

@@ -1587,7 +1587,6 @@ fn resetting_the_layout_does_not_re_fold_the_pane_it_just_opened() {
     );
 }
 
-
 /// A separator resizes the two panes it is DRAWN between and leaves every other
 /// pane exactly where it was.
 ///
@@ -1599,11 +1598,12 @@ fn resetting_the_layout_does_not_re_fold_the_pane_it_just_opened() {
 /// picture re-laid-out for a gesture aimed at one edge of it, and the pane the
 /// user was pointing at moving least of the two.
 ///
-/// Both ways, since each direction is a different pane's floor to stop at and
-/// neither is anywhere near it here.
+/// Both ways, since each direction is a different pane's floor to stop at — and
+/// short of either, since a drag that lands ON a floor is testing the clamp
+/// rather than the share-out. 75 points leaves the analyzer 30 clear of its own.
 #[test]
 fn a_separator_moves_the_panes_it_is_drawn_between_and_nothing_else() {
-    for step in [-20.0f32, 20.0] {
+    for step in [-15.0f32, 15.0] {
         let mut dock = dock();
         let mut folds = Folds::default();
         let mut window = Window::new(1000.0);
@@ -1689,27 +1689,97 @@ fn pairs() -> DockState<Tab> {
 }
 
 /// Four panes, one boundary: the two it is drawn between move and the outer two
-/// do not, on both sides of it.
+/// do not, on both sides of it. Both directions, since which of the two facing
+/// panes is being squeezed swaps with the direction.
 #[test]
 fn a_separator_between_two_pairs_moves_the_inner_pane_of_each() {
-    let mut dock = pairs();
+    for step in [-20.0f32, 20.0] {
+        let mut dock = pairs();
+        let mut folds = Folds::default();
+        let mut window = Window::new(1000.0);
+        window.settle(&mut folds, &mut dock);
+        let at = |dock: &DockState<Tab>, tab| {
+            width(dock, dock.find_tab(&tab).expect("the tab is docked").node)
+        };
+        // Left to right, which is not the order the tree nests them in.
+        let row = [Tab::Lattice, Tab::Spectral, Tab::Notes, Tab::Tuning];
+        let before = row.map(|tab| at(&dock, tab));
+        for _ in 0..3 {
+            drag(&mut window.dial, &mut dock, NodeIndex::root(), step);
+            window.frame(&mut folds, &mut dock);
+        }
+        let after = row.map(|tab| at(&dock, tab));
+        let moved: Vec<f32> = after.iter().zip(&before).map(|(a, b)| a - b).collect();
+        let want = step * 3.0;
+        assert!(moved[0].abs() < 1.0, "the outer left pane moved {:.1}pt", moved[0]);
+        assert!(
+            (moved[1] - want).abs() < 1.0,
+            "the pane left of the separator moved {:.1}pt of the {want}",
+            moved[1],
+        );
+        assert!((moved[2] + want).abs() < 1.0, "the pane right of it moved {:.1}pt", moved[2]);
+        assert!(moved[3].abs() < 1.0, "the outer right pane moved {:.1}pt", moved[3]);
+    }
+}
+
+/// A column with a side-by-side pair in it, which egui_dock lets a user build by
+/// dropping one tab beside another inside a column.
+///
+/// The shape that tells a vertical split's room from its floor. Every other
+/// fixture here bottoms out at a leaf or at an all-leaf column, where the two
+/// are the same number.
+fn column_with_a_pair() -> DockState<Tab> {
+    let mut dock = DockState::new(vec![Tab::Lattice]);
+    let surface = dock.main_surface_mut();
+    let [_, column] = surface.split_right(NodeIndex::root(), 0.5, vec![Tab::Tuning]);
+    let [_, bottom] = surface.split_below(column, 0.5, vec![Tab::Notes]);
+    surface.split_right(bottom, 0.5, vec![Tab::Scene]);
+    dock
+}
+
+/// A column squeezed by the separator down its side moves AS ONE, and stops
+/// where the narrowest row in it stops.
+///
+/// Both rows of a column are drawn at the same width and both reach the
+/// boundary, so a drag that hands each of them the same points is only correct
+/// while each can take them. Where one row is a PAIR, the pane facing the
+/// boundary is half a row, and the drag runs out there long before the row does
+/// — so a column priced at what its own floor allows promises points that the
+/// pair's near pane cannot pay. It stops at its floor, the leftovers go
+/// nowhere, and the two rows come out different widths: the pane BEHIND the
+/// near one wears the difference, which is the whole thing this separator is
+/// not supposed to touch.
+#[test]
+fn a_column_with_a_pair_in_it_is_squeezed_no_further_than_the_pair_allows() {
+    let mut dock = column_with_a_pair();
     let mut folds = Folds::default();
     let mut window = Window::new(1000.0);
     window.settle(&mut folds, &mut dock);
-    let at = |dock: &DockState<Tab>, tab| {
-        width(dock, dock.find_tab(&tab).expect("the tab is docked").node)
-    };
-    // Left to right, which is not the order the tree nests them in.
-    let row = [Tab::Lattice, Tab::Spectral, Tab::Notes, Tab::Tuning];
-    let before = row.map(|tab| at(&dock, tab));
-    for _ in 0..3 {
+    let node = |dock: &DockState<Tab>, tab| dock.find_tab(&tab).expect("the tab is docked").node;
+    let at = |dock: &DockState<Tab>, tab| width(dock, node(dock, tab));
+    let floor = style().separator.extra - style().separator.width * 0.5;
+    let behind = at(&dock, Tab::Scene);
+    // Rightward, which is the column shrinking: far enough that the pair's near
+    // pane reaches its floor well before the column's own would.
+    for _ in 0..15 {
         drag(&mut window.dial, &mut dock, NodeIndex::root(), 20.0);
         window.frame(&mut folds, &mut dock);
     }
-    let after = row.map(|tab| at(&dock, tab));
-    let moved: Vec<f32> = after.iter().zip(&before).map(|(a, b)| a - b).collect();
-    assert!(moved[0].abs() < 1.0, "the outer left pane moved {:.1}pt", moved[0]);
-    assert!((moved[1] - 60.0).abs() < 1.0, "the pane left of the separator took {:.1}pt", moved[1]);
-    assert!((moved[2] + 60.0).abs() < 1.0, "the pane right of it paid {:.1}pt", -moved[2]);
-    assert!(moved[3].abs() < 1.0, "the outer right pane moved {:.1}pt", moved[3]);
+    assert!(
+        at(&dock, Tab::Notes) > floor - 1.0,
+        "the pane facing the boundary is drawn at {:.1}, under its {floor} floor",
+        at(&dock, Tab::Notes),
+    );
+    assert!(
+        (at(&dock, Tab::Scene) - behind).abs() < 1.0,
+        "the pane behind it is not what the separator divides, and moved {:.1}pt",
+        at(&dock, Tab::Scene) - behind,
+    );
+    // The column is one column, however deep either row nests.
+    let (top, bottom) = (at(&dock, Tab::Tuning), node(&dock, Tab::Notes).parent().unwrap());
+    assert!(
+        (top - width(&dock, bottom)).abs() < 1.0,
+        "the column's rows came out {top:.1} and {:.1} wide",
+        width(&dock, bottom),
+    );
 }
