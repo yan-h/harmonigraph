@@ -42,13 +42,9 @@ fn style() -> egui_dock::Style {
 /// egui_dock's collapsed-leaf rule. The fold reads the WIDTH of horizontal
 /// splits and nothing else, so the difference never reaches it.
 fn lay_out(dock: &mut DockState<Tab>, width: f32) {
-    lay_out_surface(dock, SurfaceIndex::main(), width);
-}
-
-fn lay_out_surface(dock: &mut DockState<Tab>, surface: SurfaceIndex, width: f32) {
     let separator = style().separator.width;
     let frame = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, FRAME_HEIGHT));
-    let tree = &mut dock[surface];
+    let tree = &mut dock[SurfaceIndex::main()];
     tree[NodeIndex::root()].set_rect(frame);
     for index in 0..tree.len() {
         let node = NodeIndex(index);
@@ -361,26 +357,6 @@ fn a_persisted_fold_still_holds_the_fraction_it_was_dialled_at() {
     assert!((width(&dock, LATTICE) - pane).abs() < 0.01, "with the pane in it");
 }
 
-/// A fold in a floating dock window is that window's own business: there
-/// is no plugin window behind it to take the width from, so it keeps
-/// egui_dock's trade and hands the width to the pane beside it.
-#[test]
-fn a_fold_in_a_floating_window_leaves_the_plugin_window_alone() {
-    let mut dock = dock();
-    let floating = dock.add_window(vec![Tab::Nodes]);
-    dock[floating].split_right(NodeIndex::root(), 0.5, vec![Tab::Scene]);
-    lay_out(&mut dock, 1000.0);
-    lay_out_surface(&mut dock, floating, 500.0);
-    let path = dock.find_tab(&Tab::Nodes).expect("tab is in the floating window");
-    dock[path.surface][path.node].set_collapsed(true);
-    let mut folds = Folds::default();
-    let mut dial = Dial::default();
-    let window = folds.apply(&mut dock, &style(), 1000.0, 0.0, &mut dial);
-    lay_out_surface(&mut dock, floating, 500.0);
-    assert_eq!(window, 0.0, "the plugin window is not the one that folded");
-    let rail = dock[floating][NodeIndex(1)].rect().expect("on screen").width();
-    assert!((rail - 26.0).abs() < 0.01, "the fold itself still happens");
-}
 /// A settings column folds away as one rail once everything in it is
 /// collapsed: the stacked leaves fold onto each other's tab bars, so the
 /// column itself is one rail wide — and the pictures beside it are no
@@ -556,6 +532,27 @@ fn a_fold_blob_predating_the_recorded_window_still_loads() {
     let loaded: Folds = ron::from_str(&stale).expect("a blob without the field still loads");
     assert_eq!(loaded.0.len(), folds.0.len(), "every entry survives");
     assert!(loaded.0.iter().all(|fold| fold.window == 0.0), "no history to recover");
+}
+
+/// A blob written while an entry still named a surface, and while a fraction
+/// was what one held instead of a width, loads with both keys ignored.
+///
+/// This is the whole cost of retiring either field, and it is why retiring
+/// them was affordable: `UiPersist` is one RON document, so a blob these
+/// entries could not parse would cost the saved layout entire and not just its
+/// folds. Serde passes over a key it does not know, so what is lost is the
+/// value and never the entry — a fold recorded before the layout was points
+/// comes back with no width to seed from, and opens at the rail width its
+/// fraction in the tree says.
+#[test]
+fn a_fold_blob_still_carrying_the_retired_keys_loads_without_them() {
+    let older = "([(surface:0,node:1,side:Right,width:487.0,window:1000.0),\
+                   (surface:0,node:5,fraction:0.35)])";
+    let loaded: Folds = ron::from_str(older).expect("an older blob still loads");
+    assert_eq!(loaded.0.len(), 2, "both entries survive the keys they carry");
+    assert_eq!(loaded.0[0].node, 1);
+    assert!((loaded.0[0].width - 487.0).abs() < 0.01, "what it does still hold is read");
+    assert_eq!(loaded.0[1].width, 0.0, "and a fraction seeds nothing");
 }
 
 /// [`Folds`] is persisted and [`Dial`] is not, so a project reopened with a
@@ -1490,52 +1487,6 @@ fn folding_a_pane_does_not_move_its_neighbour_in_a_whole_point_window() {
             "folding the analyzer at {start} moved the lattice from {before} to {after}",
         );
     }
-}
-
-/// A fold worked inside a floating dock window must not cost the main surface
-/// its hold.
-///
-/// A floating window has no window of its own to ask for, so a hold there could
-/// never be released — and the hold is one slot, so an unreleasable one would
-/// sit in it forever and every later unfold on the main surface would go
-/// through unheld. That is #121's flicker, handed back by the fix for it.
-#[test]
-fn a_fold_in_a_floating_window_does_not_cost_the_main_surface_its_hold() {
-    let mut dock = dock();
-    let floating = dock.add_window(vec![Tab::Notes]);
-    let mut folds = Folds::default();
-    let mut dial = Dial::default();
-    // A dock window is laid out in its own window, which the fold pass reads
-    // off the root's rect; without one it is skipped before it reaches any of
-    // this (`mod.rs`, the non-main `area`).
-    let float_frame = |folds: &mut Folds, dock: &mut DockState<Tab>, dial: &mut Dial| {
-        lay_out_surface(dock, floating, 300.0);
-        let _ = frame(folds, dock, dial, 1000.0);
-        lay_out_surface(dock, floating, 300.0);
-    };
-    float_frame(&mut folds, &mut dock, &mut dial);
-
-    // Something folds and unfolds out in the floating window.
-    let leaf = dock[floating].find_tab(&Tab::Notes).expect("tab is in the window").0;
-    dock[floating][leaf].set_collapsed(true);
-    float_frame(&mut folds, &mut dock, &mut dial);
-    dock[floating][leaf].set_collapsed(false);
-    float_frame(&mut folds, &mut dock, &mut dial);
-
-    // The main surface's own unfold still waits for its window.
-    collapse(&mut dock, Tab::Lattice, true);
-    let narrow = settle(&mut folds, &mut dock, &mut dial, 1000.0);
-    collapse(&mut dock, Tab::Lattice, false);
-    let asked = frame(&mut folds, &mut dock, &mut dial, narrow);
-    assert!(
-        collapsed(&dock[SurfaceIndex::main()], LATTICE),
-        "the main surface's unfold is still held for the frame that has its window"
-    );
-    let _ = frame(&mut folds, &mut dock, &mut dial, asked);
-    assert!(
-        !collapsed(&dock[SurfaceIndex::main()], LATTICE),
-        "and still opens on it"
-    );
 }
 
 /// Resetting the layout while a pane is folded must not fold it again.

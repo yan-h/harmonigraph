@@ -29,10 +29,10 @@ use crate::panes::Tab;
 /// read here is a frame ahead of the bar on screen and this would paint beside
 /// it rather than over it.
 fn lit(ui: &egui::Ui, dock: &DockState<Tab>, style: &egui_dock::Style, dial: &Dial) {
-    let Some((surface, node)) = dial.held() else {
+    let Some(node) = dial.held() else {
         return;
     };
-    let Some(tree) = dock.get_surface(surface).and_then(Surface::node_tree) else {
+    let Some(tree) = dock.get_surface(SurfaceIndex::main()).and_then(Surface::node_tree) else {
         return;
     };
     let (left, right) = (node.left(), node.right());
@@ -97,11 +97,7 @@ pub fn paint(ui: &egui::Ui, dock: &mut DockState<Tab>, style: &egui_dock::Style,
     let mut opened = None;
     let mut shoved = None;
     lit(ui, dock, style, dial);
-    for index in 0..dock.surfaces_count() {
-        let surface = SurfaceIndex(index);
-        let Some(tree) = dock.get_surface(surface).and_then(Surface::node_tree) else {
-            continue;
-        };
+    if let Some(tree) = dock.get_surface(SurfaceIndex::main()).and_then(Surface::node_tree) {
         let holds = holds(tree);
         for node in 0..tree.len() {
             let node = NodeIndex(node);
@@ -135,8 +131,8 @@ pub fn paint(ui: &egui::Ui, dock: &mut DockState<Tab>, style: &egui_dock::Style,
             }
             if chrome {
                 for band in name_bands(tree, folded) {
-                    if paint_band(ui, &band, side, surface, style) {
-                        opened = Some((surface, band.node));
+                    if paint_band(ui, &band, side, style) {
+                        opened = Some(band.node);
                     }
                 }
             }
@@ -155,13 +151,13 @@ pub fn paint(ui: &egui::Ui, dock: &mut DockState<Tab>, style: &egui_dock::Style,
             for (index, band) in
                 std::iter::once(outer).chain(inner_bands(tree, folded)).enumerate()
             {
-                let id = egui::Id::new(("fold band", surface.0, node.0, index));
+                let id = egui::Id::new(("fold band", node.0, index));
                 match target {
                     // Somewhere outward to pass it: the panes move as the drag
                     // goes, which is what any separator between two panes does.
                     Some(target) => {
                         if let Some(delta) = shove(ui, band, id, style) {
-                            shoved = Some((surface, target, delta));
+                            shoved = Some((target, delta));
                         }
                     }
                     // Nowhere: the fold is holding the whole of one side of the
@@ -180,15 +176,15 @@ pub fn paint(ui: &egui::Ui, dock: &mut DockState<Tab>, style: &egui_dock::Style,
     // care which arrow moved them — and egui_dock's own collapse button, which
     // it draws for a folded leaf too, moves them from inside `show` where
     // nothing of ours can intercept it.
-    if let Some((surface, node)) = opened {
-        if let Some(tree) = dock.get_surface_mut(surface).and_then(Surface::node_tree_mut) {
-            uncollapse(tree, node);
-        }
+    let Some(tree) = dock.get_surface_mut(SurfaceIndex::main()).and_then(Surface::node_tree_mut)
+    else {
+        return;
+    };
+    if let Some(node) = opened {
+        uncollapse(tree, node);
     }
-    if let Some((surface, node, delta)) = shoved {
-        if let Some(tree) = dock.get_surface_mut(surface).and_then(Surface::node_tree_mut) {
-            nudge(tree, node, delta, style);
-        }
+    if let Some((node, delta)) = shoved {
+        nudge(tree, node, delta, style);
     }
 }
 
@@ -284,13 +280,7 @@ fn shove(
 /// takes the click there, and egui_dock's own is painted over and lifted out
 /// of the frame's hit test: left live it would open a pane from a point the
 /// rail now gives to another pane's name.
-fn paint_band(
-    ui: &egui::Ui,
-    band: &Band,
-    side: Side,
-    surface: SurfaceIndex,
-    style: &egui_dock::Style,
-) -> bool {
+fn paint_band(ui: &egui::Ui, band: &Band, side: Side, style: &egui_dock::Style) -> bool {
     if !band.rect.is_positive() {
         return false;
     }
@@ -309,7 +299,7 @@ fn paint_band(
     if (band.rect.top() - band.leaf.rect.top()).abs() < 0.5 {
         return false;
     }
-    let id = egui::Id::new(("fold arrow", surface.0, band.node.0));
+    let id = egui::Id::new(("fold arrow", band.node.0));
     let clicked = ui.interact(arrow, id, egui::Sense::click()).clicked();
     ui.interact(arrow_button(band.leaf.rect, style), id.with("stacked"), egui::Sense::click());
     clicked
