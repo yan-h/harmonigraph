@@ -120,7 +120,7 @@ impl NoteHistory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::notes::{NoteEvent, NoteEventKind, NoteTracker};
+    use crate::notes::{Envelope, NoteEvent, NoteEventKind, NoteTracker};
 
     fn on(time: Time, note: u8) -> NoteEvent {
         NoteEvent { time, channel: 0, note, kind: NoteEventKind::On { velocity: 0.8 } }
@@ -135,7 +135,7 @@ mod tests {
     fn play(tracker: &mut NoteTracker, note: u8, on_time: Time, off_time: Time) {
         tracker.handle_event(on(on_time, note));
         tracker.handle_event(off(off_time, note));
-        tracker.prune(off_time + 2.0, 1.0);
+        tracker.prune(off_time + 2.0, &Envelope::default());
     }
 
     #[test]
@@ -144,11 +144,11 @@ mod tests {
         tracker.handle_event(on(0.0, 60));
         tracker.handle_event(off(1.0, 60));
         // Mid-fade: still a live voice, not yet a memory.
-        tracker.prune(1.5, 1.0);
+        tracker.prune(1.5, &Envelope::default());
         assert_eq!(tracker.voices().count(), 1);
         assert!(tracker.history().is_empty());
         // The fade completes and the voice becomes history in one step.
-        tracker.prune(2.5, 1.0);
+        tracker.prune(2.5, &Envelope::default());
         assert_eq!(tracker.voices().count(), 0);
         assert_eq!(tracker.history().visits().count(), 1);
     }
@@ -206,7 +206,7 @@ mod tests {
             kind: NoteEventKind::Tuning { semitones: 2.0 },
         });
         tracker.handle_event(off(1.0, 60));
-        tracker.prune(3.0, 1.0);
+        tracker.prune(3.0, &Envelope::default());
         let visit = *tracker.history().visits().next().unwrap();
         assert_eq!(visit.pitch, 62.0);
         assert_eq!(visit.pitch_class, PitchClass::from_midi_note(2));
@@ -227,7 +227,7 @@ mod tests {
                 kind: NoteEventKind::Tuning { semitones: i as f32 * 0.01 },
             });
             tracker.handle_event(off(t, 60));
-            tracker.prune(t + 2.0, 1.0);
+            tracker.prune(t + 2.0, &Envelope::default());
         }
         let history = tracker.history();
         assert_eq!(history.visits().count(), NoteHistory::MAX_VISITS);

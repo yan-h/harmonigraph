@@ -189,8 +189,13 @@ mod tests {
         replay.advance_to(&mut state, 1.0);
         let voice = *state.tracker.voices().next().unwrap();
         assert_eq!(voice.on_time, 0.5);
-        // Released at 0.6 with a 1 s fade: 40% gone by t=1.0.
-        assert!((voice.activation(1.0, 1.0) - 0.6).abs() < 1e-6);
+        // Released at 0.6 with a 1 s straight-line fade: 40% gone by t=1.0.
+        // The envelope is spelled out rather than taken from the state's view
+        // because what is under test is the TIMESTAMP — reading it through
+        // whatever curve the default view happens to carry would have this
+        // fail the day that default is retuned, for no reason it names.
+        let env = harmonigraph_core::Envelope { fade_time: 1.0, ..Default::default() };
+        assert!((voice.activation(1.0, &env) - 0.6).abs() < 1e-6);
     }
 
     #[test]

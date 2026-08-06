@@ -1157,6 +1157,16 @@ fn the_view_fields_an_old_blob_reloads_differently_are_exactly_these() {
         "octave_extras",
         "octave_extra_size",
         "octave_extra_blend",
+        // A blob with no envelope keys predates the note having a settable
+        // arrival and curve, and reloads on the pair that draws what it was
+        // saved drawing: no attack, so the core lights the instant a note
+        // sounds, and a straight-line fade. A fresh view opens with a short
+        // attack and a gentle curve instead. The one thing the fallback
+        // cannot carry over is the fixed 0.15 s ramp the octave sectors used
+        // to run on alone — there is one attack now, and the core is the
+        // layer that gets to keep its behavior (see `ViewConfig::attack_time`).
+        "attack_time",
+        "fade_shape",
         "idle_marker",
         "idle_radius",
         "mark_thickness",

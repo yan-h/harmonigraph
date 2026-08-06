@@ -35,7 +35,7 @@ fn off_sheet_grid_appears_only_where_the_music_reaches() {
         extent_threes: 1,
         extent_fives: 0,
         extent_sevens: 2,
-        ..ViewConfig::default()
+        ..plain_view()
     };
     let is_link = |s: &EdgeInstance| (s.b.z - s.a.z).abs() > 0.25;
     let off_home = |s: &EdgeInstance| is_link(s) || s.a.z.abs() > 0.5;
@@ -253,7 +253,7 @@ fn every_sounding_node_clears_what_is_behind_it_the_home_sheet_included() {
     // reads as being in front. Which layer the clearing is DRAWN in differs
     // — the home sheet's goes ahead of the grid, see the renderer — but
     // that is not this layer's business.
-    let view = ViewConfig { extent_sevens: 1, sevens_gutter: 0.2, ..ViewConfig::default() };
+    let view = ViewConfig { extent_sevens: 1, sevens_gutter: 0.2, ..plain_view() };
     let scene = scene_of(&held(60), &Tuning::default(), &view, &FrameParams::default(), 0.0);
 
     // C sounds, so every node whose pitch class is C lights — on the home
@@ -284,7 +284,7 @@ fn a_flat_lattice_still_clears_its_grid() {
     // sheet clears on a flat lattice exactly as it does on a deep one.
     // Gating it on the extent would make the look reachable only by growing
     // depth the view doesn't want.
-    let view = ViewConfig { extent_sevens: 0, sevens_gutter: 0.2, ..ViewConfig::default() };
+    let view = ViewConfig { extent_sevens: 0, sevens_gutter: 0.2, ..plain_view() };
     let scene = scene_of(&held(60), &Tuning::default(), &view, &FrameParams::default(), 0.0);
     let mut lit = 0;
     for node in &scene.nodes {

@@ -60,25 +60,25 @@ fn lattice_to_world(pos: LatticePos, spacing: f32) -> Vec3 {
 /// Node radius as a fraction of the lattice spacing.
 const NODE_RADIUS_FACTOR: f32 = 0.25;
 
-/// Seconds an indicator on the outer layer eases in — the octave sectors
-/// and the melody/bass rings alike. Keeps a fresh octave's color GROWING
-/// into the node's blend instead of instantly repainting its share of the
-/// disc (and softens glyph pop-in); short enough to still feel immediate.
+/// The longest attack the bar offers ([`ViewConfig::attack_time`]), and the
+/// clamp [`ViewConfig::envelope`] holds a hand-edited view to.
 ///
-/// ONE time for both, because a ring and the sector it links back to belong
-/// to the same note: easing them in at different rates would have the two
-/// halves of one arrival disagree about how fast it happened.
+/// A quarter second, because that is where an attack stops being a softened
+/// arrival and starts being a swell the player has to wait out: attack and
+/// release multiply, so at this end a note has to be held a quarter second
+/// before it reads at full, and everything shorter is dimmed in proportion
+/// to how short it is. Past here the lattice would be answering a phrase
+/// rather than its notes, which is a different instrument rather than more
+/// of this one — the same line [`MARK_DELAY_MAX`] is drawn on.
 ///
-/// One RATE, note, not one moment. [`ViewConfig::mark_delay`] can hold a ring
-/// back until its note has worn the end a while, which is the ring arriving
-/// later than the sector under it — deliberately, and on this same ramp when
-/// it does.
-///
-/// Note that this is an attack on the *appearance*, not on the note — a
-/// staccato note still reaches full brightness, since its release fades the
-/// envelope over `fade_time` while this ramp is still climbing, and the
-/// product peaks shortly after the key comes up.
-const ATTACK_TIME: f64 = 0.15;
+/// One RATE for the whole node, note, not one moment. The octave sectors and
+/// the melody/bass rings arrive on the same ramp as the core they sit on,
+/// because a ring and the sector it links back to belong to one note and
+/// easing them in at different rates would have the halves of one arrival
+/// disagree about how fast it happened —
+/// [`ViewConfig::mark_delay`] moves a ring's ramp LATER without changing its
+/// rate, which is the one thing that may differ.
+pub const ATTACK_TIME_MAX: f32 = 0.25;
 
 /// The longest wait the Delay bar offers before a melody/bass ring starts
 /// easing in ([`ViewConfig::mark_delay`]), and the clamp `derive_scene` holds
@@ -211,9 +211,9 @@ pub struct NodeInstance {
     /// they simply both draw. See [`ViewConfig::mark_melody`].
     pub bass_slots: u32,
     /// How far each mark has eased in, 0..1: a ring grows on over
-    /// [`ATTACK_TIME`] from the moment its note TOOK that end (plus whatever
-    /// wait [`ViewConfig::mark_delay`] asks for first), rather than
-    /// appearing at full the frame it is claimed. Separate from
+    /// [`ViewConfig::attack_time`] from the moment its note TOOK that end
+    /// (plus whatever wait [`ViewConfig::mark_delay`] asks for first), rather
+    /// than appearing at full the frame it is claimed. Separate from
     /// `activation` because a mark can be arriving while the node it sits
     /// on has been fully lit for a while — the ring has to follow its own
     /// note, not the disc's.

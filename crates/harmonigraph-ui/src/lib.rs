@@ -426,9 +426,9 @@ pub fn begin_frame(state: &mut SharedState, params: &dyn ParamBackend, now: f64)
         darkest_pitch: params.get(params::ParamKey::DarkestPitch),
         brightest_pitch: params.get(params::ParamKey::BrightestPitch),
     };
-    // Every layer of a node now fades on this one time, so a voice is dead
-    // to the display exactly when its envelope reaches zero.
-    state.tracker.prune(now, state.frame_params.fade_time);
+    // Every layer of a node fades on this one envelope, so a voice is dead to
+    // the display exactly when its release reaches zero.
+    state.tracker.prune(now, &state.view.envelope(&state.frame_params));
 }
 
 /// The tuning axes one comma's identity reads, in microcents — the key its

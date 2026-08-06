@@ -272,7 +272,7 @@ pub(crate) fn spectral_pane(
         });
         let half = (cfg.roll_thickness * 0.5 / scale.span).max(0.0);
         for voice in voices {
-            let strength = voice.activation(now, state.frame_params.fade_time);
+            let strength = voice.activation(now, &state.view.envelope(&state.frame_params));
             if strength <= 0.0 || !scale.contains(voice.pitch) {
                 continue;
             }

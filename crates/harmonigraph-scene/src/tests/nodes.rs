@@ -329,12 +329,12 @@ fn one_fade_time_carries_the_body_but_the_marks_snap_off() {
         tracker.handle_event(NoteEvent { time: 0.0, channel: 0, note, kind: NoteEventKind::Off });
     }
     let frame = FrameParams { fade_time: 2.0, ..FrameParams::default() };
-    tracker.prune(1.0, frame.fade_time);
     let view = ViewConfig {
         mark_melody: true,
         mark_bass: true,
-        ..ViewConfig::default()
+        ..plain_view()
     };
+    tracker.prune(1.0, &view.envelope(&frame));
     let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, 1.0);
 
     let half = |what: &str, v: f32| {
@@ -441,7 +441,7 @@ fn channel_14_voices_render_outlined() {
     let scene = scene_of(
         &tracker,
         &Tuning::default(),
-        &ViewConfig::default(),
+        &plain_view(),
         &FrameParams::default(),
         0.0,
     );
@@ -458,8 +458,8 @@ fn held_note_lights_matching_nodes() {
         kind: NoteEventKind::On { velocity: 1.0 },
     });
     let tuning = Tuning::default(); // 12-TET: origin node matches C exactly
-    // Sampled after ATTACK_TIME: the octave indicator eases in,
-    // so at the note-on instant itself it is still at zero.
+    // Sampled past the view's attack: every layer of a node eases in, so at
+    // the note-on instant itself the whole thing is still at zero.
     let scene = scene_of(
         &tracker,
         &tuning,

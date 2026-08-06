@@ -8,11 +8,11 @@ use crate::octaves::octave_layout;
 use crate::trail::TrailField;
 use crate::view::{FrameParams, ViewConfig};
 use crate::{
-    lattice_to_world, EdgeInstance, NodeInstance, Pulse, Scene, ATTACK_TIME,
+    lattice_to_world, EdgeInstance, NodeInstance, Pulse, Scene,
     MARK_DELAY_MAX, NODE_RADIUS_FACTOR, OCTAVE_SLOTS,
 };
 use glam::Vec4;
-use harmonigraph_core::{ChannelRole, HeldEnd, LatticePos, NoteTracker, Time, Tuning};
+use harmonigraph_core::{ChannelRole, HeldEnd, LatticePos, NoteTracker, Tuning};
 
 /// A melody- or bass-ring accumulator for one node: which octave slots it
 /// marks, plus the color and drawn level of the strongest marking voice seen
@@ -77,20 +77,6 @@ fn marks(
     }
 }
 
-/// How far an indicator that arrived at `since` has eased in, 0..1:
-/// smoothstep over the first [`ATTACK_TIME`] seconds. Shared by the octave
-/// sectors and the melody/bass rings, so a note's whole outer layer arrives
-/// on one ramp.
-///
-/// One ramp, not always one moment: a ring can be handed a `since` the Delay
-/// setting has pushed later than the note-on its sector eases from (see
-/// [`ViewConfig::mark_delay`]), which is the ring arriving after the layer it
-/// brackets rather than with it — the whole point of that setting.
-fn attack(now: Time, since: Time) -> f32 {
-    let t = ((now - since) / ATTACK_TIME).clamp(0.0, 1.0) as f32;
-    t * t * (3.0 - 2.0 * t)
-}
-
 /// Build the frame's scene. `hovered` comes from last frame's picking (the
 /// usual immediate-mode one-frame latency, invisible in practice).
 pub fn derive_scene(
@@ -120,7 +106,9 @@ pub fn derive_scene(
     // speed the ends change hands every few frames, and a ring that eases in
     // on each of them reads as flicker rather than as the top line.
     let mark_delay = view.mark_delay.clamp(0.0, MARK_DELAY_MAX) as f64;
-    let ease = |end: Option<HeldEnd>| end.map_or(1.0, |end| attack(now, end.since + mark_delay));
+    let env = view.envelope(frame);
+    let ease =
+        |end: Option<HeldEnd>| end.map_or(1.0, |end| env.attack(now, end.since + mark_delay));
     let melody_attack = ease(live_extremes.0);
     let bass_attack = ease(live_extremes.1);
     // Sanitized once, outside the node loop. Capped at 1: this axis makes
@@ -183,7 +171,7 @@ pub fn derive_scene(
         // index voices by quantized pitch class instead.
         for &(voice, voice_color) in &voices {
             if tuning.matches(voice.pitch_class, node_pc) {
-                let envelope = voice.activation(now, frame.fade_time);
+                let envelope = voice.activation(now, &env);
                 if envelope > activation {
                     activation = envelope;
                     color = voice_color;
@@ -216,9 +204,10 @@ pub fn derive_scene(
                 let slot = sounding
                     .clamp(low_slot, high_slot)
                     .clamp(0, OCTAVE_SLOTS as i32 - 1) as usize;
-                // Eases in from note-on; release still fades on the octave
-                // envelope.
-                octaves[slot] = octaves[slot].max(envelope * attack(now, voice.on_time));
+                // The voice's envelope entire — the attack is already in it
+                // ([`Voice::activation`]), and the release still fades on the
+                // octave's own voice rather than on the node's.
+                octaves[slot] = octaves[slot].max(envelope);
 
                 // Mark the outer notes in the slot they sound in. Set on
                 // every node the voice matches, exactly as its activation
@@ -263,11 +252,24 @@ pub fn derive_scene(
                         frame.brightest_pitch,
                         view.pitch_gradient,
                     );
+                    // The RELEASE alone under the ring's own ease, not the
+                    // node's full activation: the attack is in that, and the
+                    // ring already carries one from the moment its note took
+                    // the end. Multiplying both in would square the ramp
+                    // wherever those two moments coincide — which is the
+                    // ordinary case, a note arriving as the new outer voice —
+                    // and a ring rising as the square of the sector it
+                    // brackets is precisely the disagreement about how fast
+                    // the note arrived that one shared rate exists to
+                    // prevent. A mark is held-only, so this term is 1 for the
+                    // whole of a drawn ring's life; it rides along for the
+                    // day a released voice is allowed to keep an end.
+                    let release = voice.release_level(now, &env);
                     if is_melody {
-                        melody.add(slot, envelope * melody_attack, mark_color);
+                        melody.add(slot, release * melody_attack, mark_color);
                     }
                     if is_bass {
-                        bass.add(slot, envelope * bass_attack, mark_color);
+                        bass.add(slot, release * bass_attack, mark_color);
                     }
                 }
             }

@@ -949,7 +949,7 @@ fn paint(
     state.tracker.handle_event(on(97.0, 127));
     state.tracker.handle_event(on(99.0, 67));
     let now = 100.0;
-    state.tracker.prune(now, 1.0);
+    state.tracker.prune(now, &harmonigraph_core::Envelope::default());
 
     let ctx = egui::Context::default();
     crate::theme::apply_theme(&ctx);

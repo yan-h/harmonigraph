@@ -4,7 +4,7 @@
 //! note.
 
 use crate::*;
-use harmonigraph_core::{NoteEvent, NoteEventKind, NoteTracker, Tuning};
+use harmonigraph_core::{Envelope, NoteEvent, NoteEventKind, NoteTracker, Tuning};
 use super::harness::*;
 
 /// Play `note` from `on` to `off` and let its fade finish, which is what
@@ -16,7 +16,7 @@ fn play_and_forget(tracker: &mut NoteTracker, note: u8, on: f64, off: f64) {
     ] {
         tracker.handle_event(NoteEvent { time, channel: 0, note, kind });
     }
-    tracker.prune(off + 2.0, 1.0);
+    tracker.prune(off + 2.0, &Envelope::default());
 }
 
 fn trail_view(mark: TrailMark) -> ViewConfig {
@@ -186,7 +186,7 @@ fn an_off_sheet_node_stays_blank_even_after_it_is_played() {
         kind: NoteEventKind::On { velocity: 1.0 },
     });
     tracker.handle_event(NoteEvent { time: 1.0, channel: 0, note: 70, kind: NoteEventKind::Off });
-    tracker.prune(5.0, 1.0);
+    tracker.prune(5.0, &Envelope::default());
 
     let scene = scene_of(&tracker, &tuning, &view, &frame, 10.0);
     // The off-sheet node is where the note was, but it draws nothing.

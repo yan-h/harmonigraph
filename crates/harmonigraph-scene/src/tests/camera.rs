@@ -163,7 +163,7 @@ fn idle_off_sheet_nodes_are_not_pickable() {
     // it would be must not hand back its pitch. Sounding makes it
     // visible, and pickable again. Needs a sevens extent: the default view
     // is the home sheet alone, which has no off-sheet node to hover.
-    let view = ViewConfig { extent_sevens: 1, ..ViewConfig::default() };
+    let view = ViewConfig { extent_sevens: 1, ..plain_view() };
     let tuning = Tuning::default();
     let viewport = Vec2::new(800.0, 600.0);
 

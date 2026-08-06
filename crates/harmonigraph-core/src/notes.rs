@@ -69,6 +69,118 @@ pub enum VoiceState {
     Released { at: Time },
 }
 
+/// The most curved `shape` 1 asks for, as the rate constant of the
+/// exponential in [`Envelope::approach`].
+///
+/// 6 is where the curve stops changing character rather than where it stops
+/// being drawable: half the travel is gone in the first 12% of the time, and
+/// the tail past halfway is already too faint to read as motion. Higher
+/// constants move the knee closer to the start without changing what the
+/// viewer sees, so the top of the bar would be a stretch of settings that all
+/// look the same — the bar's own resolution spent on nothing.
+const MAX_CURVE: f32 = 6.0;
+
+/// The shape and the two durations every fading layer of a node runs on: how
+/// long a note takes to arrive, how long it takes to leave, and the one curve
+/// both of those follow.
+///
+/// ONE curve for the two directions, so "snappy" cannot come to mean two
+/// different things at once. It is applied as an APPROACH to whichever level
+/// is being approached — full on the way in, nothing on the way out — which
+/// is what makes the pair symmetric without either end having to be written
+/// backwards (see [`Envelope::approach`]).
+///
+/// Two DURATIONS, though, and that asymmetry is load-bearing rather than an
+/// omission. The two ends MULTIPLY: a note released mid-attack peaks at
+/// whatever its attack had reached by then, so an attack as long as the fade
+/// means anything played faster than the fade never reaches full brightness.
+/// The Fade runs to a hundred seconds, so one shared number would have fast
+/// playing go DIM — the exact opposite of what a long fade is reached for.
+/// Held apart, the shape stays global and the two times stay honest.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct Envelope {
+    /// Seconds a note takes to reach full brightness from its note-on.
+    pub attack_time: f32,
+    /// Seconds a released note keeps fading before it is gone.
+    pub fade_time: f32,
+    /// How curved both ends are, 0..=1: 0 a straight line, 1 the most
+    /// exponential on offer ([`MAX_CURVE`]).
+    pub shape: f32,
+}
+
+impl Default for Envelope {
+    /// A straight line, which is what every layer of the lattice faded on
+    /// before the shape was a setting: a blob or a test that says nothing
+    /// about the curve gets the one it always drew.
+    fn default() -> Envelope {
+        Envelope { attack_time: 0.0, fade_time: 1.0, shape: 0.0 }
+    }
+}
+
+impl Envelope {
+    /// How far a transition of `duration` seconds that began `elapsed`
+    /// seconds ago has travelled, 0..=1. The one shape both directions run
+    /// on, and the only place the curve is written.
+    ///
+    /// An APPROACH: it leaves where it started fast and settles into where it
+    /// is going, which at `shape` 1 is `1 - e^-kp` — the curve a note's own
+    /// sound makes, and the one an analog envelope charges and discharges on.
+    /// Both ends want that same fast-then-slow character, which is why one
+    /// function serves them: reversing it for the release instead would give
+    /// an attack that dawdles and then snaps to full, and a trigger that
+    /// arrives late reads as a dropped frame rather than as a soft one.
+    ///
+    /// Normalized to reach exactly 1 at `p = 1` rather than approaching it
+    /// asymptotically, which is what keeps `duration` meaning "when it is
+    /// over". An un-normalized exponential never arrives, and a release that
+    /// never arrives is a released voice [`NoteTracker::prune`] can never
+    /// drop — the tail would accumulate voices for the whole session, against
+    /// an O(nodes × voices) loop.
+    ///
+    /// A DURATION that is not a positive real number falls to "already over",
+    /// and that is the safe direction rather than the tidy one: an attack
+    /// lands at full and a release at nothing, so a poisoned number makes a
+    /// node appear or vanish instantly instead of hanging a voice at full
+    /// brightness that `prune` will never drop. The infinity is the case that
+    /// matters and the one a `<= 0.0` test misses — it divides to a progress
+    /// of 0, which is a release that never moves, and every note ever played
+    /// then stays in the released tail for the rest of the session.
+    ///
+    /// A poisoned SHAPE straightens instead, there being a real duration to
+    /// run out: a NaN through `clamp` stays a NaN, and `min` would answer
+    /// with the bound and silently pin the curve at its sharpest.
+    fn approach(&self, elapsed: Time, duration: f32) -> f32 {
+        if !duration.is_finite() || duration <= 0.0 {
+            return 1.0;
+        }
+        // `f64::max` answers with the other operand against a NaN, so a
+        // non-finite clock reads as "just started" rather than poisoning the
+        // divide below.
+        let p = (elapsed.max(0.0) as f32 / duration).min(1.0);
+        let k = if self.shape.is_finite() { self.shape.clamp(0.0, 1.0) } else { 0.0 } * MAX_CURVE;
+        if k <= 0.0 {
+            return p;
+        }
+        (1.0 - (-k * p).exp()) / (1.0 - (-k).exp())
+    }
+
+    /// How far a note that arrived at `since` has eased in, 0..=1.
+    ///
+    /// Keeps climbing after the key comes up, which is what lets a staccato
+    /// note read at all: the release fades this ramp while it is still rising
+    /// and the product peaks shortly after the note-off, rather than the note
+    /// being cut off at whatever it had reached (see [`Voice::activation`]).
+    pub fn attack(&self, now: Time, since: Time) -> f32 {
+        self.approach(now - since, self.attack_time)
+    }
+
+    /// What is LEFT of a note released at `at`, 1 down to 0 — the mirror of
+    /// [`attack`](Self::attack) on the same curve.
+    pub fn release(&self, now: Time, at: Time) -> f32 {
+        1.0 - self.approach(now - at, self.fade_time)
+    }
+}
+
 /// One sounding (or recently sounding) note.
 #[derive(Copy, Clone, Debug)]
 pub struct Voice {
@@ -116,22 +228,39 @@ impl Voice {
         self.octave - 1
     }
 
-    /// Envelope in `[0, 1]` driving the visual intensity of this voice:
-    /// 1 while held, then a linear decay over `fade_time` seconds.
-    /// The scene layer shapes this further (attack ramps, per-octave
-    /// envelopes); this stays the single source of truth for "is this voice
-    /// still visible".
-    pub fn activation(&self, now: Time, fade_time: f32) -> f32 {
+    /// What is left of this voice's RELEASE, `[0, 1]`: 1 for the whole of a
+    /// held note, then down to 0 across the fade.
+    ///
+    /// The half of the envelope that answers "is this voice over", which is
+    /// not the same question as "is it visible" — an arriving note is barely
+    /// visible and is the furthest thing from over. [`prune`](NoteTracker::prune)
+    /// wants this one; everything that DRAWS wants
+    /// [`activation`](Self::activation).
+    pub fn release_level(&self, now: Time, env: &Envelope) -> f32 {
         match self.state {
             VoiceState::Held => 1.0,
-            VoiceState::Released { at } => {
-                if fade_time <= 0.0 {
-                    return 0.0;
-                }
-                let elapsed = (now - at).max(0.0) as f32;
-                (1.0 - elapsed / fade_time).max(0.0)
-            }
+            VoiceState::Released { at } => env.release(now, at),
         }
+    }
+
+    /// Envelope in `[0, 1]` driving the visual intensity of this voice: the
+    /// attack it is easing in on times what is left of its release, both on
+    /// the one curve the [`Envelope`] carries.
+    ///
+    /// The single source of truth for how lit a voice is, and the chokepoint
+    /// every layer of a node multiplies through — the core disc, its glow,
+    /// the octave sectors, the gutter it clears, and the piano roll. One
+    /// function so a note cannot arrive at one rate and leave at another, nor
+    /// have one layer disagree with the next about either.
+    ///
+    /// The melody/bass rings are the deliberate exception and take
+    /// [`release_level`](Self::release_level) instead: a ring runs its own
+    /// ease from the moment its note TOOK the end (plus whatever wait
+    /// `mark_delay` asks), and multiplying the note's attack in on top would
+    /// square the two wherever those moments coincide — the usual case —
+    /// leaving a ring visibly slower than the sector it brackets.
+    pub fn activation(&self, now: Time, env: &Envelope) -> f32 {
+        env.attack(now, self.on_time) * self.release_level(now, env)
     }
 }
 
@@ -292,11 +421,17 @@ impl NoteTracker {
     /// up exactly where its fade lets go. (A retrigger without an off
     /// replaces its voice outright — see `handle_event` — so that voice is
     /// never recorded; the retrigger's own release covers the pitch.)
-    pub fn prune(&mut self, now: Time, fade_time: f32) {
+    /// Asks the RELEASE rather than the full activation, because the question
+    /// here is whether the fade is over and not whether anything is currently
+    /// on screen. The two part company at exactly one moment and it is a real
+    /// one: a note switched off in the same instant it arrived has an attack
+    /// of 0, so its activation is 0 while its release has not started — read
+    /// that way, a zero-length note would be dropped before it ever drew.
+    pub fn prune(&mut self, now: Time, env: &Envelope) {
         self.roll.trim(now);
         let history = &mut self.history;
         self.released.retain(|voice| {
-            if voice.activation(now, fade_time) > 0.0 {
+            if voice.release_level(now, env) > 0.0 {
                 return true;
             }
             history.record(voice, now);
@@ -442,10 +577,10 @@ mod tests {
         tracker.handle_event(off(1.0, 60));
         assert_eq!(tracker.held_count(), 0);
         // Still visible mid-fade...
-        tracker.prune(1.5, 1.0);
+        tracker.prune(1.5, &Envelope::default());
         assert_eq!(tracker.voices().count(), 1);
         // ...gone after the fade time has fully elapsed.
-        tracker.prune(2.1, 1.0);
+        tracker.prune(2.1, &Envelope::default());
         assert_eq!(tracker.voices().count(), 0);
     }
 
@@ -480,7 +615,7 @@ mod tests {
         // Pruning the voice that handed it over is not a change of ends. This
         // is the whole reason the stamp is kept here rather than read back off
         // the released tail, which the prune empties.
-        tracker.prune(5.0, 0.1);
+        tracker.prune(5.0, &Envelope { fade_time: 0.1, ..Envelope::default() });
         assert_eq!(tracker.voices().count(), 2, "the released C4 is gone");
         assert_eq!(tracker.highest_held(), Some(HeldEnd { key: (0, 57), since: 4.0 }));
 
@@ -563,25 +698,148 @@ mod tests {
         assert_eq!(voice.display_octave(), 3); // shown one lower, as C3
     }
 
+    /// A fade of `secs` with no attack, on a straight line.
+    fn fade(secs: f32) -> Envelope {
+        Envelope { fade_time: secs, ..Envelope::default() }
+    }
+
     #[test]
-    fn activation_is_full_while_held_then_decays_linearly() {
+    fn activation_is_full_while_held_then_decays_over_the_fade() {
         let mut tracker = NoteTracker::new();
         tracker.handle_event(on(0.0, 60));
         let held = *tracker.voices().next().unwrap();
-        // Held voices read full intensity regardless of the fade time.
-        assert_eq!(held.activation(100.0, 2.0), 1.0);
-        assert_eq!(held.activation(100.0, 0.0), 1.0);
+        // Held voices read full intensity regardless of the fade time — with
+        // no attack, which is what `fade` builds; the attack has its own
+        // tests below.
+        assert_eq!(held.activation(100.0, &fade(2.0)), 1.0);
+        assert_eq!(held.activation(100.0, &fade(0.0)), 1.0);
 
         tracker.handle_event(off(10.0, 60));
         let released = *tracker.voices().next().unwrap();
-        assert_eq!(released.activation(10.0, 2.0), 1.0); // full at release
-        assert!((released.activation(11.0, 2.0) - 0.5).abs() < 1e-6); // half-way
-        assert_eq!(released.activation(12.0, 2.0), 0.0); // fully faded
-        assert_eq!(released.activation(20.0, 2.0), 0.0); // clamps, not negative
-        assert_eq!(released.activation(9.0, 2.0), 1.0); // `now` before release
+        assert_eq!(released.activation(10.0, &fade(2.0)), 1.0); // full at release
+        assert!((released.activation(11.0, &fade(2.0)) - 0.5).abs() < 1e-6); // half-way
+        assert_eq!(released.activation(12.0, &fade(2.0)), 0.0); // fully faded
+        assert_eq!(released.activation(20.0, &fade(2.0)), 0.0); // clamps, not negative
+        assert_eq!(released.activation(9.0, &fade(2.0)), 1.0); // `now` before release
         // A non-positive fade time releases instantly (guards div-by-zero).
-        assert_eq!(released.activation(10.0, 0.0), 0.0);
-        assert_eq!(released.activation(10.0, -1.0), 0.0);
+        assert_eq!(released.activation(10.0, &fade(0.0)), 0.0);
+        assert_eq!(released.activation(10.0, &fade(-1.0)), 0.0);
+    }
+
+    /// The two ends are one curve read in two directions, which is the whole
+    /// claim of the [`Envelope`] type: whatever the shape, what an attack has
+    /// GAINED at a given fraction of its time is exactly what a release of
+    /// the same shape has LOST at the same fraction of its own.
+    #[test]
+    fn the_attack_and_the_release_are_the_same_curve() {
+        for shape in [0.0, 0.35, 1.0] {
+            let env = Envelope { attack_time: 4.0, fade_time: 4.0, shape };
+            for step in 0..=8 {
+                let t = f64::from(step) * 0.5;
+                let gained = env.attack(t, 0.0);
+                let left = env.release(t, 0.0);
+                assert!(
+                    (gained + left - 1.0).abs() < 1e-6,
+                    "shape {shape} at {t}s: gained {gained}, left {left}"
+                );
+            }
+        }
+    }
+
+    /// Both ends hit their endpoints exactly, at every shape. The release end
+    /// is the load-bearing one: `prune` drops a voice when its release
+    /// reaches 0, so a curve that only approached 0 would keep every note
+    /// ever played in the released tail (see [`Envelope::approach`]).
+    #[test]
+    fn every_shape_starts_and_finishes_exactly() {
+        for shape in [0.0, 0.1, 0.35, 0.9, 1.0] {
+            let env = Envelope { attack_time: 0.5, fade_time: 2.0, shape };
+            assert_eq!(env.attack(0.0, 0.0), 0.0, "attack starts at nothing, shape {shape}");
+            assert_eq!(env.attack(0.5, 0.0), 1.0, "and is full at its time, shape {shape}");
+            assert_eq!(env.release(0.0, 0.0), 1.0, "release starts at full, shape {shape}");
+            assert_eq!(env.release(2.0, 0.0), 0.0, "and is gone at the fade, shape {shape}");
+            assert_eq!(env.release(1e6, 0.0), 0.0, "and stays gone, shape {shape}");
+        }
+    }
+
+    /// What the Shape bar buys: 0 is the straight line the lattice has always
+    /// faded on, and turning it up moves the fade EARLIER without moving
+    /// either end. Written as an ordering rather than as numbers so it states
+    /// the property the bar promises instead of restating the formula.
+    #[test]
+    fn a_higher_shape_front_loads_the_fade() {
+        let level = |shape: f32| Envelope { fade_time: 2.0, shape, ..Envelope::default() }
+            .release(1.0, 0.0);
+        assert!((level(0.0) - 0.5).abs() < 1e-6, "0 is the straight line: half gone at half way");
+        let mut prev = level(0.0);
+        for shape in [0.25, 0.5, 0.75, 1.0] {
+            let now = level(shape);
+            assert!(now < prev, "shape {shape} leaves less at half way than the shape under it");
+            prev = now;
+        }
+        assert!(prev < 0.1, "and the top of the bar is most of the way gone by half way");
+    }
+
+    /// A note switched off before its attack finishes never reaches full —
+    /// the two ends multiply — and this is the reason the attack has its own
+    /// duration rather than sharing the Fade (see [`Envelope`]).
+    #[test]
+    fn a_note_shorter_than_its_attack_peaks_below_full() {
+        let env = Envelope { attack_time: 0.2, fade_time: 1.0, shape: 0.0 };
+        let mut voice = Voice::new(0, 60, 1.0, 0.0);
+        voice.state = VoiceState::Released { at: 0.05 };
+        // Sampled across the whole of the note's life, peak included: the
+        // attack keeps climbing after the key is up, so the brightest moment
+        // is not the note-off.
+        let peak = (0..=100)
+            .map(|i| voice.activation(f64::from(i) * 0.01, &env))
+            .fold(0.0f32, f32::max);
+        assert!(peak > 0.0, "a short note still draws");
+        assert!(peak < 1.0, "but a quarter of an attack cannot reach full: {peak}");
+    }
+
+    /// A zero-length note — on and off at one instant — still fades in rather
+    /// than never drawing at all. This is why `prune` asks the RELEASE and not
+    /// the activation: at the note-on instant the attack is 0, so a prune
+    /// reading the activation would drop the voice in the same frame it
+    /// arrived.
+    #[test]
+    fn a_zero_length_note_survives_its_first_prune() {
+        let env = Envelope { attack_time: 0.1, fade_time: 1.0, shape: 0.0 };
+        let mut tracker = NoteTracker::new();
+        tracker.handle_event(on(0.0, 60));
+        tracker.handle_event(off(0.0, 60));
+        let voice = *tracker.voices().next().unwrap();
+        assert_eq!(voice.activation(0.0, &env), 0.0, "nothing on screen at the instant itself");
+        assert_eq!(voice.release_level(0.0, &env), 1.0, "but the release has not started");
+
+        tracker.prune(0.0, &env);
+        assert_eq!(tracker.voices().count(), 1, "so the note is still there to draw");
+        let voice = *tracker.voices().next().unwrap();
+        assert!(voice.activation(0.05, &env) > 0.0, "and it does draw, a frame later");
+    }
+
+    /// The guards in [`Envelope::approach`], which a shell can reach without
+    /// passing `ViewConfig::sanitize`. Every one falls to "already over",
+    /// because the alternative for the release end is a voice stuck at full
+    /// brightness that `prune` will never drop.
+    #[test]
+    fn a_non_finite_envelope_ends_rather_than_hangs() {
+        let mut voice = Voice::new(0, 60, 1.0, 0.0);
+        voice.state = VoiceState::Released { at: 0.0 };
+        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let fades = Envelope { attack_time: 0.0, fade_time: bad, shape: 0.0 };
+            assert_eq!(voice.release_level(1.0, &fades), 0.0, "fade_time {bad} ends the note");
+
+            // A poisoned SHAPE straightens rather than ending, the duration
+            // still being a real number: there is nothing to hang on.
+            let curve = Envelope { attack_time: 0.0, fade_time: 2.0, shape: bad };
+            let level = curve.release(1.0, 0.0);
+            assert!(level.is_finite(), "shape {bad} keeps a real level, got {level}");
+        }
+        // And a non-finite clock reads as the transition not having started.
+        let env = Envelope { attack_time: 1.0, fade_time: 1.0, shape: 0.5 };
+        assert_eq!(env.attack(f64::NAN, 0.0), 0.0);
     }
 
     #[test]
@@ -612,9 +870,9 @@ mod tests {
         });
         assert_eq!(tracker.held_count(), 0);
         // Released voices fade out rather than vanish.
-        tracker.prune(1.5, 1.0);
+        tracker.prune(1.5, &Envelope::default());
         assert_eq!(tracker.voices().count(), 2);
-        tracker.prune(2.1, 1.0);
+        tracker.prune(2.1, &Envelope::default());
         assert_eq!(tracker.voices().count(), 0);
     }
 
