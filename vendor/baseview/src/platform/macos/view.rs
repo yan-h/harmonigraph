@@ -219,12 +219,20 @@ impl BaseviewView {
         }));
     }
 
+    /// Run one frame, unless one is already running.
+    ///
+    /// The timer is not the only caller — `handle_occlusion_notification`
+    /// paints from inside a notification, and a notification can in principle
+    /// be delivered while a frame holds the handler. Taking the borrow
+    /// fallibly rather than with `borrow_mut` is what makes that safe: a
+    /// panicking borrow would turn a re-entrant delivery into a crash, and the
+    /// frame already in flight is about to paint the same content anyway.
     fn trigger_frame(this: ViewRef<Self>) {
         // Before the frame, so a pointer that has quietly stopped being ours is
         // gone by the time anything is drawn from where it was.
         Self::settle_pointer_exit(this);
 
-        let mut handler = this.window_handler.borrow_mut();
+        let Ok(mut handler) = this.window_handler.try_borrow_mut() else { return };
         let Some(handler) = handler.as_mut() else { return };
 
         handler.on_frame(&mut this.into());
@@ -274,13 +282,34 @@ impl BaseviewView {
         }
 
         let visible = window.occlusionState().contains(NSWindowOcclusionState::Visible);
-        if visible {
-            // Re-exposed: the compositor may still be showing a stale
-            // snapshot of the window. Mark the view dirty so AppKit
-            // commits a fresh frame instead of the pre-occlusion ghost.
-            this.view.setNeedsDisplay(true);
-        }
         Self::trigger_deferrable_event(this, Event::Window(WindowEvent::Occluded(!visible)));
+
+        if visible {
+            // Re-exposed, and what is on screen is the drawable from before
+            // the window was hidden — the compositor keeps showing it until
+            // something presents over it, and nothing can present while the
+            // window is occluded (a drawable is refused, so the whole time it
+            // was hidden every frame was skipped).
+            //
+            // So the ghost lives exactly as long as it takes to get one frame
+            // out, and this notification is the earliest that can happen: the
+            // occlusion state it reports is the same state the drawable
+            // request checks, so no earlier signal — activation, key window —
+            // buys a frame that would be allowed to present.
+            //
+            // Painting HERE rather than leaving it to the next timer tick is
+            // therefore the whole of the fix. The event above marks the
+            // handler for repaint; the tick that would act on it is up to a
+            // frame interval away, and that interval IS the ghost: measured
+            // at 11-14 ms against a ~15 ms timer, and it scales with the
+            // interval, so a frame-rate cap makes it worse.
+            //
+            // The dirty mark is for whatever AppKit draws itself, which for a
+            // surface-backed window is nothing; the frame is what puts new
+            // pixels up.
+            this.view.setNeedsDisplay(true);
+            Self::trigger_frame(this);
+        }
     }
 
     fn fetch_view_size(view: &NSView) -> WindowInfo {

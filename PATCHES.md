@@ -34,10 +34,17 @@ in the workspace `Cargo.toml`. Keep this file current when bumping either.
   `src/platform/macos/view.rs`): new `WindowEvent::Occluded(bool)`
   (mirroring winit's event), emitted from an
   `NSWindowDidChangeOcclusionStateNotification` observer filtered to the
-  view's own window. On re-expose the view is also marked
-  `setNeedsDisplay` so AppKit commits a fresh frame over whatever stale
-  snapshot the compositor kept while the window was hidden. Together with
-  the egui-baseview patch below, this fixes the outdated ghost image that
+  view's own window. On re-expose the view is marked `setNeedsDisplay`
+  and, more to the point, a frame is run right there in the notification
+  rather than left to the next timer tick — nothing can present while the
+  window is occluded, so what is on screen is the drawable from before it
+  was hidden, and the ghost lasts exactly until one frame gets out.
+  Waiting for the tick made that up to a frame interval: measured at
+  11-14 ms against a ~15 ms timer, and it scales with the interval, so a
+  frame-rate cap makes it worse; painting from the notification measures
+  under 1 ms. `trigger_frame` takes the handler borrow fallibly to stay
+  safe against a notification arriving mid-frame. Together with the
+  egui-baseview patch below, this fixes the outdated ghost image that
   stayed on screen after tabbing away from the host and back, until the
   window was clicked. macOS only; other platforms never emit the event.
 - **Patch 4** (`src/lib.rs`, `src/window_open_options.rs`, `src/window.rs`,
