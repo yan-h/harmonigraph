@@ -31,7 +31,9 @@ pub mod wav;
 
 pub use coords::{positions_within, LatticePos, NoteName};
 pub use history::{NoteHistory, Visit};
-pub use notes::{ChannelRole, NoteEvent, NoteEventKind, NoteTracker, Time, Voice, VoiceState};
+pub use notes::{
+    ChannelRole, HeldEnd, NoteEvent, NoteEventKind, NoteTracker, Time, Voice, VoiceState,
+};
 pub use roll::{NoteRoll, RollNote};
 pub use spectrogram::{SpectrogramColumn, SpectrumHistory};
 pub use tuning::{

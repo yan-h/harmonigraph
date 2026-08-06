@@ -323,6 +323,33 @@ pub struct ViewConfig {
     /// the band was resized; absolute holds them still.
     #[serde(default = "default_mark_thickness")]
     pub mark_thickness: f32,
+    /// How long a note must HOLD an end before its ring begins to ease in,
+    /// in seconds. The wait sits in front of the ease rather than stretching
+    /// it: the ring is at 0 for this long and then arrives on the usual
+    /// [`ATTACK_TIME`](crate::ATTACK_TIME) ramp.
+    ///
+    /// A ring is held-only, so a wait is also a THRESHOLD: an end that
+    /// changes hands again before the delay is up never draws a ring at all.
+    /// That is what the setting is for. Playing fast, the top and bottom of
+    /// what is down change every few notes, and a ring easing in on each of
+    /// them reads as flicker over the octave band rather than as the line it
+    /// is tracing — so the delay is how long a note has to be the melody
+    /// before it counts as the melody.
+    ///
+    /// Not derived from the note Fade, which is the other end of the same
+    /// note and reads as the natural pair: a fade is how long a note takes to
+    /// LEAVE, and tying the two would mean a long release could not be paired
+    /// with a ring that answers immediately. The delay is measured from the
+    /// handoff the tracker stamps ([`HeldEnd`](harmonigraph_core::HeldEnd)),
+    /// which is exactly why that stamp cannot come off the released voice:
+    /// any delay past the Fade would outlive the note that handed the end
+    /// over.
+    ///
+    /// 0 is the ring arriving with its note, which is how the marks have
+    /// always drawn — hence a bare `#[serde(default)]`, the same value being
+    /// right for a blob that predates the bar and for a fresh view.
+    #[serde(default)]
+    pub mark_delay: f32,
     /// Which shimmer sweeps the melody/bass rings (see [`Pulse`]): the sheet
     /// takes both rings AND the octave slice each one points at. That reach
     /// into the other layer is the mark being the ring together with the slice
@@ -983,6 +1010,13 @@ impl ViewConfig {
         // than in `derive_scene` because this is the blob's own door: the bars
         // cannot reach these values, so a view that holds one got it from a
         // file.
+        // The mark delay, against that same hole: it is added to a timestamp
+        // and the sum is divided by the attack, so a non-finite one is a NaN
+        // ring level on every marked node — the rings drawn out of nothing
+        // wherever the marks are on. `derive_scene` clamps the RANGE (the bar
+        // cannot leave it; a file can), which is again no guard against a NaN.
+        self.mark_delay = finite_or(self.mark_delay, 0.0);
+
         self.shimmer_speed = finite_or(self.shimmer_speed, default_shimmer_speed());
         self.shimmer_width = finite_or(self.shimmer_width, default_shimmer_width());
         self.shimmer_intensity = finite_or(self.shimmer_intensity, default_shimmer_intensity());
@@ -1101,6 +1135,11 @@ impl Default for ViewConfig {
             legacy_highlight_extremes: None,
             // Thin rings, slit at the marked octave's boundaries.
             mark_thickness: 0.078_269_88,
+            // No wait: a fresh view answers the keys immediately, and the
+            // delay is a THRESHOLD (see `mark_delay`) — a note held for less
+            // than it wears no ring at all, which is a reading of the music
+            // to reach for rather than one to open on.
+            mark_delay: 0.0,
             pulse_marks: Pulse::Bands,
             // The sheet the rings above wear. A period well under one node's
             // spacing puts several of them across every ring, so this reads as

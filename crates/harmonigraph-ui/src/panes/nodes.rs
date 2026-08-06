@@ -8,7 +8,9 @@ use super::{param_bar, section};
 use crate::params::{ParamBackend, ParamKey};
 use crate::widgets::{button_row, choice_row, OctaveStrip, RangeBar, SpectrumBar, ValueBar};
 use crate::SharedState;
-use harmonigraph_scene::{Pulse, ViewConfig, MIN_EXTRA_SIZE, PITCH_CEIL, PITCH_FLOOR};
+use harmonigraph_scene::{
+    Pulse, ViewConfig, MARK_DELAY_MAX, MIN_EXTRA_SIZE, PITCH_CEIL, PITCH_FLOOR,
+};
 
 /// The sounding-note controls, top to bottom as the note reads outward: the
 /// Core mark at its center, the Octaves ring around it, the melody/bass marks
@@ -206,22 +208,45 @@ fn melody_bass_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                  values grow the bass ring in over the core, so raise \
                  Band inner to make room",
             );
-        // The sweep, on the only layer that runs one — the sheet takes both
-        // rings and the octave slice each one points at. Off is its own option
-        // rather than a checkbox beside the row: there is no separate bar the
-        // pattern would otherwise gray out, so one row says both whether the
-        // marks shimmer and how.
-        //
-        // Gated, because a ring has to be DRAWN for a sheet over it to mean
-        // anything. Thickness 0 is the documented off position, where
-        // `mark_ring` returns no coverage (the Core section gates its own
-        // Solidity and Style on a radius of 0 the same way). The enclosing
-        // block already grays this on both marks being off, so what the row is
-        // gated on either way is `mark_rings_draw` — the same predicate
-        // `derive_scene` folds the pattern on, and the one the Shimmer section
-        // reads. Written as the thickness alone because that is the half this
-        // row adds; the pair is what has to agree.
+        // Both of the below are about a ring that is DRAWN — when it arrives
+        // and what crosses it — so both are gated on there being one.
+        // Thickness 0 is the documented off position, where `mark_ring`
+        // returns no coverage (the Core section gates its own Solidity and
+        // Style on a radius of 0 the same way). The enclosing block already
+        // grays these on both marks being off, so what they are gated on
+        // either way is `mark_rings_draw` — the same predicate `derive_scene`
+        // folds the shimmer on, and the one the Shimmer section reads.
+        // Written as the thickness alone because that is the half this block
+        // adds; the pair is what has to agree.
         ui.add_enabled_ui(view.mark_thickness > 0.0, |ui| {
+            // How long an end has to be HELD before its ring answers. Here
+            // rather than in with the note-wide settings at the foot of the
+            // pane, because it is about these two rings alone: the octave
+            // sectors under them and the core answer immediately whatever
+            // this says.
+            //
+            // Linear, unlike the wide bars that need easing to be draggable
+            // at their fine end: one second of travel puts a hundredth of it
+            // — the readout's own resolution — a couple of pixels apart, and
+            // the settings that matter (a passing sixteenth at 120bpm is
+            // 125ms) sit in the first third rather than crushed at the
+            // bottom. Read out in seconds, the one value in this section that
+            // is not a length.
+            ValueBar::new(&mut view.mark_delay, 0.0..=MARK_DELAY_MAX, "Delay")
+                .display(|v| format!("{v:.2} s"))
+                .show(ui)
+                .on_hover_text(
+                    "How long a note has to stay the melody or the bass \
+                     before its ring starts fading in. A note that loses the \
+                     end again first never rings at all, which is what keeps \
+                     fast playing from flickering rings across the band. 0 \
+                     rings every note the moment it takes an end",
+                );
+            // The sweep, on the only layer that runs one — the sheet takes
+            // both rings and the octave slice each one points at. Off is its
+            // own option rather than a checkbox beside the row: there is no
+            // separate bar the pattern would otherwise gray out, so one row
+            // says both whether the marks shimmer and how.
             choice_row(ui, "Shimmer", &mut view.pulse_marks, SHIMMER_PATTERNS);
         });
     });
