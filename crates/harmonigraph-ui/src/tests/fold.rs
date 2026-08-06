@@ -213,8 +213,7 @@ fn no_pane_is_dragged_below_its_floor_wherever_it_sits() {
             }
             // The separator on the left of `grab`, dragged past every floor there
             // is — egui_dock's clamp and ours both stop it somewhere.
-            let rect = pane_rect(&state, grab);
-            let at = egui::pos2(rect.left() - style.separator.width * 0.5, rect.center().y);
+            let at = handle_left_of(&state, grab, &style);
             h.frame(&mut state, vec![egui::Event::PointerMoved(at)]);
             h.frame(&mut state, vec![egui::Event::PointerMoved(at), press(at, true)]);
             let target = at + egui::vec2(delta, 0.0);
@@ -264,8 +263,7 @@ fn start_dragging_the_settings_boundary(
     style: &egui_dock::Style,
 ) -> egui::Pos2 {
     h.settle(state);
-    let rect = pane_rect(state, panes::Tab::Tuning);
-    let at = egui::pos2(rect.left() - style.separator.width * 0.5, rect.center().y);
+    let at = handle_left_of(state, panes::Tab::Tuning, style);
     h.frame(state, vec![egui::Event::PointerMoved(at)]);
     h.frame(state, vec![egui::Event::PointerMoved(at), press(at, true)]);
     let target = at + egui::vec2(-60.0, 0.0);
@@ -291,15 +289,17 @@ fn the_bar_being_dragged_stays_lit_when_the_pointer_leaves_the_window() {
     let target = start_dragging_the_settings_boundary(&mut h, &mut state, &style);
     let out = h.frame(&mut state, vec![]);
     assert!(a_bar_is_lit(&out, &style), "the bar is not lit while it is being dragged");
-    // The boundary itself, which is what the pointer is holding — the panes
-    // behind it share the width it moves in proportion to their own.
+    // The boundary itself, which is what the pointer is holding.
     let was = pane_rect(&state, panes::Tab::Tuning).left();
-    // Out of the window and still held, which the host goes on sending
-    // positions for: the pointer is captured by the view it was pressed in.
+    // Back the way it came, which is the direction with room in it: the opening
+    // leg spent 60 of the analyzer's 97 points over its floor, and a separator
+    // stops at the floor of the pane it is drawn against rather than pushing
+    // into the lattice behind it (see `fold::Points::slack`). Reversing is a
+    // resize like any other — what this is about is the pointer being gone.
     h.frame(&mut state, vec![egui::Event::PointerGone]);
-    h.frame(&mut state, vec![egui::Event::PointerMoved(target + egui::vec2(-60.0, 0.0))]);
+    h.frame(&mut state, vec![egui::Event::PointerMoved(target + egui::vec2(60.0, 0.0))]);
     let out = h.frame(&mut state, vec![]);
-    let moved = was - pane_rect(&state, panes::Tab::Tuning).left();
+    let moved = pane_rect(&state, panes::Tab::Tuning).left() - was;
     assert!((moved - 60.0).abs() < 2.0, "the drag carried on for {moved:.0}pt of the 60 asked");
     assert!(a_bar_is_lit(&out, &style), "the bar went dark while the pane was still resizing");
 }
@@ -547,8 +547,10 @@ fn reset_layout_puts_the_dialled_pane_widths_back() {
     h.frame(&mut state, vec![press(target, false)]);
     h.settle_folds(&mut state);
     let dragged: Vec<f32> = LAID_OUT_TABS.iter().map(|tab| pane_width(&state, *tab)).collect();
+    // The analyzer, since that is the pane the settings boundary is drawn
+    // against and a separator resizes what it divides (see `fold::Points::lean`).
     assert!(
-        (dragged[0] - fresh[0]).abs() > 10.0,
+        (dragged[1] - fresh[1]).abs() > 10.0,
         "the drag has to actually move a boundary for the reset to have something to undo: \
          {fresh:?} -> {dragged:?}"
     );
@@ -585,7 +587,9 @@ fn loading_a_saved_layout_brings_its_pane_widths_with_it() {
     h.frame(&mut state, vec![press(target, false)]);
     h.settle_folds(&mut state);
     let dragged: Vec<f32> = LAID_OUT_TABS.iter().map(|tab| pane_width(&state, *tab)).collect();
-    assert!((dragged[0] - fresh[0]).abs() > 10.0, "the drag has to move a boundary: {dragged:?}");
+    // The analyzer, since that is the pane the settings boundary is drawn
+    // against and a separator resizes what it divides (see `fold::Points::lean`).
+    assert!((dragged[1] - fresh[1]).abs() > 10.0, "the drag has to move a boundary: {dragged:?}");
 
     state.load_persist(&saved);
     h.settle_folds(&mut state);
@@ -802,4 +806,73 @@ fn a_folded_columns_stacked_arrow_is_inert() {
         collapsed(&state, panes::Tab::Notes),
         "the log pane should not open from a button that is no longer drawn",
     );
+}
+
+/// A whole pointer gesture on a separator: press where it is drawn, travel `dx`
+/// in steps, release. Stepped rather than jumped, because a drag is followed by
+/// the pointer frame to frame once the boundary is held (see `fold::Grip`).
+fn drag_separator(h: &mut DockHarness, state: &mut SharedState, from: egui::Pos2, dx: f32) {
+    h.frame(state, vec![egui::Event::PointerMoved(from)]);
+    h.frame(state, vec![egui::Event::PointerMoved(from), press(from, true)]);
+    for step in 1..=10 {
+        let at = from + egui::vec2(dx * step as f32 / 10.0, 0.0);
+        h.frame(state, vec![egui::Event::PointerMoved(at)]);
+    }
+    let end = from + egui::vec2(dx, 0.0);
+    h.frame(state, vec![press(end, false)]);
+    h.settle_folds(state);
+}
+
+/// The separator drawn against a pane's left edge, where the pointer grabs it.
+fn handle_left_of(state: &SharedState, tab: panes::Tab, style: &egui_dock::Style) -> egui::Pos2 {
+    let rect = pane_rect(state, tab);
+    egui::pos2(rect.left() - style.separator.width * 0.5, rect.center().y)
+}
+
+/// With the analyzer squeezed to its floor, its RIGHT-hand separator stops
+/// rather than moving the lattice — and its own arrow of travel, outward, still
+/// works.
+///
+/// Reported as the right handle grabbing the left one, which is what it looks
+/// like: pushing the drag through the floor into the lattice leaves the analyzer
+/// sliding sideways at a fixed width, so the boundary that visibly moves against
+/// the panes is the one on the analyzer's OTHER side. Both handles do move, but
+/// the pane the gesture was aimed at is the one that does not.
+///
+/// Driven through the real dock rather than `fold::tests`, because it is a
+/// claim about what a pointer on a separator does, and egui_dock's own drag and
+/// its per-frame re-clamp are both between the two.
+#[test]
+fn a_squeezed_panes_far_separator_stops_rather_than_moving_the_pane_behind_it() {
+    let style = theme::dock_style(&egui::Style::default(), 1.0);
+    // Inward the analyzer has nothing left to give and the boundary holds;
+    // outward it is an ordinary resize, and travels eight of the gesture's ten
+    // steps: the press frame carries no travel of its own, and the fraction a
+    // drag writes is read on the frame after the one it was written in.
+    for (what, dx, want) in [("inward", -60.0f32, 0.0f32), ("outward", 60.0, 48.0)] {
+        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        let mut h = DockHarness::new();
+        h.settle_folds(&mut state);
+        // Squeeze the analyzer to its floor with its own LEFT handle.
+        let at = handle_left_of(&state, panes::Tab::Spectral, &style);
+        drag_separator(&mut h, &mut state, at, 200.0);
+        let floor = style.separator.extra - style.separator.width * 0.5;
+        let (lattice, analyzer) =
+            (pane_width(&state, panes::Tab::Lattice), pane_width(&state, panes::Tab::Spectral));
+        assert!((analyzer - floor).abs() < 1.0, "the analyzer is not on its floor: {analyzer}");
+
+        let grabbed = handle_left_of(&state, panes::Tab::Tuning, &style);
+        let boundary = pane_rect(&state, panes::Tab::Tuning).left();
+        drag_separator(&mut h, &mut state, grabbed, dx);
+        let moved = pane_rect(&state, panes::Tab::Tuning).left() - boundary;
+        assert!(
+            (moved - want).abs() < 1.0,
+            "dragged {what}, the boundary went {moved:.1}pt where it should have gone {want}",
+        );
+        assert!(
+            (pane_width(&state, panes::Tab::Lattice) - lattice).abs() < 1.0,
+            "dragged {what}, the lattice is not what this separator divides, and moved {:.1}pt",
+            pane_width(&state, panes::Tab::Lattice) - lattice,
+        );
+    }
 }
