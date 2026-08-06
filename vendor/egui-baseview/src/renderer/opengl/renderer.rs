@@ -74,6 +74,11 @@ impl Renderer {
         self.painter.max_texture_side()
     }
 
+    /// The window's occlusion state changed. Nothing to do here: the GL path
+    /// draws into the view's own context rather than into a layer of its own,
+    /// so there is no separate layer to hide while the window is away.
+    pub fn window_occluded(&mut self, _occluded: bool) {}
+
     /// Returns whether a frame was presented (the GL path always
     /// presents; the return type matches the wgpu renderer, which can
     /// fail to acquire a surface).

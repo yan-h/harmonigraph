@@ -34,10 +34,21 @@ in the workspace `Cargo.toml`. Keep this file current when bumping either.
   `src/platform/macos/view.rs`): new `WindowEvent::Occluded(bool)`
   (mirroring winit's event), emitted from an
   `NSWindowDidChangeOcclusionStateNotification` observer filtered to the
-  view's own window. On re-expose the view is also marked
-  `setNeedsDisplay` so AppKit commits a fresh frame over whatever stale
-  snapshot the compositor kept while the window was hidden. Together with
-  the egui-baseview patch below, this fixes the outdated ghost image that
+  view's own window. On re-expose the view is marked `setNeedsDisplay`
+  and, more to the point, a frame is run right there in the notification
+  rather than left to the next timer tick — nothing can present while the
+  window is occluded, so what is on screen is the drawable from before it
+  was hidden, and the ghost lasts exactly until one frame gets out.
+  Waiting for the tick made that up to a frame interval: measured at
+  11-14 ms against a ~15 ms timer, and it scales with the interval, so a
+  frame-rate cap makes it worse; painting from the notification measures
+  under 1 ms. `trigger_frame` takes the handler borrow fallibly to stay
+  safe against a notification arriving mid-frame (that direction only —
+  `trigger_event` still borrows infallibly and documents its panic), and
+  the handler drops a notification repeating the state the view is
+  already in, which would otherwise buy an off-cadence frame for
+  nothing. Together with the
+  egui-baseview patch below, this fixes the outdated ghost image that
   stayed on screen after tabbing away from the host and back, until the
   window was clicked. macOS only; other platforms never emit the event.
 - **Patch 4** (`src/lib.rs`, `src/window_open_options.rs`, `src/window.rs`,
@@ -190,7 +201,7 @@ in the workspace `Cargo.toml`. Keep this file current when bumping either.
   `update_buffers` itself measured 0.3 ms. The term is now gated on
   `msaa_samples > 1`; `width`/`height` start at 0, so the first frame still
   configures.
-- **Patch 10** (`src/renderer/wgpu/renderer.rs` `fold_present` module +
+- **Patch 10** (`src/renderer/wgpu/renderer.rs` `layer_present` module +
   hooks, `Cargo.toml` objc2 deps): present a resize without the flash
   (issue #121's fold flicker). Two artifacts, one layer: wgpu presents into
   a `CAMetalLayer` that raw-window-metal adds as a plain (not view-backed)
@@ -220,13 +231,36 @@ in the workspace `Cargo.toml`. Keep this file current when bumping either.
   backstop for it). The position is the pointer's last known one, which is
   where a release lands; `None` now means only that the pointer has never been
   seen, which is the case the guard is for.
+- **Patch 12** (`src/renderer/{wgpu,opengl}/renderer.rs`, `src/window.rs`):
+  the same layer as Patch 10, across the other discontinuity — a window
+  coming back from occlusion. Nothing can present while it is hidden, so
+  the layer still holds the frame from before it went away and the
+  compositor puts that back on screen the instant the window is visible
+  again, before this process is told anything.
+  `Renderer::window_occluded` hides the layer while the window is
+  occluded, so the re-expose composites the host's background instead of a
+  picture that has stopped being true: a black hole for that frame rather
+  than a lie — honesty, not invisibility, since one frame is the floor
+  either way (see the baseview occlusion patch). The layer comes back in
+  `before_present`, from the frame holding a drawable it is about to
+  present, under `presentsWithTransaction` (raised for as long as the
+  layer is hidden) so the two land in one commit. That gate is the
+  load-bearing part: a successful acquire proves both that the window is
+  visible — the acquire refuses an occluded one — and that there is
+  something to show, so no occlusion event has to be trusted to arrive for
+  the layer to come back, and no frame unhides ahead of content. A lost
+  `Occluded(false)` (a view momentarily without a window, a host
+  reparenting the plugin) would otherwise leave a permanently blank
+  editor. The GL renderer draws into the view's own context and takes the
+  no-op.
 - **Upgrade**: download the new crates.io tarball into
   `vendor/egui-baseview`, re-apply the two conversions, the
   texture-delta forced render, the occlusion/skipped-present patch, the
   staged-upload flush, the repaint-deadline fix, the frame-timer
   plumbing, the `WgpuSetup` re-export, the tessellation/egui-GPU timers,
-  the upload split with its per-frame-reconfigure fix, the fold-present
-  module with its hooks and objc2 deps, and the kept pointer position.
+  the upload split with its per-frame-reconfigure fix, the `layer_present`
+  module with its hooks and objc2 deps — both the resize half and the
+  occlusion hide/unhide — and the kept pointer position.
 - **Upstreaming**: clear-cut bug fix; affects their own `ResizableWindow`
   helper on any HiDPI display. PR to the RustAudio repo.
 

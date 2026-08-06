@@ -226,10 +226,11 @@ pub struct Renderer {
     last_tess_ms: f32,
     width: u32,
     height: u32,
-    /// Keeps a resize from flashing: implicit-action suppression and
-    /// `presentsWithTransaction` on the CAMetalLayer this surface draws into.
+    /// Keeps a resize and a re-expose from flashing: implicit-action
+    /// suppression, `presentsWithTransaction` and the hidden flag on the
+    /// CAMetalLayer this surface draws into.
     #[cfg(target_os = "macos")]
-    fold_present: fold_present::FoldPresent,
+    layer_present: layer_present::LayerPresent,
 }
 
 impl Renderer {
@@ -240,7 +241,7 @@ impl Renderer {
         let surface = unsafe { instance.create_surface_unsafe(target) }.unwrap();
 
         #[cfg(target_os = "macos")]
-        let fold_present = fold_present::FoldPresent::new(&surface);
+        let layer_present = layer_present::LayerPresent::new(&surface);
 
         let msaa_samples = config.renderer_options.msaa_samples;
 
@@ -273,7 +274,7 @@ impl Renderer {
             width: 0,
             height: 0,
             #[cfg(target_os = "macos")]
-            fold_present,
+            layer_present,
         })
     }
 
@@ -409,6 +410,24 @@ impl Renderer {
         }
     }
 
+    /// The window's occlusion state changed.
+    ///
+    /// What the surface does about it is a macOS matter — the `layer_present`
+    /// module owns the layer this hides, and the frame that presents brings
+    /// it back. Elsewhere the event is never emitted and this is a no-op.
+    ///
+    /// (Named without an intra-doc link on purpose: the module is macOS-only
+    /// and this method is not, so a link here would name nothing on the
+    /// platforms where the module does not exist.)
+    pub fn window_occluded(&mut self, occluded: bool) {
+        #[cfg(target_os = "macos")]
+        if occluded {
+            self.layer_present.occluded();
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = occluded;
+    }
+
     /// Returns whether a frame was actually presented; `false` means the
     /// surface wasn't available (occluded window, outdated/lost surface)
     /// and the caller should retry rather than treat the frame as shown.
@@ -518,7 +537,7 @@ impl Renderer {
         // `width`/`height` start at 0, so the first frame still configures.
         #[cfg(target_os = "macos")]
         if self.width != canvas_width || self.height != canvas_height {
-            self.fold_present.size_changed();
+            self.layer_present.size_changed();
         }
         if self.width != canvas_width
             || self.height != canvas_height
@@ -534,7 +553,7 @@ impl Renderer {
         // is captured when the drawable is acquired, so a value set later in
         // the frame only reaches the NEXT present.
         #[cfg(target_os = "macos")]
-        self.fold_present.before_acquire();
+        self.layer_present.before_acquire();
 
         // Timed because this is where a vsync-throttled frame WAITS. With a
         // Fifo surface, acquiring blocks until the display frees a slot, and
@@ -591,7 +610,7 @@ impl Renderer {
                 // stretched-drawable artifact this exists to remove.
                 #[cfg(target_os = "macos")]
                 {
-                    self.fold_present.renew(&self.surface);
+                    self.layer_present.renew(&self.surface);
                 }
             }
 
@@ -678,6 +697,12 @@ impl Renderer {
             .queue
             .submit(user_cmd_bufs.into_iter().chain([encoded]));
 
+        // A drawable is in hand and the present is the next statement, so a
+        // layer hidden while the window was occluded comes back here — with
+        // this frame, in this frame's commit.
+        #[cfg(target_os = "macos")]
+        self.layer_present.before_present();
+
         output_frame.present();
         self.last_submit_ms = submit_start.elapsed().as_secs_f32() * 1000.0;
 
@@ -756,7 +781,8 @@ fn baseview_window_to_surface_target(window: &baseview::Window<'_>) -> wgpu::Sur
     }
 }
 
-/// Presenting a window resize without a flash (harmonigraph issue #121).
+/// What the layer shows across a discontinuity: a window resize (harmonigraph
+/// issue #121), and a window coming back from occlusion.
 ///
 /// wgpu presents into a `CAMetalLayer` that raw-window-metal adds as a plain
 /// sublayer of the view's backing layer, kept in sync with it by a KVO
@@ -786,8 +812,22 @@ fn baseview_window_to_surface_target(window: &baseview::Window<'_>) -> wgpu::Sur
 ///   a main-thread wait per present, so it is raised only around resizes
 ///   (and held through a border drag, which re-arms it every frame) rather
 ///   than left on.
+///
+/// Occlusion is the same problem with a different discontinuity. Nothing can
+/// present while the window is hidden — the drawable request is refused — so
+/// the layer still holds the frame from before it went away, and that is what
+/// the compositor puts back on screen the instant the window is visible
+/// again, before this process is told anything. Hiding the layer for as long
+/// as the window is occluded is what stops it: an empty layer composites as
+/// the host's background rather than as a picture that has stopped being
+/// true. The trade is that the background is what shows for that frame — a
+/// black hole where the plugin was — so this buys honesty, not invisibility.
+/// The layer comes back only with a frame that is presenting, under
+/// `presentsWithTransaction` so the two land in a single commit: unhiding
+/// ahead of content, on its own commit, would show the stale drawable for
+/// exactly the frame this exists to remove.
 #[cfg(target_os = "macos")]
-mod fold_present {
+mod layer_present {
     use objc2::rc::Retained;
     use objc2::runtime::ProtocolObject;
     use objc2_foundation::{ns_string, NSDictionary, NSNull};
@@ -798,7 +838,7 @@ mod fold_present {
     /// size back and land its own window resize a frame behind ours.
     const PWT_FRAMES: u32 = 3;
 
-    pub(super) struct FoldPresent {
+    pub(super) struct LayerPresent {
         /// The layer this renderer's surface presents into. `None` only if
         /// the surface is somehow not Metal-backed; every hook degrades to a
         /// no-op then.
@@ -809,16 +849,29 @@ mod fold_present {
         /// What the layer property is currently set to, so steady-state
         /// frames don't re-send it.
         pwt_raised: bool,
+        /// Whether the layer is hidden because the window was occluded. The
+        /// occlusion state itself is deliberately NOT kept: the only thing
+        /// that ends the hiding is a frame that presents, and that frame
+        /// carries its own proof the window is back (see
+        /// [`Self::before_present`]), so a second copy of the state here
+        /// could only go stale and strand the layer.
+        hidden: bool,
     }
 
-    impl FoldPresent {
+    impl LayerPresent {
         /// Take the layer of a surface that has just replaced this one, keeping
         /// the frames already armed. `pwt_raised` goes back to false because
-        /// the new layer's property is: it is a different layer.
+        /// the new layer's property is: it is a different layer, and a new
+        /// layer is visible, so a hiding still in force has to be re-applied
+        /// to it rather than inherited.
         pub(super) fn renew(&mut self, surface: &wgpu::Surface) {
             let armed = self.pwt_frames;
+            let hidden = self.hidden;
             *self = Self::new(surface);
             self.pwt_frames = armed;
+            if hidden {
+                self.occluded();
+            }
         }
 
         pub(super) fn new(surface: &wgpu::Surface) -> Self {
@@ -833,14 +886,18 @@ mod fold_present {
                 layer,
                 pwt_frames: 0,
                 pwt_raised: false,
+                hidden: false,
             }
         }
 
         /// `NSNull` is Core Animation's "no action" sentinel; a key listed
         /// in `actions` ends the `actionForKey:` lookup before it reaches
         /// the delegate or the class default that carries the implicit
-        /// animation. Every animatable property a resize touches is listed;
-        /// the drawable swap itself has no action and needs no entry.
+        /// animation. Every animatable property a resize touches is listed,
+        /// and `hidden` — which occlusion touches — with them, so the layer
+        /// goes away and comes back on a frame boundary rather than over a
+        /// quarter-second fade; the drawable swap itself has no action and
+        /// needs no entry.
         fn disable_implicit_actions(layer: &CAMetalLayer) {
             let null = NSNull::null();
             let no_action: &ProtocolObject<dyn CAAction> = ProtocolObject::from_ref(&*null);
@@ -868,8 +925,56 @@ mod fold_present {
             self.pwt_frames = PWT_FRAMES;
         }
 
+        /// The window became occluded: hide the layer, so that whatever the
+        /// compositor puts back on re-expose is not the frame from before.
+        ///
+        /// Only the occluded direction is acted on here. Coming back is
+        /// [`Self::before_present`]'s, and deliberately not this event's —
+        /// see there.
+        pub(super) fn occluded(&mut self) {
+            if let Some(layer) = &self.layer {
+                layer.setHidden(true);
+            }
+            self.hidden = true;
+        }
+
+        /// A drawable is in hand and this frame is about to present it: the
+        /// layer can come back, carrying content rather than ahead of it.
+        ///
+        /// A successful acquire is the gate because it is the only thing that
+        /// PROVES both halves of what the unhide needs. It proves the window
+        /// is visible, since the acquire itself refuses an occluded one — so
+        /// this cannot be reached while hidden is still wanted, and no
+        /// occlusion event has to be trusted to arrive for the layer to come
+        /// back. A lost or filtered `Occluded(false)` — a view momentarily
+        /// without a window, a host reparenting the plugin — would otherwise
+        /// leave a permanently blank editor, which is a far worse failure
+        /// than the ghost this all exists to remove. And it proves there is
+        /// something to show, so a frame that unhides never reveals the stale
+        /// drawable by arriving without one.
+        ///
+        /// Both this and the present land in the run loop's transaction, and
+        /// `presentsWithTransaction` (raised for as long as the layer is
+        /// hidden) keeps the present inside it, so the layer comes back in
+        /// the same commit as the frame that justifies it.
+        pub(super) fn before_present(&mut self) {
+            if !self.hidden {
+                return;
+            }
+            if let Some(layer) = &self.layer {
+                layer.setHidden(false);
+            }
+            self.hidden = false;
+        }
+
         pub(super) fn before_acquire(&mut self) {
-            let raise = self.pwt_frames > 0;
+            // Raised while the layer is hidden as well as for a resize's
+            // armed tail: the frame that ends the hiding has to present
+            // inside the transaction that unhides, and which frame that will
+            // be is not known until its acquire succeeds. Costs nothing on
+            // the frames that don't present — the wait it buys is part of
+            // presenting.
+            let raise = self.pwt_frames > 0 || self.hidden;
             self.pwt_frames = self.pwt_frames.saturating_sub(1);
             if raise != self.pwt_raised {
                 if let Some(layer) = &self.layer {
