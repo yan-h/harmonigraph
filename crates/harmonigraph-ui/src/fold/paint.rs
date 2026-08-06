@@ -213,7 +213,7 @@ fn shove_target(tree: &Tree<Tab>, holds: &[Hold], fold: NodeIndex) -> Option<Nod
         // Horizontal, because a vertical split divides height and has no share
         // of the width to trade; and not itself folded, or its fraction is the
         // fold's to write and a drag would be overwritten again.
-        if held.above && !held.folded() && tree[parent].is_horizontal() {
+        if !held.folded() && tree[parent].is_horizontal() {
             return Some(parent);
         }
         node = parent;

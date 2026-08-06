@@ -521,7 +521,7 @@ fn a_layout_reset_hands_back_every_fold_it_holds() {
     // that has not been recorded proves nothing about `clear` dropping it.
     let window = settle(&mut folds, &mut dock, &mut dial, 1000.0);
     assert!(!folds.is_empty(), "the fold is recorded before the reset throws it away");
-    assert!((window + folds.clear(&dial, window) - 1000.0).abs() < 0.01);
+    assert!((window + folds.clear(&dock, &style(), &dial, window) - 1000.0).abs() < 0.01);
     assert!(folds.is_empty());
 }
 
@@ -545,7 +545,7 @@ fn a_layout_reset_asks_for_no_more_window_than_an_unfold_would() {
     let _ = frame(&mut folds, &mut dock, &mut dial, 1000.0);
     let window = frame(&mut folds, &mut dock, &mut dial, 1000.0);
     assert!((window - 1000.0).abs() < 0.01, "the host refused, so the window did not move");
-    let owed = folds.clear(&dial, window);
+    let owed = folds.clear(&dock, &style(), &dial, window);
     assert!(owed < 0.5, "reset asked the host for {} points on top of {window}", owed.round());
 }
 

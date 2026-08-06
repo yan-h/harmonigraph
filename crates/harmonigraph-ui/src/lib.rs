@@ -238,10 +238,12 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     // Deferred from the Panel pane's button: replacing the dock BEFORE the
     // write-back above would be silently undone.
     if std::mem::take(&mut state.reset_layout) {
-        state.dock = default_dock();
         // The default layout has every pane open, so the window gets back
-        // whatever the folds being thrown away were holding.
-        state.window_width_change += state.folds.clear(&state.dial, area);
+        // whatever the folds being thrown away were holding — priced off the
+        // dock they are in, so before it is replaced.
+        state.window_width_change +=
+            state.folds.clear(&state.dock, &dock_style, &state.dial, area);
+        state.dock = default_dock();
         // The flags describe the tree being thrown away (see [`fold::Dial::forget`]).
         state.dial.forget();
     }
