@@ -402,46 +402,6 @@ fn a_pinned_separator_resizes_in_frameless_mode_too() {
     }
 }
 
-/// The pull works in frameless mode too, where it is the only way back: the
-/// arrow that brings a folded pane out lives on a tab bar, and frameless mode has
-/// none.
-#[test]
-fn a_folded_column_can_be_pulled_back_in_frameless_mode() {
-    let mut h = DockHarness::new();
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
-    h.settle(&mut state);
-    // Folding the settings leaf takes the whole column with it (the readouts open
-    // folded), which leaves the fold with nothing outward to pass a drag to.
-    let _ = h.collapse_click(&mut state, panes::Tab::Tuning);
-    let _ = h.settle_folds(&mut state);
-    state.view.frameless = true;
-    let _ = h.settle_folds(&mut state);
-    let column = state
-        .dock
-        .find_tab(&panes::Tab::Tuning)
-        .and_then(|path| path.node.parent())
-        .expect("the settings leaf shares a column with the readouts");
-    let main = egui_dock::SurfaceIndex::main();
-    let gone = state.dock[main][column].rect().expect("the fold is laid out");
-    assert!(gone.width() < 1.0, "a fold with no tab bar to leave is {} wide", gone.width());
-
-    let at = egui::pos2(gone.left() - 2.0, gone.top() + 40.0);
-    h.frame(&mut state, vec![egui::Event::PointerMoved(at)]);
-    h.frame(&mut state, vec![egui::Event::PointerMoved(at), press(at, true)]);
-    let target = egui::pos2(gone.right() - 200.0, at.y);
-    h.frame(&mut state, vec![egui::Event::PointerMoved(target)]);
-    h.frame(&mut state, vec![press(target, false)]);
-    let _ = h.settle_folds(&mut state);
-
-    assert!(!collapsed(&state, panes::Tab::Tuning), "the pull should have brought the column back");
-    assert!(collapsed(&state, panes::Tab::Notes), "and left the readouts as they were");
-    let width = state.dock[main][column].rect().expect("laid out").width();
-    assert!(
-        (width - 200.0).abs() < 6.0,
-        "the column should come back at the 200 it was pulled to, and is {width}",
-    );
-}
-
 /// The same, with the two collapsed panes SIBLINGS: their own split is collapsed
 /// too, so one fold renders as two rails and the separator between them is inside
 /// it. It has a rail on both sides and used to be inert, which from the outside
@@ -492,61 +452,25 @@ fn the_separator_inside_a_folded_pair_resizes_the_open_panes_around_it() {
 
 /// Where a fold holds the whole of one side of the window there is no boundary to
 /// pass a drag out to — one open pane, one rail, and the window's own edge — so
-/// the separator beside the rail does the only resize left: the pane comes back
-/// at the width it is pulled to, out of the window.
+/// the separator beside the rail has nothing it could resize, and neither a click
+/// nor a drag on it does anything at all. The arrow on the rail is what brings
+/// the pane back.
 ///
-/// A pane at a time, in the stretch of the separator beside that pane's stretch
-/// of the rail, exactly as the arrows on the rail are: the settings column opens
-/// on a pull aimed at it, and the readout pane folded away underneath it — folded
-/// long before the column was, and by its own arrow — stays folded.
+/// It could instead be that pane's own handle, unfolding it at the width it is
+/// dragged to. What that costs is a pane the drag can leave narrower than
+/// `separator.extra`, which is the floor egui_dock clamps every separator's
+/// fraction to on every frame: under it the fraction saturates, `fold::drags`
+/// reads a saturated fraction as that clamp rather than as a gesture, and the
+/// pane comes back with a separator that lights up under the pointer and moves
+/// nothing in either direction.
 #[test]
-fn pulling_a_folded_column_out_brings_back_the_pane_it_was_aimed_at() {
+fn the_handle_beside_an_outermost_rail_does_nothing() {
     let mut h = DockHarness::new();
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
     h.settle(&mut state);
     // The Notes/Console leaf opens folded, so folding the settings leaf too
-    // folds the whole column sideways into one rail down the right edge.
-    let _ = h.collapse_click(&mut state, panes::Tab::Tuning);
-    let _ = h.settle_folds(&mut state);
-    let column = state
-        .dock
-        .find_tab(&panes::Tab::Tuning)
-        .and_then(|path| path.node.parent())
-        .expect("the settings leaf shares a column with the readouts");
-    let main = egui_dock::SurfaceIndex::main();
-    let rail = state.dock[main][column].rect().expect("the rail is laid out");
-    let style = theme::dock_style(&egui::Style::default(), 1.0);
-    assert!(rail.width() < style.tab_bar.height + 4.0, "the column should be one rail wide");
-
-    // The settings pane's own stretch of the rail is the top of it: the column is
-    // dialled at 0.55, the readouts below that.
-    let at = egui::pos2(rail.left() - style.separator.width * 0.5, rail.top() + 40.0);
-    h.frame(&mut state, vec![egui::Event::PointerMoved(at)]);
-    h.frame(&mut state, vec![egui::Event::PointerMoved(at), press(at, true)]);
-    let target = egui::pos2(rail.right() - 260.0, at.y);
-    h.frame(&mut state, vec![egui::Event::PointerMoved(target)]);
-    h.frame(&mut state, vec![press(target, false)]);
-    let _ = h.settle_folds(&mut state);
-
-    assert!(!collapsed(&state, panes::Tab::Tuning), "the pull should have brought the column back");
-    assert!(
-        collapsed(&state, panes::Tab::Notes),
-        "the readouts were folded before the column was, and are not the pull's to open",
-    );
-    let width = state.dock[main][column].rect().expect("laid out").width();
-    assert!(
-        (width - 260.0).abs() < 6.0,
-        "the column should come back at the 260 it was pulled to, and is {width}",
-    );
-}
-
-/// A click on that same handle is not a pull: the pane stays folded, or every
-/// stray press on a separator would open whatever is beside it.
-#[test]
-fn a_click_on_the_handle_beside_a_rail_leaves_the_pane_folded() {
-    let mut h = DockHarness::new();
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
-    h.settle(&mut state);
+    // folds the whole column sideways into one rail down the right edge — and
+    // leaves that fold with nothing outward to pass a drag to.
     let _ = h.collapse_click(&mut state, panes::Tab::Tuning);
     let _ = h.settle_folds(&mut state);
     let column = state
@@ -558,13 +482,32 @@ fn a_click_on_the_handle_beside_a_rail_leaves_the_pane_folded() {
     let rail = state.dock[main][column].rect().expect("the rail is laid out");
     let separator = theme::dock_style(&egui::Style::default(), 1.0).separator.width;
     let at = egui::pos2(rail.left() - separator * 0.5, rail.top() + 40.0);
+    let lattice = pane_width(&state, panes::Tab::Lattice);
+
+    // A click.
     h.frame(&mut state, vec![egui::Event::PointerMoved(at)]);
     h.frame(&mut state, vec![egui::Event::PointerMoved(at), press(at, true)]);
     h.frame(&mut state, vec![press(at, false)]);
     let _ = h.settle_folds(&mut state);
     assert!(
         collapsed(&state, panes::Tab::Tuning),
-        "a click that went nowhere should have left the rail alone",
+        "a click on the handle should have left the rail alone",
+    );
+
+    // And a drag well out into the open pane beside it.
+    h.frame(&mut state, vec![egui::Event::PointerMoved(at), press(at, true)]);
+    let target = egui::pos2(at.x - 260.0, at.y);
+    h.frame(&mut state, vec![egui::Event::PointerMoved(target)]);
+    h.frame(&mut state, vec![press(target, false)]);
+    let _ = h.settle_folds(&mut state);
+    assert!(
+        collapsed(&state, panes::Tab::Tuning),
+        "and so should a drag: the arrow is what opens a rail",
+    );
+    assert!(
+        (pane_width(&state, panes::Tab::Lattice) - lattice).abs() < 1.0,
+        "with no boundary to move, the pane beside the rail stays where it was: {} from {lattice}",
+        pane_width(&state, panes::Tab::Lattice),
     );
 }
 

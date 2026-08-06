@@ -5,9 +5,9 @@
 //! [`shove_target`]).
 //!
 //! The layout these draw is [`super`]'s; nothing here decides a width. What it
-//! reads back — an arrow clicked, a rail pulled open — goes to the next frame
-//! through the collapsed flags and [`Dial`], which is where a width becomes
-//! layout again.
+//! reads back — an arrow clicked, a pinned separator dragged — goes to the next
+//! frame through the collapsed flags and the fractions in the tree, which is
+//! where a width becomes layout again.
 
 use egui_dock::{DockState, Node, NodeIndex, Surface, SurfaceIndex, Tree};
 
@@ -77,12 +77,7 @@ const ARROW_BUTTON: f32 = 24.0;
 /// anything but the tab that names it. The tab bar's darker well stays where it
 /// always is, in the collapse button's square and the separator beside the
 /// rail, so a rail still ends where a pane's edge would.
-pub fn paint(
-    ui: &egui::Ui,
-    dock: &mut DockState<Tab>,
-    style: &egui_dock::Style,
-    dial: &mut Dial,
-) {
+pub fn paint(ui: &egui::Ui, dock: &mut DockState<Tab>, style: &egui_dock::Style, dial: &Dial) {
     let rail = style.tab_bar.height;
     // Frameless mode hides every tab bar, which takes the rail with it: a fold
     // there is a pane squeezed to NOTHING, so there is no rail to draw, no name
@@ -90,6 +85,11 @@ pub fn paint(
     // is the separator the pane left behind, and the panes on either side of it
     // that a drag on it means (see the handles below) — so the chrome is what
     // gets skipped, not the frame.
+    //
+    // A pane folded in frameless mode therefore has nothing on screen that
+    // opens it, and comes back by leaving frameless mode (Tab) and clicking the
+    // arrow that reappears on its rail. Frameless is a toggle over the same
+    // layout, so nothing is stranded by that.
     let chrome = rail > 0.0;
     // The pane an arrow of ours was clicked for, and the split a pinned
     // separator passed a drag out to: both applied once the tree is no longer
@@ -156,43 +156,20 @@ pub fn paint(
                 std::iter::once(outer).chain(inner_bands(tree, folded)).enumerate()
             {
                 let id = egui::Id::new(("fold band", surface.0, node.0, index));
-                match (target, index) {
+                match target {
                     // Somewhere outward to pass it: the panes move as the drag
                     // goes, which is what any separator between two panes does.
-                    (Some(target), _) => {
+                    Some(target) => {
                         if let Some(delta) = shove(ui, band, id, style) {
                             shoved = Some((surface, target, delta));
                         }
                     }
                     // Nowhere: the fold is holding the whole of one side of the
-                    // window, so the only width that can move is the folded
-                    // pane's own, out of the window (see [`grab`]). The
-                    // separator the rail sits against is the one that offers
-                    // that; a band between two rails offers nothing.
-                    //
-                    // A pane at a time, in the stretch of the separator beside
-                    // that pane's stretch of the rail, so a pull opens what its
-                    // own arrow would (see [`name_bands`]).
-                    (None, 0) => {
-                        for pane in name_bands(tree, folded) {
-                            let slice = egui::Rect::from_x_y_ranges(
-                                band.x_range(),
-                                pane.rect.y_range(),
-                            );
-                            let id = id.with(pane.node.0);
-                            let split = tree[node].rect();
-                            if let Some(width) = grab(ui, slice, side, split, span, id, style) {
-                                dial.pull = Some(Pull {
-                                    surface: surface.0,
-                                    node: node.0,
-                                    side,
-                                    leaf: pane.node.0,
-                                    width,
-                                });
-                            }
-                        }
-                    }
-                    (None, _) => deaden(ui, band, style),
+                    // window, so there is no second open pane for the boundary
+                    // to trade against and nothing any of these separators
+                    // could resize. The arrow on the rail is what brings the
+                    // pane back.
+                    None => deaden(ui, band, style),
                 }
             }
         }
@@ -338,126 +315,6 @@ fn paint_band(
     clicked
 }
 
-/// The separator beside a rail, as the resize handle of the pane the rail stands
-/// in for. Answers the width that pane is to come back at, once, on the frame the
-/// pull is let go of.
-///
-/// For the fold that has nowhere to pass a drag outward to ([`shove_target`]),
-/// which is one holding the whole of one side of the window: the pane beside the
-/// rail cannot grow, because there is nothing on the other side of it to take the
-/// width from but the window itself. What CAN move is the folded pane's own
-/// width, out of the window, which is the fold run backwards at a width the user
-/// chose rather than the one they folded at — so that is what this offers. See
-/// [`Folds::apply`] for who pays.
-///
-/// The pane opens when the drag ENDS. Opening it as the pull went would hand the
-/// rest of the gesture to a separator that has just replaced this handle —
-/// egui_dock's own, for a split that is no longer folded — and drop the pull
-/// half way through it.
-///
-/// It comes back at a width a drag can move it off ([`pull_range`]), and only
-/// where the pointer has left the rail: a pull aimed into the rail, a click on
-/// the separator among them, leaves the pane folded.
-fn grab(
-    ui: &egui::Ui,
-    band: egui::Rect,
-    side: Side,
-    split: Option<egui::Rect>,
-    span: f32,
-    id: egui::Id,
-    style: &egui_dock::Style,
-) -> Option<f32> {
-    let split = split?;
-    let reach = egui::vec2(style.separator.extra_interact_width * 0.5, 0.0);
-    let response = ui
-        .interact(band.expand2(reach), id, egui::Sense::click_and_drag())
-        .on_hover_and_drag_cursor(egui::CursorIcon::ResizeHorizontal);
-    // Hover and drag accents as egui_dock paints them on a live separator,
-    // because that is what this is now — the fold took the accent away with the
-    // drag, and a handle that does something has to look like one.
-    let color = if response.dragged() {
-        style.separator.color_dragged
-    } else if response.hovered() {
-        style.separator.color_hovered
-    } else {
-        style.separator.color_idle
-    };
-    ui.painter().rect_filled(band, egui::CornerRadius::ZERO, color);
-    // How far out of the rail the pointer has come, which is the width the pull
-    // is naming.
-    let pulled = |at: egui::Pos2| match side {
-        Side::Left => at.x - split.left(),
-        Side::Right => split.right() - at.x,
-    };
-    let range = pull_range(span, split.width(), style);
-    let width = |at: egui::Pos2| pulled(at).clamp(*range.start(), *range.end());
-    let at = response.interact_pointer_pos()?;
-    // A pull that has not left the rail is a pane that stays folded, a click on
-    // the separator among them: the rail is still what the pointer is over, and
-    // the width it would name is one the pane cannot come back at.
-    let opens = pulled(at) > span + 1.0;
-    if response.dragged() {
-        // Only where letting go would open the pane, so the line promises
-        // nothing a release does not give.
-        if !opens {
-            return None;
-        }
-        // How much pane is being asked for, while the pull is still in hand: the
-        // rail cannot follow the pointer, being a rail until the pane opens, so
-        // without the line a pull has no answer at all until it is let go.
-        //
-        // The line is the pane's far edge measured from the rail's OUTER side,
-        // which is the side the width is counted from. The window grows behind
-        // it by what the fold took, so a pane pulled out of a rail on the left
-        // lands its edge exactly here and one pulled out of a rail on the right
-        // lands that much further out, having grown into the width the window
-        // gave back rather than over the pane the pull crossed.
-        let edge = match side {
-            Side::Left => split.left() + width(at),
-            Side::Right => split.right() - width(at),
-        };
-        let half = style.separator.width * 0.5;
-        let guide = egui::Rect::from_x_y_ranges(edge - half..=edge + half, split.y_range());
-        ui.painter().rect_filled(guide, egui::CornerRadius::ZERO, style.separator.color_dragged);
-        return None;
-    }
-    if !response.drag_stopped() {
-        return None;
-    }
-    opens.then(|| width(at))
-}
-
-/// The widths a pull can name: what the pane it opens needs at the narrowest,
-/// and what the split it sits in leaves at the widest.
-///
-/// The floor is the one a separator drag stops at ([`min_widths`]), and holding
-/// a pull to it is what keeps the gesture reversible. A pane dialled below
-/// `separator.extra` is one egui_dock saturates the fraction of — it re-clamps
-/// every separator on every frame to keep that many points of pane either side
-/// — and a saturated fraction is one [`drags`] reads as the clamp rather than
-/// as a gesture (see [`unmoved`]). So a pane come back narrower than the floor
-/// has a separator that lights up, changes the cursor and moves nothing, in
-/// either direction, for as long as it stays that narrow: the arrow is the only
-/// way back out. Whatever inside the rail stays folded keeps its own rail on
-/// top of the floor, since a pull opens one pane and not the subtree.
-///
-/// The top is the split less a rail for the pane beside it, which is that pane's
-/// own width: pulled the whole way, the two swap: the rail comes back at what
-/// the neighbour had, and the neighbour drops to what the fold recorded — never
-/// under it, and never under the floor with it. A pointer that has run out of
-/// split has run out of gesture, and the pane can be dragged wider once it is a
-/// pane again.
-pub(super) fn pull_range(
-    span: f32,
-    split: f32,
-    style: &egui_dock::Style,
-) -> std::ops::RangeInclusive<f32> {
-    let separator = style.separator.width;
-    let floor = style.separator.extra - separator * 0.5;
-    let least = span - style.tab_bar.height + floor;
-    least..=(split - separator - span).max(least)
-}
-
 /// Each pane in a folded subtree with the stretch of rail that is ITS pane:
 /// the arrow that brings it back at the top, its name below that.
 ///
@@ -545,10 +402,9 @@ fn inner_bands(tree: &Tree<Tab>, node: NodeIndex) -> Vec<egui::Rect> {
     bands
 }
 
-/// Take the grab handle off a separator with a rail on both sides of it AND
-/// nothing outward to pass a drag to — inside a fold that is holding the whole of
-/// one side of the window, where there is no second open pane for the boundary to
-/// trade against.
+/// Take the resize handle off a separator a fold has pinned with nothing outward
+/// to pass a drag to — a fold holding the whole of one side of the window, where
+/// there is no second open pane for the boundary to trade against.
 ///
 /// egui_dock keeps drawing them, hover accent and resize cursor and all, and
 /// dragging one cannot do anything: neither side of it can change width, the fold
@@ -557,9 +413,17 @@ fn inner_bands(tree: &Tree<Tab>, node: NodeIndex) -> Vec<egui::Rect> {
 /// withdrawn — the same thing egui_dock does for a pane folded downwards, which
 /// simply has no separator at all.
 ///
-/// Every other separator a fold has pinned does something: [`shove`] where there
-/// is a boundary outward to move, and [`grab`] on the rail's open side where there
-/// is not.
+/// A rail's arrow is what brings its pane back, and the only thing that does.
+/// The separator beside it could instead be the pane's own handle, unfolding it
+/// at the width it is dragged to — but a width dragged out of a rail is one the
+/// pane can be left too narrow to have a working separator at, since a pane
+/// under `separator.extra` saturates the split's fraction and [`drags`] reads a
+/// saturated fraction as egui_dock's own clamp (see [`unmoved`]). One
+/// affordance for one thing costs nothing here: the arrow is on the rail, in
+/// view, and it hands the pane back at the width it folded from.
+///
+/// The separator a fold has pinned with somewhere outward to pass a drag DOES
+/// resize, and [`shove`] is where it goes.
 fn deaden(ui: &egui::Ui, band: egui::Rect, style: &egui_dock::Style) {
     ui.painter().rect_filled(band, egui::CornerRadius::ZERO, style.separator.color_idle);
     // The cursor is a frame-wide setting rather than a shape, so it is undone
