@@ -1148,6 +1148,58 @@ fn a_rail_pulled_open_comes_back_at_the_width_it_was_pulled_to() {
     assert!((width(&dock, SETTINGS) - 298.0).abs() < 1.0, "the column keeps its width");
 }
 
+/// The narrowest a pull can bring a pane back at is the floor a drag stops at,
+/// not the rail's own width — below that, egui_dock's per-frame clamp saturates
+/// the split's fraction, and a saturated fraction is one `drags` cannot tell
+/// from the clamp itself. A pane pulled barely out of its rail therefore had a
+/// separator that lit up under the pointer and moved nothing at all, either
+/// way, leaving the arrow as the only way back out of a pane a few points wide.
+#[test]
+fn a_rail_pulled_barely_open_comes_back_wide_enough_to_drag() {
+    let mut dock = DockState::new(vec![Tab::Lattice]);
+    dock.main_surface_mut().split_right(NodeIndex::root(), 0.7, vec![Tab::Tuning]);
+    let (left, right) = (NodeIndex(1), NodeIndex(2));
+    let mut folds = Folds::default();
+    let mut dial = Dial::default();
+    let _ = frame(&mut folds, &mut dock, &mut dial, 1000.0);
+    collapse(&mut dock, Tab::Tuning, true);
+    let folded = settle(&mut folds, &mut dock, &mut dial, 1000.0);
+    // A pointer a point out of the rail, which is the least a pull can name.
+    let rail = style().tab_bar.height;
+    let least = *super::paint::pull_range(rail, folded, &style()).start();
+    let floor = style().separator.extra - style().separator.width * 0.5;
+    assert!(
+        (least - floor).abs() < 0.01,
+        "a pull bottoms out at the floor a pane may be drawn at, and stops at {least}",
+    );
+    pull(&mut dial, NodeIndex::root(), Side::Right, right, least);
+    let mut window = settle(&mut folds, &mut dock, &mut dial, folded);
+    window = settle(&mut folds, &mut dock, &mut dial, window);
+    assert!(!collapsed_tab(&dock, Tab::Tuning), "a pull out of the rail opens the pane");
+    assert!(
+        width(&dock, right) >= floor - 1.0,
+        "the pane comes back at the floor and is {}",
+        width(&dock, right),
+    );
+    // And the separator beside it is a separator again: it moves the boundary
+    // the way any other one does.
+    let (before, was) = (width(&dock, right), width(&dock, left));
+    for _ in 0..3 {
+        drag(&mut dial, &mut dock, NodeIndex::root(), -20.0);
+        let _ = frame(&mut folds, &mut dock, &mut dial, window);
+    }
+    assert!(
+        (width(&dock, right) - (before + 60.0)).abs() < 1.0,
+        "60pt of leftward drag should widen the pane from {before} and leaves it {}",
+        width(&dock, right),
+    );
+    assert!(
+        (width(&dock, left) - (was - 60.0)).abs() < 1.0,
+        "the pane beside it pays, from {was} to {}",
+        width(&dock, left),
+    );
+}
+
 /// A pull on one pane of a folded PAIR brings that pane back and leaves the
 /// other where it was: a rail can hold panes that were folded separately, and
 /// a pull is the pane's own arrow with a width on it, not the subtree's.

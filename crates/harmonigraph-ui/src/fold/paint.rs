@@ -354,6 +354,10 @@ fn paint_band(
 /// rest of the gesture to a separator that has just replaced this handle —
 /// egui_dock's own, for a split that is no longer folded — and drop the pull
 /// half way through it.
+///
+/// It comes back at a width a drag can move it off ([`pull_range`]), and only
+/// where the pointer has left the rail: a pull aimed into the rail, a click on
+/// the separator among them, leaves the pane folded.
 fn grab(
     ui: &egui::Ui,
     band: egui::Rect,
@@ -379,20 +383,25 @@ fn grab(
         style.separator.color_idle
     };
     ui.painter().rect_filled(band, egui::CornerRadius::ZERO, color);
-    // What the pane would come back at from where the pointer is: never
-    // narrower than the rail standing in for it, since below that it is still
-    // folded, and never wider than the split the rail sits in, less a rail for
-    // the pane beside it — a pointer that has run out of split has run out of
-    // gesture, and the pane can be dragged wider once it is a pane again.
-    let width = |at: egui::Pos2| {
-        let pulled = match side {
-            Side::Left => at.x - split.left(),
-            Side::Right => split.right() - at.x,
-        };
-        pulled.clamp(span, (split.width() - style.separator.width - span).max(span))
+    // How far out of the rail the pointer has come, which is the width the pull
+    // is naming.
+    let pulled = |at: egui::Pos2| match side {
+        Side::Left => at.x - split.left(),
+        Side::Right => split.right() - at.x,
     };
+    let range = pull_range(span, split.width(), style);
+    let width = |at: egui::Pos2| pulled(at).clamp(*range.start(), *range.end());
     let at = response.interact_pointer_pos()?;
+    // A pull that has not left the rail is a pane that stays folded, a click on
+    // the separator among them: the rail is still what the pointer is over, and
+    // the width it would name is one the pane cannot come back at.
+    let opens = pulled(at) > span + 1.0;
     if response.dragged() {
+        // Only where letting go would open the pane, so the line promises
+        // nothing a release does not give.
+        if !opens {
+            return None;
+        }
         // How much pane is being asked for, while the pull is still in hand: the
         // rail cannot follow the pointer, being a rail until the pane opens, so
         // without the line a pull has no answer at all until it is let go.
@@ -415,11 +424,38 @@ fn grab(
     if !response.drag_stopped() {
         return None;
     }
-    // A pull that ends where it started is a click on a separator, and one aimed
-    // INTO the rail is a pane that stays folded. Both come out at the clamp's
-    // floor, which is the rail's own width.
-    let width = width(at);
-    (width > span + 1.0).then_some(width)
+    opens.then(|| width(at))
+}
+
+/// The widths a pull can name: what the pane it opens needs at the narrowest,
+/// and what the split it sits in leaves at the widest.
+///
+/// The floor is the one a separator drag stops at ([`min_widths`]), and holding
+/// a pull to it is what keeps the gesture reversible. A pane dialled below
+/// `separator.extra` is one egui_dock saturates the fraction of — it re-clamps
+/// every separator on every frame to keep that many points of pane either side
+/// — and a saturated fraction is one [`drags`] reads as the clamp rather than
+/// as a gesture (see [`unmoved`]). So a pane come back narrower than the floor
+/// has a separator that lights up, changes the cursor and moves nothing, in
+/// either direction, for as long as it stays that narrow: the arrow is the only
+/// way back out. Whatever inside the rail stays folded keeps its own rail on
+/// top of the floor, since a pull opens one pane and not the subtree.
+///
+/// The top is the split less a rail for the pane beside it, which is that pane's
+/// own width: pulled the whole way, the two swap: the rail comes back at what
+/// the neighbour had, and the neighbour drops to what the fold recorded — never
+/// under it, and never under the floor with it. A pointer that has run out of
+/// split has run out of gesture, and the pane can be dragged wider once it is a
+/// pane again.
+pub(super) fn pull_range(
+    span: f32,
+    split: f32,
+    style: &egui_dock::Style,
+) -> std::ops::RangeInclusive<f32> {
+    let separator = style.separator.width;
+    let floor = style.separator.extra - separator * 0.5;
+    let least = span - style.tab_bar.height + floor;
+    least..=(split - separator - span).max(least)
 }
 
 /// Each pane in a folded subtree with the stretch of rail that is ITS pane:
