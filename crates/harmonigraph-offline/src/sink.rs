@@ -15,9 +15,123 @@ use std::io::Write;
 use std::process::{Child, Command, Stdio};
 
 pub enum Sink {
-    Video { child: Child },
+    Video { child: Child, writer: Writer },
     Pngs { dir: std::path::PathBuf, stem: String, index: u32, size: [u32; 2] },
     Raw { file: std::fs::File },
+}
+
+/// Frames waiting to be written, at most. Two, plus the one the writer is
+/// pushing into the pipe and the one the renderer is filling: four buffers in
+/// flight, which is 33 MB at 1080p and 133 MB at 4K.
+///
+/// Deep enough is all this has to be. The queue exists to cover the JITTER
+/// between the two halves — a frame that renders fast arriving while the
+/// encoder is still on a slow one — not to bank work: over a whole render the
+/// halves run at whatever the slower one manages, and a deeper queue only
+/// holds more megabytes at that same rate. Bounded by FRAMES rather than by
+/// bytes for the same reason a 4K frame is worth four of a 1080p one to hold.
+const QUEUE_DEPTH: usize = 2;
+
+/// The thread ffmpeg's stdin is written from, and the buffers going round it.
+///
+/// The pipe is why this exists. A 1080p frame is 8.3 MB and the macOS pipe
+/// buffer is 64 KB, so a blocking `write_all` onto ffmpeg's stdin does not
+/// hand a frame over — it waits for x264 to consume essentially the whole of
+/// it, with the GPU idle for the duration.
+///
+/// Measured on a 20 s take, 1439 frames at 1920x1080@60 on eight cores, with
+/// the encoder's output byte-identical either way:
+///
+/// | | wall | of which the renderer spends blocked handing a frame over |
+/// |---|---|---|
+/// | writing the pipe from the render thread | 12.55 s | 5.25 s |
+/// | writing it from here | 10.92 s | 3.10 s |
+///
+/// So 1.15x, and NOT the 1.6x that "the halves cost about the same, so
+/// overlapping them halves the wall" predicts — worth knowing before anyone
+/// spends a session chasing the rest. The render half alone, with the encoder
+/// stubbed out, is 6.59 s. The two halves do now overlap, but they overlap
+/// onto the same eight cores, and x264 at `-preset slow` is most of what runs
+/// on them: what is left of the 3.10 s is the encoder being genuinely slower
+/// than the renderer over stretches, which is backpressure rather than a
+/// stall. A deeper queue defers that; it does not remove it. See
+/// [`QUEUE_DEPTH`].
+///
+/// Buffers are recycled round the two channels rather than allocated per
+/// frame, which is the difference between moving the cost off the render
+/// thread and moving it into the allocator.
+pub struct Writer {
+    /// Frames on their way to the encoder. `None` once the writer has stopped
+    /// and been collected, which is what makes a second `push` after an early
+    /// stop a no-op rather than a panic on a dead channel.
+    frames: Option<std::sync::mpsc::SyncSender<Vec<u8>>>,
+    /// Written buffers coming back to be refilled. Unbounded, and it cannot
+    /// grow past the buffers in circulation: nothing but `push` creates one.
+    spare: std::sync::mpsc::Receiver<Vec<u8>>,
+    /// `Ok(true)` — everything handed over was written; `Ok(false)` — the
+    /// encoder closed the pipe and wants no more (see [`Sink::push`]);
+    /// `Err` — the write itself failed.
+    thread: Option<std::thread::JoinHandle<Result<bool, String>>>,
+}
+
+impl Writer {
+    /// Start writing `stdin` from its own thread.
+    fn spawn(stdin: std::process::ChildStdin) -> Writer {
+        let (frames, incoming) = std::sync::mpsc::sync_channel::<Vec<u8>>(QUEUE_DEPTH);
+        let (used, spare) = std::sync::mpsc::channel::<Vec<u8>>();
+        let thread = std::thread::spawn(move || {
+            let mut stdin = stdin;
+            while let Ok(frame) = incoming.recv() {
+                match stdin.write_all(&frame) {
+                    // The buffer goes back to be refilled. A failed send here
+                    // means the render side is gone, which the recv above is
+                    // about to report anyway.
+                    Ok(()) => {
+                        let _ = used.send(frame);
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => return Ok(false),
+                    Err(e) => return Err(format!("writing a frame to ffmpeg failed: {e}")),
+                }
+            }
+            Ok(true)
+        });
+        Writer { frames: Some(frames), spare, thread: Some(thread) }
+    }
+
+    /// Hand one frame over, with [`Sink::push`]'s answer.
+    ///
+    /// The answer is about the frames BEFORE this one: an early stop is
+    /// something the writer discovers a frame or three later, so the renderer
+    /// draws that many past the point ffmpeg stopped listening and they are
+    /// dropped. Which costs a few frames of a render that is ending anyway,
+    /// and is what buys the overlap the rest of the time.
+    fn push(&mut self, frame: &[u8]) -> Result<bool, String> {
+        let Some(frames) = self.frames.as_ref() else {
+            return Ok(false);
+        };
+        let mut buffer = self.spare.try_recv().unwrap_or_default();
+        buffer.clear();
+        buffer.extend_from_slice(frame);
+        if frames.send(buffer).is_ok() {
+            return Ok(true);
+        }
+        // The channel is closed only because the writer returned, and it
+        // returns only on an early stop or a failure. Which one is its verdict.
+        self.collect()
+    }
+
+    /// Stop the writer and take its verdict, closing ffmpeg's stdin with it —
+    /// the thread owns the pipe, so this is also what lets ffmpeg reach EOF
+    /// and exit.
+    fn collect(&mut self) -> Result<bool, String> {
+        self.frames = None;
+        match self.thread.take() {
+            Some(thread) => thread.join().unwrap_or_else(|_| Err("the frame writer panicked".into())),
+            // Already collected, by an earlier `push` that found the channel
+            // shut: the verdict was returned then.
+            None => Ok(false),
+        }
+    }
 }
 
 /// How a video sink should be set up.
@@ -108,10 +222,15 @@ impl Sink {
         }
         command.arg(path).stdin(Stdio::piped());
 
-        let child = command
+        let mut child = command
             .spawn()
             .map_err(|e| format!("could not start {}: {e}", ffmpeg.display()))?;
-        Ok(Sink::Video { child })
+        // The writer thread OWNS the pipe from here. Nothing else may hold a
+        // handle on it: ffmpeg reaches EOF when the last one drops, so a
+        // second copy left in `child` would keep the encoder waiting for
+        // frames through `finish`.
+        let stdin = child.stdin.take().ok_or("ffmpeg stdin closed")?;
+        Ok(Sink::Video { child, writer: Writer::spawn(stdin) })
     }
 
     /// Feed one frame. `Ok(true)` means keep going; `Ok(false)` means the
@@ -121,16 +240,14 @@ impl Sink {
     /// the picture keeps fading out past it). Whether that early stop was
     /// success or a crash is ffmpeg's call, read from its exit status in
     /// [`Self::finish`]; the caller just stops feeding on `Ok(false)`.
+    ///
+    /// The video sink answers about the frames before this one — see
+    /// [`Writer::push`]. `frame` is copied rather than taken, the renderer
+    /// handing over a view of a buffer it owns; the copy is into a buffer the
+    /// writer hands back, so it costs a memcpy and no allocation.
     pub fn push(&mut self, frame: &[u8]) -> Result<bool, String> {
         match self {
-            Sink::Video { child } => {
-                let stdin = child.stdin.as_mut().ok_or("ffmpeg stdin closed")?;
-                match stdin.write_all(frame) {
-                    Ok(()) => Ok(true),
-                    Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => Ok(false),
-                    Err(e) => Err(format!("writing a frame to ffmpeg failed: {e}")),
-                }
-            }
+            Sink::Video { writer, .. } => writer.push(frame),
             Sink::Raw { file } => file.write_all(frame).map(|()| true).map_err(|e| e.to_string()),
             Sink::Pngs { dir, stem, index, size } => {
                 let path = dir.join(format!("{stem}-{index:05}.png"));
@@ -146,14 +263,21 @@ impl Sink {
     /// half-written video can't be mistaken for a finished one.
     pub fn finish(self) -> Result<(), String> {
         match self {
-            Sink::Video { mut child } => {
-                drop(child.stdin.take());
+            Sink::Video { mut child, mut writer } => {
+                // Drain first: the queued frames are part of the video, and
+                // the thread holds the pipe ffmpeg is waiting for EOF on.
+                let written = writer.collect();
                 let status = child.wait().map_err(|e| format!("waiting for ffmpeg: {e}"))?;
-                if status.success() {
-                    Ok(())
-                } else {
-                    Err(format!("ffmpeg exited with {status}"))
+                // The exit status first, when it says something went wrong.
+                // A write failing and ffmpeg dying are usually one event seen
+                // from both ends, and ffmpeg's end is the one that says what
+                // happened — a broken pipe here only says the far end is gone.
+                if !status.success() {
+                    return Err(format!("ffmpeg exited with {status}"));
                 }
+                // Whereas a write that failed against an encoder that exited
+                // CLEANLY is its own thing, and silently truncates the video.
+                written.map(|_| ())
             }
             Sink::Raw { mut file } => file.flush().map_err(|e| e.to_string()),
             Sink::Pngs { .. } => Ok(()),
@@ -219,6 +343,98 @@ fn find_ffmpeg(explicit: Option<&str>) -> Result<std::path::PathBuf, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A stand-in for ffmpeg: a script that ignores the encoder arguments and
+    /// does `body` instead. Returns the directory it lives in, so the caller
+    /// can name files beside it and remove the lot.
+    ///
+    /// A subprocess rather than a fake trait because the pipe IS the thing
+    /// under test — the queue exists because a real 64 KB kernel pipe blocks a
+    /// writer, and an in-process stand-in for it would have neither the
+    /// blocking nor the broken-pipe end that the two tests below turn on.
+    fn fake_ffmpeg(name: &str, body: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("harmonigraph-sink-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        let script = dir.join("ffmpeg.sh");
+        std::fs::write(&script, format!("#!/bin/sh\n{body}\n")).expect("write the script");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
+                .expect("chmod");
+        }
+        dir
+    }
+
+    fn video_to(dir: &std::path::Path) -> Sink {
+        Sink::create(
+            &dir.join("out.mp4"),
+            &VideoOptions {
+                // Even, or `video` rejects the size before spawning anything.
+                size: [4, 2],
+                fps: 30.0,
+                audio: None,
+                crf: 20,
+                ffmpeg: Some(dir.join("ffmpeg.sh").to_str().expect("utf-8 path")),
+                audio_offset: 0.0,
+            },
+        )
+        .expect("the fake encoder should start")
+    }
+
+    /// Every frame reaches the encoder, whole and in order.
+    ///
+    /// Which is what a thread between the two can break and a blocking write
+    /// cannot: frames handed over asynchronously can be dropped at the end
+    /// (the queue not drained before the pipe closes), truncated (a buffer
+    /// recycled while it is still being written) or reordered. The video is
+    /// silently wrong in all three cases — it still plays.
+    #[test]
+    #[cfg(unix)]
+    fn every_frame_handed_over_reaches_the_encoder_in_order() {
+        let dir = fake_ffmpeg("in-order", "cat > \"$(dirname \"$0\")/frames.rgba\"");
+        let mut sink = video_to(&dir);
+        // Distinguishable per frame, so the check is about ORDER and not just
+        // about the byte count.
+        let frames: Vec<Vec<u8>> = (0..64u8).map(|k| vec![k; 4 * 2 * 4]).collect();
+        for frame in &frames {
+            assert_eq!(sink.push(frame), Ok(true), "the fake encoder is reading");
+        }
+        sink.finish().expect("a clean finish");
+
+        let written = std::fs::read(dir.join("frames.rgba")).expect("the encoder's input");
+        assert_eq!(
+            written,
+            frames.concat(),
+            "the {} frames handed over are not what arrived",
+            frames.len(),
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An encoder that stops listening is a clean early stop, not a failure —
+    /// `-shortest` with the soundtrack ending before the picture does exactly
+    /// this — and it still reads as one through a queue, where the news
+    /// arrives some frames after the event.
+    #[test]
+    #[cfg(unix)]
+    fn an_encoder_that_closes_the_pipe_early_stops_the_render_without_failing_it() {
+        // Exits at once, having read nothing: every write after that is a
+        // broken pipe.
+        let dir = fake_ffmpeg("early-stop", "exit 0");
+        let mut sink = video_to(&dir);
+        // Well past the 64 KB a pipe will hold without a reader, so this
+        // cannot end by running out of frames instead.
+        let frame = vec![0u8; 64 * 1024];
+        let mut fed = 0;
+        while sink.push(&frame).expect("an early stop is not an error") {
+            fed += 1;
+            assert!(fed < 4096, "the encoder is gone and the sink went on accepting frames");
+        }
+        sink.finish().expect("an encoder that exited cleanly is a clean finish");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn an_explicit_ffmpeg_that_does_not_exist_is_reported_not_ignored() {
