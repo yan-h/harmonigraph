@@ -411,7 +411,7 @@ pub fn derive_scene(
     Scene {
         nodes,
         camera,
-        time: (now % 3600.0) as f32,
+        now,
         node_radius: view.spacing * NODE_RADIUS_FACTOR,
         core_radius,
         core_solidity,

@@ -261,7 +261,7 @@ fn parity_scene() -> Scene {
     Scene {
         nodes,
         camera: harmonigraph_scene::Camera::default(),
-        time: 1.25,
+        now: 1.25,
         // The ground the sevens knockout clears to; the half of this
         // scene's nodes that carry a gutter exercise it.
         background: harmonigraph_scene::skin::panel_color(),
@@ -666,7 +666,7 @@ fn every_shimmer_pattern_draws_a_different_picture() {
         .map(|&mode| {
             let mut scene = single_marked_node(MIDDLE_C, 0);
             scene.pulse_marks = mode;
-            scene.time = 0.4;
+            scene.now = 0.4;
             (mode, gpu.shot(&scene))
         })
         .collect();
@@ -680,6 +680,74 @@ fn every_shimmer_pattern_draws_a_different_picture() {
             );
         }
     }
+}
+
+/// One period of travel returns four of the five patterns to the picture they
+/// drew, and Hex to its opposite.
+///
+/// This is the shape the shader's periodicity actually has, and
+/// `Scene::shimmer_slide` reduces a song position against it — so what the
+/// modulus there has to be is measured here rather than reasoned about at the
+/// other end of the pipe. Hex crosses three gratings sixty degrees apart and
+/// the outer two take the travel through a `cos 60`, which halves their rate
+/// along their own axes: it closes a cycle over TWO periods, and reducing a
+/// clock by one would land it on this test's second assertion, silently, at
+/// every wrap.
+///
+/// Rendered rather than argued because the alternative — asserting that a
+/// reduced clock draws what an unreduced one would — cannot be written: the
+/// reduction is what produces the number the shader sees, so both sides of
+/// that comparison are the same uniform. Turning it around is what makes it
+/// observable, and this is the turned-around form.
+#[test]
+fn one_period_of_travel_repeats_every_pattern_but_hex() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut gpu) = Shooter::new(SIZE) else {
+        return;
+    };
+    use harmonigraph_scene::Pulse;
+    // The pair `the_mark_sheet_reaches_the_slice_whole` sweeps at: a period
+    // well inside what this size resolves, at a pace that crosses it.
+    const WIDTH: f32 = 1.2;
+    const SPEED: f32 = 1.6;
+    let at = |mode: Pulse, now: f64| -> Scene {
+        let mut scene = single_marked_node(MIDDLE_C, 0);
+        scene.pulse_marks = mode;
+        scene.shimmer_width = WIDTH;
+        scene.shimmer_speed = SPEED;
+        scene.now = now;
+        scene
+    };
+    // Seconds of clock that carry the sheet one period along.
+    let period = (WIDTH / SPEED) as f64;
+    // Off zero, so a pattern that ignored the clock entirely would not pass
+    // the first half by drawing its rest state twice.
+    const BASE: f64 = 0.3;
+
+    for mode in [Pulse::Bands, Pulse::Checker, Pulse::Weave, Pulse::Rings] {
+        let (before, after) = (gpu.shot(&at(mode, BASE)), gpu.shot(&at(mode, BASE + period)));
+        // Half a percent rather than byte-equality, though it measures zero
+        // here: the two shots reach the same phase by different arithmetic —
+        // one is the other's plus a period, through a sine whose argument is
+        // scaled by a reciprocal — so a driver rounding one of them the other
+        // way is a byte, not a defect. What this guards against redraws the
+        // sheet, not a byte of it.
+        let moved = differing_pixels(&before, &after);
+        assert!(
+            moved * 200 < before.len(),
+            "{mode:?} redrew {moved} pixels a period of travel later; it takes the sheet's \
+             own period whole, so a period of travel is where it repeats",
+        );
+    }
+
+    let (before, after) =
+        (gpu.shot(&at(Pulse::Hex, BASE)), gpu.shot(&at(Pulse::Hex, BASE + period)));
+    assert!(
+        differing_pixels(&before, &after) > 0,
+        "Hex drew the same picture a period of travel later, so its cycle is one period \
+         and not two — and `Scene::shimmer_slide` is reducing the clock by twice what it \
+         has to, or this pattern's gratings have moved off sixty degrees",
+    );
 }
 
 /// The Softness bar reaches the picture, and it is the SHAPE it moves rather
@@ -715,7 +783,7 @@ fn shimmer_softness_spreads_the_light_without_raising_the_peak() {
         scene.pulse_marks = harmonigraph_scene::Pulse::Bands;
         scene.shimmer_softness = softness;
         scene.shimmer_speed = 0.0;
-        scene.time = 0.4;
+        scene.now = 0.4;
         scene
     };
     let light = |px: &[u8]| -> u64 {
@@ -841,19 +909,19 @@ type Shots = (Vec<u8>, Vec<Vec<u8>>);
 /// Softness. Both colors are sampled at the same phases, so that 5.7% cancels
 /// between them and none of it reaches a comparison.
 fn sweep_over_color(gpu: &mut Shooter, color: glam::Vec4) -> Shots {
-    let at = |pulse, time: f32| -> Scene {
+    let at = |pulse, time: f64| -> Scene {
         let mut scene = single_marked_node(MIDDLE_C, MIDDLE_C);
         scene.nodes[0].melody_color = color;
         scene.nodes[0].bass_color = color;
         scene.pulse_marks = pulse;
-        scene.time = time;
+        scene.now = time;
         scene
     };
     let steady_scene = at(harmonigraph_scene::Pulse::Off, 0.0);
     let period = steady_scene.shimmer_width / steady_scene.shimmer_speed;
     let steady = gpu.shot(&steady_scene);
     let swept = (0..8)
-        .map(|k| gpu.shot(&at(harmonigraph_scene::Pulse::Bands, period * k as f32 / 8.0)))
+        .map(|k| gpu.shot(&at(harmonigraph_scene::Pulse::Bands, period as f64 * k as f64 / 8.0)))
         .collect();
     (steady, swept)
 }
@@ -1208,9 +1276,9 @@ fn the_mark_shimmer_sweeps_the_rings_and_moves_with_time() {
     };
 
     let mut off = single_marked_node(0, 0);
-    off.time = 0.4;
+    off.now = 0.4;
     let off_a = gpu.shot(&off);
-    off.time = 1.1;
+    off.now = 1.1;
     let off_b = gpu.shot(&off);
     assert_eq!(differing_pixels(&off_a, &off_b), 0, "Pulse::Off must not depend on scene.time");
 
@@ -1218,18 +1286,18 @@ fn the_mark_shimmer_sweeps_the_rings_and_moves_with_time() {
     // shimmer -- so this marks one end, and the steady shot of the same
     // fixture is what isolates what `pulse_marks` did.
     let mut ring_off = single_marked_node(MIDDLE_C, 0);
-    ring_off.time = 0.4;
+    ring_off.now = 0.4;
     let ring_off_a = gpu.shot(&ring_off);
 
     let mut marks = single_marked_node(MIDDLE_C, 0);
     marks.pulse_marks = harmonigraph_scene::Pulse::Bands;
-    marks.time = 0.4;
+    marks.now = 0.4;
     let marks_a = gpu.shot(&marks);
     assert!(
         differing_pixels(&ring_off_a, &marks_a) > 0,
         "the mark rings' sheet drew the steady picture"
     );
-    marks.time = 1.1;
+    marks.now = 1.1;
     let marks_b = gpu.shot(&marks);
     assert!(
         differing_pixels(&marks_a, &marks_b) > 0,
@@ -1257,12 +1325,12 @@ fn the_shimmers_speed_and_width_reach_the_picture_and_only_speed_carries_the_clo
     // Both ends marked, so the sheet has as much of the picture to fall
     // across as the fixture can give it: this is about the sheet's own shape
     // and pace, not about what it crosses.
-    let sweep = |speed: f32, width: f32, time: f32| -> Scene {
+    let sweep = |speed: f32, width: f32, time: f64| -> Scene {
         let mut scene = single_marked_node(MIDDLE_C, MIDDLE_C);
         scene.pulse_marks = harmonigraph_scene::Pulse::Bands;
         scene.shimmer_speed = speed;
         scene.shimmer_width = width;
-        scene.time = time;
+        scene.now = time;
         scene
     };
 
@@ -1319,12 +1387,12 @@ fn the_mark_sheet_reaches_the_slice_whole() {
     // than the whole node riding one shoulder of a band five nodes wide.
     const WIDTH: f32 = 1.2;
     const SPEED: f32 = 1.6;
-    let scene = |melody: u32, marks: harmonigraph_scene::Pulse, time: f32| -> Scene {
+    let scene = |melody: u32, marks: harmonigraph_scene::Pulse, time: f64| -> Scene {
         let mut scene = single_marked_node(melody, 0);
         scene.pulse_marks = marks;
         scene.shimmer_width = WIDTH;
         scene.shimmer_speed = SPEED;
-        scene.time = time;
+        scene.now = time;
         scene
     };
     let off = harmonigraph_scene::Pulse::Off;
@@ -1334,7 +1402,7 @@ fn the_mark_sheet_reaches_the_slice_whole() {
     // it whatever phase the fixture happens to start at.
     let (mut dimmed_slice, mut dimmed_ring) = (0usize, 0usize);
     for step in 0..8 {
-        let time = 0.2 + step as f32 * (WIDTH / SPEED) / 8.0;
+        let time = 0.2 + step as f64 * (WIDTH / SPEED) as f64 / 8.0;
         // The rings, from the node that wears none — the same mask
         // `the_mark_shimmer_reaches_the_octave_slice_it_points_at` takes, so
         // what is left is the glyph layer.
@@ -1403,7 +1471,7 @@ fn shimmer_intensity_scales_the_sweep_and_bottoms_out_at_the_steady_layer() {
         scene.pulse_marks = pulse;
         scene.shimmer_intensity = intensity;
         scene.shimmer_speed = 0.0;
-        scene.time = 0.4;
+        scene.now = 0.4;
         scene
     };
     let off = harmonigraph_scene::Pulse::Off;
@@ -1468,7 +1536,7 @@ fn a_tight_width_puts_several_bands_across_one_node() {
         // Held still, so the profile is one instant of the sheet and not a
         // smear of where it was going.
         scene.shimmer_speed = 0.0;
-        scene.time = 0.4;
+        scene.now = 0.4;
         scene
     };
     let steady = {
@@ -1576,7 +1644,7 @@ fn a_width_finer_than_the_pixels_fades_out_instead_of_aliasing() {
         // Held still: a fade measured across two instants would be measuring
         // the travel as well.
         scene.shimmer_speed = 0.0;
-        scene.time = 0.4;
+        scene.now = 0.4;
         scene
     };
     let steady = {
@@ -1628,7 +1696,7 @@ fn the_mark_shimmer_reaches_the_octave_slice_it_points_at() {
     // compared across two clocks would differ whatever it drew.
     let at = |melody: u32, pulse: harmonigraph_scene::Pulse| -> Scene {
         let mut scene = single_marked_node(melody, 0);
-        scene.time = 0.4;
+        scene.now = 0.4;
         scene.pulse_marks = pulse;
         scene
     };
@@ -1765,7 +1833,7 @@ fn the_shimmer_is_one_field_across_the_lattice() {
     // a place that is not the middle of the frame.
     let steady = || {
         let mut scene = single_marked_node(MIDDLE_C, MIDDLE_C);
-        scene.time = 0.4;
+        scene.now = 0.4;
         scene
     };
     let steady_across = move_cost(&steady, across_the_bands);

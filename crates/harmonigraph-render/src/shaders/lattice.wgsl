@@ -9,12 +9,15 @@ struct Uniforms {
     view_proj: mat4x4<f32>,
     cam_right: vec4<f32>,
     cam_up: vec4<f32>,
-    // x: global time (s, wraps hourly). The shimmer clocks on this: its
-    //    sheet spans the whole lattice, so every node has to read one clock
-    //    (at worst the sheet jumps once an hour at the wrap).
+    // x: unused — it carried the global clock in seconds, which nothing
+    //    here reads: the shimmer was its one consumer, and it takes its
+    //    travel pre-multiplied and pre-wrapped in misc8.x instead, an f32
+    //    being unable to carry an hour-long song position finely enough to
+    //    phase a band a fiftieth of a world unit wide. A second spelling of
+    //    the same clock is how a later pattern would clock on the wrong one.
     // y: base node radius (world units),
     // z: unused,
-    // w: unused — it carried the node style, the core orb's paint, back
+    // w: unused — it carried the node style, the core orb's paint, from
     //    when the core had more than one. A retired slot rather than a
     //    repack, which would renumber the ones around it for nothing.
     misc: vec4<f32>,
@@ -71,11 +74,14 @@ struct Uniforms {
     // per node from these — both depend on the node's pitch class, so there is
     // no one answer to send.
     misc7: vec4<f32>,
-    // The shimmer's knobs. x: how fast the bands travel, in world units per
-    // second; y: how wide they are, in world units (the scene floors it above
-    // zero — the band phase divides by it); z: how deep the light they carry
-    // is, 0 none and 1 the tuned depth; w: how gradually it arrives across the
-    // period, 0 a crest and 1 a cosine. See the Shimmer section below.
+    // The shimmer's knobs. x: how FAR the bands have travelled, in world
+    // units, already reduced onto one cycle of the pattern — a clock and a
+    // speed cannot be had here separately, and the reason is precision (see
+    // `Scene::shimmer_slide`); y: how wide they are, in world units (the scene
+    // floors it above zero — the band phase divides by it); z: how deep the
+    // light they carry is, 0 none and 1 the tuned depth; w: how gradually it
+    // arrives across the period, 0 a crest and 1 a cosine. See the Shimmer
+    // section below.
     misc8: vec4<f32>,
     // The angle from a ring's own seam to each of its slice boundaries, four
     // to a row and read through oct_bound(): boundary j walking clockwise. One
@@ -543,11 +549,12 @@ fn pulse_marks_mode() -> u32 {
 // settings below are in those units for that reason.
 //
 // Distance from one bright peak to the next (u.misc8.y, the view's Width
-// bar), and how fast the sheet travels (u.misc8.x, the Speed bar). The pair
-// sizes and moves ONE shape: the softness below is what shares the period out
-// between the lit part and the dark, so a wider setting widens both together
-// rather than spacing out peaks of a fixed size. See `ViewConfig::shimmer_width`
-// for what a setting under the node spacing costs.
+// bar), and how far the sheet has travelled by now (u.misc8.x, the Speed bar
+// against the clock, multiplied out on the CPU). The pair sizes and moves ONE
+// shape: the softness below is what shares the period out between the lit part
+// and the dark, so a wider setting widens both together rather than spacing out
+// peaks of a fixed size. See `ViewConfig::shimmer_width` for what a setting
+// under the node spacing costs.
 fn shimmer_period() -> f32 {
     // The scene clamps this well clear of zero; the floor is here so a hand-
     // built Scene in a test cannot divide by it either.
@@ -698,6 +705,14 @@ fn shimmer_pattern(
         // range rather than divided by the count, which would leave the
         // pattern unable to reach either end.
         //
+        // The outer two gratings take the travel through a cos of sixty
+        // degrees, so along their own axes the sheet moves at HALF its own
+        // rate and this pattern only closes a cycle over two periods. That
+        // is what `Scene::shimmer_slide` reduces against, and it is the one
+        // arm here that needs the two: changing these angles changes the
+        // modulus, and reducing by one period flips this pattern's sign at
+        // every wrap.
+        //
         // COSINES, where every other pattern here takes sines, and the
         // asymmetry is the whole point: sin(A) + sin(C) + sin(A+C) is an odd
         // function, so it runs a symmetric ±3sqrt(3)/2 with as many dark
@@ -757,8 +772,12 @@ fn shimmer_terms(mode: u32, field: vec2<f32>, footprint: f32) -> vec2<f32> {
     let period = shimmer_period();
     let dir = vec2<f32>(cos(SHIMMER_ANGLE), sin(SHIMMER_ANGLE));
     let norm = vec2<f32>(-dir.y, dir.x);
-    // How far the sheet has slid.
-    let slide = u.misc.x * u.misc8.x;
+    // How far the sheet has slid — arriving whole rather than as a clock
+    // times a speed, and already reduced onto one cycle of the pattern. The
+    // reduction is exact (every arm below is periodic in it) and it is done
+    // in f64 on the CPU, where a song position still HAS the resolution to
+    // phase a band with. See `Scene::shimmer_slide`.
+    let slide = u.misc8.x;
     // The field slid along the sheet's own direction. The radial pattern
     // takes `field` and `slide` apart for itself, inside `shimmer_pattern`.
     let p = field - dir * slide;
