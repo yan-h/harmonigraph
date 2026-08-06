@@ -361,28 +361,6 @@ fn a_persisted_fold_still_holds_the_fraction_it_was_dialled_at() {
     assert!((width(&dock, LATTICE) - pane).abs() < 0.01, "with the pane in it");
 }
 
-/// An entry from a blob written before folds moved the window has no width
-/// to give back, and taking one out of that window would move a window
-/// that never gave anything up. The fraction is what those entries hold,
-/// and all they hold — which is also the wire format this has to keep
-/// reading, since a blob it cannot parse costs the whole saved layout.
-#[test]
-fn a_fold_from_before_the_window_moved_gives_back_only_its_fraction() {
-    let mut dock = dock();
-    let mut folds: Folds = ron::from_str("([(surface:0,node:1,fraction:0.35)])")
-        .expect("an older blob still loads");
-    let mut dial = Dial::default();
-    // A settled frame before the click, as the editor always has: the
-    // layout is dialled in at the window it is being drawn in.
-    let _ = frame(&mut folds, &mut dock, &mut dial, 1000.0);
-    // Nothing in the dock is collapsed, so the entry is released the first
-    // time it is looked at — the unfold path, with nothing taken.
-    let window = frame(&mut folds, &mut dock, &mut dial, 1000.0);
-    assert!((fraction(&dock, PICTURES) - 0.35).abs() < 0.001, "the fraction it remembered");
-    assert_eq!(window, 1000.0, "and no width, because it took none");
-    assert!(folds.is_empty());
-}
-
 /// A fold in a floating dock window is that window's own business: there
 /// is no plugin window behind it to take the width from, so it keeps
 /// egui_dock's trade and hands the width to the pane beside it.

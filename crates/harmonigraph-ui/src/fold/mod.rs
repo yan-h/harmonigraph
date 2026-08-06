@@ -188,19 +188,11 @@ struct Fold {
     /// running, the pane's points are simply left where they were and the rail
     /// stands in for them, so there is nothing to restore.
     ///
-    /// Zero in a blob written before it was recorded, where `fraction` is what
-    /// there is instead.
+    /// Zero in a blob written before it was recorded, which seeds nothing: the
+    /// pane comes back at the rail width its fraction in the tree says, and one
+    /// drag puts it where the user wants it.
     #[serde(default)]
     width: f32,
-    /// The dialled FRACTION a blob written before the layout was points is
-    /// holding, and all it holds. The seed turns it into points, which is what
-    /// a layout is now; nothing else reads it and nothing writes it.
-    ///
-    /// Kept because the wire format has to go on parsing: `UiPersist` is one
-    /// RON document, so a blob this cannot read costs the whole saved layout,
-    /// not just its folds.
-    #[serde(default)]
-    fraction: f32,
     /// The window this fold was taken at, which is the window unfolding it owes
     /// back. [`Dial`] is runtime-only, so without this a project reopened with a
     /// pane already folded has no record of how wide the window has been — and
@@ -323,8 +315,6 @@ impl Folds {
                     let node = NodeIndex(fold.node);
                     if fold.width > 0.0 {
                         points.scale(tree, fold.side.of(node), fold.width);
-                    } else if fold.fraction > 0.0 {
-                        points.divide(tree, node, fold.fraction, separator);
                     }
                 }
             }
@@ -542,7 +532,6 @@ impl Folds {
                 node: index,
                 side,
                 width: points.span(tree, &[], side.of(NodeIndex(index))),
-                fraction: 0.0,
                 window,
             });
             moved = true;
@@ -983,18 +972,6 @@ impl Points {
             return;
         }
         self.stretch(tree, node, width / was);
-    }
-
-    /// Put a split's two sides back to a fraction that was dialled before the
-    /// layout was points — the one thing a blob from then holds.
-    fn divide(&mut self, tree: &Tree<Tab>, node: NodeIndex, fraction: f32, separator: f32) {
-        let whole = self.drew.get(node.0).copied().unwrap_or(0.0);
-        if whole <= 0.0 {
-            return;
-        }
-        let before = (whole * fraction - separator * 0.5).max(0.0);
-        self.scale(tree, node.left(), before);
-        self.scale(tree, node.right(), (whole - separator - before).max(0.0));
     }
 
     /// The points a subtree is dialled to, side by side: a vertical split's two
