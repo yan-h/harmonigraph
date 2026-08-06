@@ -1416,17 +1416,31 @@ fn node_paint(in: VsOut) -> vec4<f32> {
                 select(0.0, in.params.z, (in.marks.y & bit) != 0u),
             ));
         }
-        // Ghosts carry the ring's shape in the note's own color; a sounding
-        // slot never dips below its ghost, so a fading octave hands off to it
-        // instead of leaving a hole.
-        var cov = shape * GHOST_LEVEL * presence;
+        // Ghosts carry the ring's shape in the note's own color, and a lit
+        // slot is that ghost with its pitch painted OVER it — never one in
+        // place of the other.
+        let ghost_a = GHOST_LEVEL * presence;
+        var opacity = ghost_a;
         var slot_rgb = node_glyph_rgb;
         if level > 0.0 {
             // Straight off the octave's own envelope, so the glyph eases in
-            // over the attack and ends at nothing on release. The max() hands
-            // a backdrop slot off to its ghost as the lit coverage sinks
-            // through it.
-            cov = max(cov, shape * level);
+            // over the attack and ends on its ghost at release: the same grey
+            // at the same opacity as the silent slices beside it.
+            //
+            // Over in BOTH terms together, which is what makes the end of a
+            // release one continuous thing. Taking the coverage as a max() and
+            // the color by a `level > 0` switch instead parts them — the
+            // coverage floors at the ghost while the color is still the lit
+            // pitch, so the fade visibly stops, and then the color steps to
+            // the ghost's in one frame at no change in alpha at all. That is
+            // visible only where a node's presence OUTLIVES this slot's level,
+            // which is another instance of the pitch class still held: a lone
+            // note drives both off one envelope, so the ghost never catches
+            // the fade and the switch lands at nothing. What `over` costs is a
+            // slightly heavier tail than a max — the ghost really is still
+            // under the lit glyph, so the two add there rather than the
+            // brighter one standing alone.
+            opacity = level + ghost_a * (1.0 - level);
             // Slot s is MIDI octave s - 1, whose C is MIDI 12*s; add this
             // node's pitch class for the glyph's true pitch.
             let pitch = oct_slot_pitch(slot, in.cents);
@@ -1436,8 +1450,14 @@ fn node_paint(in: VsOut) -> vec4<f32> {
             // three read as one color. A white mix here would be a second
             // definition of what a lit pitch looks like, and it would drift
             // off the disc the moment the gradient's brightness moved.
-            slot_rgb = pitch_lut_color(pitch);
+            slot_rgb = (pitch_lut_color(pitch) * level
+                + node_glyph_rgb * ghost_a * (1.0 - level)) / max(opacity, 1e-4);
         }
+        // The wedge enters ONCE, after the two layers are resolved: they are
+        // the same shape at different opacities, and compositing their COVERED
+        // FRACTIONS instead would count the antialiased edge twice and leave a
+        // lit slice a brighter fringe than the silent ones it meets.
+        let cov = shape * opacity;
         if cov > glyph {
             glyph = cov;
             glyph_rgb = slot_rgb;

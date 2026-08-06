@@ -2279,6 +2279,142 @@ fn an_indicator_is_drawn_at_its_own_pitchs_angle() {
     }
 }
 
+/// How a release ENDS: the fading indicator arrives at the grey its silent
+/// neighbours are drawn in, and arrives there continuously.
+///
+/// It only shows where the node's PRESENCE outlives this slot's level, which
+/// is another instance of the pitch class still held. A lone note drives the
+/// backdrop and the lit glyph off one envelope, so both land at nothing
+/// together and any discontinuity between them has no coverage left to show
+/// in; here the held octave pins the backdrop at full strength while the
+/// released one runs out against it. A lit slot painted in PLACE of its ghost
+/// — coverage by a max(), color by a `level > 0` switch — fails both halves
+/// below: the coverage floors while the color is still the lit pitch, so the
+/// fade stalls, and then the color steps to the ghost's in one frame at no
+/// change in coverage at all.
+#[test]
+fn a_released_octave_lands_on_its_ghost_without_a_step() {
+    use harmonigraph_scene::octave_layout;
+
+    const SIZE: [u32; 2] = [384, 384];
+    let Some(mut gpu) = Shooter::new(SIZE) else {
+        return;
+    };
+    // An even five-octave wheel on a C node: a slice is 72 degrees, which is
+    // room to sample well inside one and well inside its neighbour.
+    let layout = octave_layout(5, 60.0, 0, 1.0, 0.0);
+    let held = harmonigraph_scene::MIDDLE_C_SLOT;
+    let (releasing, silent) = (held + 1, held + 2);
+    let scene = |level: f32| {
+        let mut scene = octave_wheel_scene(layout, 0.0);
+        let node = &mut scene.nodes[0];
+        node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
+        node.octaves[held] = 1.0;
+        node.octaves[releasing] = level;
+        // The instance still down. This is what holds the whole backdrop up
+        // while the other one fades, and the reason the handoff is legible.
+        node.activation = 1.0;
+        scene
+    };
+
+    // The band's radii on screen, read off the picture rather than
+    // reproduced from the camera's arithmetic, which would only re-assert it.
+    let c = SIZE[0] as f32 / 2.0;
+    let at = |px: &[u8], r: f32, a: f32| -> [f32; 3] {
+        // Screen y grows downward, so the sample angle is negated.
+        let (x, y) = (c + r * a.cos(), c - r * a.sin());
+        let i = (y as usize * SIZE[0] as usize + x as usize) * 4;
+        [px[i] as f32, px[i + 1] as f32, px[i + 2] as f32]
+    };
+    let middle = |slot: usize| {
+        let (e0, e1) = layout.sector(slot as i32, 0.0);
+        (0.5 * (e0 + e1), e0 - e1)
+    };
+    let (mid, wedge) = middle(releasing);
+    let full = gpu.shot(&scene(1.0));
+    let on_band: Vec<f32> = (4..SIZE[0] / 2)
+        .map(|r| r as f32)
+        .filter(|&r| at(&full, r, mid).iter().sum::<f32>() > 24.0)
+        .collect();
+    let (inner, outer) = (on_band[0], on_band[on_band.len() - 1]);
+    assert!(outer - inner > 8.0, "no band to sample: {inner}..{outer}");
+
+    // Mean color well inside a wedge, in both directions, so neither the
+    // slice's antialiased edges nor the band's enter the reading.
+    let mean = |px: &[u8], at_angle: f32, width: f32| -> [f32; 3] {
+        let (mut sum, mut n) = ([0f32; 3], 0f32);
+        let mut r = inner + 0.2 * (outer - inner);
+        while r <= outer - 0.2 * (outer - inner) {
+            for k in -6..=6 {
+                let sample = at(px, r, at_angle + 0.03 * k as f32 * width);
+                for j in 0..3 {
+                    sum[j] += sample[j];
+                }
+                n += 1.0;
+            }
+            r += 1.0;
+        }
+        sum.map(|s| s / n)
+    };
+
+    // Down the envelope past the ghost's own level, to the smallest the 8-bit
+    // packing carries, and then off it.
+    const TAIL: [f32; 9] = [1.0, 0.5, 0.25, 0.16, 0.12, 0.08, 0.04, 0.02, 1.0 / 255.0];
+    let mut steps: Vec<[f32; 3]> =
+        TAIL.iter().map(|&level| mean(&gpu.shot(&scene(level)), mid, wedge)).collect();
+    let ended = gpu.shot(&scene(0.0));
+    steps.push(mean(&ended, mid, wedge));
+
+    let light = |c: &[f32; 3]| c[0] + c[1] + c[2];
+    let apart = |a: &[f32; 3], b: &[f32; 3]| {
+        ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt()
+    };
+    // The envelope only ever takes light out of the slice.
+    for pair in steps.windows(2) {
+        assert!(
+            light(&pair[1]) <= light(&pair[0]) + 0.5,
+            "the fade brightens at {:?} then {:?}",
+            pair[0],
+            pair[1]
+        );
+    }
+    // And the last stretch of it — from the ghost's own level down to
+    // nothing, which is where a coverage that floors and a color that
+    // switches would part — is SPREAD across the frames rather than spent in
+    // one. No single step carries much of it; painted in place of its ghost
+    // instead, the slice sits still for the whole stretch and then makes the
+    // entire journey in the final frame.
+    //
+    // Asserted as a share of the travel rather than as a run of strict
+    // decreases: a continuous ramp this shallow moves the last few frames by
+    // less than an 8-bit channel, and the pair either side of zero reads
+    // identically here BECAUSE the handoff is smooth.
+    // From the ghost's own level (GHOST_LEVEL in lattice.wgsl) downward. A
+    // stale value here only widens or narrows the stretch measured, so this
+    // reads the sweep rather than asserting the constant.
+    let tail = &steps[TAIL.iter().position(|&level| level <= 0.16).expect("a tail to measure")..];
+    let travel = apart(&tail[0], &tail[tail.len() - 1]);
+    assert!(travel > 10.0, "the tail hardly moves at all ({travel:.1}), so its shape says little");
+    for pair in tail.windows(2) {
+        let step = apart(&pair[0], &pair[1]);
+        assert!(
+            step < 0.4 * travel,
+            "the indicator spends {step:.1} of its {travel:.1} tail in one step, at {:?}",
+            pair[1]
+        );
+    }
+    // Landing on the ghost the silent slices are drawn in — the same grey at
+    // the same coverage, so the finished ring is one backdrop rather than a
+    // backdrop with one slice a shade off it.
+    let (quiet, quiet_wedge) = middle(silent);
+    let neighbour = mean(&ended, quiet, quiet_wedge);
+    assert!(
+        apart(&steps[steps.len() - 1], &neighbour) < 3.0,
+        "a spent indicator reads {:?} against its neighbours' {neighbour:?}",
+        steps[steps.len() - 1]
+    );
+}
+
 /// The seams between a chord's colors run at ONE width from the rim to the
 /// centre. They are laid down as lobes of fixed ANGULAR width, so the arc each
 /// spans shrinks with the radius and they would otherwise converge to a cusp at
