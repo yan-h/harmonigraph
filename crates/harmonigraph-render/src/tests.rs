@@ -3140,16 +3140,24 @@ type LightUp = fn(&mut harmonigraph_scene::NodeInstance);
 /// ships. That is not a hypothetical gap. Inverting any one of the four,
 /// or turning any `||` between them into `&&`, passed the whole suite.
 ///
-/// They come apart in practice, which is why each gets a node here. An
-/// octave's level is packed to a BYTE, so the last of a release rounds to an
-/// octave word of exactly zero while the node's own activation is still
-/// non-zero — `params[0]` alone is holding it in the buffer, and a cull that
-/// stopped reading it would drop the tail of every note. The mark levels are
-/// held off by a wait of their own (`ViewConfig::mark_delay`) and belong to
-/// two notes out of the chord anyway, so they part company the same way.
+/// The four are not equally reachable by playing, and the test is honest
+/// about which is which. An octave's level is packed to a BYTE, so anything
+/// under 1/512 of full rounds the word to exactly zero while `params[0]` is
+/// still non-zero and alone holding the node in the buffer — a real state,
+/// though a narrow one: at the default fade it is the last fraction of a
+/// millisecond of a release.
 ///
-/// Built by hand rather than played in: the point is one term at a time,
-/// and a tracker cannot be asked for that.
+/// The two MARK terms cannot decide it at all in a scene `derive_scene`
+/// builds today, and that is the point of asserting them. A mark is
+/// held-only, so a marking voice's envelope is 1 and `params[0]` is at
+/// least that wherever a ring draws — the cull reads the mark terms for a
+/// state the deriver cannot currently produce, namely a released voice that
+/// keeps an end (see `NodeInstance::melody_level`, which carries the
+/// envelope for exactly that day). Wiring the cull to the disc alone would
+/// look green until it arrived.
+///
+/// Built by hand rather than played in for that reason as well: the point is
+/// one term at a time, and a tracker cannot be asked for that.
 #[test]
 fn each_thing_that_makes_a_node_sounding_keeps_it_alone() {
     let bare = || {

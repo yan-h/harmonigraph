@@ -126,12 +126,14 @@ const GLOW_LIMIT: f32 = 0.95;
 // clearing as wide as the widest node's, so a node with no ring sat in a
 // gap visibly bigger than itself.
 //
-// Scaled by how far the ring has EASED IN rather than switched on the
-// moment it is claimed: the rim sets how wide this node clears the sheets
-// behind it, and a rim that jumped to its full reach ahead of the ring left
-// the hole in the lattice popping open around a ring still fading up. It
-// still steps in the instant the key comes up, because that is when the
-// ring itself goes (marks are held-only).
+// Scaled by the ring's LEVEL rather than by its having claimed a slot: the
+// rim sets how wide this node clears the sheets behind it, and the two are
+// not the same moment — the Delay holds a ring off for as long as it asks
+// (see `ViewConfig::mark_delay`), so a rim keyed on the claim would pop the
+// hole in the lattice open around a ring that is not there yet. Off the
+// level, the hole opens on the frame the ring does. It still steps in the
+// instant the key comes up, because that is when the ring itself goes
+// (marks are held-only).
 fn node_rim(bass: f32) -> f32 {
     let ring = max(u.misc5.z, 0.0) + u.misc5.w;
     return u.misc3.z + select(0.0, ring * bass, u.misc5.w > 0.0);

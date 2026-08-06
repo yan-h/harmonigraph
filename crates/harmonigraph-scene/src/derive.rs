@@ -108,13 +108,15 @@ pub fn derive_scene(
     // the rings that arrive on those handoffs that read as flicker over the
     // octave band rather than as the line being traced.
     //
-    // The clamp's floor does not show in the picture — a threshold before the
-    // handoff and one exactly at it both put the ring on with its note, and a
-    // mark is only asked for while its end is held. It stays as the other half
-    // of a range, and because the `min` it would otherwise collapse to repairs
-    // a NaN silently: `f32::min` hands back the other operand, so a NaN delay
-    // would read as a full second's wait instead of as the missing mark layer
-    // `ViewConfig::sanitize` exists to catch.
+    // The clamp's floor does not show in the picture, so no test asserts it:
+    // a frame is derived at or after the stamp it reads — the editor's clock
+    // mapper ends in a `.min(gui_now)` and the replay delivers nothing past
+    // `now` — and under that a threshold before the handoff and one exactly at
+    // it both put the ring on with its note. It stays as the thing that would
+    // hold if a stamp ever did land ahead of a frame, and because the `min` it
+    // would otherwise collapse to repairs a NaN silently: `f32::min` hands back
+    // the other operand, so a NaN delay would read as a full second's wait
+    // instead of as the missing mark layer `ViewConfig::sanitize` catches.
     let mark_delay = view.mark_delay.clamp(0.0, MARK_DELAY_MAX) as f64;
     let arrived = |end: Option<HeldEnd>| {
         end.map_or(1.0, |end| f32::from(now >= end.since + mark_delay))

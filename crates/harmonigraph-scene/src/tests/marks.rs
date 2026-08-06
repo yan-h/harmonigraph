@@ -166,31 +166,23 @@ fn a_released_note_drops_its_mark_while_the_held_note_keeps_the_live_one() {
 }
 
 #[test]
-fn an_undelayed_mark_arrives_with_the_octave_it_links_to() {
-    // At the bar's 0 a note's whole outer layer arrives on the frame the note
-    // does: no ring waits, and none grows in over a ramp of its own. The Delay
-    // is the only thing that can hold one back, which is what the tests below
-    // are about.
-    let mut tracker = NoteTracker::new();
-    tracker.handle_event(NoteEvent {
-        time: 0.0,
-        channel: 0,
-        note: 60, // C4: the origin node, in middle C's octave slot
-        kind: NoteEventKind::On { velocity: 1.0 },
-    });
-    let view = ViewConfig {
-        mark_melody: true,
-        mark_bass: true,
-        ..ViewConfig::default()
-    };
-    let at = |now: f64| {
+fn at_no_delay_a_mark_arrives_with_the_octave_it_links_to() {
+    // The bar at 0 is a note's whole outer layer landing on the frame the note
+    // does: nothing on it grows in over a ramp of its own. Read against the
+    // same instant with the bar off 0, because the Delay is the only thing
+    // that can hold a ring back — a ring that drew regardless of everything
+    // would look exactly like this one at the first two settings alone.
+    let tracker = held(60); // C4: the origin node, in middle C's octave slot
+    let at = |mark_delay: f32, now: f64| {
+        let view = delayed_view(mark_delay);
         let scene = scene_of(&tracker, &Tuning::default(), &view, &FrameParams::default(), now);
         let n = origin_node(&scene);
         (n.melody_level, n.bass_level, n.octaves[MIDDLE_C_SLOT])
     };
 
-    assert_eq!(at(0.0), (1.0, 1.0, 1.0), "the whole layer is up on the note's own frame");
-    assert_eq!(at(0.5), (1.0, 1.0, 1.0), "and stays there while the note is held");
+    assert_eq!(at(0.0, 0.0), (1.0, 1.0, 1.0), "the whole layer is up on the note's own frame");
+    assert_eq!(at(0.0, 0.5), (1.0, 1.0, 1.0), "and stays there while the note is held");
+    assert_eq!(at(0.25, 0.0), (0.0, 0.0, 1.0), "with a wait asked for, the rings do wait");
 }
 
 #[test]
@@ -278,6 +270,9 @@ fn an_end_given_up_inside_the_delay_never_rings_at_all() {
         let now = 0.15 + DELAY * f64::from(step) / 10.0;
         assert!(ring(now) < 1e-6, "a ring rang at {now}, inside C4's own wait");
     }
+    // Right up to the corner, not merely most of the way: the loop above stops
+    // at nine tenths, which leaves room for a threshold a hair early to pass.
+    assert!(ring(0.15 + DELAY * 0.99) < 1e-6, "nor a hair before the wait is out");
     // C4 re-took the melody at the handoff, so its ring is due one wait after
     // THAT — not after its own note-on, which is older than the wait itself.
     assert_eq!(ring(0.15 + DELAY), 1.0, "and then C4's ring arrives");
@@ -358,10 +353,25 @@ fn the_mark_delay_is_clamped_to_the_bars_own_end() {
 /// time there is — and no ring draws anywhere, with nothing to say why.
 /// `ViewConfig::sanitize` is the only guard, and this is the test that keeps
 /// it from being deleted as redundant with the clamp above.
+///
+/// Both halves are asserted, because between them they are what says the
+/// clamp must stay a `clamp`. `f32::min` hands back the other operand when
+/// one is a NaN, so a `min(MARK_DELAY_MAX)` would quietly turn a NaN into a
+/// full second's wait — the rings would draw, late, and the sanitize below
+/// would have nothing left to be the guard against. Sanitizing first and
+/// asserting only the repaired value is exactly the shape that misses it.
 #[test]
 fn a_non_finite_delay_loads_as_no_delay_at_all() {
     let tracker = held(60);
     let mut view = delayed_view(f32::NAN);
+
+    // Unrepaired, straight into the picture: the mark layer is simply gone,
+    // at any time you look. This is the failure `sanitize` stands in front of.
+    for now in [0.0, MARK_DELAY_MAX as f64, 1e6] {
+        let scene = scene_of(&tracker, &Tuning::default(), &view, &FrameParams::default(), now);
+        assert_eq!(origin_node(&scene).melody_level, 0.0, "a NaN delay never rings, at {now}");
+    }
+
     view.sanitize();
     assert_eq!(view.mark_delay, 0.0, "the blob's door is where a NaN is repaired");
 
