@@ -135,6 +135,24 @@ impl egui_dock::TabViewer for Viewer<'_> {
         tab_title(tab).into()
     }
 
+    /// No pane leaves the editor for a window of its own.
+    ///
+    /// egui_dock offers it as "Eject" in a tab's right-click menu, and taking it
+    /// away is what lets the fold pass be one tree rather than a loop over
+    /// surfaces (see [`crate::fold`]). A dock window is laid out in a window
+    /// whose size is not the editor's to know or to ask for, so everything the
+    /// fold does with the plugin window — price a resize, hold a flag until it
+    /// arrives, tell a refusal from a floor — has no answer out there, and the
+    /// pass carried a second set of them for a surface that could only re-fit to
+    /// whatever it found itself in.
+    ///
+    /// A layout saved with a window in it still opens: the dock draws it as it
+    /// always did, and folding sideways there is simply the no-op it always
+    /// effectively was. Dragging the tab back into the editor is unaffected.
+    fn allowed_in_windows(&self, _tab: &mut Tab) -> bool {
+        false
+    }
+
     /// Identify a tab by its VARIANT, never by its title.
     ///
     /// egui_dock's default is `Id::new(title)`, and this dock deliberately has
