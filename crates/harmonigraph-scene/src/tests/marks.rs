@@ -22,6 +22,20 @@ fn marked_scene(notes: &[u8], mark_melody: bool, mark_bass: bool) -> Scene {
     scene_of(&tracker, &Tuning::default(), &view, &FrameParams::default(), 0.0)
 }
 
+/// A note-on and a note-off on channel 0, for the timed sequences below.
+fn on(time: f64, note: u8) -> NoteEvent {
+    NoteEvent { time, channel: 0, note, kind: NoteEventKind::On { velocity: 1.0 } }
+}
+
+fn off(time: f64, note: u8) -> NoteEvent {
+    NoteEvent { time, channel: 0, note, kind: NoteEventKind::Off }
+}
+
+/// Both ends marked, with the Delay bar at `mark_delay`.
+fn delayed_view(mark_delay: f32) -> ViewConfig {
+    ViewConfig { mark_melody: true, mark_bass: true, mark_delay, ..ViewConfig::default() }
+}
+
 /// Union of a mask across every node, and the nodes carrying it.
 fn marked_slots(scene: &Scene, melody: bool) -> (u32, usize) {
     let mut bits = 0u32;
@@ -222,20 +236,6 @@ fn an_inherited_end_eases_in_from_the_handoff_not_from_its_note_on() {
     assert_eq!(at(1.0 + ATTACK_TIME), (1.0, 1.0));
 }
 
-/// A note-on and a note-off on channel 0, for the sequences below.
-fn on(time: f64, note: u8) -> NoteEvent {
-    NoteEvent { time, channel: 0, note, kind: NoteEventKind::On { velocity: 1.0 } }
-}
-
-fn off(time: f64, note: u8) -> NoteEvent {
-    NoteEvent { time, channel: 0, note, kind: NoteEventKind::Off }
-}
-
-/// Both ends marked, with the Delay bar at `mark_delay`.
-fn delayed_view(mark_delay: f32) -> ViewConfig {
-    ViewConfig { mark_melody: true, mark_bass: true, mark_delay, ..ViewConfig::default() }
-}
-
 #[test]
 fn a_delay_holds_the_ring_off_until_its_note_has_worn_the_end_that_long() {
     // The wait sits in FRONT of the ease rather than stretching it: the ring
@@ -250,8 +250,13 @@ fn a_delay_holds_the_ring_off_until_its_note_has_worn_the_end_that_long() {
         (n.melody_level, n.bass_level, n.octaves[MIDDLE_C_SLOT])
     };
 
-    assert_eq!(at(DELAY * 0.5).0, 0.0, "half way through the wait, nothing has started");
-    assert_eq!(at(DELAY).0, 0.0, "the ease starts AT the delay, not before it");
+    // Not `assert_eq!(.., 0.0)` at the delay itself: the claim is one-sided
+    // ("has not started"), and the ramp's own zero sits exactly there. These
+    // constants are binary-exact so the equality would in fact hold, but a
+    // later reader retuning DELAY to 0.3 would land a hair past the corner
+    // and fail on a smoothstep of about 1e-32, which is nothing drawn.
+    assert!(at(DELAY * 0.5).0 < 1e-6, "half way through the wait, nothing has started");
+    assert!(at(DELAY).0 < 1e-6, "the ease starts AT the delay, not before it");
 
     let (melody, bass, octave) = at(DELAY + ATTACK_TIME * 0.5);
     assert!((melody - 0.5).abs() < 1e-5, "half way in, got {melody}");
@@ -288,7 +293,7 @@ fn an_end_given_up_inside_the_delay_never_rings_at_all() {
 
     for step in 0..=10 {
         let now = 0.15 + DELAY * f64::from(step) / 10.0;
-        assert_eq!(ring(now), 0.0, "a ring rang at {now}, inside C4's own wait");
+        assert!(ring(now) < 1e-6, "a ring rang at {now}, inside C4's own wait");
     }
     // C4 re-took the melody at the handoff, so its ring is due one wait and
     // one attack after THAT — not after its own note-on, which is older than
@@ -326,9 +331,59 @@ fn a_delay_past_the_note_fade_still_measures_from_the_handoff() {
         origin_node(&scene).melody_level
     };
 
-    assert_eq!(at(1.0 + DELAY * 0.99), 0.0, "still waiting, long after the C5 was pruned");
+    assert!(at(1.0 + DELAY * 0.99) < 1e-6, "still waiting, long after the C5 was pruned");
     assert!((at(1.0 + DELAY + ATTACK_TIME * 0.5) - 0.5).abs() < 1e-5, "then it eases in");
     assert_eq!(at(1.0 + DELAY + ATTACK_TIME), 1.0);
+}
+
+/// The Delay's range is held in `derive_scene` and nowhere else — `sanitize`
+/// deliberately does range work for nothing, only finiteness — so a view out
+/// of range comes from a file and lands here. Both ends matter and they fail
+/// in opposite directions: a negative delay starts the ramp BEFORE the note
+/// took the end, which is every ring at full the frame it is claimed, exactly
+/// what easing them in exists to prevent; a huge one is the mark layer gone
+/// for as long as the take lasts, from a bar that cannot say so.
+///
+/// Asserted on the LEVEL rather than on a scene field, because unlike every
+/// other clamp in `derive_scene` this one reaches the picture only through
+/// the ring's ease — there is no `Scene::mark_delay` to read back.
+#[test]
+fn the_mark_delay_is_clamped_to_the_bar_its_own_ends() {
+    let tracker = held(60);
+    let level = |mark_delay: f32, now: f64| {
+        let view = delayed_view(mark_delay);
+        let scene = scene_of(&tracker, &Tuning::default(), &view, &FrameParams::default(), now);
+        origin_node(&scene).melody_level
+    };
+
+    // A settable delay passes through untouched, which is what makes the two
+    // clamps below a range rather than a constant.
+    assert!(level(0.5, 0.5 + ATTACK_TIME * 0.5) > 0.4, "a delay inside the bar still eases");
+
+    // Below the bar: floored at 0, the ring arriving with its note as it
+    // always did — not ahead of it.
+    assert_eq!(level(-5.0, 0.0), 0.0, "a negative delay must not pre-start the ramp");
+    assert_eq!(level(-5.0, ATTACK_TIME), 1.0, "it is the undelayed ramp, not a broken one");
+
+    // Above it: capped at the bar's end, so the rings still arrive.
+    assert_eq!(level(1e9, MARK_DELAY_MAX as f64 + ATTACK_TIME), 1.0, "a huge delay stops at 1s");
+}
+
+/// A non-finite delay is the one value that would take the mark layer down
+/// silently: `clamp` passes a NaN straight through (every comparison against
+/// it is false), the ease comes out NaN, and `Mark::add`'s `>=` then leaves
+/// the level at 0 with the slot bit set — no ring anywhere, and nothing to
+/// say why. `ViewConfig::sanitize` is the only guard, and this is the test
+/// that keeps it from being deleted as redundant with the clamp above.
+#[test]
+fn a_non_finite_delay_loads_as_no_delay_at_all() {
+    let tracker = held(60);
+    let mut view = delayed_view(f32::NAN);
+    view.sanitize();
+    assert_eq!(view.mark_delay, 0.0, "the blob's door is where a NaN is repaired");
+
+    let scene = scene_of(&tracker, &Tuning::default(), &view, &FrameParams::default(), ATTACK_TIME);
+    assert_eq!(origin_node(&scene).melody_level, 1.0, "and the rings draw as they always did");
 }
 
 #[test]

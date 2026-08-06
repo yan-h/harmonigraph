@@ -138,6 +138,12 @@ impl Voice {
 /// One end of the chord that is DOWN — the highest or lowest held voice —
 /// and the moment that voice took it.
 ///
+/// HELD is the load-bearing word, and it is this type's guarantee rather than
+/// its caller's: the scene rings these two ends and documents that a released
+/// voice wears no mark at all (`derive::held_extremes`), which now rests on
+/// the ends being read off `held` alone and restamped from every mutation of
+/// it. A released voice must never appear here.
+///
 /// The "when" is state rather than a per-frame derivation because the answer
 /// is not in the current voices: a voice that takes an end by INHERITING it,
 /// when the note outside it comes up, took it at that note's release, and
@@ -220,7 +226,11 @@ impl NoteTracker {
         match event.kind {
             // Control event: applies regardless of the event's channel.
             NoteEventKind::AllOff => self.all_notes_off(event.time),
-            _ if ChannelRole::of(event.channel) == ChannelRole::Ignored => {}
+            // Returns rather than falling through to the restamp below: this
+            // channel is not tracked at all, so nothing it carries can have
+            // moved an end, and a per-note expression stream on it would
+            // otherwise pay two scans of the held chord to conclude that.
+            _ if ChannelRole::of(event.channel) == ChannelRole::Ignored => return,
             NoteEventKind::On { velocity } => {
                 // A retrigger without an Off silently replaces the held
                 // voice (same key); the old voice gets no release fade.
@@ -249,10 +259,13 @@ impl NoteTracker {
                 }
             }
         }
-        // Every arm above can move the chord's ends: two of them change which
-        // voices are held, and a tuning can bend one past its neighbour. The
-        // arms that change nothing restamp to the same answer, `restamp_ends`
-        // being a re-read rather than a reset.
+        // Every arm reaching here can move the chord's ends: two change which
+        // voices are held, and a tuning can bend one past its neighbour. An
+        // arm that changes nothing (an off for a key that is not down)
+        // restamps to the same answer, `restamp_ends` being a re-read rather
+        // than a reset — which is also why the `AllOff` arm having already
+        // restamped inside `all_notes_off` costs nothing. That call is for the
+        // shells that reach the transport reset directly, not through here.
         self.restamp_ends(event.time);
     }
 

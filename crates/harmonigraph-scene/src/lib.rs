@@ -81,8 +81,13 @@ const NODE_RADIUS_FACTOR: f32 = 0.25;
 const ATTACK_TIME: f64 = 0.15;
 
 /// The longest wait the Delay bar offers before a melody/bass ring starts
-/// easing in ([`ViewConfig::mark_delay`]) — and the clamp `derive_scene`
-/// holds a hand-edited view to, so the bar and the picture cannot disagree.
+/// easing in ([`ViewConfig::mark_delay`]), and the clamp `derive_scene` holds
+/// a hand-edited view to. ONE constant for the two so the bar's end and the
+/// picture's cannot drift apart — which is not the same as saying a view out
+/// of range reads correctly: the bar fills to its end and reads out the value
+/// it actually holds, so a blob carrying five seconds says "5.00 s" over a
+/// full bar while the rings behave as one. Dragging it writes a value in
+/// range and the two agree again.
 ///
 /// A second, because that is where the setting stops being about flicker and
 /// starts being about tempo: at 120bpm it rings only what is held for a whole

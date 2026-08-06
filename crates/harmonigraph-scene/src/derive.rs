@@ -252,9 +252,11 @@ pub fn derive_scene(
                     //
                     // Strongest marking voice wins the color; the slots still
                     // collect every one of them, since a release crossfades
-                    // two. The ring eases in on the SAME ramp as that sector
-                    // — from when the note took the end, which is not always
-                    // its note-on (see `end_taken_at`).
+                    // two. The ring eases in on the SAME ramp as that sector,
+                    // from when the note took the end — which is not always
+                    // its note-on, and is the tracker's own answer rather
+                    // than anything derived here (`HeldEnd`, stamped by
+                    // `NoteTracker::restamp_ends`).
                     let mark_color = pitch_lut_color(
                         octave_layout.slot_pitch(slot as i32, node_cents),
                         frame.darkest_pitch,

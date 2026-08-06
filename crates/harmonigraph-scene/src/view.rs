@@ -1011,10 +1011,14 @@ impl ViewConfig {
         // cannot reach these values, so a view that holds one got it from a
         // file.
         // The mark delay, against that same hole: it is added to a timestamp
-        // and the sum is divided by the attack, so a non-finite one is a NaN
-        // ring level on every marked node — the rings drawn out of nothing
-        // wherever the marks are on. `derive_scene` clamps the RANGE (the bar
-        // cannot leave it; a file can), which is again no guard against a NaN.
+        // and the sum divided by the attack, so a non-finite one poisons the
+        // ease of every ring. The symptom is the rings VANISHING, not drawing
+        // wrong — a NaN level fails `Mark::add`'s `>=` (NaN answers no to
+        // every comparison), so the level stays at 0 while the slot bit is
+        // still set, and the shader multiplies the ring's coverage away to
+        // nothing. Silent, and it takes the whole layer wherever the marks
+        // are on. `derive_scene` clamps the RANGE (the bar cannot leave it; a
+        // file can), which is again no guard against a NaN.
         self.mark_delay = finite_or(self.mark_delay, 0.0);
 
         self.shimmer_speed = finite_or(self.shimmer_speed, default_shimmer_speed());
