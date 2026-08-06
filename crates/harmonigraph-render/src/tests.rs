@@ -1977,6 +1977,75 @@ fn octave_wheel_scene(layout: harmonigraph_scene::OctaveLayout, cents: f32) -> S
     scene
 }
 
+/// Reads mean colors out of one wedge of a rendered node's octave band.
+/// Self-calibrating — it finds the band's radii from a picture that has it
+/// lit, rather than reproducing the camera's arithmetic, which would only
+/// re-assert it.
+struct BandProbe {
+    size: [u32; 2],
+    inner: f32,
+    outer: f32,
+}
+
+impl BandProbe {
+    /// Calibrated along `angle`, on a shot with the band drawn: the node is
+    /// alone at the world origin and the camera looks at it, so the frame's
+    /// center is its center.
+    fn new(px: &[u8], size: [u32; 2], angle: f32) -> BandProbe {
+        let mut probe = BandProbe { size, inner: 0.0, outer: 0.0 };
+        let on_band: Vec<f32> = (4..size[0] / 2)
+            .map(|r| r as f32)
+            .filter(|&r| probe.at(px, r, angle).iter().sum::<f32>() > 24.0)
+            .collect();
+        assert!(!on_band.is_empty(), "nothing lit along the ray at {angle} rad");
+        probe.inner = on_band[0];
+        probe.outer = on_band[on_band.len() - 1];
+        assert!(
+            probe.outer - probe.inner > 8.0,
+            "no band to sample: {}..{}",
+            probe.inner,
+            probe.outer
+        );
+        probe
+    }
+
+    /// One pixel, `r` from the center at `a` radians.
+    fn at(&self, px: &[u8], r: f32, a: f32) -> [f32; 3] {
+        let c = self.size[0] as f32 / 2.0;
+        // Screen y grows downward, so the sample angle is negated.
+        let (x, y) = (c + r * a.cos(), c - r * a.sin());
+        let i = (y as usize * self.size[0] as usize + x as usize) * 4;
+        [px[i] as f32, px[i + 1] as f32, px[i + 2] as f32]
+    }
+
+    /// Mean color well inside the wedge `width` wide centered on `angle`, in
+    /// both directions, so neither the slice's antialiased edges nor the
+    /// band's enter the reading.
+    fn mean(&self, px: &[u8], angle: f32, width: f32) -> [f32; 3] {
+        let (mut sum, mut n) = ([0f32; 3], 0f32);
+        let margin = 0.2 * (self.outer - self.inner);
+        let mut r = self.inner + margin;
+        while r <= self.outer - margin {
+            for k in -6..=6 {
+                let sample = self.at(px, r, angle + 0.03 * k as f32 * width);
+                for j in 0..3 {
+                    sum[j] += sample[j];
+                }
+                n += 1.0;
+            }
+            r += 1.0;
+        }
+        sum.map(|s| s / n)
+    }
+}
+
+/// The middle of slot `slot`'s wedge on a node whose pitch class is `cents`,
+/// and how wide it is — the pair [`BandProbe::mean`] samples inside.
+fn wedge_of(layout: harmonigraph_scene::OctaveLayout, slot: usize, cents: f32) -> (f32, f32) {
+    let (e0, e1) = layout.sector(slot as i32, cents);
+    (0.5 * (e0 + e1), e0 - e1)
+}
+
 /// The band's lit/unlit profile around a rendered node: index `i` is the
 /// angle `360 * i / STEPS` counter-clockwise from screen right.
 /// Self-calibrating — it finds the node's center and the band's radius from
@@ -2331,56 +2400,19 @@ fn a_released_octave_lands_on_its_ghost_without_a_step() {
         scene
     };
 
-    // The band's radii on screen, read off the picture rather than
-    // reproduced from the camera's arithmetic, which would only re-assert it.
-    let c = SIZE[0] as f32 / 2.0;
-    let at = |px: &[u8], r: f32, a: f32| -> [f32; 3] {
-        // Screen y grows downward, so the sample angle is negated.
-        let (x, y) = (c + r * a.cos(), c - r * a.sin());
-        let i = (y as usize * SIZE[0] as usize + x as usize) * 4;
-        [px[i] as f32, px[i + 1] as f32, px[i + 2] as f32]
-    };
-    let middle = |slot: usize| {
-        let (e0, e1) = layout.sector(slot as i32, 0.0);
-        (0.5 * (e0 + e1), e0 - e1)
-    };
-    let (mid, wedge) = middle(releasing);
+    let (mid, wedge) = wedge_of(layout, releasing, 0.0);
     // Down the envelope past the ghost's own level, to the smallest the 8-bit
     // packing carries, and then off it. The first of these is also the shot
     // the radii are calibrated from, taken once and read twice so the two can
     // never drift onto different pictures.
     const TAIL: [f32; 9] = [1.0, 0.5, 0.25, 0.16, 0.12, 0.08, 0.04, 0.02, 1.0 / 255.0];
     let full = gpu.shot(&scene(TAIL[0]));
-    let on_band: Vec<f32> = (4..SIZE[0] / 2)
-        .map(|r| r as f32)
-        .filter(|&r| at(&full, r, mid).iter().sum::<f32>() > 24.0)
-        .collect();
-    assert!(!on_band.is_empty(), "nothing lit along the ray through slot {releasing}");
-    let (inner, outer) = (on_band[0], on_band[on_band.len() - 1]);
-    assert!(outer - inner > 8.0, "no band to sample: {inner}..{outer}");
+    let probe = BandProbe::new(&full, SIZE, mid);
 
-    // Mean color well inside a wedge, in both directions, so neither the
-    // slice's antialiased edges nor the band's enter the reading.
-    let mean = |px: &[u8], at_angle: f32, width: f32| -> [f32; 3] {
-        let (mut sum, mut n) = ([0f32; 3], 0f32);
-        let mut r = inner + 0.2 * (outer - inner);
-        while r <= outer - 0.2 * (outer - inner) {
-            for k in -6..=6 {
-                let sample = at(px, r, at_angle + 0.03 * k as f32 * width);
-                for j in 0..3 {
-                    sum[j] += sample[j];
-                }
-                n += 1.0;
-            }
-            r += 1.0;
-        }
-        sum.map(|s| s / n)
-    };
-
-    let mut steps: Vec<[f32; 3]> = vec![mean(&full, mid, wedge)];
-    steps.extend(TAIL[1..].iter().map(|&level| mean(&gpu.shot(&scene(level)), mid, wedge)));
+    let mut steps: Vec<[f32; 3]> = vec![probe.mean(&full, mid, wedge)];
+    steps.extend(TAIL[1..].iter().map(|&level| probe.mean(&gpu.shot(&scene(level)), mid, wedge)));
     let ended = gpu.shot(&scene(0.0));
-    steps.push(mean(&ended, mid, wedge));
+    steps.push(probe.mean(&ended, mid, wedge));
 
     let light = |c: &[f32; 3]| c[0] + c[1] + c[2];
     let apart = |a: &[f32; 3], b: &[f32; 3]| {
@@ -2421,13 +2453,74 @@ fn a_released_octave_lands_on_its_ghost_without_a_step() {
     // Landing on the ghost the silent slices are drawn in — the same grey at
     // the same coverage, so the finished ring is one backdrop rather than a
     // backdrop with one slice a shade off it.
-    let (quiet, quiet_wedge) = middle(silent);
-    let neighbour = mean(&ended, quiet, quiet_wedge);
+    let (quiet, quiet_wedge) = wedge_of(layout, silent, 0.0);
+    let neighbour = probe.mean(&ended, quiet, quiet_wedge);
     assert!(
         apart(&steps[steps.len() - 1], &neighbour) < 3.0,
         "a spent indicator reads {:?} against its neighbours' {neighbour:?}",
         steps[steps.len() - 1]
     );
+}
+
+/// The OTHER release: a node going out together with its octave, which is a
+/// lone note let go, or the last instance of one. Here `level` and `presence`
+/// are the same envelope and there is no backdrop to hand off to — it is
+/// leaving too — so the indicator keeps its own pitch the whole way down and
+/// its opacity runs to nothing in a STRAIGHT line.
+///
+/// That is the half a ghost scaled by `1 - level` gets wrong. It is the same
+/// arithmetic wherever presence is 1, so the handoff above cannot see it, but
+/// with the two on one envelope it counts the note's presence twice: the
+/// opacity bulges to `1.16e - 0.16e²`, four points over the line at the middle
+/// of the fade, and the slice picks up a whitening from a backdrop that is not
+/// there. Taking the ghost as what is LEFT of the presence after this slot's
+/// own level is what makes both releases straight.
+#[test]
+fn a_lone_notes_octave_fades_in_a_straight_line() {
+    use harmonigraph_scene::octave_layout;
+
+    const SIZE: [u32; 2] = [384, 384];
+    let Some(mut gpu) = Shooter::new(SIZE) else {
+        return;
+    };
+    let layout = octave_layout(5, 60.0, 0, 1.0, 0.0);
+    let slot = harmonigraph_scene::MIDDLE_C_SLOT;
+    let scene = |envelope: f32| {
+        let mut scene = octave_wheel_scene(layout, 0.0);
+        let node = &mut scene.nodes[0];
+        node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
+        node.octaves[slot] = envelope;
+        // ONE envelope for both: nothing else on this node is sounding, so
+        // its presence is this octave's own.
+        node.activation = envelope;
+        scene
+    };
+
+    let (mid, wedge) = wedge_of(layout, slot, 0.0);
+    let full = gpu.shot(&scene(1.0));
+    let probe = BandProbe::new(&full, SIZE, mid);
+    let lit = probe.mean(&full, mid, wedge);
+
+    // Proportional, channel by channel: the wedge is nothing but this glyph
+    // (no core, no rings, and the idle marker does not reach the band), so a
+    // straight-line fade is the reading at `e` being `e` of the reading at
+    // full. The tolerance is the 8-bit packing of the level plus the target's
+    // own rounding, well under the 5-to-9 the bulge would add here.
+    for envelope in [0.75f32, 0.5, 0.25] {
+        let got = probe.mean(&gpu.shot(&scene(envelope)), mid, wedge);
+        for j in 0..3 {
+            let want = envelope * lit[j];
+            assert!(
+                (got[j] - want).abs() < 2.5,
+                "at {envelope} of the envelope the slice reads {got:?}, not {want:.1} in \
+                 channel {j} — {lit:?} at full"
+            );
+        }
+    }
+    // And it ends at nothing rather than on a ghost: with the node gone there
+    // is no backdrop left for the indicator to sit in.
+    let spent = probe.mean(&gpu.shot(&scene(0.0)), mid, wedge);
+    assert!(spent.iter().sum::<f32>() < 3.0, "a spent lone note leaves {spent:?} behind");
 }
 
 /// The seams between a chord's colors run at ONE width from the rim to the

@@ -1449,36 +1449,43 @@ fn node_paint(in: VsOut) -> vec4<f32> {
             // note drives both off one envelope, so the ghost never catches
             // the fade and the switch lands at nothing.
             //
-            // What `over` costs is the ghost's weight ADDED to a part-lit slot
-            // instead of hidden under it, over the whole envelope rather than
-            // in the tail: `ghost_a * (1 - level)` more than a max above the
-            // handoff and `level * (1 - ghost_a)` more below it, nothing at
-            // either end, and most at `level == GHOST_LEVEL` — 0.29 against
-            // the max's 0.16 on a node at full presence. It stays monotone in
-            // `level`, so that is a mid-release the eye reads as a little
-            // heavier, not an artifact.
-            opacity = level + ghost_a * (1.0 - level);
+            // The ghost takes what is left of the node's PRESENCE after this
+            // slot's own level, rather than a share of the whole of it. That
+            // is what makes both releases straight lines:
+            //
+            //     opacity = level * (1 - GHOST_LEVEL) + GHOST_LEVEL * presence
+            //
+            // is linear in each of them separately, so a slot fading under a
+            // held instance runs 1 down to its ghost evenly, and a slot whose
+            // node is going with it — `level` and `presence` one envelope —
+            // runs to nothing evenly. Scaling the ghost by `1 - level`
+            // instead, which is the same thing wherever presence is 1, counts
+            // the note's own presence twice in that second case: it bulges
+            // to 1.16e - 0.16e², four points over the straight line at the
+            // middle of the fade.
+            let ghost_rest = max(GHOST_LEVEL * (presence - level), 0.0);
+            opacity = level + ghost_rest;
             // Slot s is MIDI octave s - 1, whose C is MIDI 12*s; add this
             // node's pitch class for the glyph's true pitch.
             let pitch = oct_slot_pitch(slot, in.cents);
-            // A FULLY lit glyph is exactly the color that pitch lights
-            // everywhere else, which the ghost's `1 - level` weight is what
-            // holds: at level 1 it is nothing, and the pitch stands alone. The
+            // A glyph as lit as its node is present is exactly the color that
+            // pitch lights everywhere else, which `ghost_rest` is what holds:
+            // it is nothing where `level` reaches `presence`, so a fully lit
+            // slot AND a lone note's whole release wear the pitch alone. The
             // LUT is the pitch ramp (pitch_ramp_lch in harmonigraph-scene),
             // and the core disc and the piano roll sample that same table — so
             // all three read as one color where the note is sounding. A white
-            // mix at full level would be a second definition of what a lit
-            // pitch looks like, and it would drift off the disc the moment the
-            // gradient's brightness moved. BELOW full, the mix toward the
-            // whitened node color is the ghost coming through as the note
-            // goes, which is the fade itself rather than a second definition
-            // of anything.
+            // mix there would be a second definition of what a lit pitch looks
+            // like, and it would drift off the disc the moment the gradient's
+            // brightness moved. Where the node OUTLIVES the slot, the mix
+            // toward the whitened node color is the ghost coming through as
+            // that one octave goes, which is the fade itself rather than a
+            // second definition of anything.
             //
             // The divide un-premultiplies, and wants no floor under it: this
             // branch has `level > 0`, the packing's smallest step is 1/255,
-            // and `opacity >= level` at every ghost.
-            slot_rgb = (pitch_lut_color(pitch) * level
-                + node_glyph_rgb * ghost_a * (1.0 - level)) / opacity;
+            // and `ghost_rest` is never negative, so `opacity >= level`.
+            slot_rgb = (pitch_lut_color(pitch) * level + node_glyph_rgb * ghost_rest) / opacity;
         }
         // The wedge enters ONCE, after the two layers are resolved: they are
         // the same shape at different opacities, and compositing their COVERED
