@@ -525,8 +525,9 @@ fn every_layer_section(
         .on_hover_text(
             "The curve both the Attack and the Fade run on. 0 is a straight \
              line — the same change every frame. Higher leaves and arrives \
-             fast and settles slowly, the way a struck note decays. The \
-             trail keeps its own straight fade whatever this says",
+             fast and settles slowly, the way a struck note decays; at the \
+             top most of the travel is over in the first quarter of the \
+             time. The trail keeps its own straight fade whatever this says",
         );
     // 0 = off (the renderer skips the whole post-process chain), so the bar
     // doubles as the toggle.

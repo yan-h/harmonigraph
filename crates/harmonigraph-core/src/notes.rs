@@ -69,16 +69,17 @@ pub enum VoiceState {
     Released { at: Time },
 }
 
-/// The most curved `shape` 1 asks for, as the rate constant of the
-/// exponential in [`Envelope::approach`].
+/// The sharpest curve `shape` 1 asks for, as the exponent in
+/// [`Envelope::approach`]. `shape` walks the exponent from 1 (a straight
+/// line) to this.
 ///
-/// 6 is where the curve stops changing character rather than where it stops
-/// being drawable: half the travel is gone in the first 12% of the time, and
-/// the tail past halfway is already too faint to read as motion. Higher
-/// constants move the knee closer to the start without changing what the
-/// viewer sees, so the top of the bar would be a stretch of settings that all
-/// look the same — the bar's own resolution spent on nothing.
-const MAX_CURVE: f32 = 6.0;
+/// 4 is where the curve stops changing character rather than where it stops
+/// being drawable: a quartic is 94% gone by half way, and what is left after
+/// that is already too faint to read as motion. Higher exponents move the
+/// knee closer to the start without changing what the viewer sees, so the top
+/// of the bar would be a stretch of settings that all look alike — the bar's
+/// own resolution spent on nothing.
+const MAX_POWER: f32 = 4.0;
 
 /// The shape and the two durations every fading layer of a node runs on: how
 /// long a note takes to arrive, how long it takes to leave, and the one curve
@@ -103,8 +104,8 @@ pub struct Envelope {
     pub attack_time: f32,
     /// Seconds a released note keeps fading before it is gone.
     pub fade_time: f32,
-    /// How curved both ends are, 0..=1: 0 a straight line, 1 the most
-    /// exponential on offer ([`MAX_CURVE`]).
+    /// How curved both ends are, 0..=1: 0 a straight line, 1 the sharpest
+    /// curve on offer ([`MAX_POWER`]).
     pub shape: f32,
 }
 
@@ -123,19 +124,31 @@ impl Envelope {
     /// on, and the only place the curve is written.
     ///
     /// An APPROACH: it leaves where it started fast and settles into where it
-    /// is going, which at `shape` 1 is `1 - e^-kp` — the curve a note's own
-    /// sound makes, and the one an analog envelope charges and discharges on.
-    /// Both ends want that same fast-then-slow character, which is why one
-    /// function serves them: reversing it for the release instead would give
-    /// an attack that dawdles and then snaps to full, and a trigger that
-    /// arrives late reads as a dropped frame rather than as a soft one.
+    /// is going, `1 - (1-p)^n`. Both ends want that same fast-then-slow
+    /// character, which is why one function serves them: reversing it for the
+    /// release instead would give an attack that dawdles and then snaps to
+    /// full, and a trigger that arrives late reads as a dropped frame rather
+    /// than as a soft one.
     ///
-    /// Normalized to reach exactly 1 at `p = 1` rather than approaching it
-    /// asymptotically, which is what keeps `duration` meaning "when it is
-    /// over". An un-normalized exponential never arrives, and a release that
-    /// never arrives is a released voice [`NoteTracker::prune`] can never
-    /// drop — the tail would accumulate voices for the whole session, against
-    /// an O(nodes × voices) loop.
+    /// A POWER rather than the exponential a note's own sound decays on, and
+    /// the reason is the parameter rather than the picture. An exponential is
+    /// naturally described by a RATE — a time constant it never quite reaches
+    /// the end of — and the setting above it here is a DURATION, the moment
+    /// the note is gone. Fitting one to the other means normalizing
+    /// `(1 - e^-kp)` by its own value at `p = 1`, and that normalization is
+    /// not free: it needs a divide, a special case at `k = 0` where the ratio
+    /// is 0/0, and a constant whose units are a rate on a bar that reads as a
+    /// shape. A power arrives at exactly 1 on its own, at every exponent, with
+    /// none of that — and the two draw the same picture over the range a bar
+    /// can reach, a cubic sitting about where a rate constant of 4 does.
+    ///
+    /// What the power gives up is the true asymptotic tail, and it gives up
+    /// nothing, because the normalization was cutting that tail off anyway.
+    ///
+    /// Arriving at exactly 1 is load-bearing and not tidiness: a release that
+    /// only approaches 0 is a voice [`NoteTracker::prune`] can never drop, and
+    /// the released tail would accumulate for the whole session against an
+    /// O(nodes × voices) loop.
     ///
     /// A DURATION that is not a positive real number falls to "already over",
     /// and that is the safe direction rather than the tidy one: an attack
@@ -147,8 +160,8 @@ impl Envelope {
     /// then stays in the released tail for the rest of the session.
     ///
     /// A poisoned SHAPE straightens instead, there being a real duration to
-    /// run out: a NaN through `clamp` stays a NaN, and `min` would answer
-    /// with the bound and silently pin the curve at its sharpest.
+    /// run out: a NaN through `clamp` stays a NaN, and `min` would answer with
+    /// the bound and silently pin the curve at its sharpest.
     fn approach(&self, elapsed: Time, duration: f32) -> f32 {
         if !duration.is_finite() || duration <= 0.0 {
             return 1.0;
@@ -157,11 +170,11 @@ impl Envelope {
         // non-finite clock reads as "just started" rather than poisoning the
         // divide below.
         let p = (elapsed.max(0.0) as f32 / duration).min(1.0);
-        let k = if self.shape.is_finite() { self.shape.clamp(0.0, 1.0) } else { 0.0 } * MAX_CURVE;
-        if k <= 0.0 {
-            return p;
-        }
-        (1.0 - (-k * p).exp()) / (1.0 - (-k).exp())
+        let shape = if self.shape.is_finite() { self.shape.clamp(0.0, 1.0) } else { 0.0 };
+        // Exponent 1 is the straight line and `powf` returns it exactly, so
+        // the flat end of the bar needs no case of its own.
+        let power = 1.0 + shape * (MAX_POWER - 1.0);
+        1.0 - (1.0 - p).powf(power)
     }
 
     /// How far a note that arrived at `since` has eased in, 0..=1.

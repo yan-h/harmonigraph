@@ -283,8 +283,10 @@ pub struct ViewConfig {
     #[serde(default)]
     pub attack_time: f32,
     /// How curved both ends of the note envelope are, 0..=1: 0 the straight
-    /// line every layer has always faded on, 1 the most exponential the
-    /// shape offers.
+    /// line every layer has always faded on, 1 the sharpest curve on offer.
+    /// It walks the exponent of an ease-out — see
+    /// [`Envelope::approach`](harmonigraph_core::Envelope), which is also
+    /// where the case for a power over an exponential is written.
     ///
     /// One number for the arrival and the departure together, which is the
     /// point of it — a curve is a house style for how things move, and a
@@ -1208,12 +1210,11 @@ impl Default for ViewConfig {
             // rather than erased, and erasing it is not worth what 0.15
             // costs the staccato end.
             attack_time: 0.05,
-            // A gentle curve rather than the straight line or the full
-            // exponential: enough that a release leaves promptly and settles
-            // instead of sliding out at one rate, and not so much that the
-            // tail is over before the ear has finished the note. The straight
-            // line is still one drag away, and is what every saved project
-            // opens on.
+            // Near enough a square law (the exponent lands at 2.05): enough
+            // that a release leaves promptly and settles instead of sliding
+            // out at one rate, and not so much that the tail is over before
+            // the ear has finished the note. The straight line is still one
+            // drag away, and is what every saved project opens on.
             fade_shape: 0.35,
             // No idle marker: the grid lines alone carry the lattice's
             // shape where nothing is playing, leaving the node positions
