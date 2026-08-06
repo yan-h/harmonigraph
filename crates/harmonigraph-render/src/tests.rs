@@ -1915,9 +1915,6 @@ fn a_real_held_chord_shows_its_melody_and_bass_marks() {
             &FrameParams::default(),
             Camera::default(),
             None,
-            // Past ATTACK_TIME: the octave glyphs and the mark rings both
-            // ease in over the first 0.15s, so at t=0 there is deliberately
-            // nothing on that layer yet.
             0.5,
         )
     };
@@ -3144,12 +3141,12 @@ type LightUp = fn(&mut harmonigraph_scene::NodeInstance);
 /// or turning any `||` between them into `&&`, passed the whole suite.
 ///
 /// They come apart in practice, which is why each gets a node here. An
-/// octave's level is `envelope * attack(...)` and is packed to a byte, so
-/// for the first frames after a note-on a node has a full activation and an
-/// octave word of exactly zero — `params[0]` alone is holding it in the
-/// buffer, and a cull that stopped reading it would drop the first frame of
-/// a note. The mark levels ride their own ease-in (`melody_attack`) rather
-/// than the node's, so they part company the same way.
+/// octave's level is packed to a BYTE, so the last of a release rounds to an
+/// octave word of exactly zero while the node's own activation is still
+/// non-zero — `params[0]` alone is holding it in the buffer, and a cull that
+/// stopped reading it would drop the tail of every note. The mark levels are
+/// held off by a wait of their own (`ViewConfig::mark_delay`) and belong to
+/// two notes out of the chord anyway, so they part company the same way.
 ///
 /// Built by hand rather than played in: the point is one term at a time,
 /// and a tracker cannot be asked for that.

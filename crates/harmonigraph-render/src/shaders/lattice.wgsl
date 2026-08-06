@@ -198,8 +198,8 @@ struct Instance {
     // x: activation 0..1, w: outlined 0/1 (channel-14 voices render as a
     // ring, not a disc). y/z: the melody and bass marks' own levels, which
     // follow the marked voice rather than this node's activation — each
-    // ring eases in over the scene layer's attack when its note takes that
-    // end, and drops to 0 the frame the key comes up.
+    // ring comes on once its note has worn that end for the scene layer's
+    // Delay, and drops to 0 the frame the key comes up.
     @location(2) params: vec4<f32>,
     // Per-octave activation, 8 bits per slot, little-endian packed.
     @location(3) octaves: vec3<u32>,
@@ -1434,9 +1434,9 @@ fn node_paint(in: VsOut) -> vec4<f32> {
         var opacity = ghost_a;
         var slot_rgb = node_glyph_rgb;
         if level > 0.0 {
-            // Straight off the octave's own envelope, so the glyph eases in
-            // over the attack and ends on its ghost at release: the same grey
-            // at the same opacity as the silent slices beside it.
+            // Straight off the octave's own envelope, so the glyph lights with
+            // its note and ends on its ghost at release: the same grey at the
+            // same opacity as the silent slices beside it.
             //
             // Over in BOTH terms together, which is what makes the end of a
             // release one continuous thing. Taking the opacity as a max() and

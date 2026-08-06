@@ -323,15 +323,14 @@ pub struct ViewConfig {
     /// the band was resized; absolute holds them still.
     #[serde(default = "default_mark_thickness")]
     pub mark_thickness: f32,
-    /// How long a note must HOLD an end before its ring begins to ease in,
-    /// in seconds. The wait sits in front of the ease rather than stretching
-    /// it: the ring is at 0 for this long and then arrives on the usual
-    /// [`ATTACK_TIME`](crate::ATTACK_TIME) ramp.
+    /// How long a note must HOLD an end before its ring appears, in seconds.
+    /// The ring is at nothing for this long and then simply there: the wait is
+    /// the whole of what shapes a ring's arrival, with no ramp behind it.
     ///
     /// A ring is held-only, so a wait is also a THRESHOLD: an end that
     /// changes hands again before the delay is up never draws a ring at all.
     /// That is what the setting is for. Playing fast, the top and bottom of
-    /// what is down change every few notes, and a ring easing in on each of
+    /// what is down change every few notes, and a ring appearing on each of
     /// them reads as flicker over the octave band rather than as the line it
     /// is tracing — so the delay is how long a note has to be the melody
     /// before it counts as the melody.

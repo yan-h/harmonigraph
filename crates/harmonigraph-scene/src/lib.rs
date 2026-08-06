@@ -60,29 +60,9 @@ fn lattice_to_world(pos: LatticePos, spacing: f32) -> Vec3 {
 /// Node radius as a fraction of the lattice spacing.
 const NODE_RADIUS_FACTOR: f32 = 0.25;
 
-/// Seconds an indicator on the outer layer eases in — the octave sectors
-/// and the melody/bass rings alike. Keeps a fresh octave's color GROWING
-/// into the node's blend instead of instantly repainting its share of the
-/// disc (and softens glyph pop-in); short enough to still feel immediate.
-///
-/// ONE time for both, because a ring and the sector it links back to belong
-/// to the same note: easing them in at different rates would have the two
-/// halves of one arrival disagree about how fast it happened.
-///
-/// One RATE, note, not one moment. [`ViewConfig::mark_delay`] can hold a ring
-/// back until its note has worn the end a while, which is the ring arriving
-/// later than the sector under it — deliberately, and on this same ramp when
-/// it does.
-///
-/// Note that this is an attack on the *appearance*, not on the note — a
-/// staccato note still reaches full brightness, since its release fades the
-/// envelope over `fade_time` while this ramp is still climbing, and the
-/// product peaks shortly after the key comes up.
-const ATTACK_TIME: f64 = 0.15;
-
-/// The longest wait the Delay bar offers before a melody/bass ring starts
-/// easing in ([`ViewConfig::mark_delay`]), and the clamp `derive_scene` holds
-/// a hand-edited view to. ONE constant for the two so the bar's end and the
+/// The longest wait the Delay bar offers before a melody/bass ring appears
+/// ([`ViewConfig::mark_delay`]), and the clamp `derive_scene` holds a
+/// hand-edited view to. ONE constant for the two so the bar's end and the
 /// picture's cannot drift apart — which is not the same as saying a view out
 /// of range reads correctly: the bar fills to its end and reads out the value
 /// it actually holds, so a blob carrying five seconds says "5.00 s" over a
@@ -210,18 +190,19 @@ pub struct NodeInstance {
     /// marks are drawn as rings at different radii, so that costs nothing:
     /// they simply both draw. See [`ViewConfig::mark_melody`].
     pub bass_slots: u32,
-    /// How far each mark has eased in, 0..1: a ring grows on over
-    /// [`ATTACK_TIME`] from the moment its note TOOK that end (plus whatever
-    /// wait [`ViewConfig::mark_delay`] asks for first), rather than
-    /// appearing at full the frame it is claimed. Separate from
-    /// `activation` because a mark can be arriving while the node it sits
-    /// on has been fully lit for a while — the ring has to follow its own
-    /// note, not the disc's.
+    /// How strongly each mark draws, 0..1: 0 while the ring is still waiting
+    /// out [`ViewConfig::mark_delay`] from the moment its note TOOK that end,
+    /// and the voice's envelope once the wait is out. A step, so the field
+    /// only ever holds those two — it stays a level rather than a flag because
+    /// the envelope is what it carries, and because the shader reads it as
+    /// one. Separate from `activation` because a mark can still be waiting
+    /// while the node it sits on has been fully lit for a while — the ring
+    /// follows its own note, not the disc's.
     ///
-    /// Only the fade IN: a mark is held-only (see [`derive`](mod@derive)), so it still
-    /// comes off with the key rather than trailing the disc's release. The
-    /// voice's envelope rides along all the same, for the day a released
-    /// voice is allowed to keep an end.
+    /// Only the arrival is gated: a mark is held-only (see
+    /// [`derive`](mod@derive)), so it still comes off with the key rather than
+    /// trailing the disc's release. The voice's envelope rides along all the
+    /// same, for the day a released voice is allowed to keep an end.
     ///
     /// Per node rather than per slot because the mark is a ring around the
     /// whole node; the slots above only say which sector it links back to.

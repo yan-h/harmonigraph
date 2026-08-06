@@ -62,9 +62,9 @@ fn main() -> Result<(), String> {
             "outer_outer" => view.outer_outer = num()?,
             "outer_gap" => view.outer_gap = num()?,
             "mark_thickness" => view.mark_thickness = num()?,
-            // Seconds an end has to be held before its ring eases in. A still
-            // frame lands somewhere in that wait or past it, which is the
-            // whole of what the key does to one.
+            // Seconds an end has to be held before its ring appears. A still
+            // frame lands inside that wait or past it, which is the whole of
+            // what the key does to one.
             "mark_delay" => view.mark_delay = num()?,
             // Which shimmer sweeps the mark rings, and how that sheet is
             // sized, paced, lit and shaped. A still frame of a moving look is a

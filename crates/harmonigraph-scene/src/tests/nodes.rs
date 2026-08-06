@@ -458,14 +458,15 @@ fn held_note_lights_matching_nodes() {
         kind: NoteEventKind::On { velocity: 1.0 },
     });
     let tuning = Tuning::default(); // 12-TET: origin node matches C exactly
-    // Sampled after ATTACK_TIME: the octave indicator eases in,
-    // so at the note-on instant itself it is still at zero.
+    // Sampled at the note-on instant itself: the octave indicator carries the
+    // note's own envelope and nothing else, so it is lit on the first frame
+    // its note is, rather than growing into it over a ramp of its own.
     let scene = scene_of(
         &tracker,
         &tuning,
         &ViewConfig::default(),
         &FrameParams::default(),
-        0.5,
+        0.0,
     );
     let origin = origin_node(&scene);
     assert_eq!(origin.activation, 1.0);

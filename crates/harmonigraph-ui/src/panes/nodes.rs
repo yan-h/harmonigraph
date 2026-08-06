@@ -237,10 +237,10 @@ fn melody_bass_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                 .show(ui)
                 .on_hover_text(
                     "How long a note has to stay the melody or the bass \
-                     before its ring starts fading in. A note that loses the \
-                     end again first never rings at all, which is what keeps \
-                     fast playing from flickering rings across the band. 0 \
-                     rings every note the moment it takes an end",
+                     before its ring appears. A note that loses the end again \
+                     first never rings at all, which is what keeps fast \
+                     playing from flickering rings across the band. 0 rings \
+                     every note the moment it takes an end",
                 );
             // The sweep, on the only layer that runs one — the sheet takes
             // both rings and the octave slice each one points at. Off is its

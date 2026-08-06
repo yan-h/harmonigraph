@@ -8,15 +8,15 @@ use crate::octaves::octave_layout;
 use crate::trail::TrailField;
 use crate::view::{FrameParams, ViewConfig};
 use crate::{
-    lattice_to_world, EdgeInstance, NodeInstance, Pulse, Scene, ATTACK_TIME,
+    lattice_to_world, EdgeInstance, NodeInstance, Pulse, Scene,
     MARK_DELAY_MAX, NODE_RADIUS_FACTOR, OCTAVE_SLOTS,
 };
 use glam::Vec4;
-use harmonigraph_core::{ChannelRole, HeldEnd, LatticePos, NoteTracker, Time, Tuning};
+use harmonigraph_core::{ChannelRole, HeldEnd, LatticePos, NoteTracker, Tuning};
 
 /// A melody- or bass-ring accumulator for one node: which octave slots it
 /// marks, plus the color and drawn level of the strongest marking voice seen
-/// so far — the voice's envelope times how far its ring has eased in. The
+/// so far — the voice's envelope, zeroed while its ring is still waiting. The
 /// `>=` in [`Mark::add`] means ties favor the later voice, so a release
 /// crossfading two voices lands on the newer color.
 #[derive(Default)]
@@ -77,20 +77,6 @@ fn marks(
     }
 }
 
-/// How far an indicator that arrived at `since` has eased in, 0..1:
-/// smoothstep over the first [`ATTACK_TIME`] seconds. Shared by the octave
-/// sectors and the melody/bass rings, so a note's whole outer layer arrives
-/// on one ramp.
-///
-/// One ramp, not always one moment: a ring can be handed a `since` the Delay
-/// setting has pushed later than the note-on its sector eases from (see
-/// [`ViewConfig::mark_delay`]), which is the ring arriving after the layer it
-/// brackets rather than with it — the whole point of that setting.
-fn attack(now: Time, since: Time) -> f32 {
-    let t = ((now - since) / ATTACK_TIME).clamp(0.0, 1.0) as f32;
-    t * t * (3.0 - 2.0 * t)
-}
-
 /// Build the frame's scene. `hovered` comes from last frame's picking (the
 /// usual immediate-mode one-frame latency, invisible in practice).
 pub fn derive_scene(
@@ -110,19 +96,31 @@ pub fn derive_scene(
     let center = view.center();
     let node_idle = idle_color(view);
     let live_extremes = held_extremes(tracker, view.mark_melody, view.mark_bass);
-    // Each ring's ease-in, resolved once per frame: which note wears an end
-    // and how long it has worn it are properties of the CHORD, identical on
-    // every node the note lights.
+    // Whether each ring has arrived, resolved once per frame: which note wears
+    // an end and how long it has worn it are properties of the CHORD,
+    // identical on every node the note lights.
     //
-    // The delay simply moves the ramp's start later, so an end held for less
-    // than it never draws a ring at all — a mark is held-only, and the level
-    // is still 0 when the key comes up. That is what the setting is for: at
-    // speed the ends change hands every few frames, and a ring that eases in
-    // on each of them reads as flicker rather than as the top line.
+    // A ring arrives at full, on the frame the wait is out — the Delay is the
+    // whole of what shapes when a ring appears, with no ramp behind it. What
+    // takes the flicker out is the wait being a THRESHOLD as well as a wait: a
+    // mark is held-only, so an end given up before the delay is out was never
+    // drawn at all. At speed the ends change hands every few notes, and it is
+    // the rings that arrive on those handoffs that read as flicker over the
+    // octave band rather than as the line being traced.
+    //
+    // The clamp's floor does not show in the picture — a threshold before the
+    // handoff and one exactly at it both put the ring on with its note, and a
+    // mark is only asked for while its end is held. It stays as the other half
+    // of a range, and because the `min` it would otherwise collapse to repairs
+    // a NaN silently: `f32::min` hands back the other operand, so a NaN delay
+    // would read as a full second's wait instead of as the missing mark layer
+    // `ViewConfig::sanitize` exists to catch.
     let mark_delay = view.mark_delay.clamp(0.0, MARK_DELAY_MAX) as f64;
-    let ease = |end: Option<HeldEnd>| end.map_or(1.0, |end| attack(now, end.since + mark_delay));
-    let melody_attack = ease(live_extremes.0);
-    let bass_attack = ease(live_extremes.1);
+    let arrived = |end: Option<HeldEnd>| {
+        end.map_or(1.0, |end| f32::from(now >= end.since + mark_delay))
+    };
+    let melody_on = arrived(live_extremes.0);
+    let bass_on = arrived(live_extremes.1);
     // Sanitized once, outside the node loop. Capped at 1: this axis makes
     // off-sheet nodes SMALLER, never larger, so the home sheet stays the
     // biggest thing on screen (see `ViewConfig::sevens_size`). The floor
@@ -216,17 +214,17 @@ pub fn derive_scene(
                 let slot = sounding
                     .clamp(low_slot, high_slot)
                     .clamp(0, OCTAVE_SLOTS as i32 - 1) as usize;
-                // Eases in from note-on; release still fades on the octave
-                // envelope.
-                octaves[slot] = octaves[slot].max(envelope * attack(now, voice.on_time));
+                // Lit with the note, on the note's own envelope: the sector
+                // arrives with the disc it sits on and releases with it.
+                octaves[slot] = octaves[slot].max(envelope);
 
                 // Mark the outer notes in the slot they sound in. Set on
                 // every node the voice matches, exactly as its activation
                 // is, so the mark can't disagree with the lighting.
                 //
                 // The level is the strongest marking voice ON THIS NODE.
-                // Only held voices mark, so the ring eases in while its end
-                // is held and is gone the frame it is released — it never
+                // Only held voices mark, so the ring stands while its end is
+                // held and is gone the frame it is released — it never
                 // outlives the key, even as the disc keeps fading.
                 let (is_melody, is_bass) = marks(voice, live_extremes);
                 if is_melody || is_bass {
@@ -252,11 +250,11 @@ pub fn derive_scene(
                     //
                     // Strongest marking voice wins the color; the slots still
                     // collect every one of them, since a release crossfades
-                    // two. The ring eases in on the SAME ramp as that sector,
-                    // from when the note took the end — which is not always
-                    // its note-on, and is the tracker's own answer rather
-                    // than anything derived here (`HeldEnd`, stamped by
-                    // `NoteTracker::restamp_ends`).
+                    // two. The ring comes on once its note has worn the end
+                    // for the Delay — measured from when the end changed
+                    // hands, which is not always a note-on, and is the
+                    // tracker's own answer rather than anything derived here
+                    // (`HeldEnd`, stamped by `NoteTracker::restamp_ends`).
                     let mark_color = pitch_lut_color(
                         octave_layout.slot_pitch(slot as i32, node_cents),
                         frame.darkest_pitch,
@@ -264,10 +262,10 @@ pub fn derive_scene(
                         view.pitch_gradient,
                     );
                     if is_melody {
-                        melody.add(slot, envelope * melody_attack, mark_color);
+                        melody.add(slot, envelope * melody_on, mark_color);
                     }
                     if is_bass {
-                        bass.add(slot, envelope * bass_attack, mark_color);
+                        bass.add(slot, envelope * bass_on, mark_color);
                     }
                 }
             }
