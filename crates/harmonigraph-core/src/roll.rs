@@ -311,7 +311,7 @@ impl NoteRoll {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::notes::{NoteEvent, NoteEventKind, NoteTracker};
+    use crate::notes::{Envelope, NoteEvent, NoteEventKind, NoteTracker};
 
     fn on(time: Time, note: u8) -> NoteEvent {
         NoteEvent { time, channel: 0, note, kind: NoteEventKind::On { velocity: 0.8 } }
@@ -516,7 +516,7 @@ mod tests {
         tracker.handle_event(on(0.0, 60));
         tracker.handle_event(off(1.0, 60));
         tracker.handle_event(on(1.0, 72)); // still held at the far future
-        tracker.prune(NoteRoll::MAX_AGE + 100.0, 1.0);
+        tracker.prune(NoteRoll::MAX_AGE + 100.0, &Envelope::default());
         let roll = tracker.roll();
         assert_eq!(roll.len(), 1);
         assert!(roll.notes().next().unwrap().is_live());

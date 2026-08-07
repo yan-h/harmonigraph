@@ -5,11 +5,11 @@
 //! [`super::scene`].
 
 use super::{param_bar, section};
-use crate::params::{ParamBackend, ParamKey};
+use crate::params::{seconds, ParamBackend, ParamKey};
 use crate::widgets::{button_row, choice_row, OctaveStrip, RangeBar, SpectrumBar, ValueBar};
 use crate::SharedState;
 use harmonigraph_scene::{
-    Pulse, ViewConfig, MARK_DELAY_MAX, MIN_EXTRA_SIZE, PITCH_CEIL, PITCH_FLOOR,
+    Pulse, ViewConfig, ATTACK_TIME_MAX, MARK_DELAY_MAX, MIN_EXTRA_SIZE, PITCH_CEIL, PITCH_FLOOR,
 };
 
 /// The sounding-note controls, top to bottom as the note reads outward: the
@@ -233,7 +233,7 @@ fn melody_bass_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
             // bottom. Read out in seconds, the one value in this section that
             // is not a length.
             ValueBar::new(&mut view.mark_delay, 0.0..=MARK_DELAY_MAX, "Delay")
-                .display(|v| format!("{v:.2} s"))
+                .display(seconds)
                 .show(ui)
                 .on_hover_text(
                     "How long a note has to stay the melody or the bass \
@@ -496,11 +496,44 @@ fn every_layer_section(
          gradient's first color, the high end its last. Drag either end, or \
          drag between them to slide the whole range.",
     );
+    // Arrival, departure, and the one curve they share — read in that order
+    // because that is the order a note goes through them. Attack and Shape
+    // are view settings and Fade is an automatable param, so the three are
+    // stored apart (`ViewConfig::envelope` is where they are put back
+    // together); the pane is where they have to LOOK like the one setting
+    // they are, which is why the split does not reorder them.
+    // Two decimals and a linear travel, the same as the Fade under it and the
+    // mark Delay above: the three are one second each and are read against
+    // each other, so they are formatted and scaled alike.
+    ValueBar::new(&mut view.attack_time, 0.0..=ATTACK_TIME_MAX, "Attack")
+        .display(seconds)
+        .show(ui)
+        .on_hover_text(
+            "Seconds a note takes to reach full brightness — the core, its \
+             glow, the octave glyphs and the rings together. 0 lights every \
+             note the instant it sounds. Long attacks dim short notes: a \
+             note released before the attack finishes never reaches full",
+        );
     param_bar(ui, params, ParamKey::Fade).on_hover_text(
         "Seconds a released note keeps fading — the pitch class core, \
          the octave glyphs, and the melody/bass marks together. 0 cuts \
          notes off the moment they're released",
     );
+    // Linear like every bar around it, and for the same reason: the whole
+    // range is one unit, so every hundredth of it — the readout's own
+    // resolution — is already a couple of pixels of travel, and there is no
+    // fine end for an ease to rescue. The one bar in the group that is NOT a
+    // duration, hence no seconds on the readout — it is the shape the two
+    // times either side of it are drawn with.
+    ValueBar::new(&mut view.fade_shape, 0.0..=1.0, "Shape")
+        .show(ui)
+        .on_hover_text(
+            "The curve both the Attack and the Fade run on. 0 is a straight \
+             line — the same change every frame. Higher leaves and arrives \
+             fast and settles slowly, the way a struck note decays; at the \
+             top most of the travel is over in the first quarter of the \
+             time. The trail keeps its own straight fade whatever this says",
+        );
     // 0 = off (the renderer skips the whole post-process chain), so the bar
     // doubles as the toggle.
     ValueBar::new(&mut view.bloom_strength, 0.0..=1.5, "Bloom")

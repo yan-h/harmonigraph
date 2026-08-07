@@ -5,7 +5,8 @@
 use crate::skin;
 use crate::style::{HighlightExtremes, IdleMarker, PitchGradient, Pulse, SevensLabel};
 use crate::trail::TrailMark;
-use harmonigraph_core::{coords, Comma, LatticePos, Tempered};
+use crate::ATTACK_TIME_MAX;
+use harmonigraph_core::{coords, Comma, Envelope, LatticePos, Tempered};
 
 /// Purely-visual settings (not host-automatable parameters). The UI layer
 /// persists these separately from plugin parameters.
@@ -255,6 +256,50 @@ pub struct ViewConfig {
     // `pulse_octaves` key, naming any of the six patterns `Pulse` answers to;
     // serde ignores unknown keys, so such a blob loads intact, opens on the
     // steady octave layer, and drops the key on the next save.
+    // ---- Note envelope ---------------------------------------------------
+    // How a note ARRIVES and how it LEAVES, for every layer of the node at
+    // once. The leaving time is the host-automatable Fade param and lives in
+    // [`FrameParams`]; the two settings here are the other half of it, and
+    // [`ViewConfig::envelope`] is where the three are put back together.
+    /// Seconds a note takes to reach full brightness from its note-on, on the
+    /// same curve as the release (see [`Envelope`]).
+    ///
+    /// A DURATION of its own rather than a share of the Fade, for the reason
+    /// written on `Envelope`: attack and release multiply, and one shared
+    /// number would have fast playing go dim at long fades. So the shape is
+    /// what the two ends have in common and the times are separate.
+    ///
+    /// This reaches further than the ramp it replaces. An arrival used to be
+    /// the outer layer's alone — the octave sectors and the rings eased in
+    /// over a fixed 0.15 s while the core disc simply appeared at full — so
+    /// the sharpest edge in a note-on was the one layer that had no ramp at
+    /// all. Now the core, its glow, the gutter it clears and the piano roll
+    /// arrive on this too, and the fixed constant behind the sectors is gone.
+    ///
+    /// 0 is that instant core, and is what a blob predating the bar loads at:
+    /// the sectors it was saved with eased in and the core did not, and of
+    /// the two, the core is the one the picture was composed around. A blob
+    /// wanting the old sector ramp back sets 0.15.
+    #[serde(default)]
+    pub attack_time: f32,
+    /// How curved both ends of the note envelope are, 0..=1: 0 the straight
+    /// line every layer has always faded on, 1 the sharpest curve on offer.
+    /// It walks the exponent of an ease-out — see
+    /// [`Envelope::approach`](harmonigraph_core::Envelope), which is also
+    /// where the case for a power over an exponential is written.
+    ///
+    /// One number for the arrival and the departure together, which is the
+    /// point of it — a curve is a house style for how things move, and a
+    /// lattice that answered the keys one way and let go another would read
+    /// as two instruments. It does NOT reach the trail, whose fade is a
+    /// memory decaying over tens of seconds rather than a note's own
+    /// envelope, and which stays deliberately linear (see
+    /// [`trail`](mod@crate::trail)).
+    ///
+    /// A bare `#[serde(default)]`: 0 is the straight line, so a blob that
+    /// predates the bar loads drawing exactly what it was saved drawing.
+    #[serde(default)]
+    pub fade_shape: f32,
     // ---- Idle (unlit) node marker ----------------------------------------
     // A minimal grey marker at each home-sheet node, drawn ALWAYS —
     // independent of both the active appearance and whether a note is
@@ -326,15 +371,21 @@ pub struct ViewConfig {
     /// How long a note must HOLD an end before its ring begins to ease in,
     /// in seconds. The wait sits in front of the ease rather than stretching
     /// it: the ring is at 0 for this long and then arrives on the usual
-    /// [`ATTACK_TIME`](crate::ATTACK_TIME) ramp.
+    /// [`attack_time`](Self::attack_time) ramp.
     ///
-    /// A ring is held-only, so a wait is also a THRESHOLD: an end that
-    /// changes hands again before the delay is up never draws a ring at all.
-    /// That is what the setting is for. Playing fast, the top and bottom of
-    /// what is down change every few notes, and a ring easing in on each of
-    /// them reads as flicker over the octave band rather than as the line it
-    /// is tracing — so the delay is how long a note has to be the melody
-    /// before it counts as the melody.
+    /// The wait is also a THRESHOLD: an end that changes hands again before
+    /// the delay is up never draws a ring at all. That is what the setting is
+    /// for. Playing fast, the top and bottom of what is down change every few
+    /// notes, and a ring easing in on each of them reads as flicker over the
+    /// octave band rather than as the line it is tracing — so the delay is
+    /// how long a note has to be the melody before it counts as the melody.
+    ///
+    /// A ring outlives its key (it fades out on the note's release), so the
+    /// threshold is answered AT the key-up — `derive_scene`'s `ease` — and
+    /// only the ramp runs on from there. Left to the ramp alone, an end
+    /// dropped mid-delay would climb past the threshold while the note was
+    /// already fading and ring a note that never was the melody, which is the
+    /// very flicker this setting buys off.
     ///
     /// Not derived from the note Fade, which is the other end of the same
     /// note and reads as the natural pair: a fade is how long a note takes to
@@ -345,10 +396,13 @@ pub struct ViewConfig {
     /// any delay past the Fade would outlive the note that handed the end
     /// over.
     ///
-    /// 0 is the ring arriving with its note, which is how the marks have
-    /// always drawn — hence a bare `#[serde(default)]`, the same value being
-    /// right for a blob that predates the bar and for a fresh view.
-    #[serde(default)]
+    /// 0 is the ring arriving with its note, and it is not what either door
+    /// opens on: a blob that predates the bar loads the same wait a fresh
+    /// view does (see [`default_mark_delay`]). Those blobs were saved drawing
+    /// rings that answer immediately, and are reinterpreted deliberately —
+    /// what a bare 0 loads is the chord-release smear rather than a look
+    /// anyone chose.
+    #[serde(default = "default_mark_delay")]
     pub mark_delay: f32,
     /// Which shimmer sweeps the melody/bass rings (see [`Pulse`]): the sheet
     /// takes both rings AND the octave slice each one points at. That reach
@@ -704,6 +758,22 @@ fn default_mark_thickness() -> f32 {
     0.09
 }
 
+/// Just past a passing sixteenth — 125ms at 120bpm — which is where the wait
+/// stops rejecting notes anyone is listening to and starts rejecting the ones
+/// nobody is.
+///
+/// A default rather than the 0 the bar's low end offers, because a ring
+/// outlives its key ([`ViewConfig::mark_delay`]): at 0 every momentary
+/// crowning rings its way OUT over the whole Fade, so lifting a chord one key
+/// at a time leaves a fading ring on nearly every note of it. The threshold is
+/// what stops that, and opening at 0 would ship the mechanism switched off.
+///
+/// The same value at both doors — a fresh view and a blob with no key — since
+/// the smear is not a look a blob can be said to have chosen.
+fn default_mark_delay() -> f32 {
+    0.15
+}
+
 /// The gap the sectors always had (SLICE_GAP_HALF was 0.06 either side of
 /// the boundary), now also the rings' padding from the band.
 fn default_outer_gap() -> f32 {
@@ -828,6 +898,23 @@ fn default_grid_inset() -> f32 {
 }
 
 impl ViewConfig {
+    /// The note envelope, assembled from the two halves it is stored in: the
+    /// shape and the attack are a LOOK and live here, the fade time is
+    /// host-automatable and lives in [`FrameParams`].
+    ///
+    /// One assembly point, called by everything that needs an envelope, so
+    /// the split is invisible past this line and no caller can pair a fade
+    /// time with the wrong shape. Both halves are clamped to the range their
+    /// bars offer — a hand-edited blob can hold anything, and `sanitize` only
+    /// repairs the non-finite (a finite 40 would be a curve no bar can undo).
+    pub fn envelope(&self, frame: &FrameParams) -> Envelope {
+        Envelope {
+            attack_time: self.attack_time.clamp(0.0, ATTACK_TIME_MAX),
+            fade_time: frame.fade_time,
+            shape: self.fade_shape.clamp(0.0, 1.0),
+        }
+    }
+
     /// Whether a melody/bass ring can be drawn at all: an end has to be
     /// marked for there to BE a ring, and the thickness has to leave it
     /// something to draw with.
@@ -1021,6 +1108,17 @@ impl ViewConfig {
         // file can), which is again no guard against a NaN.
         self.mark_delay = finite_or(self.mark_delay, 0.0);
 
+        // The note envelope, against the same hole. `Envelope::approach`
+        // guards its own arithmetic against a non-finite duration or shape —
+        // it has to, being reachable from a shell that never went through
+        // this door — but it guards by treating the transition as already
+        // OVER, so a NaN attack would show as every note appearing at full
+        // with no ramp and a NaN shape as a curve that silently straightens.
+        // Both are the picture quietly drawing something other than what the
+        // bars read out, which is exactly what this door is for.
+        self.attack_time = finite_or(self.attack_time, 0.0);
+        self.fade_shape = finite_or(self.fade_shape, 0.0);
+
         self.shimmer_speed = finite_or(self.shimmer_speed, default_shimmer_speed());
         self.shimmer_width = finite_or(self.shimmer_width, default_shimmer_width());
         self.shimmer_intensity = finite_or(self.shimmer_intensity, default_shimmer_intensity());
@@ -1124,6 +1222,25 @@ impl Default for ViewConfig {
             octave_extras: 2,
             octave_extra_size: 0.387_534_47,
             octave_extra_blend: 0.562_241_4,
+            // A fifth of the ramp the octave sectors alone used to run, and
+            // short for a reason the old constant did not have to answer to:
+            // one attack now reaches the CORE, and attack and release
+            // multiply. At 0.15 a thirty-second note at 120bpm (62 ms) peaks
+            // at 42% of full and a run of them reads as a dim smear; at 0.05
+            // it clears full brightness before the key is even up, and the
+            // shortest note that dims at all is faster than the instrument
+            // plays. What it buys at that length is the hard edge off a
+            // note-on, which is the whole of what it is for — the glyph
+            // pop-in the retired constant was tuned against is softened
+            // rather than erased, and erasing it is not worth what 0.15
+            // costs the staccato end.
+            attack_time: 0.05,
+            // Near enough a square law (the exponent lands at 2.05): enough
+            // that a release leaves promptly and settles instead of sliding
+            // out at one rate, and not so much that the tail is over before
+            // the ear has finished the note. The straight line is still one
+            // drag away, and is what every saved project opens on.
+            fade_shape: 0.35,
             // No idle marker: the grid lines alone carry the lattice's
             // shape where nothing is playing, leaving the node positions
             // themselves empty. (`idle_radius` rides along inert, so
@@ -1139,11 +1256,10 @@ impl Default for ViewConfig {
             legacy_highlight_extremes: None,
             // Thin rings, slit at the marked octave's boundaries.
             mark_thickness: 0.078_269_88,
-            // No wait: a fresh view answers the keys immediately, and the
-            // delay is a THRESHOLD (see `mark_delay`) — a note held for less
-            // than it wears no ring at all, which is a reading of the music
-            // to reach for rather than one to open on.
-            mark_delay: 0.0,
+            // Long enough to reject a passing sixteenth, which is what keeps
+            // a chord's release from smearing a fading ring across it — see
+            // `default_mark_delay`, the same value a blob with no key loads.
+            mark_delay: default_mark_delay(),
             pulse_marks: Pulse::Bands,
             // The sheet the rings above wear. A period well under one node's
             // spacing puts several of them across every ring, so this reads as

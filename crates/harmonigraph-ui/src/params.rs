@@ -12,7 +12,7 @@
 //! and the seam that edits it together, which is how every call site already
 //! reads.
 
-pub use harmonigraph_take::params::{MAX_TUNING_OFFSET, ParamKey};
+pub use harmonigraph_take::params::{seconds, MAX_TUNING_OFFSET, ParamKey};
 
 
 /// Read/write access to the automatable parameters.

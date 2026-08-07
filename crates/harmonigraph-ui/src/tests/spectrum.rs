@@ -517,7 +517,8 @@ fn clearing_everything_empties_all_three_accumulations() {
         note: 60,
         kind: harmonigraph_core::NoteEventKind::Off,
     });
-    state.tracker.prune(600.0, 0.1);
+    let env = harmonigraph_core::Envelope { fade_time: 0.1, ..Default::default() };
+    state.tracker.prune(600.0, &env);
     // One analyzed column is enough; how audio becomes columns is the
     // spectrogram's own business and tested there.
     state.spectrum.history.push(harmonigraph_core::SpectrogramColumn::from_power(

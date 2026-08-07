@@ -16,6 +16,18 @@ use std::ops::RangeInclusive;
 
 use harmonigraph_core::tuning;
 
+/// How a NOTE TIME reads out: two decimals and the unit on the number.
+///
+/// One function for the three of them — the Attack and the mark Delay are
+/// view settings and the Fade is a param, so they are built by different code
+/// and would otherwise carry three copies of this literal. They are one second
+/// each and are read against each other constantly (see
+/// [`ParamKey::logarithmic`]); retuning the readout has to move all three or
+/// it makes them look like different kinds of setting again.
+pub fn seconds(v: f32) -> String {
+    format!("{v:.2} s")
+}
+
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum ParamKey {
@@ -76,7 +88,8 @@ impl ParamKey {
             ParamKey::Five => "Major third (¢)",
             ParamKey::Seven => "Harmonic seventh (¢)",
             ParamKey::Tolerance => "Tolerance (¢)",
-            ParamKey::Fade => "Fade (s)",
+            // No unit in the name: the readout carries it (see `display`).
+            ParamKey::Fade => "Fade",
             ParamKey::DarkestPitch => "Darkest pitch",
             ParamKey::BrightestPitch => "Brightest pitch",
         }
@@ -164,7 +177,13 @@ impl ParamKey {
                 tuning::SEVEN_JUST - MAX_TUNING_OFFSET..=tuning::SEVEN_JUST + MAX_TUNING_OFFSET
             }
             ParamKey::Tolerance => 0.001..=49.999,
-            ParamKey::Fade => 0.0..=100.0,
+            // A second, which is where a fade stops being a release and
+            // starts being a held image of a note that is already over: past
+            // it the lattice shows a chord the player has left, and the
+            // reading of what is DOWN goes with it. The same line the Attack
+            // and the mark Delay are drawn on, so the three note-wide times
+            // share one scale and can be read against each other.
+            ParamKey::Fade => 0.0..=1.0,
             // Both ends span the whole MIDI range so the pair reads as one
             // two-handle control (the Nodes pane's Color range); ordering is
             // kept by the range bar's min span, not by a hard 60-note split.
@@ -173,17 +192,43 @@ impl ParamKey {
         }
     }
 
+    /// Whether the bar and the host-facing range are skewed toward the low
+    /// end. Only the Tolerance is: it lives in its first hundredth, a
+    /// hundredth of a cent being a real setting and forty cents an absurd
+    /// one, so a linear bar would spend its whole travel on values nobody
+    /// picks.
+    ///
+    /// The Fade is NOT, and neither is the Attack beside it. Both run 0..1s
+    /// against the mark Delay's own linear second, and a hundredth of that —
+    /// the readout's resolution — is already a couple of pixels of travel, so
+    /// there is no crushed low end for an ease to rescue. What an ease would
+    /// cost is the three bars agreeing: they are read against each other
+    /// constantly, and a Fade whose middle is at 0.2s cannot be eyeballed
+    /// against an Attack whose middle is at 0.5s.
     pub fn logarithmic(self) -> bool {
-        matches!(
-            self,
-            ParamKey::Tolerance | ParamKey::Fade
-        )
+        matches!(self, ParamKey::Tolerance)
+    }
+
+    /// How the value READS OUT where a bare decimal would not say what it is.
+    /// `None` leaves the bar's plain formatting.
+    ///
+    /// The unit rides the NUMBER rather than the name, matching the Attack
+    /// and Delay bars either side of the Fade — a bar whose name carries the
+    /// unit and one whose readout does look like two different kinds of
+    /// setting, and these three are the same kind.
+    pub fn display(self) -> Option<fn(f32) -> String> {
+        match self {
+            ParamKey::Fade => Some(seconds),
+            _ => None,
+        }
     }
 
     /// Skew steepness for the [`logarithmic`](Self::logarithmic) params
     /// (more negative = more resolution at the low end). The plugin feeds
     /// this to nice-plug's skewed ranges; the UI's eased ValueBars only
-    /// consult `logarithmic()`. Meaningless for linear params.
+    /// consult `logarithmic()`. Meaningless for linear params, which is
+    /// every key but the Tolerance — the arm below is what keeps this
+    /// total, not a second setting.
     pub fn skew_steepness(self) -> f32 {
         match self {
             ParamKey::Tolerance => -2.5,

@@ -363,6 +363,36 @@ impl Drop for Writer {
 mod tests {
     use super::*;
 
+    /// The three note-wide times — Attack, Fade, mark Delay — are read
+    /// against each other, so the Fade has to present like the two view
+    /// settings either side of it: a linear bar, and the unit on the NUMBER
+    /// rather than in the name. Pinned because the bar itself is built from
+    /// these three answers and nothing else would notice them drifting.
+    #[test]
+    fn the_fade_bar_reads_like_the_note_times_beside_it() {
+        assert!(!ParamKey::Fade.logarithmic(), "a linear second, like Attack and Delay");
+        assert_eq!(ParamKey::Fade.label(), "Fade", "the unit is not in the name");
+        // The SCALE the other two answers are premised on, and the one thing
+        // here with a reach past the bar: this range is what the host exposes
+        // to an automation lane, so moving it re-reads every lane recorded
+        // against it. The linear travel above is only defensible while a
+        // Fade's whole range is one second — at a hundred, its usable settings
+        // really would be crushed into the bar's first percent.
+        assert_eq!(*ParamKey::Fade.range().start(), 0.0);
+        assert_eq!(
+            *ParamKey::Fade.range().end(),
+            1.0,
+            "one second, the same as the Attack and Delay bars either side",
+        );
+        let display = ParamKey::Fade.display().expect("the Fade reads out in seconds");
+        assert_eq!(display(0.1), "0.10 s");
+        assert_eq!(display(1.0), "1.00 s");
+        // The Tolerance is the one key that still wants its low end stretched,
+        // and it carries no unit suffix — the two answers are independent.
+        assert!(ParamKey::Tolerance.logarithmic());
+        assert!(ParamKey::Tolerance.display().is_none());
+    }
+
     /// Where the render starts is anchored to this, so it has to answer for a
     /// take with no notes: a passage carrying sound but no MIDI. Arming writes
     /// a full parameter snapshot regardless, so the params are what keep the

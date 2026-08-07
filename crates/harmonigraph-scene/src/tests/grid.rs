@@ -77,7 +77,7 @@ fn grid_view() -> ViewConfig {
         extent_threes: 3,
         extent_fives: 3,
         extent_sevens: 1,
-        ..ViewConfig::default()
+        ..plain_view()
     }
 }
 
@@ -220,7 +220,7 @@ fn a_chain_stops_at_the_first_sounding_note_under_it() {
         extent_threes: 0,
         extent_fives: 0,
         extent_sevens: 2,
-        ..ViewConfig::default()
+        ..plain_view()
     };
     // 12-TET default: a sevens step is 1000¢, so (0,0,1) is MIDI 70's
     // pitch class and (0,0,2) is MIDI 68's. The home node is C.
@@ -279,7 +279,7 @@ fn a_lit_chain_keeps_the_lattices_own_color() {
         extent_threes: 0,
         extent_fives: 0,
         extent_sevens: 1,
-        ..ViewConfig::default()
+        ..plain_view()
     };
     let mut tracker = NoteTracker::new();
     tracker.handle_event(NoteEvent {

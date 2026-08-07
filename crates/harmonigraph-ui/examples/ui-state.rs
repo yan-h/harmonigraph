@@ -66,6 +66,13 @@ fn main() -> Result<(), String> {
             // frame lands somewhere in that wait or past it, which is the
             // whole of what the key does to one.
             "mark_delay" => view.mark_delay = num()?,
+            // The note envelope's two view-side halves. Both matter to a
+            // still frame for the same reason the delay does: it lands at
+            // some point along a note's arrival or its departure, and these
+            // are what decide how far along that point is. (The third half,
+            // the Fade, is a param rather than a view key.)
+            "attack_time" => view.attack_time = num()?,
+            "fade_shape" => view.fade_shape = num()?,
             // Which shimmer sweeps the mark rings, and how that sheet is
             // sized, paced, lit and shaped. A still frame of a moving look is a
             // real question — the pattern itself is what the four `shimmer_*`

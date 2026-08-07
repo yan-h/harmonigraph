@@ -311,11 +311,11 @@ fn octaves_fade_independently() {
 }
 
 #[test]
-fn one_fade_time_carries_the_body_but_the_marks_snap_off() {
-    // The core and the octave glyphs ride the single Fade param: release a
-    // two-note chord and half a fade later both are half-way down. The
-    // melody/bass rings do NOT ride it — they come off with the key, so a
-    // released note wears no mark at all even mid-fade.
+fn one_fade_time_carries_every_layer_of_the_node() {
+    // The core, the octave glyphs and the melody/bass rings all ride the
+    // single Fade param: release a two-note chord and half a fade later every
+    // one of them is half-way down. One time for the whole node, so a release
+    // reads as one gesture rather than as layers leaving at their own pace.
     let mut tracker = NoteTracker::new();
     for note in [60u8, 67] {
         tracker.handle_event(NoteEvent {
@@ -329,12 +329,12 @@ fn one_fade_time_carries_the_body_but_the_marks_snap_off() {
         tracker.handle_event(NoteEvent { time: 0.0, channel: 0, note, kind: NoteEventKind::Off });
     }
     let frame = FrameParams { fade_time: 2.0, ..FrameParams::default() };
-    tracker.prune(1.0, frame.fade_time);
     let view = ViewConfig {
         mark_melody: true,
         mark_bass: true,
-        ..ViewConfig::default()
+        ..plain_view()
     };
+    tracker.prune(1.0, &view.envelope(&frame));
     let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, 1.0);
 
     let half = |what: &str, v: f32| {
@@ -344,58 +344,102 @@ fn one_fade_time_carries_the_body_but_the_marks_snap_off() {
     let origin = origin_node(&scene);
     half("the core", origin.activation);
     half("the octave glyph", origin.octaves[MIDDLE_C_SLOT]);
-    // ...but no ring survives the release, on any node.
-    assert!(
-        scene.nodes.iter().all(|n| n.melody_slots == 0 && n.bass_slots == 0),
-        "released notes wear no melody/bass mark",
-    );
-    assert!(
-        scene.nodes.iter().all(|n| n.melody_level == 0.0 && n.bass_level == 0.0),
-        "and no mark level lingers",
-    );
+    // ...and so is the bass ring it left with. C4 was the bottom of the
+    // chord, so its slot is still marked, at the same level as the glyph
+    // under it rather than at nothing or at full.
+    assert_eq!(origin.bass_slots, 1 << MIDDLE_C_SLOT, "C4 left wearing the bass end");
+    half("the bass ring", origin.bass_level);
+    assert_eq!(origin.bass_level, origin.octaves[MIDDLE_C_SLOT], "ring and sector leave as one");
+    assert_eq!(origin.melody_slots, 0, "C4 was never the melody");
+    // And the melody ring is on G's node, on the same envelope. G also leaves
+    // wearing the BASS: C4's key came up first, which left G the lone note
+    // down and so both ends of a one-note chord for the instant before its
+    // own key followed. A momentary crowning, and what the Delay exists to
+    // filter — see `the_delay_is_what_keeps_a_released_chord_from_smearing_rings`.
+    let melody = node_at(&scene, LatticePos::new(1, 0, 0));
+    assert_eq!(melody.melody_slots, 1 << MIDDLE_C_SLOT, "G4 left wearing the melody end");
+    half("the melody ring", melody.melody_level);
 }
 
 #[test]
-fn releasing_a_chord_leaves_no_fading_marks() {
-    // The reported bug: releasing a held chord smeared a fading melody/bass
-    // ring across most pitch classes, because each key-lift was measured
-    // against the notes still down and so kept re-crowning a new momentary
-    // extreme. Now a released note wears no mark at all, so whatever order a
-    // chord's keys come up in, nothing is left fading behind them.
+fn the_delay_is_what_keeps_a_released_chord_from_smearing_rings() {
+    // The bug this guards was a chord release smearing a melody/bass ring
+    // across most pitch classes: lifting the keys one at a time re-crowns a
+    // new momentary extreme on every lift, and each of those crownings rings.
+    //
+    // Rings are no longer held-only — they fade out with their note — so what
+    // stops the smear is no longer the release itself but the DELAY: a note
+    // that wore an end for a millisecond never cleared the threshold while it
+    // was down, and the threshold is answered there, so its ramp running on
+    // afterwards carries nothing. This pins both halves, because at a delay of
+    // 0 there is no threshold and every momentary crowning does ring.
     let chord = [60u8, 62, 64, 65, 67]; // C D E F G
-    let mut tracker = NoteTracker::new();
-    for &note in &chord {
-        tracker.handle_event(NoteEvent {
-            time: 0.0,
-            channel: 0,
-            note,
-            kind: NoteEventKind::On { velocity: 1.0 },
-        });
-    }
-    // Lift the keys one at a time, top-down, each a hair apart.
-    for (i, &note) in [67u8, 65, 64, 62, 60].iter().enumerate() {
-        tracker.handle_event(NoteEvent {
-            time: 0.001 * (i as f64 + 1.0),
-            channel: 0,
-            note,
-            kind: NoteEventKind::Off,
-        });
-    }
-    // Mid-fade, well within one fade time.
-    let frame = FrameParams { fade_time: 2.0, ..FrameParams::default() };
-    let view = ViewConfig {
-        mark_melody: true,
-        mark_bass: true,
-        ..ViewConfig::default()
+    let ring_count = |mark_delay: f32| {
+        let mut tracker = NoteTracker::new();
+        for &note in &chord {
+            tracker.handle_event(NoteEvent {
+                time: 0.0,
+                channel: 0,
+                note,
+                kind: NoteEventKind::On { velocity: 1.0 },
+            });
+        }
+        // Held for a second — long enough that the chord's REAL ends clear
+        // any delay worth setting — and then lifted one key at a time,
+        // top-down, each a hair apart. Only the notes crowned by those lifts
+        // wore an end briefly.
+        for (i, &note) in [67u8, 65, 64, 62, 60].iter().enumerate() {
+            tracker.handle_event(NoteEvent {
+                time: 1.0 + 0.001 * (i as f64 + 1.0),
+                channel: 0,
+                note,
+                kind: NoteEventKind::Off,
+            });
+        }
+        // Mid-fade, well within one fade time.
+        let frame = FrameParams { fade_time: 2.0, ..FrameParams::default() };
+        let view = ViewConfig {
+            mark_melody: true,
+            mark_bass: true,
+            mark_delay,
+            ..plain_view()
+        };
+        let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, 1.5);
+        assert!(scene.nodes.iter().any(|n| n.activation > 0.0), "discs still fading");
+        // Distinct PITCH CLASSES wearing a ring, not nodes: one class lights
+        // every lattice position that spells it, so counting nodes counts the
+        // window's shape rather than how many notes are ringing.
+        let mut ringing: Vec<i32> = scene
+            .nodes
+            .iter()
+            .filter(|n| n.melody_level > 0.0 || n.bass_level > 0.0)
+            .map(|n| n.cents.round() as i32)
+            .collect();
+        ringing.sort_unstable();
+        ringing.dedup();
+        ringing.len()
     };
-    let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, 0.5);
-    // The discs are still fading (the notes remain visible)...
-    assert!(scene.nodes.iter().any(|n| n.activation > 0.0), "discs still fading");
-    // ...but not one melody or bass ring survives the release.
-    for n in &scene.nodes {
-        assert_eq!(n.melody_slots, 0, "no melody ring on a released chord");
-        assert_eq!(n.bass_slots, 0, "no bass ring on a released chord");
-    }
+
+    // A delay longer than the key-lifts are apart: only the two notes that
+    // really wore an end — the top and the bottom of the chord as played —
+    // are left ringing their way out. The three that were the melody for a
+    // millisecond each never earned a ring and do not grow one while fading.
+    assert_eq!(ring_count(0.2), 2, "a delay leaves only the ends that were really worn");
+
+    // And with no delay there is no threshold to apply: every crowning rings,
+    // including the momentary ones, and each leaves on its own note's fade.
+    // Recorded rather than endorsed — this is what the Delay bar buys off.
+    assert_eq!(ring_count(0.0), 5, "at delay 0 every momentary extreme rings");
+
+    // Which is why 0 is not what either door opens on. The bar can be dragged
+    // there deliberately; what a fresh view and a blob with no key load is a
+    // wait that rejects these lifts, so the smear is off by default rather
+    // than one setting away from being on.
+    assert_eq!(
+        ring_count(ViewConfig::default().mark_delay),
+        2,
+        "the default wait is what keeps the smear off out of the box",
+    );
 }
 
 #[test]
@@ -441,7 +485,7 @@ fn channel_14_voices_render_outlined() {
     let scene = scene_of(
         &tracker,
         &Tuning::default(),
-        &ViewConfig::default(),
+        &plain_view(),
         &FrameParams::default(),
         0.0,
     );
@@ -458,8 +502,8 @@ fn held_note_lights_matching_nodes() {
         kind: NoteEventKind::On { velocity: 1.0 },
     });
     let tuning = Tuning::default(); // 12-TET: origin node matches C exactly
-    // Sampled after ATTACK_TIME: the octave indicator eases in,
-    // so at the note-on instant itself it is still at zero.
+    // Sampled past the view's attack: every layer of a node eases in, so at
+    // the note-on instant itself the whole thing is still at zero.
     let scene = scene_of(
         &tracker,
         &tuning,
