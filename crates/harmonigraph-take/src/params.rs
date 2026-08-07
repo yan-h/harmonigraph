@@ -76,7 +76,8 @@ impl ParamKey {
             ParamKey::Five => "Major third (¢)",
             ParamKey::Seven => "Harmonic seventh (¢)",
             ParamKey::Tolerance => "Tolerance (¢)",
-            ParamKey::Fade => "Fade (s)",
+            // No unit in the name: the readout carries it (see `display`).
+            ParamKey::Fade => "Fade",
             ParamKey::DarkestPitch => "Darkest pitch",
             ParamKey::BrightestPitch => "Brightest pitch",
         }
@@ -179,17 +180,43 @@ impl ParamKey {
         }
     }
 
+    /// Whether the bar and the host-facing range are skewed toward the low
+    /// end. Only the Tolerance is: it lives in its first hundredth, a
+    /// hundredth of a cent being a real setting and forty cents an absurd
+    /// one, so a linear bar would spend its whole travel on values nobody
+    /// picks.
+    ///
+    /// The Fade is NOT, and neither is the Attack beside it. Both run 0..1s
+    /// against the mark Delay's own linear second, and a hundredth of that —
+    /// the readout's resolution — is already a couple of pixels of travel, so
+    /// there is no crushed low end for an ease to rescue. What an ease would
+    /// cost is the three bars agreeing: they are read against each other
+    /// constantly, and a Fade whose middle is at 0.2s cannot be eyeballed
+    /// against an Attack whose middle is at 0.5s.
     pub fn logarithmic(self) -> bool {
-        matches!(
-            self,
-            ParamKey::Tolerance | ParamKey::Fade
-        )
+        matches!(self, ParamKey::Tolerance)
+    }
+
+    /// How the value READS OUT where a bare decimal would not say what it is.
+    /// `None` leaves the bar's plain formatting.
+    ///
+    /// The unit rides the NUMBER rather than the name, matching the Attack
+    /// and Delay bars either side of the Fade — a bar whose name carries the
+    /// unit and one whose readout does look like two different kinds of
+    /// setting, and these three are the same kind.
+    pub fn display(self) -> Option<fn(f32) -> String> {
+        match self {
+            ParamKey::Fade => Some(|v| format!("{v:.2} s")),
+            _ => None,
+        }
     }
 
     /// Skew steepness for the [`logarithmic`](Self::logarithmic) params
     /// (more negative = more resolution at the low end). The plugin feeds
     /// this to nice-plug's skewed ranges; the UI's eased ValueBars only
-    /// consult `logarithmic()`. Meaningless for linear params.
+    /// consult `logarithmic()`. Meaningless for linear params, which is
+    /// every key but the Tolerance — the arm below is what keeps this
+    /// total, not a second setting.
     pub fn skew_steepness(self) -> f32 {
         match self {
             ParamKey::Tolerance => -2.5,

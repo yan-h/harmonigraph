@@ -502,8 +502,11 @@ fn every_layer_section(
     // stored apart (`ViewConfig::envelope` is where they are put back
     // together); the pane is where they have to LOOK like the one setting
     // they are, which is why the split does not reorder them.
+    // Two decimals and a linear travel, the same as the Fade under it and the
+    // mark Delay above: the three are one second each and are read against
+    // each other, so they are formatted and scaled alike.
     ValueBar::new(&mut view.attack_time, 0.0..=ATTACK_TIME_MAX, "Attack")
-        .display(|v| format!("{v:.3} s"))
+        .display(|v| format!("{v:.2} s"))
         .show(ui)
         .on_hover_text(
             "Seconds a note takes to reach full brightness — the core, its \

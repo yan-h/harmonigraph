@@ -283,10 +283,13 @@ pub(super) fn param_bar(
     key: ParamKey,
 ) -> egui::Response {
     let mut value = params.get(key);
-    let response = ValueBar::new(&mut value, key.range(), key.label())
+    let mut bar = ValueBar::new(&mut value, key.range(), key.label())
         .eased(key.logarithmic())
-        .decimals(2)
-        .show(ui);
+        .decimals(2);
+    if let Some(display) = key.display() {
+        bar = bar.display(display);
+    }
+    let response = bar.show(ui);
     // Bracket drags so the host records one automation gesture per drag;
     // one-shot changes (typed values) go through set() alone.
     if response.drag_started() {
