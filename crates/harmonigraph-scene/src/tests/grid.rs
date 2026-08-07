@@ -86,7 +86,7 @@ fn grid_of(view: &ViewConfig) -> Vec<EdgeInstance> {
 }
 
 fn grid_of_with(view: &ViewConfig, tracker: &NoteTracker) -> Vec<EdgeInstance> {
-    scene_of(tracker, &Tuning::default(), view, &FrameParams::default(), 0.0).grid
+    scene_of(tracker, &Tuning::default(), view, &plain_frame(), 0.0).grid
 }
 
 #[test]
@@ -235,7 +235,7 @@ fn a_chain_stops_at_the_first_sounding_note_under_it() {
             });
         }
         let scene =
-            scene_of(&tracker, &Tuning::default(), &view, &FrameParams::default(), 0.0);
+            scene_of(&tracker, &Tuning::default(), &view, &plain_frame(), 0.0);
         // The two links of the upward column, low end first.
         let mut links: Vec<&EdgeInstance> = scene
             .grid
@@ -289,7 +289,7 @@ fn a_lit_chain_keeps_the_lattices_own_color() {
         kind: NoteEventKind::On { velocity: 1.0 },
     });
     let scene =
-        scene_of(&tracker, &Tuning::default(), &view, &FrameParams::default(), 0.0);
+        scene_of(&tracker, &Tuning::default(), &view, &plain_frame(), 0.0);
     let lit: Vec<&EdgeInstance> = scene
         .grid
         .iter()

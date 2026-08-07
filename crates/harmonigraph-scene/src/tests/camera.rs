@@ -171,7 +171,7 @@ fn idle_off_sheet_nodes_are_not_pickable() {
         &NoteTracker::new(),
         &tuning,
         &view,
-        &FrameParams::default(),
+        &plain_frame(),
         0.0,
     );
     let off = *idle
@@ -200,7 +200,7 @@ fn idle_off_sheet_nodes_are_not_pickable() {
         note,
         kind: NoteEventKind::On { velocity: 1.0 },
     });
-    let lit = scene_of(&tracker, &tuning, &view, &FrameParams::default(), 0.0);
+    let lit = scene_of(&tracker, &tuning, &view, &plain_frame(), 0.0);
     let lit_off = lit
         .nodes
         .iter()

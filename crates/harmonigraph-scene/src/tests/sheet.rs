@@ -64,7 +64,7 @@ fn off_sheet_grid_appears_only_where_the_music_reaches() {
         kind: NoteEventKind::On { velocity: 1.0 },
     });
     let scene =
-        scene_of(&tracker, &Tuning::default(), &view, &FrameParams::default(), 0.0);
+        scene_of(&tracker, &Tuning::default(), &view, &plain_frame(), 0.0);
     let column_links: Vec<&EdgeInstance> = scene
         .grid
         .iter()
@@ -254,7 +254,7 @@ fn every_sounding_node_clears_what_is_behind_it_the_home_sheet_included() {
     // — the home sheet's goes ahead of the grid, see the renderer — but
     // that is not this layer's business.
     let view = ViewConfig { extent_sevens: 1, sevens_gutter: 0.2, ..plain_view() };
-    let scene = scene_of(&held(60), &Tuning::default(), &view, &FrameParams::default(), 0.0);
+    let scene = scene_of(&held(60), &Tuning::default(), &view, &plain_frame(), 0.0);
 
     // C sounds, so every node whose pitch class is C lights — on the home
     // sheet and off it. All of them clear; the silent ones do not.
@@ -285,7 +285,7 @@ fn a_flat_lattice_still_clears_its_grid() {
     // Gating it on the extent would make the look reachable only by growing
     // depth the view doesn't want.
     let view = ViewConfig { extent_sevens: 0, sevens_gutter: 0.2, ..plain_view() };
-    let scene = scene_of(&held(60), &Tuning::default(), &view, &FrameParams::default(), 0.0);
+    let scene = scene_of(&held(60), &Tuning::default(), &view, &plain_frame(), 0.0);
     let mut lit = 0;
     for node in &scene.nodes {
         if node.activation > 0.0 {

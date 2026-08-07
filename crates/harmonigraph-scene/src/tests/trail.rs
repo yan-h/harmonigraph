@@ -99,7 +99,7 @@ fn a_memory_never_touches_any_layer_that_means_is_sounding() {
 fn tint_puts_the_remembered_color_on_a_silent_node_only() {
     let mut tracker = NoteTracker::new();
     play_and_forget(&mut tracker, 60, 0.0, 1.0);
-    let frame = FrameParams::default();
+    let frame = plain_frame();
     let tuning = Tuning::default();
 
     // Silent and visited: `color` carries the remembered note's color for

@@ -14,25 +14,36 @@ pub(super) fn scene_of(
     derive_scene(tracker, tuning, view, frame, Camera::default(), None, now)
 }
 
-/// [`ViewConfig::default`] with the note envelope pinned flat: no attack, so
-/// a note is fully lit on the frame it sounds, a straight-line fade, so half a
-/// fade time in reads half gone, and no mark Delay, so a ring is part of that
-/// same instant arrival rather than a layer that answers later.
+/// [`ViewConfig::default`] with the shape pinned flat (straight-line fade, so
+/// half a fade time in reads half gone) and no mark Delay, so a ring is part
+/// of whatever arrival its note gets rather than a layer that answers later.
 ///
-/// The suites that spread this are about what a SOUNDING note draws — the
-/// gutter it clears, the grid it cuts, the outline its channel gives it, the
-/// end it marks, what is left of it mid-release — and they say so by sampling
-/// at time 0 and by naming levels in fractions. Under the default view's
-/// envelope neither holds: time 0 is the one instant a note is guaranteed not
-/// to be drawn yet, and a curved fade is not half gone at half way.
+/// The duration itself — the shared Fade param that now drives both arrival
+/// and release — is a [`FrameParams`] field and out of this fixture's reach;
+/// pair this with [`plain_frame`] for the old "fully lit the frame it
+/// sounds" flatness, or with a duration of the caller's own choosing where
+/// only the shape and the delay need pinning.
+pub(super) fn plain_view() -> ViewConfig {
+    ViewConfig { fade_shape: 0.0, mark_delay: 0.0, ..ViewConfig::default() }
+}
+
+/// [`FrameParams::default`] with the Fade duration pinned to 0: both the
+/// arrival and the release become a STEP rather than a ramp, so a note is
+/// fully lit on the frame it sounds and cut instantly on release.
+///
+/// The suites that pair this with [`plain_view`] are about what a SOUNDING
+/// note draws — the gutter it clears, the grid it cuts, the outline its
+/// channel gives it, the end it marks — and they say so by sampling at time 0
+/// and by naming levels in whole numbers. Under any nonzero duration neither
+/// holds: time 0 is the one instant a note is guaranteed not to be drawn yet.
 ///
 /// Pinning it keeps each of them measuring its own subject instead of the
-/// envelope, and keeps them from turning red the day the default envelope is
-/// retuned — which is a look, and looks move. The envelope is tested where it
-/// lives: the curve in `harmonigraph_core::notes`, and its reach into these
-/// layers in `a_fresh_mark_eases_in_with_the_octave_it_links_to`.
-pub(super) fn plain_view() -> ViewConfig {
-    ViewConfig { attack_time: 0.0, fade_shape: 0.0, mark_delay: 0.0, ..ViewConfig::default() }
+/// envelope, and keeps them from turning red the day the default duration is
+/// retuned — which is a look, and looks move. The envelope's own curve is
+/// tested where it lives: `harmonigraph_core::notes`, and its reach into
+/// these layers in `a_fresh_mark_eases_in_with_the_octave_it_links_to`.
+pub(super) fn plain_frame() -> FrameParams {
+    FrameParams { fade_time: 0.0, ..FrameParams::default() }
 }
 
 pub(super) fn origin_node(scene: &Scene) -> &NodeInstance {

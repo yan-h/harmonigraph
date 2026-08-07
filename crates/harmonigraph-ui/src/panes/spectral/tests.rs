@@ -777,6 +777,10 @@ fn an_off_lattice_note_gets_a_band_down_the_spectrum() {
         state.spectrum_config.orientation = SpectralOrientation::Left;
         state.spectrum_config.low_midi = 55.0;
         state.spectrum_config.high_midi = 67.0;
+        // No arrival ramp: the band's strength is read off `voice.activation`,
+        // and this test's exact-color match only fires at a strength of
+        // exactly 1.0.
+        state.frame_params.fade_time = 0.0;
         state.tracker.handle_event(NoteEvent {
             time: 0.0,
             channel: 0,

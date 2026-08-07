@@ -282,12 +282,17 @@ fn the_table_tracks_the_curve_it_samples() {
 fn octaves_fade_independently() {
     // Hold C4, tap-and-release C5: the C5 indicator must decay on
     // its own envelope even though the node stays fully active.
+    //
+    // C4 struck long before the window this test samples: attack and release
+    // now share the one Fade duration, so a note sampled soon after its own
+    // note-on would still be climbing, and "the node stays fully active"
+    // would be measuring that ramp rather than the claim this test is about.
     let mut tracker = NoteTracker::new();
-    for (note, kind) in [
-        (60, NoteEventKind::On { velocity: 1.0 }), // C4 held
-        (72, NoteEventKind::On { velocity: 1.0 }), // C5 tapped...
+    for (note, time, kind) in [
+        (60, -10.0, NoteEventKind::On { velocity: 1.0 }), // C4 held
+        (72, 0.0, NoteEventKind::On { velocity: 1.0 }),   // C5 tapped...
     ] {
-        tracker.handle_event(NoteEvent { time: 0.0, channel: 0, note, kind });
+        tracker.handle_event(NoteEvent { time, channel: 0, note, kind });
     }
     tracker.handle_event(NoteEvent {
         time: 0.1,
@@ -316,10 +321,15 @@ fn one_fade_time_carries_every_layer_of_the_node() {
     // single Fade param: release a two-note chord and half a fade later every
     // one of them is half-way down. One time for the whole node, so a release
     // reads as one gesture rather than as layers leaving at their own pace.
+    //
+    // Struck long before the release under test: attack and release now share
+    // this one duration, so a chord released the instant it sounds would
+    // still be climbing its own arrival, and "half-way down" would be
+    // measuring that ramp as well as the release this test is about.
     let mut tracker = NoteTracker::new();
     for note in [60u8, 67] {
         tracker.handle_event(NoteEvent {
-            time: 0.0,
+            time: -100.0,
             channel: 0,
             note,
             kind: NoteEventKind::On { velocity: 1.0 },
@@ -486,7 +496,7 @@ fn channel_14_voices_render_outlined() {
         &tracker,
         &Tuning::default(),
         &plain_view(),
-        &FrameParams::default(),
+        &plain_frame(),
         0.0,
     );
     assert!(origin_node(&scene).outlined);
@@ -502,13 +512,14 @@ fn held_note_lights_matching_nodes() {
         kind: NoteEventKind::On { velocity: 1.0 },
     });
     let tuning = Tuning::default(); // 12-TET: origin node matches C exactly
-    // Sampled past the view's attack: every layer of a node eases in, so at
-    // the note-on instant itself the whole thing is still at zero.
+    // This is about which nodes a held note lights, not about the envelope's
+    // own timing, so a flat Fade duration keeps it lit at full without
+    // reaching into a separate bar to say so.
     let scene = scene_of(
         &tracker,
         &tuning,
         &ViewConfig::default(),
-        &FrameParams::default(),
+        &plain_frame(),
         0.5,
     );
     let origin = origin_node(&scene);
@@ -540,7 +551,7 @@ fn a_note_outside_the_ring_lights_the_outermost_indicator() {
             note,
             kind: NoteEventKind::On { velocity: 1.0 },
         });
-        let scene = scene_of(&tracker, &Tuning::default(), &view, &FrameParams::default(), 0.5);
+        let scene = scene_of(&tracker, &Tuning::default(), &view, &plain_frame(), 0.5);
         let octaves = origin_node(&scene).octaves;
         let slots: Vec<usize> = (0..OCTAVE_SLOTS).filter(|&s| octaves[s] > 0.0).collect();
         assert_eq!(slots.len(), 1, "one octave sounds, got slots {slots:?}");
@@ -569,7 +580,7 @@ fn a_note_outside_the_ring_lights_the_outermost_indicator() {
         note: 96,
         kind: NoteEventKind::On { velocity: 1.0 },
     });
-    let scene = scene_of(&tracker, &Tuning::default(), &wide, &FrameParams::default(), 0.5);
+    let scene = scene_of(&tracker, &Tuning::default(), &wide, &plain_frame(), 0.5);
     assert_eq!(
         origin_node(&scene).octaves[MIDDLE_C_SLOT + 3],
         1.0,
@@ -596,7 +607,7 @@ fn a_ring_reaching_under_the_packing_folds_onto_a_slot_it_has() {
     // about the packing's own edge, which a fringe would move.
     let view =
         ViewConfig { octave_count: 5, octave_center: 12.0, octave_extras: 0, ..ViewConfig::default() };
-    let scene = scene_of(&held(0), &tuning, &view, &FrameParams::default(), 0.5);
+    let scene = scene_of(&held(0), &tuning, &view, &plain_frame(), 0.5);
     let node_cents = tuning.pitch_class(LatticePos::ORIGIN).to_cents();
     assert!(node_cents > 1190.0, "the origin must sit just under the wrap, got {node_cents}");
     assert_eq!(

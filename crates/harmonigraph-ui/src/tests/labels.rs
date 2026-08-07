@@ -458,10 +458,10 @@ fn lattice_labels_at(label_scale: f32, distance: f32, ppp: f32) -> Vec<(f32, egu
     state.view.label_scale = label_scale;
     state.camera.distance = distance;
     // No arrival ramp: the scene below is derived at time 0, which under a
-    // real attack is the one instant the note has not lit yet, and a label
-    // follows what its node is doing. This suite is about where a label is
-    // DRAWN, not when it appears.
-    state.view.attack_time = 0.0;
+    // real Fade duration is the one instant the note has not lit yet, and a
+    // label follows what its node is doing. This suite is about where a
+    // label is DRAWN, not when it appears.
+    state.frame_params.fade_time = 0.0;
     // Middle C: the origin node, which the camera looks straight at.
     state.tracker.handle_event(harmonigraph_core::NoteEvent {
         time: 0.0,
@@ -728,8 +728,8 @@ fn the_cents_readout_sits_right_under_the_note_name() {
     state.view.show_labels = true;
     state.view.show_cents = true;
     // Derived at time 0, so the note has to be lit without waiting on an
-    // attack — this is about where the readout SITS.
-    state.view.attack_time = 0.0;
+    // arrival — this is about where the readout SITS.
+    state.frame_params.fade_time = 0.0;
     // Middle C: the origin node, which the default camera looks straight at.
     state.tracker.handle_event(harmonigraph_core::NoteEvent {
         time: 0.0,
@@ -942,8 +942,8 @@ fn every_label_names_its_own_node_in_the_panes_own_space() {
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
     state.view.show_labels = true;
     // Derived at time 0, so the notes have to be lit without waiting on an
-    // attack — this is about which name lands on which node.
-    state.view.attack_time = 0.0;
+    // arrival — this is about which name lands on which node.
+    state.frame_params.fade_time = 0.0;
     // Two notes a third apart, so there are two names to tell apart and two
     // nodes to confuse them between.
     for note in [60, 64] {

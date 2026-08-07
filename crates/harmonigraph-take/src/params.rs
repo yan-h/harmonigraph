@@ -18,12 +18,12 @@ use harmonigraph_core::tuning;
 
 /// How a NOTE TIME reads out: two decimals and the unit on the number.
 ///
-/// One function for the three of them — the Attack and the mark Delay are
-/// view settings and the Fade is a param, so they are built by different code
-/// and would otherwise carry three copies of this literal. They are one second
-/// each and are read against each other constantly (see
-/// [`ParamKey::logarithmic`]); retuning the readout has to move all three or
-/// it makes them look like different kinds of setting again.
+/// One function for the two of them — the mark Delay is a view setting and
+/// the Fade is a param, so they are built by different code and would
+/// otherwise carry two copies of this literal. They are one second each and
+/// are read against each other constantly (see [`ParamKey::logarithmic`]);
+/// retuning the readout has to move both or it makes them look like
+/// different kinds of setting again.
 pub fn seconds(v: f32) -> String {
     format!("{v:.2} s")
 }
@@ -41,10 +41,11 @@ pub enum ParamKey {
     Seven,
     /// Node matching tolerance in cents.
     Tolerance,
-    /// Seconds a released note keeps fading. ONE time for every note
-    /// indicator — the pitch class core, the octave glyphs, and the
-    /// melody/bass marks all ride it, so a release is a single gesture
-    /// across the whole node instead of layers ending at different moments.
+    /// Seconds a note takes to arrive and, once released, to fade. ONE time
+    /// for every note indicator — the pitch class core, the octave glyphs,
+    /// and the melody/bass marks all ride it — and for both directions, so an
+    /// arrival or a release is a single gesture across the whole node instead
+    /// of layers moving at different moments or rates.
     Fade,
     /// Pitch (MIDI note) shown darkest on pitch-colored channels (10-14 in
     /// MIDI convention).
@@ -147,12 +148,13 @@ impl ParamKey {
             ParamKey::Five => tuning::FIVE_12TET,
             ParamKey::Seven => tuning::SEVEN_12TET,
             ParamKey::Tolerance => 0.5,
-            // A tenth of a second: long enough that a release reads as a
-            // fade rather than a cut, short enough that the node is clear
-            // before the next one lands at playing tempo. A whole second
-            // keeps released notes up long enough to blur which of them are
-            // still sounding.
-            ParamKey::Fade => 0.1,
+            // 0.15 seconds, the one duration a note arrives on and, once
+            // released, leaves on: quick enough that an arrival reads as a
+            // snap rather than a swell and a release reads as a fade rather
+            // than a cut, with the node clear well before the next one lands
+            // at playing tempo. A whole second keeps released notes up long
+            // enough to blur which of them are still sounding.
+            ParamKey::Fade => 0.15,
             // G♯0 to F6 — a shade under six octaves, set inside the MIDI
             // range rather than at its ends (C0 to C7 is the whole of what a
             // keyboard reaches, and the octaves nobody plays spend the
@@ -180,9 +182,9 @@ impl ParamKey {
             // A second, which is where a fade stops being a release and
             // starts being a held image of a note that is already over: past
             // it the lattice shows a chord the player has left, and the
-            // reading of what is DOWN goes with it. The same line the Attack
-            // and the mark Delay are drawn on, so the three note-wide times
-            // share one scale and can be read against each other.
+            // reading of what is DOWN goes with it. The same line the mark
+            // Delay is drawn on, so the two note-wide times share one scale
+            // and can be read against each other.
             ParamKey::Fade => 0.0..=1.0,
             // Both ends span the whole MIDI range so the pair reads as one
             // two-handle control (the Nodes pane's Color range); ordering is
@@ -198,13 +200,13 @@ impl ParamKey {
     /// one, so a linear bar would spend its whole travel on values nobody
     /// picks.
     ///
-    /// The Fade is NOT, and neither is the Attack beside it. Both run 0..1s
-    /// against the mark Delay's own linear second, and a hundredth of that —
-    /// the readout's resolution — is already a couple of pixels of travel, so
-    /// there is no crushed low end for an ease to rescue. What an ease would
-    /// cost is the three bars agreeing: they are read against each other
-    /// constantly, and a Fade whose middle is at 0.2s cannot be eyeballed
-    /// against an Attack whose middle is at 0.5s.
+    /// The Fade is NOT. It runs 0..1s against the mark Delay's own linear
+    /// second, and a hundredth of that — the readout's resolution — is
+    /// already a couple of pixels of travel, so there is no crushed low end
+    /// for an ease to rescue. What an ease would cost is the two bars
+    /// agreeing: they are read against each other constantly, and a Fade
+    /// whose middle is at 0.2s cannot be eyeballed against a Delay whose
+    /// middle is at 0.5s.
     pub fn logarithmic(self) -> bool {
         matches!(self, ParamKey::Tolerance)
     }
@@ -212,10 +214,10 @@ impl ParamKey {
     /// How the value READS OUT where a bare decimal would not say what it is.
     /// `None` leaves the bar's plain formatting.
     ///
-    /// The unit rides the NUMBER rather than the name, matching the Attack
-    /// and Delay bars either side of the Fade — a bar whose name carries the
-    /// unit and one whose readout does look like two different kinds of
-    /// setting, and these three are the same kind.
+    /// The unit rides the NUMBER rather than the name, matching the Delay bar
+    /// beside the Fade — a bar whose name carries the unit and one whose
+    /// readout does look like two different kinds of setting, and these two
+    /// are the same kind.
     pub fn display(self) -> Option<fn(f32) -> String> {
         match self {
             ParamKey::Fade => Some(seconds),

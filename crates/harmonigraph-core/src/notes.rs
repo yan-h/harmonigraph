@@ -91,16 +91,15 @@ const MAX_POWER: f32 = 4.0;
 /// is what makes the pair symmetric without either end having to be written
 /// backwards (see [`Envelope::approach`]).
 ///
-/// Two DURATIONS, though, and that asymmetry is load-bearing rather than an
-/// omission — the two want the same RANGE, which is what the bars give them,
-/// and not the same value. The ends MULTIPLY: a note released mid-attack
-/// peaks at whatever its attack had reached by then, so an attack as long as
-/// the fade means anything played faster than the fade never reaches full
-/// brightness. One shared number would tie a long, deliberate release to a
-/// long, deliberate arrival, and playing into it would go DIM — the two
-/// settings are wanted at opposite ends far more often than together, a
-/// slow departure under prompt arrivals being the ordinary ask. Held apart,
-/// the shape stays global and the two times stay honest.
+/// Two DURATIONS rather than one, because the ends MULTIPLY: a note released
+/// mid-attack peaks at whatever its attack had reached by then, so an attack
+/// as long as the fade means anything played faster than the fade never
+/// reaches full brightness. `ViewConfig::envelope` — the one production
+/// caller — feeds the same host-automatable Fade value into both ends, so a
+/// chord shorter than that duration is the whole reach of the cost; a caller
+/// that wants an independently slow release under prompt arrivals is free to
+/// build an `Envelope` with different values directly, the way the tests
+/// below do.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct Envelope {
     /// Seconds a note takes to reach full brightness from its note-on.
@@ -243,11 +242,11 @@ pub struct Voice {
     /// the level it had reached rather than jumping to full or to nothing.
     ///
     /// The MOMENT and not the level, deliberately. What the ease has reached
-    /// depends on the Attack and the mark Delay, which are view settings a
-    /// drag can change mid-fade; baking one into the tracker would leave
-    /// every already-released ring answering to a setting that is no longer
-    /// on screen. The moment is a fact about the music, and the view is free
-    /// to re-read it every frame.
+    /// depends on the Fade duration and the mark Delay, either of which a
+    /// drag (or host automation) can change mid-fade; baking one into the
+    /// tracker would leave every already-released ring answering to a
+    /// setting that is no longer on screen. The moment is a fact about the
+    /// music, and the view is free to re-read it every frame.
     pub wore_high: Option<Time>,
     /// The lowest end's stamp — see [`wore_high`](Self::wore_high).
     pub wore_low: Option<Time>,
@@ -906,8 +905,8 @@ mod tests {
     /// been reached. The mark Delay is the whole reason the difference is
     /// visible: it works by handing [`Envelope::attack`] a start moment in the
     /// future, so a curve answering 1 regardless would draw every ring
-    /// straight through its own wait — and it would do it at an Attack of 0,
-    /// which is what every project saved before the bar existed loads on.
+    /// straight through its own wait — and it would do it at the Fade's own
+    /// low end, a duration of 0 being a perfectly ordinary setting.
     #[test]
     fn a_zero_length_ramp_steps_at_its_start() {
         let env = Envelope { attack_time: 0.0, fade_time: 1.0, shape: 0.0 };

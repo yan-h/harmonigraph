@@ -19,11 +19,11 @@ fn marked_scene(notes: &[u8], mark_melody: bool, mark_bass: bool) -> Scene {
         });
     }
     // The flat harness, because these read the masks at time 0: under the
-    // default view's attack and mark Delay that instant is the one moment a
-    // note is guaranteed not to be drawn yet, and a slot bit asserted over a
-    // node drawing nothing says less than it reads as saying.
+    // default view's Fade duration and mark Delay that instant is the one
+    // moment a note is guaranteed not to be drawn yet, and a slot bit
+    // asserted over a node drawing nothing says less than it reads as saying.
     let view = ViewConfig { mark_melody, mark_bass, ..plain_view() };
-    scene_of(&tracker, &Tuning::default(), &view, &FrameParams::default(), 0.0)
+    scene_of(&tracker, &Tuning::default(), &view, &plain_frame(), 0.0)
 }
 
 /// A note-on and a note-off on channel 0, for the timed sequences below.
@@ -35,15 +35,23 @@ fn off(time: f64, note: u8) -> NoteEvent {
     NoteEvent { time, channel: 0, note, kind: NoteEventKind::Off }
 }
 
-/// The attack these tests run on, pinned here rather than taken from the
-/// default view. They are about WHEN a ring arrives — the delay, the handoff,
-/// the threshold — and the ramp is only the clock they read that off. Pinning
-/// it keeps them measuring the delay rather than the day someone retunes the
-/// default attack, and lets them sample the ramp at a half and read a half
-/// (see `fade_shape` below).
+/// The Fade duration these tests run the ring's own arrival on, pinned here
+/// rather than taken from the default view. They are about WHEN a ring
+/// arrives — the delay, the handoff, the threshold — and the ramp is only the
+/// clock they read that off. Pinning it keeps them measuring the delay rather
+/// than the day someone retunes the default duration, and lets them sample
+/// the ramp at a half and read a half (see `fade_shape` below).
+///
+/// Attack and release share this one duration now, so a test that also needs
+/// a note to be RELEASED and read back mid-fade has to pick: either the
+/// release under test rides this same short duration too (most of the tests
+/// below), or the voice supplying "context" (a chord partner, a held anchor)
+/// is struck long enough before the sampled window that its own arrival is
+/// long since complete and only its release — or its steady hold — is live.
 const ATTACK: f64 = 0.15;
 
-/// Both ends marked, with the Delay bar at `mark_delay`.
+/// Both ends marked, with the Delay bar at `mark_delay`. Pair with
+/// [`attack_frame`] for the Fade duration these tests are built around.
 ///
 /// Straight-line shape on purpose: these tests sample the ramp at fractions
 /// of [`ATTACK`] and expect the same fraction back, which is a statement about
@@ -54,10 +62,15 @@ fn delayed_view(mark_delay: f32) -> ViewConfig {
         mark_melody: true,
         mark_bass: true,
         mark_delay,
-        attack_time: ATTACK as f32,
         fade_shape: 0.0,
         ..ViewConfig::default()
     }
+}
+
+/// [`FrameParams::default`] with the Fade duration at [`ATTACK`] — the one
+/// these tests read the ring's own ease off.
+fn attack_frame() -> FrameParams {
+    FrameParams { fade_time: ATTACK as f32, ..FrameParams::default() }
 }
 
 /// Union of a mask across every node, and the nodes carrying it.
@@ -171,10 +184,16 @@ fn a_handoff_inside_one_pitch_class_rings_whichever_end_is_stronger() {
     // it draws the loser's link at the winner's brightness, which says the
     // octave it points at is ringing when it is half gone — or, right after
     // the handoff, that the incoming one is at full before it has begun.
+    //
+    // Struck long before the window this test samples, so both notes' own
+    // arrival is complete by the time either ring is read — arrival and
+    // release now share the one Fade duration, so a note sampled soon after
+    // its own note-on would still be climbing and the numbers below would be
+    // measuring that ramp as well as the ring comparison this test is about.
     let mut tracker = NoteTracker::new();
     for note in [60u8, 72] {
         tracker.handle_event(NoteEvent {
-            time: 0.0,
+            time: -10.0,
             channel: 0,
             note,
             kind: NoteEventKind::On { velocity: 1.0 },
@@ -189,9 +208,9 @@ fn a_handoff_inside_one_pitch_class_rings_whichever_end_is_stronger() {
     };
 
     // Just after the key-up, the DEPARTING ring is still the stronger of the
-    // two: C5 is barely into its fade while C4's inherited ring is a third of
-    // the way up its attack. So the ring points at C5's octave, at C5's own
-    // level — it does not blink out at the key.
+    // two: C5 is barely into its fade while C4's inherited ring has only just
+    // started (it took the end at the key-up itself). So the ring points at
+    // C5's octave, at C5's own level — it does not blink out at the key.
     let just_after = at(1.05);
     assert_eq!(
         just_after.melody_slots,
@@ -204,25 +223,29 @@ fn a_handoff_inside_one_pitch_class_rings_whichever_end_is_stronger() {
         just_after.melody_level
     );
 
-    // A fade later the two have crossed: C4's ring is up and C5's is half
-    // gone, so the sector the ring links to has moved with it. The level is
-    // continuous across that switch — the two curves are equal at the moment
-    // the stronger one changes — so what the viewer sees move is the link.
-    let later = at(2.0);
-    assert_eq!(later.activation, 1.0, "the held C4 keeps the node lit throughout");
-    assert_eq!(later.melody_slots, 1 << MIDDLE_C_SLOT, "the ring has moved to the held C4");
-    assert_eq!(later.melody_level, 1.0, "at C4's level, not dimmed by the note it replaced");
-    assert_eq!(later.bass_slots, 1 << MIDDLE_C_SLOT, "only C4 was ever the bass");
-
-    // The OCTAVE layer is per slot, so it shows both notes the whole time —
-    // the released C5 fading on its own envelope under a ring that has left
-    // it. That layer is where a doubling stays legible; the ring is one ring.
+    // One full Fade after the key-up, the two curves cross exactly: C5's
+    // release and C4's own inherited ease are complementary lines on the same
+    // duration, so both read 0.5 — the octave layer (which answers to C5's
+    // real note-on, not the handoff) is at the same halfway point.
+    let crossing = at(2.0);
+    assert_eq!(crossing.activation, 1.0, "the held C4 keeps the node lit throughout");
     assert!(
-        (later.octaves[MIDDLE_C_SLOT + 1] - 0.5).abs() < 1e-5,
+        (crossing.octaves[MIDDLE_C_SLOT + 1] - 0.5).abs() < 1e-5,
         "the released C5's octave is half-faded, got {}",
-        later.octaves[MIDDLE_C_SLOT + 1]
+        crossing.octaves[MIDDLE_C_SLOT + 1]
     );
-    assert_eq!(later.octaves[MIDDLE_C_SLOT], 1.0, "the held C4's octave is at full");
+    assert_eq!(crossing.octaves[MIDDLE_C_SLOT], 1.0, "the held C4's octave is at full");
+
+    // Past the crossing, C4's ring has clearly taken over: the sector the
+    // ring links to has moved with it, continuously — nothing snaps.
+    let later = at(2.5);
+    assert_eq!(later.melody_slots, 1 << MIDDLE_C_SLOT, "the ring has moved to the held C4");
+    assert!(
+        (later.melody_level - 0.75).abs() < 1e-5,
+        "past the crossing, C4's own ease is ahead of C5's fade: got {}",
+        later.melody_level
+    );
+    assert_eq!(later.bass_slots, 1 << MIDDLE_C_SLOT, "only C4 was ever the bass");
 }
 
 /// A ring that never cleared the Delay contributes no SLOT either, not just no
@@ -239,7 +262,7 @@ fn an_end_dropped_inside_the_delay_does_not_slit_the_ring_that_replaced_it() {
     tracker.handle_event(on(0.5, 84));
     tracker.handle_event(off(0.55, 84));
     let view = delayed_view(DELAY as f32);
-    let frame = FrameParams { fade_time: 4.0, ..FrameParams::default() };
+    let frame = attack_frame();
     // C5 retook the melody at 0.55; one wait and one attack later its ring is
     // whole, and the C6 that came and went inside the wait is still in the
     // tracker's released tail.
@@ -263,7 +286,10 @@ fn an_end_dropped_inside_the_delay_does_not_slit_the_ring_that_replaced_it() {
 #[test]
 fn a_lone_notes_ring_fades_out_with_it() {
     let mut tracker = NoteTracker::new();
-    tracker.handle_event(on(0.0, 60));
+    // Struck long before the window this test samples, so its own arrival —
+    // which now runs on the same duration as the release under test — is
+    // long complete by the key-up.
+    tracker.handle_event(on(-10.0, 60));
     tracker.handle_event(off(1.0, 60));
     let view = delayed_view(0.0);
     let frame = FrameParams { fade_time: 2.0, ..FrameParams::default() };
@@ -295,7 +321,7 @@ fn a_note_shorter_than_its_attack_still_rings_level_with_its_sector() {
     // one are far apart rather than a rounding away.
     tracker.handle_event(off(ATTACK / 3.0, 60));
     let view = delayed_view(0.0);
-    let frame = FrameParams { fade_time: 2.0, ..FrameParams::default() };
+    let frame = attack_frame();
     let ring = |now: f64| {
         let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, now);
         let n = *origin_node(&scene);
@@ -308,10 +334,19 @@ fn a_note_shorter_than_its_attack_still_rings_level_with_its_sector() {
         assert_eq!(melody, octave, "at {now}s the ring and the sector it links to disagree");
         assert_eq!(melody, bass, "and a lone note's two rings leave together");
     }
-    // And it is a rising ramp being read rather than a flat one: the note goes
-    // on getting brighter after its own key-up, which is the whole reason the
-    // attack outlives the key.
-    assert!(ring(ATTACK).0 > ring(ATTACK / 3.0).0, "the ring still climbs past the key");
+    // And it is a rising ramp being read rather than a flat one just after the
+    // key: the note goes on getting brighter for a stretch after its own
+    // key-up, which is the whole reason the attack outlives it. Arrival and
+    // release now share the one duration, so the climb does not run all the
+    // way to the end of it — release_level and the ring's own ease are
+    // complementary lines on that shared clock, equal at both ends of it, so
+    // the peak sits at the midpoint (step 2) rather than at the far end
+    // (step 3, sampled at a full attack, where the two curves have already
+    // met again on their way back down).
+    assert!(
+        ring(ATTACK * 2.0 / 3.0).0 > ring(ATTACK / 3.0).0,
+        "the ring still climbs past the key",
+    );
 }
 
 /// The Delay stays a THRESHOLD now that a ring outlives its key. An end
@@ -352,8 +387,9 @@ fn a_fresh_mark_eases_in_with_the_octave_it_links_to() {
         kind: NoteEventKind::On { velocity: 1.0 },
     });
     let view = delayed_view(0.0);
+    let frame = attack_frame();
     let at = |now: f64| {
-        let scene = scene_of(&tracker, &Tuning::default(), &view, &FrameParams::default(), now);
+        let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, now);
         let n = origin_node(&scene);
         (n.melody_level, n.bass_level, n.octaves[MIDDLE_C_SLOT])
     };
@@ -380,27 +416,40 @@ fn an_inherited_end_eases_in_from_the_handoff_not_from_its_note_on() {
     // one eases in at C, and neither reading is mixed into the other by one
     // node having to carry both.
     let mut tracker = NoteTracker::new();
-    for note in [60u8, 67] {
-        tracker.handle_event(NoteEvent {
-            time: 0.0,
-            channel: 0,
-            note,
-            kind: NoteEventKind::On { velocity: 1.0 },
-        });
-    }
+    tracker.handle_event(NoteEvent {
+        time: 0.0,
+        channel: 0,
+        note: 60,
+        kind: NoteEventKind::On { velocity: 1.0 },
+    });
+    // G struck long before the window this test samples: its own arrival now
+    // shares the departure frame's duration below, and backdating it is what
+    // keeps "whole at the key-up" a claim about the HANDOFF rather than about
+    // G's own arrival still being mid-ramp.
+    tracker.handle_event(NoteEvent {
+        time: -10.0,
+        channel: 0,
+        note: 67,
+        kind: NoteEventKind::On { velocity: 1.0 },
+    });
     tracker.handle_event(NoteEvent { time: 1.0, channel: 0, note: 67, kind: NoteEventKind::Off });
     let view = delayed_view(0.0);
-    // Long enough that the released G4 is still in the tracker, which is
-    // where the handoff moment is read from.
-    let frame = FrameParams { fade_time: 2.0, ..FrameParams::default() };
+    // C's inherited ring arrives on this — the duration these tests read the
+    // ring's own ease off.
+    let melody_frame = attack_frame();
     let at = |now: f64| {
-        let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, now);
+        let scene = scene_of(&tracker, &Tuning::default(), &view, &melody_frame, now);
         let n = origin_node(&scene);
         (n.melody_level, n.bass_level)
     };
+    // G's own departure needs a duration long enough to read at a half and a
+    // whole rather than one that has finished within a hundredth of a second
+    // — a different scene from C's arrival above, which is a valid reading of
+    // one Fade knob at two different settings rather than two knobs at once.
+    let departure_frame = FrameParams { fade_time: 2.0, ..FrameParams::default() };
     // 12-TET: a fifth is one step along the threes axis.
     let leaving = |now: f64| {
-        let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, now);
+        let scene = scene_of(&tracker, &Tuning::default(), &view, &departure_frame, now);
         node_at(&scene, LatticePos::new(1, 0, 0)).melody_level
     };
 
@@ -425,8 +474,9 @@ fn a_delay_holds_the_ring_off_until_its_note_has_worn_the_end_that_long() {
     const DELAY: f64 = 0.25;
     let tracker = held(60); // C4: the origin node, in middle C's octave slot
     let view = delayed_view(DELAY as f32);
+    let frame = attack_frame();
     let at = |now: f64| {
-        let scene = scene_of(&tracker, &Tuning::default(), &view, &FrameParams::default(), now);
+        let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, now);
         let n = origin_node(&scene);
         (n.melody_level, n.bass_level, n.octaves[MIDDLE_C_SLOT])
     };
@@ -464,7 +514,7 @@ fn an_end_given_up_inside_the_delay_never_rings_at_all() {
     tracker.handle_event(on(0.05, 67)); // G4 takes the melody...
     tracker.handle_event(off(0.15, 67)); // ...and hands it back inside the wait
     let view = delayed_view(DELAY as f32);
-    let frame = FrameParams { fade_time: 2.0, ..FrameParams::default() };
+    let frame = attack_frame();
     let ring = |now: f64| {
         let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, now);
         // The loudest melody ring ANYWHERE: G4 and C4 light different nodes,
@@ -490,19 +540,18 @@ fn an_end_given_up_inside_the_delay_never_rings_at_all() {
 fn a_delay_past_the_note_fade_still_measures_from_the_handoff() {
     // The handoff moment has to outlive the note that made it. Lift the top
     // of a held chord and the note below inherits the melody AT THAT MOMENT
-    // — but the note that handed it over is pruned one Fade later, and the
-    // default fade is 0.1s, shorter than most of this bar. Read the moment
-    // off the released tail and any longer delay would lose it mid-wait and
-    // land the ring at full in a single frame, which is the pop the wait was
-    // set to avoid. The tracker's own stamp is what survives the pruning.
+    // — but the note that handed it over is pruned one Fade later, shorter
+    // than this bar. Read the moment off the released tail and any longer
+    // delay would lose it mid-wait and land the ring at full in a single
+    // frame, which is the pop the wait was set to avoid. The tracker's own
+    // stamp is what survives the pruning.
     const DELAY: f64 = 0.5;
-    const FADE: f32 = 0.1;
     let mut tracker = NoteTracker::new();
     tracker.handle_event(on(0.0, 60)); // C4 and C5 share a pitch class, so
     tracker.handle_event(on(0.0, 72)); // both land on the origin node
     tracker.handle_event(off(1.0, 72));
     let view = delayed_view(DELAY as f32);
-    let frame = FrameParams { fade_time: FADE, ..FrameParams::default() };
+    let frame = attack_frame();
     // The frame order the UI runs in: prune, then derive.
     tracker.prune(1.2, &view.envelope(&frame));
     assert_eq!(tracker.voices().count(), 1, "the C5 that handed the end over is gone");
@@ -531,9 +580,10 @@ fn a_delay_past_the_note_fade_still_measures_from_the_handoff() {
 #[test]
 fn the_mark_delay_is_clamped_to_the_bar_its_own_ends() {
     let tracker = held(60);
+    let frame = attack_frame();
     let level = |mark_delay: f32, now: f64| {
         let view = delayed_view(mark_delay);
-        let scene = scene_of(&tracker, &Tuning::default(), &view, &FrameParams::default(), now);
+        let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, now);
         origin_node(&scene).melody_level
     };
 
@@ -564,7 +614,7 @@ fn a_non_finite_delay_loads_as_no_delay_at_all() {
     view.sanitize();
     assert_eq!(view.mark_delay, 0.0, "the blob's door is where a NaN is repaired");
 
-    let scene = scene_of(&tracker, &Tuning::default(), &view, &FrameParams::default(), ATTACK);
+    let scene = scene_of(&tracker, &Tuning::default(), &view, &attack_frame(), ATTACK);
     assert_eq!(origin_node(&scene).melody_level, 1.0, "and the rings draw as they always did");
 }
 
@@ -627,7 +677,7 @@ fn marked(channel: u8, notes: &[u8], count: u32, center: f32) -> (Scene, FramePa
         mark_bass: true,
         ..plain_view()
     };
-    let frame = FrameParams::default();
+    let frame = plain_frame();
     (scene_of(&tracker, &Tuning::default(), &view, &frame, 0.0), frame)
 }
 
