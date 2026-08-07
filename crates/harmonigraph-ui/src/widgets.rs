@@ -1288,6 +1288,24 @@ enum SpectrumGrab {
 /// single-hue gradient with a brightness ramp is a real setting that the track
 /// alone would draw as nothing. The strip is also what makes a flip visible:
 /// the arc keeps its colors and its width, and only the strip reverses.
+/// The arc a double-click on the track goes home to: the one a fresh view
+/// opens with.
+///
+/// Read off [`ViewConfig::default`] for the reason [`reset_wheel`] is, and
+/// the drift it warns about is live here rather than hypothetical:
+/// `ViewConfig::default` COMPOSES its gradient — a shorter arc over a
+/// shallower brightness ramp — instead of taking `PitchGradient::default()`,
+/// which is the type's own CIELAB-converted arc. Resetting to the type's
+/// default lands the bar on a pair the plugin has never opened on, and the
+/// bar carries no text entry to dial it back with, so the shipped arc would
+/// be unrecoverable by gesture.
+///
+/// Only the two hue fields, because only those two are what the track sets.
+fn reset_arc() -> (f32, f32) {
+    let fresh = ViewConfig::default().pitch_gradient;
+    (fresh.hue_start, fresh.hue_span)
+}
+
 pub struct SpectrumBar<'a> {
     gradient: &'a mut PitchGradient,
 }
@@ -1344,9 +1362,9 @@ impl<'a> SpectrumBar<'a> {
         let grab_id = response.id.with("spectrum_grab");
         let clicked_track = response.interact_pointer_pos().is_some_and(|p| on_track(&p));
         if response.double_clicked() && clicked_track {
-            let home = PitchGradient::default();
-            self.gradient.hue_start = home.hue_start;
-            self.gradient.hue_span = home.hue_span;
+            let (hue_start, hue_span) = reset_arc();
+            self.gradient.hue_start = hue_start;
+            self.gradient.hue_span = hue_span;
             response.mark_changed();
         }
         if response.dragged() {
@@ -2201,7 +2219,11 @@ mod tests {
     /// only once it has moved, by which time it can be over the track.
     #[test]
     fn the_pitch_strip_is_a_picture_and_not_a_control() {
-        let home = PitchGradient::default();
+        // The arc the track's own reset lands on, so the control half below
+        // reads the reset rather than a constant that merely used to match it
+        // (see `a_double_click_on_the_spectrum_goes_home_to_the_arc_a_fresh_view_opens_on`).
+        let (hue_start, hue_span) = reset_arc();
+        let home = PitchGradient { hue_start, hue_span, ..ViewConfig::default().pitch_gradient };
 
         // A drag begun on the strip and run up into the track.
         let mut g = home;
@@ -2238,6 +2260,34 @@ mod tests {
             (g.hue_start, g.hue_span),
             (home.hue_start, home.hue_span),
             "a double-click on the track did not reset, so the strip half proves nothing",
+        );
+    }
+
+    /// The arc a double-click goes home to is the one a fresh view OPENS on,
+    /// which is not the gradient type's own default.
+    ///
+    /// The same argument [`reset_wheel`] is written out for, one control over:
+    /// a reset that names its own value drifts the moment the fresh look
+    /// moves, and does it silently, because nothing reads out the pair it
+    /// resets to. `ViewConfig::default` composes its gradient rather than
+    /// taking `PitchGradient::default()` — a shorter arc over a shallower
+    /// brightness ramp — and says at the field that it is free to differ.
+    /// A reset that lands on the type's default therefore puts the bar
+    /// somewhere the plugin has never opened, and the bar has no text entry
+    /// to dial it back with.
+    #[test]
+    fn a_double_click_on_the_spectrum_goes_home_to_the_arc_a_fresh_view_opens_on() {
+        let fresh = ViewConfig::default().pitch_gradient;
+        let dialled = PitchGradient { hue_start: 12.0, hue_span: 33.0, ..fresh };
+
+        let mut g = dialled;
+        let mut h = Spectrum::settled(&mut g);
+        let at = egui::pos2(h.on_strip(0.5).x, h.track().center().y);
+        h.double_click(&mut g, at);
+        assert_eq!(
+            (g.hue_start, g.hue_span),
+            (fresh.hue_start, fresh.hue_span),
+            "the reset landed on an arc no fresh view opens on",
         );
     }
 
