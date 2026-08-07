@@ -164,7 +164,13 @@ impl ParamKey {
                 tuning::SEVEN_JUST - MAX_TUNING_OFFSET..=tuning::SEVEN_JUST + MAX_TUNING_OFFSET
             }
             ParamKey::Tolerance => 0.001..=49.999,
-            ParamKey::Fade => 0.0..=100.0,
+            // A second, which is where a fade stops being a release and
+            // starts being a held image of a note that is already over: past
+            // it the lattice shows a chord the player has left, and the
+            // reading of what is DOWN goes with it. The same line the Attack
+            // and the mark Delay are drawn on, so the three note-wide times
+            // share one scale and can be read against each other.
+            ParamKey::Fade => 0.0..=1.0,
             // Both ends span the whole MIDI range so the pair reads as one
             // two-handle control (the Nodes pane's Color range); ordering is
             // kept by the range bar's min span, not by a hard 60-note split.

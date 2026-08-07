@@ -12,7 +12,7 @@ use crate::{
     MARK_DELAY_MAX, NODE_RADIUS_FACTOR, OCTAVE_SLOTS,
 };
 use glam::Vec4;
-use harmonigraph_core::{ChannelRole, HeldEnd, LatticePos, NoteTracker, Tuning};
+use harmonigraph_core::{ChannelRole, HeldEnd, LatticePos, NoteTracker, Time, Tuning, VoiceState};
 
 /// A melody- or bass-ring accumulator for one node: which octave slots it
 /// marks, plus the color and drawn level of the strongest marking voice seen
@@ -40,12 +40,16 @@ impl Mark {
 /// the caller asked for them — either is `None` when that end isn't being
 /// marked or nothing is held.
 ///
-/// Held only, which is the tracker's own answer ([`HeldEnd`]): the
-/// melody/bass rings live on the notes actually down. A released voice is no
-/// longer part of the chord and wears no mark at all — its ring comes off the
-/// instant the key does, even as its disc fades out (see [`marks`]). This is
-/// what keeps a chord's release from smearing a fading melody/bass ring
-/// across every note as the keys lift one by one.
+/// Held only, which is the tracker's own answer ([`HeldEnd`]): these are the
+/// LIVE ends, the notes actually down, and a released voice is never one of
+/// them however brightly its ring is still drawn. What a released voice wears
+/// is the stamp it left with
+/// ([`Voice::wore_high`](harmonigraph_core::Voice::wore_high)), read in
+/// [`marks`] — a ring on its way out, not a claim on the end.
+///
+/// The two must not be conflated: a released voice allowed back in here would
+/// keep the end from the note that replaced it, and the incoming ring would
+/// have nothing to ease from.
 pub(crate) fn held_extremes(
     tracker: &NoteTracker,
     mark_melody: bool,
@@ -57,23 +61,38 @@ pub(crate) fn held_extremes(
     )
 }
 
-/// Which ends `voice` currently wears, as `(melody, bass)`. Only a HELD
-/// voice wears an end — the melody/bass rings live on the notes actually
-/// down. A released voice wears neither: its ring comes off the instant the
-/// key does, even though its disc keeps fading. Both can be true at once —
-/// a lone held note is its own melody and bass.
+/// Which ends `voice` wears and WHEN it took each, as `(melody, bass)` —
+/// `None` where it wears that end not at all. Both can be set at once: a lone
+/// note is its own melody and bass.
+///
+/// A held voice wears the live end. A released one wears the stamp it left
+/// the held set with, so its ring fades out with the note instead of snapping
+/// off at the key — which is the same envelope every other layer of the node
+/// leaves on, and the reason a handoff reads as one ring crossing to another
+/// rather than as one vanishing and a second appearing.
+///
+/// The released stamps are gated on the same two flags here that
+/// [`held_extremes`] applies to the live ends. They have to be: a stamp is
+/// left whatever the view says, so a ring turned off mid-fade would otherwise
+/// go on drawing until the note it belongs to is pruned.
 fn marks(
     voice: &harmonigraph_core::Voice,
     live: (Option<HeldEnd>, Option<HeldEnd>),
-) -> (bool, bool) {
+    mark_melody: bool,
+    mark_bass: bool,
+) -> (Option<Time>, Option<Time>) {
     match voice.state {
-        // `live` is already filtered by `which` (see held_extremes).
+        // `live` is already filtered by those same flags (see held_extremes).
         harmonigraph_core::VoiceState::Held => {
             let key = (voice.channel, voice.note);
-            let wears = |end: Option<HeldEnd>| end.is_some_and(|end| end.key == key);
+            let wears =
+                |end: Option<HeldEnd>| end.filter(|end| end.key == key).map(|end| end.since);
             (wears(live.0), wears(live.1))
         }
-        harmonigraph_core::VoiceState::Released { .. } => (false, false),
+        harmonigraph_core::VoiceState::Released { .. } => (
+            voice.wore_high.filter(|_| mark_melody),
+            voice.wore_low.filter(|_| mark_bass),
+        ),
     }
 }
 
@@ -96,21 +115,35 @@ pub fn derive_scene(
     let center = view.center();
     let node_idle = idle_color(view);
     let live_extremes = held_extremes(tracker, view.mark_melody, view.mark_bass);
-    // Each ring's ease-in, resolved once per frame: which note wears an end
-    // and how long it has worn it are properties of the CHORD, identical on
-    // every node the note lights.
-    //
-    // The delay simply moves the ramp's start later, so an end held for less
-    // than it never draws a ring at all — a mark is held-only, and the level
-    // is still 0 when the key comes up. That is what the setting is for: at
-    // speed the ends change hands every few frames, and a ring that eases in
-    // on each of them reads as flicker rather than as the top line.
     let mark_delay = view.mark_delay.clamp(0.0, MARK_DELAY_MAX) as f64;
     let env = view.envelope(frame);
-    let ease =
-        |end: Option<HeldEnd>| end.map_or(1.0, |end| env.attack(now, end.since + mark_delay));
-    let melody_attack = ease(live_extremes.0);
-    let bass_attack = ease(live_extremes.1);
+    // How far a ring taken at `since` has eased in, for the voice `state`.
+    //
+    // The delay simply moves the ramp's start later, so an end held for less
+    // than it never draws a ring at all. That is what the setting is for: at
+    // speed the ends change hands every few frames, and a ring easing in on
+    // each of them reads as flicker rather than as the top line.
+    //
+    // A RELEASED voice reads its ease at the moment its key came up rather
+    // than at `now`, which is what keeps that threshold a threshold. A ring
+    // fades out with its note, so its ease outlives the key — left running,
+    // an end dropped halfway through the delay would keep climbing after the
+    // release and a ring would appear on a note that never rang while it was
+    // down, which is exactly the flicker the delay exists to prevent. Frozen,
+    // a ring leaves at the level it actually reached: nothing if it never
+    // earned one.
+    //
+    // The disc does the opposite — its attack keeps climbing past the key, so
+    // a staccato note peaks after the note-off (see `Envelope::attack`). The
+    // two differ because the disc's ramp is only about smoothing an arrival,
+    // while this one is also a rule about which notes count.
+    let ease = |since: Time, state: VoiceState| {
+        let read_at = match state {
+            VoiceState::Held => now,
+            VoiceState::Released { at } => at,
+        };
+        env.attack(read_at, since + mark_delay)
+    };
     // Sanitized once, outside the node loop. Capped at 1: this axis makes
     // off-sheet nodes SMALLER, never larger, so the home sheet stays the
     // biggest thing on screen (see `ViewConfig::sevens_size`). The floor
@@ -213,12 +246,14 @@ pub fn derive_scene(
                 // every node the voice matches, exactly as its activation
                 // is, so the mark can't disagree with the lighting.
                 //
-                // The level is the strongest marking voice ON THIS NODE.
-                // Only held voices mark, so the ring eases in while its end
-                // is held and is gone the frame it is released — it never
-                // outlives the key, even as the disc keeps fading.
-                let (is_melody, is_bass) = marks(voice, live_extremes);
-                if is_melody || is_bass {
+                // The level is the strongest marking voice ON THIS NODE. A
+                // ring eases in while its end is held and fades out with the
+                // note when the key comes up, on the note's own release — so
+                // a handoff is one ring crossing to another rather than one
+                // vanishing as a second appears.
+                let (melody_since, bass_since) =
+                    marks(voice, live_extremes, view.mark_melody, view.mark_bass);
+                if melody_since.is_some() || bass_since.is_some() {
                     // The mark takes the color of the SECTOR it links back to
                     // — the pitch of that slot on this node, through the very
                     // table the shader tints the lit glyph from — so the ring
@@ -244,8 +279,8 @@ pub fn derive_scene(
                     // two. The ring eases in on the SAME ramp as that sector,
                     // from when the note took the end — which is not always
                     // its note-on, and is the tracker's own answer rather
-                    // than anything derived here (`HeldEnd`, stamped by
-                    // `NoteTracker::restamp_ends`).
+                    // than anything derived here (`HeldEnd` while the note is
+                    // down, `Voice::wore_high` once it is not).
                     let mark_color = pitch_lut_color(
                         octave_layout.slot_pitch(slot as i32, node_cents),
                         frame.darkest_pitch,
@@ -261,15 +296,19 @@ pub fn derive_scene(
                     // and a ring rising as the square of the sector it
                     // brackets is precisely the disagreement about how fast
                     // the note arrived that one shared rate exists to
-                    // prevent. A mark is held-only, so this term is 1 for the
-                    // whole of a drawn ring's life; it rides along for the
-                    // day a released voice is allowed to keep an end.
+                    // prevent.
+                    //
+                    // Per voice rather than once per frame, which the ease was
+                    // when only held notes could wear a ring: a chord has one
+                    // melody, but it can have several notes on their way out
+                    // that each wore the end when they left, and they leave
+                    // from different levels at different moments.
                     let release = voice.release_level(now, &env);
-                    if is_melody {
-                        melody.add(slot, release * melody_attack, mark_color);
+                    if let Some(since) = melody_since {
+                        melody.add(slot, release * ease(since, voice.state), mark_color);
                     }
-                    if is_bass {
-                        bass.add(slot, release * bass_attack, mark_color);
+                    if let Some(since) = bass_since {
+                        bass.add(slot, release * ease(since, voice.state), mark_color);
                     }
                 }
             }

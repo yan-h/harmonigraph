@@ -92,12 +92,15 @@ const MAX_POWER: f32 = 4.0;
 /// backwards (see [`Envelope::approach`]).
 ///
 /// Two DURATIONS, though, and that asymmetry is load-bearing rather than an
-/// omission. The two ends MULTIPLY: a note released mid-attack peaks at
-/// whatever its attack had reached by then, so an attack as long as the fade
-/// means anything played faster than the fade never reaches full brightness.
-/// The Fade runs to a hundred seconds, so one shared number would have fast
-/// playing go DIM — the exact opposite of what a long fade is reached for.
-/// Held apart, the shape stays global and the two times stay honest.
+/// omission — the two want the same RANGE, which is what the bars give them,
+/// and not the same value. The ends MULTIPLY: a note released mid-attack
+/// peaks at whatever its attack had reached by then, so an attack as long as
+/// the fade means anything played faster than the fade never reaches full
+/// brightness. One shared number would tie a long, deliberate release to a
+/// long, deliberate arrival, and playing into it would go DIM — the two
+/// settings are wanted at opposite ends far more often than together, a
+/// slow departure under prompt arrivals being the ordinary ask. Held apart,
+/// the shape stays global and the two times stay honest.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct Envelope {
     /// Seconds a note takes to reach full brightness from its note-on.
@@ -164,7 +167,21 @@ impl Envelope {
     /// the bound and silently pin the curve at its sharpest.
     fn approach(&self, elapsed: Time, duration: f32) -> f32 {
         if !duration.is_finite() || duration <= 0.0 {
-            return 1.0;
+            // No ramp to walk, so a STEP — but a step at the moment the
+            // transition starts, not one that has always been over. The
+            // difference is invisible on a note's own attack, where the clock
+            // starts at the note-on and `elapsed` is never negative, and it is
+            // the whole of the mark Delay, which works by handing this a start
+            // moment in the future ([`ViewConfig::mark_delay`]). Answering 1
+            // regardless would leave every ring drawn through its own wait,
+            // and the Delay bar inert at exactly the attack of 0 that every
+            // saved project loads on.
+            //
+            // The NaN arm is spelled out rather than left to fall through a
+            // negated comparison: a NaN clock lands on "started", which for a
+            // release is the safe direction — gone, rather than held at full
+            // where `prune` will never reach it.
+            return if elapsed >= 0.0 || elapsed.is_nan() { 1.0 } else { 0.0 };
         }
         // `f64::max` answers with the other operand against a NaN, so a
         // non-finite clock reads as "just started" rather than poisoning the
@@ -208,6 +225,26 @@ pub struct Voice {
     pub octave: i8,
     pub on_time: Time,
     pub state: VoiceState,
+    /// The moment this voice took the highest end, stamped as it LEFT the
+    /// held set, and `None` if it was not wearing that end then (or is still
+    /// held). Same for [`wore_low`](Self::wore_low) and the lowest.
+    ///
+    /// Held apart from [`HeldEnd`], which stays strictly about what is down
+    /// now, because this is the opposite question: not "who is the melody"
+    /// but "who was, on their way out". A melody/bass ring fades with its
+    /// note rather than snapping off at the key, and this is what it fades
+    /// FROM — the stamp its ease was running against, so the ring leaves at
+    /// the level it had reached rather than jumping to full or to nothing.
+    ///
+    /// The MOMENT and not the level, deliberately. What the ease has reached
+    /// depends on the Attack and the mark Delay, which are view settings a
+    /// drag can change mid-fade; baking one into the tracker would leave
+    /// every already-released ring answering to a setting that is no longer
+    /// on screen. The moment is a fact about the music, and the view is free
+    /// to re-read it every frame.
+    pub wore_high: Option<Time>,
+    /// The lowest end's stamp — see [`wore_high`](Self::wore_high).
+    pub wore_low: Option<Time>,
 }
 
 impl Voice {
@@ -221,6 +258,8 @@ impl Voice {
             octave: 0,
             on_time,
             state: VoiceState::Held,
+            wore_high: None,
+            wore_low: None,
         };
         voice.set_pitch(f32::from(note));
         voice
@@ -388,6 +427,7 @@ impl NoteTracker {
             }
             NoteEventKind::Off => {
                 if let Some(mut voice) = self.held.remove(&(event.channel, event.note)) {
+                    self.stamp_ends_worn(&mut voice);
                     voice.state = VoiceState::Released { at: event.time };
                     self.released.push(voice);
                     self.roll.note_off(event.channel, event.note, event.time);
@@ -409,6 +449,25 @@ impl NoteTracker {
         // restamped inside `all_notes_off` costs nothing. That call is for the
         // shells that reach the transport reset directly, not through here.
         self.restamp_ends(event.time);
+    }
+
+    /// Copy onto `voice`, as it leaves the held set, the stamp of each end it
+    /// was wearing — see [`Voice::wore_high`]. Call BEFORE
+    /// [`restamp_ends`](Self::restamp_ends), which is what hands the ends to
+    /// whoever is left.
+    ///
+    /// The `since >= on_time` guard is the same identity test [`took`] makes,
+    /// and it matters for the same reason: a retrigger replaces the voice on a
+    /// key the tracker already had, so an end still keyed to that key may have
+    /// been stamped for the voice BEFORE this one. Matching on the key alone
+    /// would hand this voice a ring its predecessor earned.
+    fn stamp_ends_worn(&self, voice: &mut Voice) {
+        let key = (voice.channel, voice.note);
+        let worn = |end: Option<HeldEnd>| {
+            end.filter(|e| e.key == key && e.since >= voice.on_time).map(|e| e.since)
+        };
+        voice.wore_high = worn(self.high_end);
+        voice.wore_low = worn(self.low_end);
     }
 
     /// Re-read the two ends, keeping a `since` for as long as the SAME voice
@@ -508,6 +567,7 @@ impl NoteTracker {
         // a Vec built by draining a map inherits whatever order the map
         // iterated in, and then holds it for the whole fade.
         for mut voice in std::mem::take(&mut self.held).into_values() {
+            self.stamp_ends_worn(&mut voice);
             voice.state = VoiceState::Released { at: now };
             self.released.push(voice);
         }
@@ -830,6 +890,20 @@ mod tests {
         assert_eq!(tracker.voices().count(), 1, "so the note is still there to draw");
         let voice = *tracker.voices().next().unwrap();
         assert!(voice.activation(0.05, &env) > 0.0, "and it does draw, a frame later");
+    }
+
+    /// A zero-length ramp is a STEP AT ITS START, not a level that has always
+    /// been reached. The mark Delay is the whole reason the difference is
+    /// visible: it works by handing [`Envelope::attack`] a start moment in the
+    /// future, so a curve answering 1 regardless would draw every ring
+    /// straight through its own wait — and it would do it at an Attack of 0,
+    /// which is what every project saved before the bar existed loads on.
+    #[test]
+    fn a_zero_length_ramp_steps_at_its_start() {
+        let env = Envelope { attack_time: 0.0, fade_time: 1.0, shape: 0.0 };
+        assert_eq!(env.attack(0.5, 1.0), 0.0, "the start is still ahead");
+        assert_eq!(env.attack(1.0, 1.0), 1.0, "full the moment it arrives");
+        assert_eq!(env.attack(1.5, 1.0), 1.0, "and stays there");
     }
 
     /// The guards in [`Envelope::approach`], which a shell can reach without

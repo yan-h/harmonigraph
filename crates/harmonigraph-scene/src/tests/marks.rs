@@ -145,12 +145,13 @@ fn a_chord_inside_one_pitch_class_separates_on_the_octave_layer() {
 }
 
 #[test]
-fn a_released_note_drops_its_mark_while_the_held_note_keeps_the_live_one() {
+fn a_released_note_fades_its_mark_out_while_the_held_note_keeps_the_live_one() {
     // C4 and C5 share a pitch class, so they light ONE node. Release the
     // top one: the node stays fully lit by the held C4, and C4 — now the
-    // only held note — takes BOTH live ends. The released C5's mark does not
-    // linger: it snaps off with the key even as its octave glyph keeps
-    // fading, so the marks never disagree about which notes are down.
+    // only held note — takes BOTH live ends. The released C5's ring goes with
+    // its note rather than with its key, fading on the same envelope as the
+    // octave glyph beside it; the LIVE end has already moved on regardless,
+    // so a fading ring never says a released note is still the melody.
     let mut tracker = NoteTracker::new();
     for note in [60u8, 72] {
         tracker.handle_event(NoteEvent {
@@ -170,19 +171,75 @@ fn a_released_note_drops_its_mark_while_the_held_note_keeps_the_live_one() {
     let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, 1.0);
     let origin = origin_node(&scene);
     assert_eq!(origin.activation, 1.0, "the held C4 keeps the node lit");
-    // Only the held C4's slot is marked, at both ends; the released C5's
-    // slot carries no mark, and the mark level is at full, not fading.
-    assert_eq!(origin.melody_slots, 1 << MIDDLE_C_SLOT, "only the held C4 is the melody");
-    assert_eq!(origin.bass_slots, 1 << MIDDLE_C_SLOT, "and the bass");
-    assert_eq!(origin.melody_level, 1.0, "the held mark is at full, not mid-fade");
-    // The octave glyph for the released C5 still fades on its own envelope —
-    // it is only the RING that snaps off, not the disc or the glyph.
+    // Both slots carry a melody mark: the held C4 wears the live end, and the
+    // released C5 is still fading out of the one it left with. The two live
+    // on one node here, so `Mark` keeps the STRONGEST — the held C4 at full,
+    // not the half-faded C5 — which is what stops a departing ring from
+    // dimming the ring of the note that replaced it.
+    assert_eq!(
+        origin.melody_slots,
+        (1 << MIDDLE_C_SLOT) | (1 << (MIDDLE_C_SLOT + 1)),
+        "the held C4 rings, and the released C5 is still fading out of its own",
+    );
+    assert_eq!(origin.bass_slots, 1 << MIDDLE_C_SLOT, "only C4 was ever the bass");
+    assert_eq!(origin.melody_level, 1.0, "the held mark is at full, not dimmed by the fading one");
+    // The octave glyph for the released C5 fades on its own envelope. What
+    // its RING is doing cannot be read here — one node carries one level, and
+    // the held C4's is the one that survived the max — so the fading ring's
+    // own level is pinned by `a_lone_notes_ring_fades_out_with_it` below.
     assert!(
         (origin.octaves[MIDDLE_C_SLOT + 1] - 0.5).abs() < 1e-5,
         "the released C5's octave is half-faded, got {}",
         origin.octaves[MIDDLE_C_SLOT + 1]
     );
     assert_eq!(origin.octaves[MIDDLE_C_SLOT], 1.0, "the held C4's octave is at full");
+}
+
+/// A ring leaves on the note's own release rather than with its key, and
+/// leaves on exactly the envelope the octave sector beside it does — the two
+/// belong to one note, and a ring that outlived or predeceased its sector
+/// would read as a second thing happening.
+#[test]
+fn a_lone_notes_ring_fades_out_with_it() {
+    let mut tracker = NoteTracker::new();
+    tracker.handle_event(on(0.0, 60));
+    tracker.handle_event(off(1.0, 60));
+    let view = delayed_view(0.0);
+    let frame = FrameParams { fade_time: 2.0, ..FrameParams::default() };
+    let at = |now: f64| {
+        let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, now);
+        let n = origin_node(&scene);
+        (n.melody_level, n.bass_level, n.octaves[MIDDLE_C_SLOT])
+    };
+
+    assert_eq!(at(1.0), (1.0, 1.0, 1.0), "at the key-up it is still whole");
+    let (melody, bass, octave) = at(2.0);
+    assert!((melody - 0.5).abs() < 1e-5, "half a fade later, half gone: got {melody}");
+    assert_eq!(melody, bass, "a lone note's two rings leave together");
+    assert_eq!(melody, octave, "and on the sector's own envelope");
+    assert_eq!(at(3.0), (0.0, 0.0, 0.0), "gone at the end of the fade");
+}
+
+/// The Delay stays a THRESHOLD now that a ring outlives its key. An end
+/// dropped before the wait is up never rang, and must not ring on the way
+/// out: the ease is read at the key-up, so it is frozen at the nothing it had
+/// reached rather than climbing past the threshold while the note fades.
+#[test]
+fn an_end_dropped_inside_the_delay_never_rings_on_its_way_out() {
+    const DELAY: f64 = 0.5;
+    let mut tracker = NoteTracker::new();
+    tracker.handle_event(on(0.0, 60));
+    // Held for less than the wait, and then released with a long fade — long
+    // enough that an ease still running would sail past the threshold.
+    tracker.handle_event(off(0.2, 60));
+    let view = delayed_view(DELAY as f32);
+    let frame = FrameParams { fade_time: 4.0, ..FrameParams::default() };
+    for now in [0.2, 0.5, 1.0, 2.0, 3.0] {
+        let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, now);
+        let n = origin_node(&scene);
+        assert_eq!(n.melody_level, 0.0, "a ring appeared at {now}s on a note that never rang");
+        assert_eq!(n.bass_level, 0.0, "and a bass ring at {now}s");
+    }
 }
 
 #[test]
@@ -219,12 +276,17 @@ fn a_fresh_mark_eases_in_with_the_octave_it_links_to() {
 
 #[test]
 fn an_inherited_end_eases_in_from_the_handoff_not_from_its_note_on() {
-    // Hold C4 and C5, then lift the top: the melody drops to C4, whose own
+    // Hold C4 and G4, then lift the top: the melody drops to C4, whose own
     // note-on is long past. Easing from THAT would be no ease at all — the
     // ring has to grow from the moment it moved. C4's bass ring never
     // changed hands, so it stays at full right through the handoff.
+    //
+    // A fifth apart rather than an octave, so the two notes land on their own
+    // nodes: the outgoing ring fades out where G is drawn and the incoming
+    // one eases in at C, and neither reading is mixed into the other by one
+    // node having to carry both.
     let mut tracker = NoteTracker::new();
-    for note in [60u8, 72] {
+    for note in [60u8, 67] {
         tracker.handle_event(NoteEvent {
             time: 0.0,
             channel: 0,
@@ -232,9 +294,9 @@ fn an_inherited_end_eases_in_from_the_handoff_not_from_its_note_on() {
             kind: NoteEventKind::On { velocity: 1.0 },
         });
     }
-    tracker.handle_event(NoteEvent { time: 1.0, channel: 0, note: 72, kind: NoteEventKind::Off });
+    tracker.handle_event(NoteEvent { time: 1.0, channel: 0, note: 67, kind: NoteEventKind::Off });
     let view = delayed_view(0.0);
-    // Long enough that the released C5 is still in the tracker, which is
+    // Long enough that the released G4 is still in the tracker, which is
     // where the handoff moment is read from.
     let frame = FrameParams { fade_time: 2.0, ..FrameParams::default() };
     let at = |now: f64| {
@@ -242,12 +304,23 @@ fn an_inherited_end_eases_in_from_the_handoff_not_from_its_note_on() {
         let n = origin_node(&scene);
         (n.melody_level, n.bass_level)
     };
+    // 12-TET: a fifth is one step along the threes axis.
+    let leaving = |now: f64| {
+        let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, now);
+        node_at(&scene, LatticePos::new(1, 0, 0)).melody_level
+    };
 
     assert_eq!(at(1.0), (0.0, 1.0), "the melody has only just moved");
     let (melody, bass) = at(1.0 + ATTACK * 0.5);
     assert!((melody - 0.5).abs() < 1e-5, "half way in, got {melody}");
     assert_eq!(bass, 1.0, "the end that never moved does not re-attack");
     assert_eq!(at(1.0 + ATTACK), (1.0, 1.0));
+
+    // The other half of the same handoff: G's ring leaves as C's arrives,
+    // on G's own release rather than on the incoming ramp.
+    assert_eq!(leaving(1.0), 1.0, "the outgoing ring is whole at the key-up");
+    assert!((leaving(2.0) - 0.5).abs() < 1e-5, "and half gone half a fade later");
+    assert_eq!(leaving(3.0), 0.0, "and gone with the note");
 }
 
 #[test]

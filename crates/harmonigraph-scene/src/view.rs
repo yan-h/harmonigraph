@@ -373,13 +373,19 @@ pub struct ViewConfig {
     /// it: the ring is at 0 for this long and then arrives on the usual
     /// [`attack_time`](Self::attack_time) ramp.
     ///
-    /// A ring is held-only, so a wait is also a THRESHOLD: an end that
-    /// changes hands again before the delay is up never draws a ring at all.
-    /// That is what the setting is for. Playing fast, the top and bottom of
-    /// what is down change every few notes, and a ring easing in on each of
-    /// them reads as flicker over the octave band rather than as the line it
-    /// is tracing — so the delay is how long a note has to be the melody
-    /// before it counts as the melody.
+    /// The wait is also a THRESHOLD: an end that changes hands again before
+    /// the delay is up never draws a ring at all. That is what the setting is
+    /// for. Playing fast, the top and bottom of what is down change every few
+    /// notes, and a ring easing in on each of them reads as flicker over the
+    /// octave band rather than as the line it is tracing — so the delay is
+    /// how long a note has to be the melody before it counts as the melody.
+    ///
+    /// A ring outlives its key (it fades out on the note's release), so the
+    /// threshold survives only because a released ring's ease is read at the
+    /// key-up rather than at the current frame — `derive_scene`'s `ease`.
+    /// Left running, an end dropped mid-delay would climb past the threshold
+    /// while the note was already fading and ring a note that never was the
+    /// melody, which is the very flicker this setting buys off.
     ///
     /// Not derived from the note Fade, which is the other end of the same
     /// note and reads as the natural pair: a fade is how long a note takes to
