@@ -381,11 +381,11 @@ pub struct ViewConfig {
     /// how long a note has to be the melody before it counts as the melody.
     ///
     /// A ring outlives its key (it fades out on the note's release), so the
-    /// threshold survives only because a released ring's ease is read at the
-    /// key-up rather than at the current frame — `derive_scene`'s `ease`.
-    /// Left running, an end dropped mid-delay would climb past the threshold
-    /// while the note was already fading and ring a note that never was the
-    /// melody, which is the very flicker this setting buys off.
+    /// threshold is answered AT the key-up — `derive_scene`'s `ease` — and
+    /// only the ramp runs on from there. Left to the ramp alone, an end
+    /// dropped mid-delay would climb past the threshold while the note was
+    /// already fading and ring a note that never was the melody, which is the
+    /// very flicker this setting buys off.
     ///
     /// Not derived from the note Fade, which is the other end of the same
     /// note and reads as the natural pair: a fade is how long a note takes to
@@ -396,10 +396,13 @@ pub struct ViewConfig {
     /// any delay past the Fade would outlive the note that handed the end
     /// over.
     ///
-    /// 0 is the ring arriving with its note, which is how the marks have
-    /// always drawn — hence a bare `#[serde(default)]`, the same value being
-    /// right for a blob that predates the bar and for a fresh view.
-    #[serde(default)]
+    /// 0 is the ring arriving with its note, and it is not what either door
+    /// opens on: a blob that predates the bar loads the same wait a fresh
+    /// view does (see [`default_mark_delay`]). Those blobs were saved drawing
+    /// rings that answer immediately, and are reinterpreted deliberately —
+    /// what a bare 0 loads is the chord-release smear rather than a look
+    /// anyone chose.
+    #[serde(default = "default_mark_delay")]
     pub mark_delay: f32,
     /// Which shimmer sweeps the melody/bass rings (see [`Pulse`]): the sheet
     /// takes both rings AND the octave slice each one points at. That reach
@@ -753,6 +756,22 @@ fn default_core_solidity() -> f32 {
 /// what the rings were fixed at before this was a bar.
 fn default_mark_thickness() -> f32 {
     0.09
+}
+
+/// Just past a passing sixteenth — 125ms at 120bpm — which is where the wait
+/// stops rejecting notes anyone is listening to and starts rejecting the ones
+/// nobody is.
+///
+/// A default rather than the 0 the bar's low end offers, because a ring
+/// outlives its key ([`ViewConfig::mark_delay`]): at 0 every momentary
+/// crowning rings its way OUT over the whole Fade, so lifting a chord one key
+/// at a time leaves a fading ring on nearly every note of it. The threshold is
+/// what stops that, and opening at 0 would ship the mechanism switched off.
+///
+/// The same value at both doors — a fresh view and a blob with no key — since
+/// the smear is not a look a blob can be said to have chosen.
+fn default_mark_delay() -> f32 {
+    0.15
 }
 
 /// The gap the sectors always had (SLICE_GAP_HALF was 0.06 either side of
@@ -1237,11 +1256,10 @@ impl Default for ViewConfig {
             legacy_highlight_extremes: None,
             // Thin rings, slit at the marked octave's boundaries.
             mark_thickness: 0.078_269_88,
-            // No wait: a fresh view answers the keys immediately, and the
-            // delay is a THRESHOLD (see `mark_delay`) — a note held for less
-            // than it wears no ring at all, which is a reading of the music
-            // to reach for rather than one to open on.
-            mark_delay: 0.0,
+            // Long enough to reject a passing sixteenth, which is what keeps
+            // a chord's release from smearing a fading ring across it — see
+            // `default_mark_delay`, the same value a blob with no key loads.
+            mark_delay: default_mark_delay(),
             pulse_marks: Pulse::Bands,
             // The sheet the rings above wear. A period well under one node's
             // spacing puts several of them across every ring, so this reads as

@@ -162,10 +162,22 @@ impl Envelope {
     /// of 0, which is a release that never moves, and every note ever played
     /// then stays in the released tail for the rest of the session.
     ///
+    /// A poisoned CLOCK falls the same way, and needs its own arm to do it:
+    /// a real duration is the path a NaN `now` takes, and `f64::max` answers
+    /// with the other operand against a NaN, so left to the divide it would
+    /// come out a progress of 0 — the same never-moving release, reached
+    /// through the branch that looks safe.
+    ///
     /// A poisoned SHAPE straightens instead, there being a real duration to
     /// run out: a NaN through `clamp` stays a NaN, and `min` would answer with
     /// the bound and silently pin the curve at its sharpest.
     fn approach(&self, elapsed: Time, duration: f32) -> f32 {
+        if !elapsed.is_finite() {
+            // Over, whatever the duration says, so the two poisoned inputs
+            // land in the same place instead of one of them being caught by
+            // the ramp below (see the doc above).
+            return 1.0;
+        }
         if !duration.is_finite() || duration <= 0.0 {
             // No ramp to walk, so a STEP — but a step at the moment the
             // transition starts, not one that has always been over. The
@@ -176,16 +188,10 @@ impl Envelope {
             // regardless would leave every ring drawn through its own wait,
             // and the Delay bar inert at exactly the attack of 0 that every
             // saved project loads on.
-            //
-            // The NaN arm is spelled out rather than left to fall through a
-            // negated comparison: a NaN clock lands on "started", which for a
-            // release is the safe direction — gone, rather than held at full
-            // where `prune` will never reach it.
-            return if elapsed >= 0.0 || elapsed.is_nan() { 1.0 } else { 0.0 };
+            return if elapsed >= 0.0 { 1.0 } else { 0.0 };
         }
-        // `f64::max` answers with the other operand against a NaN, so a
-        // non-finite clock reads as "just started" rather than poisoning the
-        // divide below.
+        // Finite by the guard above, so this floor is only the transition
+        // that has not started yet — a ring inside its mark Delay.
         let p = (elapsed.max(0.0) as f32 / duration).min(1.0);
         let shape = if self.shape.is_finite() { self.shape.clamp(0.0, 1.0) } else { 0.0 };
         // Exponent 1 is the straight line and `powf` returns it exactly, so
@@ -320,10 +326,14 @@ impl Voice {
 /// and the moment that voice took it.
 ///
 /// HELD is the load-bearing word, and it is this type's guarantee rather than
-/// its caller's: the scene rings these two ends and documents that a released
-/// voice wears no mark at all (`derive::held_extremes`), which now rests on
-/// the ends being read off `held` alone and restamped from every mutation of
-/// it. A released voice must never appear here.
+/// its caller's: the scene rings these two ends LIVE, and a released voice
+/// rings from the stamp it left with instead ([`Voice::wore_high`], read in
+/// `derive::marks`). The two answer different questions — who is the melody,
+/// and who was on their way out — so a released voice allowed back in here
+/// would hold the end against the note that replaced it, and the incoming
+/// ring would have nothing to ease from. It must never appear here, which
+/// rests on the ends being read off `held` alone and restamped from every
+/// mutation of it.
 ///
 /// The "when" is state rather than a per-frame derivation because the answer
 /// is not in the current voices: a voice that takes an end by INHERITING it,
@@ -924,9 +934,19 @@ mod tests {
             let level = curve.release(1.0, 0.0);
             assert!(level.is_finite(), "shape {bad} keeps a real level, got {level}");
         }
-        // And a non-finite clock reads as the transition not having started.
+        // A poisoned CLOCK ends too, and the release is the half that has to:
+        // a real duration takes the ramp's own path, where `f64::max` turns a
+        // NaN into a progress of 0 — a release stuck at 1 forever, which is
+        // the hang this whole test is named for, reached with every duration
+        // finite.
         let env = Envelope { attack_time: 1.0, fade_time: 1.0, shape: 0.5 };
-        assert_eq!(env.attack(f64::NAN, 0.0), 0.0);
+        voice.state = VoiceState::Released { at: 0.0 };
+        assert_eq!(voice.release_level(f64::NAN, &env), 0.0, "a NaN clock ends the note");
+        assert_eq!(env.attack(f64::NAN, 0.0), 1.0, "and lands the arrival rather than stalling it");
+        // The ramp still has a "not started" end, and it is reached by a real
+        // clock ahead of the transition — the mark Delay, which is the whole
+        // reason `approach` distinguishes the two at all.
+        assert_eq!(env.attack(0.5, 1.0), 0.0, "a start still ahead has not started");
     }
 
     #[test]

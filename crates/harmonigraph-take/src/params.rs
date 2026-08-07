@@ -16,6 +16,18 @@ use std::ops::RangeInclusive;
 
 use harmonigraph_core::tuning;
 
+/// How a NOTE TIME reads out: two decimals and the unit on the number.
+///
+/// One function for the three of them — the Attack and the mark Delay are
+/// view settings and the Fade is a param, so they are built by different code
+/// and would otherwise carry three copies of this literal. They are one second
+/// each and are read against each other constantly (see
+/// [`ParamKey::logarithmic`]); retuning the readout has to move all three or
+/// it makes them look like different kinds of setting again.
+pub fn seconds(v: f32) -> String {
+    format!("{v:.2} s")
+}
+
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum ParamKey {
@@ -206,7 +218,7 @@ impl ParamKey {
     /// setting, and these three are the same kind.
     pub fn display(self) -> Option<fn(f32) -> String> {
         match self {
-            ParamKey::Fade => Some(|v| format!("{v:.2} s")),
+            ParamKey::Fade => Some(seconds),
             _ => None,
         }
     }

@@ -372,6 +372,18 @@ mod tests {
     fn the_fade_bar_reads_like_the_note_times_beside_it() {
         assert!(!ParamKey::Fade.logarithmic(), "a linear second, like Attack and Delay");
         assert_eq!(ParamKey::Fade.label(), "Fade", "the unit is not in the name");
+        // The SCALE the other two answers are premised on, and the one thing
+        // here with a reach past the bar: this range is what the host exposes
+        // to an automation lane, so moving it re-reads every lane recorded
+        // against it. The linear travel above is only defensible while a
+        // Fade's whole range is one second — at a hundred, its usable settings
+        // really would be crushed into the bar's first percent.
+        assert_eq!(*ParamKey::Fade.range().start(), 0.0);
+        assert_eq!(
+            *ParamKey::Fade.range().end(),
+            1.0,
+            "one second, the same as the Attack and Delay bars either side",
+        );
         let display = ParamKey::Fade.display().expect("the Fade reads out in seconds");
         assert_eq!(display(0.1), "0.10 s");
         assert_eq!(display(1.0), "1.00 s");

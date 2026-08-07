@@ -115,6 +115,27 @@ code is weird, and it acts as a tripwire against plausible-but-wrong
 "simplifications". New PRs keep regenerating the pattern, so this is a habit
 to maintain rather than a one-time cleanup.
 
+## Backwards compatibility is not a constraint
+
+One or two personal Bitwig projects load this plugin, so a saved blob, a
+param range and a recorded automation lane are worth what it costs to reopen
+those projects and drag a bar back. Narrow a range, rename a key, drop a
+field, move a default: say what breaks in the PR body and make the change.
+"This reinterprets saved state" is a line in the description, never a reason
+to keep a shape — and never, on its own, a review finding.
+
+What it does not license is a SILENT break. The value on screen must still
+be the value the file holds, so a change of range or units carries whatever
+clamp or repair keeps the two agreeing (`ViewConfig::sanitize`, and the
+`derive_scene` clamps it deliberately leaves to the picture). A blob that
+reads out one number while drawing another is a bug at any compat policy.
+
+The `legacy_*` fields, serde aliases and `bare_as_some` shims in the tree
+are sediment rather than policy — each was cheaper to write than to argue
+about. They stay, and the comment-tense exception above still describes
+them, because a shim that exists has to say why it is shaped that way.
+Nothing obliges the next one to exist.
+
 ## What you could not finish goes to an ISSUE, not the backlog
 
 A session that measures a bug and does not fix it is holding the most

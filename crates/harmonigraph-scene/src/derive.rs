@@ -14,13 +14,33 @@ use crate::{
 use glam::Vec4;
 use harmonigraph_core::{ChannelRole, HeldEnd, LatticePos, NoteTracker, Time, Tuning, VoiceState};
 
-/// A melody- or bass-ring accumulator for one node: which octave slots it
-/// marks, plus the color and drawn level of the strongest marking voice seen
-/// so far — the voice's envelope times how far its ring has eased in. The
-/// `>=` in [`Mark::add`] means ties favor the later voice, so a release
+/// A melody- or bass-ring accumulator for one node: the octave slot it marks,
+/// plus the color and drawn level, all three read off the STRONGEST marking
+/// voice — the voice's envelope times how far its ring has eased in. The `>=`
+/// in [`Mark::add`] means ties favor the later voice, so a release
 /// crossfading two voices lands on the newer color.
+///
+/// One voice entire, rather than the union of every marking voice's slot
+/// under the strongest one's level, because the node carries ONE level: a
+/// weaker voice's slot admitted alongside it would be drawn at the winner's
+/// brightness. That is not a near-miss — it is a link pointing at an octave
+/// whose ring is half gone (or has not started), at full. Two voices reach
+/// one node's mark only through a handoff inside a single pitch class, where
+/// the loser is by definition the dimmer of a crossfading pair, so what the
+/// union would buy is exactly the reading that cannot be drawn honestly.
+///
+/// The cost is that the sector a ring links to JUMPS at the crossover instead
+/// of both being lit through it. The level does not jump — the two curves are
+/// equal at the moment the argmax changes, which is what makes the switch
+/// invisible on the ring itself. Lighting both honestly wants a level per
+/// slot, which is `OCTAVE_SLOTS` more floats per node in the instance buffer
+/// and a shader that reads them; that is the price, and it buys one frame's
+/// worth of a link in one voicing.
 #[derive(Default)]
 struct Mark {
+    /// The slot as a MASK, so 0 is "unmarked" without an `Option` — which is
+    /// also how the shader reads it (see `NodeInstance::melody_slots`). One
+    /// bit at a time, per the argmax above.
     slots: u32,
     level: f32,
     color: Vec4,
@@ -28,12 +48,34 @@ struct Mark {
 
 impl Mark {
     fn add(&mut self, slot: usize, level: f32, color: Vec4) {
-        self.slots |= 1 << slot;
         if level >= self.level {
+            self.slots = 1 << slot;
             self.level = level;
             self.color = color;
         }
     }
+}
+
+/// One voice's per-frame envelope work: everything about how brightly it
+/// draws that depends on the voice, the frame and `now` alone, done once
+/// rather than on every node the voice matches.
+struct FrameVoice<'a> {
+    voice: &'a harmonigraph_core::Voice,
+    /// The pitch color the DISC and its octave sector take. The melody/bass
+    /// rings do not reuse it — they belong to the octave layer, colored by
+    /// axis position (see the mark color in [`derive_scene`]).
+    color: Vec4,
+    /// The note's own envelope, attack times what is left of the release:
+    /// what the disc, the glow, the gutter and the octave sector all draw at.
+    activation: f32,
+    /// What this voice's melody ring draws at, or `None` where it wears no
+    /// melody end. The RELEASE alone under the ring's own ease — see the ease
+    /// in [`derive_scene`], and
+    /// [`Voice::activation`](harmonigraph_core::Voice::activation) for why the
+    /// note's attack is not multiplied in on top.
+    melody: Option<f32>,
+    /// The same for the bass end.
+    bass: Option<f32>,
 }
 
 /// The highest and lowest HELD voices with the moment each took its end, as
@@ -72,9 +114,19 @@ pub(crate) fn held_extremes(
 /// rather than as one vanishing and a second appearing.
 ///
 /// The released stamps are gated on the same two flags here that
-/// [`held_extremes`] applies to the live ends. They have to be: a stamp is
-/// left whatever the view says, so a ring turned off mid-fade would otherwise
-/// go on drawing until the note it belongs to is pruned.
+/// [`held_extremes`] applies to the live ends, and on the flags as they are
+/// NOW. They have to be: a stamp is left whatever the view says, so a ring
+/// turned off mid-fade would otherwise go on drawing until the note it
+/// belongs to is pruned.
+///
+/// Turned back on mid-fade, the rings of notes released while it was off
+/// appear at the level their fade has reached. That is a toggle behaving like
+/// a toggle rather than a hole — switching the melody on over a held chord
+/// puts its ring up at full the same frame, the end having been taken long
+/// ago. The alternative is recording the flag at the release, which is a view
+/// setting baked into the tracker: the stamp is a fact about the music, and
+/// what is drawn from it is the view's to re-answer every frame (see
+/// [`Voice::wore_high`](harmonigraph_core::Voice::wore_high)).
 fn marks(
     voice: &harmonigraph_core::Voice,
     live: (Option<HeldEnd>, Option<HeldEnd>),
@@ -124,25 +176,28 @@ pub fn derive_scene(
     // speed the ends change hands every few frames, and a ring easing in on
     // each of them reads as flicker rather than as the top line.
     //
-    // A RELEASED voice reads its ease at the moment its key came up rather
-    // than at `now`, which is what keeps that threshold a threshold. A ring
-    // fades out with its note, so its ease outlives the key — left running,
-    // an end dropped halfway through the delay would keep climbing after the
-    // release and a ring would appear on a note that never rang while it was
-    // down, which is exactly the flicker the delay exists to prevent. Frozen,
-    // a ring leaves at the level it actually reached: nothing if it never
-    // earned one.
+    // A ring outlives its key, so for a RELEASED voice the wait is checked as
+    // a threshold at the key-up and the ramp then runs on at `now` like every
+    // other layer's. The two are separate rules and the threshold is the one
+    // the delay is: a note that gave the end back inside its wait never rang
+    // while it was down, and an ease left running would sail past the
+    // threshold during the release and put a ring on it afterwards — the very
+    // flicker the setting buys off.
     //
-    // The disc does the opposite — its attack keeps climbing past the key, so
-    // a staccato note peaks after the note-off (see `Envelope::attack`). The
-    // two differ because the disc's ramp is only about smoothing an arrival,
-    // while this one is also a rule about which notes count.
+    // The RAMP is not that rule, and freezing it where the key happened to
+    // find it costs the other half: a note shorter than the attack would keep
+    // a ring dimmer than the sector it brackets for its whole release, since
+    // the disc's own attack keeps climbing past the note-off (see
+    // `Envelope::attack`). One layer arriving slower than the next is exactly
+    // the disagreement one shared curve exists to prevent.
     let ease = |since: Time, state: VoiceState| {
-        let read_at = match state {
-            VoiceState::Held => now,
-            VoiceState::Released { at } => at,
-        };
-        env.attack(read_at, since + mark_delay)
+        if let VoiceState::Released { at } = state {
+            if at < since + mark_delay {
+                // Never earned a ring, so there is none to fade out.
+                return 0.0;
+            }
+        }
+        env.attack(now, since + mark_delay)
     };
     // Sanitized once, outside the node loop. Capped at 1: this axis makes
     // off-sheet nodes SMALLER, never larger, so the home sheet stays the
@@ -165,13 +220,18 @@ pub fn derive_scene(
         view.octave_extra_blend,
     );
 
-    // Each voice's color, computed once here rather than re-running the
-    // LCH->sRGB conversion on every node the voice matches. It depends only on
-    // the voice and the frame's gradient range — never on the node — so this
-    // lifts the transcendental color math out of the O(nodes × voices) loop
-    // below. The melody/bass rings do NOT reuse it — they belong to the octave
-    // layer, which is colored by axis position (see the mark color below).
-    let voices: Vec<(&harmonigraph_core::Voice, Vec4)> = tracker
+    // Each voice's color and envelope, computed once here rather than re-run
+    // on every node the voice matches. All of it depends on the voice, the
+    // frame and `now` alone — never on the node — so this lifts the LCH->sRGB
+    // conversion and the envelope's four `powf`s (two ends, times the disc and
+    // the ring) out of the O(nodes × voices) loop below. One pitch class
+    // lights every node that spells it, so on a wide window that is tens of
+    // nodes per voice.
+    //
+    // What genuinely varies per node stays down there: which octave slot the
+    // voice sounds in on that node, and the mark color read off that slot's
+    // own pitch.
+    let voices: Vec<FrameVoice> = tracker
         .voices()
         .map(|voice| {
             let color = channel_color(
@@ -181,7 +241,27 @@ pub fn derive_scene(
                 frame.brightest_pitch,
                 view.pitch_gradient,
             );
-            (voice, color)
+            // Which ends this voice wears is per voice too — the live ends are
+            // a frame-wide answer and the stamps are the voice's own.
+            let (melody_since, bass_since) =
+                marks(voice, live_extremes, view.mark_melody, view.mark_bass);
+            // The RELEASE alone under the ring's own ease, not the node's full
+            // activation: the attack is in that, and the ring already carries
+            // one from the moment its note took the end. Multiplying both in
+            // would square the ramp wherever those two moments coincide —
+            // which is the ordinary case, a note arriving as the new outer
+            // voice — and a ring rising as the square of the sector it
+            // brackets is precisely the disagreement about how fast the note
+            // arrived that one shared rate exists to prevent.
+            let release = voice.release_level(now, &env);
+            let ring = |since: Option<Time>| since.map(|s| release * ease(s, voice.state));
+            FrameVoice {
+                voice,
+                color,
+                activation: voice.activation(now, &env),
+                melody: ring(melody_since),
+                bass: ring(bass_since),
+            }
         })
         .collect();
 
@@ -202,12 +282,13 @@ pub fn derive_scene(
 
         // O(nodes × voices); fine at this scale. If extents grow large,
         // index voices by quantized pitch class instead.
-        for &(voice, voice_color) in &voices {
+        for lit in &voices {
+            let voice = lit.voice;
             if tuning.matches(voice.pitch_class, node_pc) {
-                let envelope = voice.activation(now, &env);
+                let envelope = lit.activation;
                 if envelope > activation {
                     activation = envelope;
-                    color = voice_color;
+                    color = lit.color;
                     outlined = ChannelRole::of(voice.channel) == ChannelRole::Outline;
                 }
                 // The slot whose own pitch on THIS node is the one sounding —
@@ -246,14 +327,12 @@ pub fn derive_scene(
                 // every node the voice matches, exactly as its activation
                 // is, so the mark can't disagree with the lighting.
                 //
-                // The level is the strongest marking voice ON THIS NODE. A
-                // ring eases in while its end is held and fades out with the
-                // note when the key comes up, on the note's own release — so
-                // a handoff is one ring crossing to another rather than one
-                // vanishing as a second appears.
-                let (melody_since, bass_since) =
-                    marks(voice, live_extremes, view.mark_melody, view.mark_bass);
-                if melody_since.is_some() || bass_since.is_some() {
+                // The ring is the strongest marking voice ON THIS NODE,
+                // entire (see [`Mark`]). It eases in while its end is held
+                // and fades out with the note when the key comes up, on the
+                // note's own release — so a handoff is one ring crossing to
+                // another rather than one vanishing as a second appears.
+                if lit.melody.is_some() || lit.bass.is_some() {
                     // The mark takes the color of the SECTOR it links back to
                     // — the pitch of that slot on this node, through the very
                     // table the shader tints the lit glyph from — so the ring
@@ -274,41 +353,24 @@ pub fn derive_scene(
                     // sector's glyph wears it as it comes, and a lightened
                     // ring would read a shade off the one it brackets.
                     //
-                    // Strongest marking voice wins the color; the slots still
-                    // collect every one of them, since a release crossfades
-                    // two. The ring eases in on the SAME ramp as that sector,
-                    // from when the note took the end — which is not always
-                    // its note-on, and is the tracker's own answer rather
-                    // than anything derived here (`HeldEnd` while the note is
-                    // down, `Voice::wore_high` once it is not).
+                    // The ring eases in on the SAME ramp as that sector, from
+                    // when the note took the end — which is not always its
+                    // note-on, and is the tracker's own answer rather than
+                    // anything derived here (`HeldEnd` while the note is
+                    // down, `Voice::wore_high` once it is not). That level is
+                    // the voice's own and is computed with it; the color is
+                    // what has to be read here, off this node's slot.
                     let mark_color = pitch_lut_color(
                         octave_layout.slot_pitch(slot as i32, node_cents),
                         frame.darkest_pitch,
                         frame.brightest_pitch,
                         view.pitch_gradient,
                     );
-                    // The RELEASE alone under the ring's own ease, not the
-                    // node's full activation: the attack is in that, and the
-                    // ring already carries one from the moment its note took
-                    // the end. Multiplying both in would square the ramp
-                    // wherever those two moments coincide — which is the
-                    // ordinary case, a note arriving as the new outer voice —
-                    // and a ring rising as the square of the sector it
-                    // brackets is precisely the disagreement about how fast
-                    // the note arrived that one shared rate exists to
-                    // prevent.
-                    //
-                    // Per voice rather than once per frame, which the ease was
-                    // when only held notes could wear a ring: a chord has one
-                    // melody, but it can have several notes on their way out
-                    // that each wore the end when they left, and they leave
-                    // from different levels at different moments.
-                    let release = voice.release_level(now, &env);
-                    if let Some(since) = melody_since {
-                        melody.add(slot, release * ease(since, voice.state), mark_color);
+                    if let Some(level) = lit.melody {
+                        melody.add(slot, level, mark_color);
                     }
-                    if let Some(since) = bass_since {
-                        bass.add(slot, release * ease(since, voice.state), mark_color);
+                    if let Some(level) = lit.bass {
+                        bass.add(slot, level, mark_color);
                     }
                 }
             }

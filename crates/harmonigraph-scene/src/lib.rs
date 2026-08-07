@@ -205,9 +205,11 @@ pub struct NodeInstance {
     /// being marked. One voice lights every node its pitch class matches
     /// under the tuning tolerance, and the mark follows the same rule.
     ///
-    /// A mask rather than a single slot because one node can hold both
-    /// outer notes at once, in different octaves (a chord voiced inside a
-    /// single pitch class), and the two must stay tellable apart.
+    /// One bit at a time: the node carries one melody ring at one level, so
+    /// the mask names the one sector that ring links back to (see
+    /// `derive::Mark`). A MASK rather than a slot index because 0 then says
+    /// "unmarked" on its own, which a `0` index could not — and because it is
+    /// what the shader tests a slot against.
     pub melody_slots: u32,
     /// The same for the bass — the lowest held note. A slot set in BOTH
     /// masks is a note that is at once the melody and the bass (a lone held
@@ -225,10 +227,12 @@ pub struct NodeInstance {
     ///
     /// Both directions: the ease in above, times what is left of the note's
     /// own release, so a ring leaves with its note rather than snapping off
-    /// at the key (see [`derive`](mod@derive)). The ease itself is FROZEN at
-    /// the key-up — a ring that had not earned its way past
-    /// [`ViewConfig::mark_delay`] must not go on climbing after the note is
-    /// released and appear once it is already over.
+    /// at the key (see [`derive`](mod@derive)). [`ViewConfig::mark_delay`] is
+    /// answered as a threshold AT the key-up — a ring that had not earned its
+    /// way past the wait must not climb into one while the note is already
+    /// fading — and the ramp itself then runs on at the current frame, like
+    /// the sector's, so the two halves of one arrival never disagree about
+    /// how fast it happened.
     ///
     /// Per node rather than per slot because the mark is a ring around the
     /// whole node; the slots above only say which sector it links back to.

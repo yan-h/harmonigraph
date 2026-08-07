@@ -369,10 +369,10 @@ fn the_delay_is_what_keeps_a_released_chord_from_smearing_rings() {
     //
     // Rings are no longer held-only — they fade out with their note — so what
     // stops the smear is no longer the release itself but the DELAY: a note
-    // that wore an end for a millisecond never reached a drawn ring, and a
-    // released ring's ease is frozen at the key-up, so it cannot climb into
-    // one afterwards either. This pins both halves, because at a delay of 0
-    // there is no threshold and every momentary crowning does ring.
+    // that wore an end for a millisecond never cleared the threshold while it
+    // was down, and the threshold is answered there, so its ramp running on
+    // afterwards carries nothing. This pins both halves, because at a delay of
+    // 0 there is no threshold and every momentary crowning does ring.
     let chord = [60u8, 62, 64, 65, 67]; // C D E F G
     let ring_count = |mark_delay: f32| {
         let mut tracker = NoteTracker::new();
@@ -430,6 +430,16 @@ fn the_delay_is_what_keeps_a_released_chord_from_smearing_rings() {
     // including the momentary ones, and each leaves on its own note's fade.
     // Recorded rather than endorsed — this is what the Delay bar buys off.
     assert_eq!(ring_count(0.0), 5, "at delay 0 every momentary extreme rings");
+
+    // Which is why 0 is not what either door opens on. The bar can be dragged
+    // there deliberately; what a fresh view and a blob with no key load is a
+    // wait that rejects these lifts, so the smear is off by default rather
+    // than one setting away from being on.
+    assert_eq!(
+        ring_count(ViewConfig::default().mark_delay),
+        2,
+        "the default wait is what keeps the smear off out of the box",
+    );
 }
 
 #[test]

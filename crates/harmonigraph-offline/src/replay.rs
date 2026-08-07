@@ -202,17 +202,19 @@ mod tests {
     fn parameter_automation_is_applied_in_time_order() {
         let mut state = SharedState::new(TextureFormat::Rgba8Unorm);
         let id = ParamKey::Fade.id().to_string();
+        // Two values a bar can actually reach, so what the test replays is a
+        // lane that could have been recorded (`ParamKey::Fade.range()`).
         let mut replay = Replay::new(take_with(
             vec![],
             vec![
-                ParamRecord { t: 0.0, id: id.clone(), value: 1.0 },
-                ParamRecord { t: 1.0, id: id.clone(), value: 4.0 },
+                ParamRecord { t: 0.0, id: id.clone(), value: 0.25 },
+                ParamRecord { t: 1.0, id: id.clone(), value: 0.75 },
             ],
         ));
         replay.advance_to(&mut state, 0.5);
-        assert_eq!(replay.params.get(ParamKey::Fade), 1.0);
+        assert_eq!(replay.params.get(ParamKey::Fade), 0.25);
         replay.advance_to(&mut state, 1.5);
-        assert_eq!(replay.params.get(ParamKey::Fade), 4.0);
+        assert_eq!(replay.params.get(ParamKey::Fade), 0.75);
     }
 
     #[test]

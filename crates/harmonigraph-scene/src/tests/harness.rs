@@ -15,8 +15,9 @@ pub(super) fn scene_of(
 }
 
 /// [`ViewConfig::default`] with the note envelope pinned flat: no attack, so
-/// a note is fully lit on the frame it sounds, and a straight-line fade, so
-/// half a fade time in reads half gone.
+/// a note is fully lit on the frame it sounds, a straight-line fade, so half a
+/// fade time in reads half gone, and no mark Delay, so a ring is part of that
+/// same instant arrival rather than a layer that answers later.
 ///
 /// The suites that spread this are about what a SOUNDING note draws — the
 /// gutter it clears, the grid it cuts, the outline its channel gives it, the
@@ -31,7 +32,7 @@ pub(super) fn scene_of(
 /// lives: the curve in `harmonigraph_core::notes`, and its reach into these
 /// layers in `a_fresh_mark_eases_in_with_the_octave_it_links_to`.
 pub(super) fn plain_view() -> ViewConfig {
-    ViewConfig { attack_time: 0.0, fade_shape: 0.0, ..ViewConfig::default() }
+    ViewConfig { attack_time: 0.0, fade_shape: 0.0, mark_delay: 0.0, ..ViewConfig::default() }
 }
 
 pub(super) fn origin_node(scene: &Scene) -> &NodeInstance {
