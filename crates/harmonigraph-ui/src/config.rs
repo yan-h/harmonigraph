@@ -180,10 +180,9 @@ pub struct SpectrumConfig {
     /// blob that kept it would be preserving a mistake.
     pub marking_scale: f32,
     /// Strength of the light edge drawn along the spectrum's profile, 0 = none.
-    /// On a roll note it is a switch rather than a strength: the rim there is a
-    /// pair of OPAQUE bands, so this decides whether they are drawn and nothing
-    /// else, and only 0 turns them off. See `panes::spectral::roll::keyline`
-    /// for the profile's edge and `keyline_bands` for the notes'.
+    /// The profile's alone — a note's edge is the outline the roll's own pair of
+    /// settings draws (see [`roll_outline`](Self::roll_outline)). See
+    /// `panes::spectral::roll::keyline`.
     pub keyline: f32,
     /// Displayed pitch range, as (fractional) MIDI note numbers. The
     /// analyzer always covers `SPECTRUM_MIN_MIDI..=SPECTRUM_MAX_MIDI`
@@ -214,6 +213,26 @@ pub struct SpectrumConfig {
     /// painted width — a note is a solid rectangle of its own color, with
     /// nothing straddling its boundary.
     pub roll_thickness: f32,
+    /// How far the dark outline around a note reaches past its edge, in POINTS,
+    /// 0 = no outline. It wraps every side, so a note is one bounded object
+    /// against the spectrogram rather than a ribbon with edged flanks.
+    ///
+    /// In points rather than semitones, unlike the ribbon it wraps: an edge is
+    /// there to be seen at all zooms, and one measured in semitones would thin
+    /// out as the pitch range opened — exactly where a picture full of notes
+    /// needs its edges most. What that costs is at the wide end, where the
+    /// ribbon floors at `MIN_RIBBON_PX` and a wide outline reaches over the
+    /// neighbouring semitone.
+    pub roll_outline: f32,
+    /// How much of that reach the outline spends fading out, in points: 0 is a
+    /// hard edge, and at or past the reach it fades over the whole of it.
+    ///
+    /// Two settings rather than one, exactly as the lattice's gutter and gutter
+    /// fade are two ([`harmonigraph_scene::ViewConfig::sevens_gutter_soft`]):
+    /// tying the fade to the reach makes a wider outline always a blurrier one,
+    /// and how far a note stands off its background is a different question
+    /// from how sharply it does.
+    pub roll_outline_fade: f32,
     /// Write each note's name over its ribbon, at the moment it was struck —
     /// see [`panes::spectral::names`](crate::panes::spectral::names).
     pub note_names: bool,
@@ -351,6 +370,13 @@ pub(crate) const COLOR_RANGE_MIN_SPAN: f32 = 12.0;
 pub(crate) const ROLL_SECONDS_MIN: f32 = 1.0;
 pub(crate) const ROLL_SECONDS_MAX: f32 = 600.0;
 
+/// How far a note's outline may be taken, and how much of it may be fade — one
+/// number for both bars, since a fade past the reach it softens does nothing.
+/// Four points is a heavy surround at the ribbon widths this pane is used at:
+/// past it the outlines of two neighbouring semitones meet at any zoom worth
+/// reading, and the picture is outline with ribbons in it.
+pub(crate) const ROLL_OUTLINE_MAX: f32 = 4.0;
+
 /// The level range's domain, in dB. The top is a full-scale sine, the
 /// loudest thing a bucket can hold; the bottom is well under any noise
 /// floor worth looking at.
@@ -398,9 +424,7 @@ impl Default for SpectrumConfig {
             marking_scale: 1.0,
             // Enough of an edge to hold the profile against a bright
             // spectrogram cell, little enough that it doesn't read as a second
-            // curve of its own. Any value but 0 draws the notes' rim, which is
-            // a pair of opaque bands and takes nothing from this but the
-            // switch, so what the number is for is the profile alone.
+            // curve of its own.
             keyline: 0.3,
             // The pitch range starts as the analyzer's whole axis — the zoom
             // opens showing everything there is.
@@ -415,6 +439,12 @@ impl Default for SpectrumConfig {
             // the roll readable when the pitch range is zoomed out over the
             // whole spectrum.
             roll_thickness: 0.3,
+            // Two points of outline with most of it fading: enough of a dark
+            // surround to separate a note from whatever the spectrogram is
+            // doing behind it, soft enough that it reads as the note standing
+            // off the picture rather than as a second shape drawn around it.
+            roll_outline: 2.0,
+            roll_outline_fade: 1.5,
             note_names: true,
             note_name_scale: 1.0,
             show_spectrogram: true,

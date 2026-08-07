@@ -13,10 +13,11 @@
 //!
 //! **What this does instead.** One quad per note segment, with a box signed
 //! distance field in the fragment shader (`shaders/roll.wgsl`). The note's
-//! solid body and the two rim bands beside it are bands of that distance, so a
-//! rim band costs a compare rather than a second and third shape. Four vertices
-//! per note against several hundred: the upload stops mattering rather than
-//! getting cheaper.
+//! solid body and the outline wrapping it are both read off that distance, so
+//! the outline costs a compare rather than a second shape — and its fade, which
+//! no stroke can draw at all, costs nothing on top. Four vertices per note
+//! against several hundred: the upload stops mattering rather than getting
+//! cheaper.
 //!
 //! **Why the buffer is still rewritten every frame.** The obvious next step
 //! is an append-and-evict ring — settled notes never change, so they could
@@ -44,10 +45,10 @@ const ROLL_SRC: &str = include_str!("shaders/roll.wgsl");
 pub(crate) const ROLL_ENTRY_POINTS: &[&str] = &["vs_note", "fs_note_gamma", "fs_note_linear"];
 
 /// One note segment: a solid box in the pane's (pitch, depth) plane, its
-/// color, and the two rim bands standing outside its long edges.
+/// color, and the outline standing outside every one of its sides.
 ///
-/// Reading outward: [`core`](Self::core), [`inner`](Self::inner),
-/// [`outer`](Self::outer).
+/// Reading outward: [`core`](Self::core), then [`outline`](Self::outline)
+/// fading out over [`outline_reach`](Self::outline_reach).
 ///
 /// Screen geometry, in egui POINTS, already resolved through the pane's
 /// `Axes` — this crate never learns which way the pane is turned. Lengths
@@ -69,28 +70,29 @@ pub struct RollInstance {
     /// non-zero for a glide, which makes the box a parallelogram rather than
     /// needing a second shape.
     pub shear: f32,
-    /// Width of EACH rim band in points, and 0 when the rim is turned off.
-    /// One width for both: [`inner`](Self::inner) runs from the note's edge out
-    /// to it, [`outer`](Self::outer) from there out to twice it.
+    /// How far the outline reaches past the note's edge, in points, and 0 when
+    /// it is turned off. It wraps the note: every side and, rounded, every
+    /// corner.
     ///
-    /// The rim rides the note's two LONG edges only, and never its ends — see
-    /// `rail_mask` in the shader for why that is the shape rather than a
-    /// choice.
+    /// A flat reach, not a distance the shader scales: on a sheared note it is
+    /// measured perpendicular to the edge it stands against, so this is its
+    /// true thickness at any angle, and it is `vs_note`'s job to grow the quad
+    /// by however far along pitch that reaches.
+    pub outline_reach: f32,
+    /// How much of that reach the outline spends fading out, in points — 0 for
+    /// a hard edge, the whole reach to fade from the note's edge outward.
     ///
-    /// A flat width, not a distance the shader scales: on a sheared note the
-    /// bands are measured perpendicular to the long edges they ride, so this is
-    /// their true thickness at any angle, and it is `vs_note`'s job to grow the
-    /// quad by however far along pitch that reaches.
-    pub keyline: f32,
+    /// Separate from the reach rather than a fraction of it, exactly as the
+    /// lattice's gutter and gutter fade are separate: tying the two makes a
+    /// wider outline always a blurrier one.
+    pub outline_fade: f32,
     /// Premultiplied sRGB bytes, straight out of [`egui::Color32`].
     pub core: [u8; 4],
-    /// The rim's two bands: `inner` against the note's edge, `outer` beyond it.
+    /// The outline's color where it is solid; the fade takes it out from there.
     ///
-    /// Named for where they sit rather than for what they look like. Which is
-    /// dark and which is light is the pane's decision, and it belongs there
-    /// whole — this crate draws the instance it is handed and invents nothing.
-    pub inner: [u8; 4],
-    pub outer: [u8; 4],
+    /// What color that is stays the pane's decision — this crate draws the
+    /// instance it is handed and invents nothing.
+    pub outline: [u8; 4],
 }
 
 impl RollInstance {
@@ -101,10 +103,10 @@ impl RollInstance {
             0 => Float32x2, // center
             1 => Float32x2, // half_extent
             2 => Float32,   // shear
-            3 => Float32,   // keyline
-            4 => Unorm8x4,  // core
-            5 => Unorm8x4,  // inner
-            6 => Unorm8x4,  // outer
+            3 => Float32,   // outline_reach
+            4 => Float32,   // outline_fade
+            5 => Unorm8x4,  // core
+            6 => Unorm8x4,  // outline
         ],
     };
 }
@@ -477,19 +479,20 @@ mod tests {
         got.iter().zip(want).all(|(&a, b)| a.abs_diff(b) <= 3)
     }
 
-    /// A straight note centered in the frame: 24 points thick, 120 long, with
-    /// the pane's own rim — a 2-point black band standing against its long
-    /// edges and a 2-point white one outside that. Wide bands so a sample lands
-    /// well inside each.
+    /// A straight note centered in the frame: 24 points thick, 120 long, in a
+    /// 4-point black outline with no fade. Wide enough that a sample lands well
+    /// inside the outline, and hard-edged so where it ends is a place rather
+    /// than a slope — the fade has [`a_fade_takes_the_outline_out_gradually`]
+    /// to itself.
     fn centered_note() -> RollInstance {
         RollInstance {
             center: [128.0, 128.0],
             half_extent: [12.0, 60.0],
             shear: 0.0,
-            keyline: 2.0,
+            outline_reach: 4.0,
+            outline_fade: 0.0,
             core: [255, 0, 0, 255],
-            inner: [0, 0, 0, 255],
-            outer: [255, 255, 255, 255],
+            outline: [0, 0, 0, 255],
         }
     }
 
@@ -524,114 +527,181 @@ mod tests {
         let _resources = RollResources::new(&device, FORMAT);
     }
 
-    /// A note is a SOLID rectangle of its own color with both rim bands
-    /// standing outside it, in the order the instance gives them: reading
-    /// outward from the middle — the note's color right to its edge, `inner`,
-    /// `outer`, nothing.
+    /// A note is a SOLID rectangle of its own color, with the outline standing
+    /// entirely outside it: reading outward from the middle — the note's color
+    /// right to its edge, the outline, nothing.
     ///
-    /// The rim standing outside is the flood invariant, and the reason the
-    /// bands are read off a distance rather than drawn as a stroke of the
-    /// note's path: a centered stroke grows inward exactly as much as outward,
-    /// and on a ribbon a few points thick the two long edges met in the middle
-    /// and painted the interior over. A band at distance 0..2 cannot reach
+    /// The outline standing outside is the flood invariant, and the reason it
+    /// is read off a distance rather than drawn as a stroke of the note's path:
+    /// a centered stroke grows inward exactly as much as outward, and on a
+    /// ribbon a few points thick the two long edges meet in the middle and
+    /// paint the interior over. Coverage taken at distance 0..4 cannot reach
     /// inside a box whose interior is at negative distance.
-    ///
-    /// The colors here are the pane's (black against the note, white outside),
-    /// so this reads as the picture as well as the contract — but what the
-    /// shader owes is the ORDER, not the choice.
     #[test]
-    fn a_note_is_solid_and_its_rim_bands_stand_outside_it() {
+    fn a_note_is_solid_and_its_outline_stands_outside_it() {
         let Some((device, queue)) = headless_device() else {
             return;
         };
         let frame = draw(&device, &queue, vec![centered_note()], bg_color());
-        // Distances outward from the note's edge (x = 140): `inner` 0..2,
-        // `outer` 2..4.
+        // The note's edge is at x = 140 and the outline runs to 144.
         let at = |x: u32| pixel(&frame, x, 128);
         const RED: [u8; 4] = [255, 0, 0, 255];
         assert!(near(at(128), RED), "the note's middle is not painted: {:?}", at(128));
         assert!(near(at(138), RED), "the fill stops short of the note's edge: {:?}", at(138));
         assert!(
             near(at(141), [0, 0, 0, 255]),
-            "no black band standing against the note's edge: {:?}",
+            "no outline standing against the note's edge: {:?}",
             at(141),
         );
-        assert!(
-            near(at(143), [255, 255, 255, 255]),
-            "no white band standing outside the black one: {:?}",
-            at(143),
-        );
-        assert!(near(at(145), BG), "the rim reaches further than it should: {:?}", at(145));
+        // Solid nearly all the way out — the last half pixel of the reach is
+        // the antialiasing ramp a hard edge still gets — and gone past it.
+        assert!(near(at(142), [0, 0, 0, 255]), "the outline is short of its reach: {:?}", at(142));
+        assert!(near(at(145), BG), "the outline reaches further than it should: {:?}", at(145));
     }
 
-    /// BOTH rim bands ride the note's two long edges and are cut at its ends.
-    /// The note's own body is untouched either way — it is the shape, not the
-    /// rim.
+    /// The outline wraps EVERY side of the note — its ends as much as its
+    /// flanks — and turns the corner between them on the radius the box
+    /// distance gives it. The note's own body is untouched either way: it is
+    /// the shape, and the outline is what is drawn around it.
     ///
-    /// This is what stops repeats of one key painting their halos over each
-    /// other: the rim stands outside the note, and along the time axis a
-    /// note's outside is the next note. Either band capped at the ends draws a
-    /// seam across a run of one key that was played as a run.
+    /// The corner is the half of this that a per-edge implementation would
+    /// miss. A note is a rectangle, so its outline is the set of points within
+    /// the reach of one — which is a rounded rectangle, not four bands butted
+    /// together. Sampled on the diagonal past the corner's radius, where four
+    /// bands would still be painting.
     #[test]
-    fn both_rim_bands_ride_the_long_edges_and_stop_at_the_ends() {
+    fn the_outline_wraps_every_side_of_a_note() {
         let Some((device, queue)) = headless_device() else {
             return;
         };
-        // Reading out from the center: the note spans +-12 across pitch (x)
-        // and +-60 along time (y), `inner` the 2 beyond each and `outer` the 2
-        // beyond that.
+        // The note spans +-12 across pitch (x) and +-60 along time (y), so its
+        // corner is at (140, 188) and the outline reaches 4 past it.
         let frame = draw(&device, &queue, vec![centered_note()], bg_color());
-        // (the note's body, `inner`, `outer`) on a side, then on an end.
-        let side = [pixel(&frame, 138, 128), pixel(&frame, 141, 128), pixel(&frame, 143, 128)];
-        let end = [pixel(&frame, 128, 186), pixel(&frame, 128, 189), pixel(&frame, 128, 191)];
+        let at = |x: u32, y: u32| pixel(&frame, x, y);
         const RED: [u8; 4] = [255, 0, 0, 255];
-        const WHITE: [u8; 4] = [255, 255, 255, 255];
         const BLACK: [u8; 4] = [0, 0, 0, 255];
-        assert!(near(side[0], RED), "the note's body went missing: {:?}", side[0]);
-        assert!(near(side[1], BLACK), "the inner rail is missing: {:?}", side[1]);
-        assert!(near(side[2], WHITE), "the outer rail is missing: {:?}", side[2]);
-        assert!(near(end[0], RED), "the note's body was cut at its end: {:?}", end[0]);
-        assert!(near(end[1], BG), "the inner band wrapped the end: {:?}", end[1]);
-        assert!(near(end[2], BG), "the outer band wrapped the end: {:?}", end[2]);
+        assert!(near(at(138, 128), RED), "the note's body went missing: {:?}", at(138, 128));
+        assert!(near(at(142, 128), BLACK), "no outline along the flank: {:?}", at(142, 128));
+        assert!(near(at(128, 186), RED), "the note's body was cut at its end: {:?}", at(128, 186));
+        assert!(near(at(128, 190), BLACK), "no outline across the end: {:?}", at(128, 190));
+        assert!(near(at(128, 193), BG), "the outline runs past its reach: {:?}", at(128, 193));
+        // Diagonally off the corner: 2.8 points out is inside the radius, 5.0
+        // is outside it, and four bands butted together would paint both.
+        assert!(near(at(141, 189), BLACK), "the corner is missing: {:?}", at(141, 189));
+        assert!(
+            near(at(143, 191), BG),
+            "the corner is square ({:?}) — the outline is being drawn as bands rather \
+             than as a distance",
+            at(143, 191),
+        );
     }
 
-    /// A rail runs the FULL length of the note it edges — corner to corner,
-    /// at its OUTER edge as much as its inner one.
+    /// The outline runs the FULL length of the note it wraps, corner to corner,
+    /// at its outer edge as much as against the note.
     ///
-    /// The keyline is a band of the box distance, so past the note's end it
-    /// curves with the field and pulls away; where that band is cut is what
-    /// decides how much rail survives. It used to sit at distance
-    /// `half_outline .. half_outline + keyline`, and the corner rounding at
-    /// the outer radius then took the rail's outer edge off half an outline
-    /// early — the rails read as visibly shorter than the note between them.
-    /// With the outline gone the band starts at the note's own edge, and both
-    /// of its corners land exactly where the note's ink stops.
+    /// It is coverage of the box distance, so past the note's end it curves
+    /// with the field: the flank's outer edge holds its distance right up to
+    /// where the note's own ink stops and only then turns. An outline that
+    /// pulled away early would read as the note tapering off before it ends.
     #[test]
-    fn a_rail_runs_the_whole_length_of_its_note() {
+    fn the_outline_runs_the_whole_length_of_its_note() {
         let Some((device, queue)) = headless_device() else {
             return;
         };
         let frame = draw(&device, &queue, vec![centered_note()], bg_color());
-        // The note's box ends at half_extent 60, so row 187 is its last full
-        // one along time and 190 is clear of it.
-        let lit = |x: u32, y: u32| pixel(&frame, x, y)[1] > (BG[1] + 40);
         let dark = |x: u32, y: u32| pixel(&frame, x, y)[1] < (BG[1] - 40);
-        // Both edges of the 2-point `inner` band, which starts at the note's
-        // own edge (x = 140): column 140 is its inner half, 141 its OUTER half —
-        // the half the band's corner rounding used to take off early.
-        for x in [140, 141] {
-            assert!(dark(x, 128), "the rail is missing at the note's middle (x = {x})");
-            assert!(dark(x, 187), "the rail stops short of the note's end (x = {x})");
-            assert!(!dark(x, 190), "the rail runs past the note's end (x = {x})");
+        // Every column of the flank's outline, from the note's own edge
+        // (x = 140) out to its reach — the outer ones being where a distance
+        // field's corner rounding bites first.
+        for x in [140, 141, 142, 143] {
+            assert!(dark(x, 128), "the outline is missing at the note's middle (x = {x})");
+            // Row 187 is the note's last full row along time; the outline is
+            // still at its full stand-off there.
+            assert!(dark(x, 187), "the outline pulls away before the note ends (x = {x})");
         }
-        // And the `outer` band beyond it (x = 142, 143), which is cut by the
-        // same mask and so runs exactly as far: an outer rail one band short of
-        // the note's end would read as the note tapering.
-        for x in [142, 143] {
-            assert!(lit(x, 128), "the outer rail is missing at the note's middle (x = {x})");
-            assert!(lit(x, 187), "the outer rail stops short of the note's end (x = {x})");
-            assert!(!lit(x, 190), "the outer rail runs past the note's end (x = {x})");
+        // And it keeps going past the end, around the corner, rather than being
+        // cut there: the flank and the cap are one shape.
+        assert!(dark(140, 190), "the outline is cut at the note's end");
+    }
+
+    /// The fade takes the outline out gradually over the last of its reach,
+    /// rather than ending it: solid where it meets the note, gone at the reach,
+    /// and monotone between.
+    ///
+    /// The pair is the lattice's knockout gutter's, and two settings rather
+    /// than one for the same reason — a fade tied to the reach makes a wider
+    /// outline always a blurrier one. So this measures the fade against a
+    /// hard-edged outline of the SAME reach: both must end in the same place,
+    /// and only one of them may be soft on the way there.
+    #[test]
+    fn a_fade_takes_the_outline_out_gradually() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        // Black on white: every painted byte is one minus the outline's
+        // coverage, read straight off the frame.
+        let note = RollInstance { core: [255, 255, 255, 255], ..centered_note() };
+        let cov = |fade: f32, x: u32| {
+            let frame = draw(
+                &device,
+                &queue,
+                vec![RollInstance { outline_fade: fade, ..note }],
+                wgpu::Color::WHITE,
+            );
+            1.0 - f32::from(pixel(&frame, x, 128)[0]) / 255.0
+        };
+
+        // A fade over the whole 4-point reach: coverage falls off linearly from
+        // the note's edge at 140 to nothing at 144.
+        for (x, want) in [(140u32, 0.875f32), (141, 0.625), (142, 0.375), (143, 0.125)] {
+            let got = cov(4.0, x);
+            assert!(
+                (got - want).abs() < 0.06,
+                "the faded outline covers {got:.3} at x = {x}, not {want:.3}",
+            );
         }
+        // Hard-edged, the same outline is solid across the whole of its reach
+        // but the last pixel, which is the antialiasing ramp a hard edge still
+        // gets — and it ends in the same place the faded one does.
+        for x in [140, 141, 142] {
+            assert!(cov(0.0, x) > 0.97, "a fade of 0 is not a hard edge (x = {x})");
+        }
+        assert!(
+            cov(0.0, 143) > cov(4.0, 143) + 0.2,
+            "the hard and faded outlines cover the same at the end of the reach ({:.3} vs {:.3})",
+            cov(0.0, 143),
+            cov(4.0, 143),
+        );
+        assert!(cov(0.0, 145) < 0.02, "the hard outline reaches past 4 points");
+        assert!(cov(4.0, 145) < 0.02, "the faded outline reaches past 4 points");
+    }
+
+    /// A fade set past the outline's own reach eats OUTWARD — it fades the
+    /// whole reach, from full coverage at the note's edge — rather than dimming
+    /// the outline everywhere.
+    ///
+    /// The same bound the lattice's gutter puts on its fade, and the same
+    /// reason: the coverage against the note is the one part that always has to
+    /// be there, since that boundary is the whole point of the outline. Without
+    /// the bound a fade dialled past the reach makes the note's edge translucent
+    /// and the ribbon starts dissolving into the picture behind it.
+    #[test]
+    fn a_fade_past_the_reach_still_meets_the_note_solid() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        // A 2-point outline asked to fade over 20.
+        let note = RollInstance {
+            outline_reach: 2.0,
+            outline_fade: 20.0,
+            core: [255, 255, 255, 255],
+            ..centered_note()
+        };
+        let frame = draw(&device, &queue, vec![note], wgpu::Color::WHITE);
+        let cov = |x: u32| 1.0 - f32::from(pixel(&frame, x, 128)[0]) / 255.0;
+        assert!(cov(140) > 0.6, "the outline meets the note at {:.3} coverage", cov(140));
+        assert!(cov(140) > cov(141), "the outline does not fade outward at all");
+        assert!(cov(143) < 0.05, "the outline reaches past the 2 points it was given");
     }
 
     /// A note is a rectangle: its corners are square, right out to them.
@@ -647,10 +717,10 @@ mod tests {
             return;
         };
         // 40 points across pitch, 6 along time — the shape of a tapped key on
-        // a thick ribbon. No keyline, so the sample reads the shape alone.
+        // a thick ribbon. No outline, so the sample reads the shape alone.
         let tap = RollInstance {
             half_extent: [20.0, 3.0],
-            keyline: 0.0,
+            outline_reach: 0.0,
             ..centered_note()
         };
         let frame = draw(&device, &queue, vec![tap], bg_color());
@@ -664,35 +734,34 @@ mod tests {
         );
     }
 
-    /// The rim must still stand OUTSIDE a note floored to its minimum
-    /// thickness: the note's own color at the middle, the black band beyond it,
-    /// the white band beyond that. This is the same invariant at the width
-    /// where it actually bit — a hairline is all edge, so a band that grew
-    /// inward would simply paint over the note.
+    /// The outline must still stand OUTSIDE a note floored to its minimum
+    /// thickness: the note's own color at the middle, the outline beyond it.
+    /// This is the same invariant at the width where it actually bites — a
+    /// hairline is all edge, so an outline that grew inward would simply paint
+    /// over the note.
     ///
-    /// The dark band being the inner one is what makes it the sharp test: a
-    /// black band that leaked inward does not merely tint a hairline, it erases
-    /// the one thing the ribbon is there to say, which is its color.
+    /// A DARK outline is what makes it the sharp test: black leaking inward
+    /// does not merely tint a hairline, it erases the one thing the ribbon is
+    /// there to say, which is its color.
     #[test]
-    fn the_rim_does_not_paint_over_a_hairline_note() {
+    fn the_outline_does_not_paint_over_a_hairline_note() {
         let Some((device, queue)) = headless_device() else {
             return;
         };
         // 1.5 points across pitch: what `panes::spectral::roll` floors a ribbon too thin
         // to see to (MIN_RIBBON_PX). Narrower than a pixel is wide, so no
         // sample here is purely one thing — what matters is that the middle
-        // still reads as the NOTE rather than as a band having flooded it. Its
-        // own coverage there is 0.75, so a red channel anywhere near that is
-        // the note; near 0 is the black band standing where the note should be.
+        // still reads as the NOTE rather than as the outline having flooded it.
+        // Its own coverage there is 0.75, so a red channel anywhere near that
+        // is the note; near 0 is the outline standing where the note should be.
         let note = RollInstance { half_extent: [0.75, 60.0], ..centered_note() };
         let frame = draw(&device, &queue, vec![note], bg_color());
         let at = |x: u32| pixel(&frame, x, 128);
         let middle = at(128);
-        assert!(middle[0] > 150, "the rim flooded the note's own color: {middle:?}");
+        assert!(middle[0] > 150, "the outline flooded the note's own color: {middle:?}");
         assert!(middle[1] < 32, "something light flooded the note's middle: {middle:?}");
-        assert!(near(at(129), [0, 0, 0, 255]), "no black band beside it: {:?}", at(129));
-        assert!(near(at(131), [255, 255, 255, 255]), "no white band outside it: {:?}", at(131));
-        assert!(near(at(134), BG), "the rim reaches further than it should: {:?}", at(134));
+        assert!(near(at(130), [0, 0, 0, 255]), "no outline beside it: {:?}", at(130));
+        assert!(near(at(134), BG), "the outline reaches further than it should: {:?}", at(134));
     }
 
     /// A note two pixels along the depth axis holds its brightness as it
@@ -715,12 +784,11 @@ mod tests {
         let Some((device, queue)) = headless_device() else {
             return;
         };
-        // White, no rim: every painted byte is the fill's own coverage.
+        // White, no outline: every painted byte is the fill's own coverage.
         let bare = RollInstance {
-            keyline: 0.0,
+            outline_reach: 0.0,
             core: [255, 255, 255, 255],
-            inner: [0, 0, 0, 0],
-            outer: [0, 0, 0, 0],
+            outline: [0, 0, 0, 0],
             ..centered_note()
         };
         // The brightest pixel anywhere, over a sweep of sub-pixel scroll
@@ -840,33 +908,32 @@ mod tests {
         }
     }
 
-    /// A glide's rim keeps its thickness instead of thinning with the angle.
+    /// A glide's outline keeps its thickness instead of thinning with the
+    /// angle.
     ///
     /// The shear that turns the box into the parallelogram a bent note
-    /// follows also stretches distances along the pitch axis, so the band has
-    /// to be measured perpendicular to the edge it rides — that is the
-    /// division by the shear's length. Without it a 45-degree glide's keyline
-    /// comes out 1/sqrt(2) as thick as the same note held.
+    /// follows also stretches distances along the pitch axis, so the outline
+    /// has to be measured perpendicular to the edge it stands against — that is
+    /// the division by the shear's length. Without it a 45-degree glide's
+    /// outline comes out 1/sqrt(2) as thick as the same note held.
     ///
     /// Measured as total ink across one scanline, which for a slanted band is
-    /// `sqrt(1 + slope^2)` times its true thickness: 5.66 points for the two
-    /// 2-point flanks at 45 degrees, against 4.0 held. An unnormalized
-    /// distance would read 4.0 for both.
-    ///
-    /// Both bands are in the measurement, since both are cut from the same
-    /// distance and `outer` is the one that would have to stretch furthest.
+    /// `sqrt(1 + slope^2)` times its true thickness. A hard-edged 3-point
+    /// outline lays down 2.5 points of ink per flank — the reach less the half
+    /// pixel its antialiasing ramp spends ending — so 5.0 points held and 7.07
+    /// at 45 degrees. An unnormalized distance would read 5.0 for both.
     #[test]
-    fn a_glides_rim_keeps_its_thickness_instead_of_thinning_with_the_angle() {
+    fn a_glides_outline_keeps_its_thickness_instead_of_thinning_with_the_angle() {
         let Some((device, queue)) = headless_device() else {
             return;
         };
-        // Only the rim paints, and in black: over a white background its
+        // Only the outline paints, and in black: over a white background its
         // coverage is then exactly `1 - r/255` in every pixel it touched.
         let bare = RollInstance {
-            keyline: 1.0,
+            outline_reach: 3.0,
+            outline_fade: 0.0,
             core: [0, 0, 0, 0],
-            inner: [0, 0, 0, 255],
-            outer: [0, 0, 0, 255],
+            outline: [0, 0, 0, 255],
             ..centered_note()
         };
         let white = wgpu::Color::WHITE;
@@ -878,40 +945,39 @@ mod tests {
         };
 
         let held = ink(bare);
-        assert!((held - 4.0).abs() < 0.3, "a held note's two 2-point flanks measured {held}");
+        assert!((held - 5.0).abs() < 0.3, "a held note's two 3-point flanks measured {held}");
 
         let glide = ink(RollInstance { shear: 1.0, ..bare });
-        let expected = 4.0 * f32::sqrt(2.0);
+        let expected = 5.0 * f32::sqrt(2.0);
         assert!(
             (glide - expected).abs() < 0.5,
-            "a 45-degree glide's rim measured {glide} across the scanline, not {expected} — \
-             the band thins with the angle instead of keeping its thickness",
+            "a 45-degree glide's outline measured {glide} across the scanline, not \
+             {expected} — it thins with the angle instead of keeping its thickness",
         );
     }
 
-    /// A glide's quad has to hold the whole rim at the note's ENDS, where a
-    /// sheared note's ink reaches furthest along pitch.
+    /// A steep glide's outline stands its full width off the note at the note's
+    /// ENDS, where a sheared note's ink reaches furthest along pitch.
     ///
-    /// The two are one statement: the bands are measured perpendicular to the
-    /// long edges (the test above), so along pitch they stand `sqrt(1+slope^2)`
-    /// times their own thickness out — and the quad the vertex stage grows has
-    /// to cover exactly that, or the fragment stage never runs where the ink
-    /// was owed and the rim is cut off along a straight line at nothing in
-    /// particular. A quad grown by the rim's flat thickness is right at slope 0
-    /// and short by `(skew - 1)` rim widths everywhere else, so a held note
-    /// cannot show it and a steep bend loses points of white.
+    /// Two things have to be right for the ink to be there, and either alone
+    /// would leave it black at the flank and short of where it belongs. The
+    /// outline is measured perpendicular to the edge it stands against (the
+    /// test above), so along PITCH it covers `sqrt(1+slope^2)` times its own
+    /// reach; and the quad the vertex stage grows has to hold all of that, or
+    /// the fragment stage never runs where the ink was owed and the outline is
+    /// cut off along a straight line at nothing in particular.
     ///
-    /// Sampled at the note's own last row, since the shortfall grows with
-    /// `|local.y|` and is zero at its middle — which is where a scanline
+    /// Sampled at the note's own last row, since both shortfalls grow with
+    /// `|local.y|` and are zero at its middle — which is where a scanline
     /// measurement like the one above would look.
     #[test]
-    fn a_steep_glides_quad_still_covers_its_rim_at_the_notes_ends() {
+    fn a_steep_glides_outline_still_stands_off_at_the_notes_ends() {
         let Some((device, queue)) = headless_device() else {
             return;
         };
         // 8 points across pitch, 40 along time, bending 3 points of pitch per
-        // point of depth: steep enough that `skew` is 3.16, so the rim stands
-        // 12.6 points out along pitch rather than 4.
+        // point of depth: steep enough that `skew` is 3.16, so the outline
+        // stands 12.6 points out along pitch rather than 4.
         let steep = RollInstance {
             half_extent: [4.0, 20.0],
             shear: 3.0,
@@ -919,21 +985,22 @@ mod tests {
         };
         let frame = draw(&device, &queue, vec![steep], bg_color());
         // Row 147 samples `local.y = 19.5` — inside the note's box, half a
-        // point short of its end, and still under the full rail. There the
-        // note's center line has drifted 58.5 points, so the far flank runs
-        // 190.5..196.8 black and 196.8..203.2 white.
+        // point short of its end. There the note's center line has drifted 58.5
+        // points, so the far flank's ribbon ends at 190.5 and its outline runs
+        // out to 203.2 — where an outline that kept its width along pitch
+        // rather than perpendicular to the edge would stop at 194.5.
         let at = |x: u32| pixel(&frame, x, 147);
         assert!(
             near(at(193), [0, 0, 0, 255]),
-            "the inner band is missing at the note's end: {:?}",
+            "the outline is missing at the note's end: {:?}",
             at(193),
         );
         assert!(
-            near(at(200), [255, 255, 255, 255]),
-            "the outer band is cut off at the note's end ({:?}) — the quad was grown \
-             by the rim's flat thickness rather than its sheared reach",
-            at(200),
+            near(at(199), [0, 0, 0, 255]),
+            "the outline is cut off at the note's end ({:?}) — it thins with the angle, \
+             or the quad was grown by its flat reach rather than its sheared one",
+            at(199),
         );
-        assert!(near(at(206), BG), "the rim reaches further than it should: {:?}", at(206));
+        assert!(near(at(206), BG), "the outline reaches further than it should: {:?}", at(206));
     }
 }

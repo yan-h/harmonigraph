@@ -193,12 +193,11 @@ pub(crate) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
     });
 
     ValueBar::new(&mut cfg.keyline, 0.0..=1.0, "Edge").show(ui).on_hover_text(
-        "A rim along the spectrum's profile and around each note ribbon. \
-         Both sit over the spectrogram, whose colors run from black to \
-         near-white, so either can end up the same brightness as what is \
-         behind it and lose its shape. This sets how bright the profile's \
-         line is; a note's rim is a solid black and white pair, which this \
-         only switches. 0 draws neither.",
+        "A light rim along the spectrum's profile. It sits over the \
+         spectrogram, whose colors run from black to near-white, so where the \
+         curve is the same brightness as the cell behind it the shape is lost \
+         without one. 0 draws none.\n\nA note ribbon has its own edge — see \
+         Outline, under Piano roll.",
     );
 
     // ---- Piano roll -----------------------------------------------------
@@ -227,6 +226,30 @@ pub(crate) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
             "Ribbon width in semitones of the pitch axis — so it holds its \
              musical meaning as the pitch range is zoomed, and a note is as \
              wide as the interval it would cover",
+        );
+    ValueBar::new(&mut cfg.roll_outline, 0.0..=crate::ROLL_OUTLINE_MAX, "Outline")
+        .decimals(1)
+        .show(ui)
+        .on_hover_text(
+            "How far a dark surround stands off a note, in points. It wraps \
+             every side, so a note is a bounded object over the spectrogram \
+             rather than a ribbon dissolving into it — and dark, because the \
+             spectrogram's palettes run to near-white and that is the one \
+             color no cell of one can hide. 0 draws none.\n\nIn points rather \
+             than semitones, so it is the same edge at every zoom; at a wide \
+             zoom the ribbons are thinner than this and neighbours' outlines \
+             reach over each other.",
+        );
+    ValueBar::new(&mut cfg.roll_outline_fade, 0.0..=crate::ROLL_OUTLINE_MAX, "Outline fade")
+        .decimals(1)
+        .show(ui)
+        .on_hover_text(
+            "How much of the outline's reach it spends fading out, in points. \
+             0 is a hard edge; at the outline's own width it fades over the \
+             whole of it, from the note's edge outward. Past that it does \
+             nothing more.\n\nThe same pair as the lattice's gutter and gutter \
+             fade, and two settings for the same reason: tied together, a \
+             wider outline would always be a blurrier one.",
         );
     ui.checkbox(&mut cfg.note_names, "Note names").on_hover_text(
         "Write each note's name on its own ribbon, at the leading edge — so a \

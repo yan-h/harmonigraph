@@ -76,31 +76,6 @@ const MIN_RIBBON_PX: f32 = 1.5;
 /// nothing sounded.
 const MIN_LENGTH_DEVICE_PX: f32 = 2.0;
 
-/// How wide each of the two bands riding a note's outer edge is, in points —
-/// the black one against the note, and the white one outside it.
-///
-/// Fixed rather than a setting: a full point is the only width worth having.
-/// The white band is the brightest thing on a note, and a *bright* sub-point
-/// line shimmers as the roll scrolls, its peak intensity wobbling with every
-/// sub-pixel step across the grid (worst on a Hi-DPI display, where 0.6 points
-/// is barely over one physical pixel).
-///
-/// One width for both bands and the same width at every zoom, so the rim is a
-/// constant: a note carries two points of it per flank whatever the ribbon
-/// behind it measures and however far the pitch range is opened. A rim scaled
-/// to the ribbon would hold a steadier ratio between the two, and that is the
-/// trade being refused — the zoom would then change what a note IS rather than
-/// how much of the axis it covers, and an edge that thins as you pull back is
-/// an edge that stops doing its job exactly where the picture gets busiest.
-///
-/// What it costs is at the wide end, where the ribbon floors at
-/// [`MIN_RIBBON_PX`] and the rim is wider than the gap a semitone leaves
-/// between two of them: neighbours' rims then reach over each other's ribbons,
-/// and since the bands are opaque and instances rasterize in buffer order, the
-/// note drawn later wins. A tight cluster reads as rim with the ribbons showing
-/// through it.
-const KEYLINE_PX: f32 = 1.0;
-
 /// The light edge drawn along the spectrum's profile, at `cfg.keyline`
 /// strength — `None` when the setting is off or too faint to be worth a shape.
 ///
@@ -111,54 +86,54 @@ const KEYLINE_PX: f32 = 1.0;
 /// entirely on which palette is in play — Mono runs to white and swallows a rim
 /// the even ramps leave standing.
 ///
-/// The threshold is a fade-out floor, which is a thing only a STRENGTH has: the
-/// roll's rim reads the same setting as a switch (see [`keyline_band`]) and so
-/// has none.
+/// The threshold is a fade-out floor: below it the line is too faint to be
+/// worth a shape at all.
 ///
-/// The roll's notes carry an opaque version of this; the profile keeps the
-/// plain fraction, being one line on a filled slab rather than a shape to pick
-/// out of a picture.
+/// The profile's edge alone. A note's is the outline [`outline`] draws, which
+/// is a dark surround with its own reach and fade — the profile is one line on
+/// a filled slab rather than a shape to pick out of a picture, and needs
+/// neither.
 pub(super) fn keyline(cfg: &crate::SpectrumConfig, alpha: f32) -> Option<Color32> {
     let strength = cfg.keyline.clamp(0.0, 1.0) * alpha;
     (strength > 0.004).then_some(Color32::WHITE.gamma_multiply(strength))
 }
 
-/// The two bands standing outside a note: `(width, inner, outer)` — black
-/// against the note, white beyond it, one width each (see [`KEYLINE_PX`]).
+/// The dark surround standing outside a note: `(reach, fade, color)` — how far
+/// past the note's edge it goes, how much of that it spends fading out, and
+/// what it is at full coverage.
 ///
-/// Both are OPAQUE. A translucent rim takes its color from whatever the
-/// spectrogram is doing behind it, so the same note comes out with a different
-/// edge over a loud cell than over a quiet one, and over the bright end of a
-/// palette the light band washes out into it — which is the one place a note
-/// most needs an edge, since that is the cell the note itself is making. Opaque,
-/// the rim is the same two lines everywhere, and a note reads as one object
-/// against a picture rather than as a tint of it.
+/// BLACK, and not a setting. The outline's job is to give a note a boundary
+/// against a spectrogram whose palette runs from black to near-white, and the
+/// one color that can be told from every cell of every palette is the one the
+/// pane's own background is: a note reads as an object sitting over the
+/// picture, with the picture darkened around it. A colored surround would be a
+/// second hue competing with the ribbon's own, which is the one thing on a note
+/// that carries meaning.
 ///
-/// Dark INSIDE and light OUTSIDE. The black separates the note's own color from
-/// the rim, so the ribbon keeps its hue right to its edge; the white then reads
-/// against the spectrogram rather than against the note, and on this pane's dark
-/// background it is the brighter contrast of the two. The other order gives the
-/// note a white halo that its own color has to fight through.
+/// Opaque where it is solid, and translucent only through the fade — never a
+/// flat tint. A uniformly translucent surround takes its color from whatever is
+/// behind it, so the same note comes out with a different edge over a loud cell
+/// than over a quiet one, and washes out entirely against the bright end of a
+/// palette — the one place a note most needs an edge, since that is the cell the
+/// note itself is making. The fade is a shape's ending rather than a strength:
+/// it is opaque against the note and gone at its reach, wherever it is drawn.
 ///
-/// Neither band scales with anything. Both are [`KEYLINE_PX`] at every zoom and
-/// every ribbon width, which is what makes the rim a constant of the picture
-/// rather than a reading of it — see that constant for the trade, which is real
-/// and is at the wide end.
+/// Neither number scales with anything: the reach is in points, so it is the
+/// same edge at every zoom and every ribbon width. That is what makes the
+/// outline a constant of the picture rather than a reading of it — see
+/// [`SpectrumConfig::roll_outline`](crate::SpectrumConfig) for the trade, which
+/// is real and is at the wide end.
 ///
-/// This crate decides all of it, and hands the shader two bands named for
-/// position alone — the look does not belong half here and half in a fragment
-/// shader.
-///
-/// Edge is a SWITCH here rather than a strength: the bands are opaque, so what
-/// it decides is whether they are drawn. Off comes back zero-width AND
-/// transparent, never one or the other: the width is what the quad grows by to
-/// make room for the bands (and what the far-edge cull keeps a leaving note
-/// alive for), so a band that will not paint must not be paid for either.
-fn keyline_band(cfg: &crate::SpectrumConfig) -> (f32, Color32, Color32) {
-    if cfg.keyline <= 0.0 {
-        return (0.0, Color32::TRANSPARENT, Color32::TRANSPARENT);
+/// Off comes back zero-reach AND transparent, never one or the other: the reach
+/// is what the quad grows by to make room for the outline (and what the
+/// far-edge cull keeps a leaving note alive for), so an outline that will not
+/// paint must not be paid for either.
+fn outline(cfg: &crate::SpectrumConfig) -> (f32, f32, Color32) {
+    let reach = cfg.roll_outline.max(0.0);
+    if reach <= 0.0 {
+        return (0.0, 0.0, Color32::TRANSPARENT);
     }
-    (KEYLINE_PX, Color32::BLACK, Color32::WHITE)
+    (reach, cfg.roll_outline_fade.clamp(0.0, reach), Color32::BLACK)
 }
 
 /// Draw every remembered note that falls inside the pane's time window and
@@ -260,9 +235,9 @@ pub(super) fn note_instances(
         None => state.tracker.roll(),
     };
     // The whole look of a note, decided once for the roll rather than per
-    // note: the two bands standing outside its long edges. The note itself is a
-    // solid rectangle of its own color and has nothing else to decide.
-    let (keyline_px, inner, outer) = keyline_band(cfg);
+    // note: the outline standing outside it. The note itself is a solid
+    // rectangle of its own color and has nothing else to decide.
+    let (outline_px, outline_fade_px, outline_color) = outline(cfg);
     // The antialiasing ramp the shader feathers every edge with — one physical
     // pixel, in points at this display's density, the same figure it takes as
     // `feather`. Ink reaches half of it past whatever it edges.
@@ -298,10 +273,10 @@ pub(super) fn note_instances(
     // to nothing — so without it the last sliver of a floored note would appear
     // INSIDE the far edge on the frame before the cull takes it, which is the
     // pop the overhang exists to prevent.
-    // The ramp alone, and no rim: both bands are cut at the note's ENDS
-    // (`rail_mask` in roll.wgsl), so along depth the rim spends none of its
-    // width and a note's ink stops half a ramp past its box.
-    let ink_px = min_half_depth + 0.5 * feather_px;
+    // The outline and the ramp: the outline wraps the note's ENDS as well as
+    // its flanks, so a note's ink runs the outline's whole reach past its box
+    // along this axis too, and half a ramp past that.
+    let ink_px = min_half_depth + outline_px + 0.5 * feather_px;
     // Seconds per point of the roll — the pane's depth axis is shared with the
     // spectrum, so it is the ROLL's share of it that a point is measured
     // against. What every screen-space length here (the ink overhang) is
@@ -309,14 +284,14 @@ pub(super) fn note_instances(
     let per_point = f64::from(1.0 / (axes.depth_len() * (1.0 - split)).max(1.0)) * time.window();
     let ink_seconds = if time.whole_song() { 0.0 } else { f64::from(ink_px) * per_point };
     let edge = oldest - ink_seconds;
-    // Across pitch the same argument in that axis' own units, and here the rim
-    // is the whole of it: the bands ride a note's long edges, which are the
-    // edges that face the pitch range's ends. Measured off the DRAWN ribbon
+    // Across pitch the same argument in that axis' own units, and here the
+    // outline is the whole of it: it stands past a note's long edges, which are
+    // the edges that face the pitch range's ends. Measured off the DRAWN ribbon
     // rather than `roll_thickness`, since the width floor is what a note
     // actually occupies at a wide zoom, and converted through the scale — so
     // the margin shrinks as the zoom tightens instead of staying a fixed number
     // of semitones.
-    let reach_px = half_pitch + 2.0 * keyline_px + 0.5 * feather_px;
+    let reach_px = half_pitch + outline_px + 0.5 * feather_px;
     let pitch_margin = reach_px / axes.pitch_len().max(1.0) * scale.span;
     let mut notes: Vec<&RollNote> = roll
         .notes()
@@ -392,23 +367,32 @@ pub(super) fn note_instances(
             // and the boundary are one thing, and a heatmap cell showing
             // through a note said neither clearly.
             let core = note_color(state, pitch, alpha);
-            // Reading outward: the note, the black band standing against its
-            // long edges, the white band standing against that, then whatever
-            // the spectrogram is doing.
+            // Reading outward: the note, the dark outline standing against
+            // every one of its edges and fading out, then whatever the
+            // spectrogram is doing.
             //
-            // Both bands stand entirely OUTSIDE the note, never as a stroke of
-            // its path — a centered stroke grows inward exactly as much as
+            // The outline stands entirely OUTSIDE the note, never as a stroke
+            // of its path — a centered stroke grows inward exactly as much as
             // outward, and a note is only a few pixels thick at the pitch
             // ranges this pane is actually used at, so the two long edges meet
             // in the middle and paint over it. Here that is structural: the
-            // shader reads each band off the DISTANCE to the note's edge, and a
-            // band read off a positive distance cannot reach back inside it
+            // shader reads the outline off the DISTANCE to the note's edge, and
+            // coverage taken at a positive distance cannot reach back inside it
             // whatever the ribbon's thickness.
             //
-            // Nothing else rides the rim — in particular, no band approximating
-            // the lattice's bloom. The bloom is the lattice's alone: there it is
-            // a real post-process pass, not hand-placed bands standing in for
-            // one.
+            // Wrapping the ENDS is what the fade earns. The outline reaches
+            // into a note's surroundings, and along time those surroundings are
+            // the next note — repeats of one key butt together there, so the
+            // outline of the later one darkens the tail of the earlier. That is
+            // a seam between two notes rather than a halo painted over one:
+            // fading, it costs the earlier note's color nothing at the moment
+            // the two meet and reads as the boundary it is, where an opaque cap
+            // would blank the note's last points outright.
+            //
+            // Nothing else rides the outline — in particular, no band
+            // approximating the lattice's bloom. The bloom is the lattice's
+            // alone: there it is a real post-process pass, not a hand-placed
+            // band standing in for one.
 
             // Geometry in the pane's own two axes, which is all the shader is
             // told: `Axes` maps those onto perpendicular screen axes, so
@@ -459,10 +443,10 @@ pub(super) fn note_instances(
                 center: [center.x, center.y],
                 half_extent: [half_pitch, half_depth],
                 shear: slope,
-                keyline: keyline_px,
+                outline_reach: outline_px,
+                outline_fade: outline_fade_px,
                 core: core.to_array(),
-                inner: inner.to_array(),
-                outer: outer.to_array(),
+                outline: outline_color.to_array(),
             });
         }
     }
@@ -516,14 +500,14 @@ mod tests {
     /// One held note, and the instances the roll would draw for it. `range`
     /// is the pitch span in semitones — the pane is 100 points across the
     /// pitch axis, so a wide range makes a thin ribbon, which is where the
-    /// rim geometry is under the most pressure.
-    fn ribbon_with_range(keyline: f32, range: f32) -> Vec<RollInstance> {
+    /// outline geometry is under the most pressure.
+    fn ribbon_with_range(outline: f32, range: f32) -> Vec<RollInstance> {
         let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
         state.spectrum_config.orientation = SpectralOrientation::Left;
         state.spectrum_config.low_midi = 60.0 - range * 0.5;
         state.spectrum_config.high_midi = 60.0 + range * 0.5;
         state.spectrum_config.roll_thickness = 2.0;
-        state.spectrum_config.keyline = keyline;
+        state.spectrum_config.roll_outline = outline;
         state.tracker.handle_event(NoteEvent {
             time: 0.0,
             channel: 0,
@@ -535,8 +519,8 @@ mod tests {
 
     /// The note is 12 semitones across a 100-point axis (a thick ribbon), so
     /// it is bounded rather than drawn as a bare spine.
-    fn ribbon(keyline: f32) -> Vec<RollInstance> {
-        ribbon_with_range(keyline, 12.0)
+    fn ribbon(outline: f32) -> Vec<RollInstance> {
+        ribbon_with_range(outline, 12.0)
     }
 
     /// A note must stay on screen until the last of its INK is past the far
@@ -596,87 +580,110 @@ mod tests {
         &rects[0]
     }
 
-    /// The rim is the same thickness at every zoom and every note width — an
-    /// edge does not thin out because the ribbon it wraps did, and does not
-    /// thicken because the range was zoomed in. One width covers both bands, so
-    /// the pair cannot drift apart either.
+    /// The outline stands the same distance off at every zoom and every note
+    /// width — an edge does not thin out because the ribbon it wraps did, and
+    /// does not thicken because the range was zoomed in.
     ///
-    /// Constant is the requirement, not a simplification of one. A rim tied to
-    /// the ribbon would hold a steadier ratio between the two, at the price of
-    /// making the zoom change what a note IS rather than how much of the axis
-    /// it covers — and the wide end, where a scaled rim would give way, is
-    /// exactly where a picture full of notes needs its edges most.
+    /// Constant is the requirement, not a simplification of one. An outline
+    /// tied to the ribbon would hold a steadier ratio between the two, at the
+    /// price of making the zoom change what a note IS rather than how much of
+    /// the axis it covers — and the wide end, where a scaled outline would give
+    /// way, is exactly where a picture full of notes needs its edges most.
     ///
-    /// It is expressed as a DISTANCE OUTSIDE the note's outline, never as a
-    /// wider stroke of it; that distinction is the flood fix, and it is
-    /// structural, since the shader reads both bands off distances outside the
-    /// note's own edge. What is left to check here is that the thickness is
-    /// handed over unscaled.
+    /// It is expressed as a DISTANCE OUTSIDE the note's edge, never as a wider
+    /// stroke of it; that distinction is the flood fix, and it is structural,
+    /// since the shader reads the outline off distances outside the note's own
+    /// edge. What is left to check here is that the reach is handed over
+    /// unscaled.
     #[test]
-    fn the_rim_is_the_same_thickness_at_any_note_width() {
-        let thick = ribbon_with_range(0.5, 12.0);
+    fn the_outline_stands_the_same_distance_off_at_any_note_width() {
+        let thick = ribbon_with_range(1.5, 12.0);
         // ~120 semitones over 100 points: the ribbon is under 2 points thick,
-        // which is where centered strokes meet in the middle and paint the
-        // interior white.
-        let thin = ribbon_with_range(0.5, 120.0);
-        assert_eq!(one(&thick).keyline, KEYLINE_PX, "the keyline is not the width it is fixed at");
-        assert_eq!(one(&thin).keyline, one(&thick).keyline, "the keyline thinned with the note");
+        // which is where a centered stroke meets itself in the middle and
+        // paints the interior black.
+        let thin = ribbon_with_range(1.5, 120.0);
+        assert_eq!(one(&thick).outline_reach, 1.5, "the outline is not the reach it was set to");
+        assert_eq!(
+            one(&thin).outline_reach,
+            one(&thick).outline_reach,
+            "the outline thinned with the note",
+        );
         assert!(
             one(&thin).half_extent[0] < one(&thick).half_extent[0],
             "the two notes are the same thickness; the comparison is vacuous",
         );
-        // And nothing in between is a ramp: the width is one number, not a
+        // And nothing in between is a ramp: the reach is one number, not a
         // reading of the ribbon it stands against.
-        let middling = ribbon_with_range(0.5, 200.0 / 3.0);
-        assert_eq!(one(&middling).keyline, KEYLINE_PX, "the keyline scaled with the ribbon");
+        let middling = ribbon_with_range(1.5, 200.0 / 3.0);
+        assert_eq!(one(&middling).outline_reach, 1.5, "the outline scaled with the ribbon");
     }
 
-    /// Both bands are OPAQUE, black inside and white outside, at every Edge
-    /// setting that draws them at all.
+    /// The outline is OPAQUE black where it meets the note, at every reach that
+    /// draws it at all, and its fade is what takes it out from there.
     ///
-    /// Opacity is the point rather than a detail. A translucent rim takes its
-    /// color from the spectrogram behind it, so the same note reads differently
-    /// over a loud cell than a quiet one, and washes out entirely against the
-    /// bright end of a palette — the cell a note makes for itself. Anything
-    /// less than 255 here is that bug returning quietly.
+    /// Opacity against the note is the point rather than a detail. A uniformly
+    /// translucent surround takes its color from the spectrogram behind it, so
+    /// the same note reads differently over a loud cell than a quiet one, and
+    /// washes out entirely against the bright end of a palette — the cell a
+    /// note makes for itself. Anything less than 255 here is that bug returning
+    /// quietly, and dialling the fade is not how you would ask for it.
     ///
-    /// Edge is a GATE and not a strength, and the gate is OFF: at 0 both bands
-    /// go, which has to mean zero width AND no color, never one or the other.
-    /// The width is what the quad grows by to make room for them (and what
-    /// keeps a leaving note alive past the far edge), so a band that will not
-    /// paint must not be paid for either. Anything above 0 draws the same rim —
-    /// a switch whose throw sits anywhere else is a switch nobody can find.
+    /// Off has to mean zero reach AND no color, never one or the other: the
+    /// reach is what the quad grows by to make room for the outline (and what
+    /// keeps a leaving note alive past the far edge), so an outline that will
+    /// not paint must not be paid for either.
     #[test]
-    fn the_rim_is_two_opaque_bands_and_edge_only_switches_them() {
-        // Three settings across the bar's whole travel, to pin that Edge scales
-        // nothing here and that only 0 turns it off: the least it can be set to
-        // above nothing, a modest one, and full.
-        for edge in [0.002, 0.3, 1.0] {
-            let lit = ribbon(edge);
+    fn the_outline_is_opaque_black_at_every_reach_that_draws_it() {
+        // Three settings across the bar's whole travel: the least it can be set
+        // to above nothing, a modest one, and full.
+        for reach in [0.05, 2.0, crate::ROLL_OUTLINE_MAX] {
+            let lit = ribbon(reach);
             let note = one(&lit);
+            assert_eq!(note.outline_reach, reach, "the outline is not the reach it was set to");
             assert_eq!(
-                note.keyline, KEYLINE_PX,
-                "the rim is not the width it is fixed at, at Edge {edge}",
-            );
-            assert_eq!(
-                note.inner,
+                note.outline,
                 [0, 0, 0, 255],
-                "the inner band is not opaque black at Edge {edge}: {:?}",
-                note.inner,
-            );
-            assert_eq!(
-                note.outer,
-                [255, 255, 255, 255],
-                "the outer band is not opaque white at Edge {edge}: {:?}",
-                note.outer,
+                "the outline is not opaque black at reach {reach}: {:?}",
+                note.outline,
             );
         }
 
         let off = ribbon(0.0);
         let note = one(&off);
-        assert_eq!(note.keyline, 0.0, "Edge 0 still made room for a rim");
-        assert_eq!(note.inner[3], 0, "Edge 0 left an inner band behind");
-        assert_eq!(note.outer[3], 0, "Edge 0 left an outer band behind");
+        assert_eq!(note.outline_reach, 0.0, "an outline of no reach still made room for one");
+        assert_eq!(note.outline[3], 0, "an outline of no reach left a color behind");
+    }
+
+    /// The fade rides its own setting, and is bounded by the reach it softens:
+    /// past that it would be asking for an outline that never meets the note
+    /// solid, which is the one thing the outline is for.
+    ///
+    /// The same bound the lattice puts on its gutter fade, and the reason the
+    /// two are separate settings at all — a fade derived from the reach makes a
+    /// wider outline always a blurrier one, so the roll takes both and clamps
+    /// rather than deriving one from the other.
+    #[test]
+    fn the_fade_is_its_own_setting_and_stops_at_the_reach() {
+        let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
+        state.spectrum_config.orientation = SpectralOrientation::Left;
+        state.tracker.handle_event(NoteEvent {
+            time: 0.0,
+            channel: 0,
+            note: 60,
+            kind: NoteEventKind::On { velocity: 1.0 },
+        });
+        let fade_at = |state: &mut SharedState, reach: f32, fade: f32| {
+            state.spectrum_config.roll_outline = reach;
+            state.spectrum_config.roll_outline_fade = fade;
+            let notes = instances(state, 0.05);
+            one(&notes).outline_fade
+        };
+        assert_eq!(fade_at(&mut state, 3.0, 0.0), 0.0, "a fade of 0 is a hard edge, not a default");
+        assert_eq!(fade_at(&mut state, 3.0, 1.0), 1.0, "the fade is not its own setting");
+        assert_eq!(fade_at(&mut state, 3.0, 3.0), 3.0, "a fade of the whole reach is allowed");
+        assert_eq!(fade_at(&mut state, 3.0, 9.0), 3.0, "a fade past the reach was not clamped");
+        // And an outline that is not drawn carries no fade to draw it with.
+        assert_eq!(fade_at(&mut state, 0.0, 2.0), 0.0, "an outline of no reach kept a fade");
     }
 
     /// Note width is in SEMITONES, so a wide zoom takes a ribbon under a
