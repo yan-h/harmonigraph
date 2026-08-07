@@ -498,16 +498,22 @@ mod tests {
         assert!(roll.notes().all(|n| n.end == Some(3.0)));
     }
 
+    /// No channel is filtered out on its way in. The top one is the case
+    /// worth naming: it is v1's reserved channel, and the reservation is
+    /// gone — a note there is a note like any other, tracked, rolled and
+    /// colored by its pitch.
     #[test]
-    fn ignored_channels_never_reach_the_roll() {
-        let mut tracker = NoteTracker::new();
-        tracker.handle_event(NoteEvent {
-            time: 0.0,
-            channel: 15,
-            note: 60,
-            kind: NoteEventKind::On { velocity: 0.8 },
-        });
-        assert!(tracker.roll().is_empty());
+    fn every_channel_reaches_the_roll() {
+        for channel in 0..16u8 {
+            let mut tracker = NoteTracker::new();
+            tracker.handle_event(NoteEvent {
+                time: 0.0,
+                channel,
+                note: 60,
+                kind: NoteEventKind::On { velocity: 0.8 },
+            });
+            assert_eq!(tracker.roll().len(), 1, "channel {channel}");
+        }
     }
 
     #[test]

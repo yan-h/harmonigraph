@@ -16,7 +16,7 @@
 //!   how wide, and the boundary angles the shader draws them between.
 //! - [`camera`] — [`Camera`], [`Projection`], and the [`Projector`] used
 //!   for label placement and picking.
-//! - [`color`] — the pitch ramp and channel/idle colors.
+//! - [`color`] — the pitch ramp every note is colored off, and the idle color.
 //! - [`skin`] — the static palette the UI and renderer share.
 //! - [`trail`] — a quiet mark on the nodes the music has already been to.
 //!
@@ -33,7 +33,7 @@ pub mod trail;
 pub mod view;
 
 pub use camera::{Camera, Projection, Projector};
-pub use color::{channel_color, hue_circle, pitch_lut_color, pitch_ramp_lut, HUE_CIRCLE_N};
+pub use color::{hue_circle, pitch_lut_color, pitch_ramp_lut, HUE_CIRCLE_N};
 pub use derive::derive_scene;
 pub use octaves::{
     clamp_center, clamp_wheel, octave_layout, OctaveLayout, Ring, DEFAULT_CENTER, DEFAULT_COUNT,
@@ -136,9 +136,6 @@ pub struct NodeInstance {
     /// range lights the outermost indicator on its side rather than
     /// disappearing.
     pub octaves: [f32; OCTAVE_SLOTS],
-    /// Render as an outline instead of a filled disc (channel 14, v1's
-    /// "channel 15" in MIDI convention).
-    pub outlined: bool,
     pub hovered: bool,
     /// On the home (center sevens) sheet. Home nodes keep a blank
     /// placeholder ring while idle; off-sheet nodes draw nothing.

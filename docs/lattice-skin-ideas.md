@@ -21,12 +21,11 @@ new node shapes are cheap: change the coverage math, keep the compositing.
 ## Node bodies
 
 - **Solid fill** — a matte filled disc, no glow at all. The literal
-  "filled circle instead of empty"; calmest possible look, pitch/channel
-  color at full — a step past what solidity 1 already gives, which keeps its
-  skirt.
-- **Outline-only (rings for everything)** — what channel-14 already does,
-  promoted to a style: every note a hollow colored ring, stroke weight
-  tracking activation. A clean "wireframe lattice".
+  "filled circle instead of empty"; calmest possible look, pitch color at
+  full — a step past what solidity 1 already gives, which keeps its skirt.
+- **Outline-only (rings for everything)** — every note a hollow colored
+  ring, stroke weight tracking activation. A clean "wireframe lattice", and
+  a view setting rather than anything a note carries in with it.
 - **Filled + hard rim** — filled interior with a bright crisp edge (the
   inverse of the outward glow); reads as a coin/token rather than a star.
 - **Concentric rings** — 1–3 nested rings; ring count or spacing encodes

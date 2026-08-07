@@ -1,5 +1,9 @@
-//! Node color: the pitch ramp shared by the CPU and the shader LUT, plus
-//! channel and idle colors.
+//! Node color: the pitch ramp shared by the CPU and the shader LUT, plus the
+//! idle color.
+//!
+//! The ramp is the only thing a sounding note's color depends on — not the
+//! MIDI channel it arrived on, which nothing in the picture reads. One pitch
+//! is one color across the whole picture, whoever played it.
 //!
 //! The ramp is authored in two spaces at once, which is the whole design:
 //! its LIGHTNESS is CIELAB's `L*` and its HUE and CHROMA are Oklab's. `L*`
@@ -13,33 +17,11 @@
 //! different reason (predictable WCAG contrast between tones). Oklab is the
 //! cheaper half of that trade and the whole of it that matters here — see
 //! `tests/hue_space.rs`, which measures both and prices them.
-//!
-//! The fixed per-channel colors below stay hand-written CIELAB LCh. They name
-//! voices rather than pitches, nothing about them is swept, and re-authoring
-//! them in another space would move colors for no gain.
 
 use crate::view::ViewConfig;
 use crate::style::PitchGradient;
-use harmonigraph_core::ChannelRole;
 use crate::PITCH_LUT_N;
 use glam::Vec4;
-
-fn lch(l: f64, c: f64, h: f64) -> Vec4 {
-    // The conversion is unclamped and out-of-gamut LCH inputs yield values
-    // outside 0..255 (v1's graphics stack clamped downstream; we must do it
-    // ourselves before handing colors to the shader).
-    //
-    // Only the fixed channel colors come through here, and they are
-    // hand-written LCh — this is what keeps a mistyped one drawable. The pitch
-    // gradient has its own path and is inside the gamut by construction.
-    let rgb = color_space::Rgb::from(color_space::Lch::new(l, c, h));
-    Vec4::new(
-        (rgb.r.clamp(0.0, 255.0) / 255.0) as f32,
-        (rgb.g.clamp(0.0, 255.0) / 255.0) as f32,
-        (rgb.b.clamp(0.0, 255.0) / 255.0) as f32,
-        1.0,
-    )
-}
 
 /// Normalized pitch height in 0..1 across the gradient range: 0 at
 /// `darkest_pitch`, 1 at `brightest_pitch` (both MIDI note numbers).
@@ -579,10 +561,12 @@ pub fn hue_circle(lightness: f32, chroma: f32) -> [Vec4; HUE_CIRCLE_N] {
 /// It is a LIT pitch that this draws: a sounding glyph stands for a position
 /// on the pitch axis rather than for the voice that lit it, and so do the
 /// glow's lobes once two octaves sound. The band's ghosts and a solo voice's
-/// glow keep the node's own color instead, deliberately — a lone voice keeps
-/// its exact color, fixed channel hues included, which the ramp could not
-/// reproduce. Do not simplify `octave_glow_color`'s `count < 2u` fallback away
-/// on the strength of this function's name.
+/// glow keep the node's own color instead, deliberately — that color is the
+/// ramp at the VOICE's pitch, which is not the lit slot's whenever the two
+/// name different pitches (see the paragraph below), so a lone voice keeps
+/// its exact color rather than the one its indicator wears. Do not simplify
+/// `octave_glow_color`'s `count < 2u` fallback away on the strength of this
+/// function's name.
 ///
 /// One table for all of them is what puts a note's disc and its own lit octave
 /// indicator on the same color EXACTLY, rather than to within a tolerance, for
@@ -614,44 +598,6 @@ pub fn pitch_lut_color(
     with_lut(gradient, |lut| {
         lut[i0].lerp(lut[(i0 + 1).min(PITCH_LUT_N - 1)], f - f.floor())
     })
-}
-
-/// Ported verbatim from v1 (`editor/color.rs`); the channel policy itself
-/// lives in [`ChannelRole`]. Gradient channels are colored by pitch height on
-/// the `gradient`'s ramp, spread between `darkest_pitch` and
-/// `brightest_pitch` (MIDI note numbers). The fixed per-channel colors below
-/// are NOT on that ramp and no gradient setting touches them: a channel color
-/// names a voice, and it has to keep meaning the same voice whatever the pitch
-/// gradient is set to.
-pub fn channel_color(
-    channel: u8,
-    pitch: f32,
-    darkest_pitch: f32,
-    brightest_pitch: f32,
-    gradient: PitchGradient,
-) -> Vec4 {
-    match ChannelRole::of(channel) {
-        ChannelRole::FixedColor => match channel {
-            0 => lch(48.0, 45.0, 32.0),  // red
-            1 => lch(65.0, 60.0, 68.0),  // orange
-            2 => lch(80.0, 42.0, 83.0),  // yellow
-            3 => lch(65.0, 50.0, 120.0), // green
-            4 => lch(60.0, 40.0, 280.0), // blue
-            5 => lch(50.0, 55.0, 305.0), // purple
-            6 => lch(70.0, 30.0, 340.0), // pink
-            7 => lch(80.0, 0.0, 0.0),    // white
-            _ => lch(0.0, 0.0, 0.0),     // 8: black
-        },
-        // Through the table, not off the curve direct: the shader has only the
-        // table, so this is what puts a disc and the octave glyph drawn on top
-        // of it in the same color exactly (see [`pitch_lut_color`]).
-        ChannelRole::PitchGradient => {
-            pitch_lut_color(pitch, darkest_pitch, brightest_pitch, gradient)
-        }
-        // Outline voices get a bright neutral (the ring shape is the
-        // signal). Ignored never reaches here — the tracker drops it.
-        ChannelRole::Outline | ChannelRole::Ignored => Vec4::new(0.85, 0.85, 0.88, 1.0),
-    }
 }
 
 /// [`max_chroma`], for the test that keeps [`PitchGradient`]'s quoted figures

@@ -188,9 +188,9 @@ fn a_second_lattice_view_in_the_same_frame_does_not_break_the_submit() {
 /// nothing.
 const PARITY_SHIMMER_WIDTH: f32 = 5.0;
 
-/// A scene exercising every draw path: lit + idle + outlined + hovered
-/// nodes with octave indicators, a chord beam, and solid + dashed grid
-/// lines, all overlapping so blend order matters.
+/// A scene exercising every draw path: lit + idle + hovered nodes with
+/// octave indicators, a chord beam, and solid + dashed grid lines, all
+/// overlapping so blend order matters.
 fn parity_scene() -> Scene {
     use glam::{Vec3, Vec4};
     use harmonigraph_core::LatticePos;
@@ -221,7 +221,6 @@ fn parity_scene() -> Scene {
             color: Vec4::new(0.25 + f * 0.12, 0.55 - f * 0.05, 0.95 - f * 0.1, 1.0),
             activation: if i % 3 == 0 { 1.0 } else { 0.3 + f * 0.1 },
             octaves,
-            outlined: i == 4,
             hovered: i == 1,
             on_home: i % 2 == 0,
             // The off-sheet half draws small and knocks out, so the
@@ -1165,7 +1164,6 @@ fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
         color: Vec4::new(0.35, 0.55, 0.85, 1.0),
         activation: 1.0,
         octaves,
-        outlined: false,
         hovered: false,
         on_home: true,
         scale: 1.0,

@@ -46,10 +46,10 @@ pub enum ParamKey {
     /// melody/bass marks all ride it, so a release is a single gesture
     /// across the whole node instead of layers ending at different moments.
     Fade,
-    /// Pitch (MIDI note) shown darkest on pitch-colored channels (10-14 in
-    /// MIDI convention).
+    /// Pitch (MIDI note) shown darkest on the gradient. Every note is
+    /// colored by pitch, whatever channel carried it.
     DarkestPitch,
-    /// Pitch shown brightest on pitch-colored channels.
+    /// Pitch shown brightest on the gradient.
     BrightestPitch,
 }
 

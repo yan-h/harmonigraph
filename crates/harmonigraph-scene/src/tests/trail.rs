@@ -116,17 +116,21 @@ fn tint_puts_the_remembered_color_on_a_silent_node_only() {
         10.0,
     ))
     .color;
+    let gradient = ViewConfig::default().pitch_gradient;
     assert_ne!(remembered, idle);
     assert_eq!(
         remembered,
-        channel_color(0, 60.0, frame.darkest_pitch, frame.brightest_pitch, PitchGradient::default())
+        pitch_lut_color(60.0, frame.darkest_pitch, frame.brightest_pitch, gradient)
     );
 
-    // Sounding again: the live note owns `color`, memory or not.
+    // Sounding again: the live note owns `color`, memory or not. An octave
+    // up from the remembered note — the same pitch class, so it lights the
+    // same node, and a different pitch, so it is a different color on the
+    // ramp and the two answers can be told apart.
     tracker.handle_event(NoteEvent {
         time: 10.0,
-        channel: 4,
-        note: 60,
+        channel: 0,
+        note: 72,
         kind: NoteEventKind::On { velocity: 1.0 },
     });
     let scene = scene_of(&tracker, &tuning, &trail_view(TrailMark::Tint), &frame, 10.5);
@@ -135,13 +139,7 @@ fn tint_puts_the_remembered_color_on_a_silent_node_only() {
     assert_eq!(node.trail, 1.0, "still remembered");
     assert_eq!(
         node.color,
-        channel_color(
-            4,
-            60.0,
-            frame.darkest_pitch,
-            frame.brightest_pitch,
-            PitchGradient::default(),
-        ),
+        pitch_lut_color(72.0, frame.darkest_pitch, frame.brightest_pitch, gradient),
         "the sounding voice's own color, not the memory's"
     );
 }

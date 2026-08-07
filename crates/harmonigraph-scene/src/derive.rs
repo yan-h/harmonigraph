@@ -3,7 +3,7 @@
 //! *policy* lives here.
 
 use crate::camera::Camera;
-use crate::color::{channel_color, idle_color, pitch_lut_color, pitch_ramp_lut};
+use crate::color::{idle_color, pitch_lut_color, pitch_ramp_lut};
 use crate::octaves::octave_layout;
 use crate::trail::TrailField;
 use crate::view::{FrameParams, ViewConfig};
@@ -12,7 +12,7 @@ use crate::{
     MARK_DELAY_MAX, NODE_RADIUS_FACTOR, OCTAVE_SLOTS,
 };
 use glam::Vec4;
-use harmonigraph_core::{ChannelRole, HeldEnd, LatticePos, NoteTracker, Time, Tuning, VoiceState};
+use harmonigraph_core::{HeldEnd, LatticePos, NoteTracker, Time, Tuning, VoiceState};
 
 /// A melody- or bass-ring accumulator for one node: the octave slot it marks,
 /// plus the color and drawn level, all three read off the STRONGEST marking
@@ -222,11 +222,11 @@ pub fn derive_scene(
 
     // Each voice's color and envelope, computed once here rather than re-run
     // on every node the voice matches. All of it depends on the voice, the
-    // frame and `now` alone — never on the node — so this lifts the LCH->sRGB
-    // conversion and the envelope's four `powf`s (two ends, times the disc and
-    // the ring) out of the O(nodes × voices) loop below. One pitch class
-    // lights every node that spells it, so on a wide window that is tens of
-    // nodes per voice.
+    // frame and `now` alone — never on the node — so this lifts the ramp walk
+    // and the envelope's four `powf`s (two ends, times the disc and the ring)
+    // out of the O(nodes × voices) loop below. One pitch class lights every
+    // node that spells it, so on a wide window that is tens of nodes per
+    // voice.
     //
     // What genuinely varies per node stays down there: which octave slot the
     // voice sounds in on that node, and the mark color read off that slot's
@@ -234,8 +234,10 @@ pub fn derive_scene(
     let voices: Vec<FrameVoice> = tracker
         .voices()
         .map(|voice| {
-            let color = channel_color(
-                voice.channel,
+            // The voice's OWN pitch. Nothing here asks which channel carried
+            // it: a channel is a routing detail of the host's, and two notes
+            // of one pitch draw identically whichever lanes they arrived on.
+            let color = pitch_lut_color(
                 voice.pitch,
                 frame.darkest_pitch,
                 frame.brightest_pitch,
@@ -294,7 +296,6 @@ pub fn derive_scene(
         let mut activation = 0.0f32;
         let mut octaves = [0f32; OCTAVE_SLOTS];
         let mut color = node_idle;
-        let mut outlined = false;
         let mut melody = Mark::default();
         let mut bass = Mark::default();
 
@@ -307,7 +308,6 @@ pub fn derive_scene(
                 if envelope > activation {
                     activation = envelope;
                     color = lit.color;
-                    outlined = ChannelRole::of(voice.channel) == ChannelRole::Outline;
                 }
                 // The slot whose own pitch on THIS node is the one sounding —
                 // `slot_pitch` solved for the slot, which is what keeps the
@@ -360,16 +360,16 @@ pub fn derive_scene(
                     // the outermost slot, so its ring would carry a pitch
                     // that is nowhere on the axis it is drawn around.
                     //
-                    // Off the pitch ramp whatever the channel, because a LIT
-                    // glyph is: the shader tints one by its own pitch and
-                    // asks nothing about the voice, so a fixed-color or
-                    // outline channel that keeps its hue on the disc still
-                    // brackets a ramp-colored sector. Only the lit glyph —
-                    // the band's ghosts wear the whitened node color, and a
-                    // solo voice's glow keeps the channel hue, both of them
-                    // on purpose. No extra lift on top of the ramp here: the
-                    // sector's glyph wears it as it comes, and a lightened
-                    // ring would read a shade off the one it brackets.
+                    // Both pitches are on the one ramp, so which pitch is read
+                    // is the whole of the difference: the shader tints a lit
+                    // glyph by the pitch it is DRAWN at and asks nothing about
+                    // the voice, and a ring is part of that glyph's layer.
+                    // Only the lit glyph — the band's ghosts wear the whitened
+                    // node color and a solo voice's glow keeps the voice's
+                    // own, both of them on purpose. No extra lift on top of
+                    // the ramp here: the sector's glyph wears it as it comes,
+                    // and a lightened ring would read a shade off the one it
+                    // brackets.
                     //
                     // The ring eases in on the SAME ramp as that sector, from
                     // when the note took the end — which is not always its
@@ -452,7 +452,6 @@ pub fn derive_scene(
             color,
             activation,
             octaves,
-            outlined,
             hovered: hovered == Some(pos),
             on_home: pos.sevens == view.center_sevens,
             scale,

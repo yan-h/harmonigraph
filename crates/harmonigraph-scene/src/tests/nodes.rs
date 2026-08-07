@@ -7,10 +7,10 @@ use harmonigraph_core::{NoteEvent, NoteEventKind, NoteTracker, Tuning};
 use super::harness::*;
 
 #[test]
-fn pitch_colored_channels_vary_with_pitch() {
+fn a_notes_color_varies_with_pitch() {
     let g = PitchGradient::default();
-    let low = channel_color(9, 24.0, 24.0, 108.0, g);
-    let high = channel_color(9, 108.0, 24.0, 108.0, g);
+    let low = pitch_lut_color(24.0, 24.0, 108.0, g);
+    let high = pitch_lut_color(108.0, 24.0, 108.0, g);
     assert_ne!(low, high);
     // The default gradient spends brightness on pitch, so the top of the
     // range is, well, brighter. A property of the DEFAULT and not of the
@@ -235,7 +235,7 @@ fn one_pitch_gives_the_disc_and_the_glyph_one_color() {
             let i0 = f.floor() as usize;
             let i1 = (i0 + 1).min(PITCH_LUT_N - 1);
             let glyph = lut[i0].lerp(lut[i1], f - f.floor());
-            let disc = channel_color(9, pitch, dark, bright, gradient);
+            let disc = pitch_lut_color(pitch, dark, bright, gradient);
             assert_eq!(glyph, disc, "{gradient:?} pitch {pitch}: glyph {glyph:?} vs disc {disc:?}");
             pitch += 0.01;
         }
@@ -519,23 +519,41 @@ fn window_center_pans_which_nodes_display() {
     assert_eq!(center_node.world_pos, Vec3::ZERO);
 }
 
+/// A channel reaches the picture nowhere: one note draws the same node on
+/// every one of the sixteen, 14 and 15 — v1's ring and its reserved lane —
+/// included.
+///
+/// Compared through `Debug` rather than field by field, so a
+/// channel-dependent field ADDED later fails this instead of slipping past a
+/// list of fields written today. That is the whole point of the test: the
+/// invariant is about the WHOLE node, and a list can only be about the parts
+/// someone thought of.
 #[test]
-fn channel_14_voices_render_outlined() {
-    let mut tracker = NoteTracker::new();
-    tracker.handle_event(NoteEvent {
-        time: 0.0,
-        channel: 14,
-        note: 60,
-        kind: NoteEventKind::On { velocity: 1.0 },
-    });
-    let scene = scene_of(
-        &tracker,
-        &Tuning::default(),
-        &plain_view(),
-        &plain_frame(),
-        0.0,
-    );
-    assert!(origin_node(&scene).outlined);
+fn every_channel_draws_the_same_node() {
+    let drawn = |channel: u8| {
+        let mut tracker = NoteTracker::new();
+        tracker.handle_event(NoteEvent {
+            time: 0.0,
+            channel,
+            note: 60,
+            kind: NoteEventKind::On { velocity: 1.0 },
+        });
+        let scene = scene_of(
+            &tracker,
+            &Tuning::default(),
+            &plain_view(),
+            &plain_frame(),
+            0.0,
+        );
+        format!("{:?}", origin_node(&scene))
+    };
+    let lit = drawn(0);
+    // Against a node that is DRAWN, or sixteen blank nodes would agree just
+    // as well and this would assert nothing.
+    assert!(lit.contains("activation: 1.0"), "the note has to be lit: {lit}");
+    for channel in 1..16u8 {
+        assert_eq!(drawn(channel), lit, "channel {channel}");
+    }
 }
 
 #[test]
@@ -759,11 +777,10 @@ fn a_degenerate_color_range_lands_where_the_shader_lands() {
 
 #[test]
 fn an_inverted_color_range_still_derives_a_scene() {
-    // The mark color runs the ramp for EVERY channel, so a fixed-color
-    // channel reaches the same gradient math a pitch-gradient one does —
-    // and Darkest above Brightest is one drag of a host's parameter list
-    // away (raise Darkest before lowering Brightest and it is the state in
-    // between). Deriving must not panic there.
+    // Every color in the picture runs the gradient math, and Darkest above
+    // Brightest is one drag of a host's parameter list away (raise Darkest
+    // before lowering Brightest and it is the state in between). Deriving
+    // must not panic there.
     let frame =
         FrameParams { darkest_pitch: 110.0, brightest_pitch: 108.0, ..FrameParams::default() };
     let view = ViewConfig { mark_melody: true, mark_bass: true, ..ViewConfig::default() };
