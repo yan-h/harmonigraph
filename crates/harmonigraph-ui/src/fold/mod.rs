@@ -83,6 +83,16 @@
 //! each other's tab bars), a collapsed pair is two, and the split inside a
 //! folded pair divides the width it was given into one rail each.
 //!
+//! The whole DOCK is the last of those, and it takes saying because nothing in
+//! the tree says it. A split hands its freed width to its parent, so a fold is
+//! always somebody's — except at the root, which has none, and where
+//! [`folded_side`] therefore answers `None` however collapsed the tree is.
+//! [`holds`] claims the root itself for that case, and [`paint`](fn@paint)
+//! draws the strip from it: every pane a rail, the window down to what those
+//! rails are worth, and each rail carrying the arrow that opens it. Left
+//! unclaimed the one layout that is all rails would be the one layout read as
+//! no fold at all — drawn at its full open width with nothing in it.
+//!
 //! ## The separators beside a fold still resize
 //!
 //! A fold owns the fraction of every split it sends width out through, and it
@@ -1248,7 +1258,12 @@ fn wants(
     // nothing fixed about it at all — what has piled up in `fixed` there is one
     // separator per horizontal split and no rail at all, which is a width the
     // panes wear like any other rather than one held back from them.
-    if !holds.iter().any(|hold| hold.side.is_some()) {
+    //
+    // A dock folded WHOLE has no side to read: the root is claimed as `inside`
+    // and nothing under it names a folded child. It is still every bit a fold,
+    // and its rails are still fixed, which is what `folded` says and `side`
+    // alone does not.
+    if !holds.iter().any(Hold::folded) {
         fixed = vec![0.0; tree.len()];
     }
     (want, fixed)
@@ -1475,6 +1490,15 @@ impl Hold {
 /// same pass has already moved.
 fn holds(tree: &Tree<Tab>) -> Vec<Hold> {
     let mut holds = vec![Hold::default(); tree.len()];
+    // A fold at the ROOT is nobody's to hand over. `folded_side` answers `None`
+    // for a split with both children collapsed, because the width such a split
+    // gives up is its PARENT's to take — and the root has no parent, so the one
+    // tree folded WHOLE is the one tree nothing else reads as folded at all.
+    // Claiming it here is what makes an all-folded dock a strip of rails rather
+    // than a full-width window with nothing in it.
+    if !tree.is_empty() && tree[NodeIndex::root()].is_collapsed() {
+        holds[NodeIndex::root().0].inside = true;
+    }
     for index in 0..tree.len() {
         let node = NodeIndex(index);
         let (left, right) = (node.left(), node.right());
@@ -1487,7 +1511,7 @@ fn holds(tree: &Tree<Tab>) -> Vec<Hold> {
             holds[right.0].inside = true;
         } else if let Some(side) = folded_side(tree, node) {
             holds[index].side = Some(side);
-            holds[match side { Side::Left => left, Side::Right => right }.0].inside = true;
+            holds[side.of(node).0].inside = true;
         }
     }
     holds

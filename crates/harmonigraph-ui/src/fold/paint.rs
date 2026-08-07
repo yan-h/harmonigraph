@@ -99,6 +99,30 @@ pub fn paint(ui: &egui::Ui, dock: &mut DockState<Tab>, style: &egui_dock::Style,
     lit(ui, dock, style, dial);
     if let Some(tree) = dock.get_surface(SurfaceIndex::main()).and_then(Surface::node_tree) {
         let holds = holds(tree);
+        // A dock folded WHOLE names no folded child anywhere: the width a fold
+        // gives up is its parent's to take, and the root has no parent (see
+        // [`holds`](super::holds)). The loop below is keyed on that name, so
+        // without this the one layout that is all rails is the one layout that
+        // draws none of them — and a strip with no arrow on it is a layout
+        // there is no way out of but Reset.
+        //
+        // Every rail's pane comes back into a window that grows rightward from
+        // a left edge the host holds still, so they all point the one way.
+        let whole = !tree.is_empty() && tree[NodeIndex::root()].is_collapsed();
+        if whole {
+            if chrome {
+                for band in name_bands(tree, NodeIndex::root()) {
+                    if paint_band(ui, &band, Side::Left, style) {
+                        opened = Some(band.node);
+                    }
+                }
+            }
+            // Every separator here divides one rail from another, with no open
+            // pane anywhere to pass a drag out to.
+            for band in inner_bands(tree, NodeIndex::root()) {
+                deaden(ui, band, style);
+            }
+        }
         for node in 0..tree.len() {
             let node = NodeIndex(node);
             // A folded side: the rail it left behind, and the arrow that

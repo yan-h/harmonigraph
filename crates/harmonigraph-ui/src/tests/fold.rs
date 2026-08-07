@@ -877,3 +877,51 @@ fn a_squeezed_panes_far_separator_stops_rather_than_moving_the_pane_behind_it() 
         );
     }
 }
+
+/// A dock folded WHOLE is a strip of rails, and every one of them still carries
+/// the name of its pane and the arrow that brings it back.
+///
+/// Nothing in such a tree names a folded child: the width a fold hands over is
+/// its PARENT's to take, and the root has no parent (see `fold::holds`). The
+/// rail chrome is keyed on that name everywhere else, so the strip has to be
+/// drawn from the root itself — and a strip with no arrow on it would be a
+/// layout with no way out but "Reset layout".
+///
+/// Three clicks fold the default dock: the log column comes folded already, so
+/// the lattice, the analyzer and the settings leaf are what is left.
+#[test]
+fn a_dock_folded_whole_is_a_strip_of_named_rails() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    // The strip is worth about three tab bars, and the shell's own floor would
+    // otherwise stop the window well above it.
+    state.min_window_width = 50.0;
+    let mut h = DockHarness::new();
+    h.settle(&mut state);
+    let opened = h.screen.width();
+
+    for tab in [panes::Tab::Lattice, panes::Tab::Spectral, panes::Tab::Tuning] {
+        h.collapse_click(&mut state, tab);
+    }
+    let output = h.settle_folds(&mut state);
+
+    assert!(
+        h.screen.width() < opened * 0.25,
+        "the folded dock is {:.1} wide, of the {opened:.1} it started at",
+        h.screen.width(),
+    );
+
+    let rail = rail_rect(
+        &state,
+        &[panes::Tab::Lattice, panes::Tab::Spectral, panes::Tab::Tuning, panes::Tab::Notes],
+    );
+    let mut named: Vec<String> =
+        rail_labels(&output, rail).into_iter().map(|(name, _)| name).collect();
+    named.sort();
+    // One per LEAF, named by the tab it has active: the lattice, the analyzer
+    // (`Tab::Spectral`'s own title), the settings column and the log under it.
+    assert_eq!(
+        named,
+        ["Analyzer", "Lattice", "Notes", "Tuning"],
+        "every rail in the strip should name the pane it opens",
+    );
+}
