@@ -134,12 +134,8 @@ fn frame_controls(ui: &mut egui::Ui, state: &mut SharedState) {
     // decides only how big, so each option shows the pixels it lands on and
     // the pair is what the plugin passes as `--size`.
     //
-    // A size lifted out of a pre-Resolution blob (see
-    // `RenderConfig::migrate_legacy`) can land between these, and then no
-    // button reads as selected until one is clicked. That is why 720 is on the
-    // list rather than only the three sizes worth delivering: it is both a
-    // real draft setting for a render measured in minutes and where a
-    // `--size 1280x720` migrates to.
+    // 720 is on the list rather than only the three sizes worth delivering
+    // because it is a real draft setting for a render measured in minutes.
     let frame = state.take.render_config.frame;
     let sizes: Vec<(u32, String, String)> = [720u32, 1080, 1440, 2160]
         .iter()

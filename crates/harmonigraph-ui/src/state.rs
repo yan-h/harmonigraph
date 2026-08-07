@@ -587,9 +587,10 @@ impl SharedState {
     /// rather than a recorded frame wrapped around them.
     ///
     /// That is what the identity change bought and what a future one would
-    /// buy again: a clean floor under the format. A bump WITHOUT one is a
-    /// different matter — it would strand real projects — so raising this
-    /// constant means either writing the migration or changing the ids.
+    /// buy again: a clean floor under the format. A bump WITHOUT one strands
+    /// real projects at defaults, which is a cost worth naming in the PR
+    /// rather than a reason not to — but it is loud, and a blob half-read is
+    /// the thing this floor exists to prevent.
     pub fn load_persist(&mut self, serialized: &str) {
         if let Ok(persist) = ron::from_str::<UiPersist>(serialized) {
             if persist.version < UI_PERSIST_VERSION {
@@ -607,25 +608,18 @@ impl SharedState {
             self.view = persist.view;
             // The incoming project's comma modes are its own, so the verdicts
             // this session reached about the tuning it was showing say nothing
-            // about them — and a blob that predates a comma arrives with that
-            // mode off, waiting for the detect its serde default just switched
-            // on. Held back, an editor that loads a project at the tuning it
-            // already had would never look (see `temper_judged`); a host
-            // pushing state into a live editor, on undo or a preset change, is
-            // exactly that case.
+            // about them, and the detect has to look again. Held back, an
+            // editor that loads a project at the tuning it already had would
+            // never look (see `temper_judged`); a host pushing state into a
+            // live editor, on undo or a preset change, is exactly that case.
             self.temper_judged = [None; Comma::COUNT];
-            // Not a migration: both fit a deserialized blob to what its
-            // controls can produce, which a hand-edited RON need not have.
+            // Both fit a deserialized blob to what its controls can produce,
+            // which a hand-edited RON need not have.
             self.view.sanitize();
             self.camera_presets = persist.camera_presets;
             self.spectrum_config = persist.spectrum;
             self.spectrum_config.sanitize();
             self.take.render_config = persist.render;
-            // The render frame's two-way `stacked` flag became a named side,
-            // and the `--size` that used to sit in the Options text became the
-            // Resolution control. Both changed AFTER the version last moved,
-            // so a blob this function accepts can still carry either.
-            self.take.render_config.migrate_legacy();
             self.fps_cap = persist.fps_cap;
             // Clamped here rather than only where it is drawn, so the control
             // cannot read out a number the chrome is not at: `set_ui_scale`
@@ -637,10 +631,10 @@ impl SharedState {
 }
 
 /// The chrome scale a blob without one loads as: the design size, which is
-/// what every project saved before the control existed was drawn at.
+/// what a fresh install opens at.
 ///
 /// Named rather than `#[serde(default)]`, which for an `f32` is 0.0 — a scale
-/// of nothing, and every one of those blobs.
+/// of nothing.
 fn default_ui_scale() -> f32 {
     1.0
 }
@@ -651,11 +645,11 @@ fn default_ui_scale() -> f32 {
 ///
 /// A bump costs the whole blob, not the dock alone: `load_persist` refuses
 /// anything below this outright, so camera, view, spectrum and render settings
-/// all fall back to defaults with it. That is what lets the migrations for
-/// older formats be deleted rather than carried forever, and it is why raising
-/// this means either writing the migration or changing the plugin ids again
-/// (see [`SharedState::load_persist`], which sets out what the id change
-/// bought and which of its callers the argument covers).
+/// all fall back to defaults with it. That is what lets a format change be
+/// made outright rather than shimmed, and it is why raising this means
+/// changing the plugin ids again (see [`SharedState::load_persist`], which
+/// sets out what the id change bought and which of its callers the argument
+/// covers).
 ///
 /// 2: Tuning and Frame merged into one tab. A version-1 layout has both, and
 /// they now name the same variant — kept as the floor's worked example, since
@@ -671,21 +665,23 @@ pub(crate) struct UiPersist {
     #[serde(default)]
     pub(crate) version: u32,
     pub(crate) dock: DockState<panes::Tab>,
-    /// serde(default) keeps pre-sideways-fold blobs loadable (as nothing
-    /// folded, which is what they were).
+    // The sections below carry `serde(default)` so a blob missing one costs
+    // that section alone rather than the whole document. The reachable case is
+    // a HAND-AUTHORED blob — `harmonigraph-offline --ui-state FILE`, the
+    // standalone's `app.ron`, anything `read-plugin-state.py` produced — and
+    // `a_persist_blob_missing_the_render_section_keeps_the_rest_of_the_blob`
+    // is what holds it.
     #[serde(default)]
     pub(crate) folds: fold::Folds,
     pub(crate) camera: Camera,
     pub(crate) view: ViewConfig,
-    /// serde(default) keeps pre-preset persisted blobs loadable.
     #[serde(default)]
     pub(crate) camera_presets: Vec<CameraPreset>,
-    /// serde(default) keeps pre-Spectrum-tab blobs loadable.
     #[serde(default)]
     pub(crate) spectrum: SpectrumConfig,
     #[serde(default)]
     pub(crate) render: RenderConfig,
-    /// serde(default) keeps pre-cap blobs loadable (as uncapped).
+    /// A missing cap reads as uncapped.
     #[serde(default)]
     pub(crate) fps_cap: Option<f32>,
     /// Pre-scale blobs load at the design size — see [`default_ui_scale`].
@@ -703,31 +699,17 @@ pub(crate) struct UiPersist {
 /// [`lead_in`](RenderConfig::lead_in). One door into the blob, so a setting the
 /// renderer honours cannot be one somebody forgot to add an accessor for.
 ///
-/// Migrated on the way out. Takes recorded before the four sides carry a
-/// `stacked` flag here, and before the Resolution control a `--size` inside
-/// `extra_args`; the renderer reading them is the whole reason those shims
-/// exist, since re-rendering an old take must still compose the frame it was
-/// framed at. See [`RenderConfig::migrate_legacy`].
-///
 /// Floored like [`SharedState::load_persist`], and it has to be: the offline
 /// renderer reads one blob through BOTH, this for the frame it composes at and
 /// that for the lattice it draws. Honour it here alone and an old take renders
 /// at its recorded size and aspect around a scene nobody dialled in, which
 /// reads as a working render rather than a refused blob. Refusing here instead
 /// leaves `main`'s `unwrap_or_default` composing at a frame it can see.
-///
-/// Costs no shim. Both migrations above are NEWER than the floor — the four
-/// sides and the Resolution control landed 2026-07-27 and 2026-07-28, the
-/// floor moved 2026-07-23 — so every blob they exist for is at the floor
-/// already.
 pub fn render_config_from_persist(serialized: &str) -> Option<RenderConfig> {
-    ron::from_str::<UiPersist>(serialized).ok().filter(|p| p.version >= UI_PERSIST_VERSION).map(
-        |persist| {
-            let mut render = persist.render;
-            render.migrate_legacy();
-            render
-        },
-    )
+    ron::from_str::<UiPersist>(serialized)
+        .ok()
+        .filter(|p| p.version >= UI_PERSIST_VERSION)
+        .map(|persist| persist.render)
 }
 
 impl SharedState {
