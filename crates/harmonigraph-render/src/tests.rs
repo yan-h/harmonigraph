@@ -1912,11 +1912,13 @@ fn a_real_held_chord_shows_its_melody_and_bass_marks() {
             &tracker,
             &Tuning::default(),
             &ViewConfig { mark_melody: marks, mark_bass: marks, ..base.clone() },
-            &FrameParams::default(),
+            // No envelope: every layer of a node eases in from its note-on
+            // over the Fade, so under a real one t=0 is the instant nothing
+            // is drawn yet and any later sample is a fraction. What is
+            // compared below is a lit node against a lit node.
+            &FrameParams { fade_time: 0.0, ..FrameParams::default() },
             Camera::default(),
             None,
-            // Past the view's attack: every layer of a node eases in from
-            // its note-on, so at t=0 there is deliberately nothing drawn yet.
             0.5,
         )
     };

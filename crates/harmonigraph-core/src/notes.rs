@@ -370,7 +370,9 @@ impl Voice {
 /// The "when" is state rather than a per-frame derivation because the answer
 /// is not in the current voices: a voice that takes an end by INHERITING it,
 /// when the note outside it comes up, took it at that note's release, and
-/// that note is pruned a fade after its key does (see
+/// that note is pruned a fade after its DEPARTURE begins — which is the later
+/// of its key-up and the end of its own arrival, so at most an arrival plus a
+/// fade after the key (see [`Voice::release_level`] and
 /// [`NoteTracker::prune`]). Read off the released tail instead, the handoff
 /// moment vanishes mid-ramp — so any ramp longer than the Fade param loses
 /// its own start and lands at full in one frame, which is precisely the pop

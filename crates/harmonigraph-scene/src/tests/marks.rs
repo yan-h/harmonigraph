@@ -35,13 +35,14 @@ fn off(time: f64, note: u8) -> NoteEvent {
     NoteEvent { time, channel: 0, note, kind: NoteEventKind::Off }
 }
 
-/// The envelope duration these tests run on, pinned here rather than taken
-/// from the Fade's own default. They are about WHEN a ring arrives — the
-/// delay, the handoff, the threshold — and the ramp is only the clock they
+/// The envelope duration these tests run on, pinned here and deliberately NOT
+/// the Fade's own default — a constant that happened to equal it would keep
+/// passing for a reason this doc denies. They are about WHEN a ring arrives —
+/// the delay, the handoff, the threshold — and the ramp is only the clock they
 /// read that off. Pinning it keeps them measuring the delay rather than the
 /// day someone retunes the default, and lets them sample the ramp at a half
 /// and read a half (see `fade_shape` below).
-const ATTACK: f64 = 0.15;
+const ATTACK: f64 = 0.2;
 
 /// Both ends marked, with the Delay bar at `mark_delay`.
 ///
@@ -251,11 +252,16 @@ fn an_end_dropped_inside_the_delay_does_not_slit_the_ring_that_replaced_it() {
     tracker.handle_event(on(0.5, 84));
     tracker.handle_event(off(0.55, 84));
     let view = delayed_view(DELAY as f32);
-    let frame = attack_frame();
-    // C5 retook the melody at 0.55; one wait and one attack later its ring is
+    // Long enough that C6 is still fading at the sample below — the released
+    // tail is where this test's rejected voice has to be for the mask to be
+    // asked about it at all. One duration for both ends means that is a
+    // statement about how long C6 has been gone, not just about the fade.
+    const SPAN: f64 = 0.4;
+    let frame = FrameParams { fade_time: SPAN as f32, ..FrameParams::default() };
+    // C5 retook the melody at 0.55; one wait and one ease later its ring is
     // whole, and the C6 that came and went inside the wait is still in the
     // tracker's released tail.
-    let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, 0.55 + DELAY + ATTACK);
+    let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, 0.55 + DELAY + SPAN);
     let origin = origin_node(&scene);
     // Sampled at the ramp's own endpoint, which the delay puts a sum of three
     // f64s away from a round number — so the claim is "up", not a bit pattern.
@@ -495,8 +501,8 @@ fn an_end_given_up_inside_the_delay_never_rings_at_all() {
     // both put together.
     assert_eq!(ring(0.15 + DELAY + ATTACK), 1.0, "and then C4's ring arrives");
     // The bass end never changed hands through any of it, so it is measured
-    // from C4's note-on and has been up since well before.
-    let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, 0.15 + DELAY);
+    // from C4's note-on — one wait and one ease after that, and unmoved since.
+    let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, 0.15 + DELAY + ATTACK);
     assert_eq!(origin_node(&scene).bass_level, 1.0, "the end that never moved is unaffected");
 }
 
@@ -505,7 +511,7 @@ fn a_delay_past_the_note_fade_still_measures_from_the_handoff() {
     // The handoff moment has to outlive the note that made it. Lift the top
     // of a held chord and the note below inherits the melody AT THAT MOMENT
     // — but the note that handed it over is pruned one Fade later, and the
-    // default fade is 0.1s, shorter than most of this bar. Read the moment
+    // Fade's whole range is shorter than most of this bar. Read the moment
     // off the released tail and any longer delay would lose it mid-wait and
     // land the ring at full in a single frame, which is the pop the wait was
     // set to avoid. The tracker's own stamp is what survives the pruning.

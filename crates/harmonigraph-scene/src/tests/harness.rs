@@ -38,9 +38,9 @@ pub(super) fn plain_view() -> ViewConfig {
 /// The frame half of the flat fixture: an envelope duration of 0, so a note
 /// is fully lit on the frame it sounds and gone on the frame it is released.
 ///
-/// One duration drives both ends now ([`ViewConfig::envelope`]), so "no
-/// arrival" and "no fade" are the same number and neither can be pinned from
-/// the view side. A test that wants a fade to sample along says so by naming
+/// One duration drives both ends ([`ViewConfig::envelope`]), so "no arrival"
+/// and "no fade" are the same number and neither can be pinned from the view
+/// side. A test that wants a fade to sample along says so by naming
 /// a `fade_time` of its own — and buys an arrival of that length with it,
 /// which is why several of them start their note before the window they
 /// measure.

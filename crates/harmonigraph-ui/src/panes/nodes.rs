@@ -503,9 +503,11 @@ fn every_layer_section(
     param_bar(ui, params, ParamKey::Fade).on_hover_text(
         "Seconds a note takes to arrive, and to leave once it's released — \
          the pitch class core, its glow, the octave glyphs and the \
-         melody/bass rings together. Short notes are never dimmed by it: a \
-         note reaches full brightness whatever the key did, and starts \
-         leaving from there. 0 switches the note on and off outright",
+         melody/bass rings together. A short note is not dimmed by it: the \
+         node reaches full brightness whatever the key did, and starts \
+         leaving from there. (A ring waits out the Delay above first, so it \
+         still comes in graded on notes shorter than the two put together.) \
+         0 switches the note on and off outright",
     );
     // Linear like every bar around it, and for the same reason: the whole
     // range is one unit, so every hundredth of it — the readout's own
