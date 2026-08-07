@@ -13,7 +13,7 @@ fn camera_target_projects_to_viewport_center() {
         &NoteTracker::new(),
         &Tuning::default(),
         &ViewConfig::default(),
-        &FrameParams::default(),
+        &plain_frame(),
         0.0,
     );
     let viewport = Vec2::new(800.0, 600.0);
@@ -34,7 +34,7 @@ fn points_behind_the_camera_do_not_project() {
             &NoteTracker::new(),
             &Tuning::default(),
             &ViewConfig::default(),
-            &FrameParams::default(),
+            &plain_frame(),
             0.0,
         );
         scene.camera = camera;
@@ -67,7 +67,7 @@ fn cabinet_faces_the_sheet_and_shears_sevens_uniformly() {
         &NoteTracker::new(),
         &Tuning::default(),
         &ViewConfig::default(),
-        &FrameParams::default(),
+        &plain_frame(),
         0.0,
     );
     s.camera = camera;
@@ -108,7 +108,7 @@ fn orthographic_matches_perspective_at_the_focus_plane_and_is_uniform() {
         &NoteTracker::new(),
         &Tuning::default(),
         &ViewConfig::default(),
-        &FrameParams::default(),
+        &plain_frame(),
         0.0,
     );
 
@@ -146,7 +146,7 @@ fn pick_selects_the_node_nearest_the_pointer() {
         &NoteTracker::new(),
         &Tuning::default(),
         &ViewConfig::default(),
-        &FrameParams::default(),
+        &plain_frame(),
         0.0,
     );
     let viewport = Vec2::new(800.0, 600.0);
@@ -171,7 +171,7 @@ fn idle_off_sheet_nodes_are_not_pickable() {
         &NoteTracker::new(),
         &tuning,
         &view,
-        &FrameParams::default(),
+        &plain_frame(),
         0.0,
     );
     let off = *idle
@@ -200,7 +200,7 @@ fn idle_off_sheet_nodes_are_not_pickable() {
         note,
         kind: NoteEventKind::On { velocity: 1.0 },
     });
-    let lit = scene_of(&tracker, &tuning, &view, &FrameParams::default(), 0.0);
+    let lit = scene_of(&tracker, &tuning, &view, &plain_frame(), 0.0);
     let lit_off = lit
         .nodes
         .iter()

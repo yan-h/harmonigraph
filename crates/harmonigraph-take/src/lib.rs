@@ -363,14 +363,14 @@ impl Drop for Writer {
 mod tests {
     use super::*;
 
-    /// The three note-wide times — Attack, Fade, mark Delay — are read
-    /// against each other, so the Fade has to present like the two view
-    /// settings either side of it: a linear bar, and the unit on the NUMBER
-    /// rather than in the name. Pinned because the bar itself is built from
-    /// these three answers and nothing else would notice them drifting.
+    /// The two note-wide times — the Fade and the mark Delay — are read
+    /// against each other, so the Fade has to present like the view setting
+    /// above it: a linear bar, and the unit on the NUMBER rather than in the
+    /// name. Pinned because the bar itself is built from these answers and
+    /// nothing else would notice them drifting.
     #[test]
     fn the_fade_bar_reads_like_the_note_times_beside_it() {
-        assert!(!ParamKey::Fade.logarithmic(), "a linear second, like Attack and Delay");
+        assert!(!ParamKey::Fade.logarithmic(), "a linear second, like the Delay");
         assert_eq!(ParamKey::Fade.label(), "Fade", "the unit is not in the name");
         // The SCALE the other two answers are premised on, and the one thing
         // here with a reach past the bar: this range is what the host exposes
@@ -382,7 +382,7 @@ mod tests {
         assert_eq!(
             *ParamKey::Fade.range().end(),
             1.0,
-            "one second, the same as the Attack and Delay bars either side",
+            "one second, the same as the Delay bar above it",
         );
         let display = ParamKey::Fade.display().expect("the Fade reads out in seconds");
         assert_eq!(display(0.1), "0.10 s");

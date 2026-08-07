@@ -5,7 +5,6 @@
 use crate::skin;
 use crate::style::{IdleMarker, PitchGradient, Pulse, SevensLabel};
 use crate::trail::TrailMark;
-use crate::ATTACK_TIME_MAX;
 use harmonigraph_core::{coords, Comma, Envelope, LatticePos, Tempered};
 
 /// Purely-visual settings (not host-automatable parameters). The UI layer
@@ -202,27 +201,9 @@ pub struct ViewConfig {
     // steady octave layer, and drops the key on the next save.
     // ---- Note envelope ---------------------------------------------------
     // How a note ARRIVES and how it LEAVES, for every layer of the node at
-    // once. The leaving time is the host-automatable Fade param and lives in
-    // [`FrameParams`]; the two settings here are the other half of it, and
-    // [`ViewConfig::envelope`] is where the three are put back together.
-    /// Seconds a note takes to reach full brightness from its note-on, on the
-    /// same curve as the release (see [`Envelope`]).
-    ///
-    /// A DURATION of its own rather than a share of the Fade, for the reason
-    /// written on `Envelope`: attack and release multiply, and one shared
-    /// number would have fast playing go dim at long fades. So the shape is
-    /// what the two ends have in common and the times are separate.
-    ///
-    /// This reaches further than the ramp it replaces. An arrival used to be
-    /// the outer layer's alone — the octave sectors and the rings eased in
-    /// over a fixed 0.15 s while the core disc simply appeared at full — so
-    /// the sharpest edge in a note-on was the one layer that had no ramp at
-    /// all. Now the core, its glow, the gutter it clears and the piano roll
-    /// arrive on this too, and the fixed constant behind the sectors is gone.
-    ///
-    /// 0 is that instant core: every layer appears at full the moment the
-    /// note sounds. 0.15 is the sector ramp the fixed constant ran.
-    pub attack_time: f32,
+    // once. The DURATION of both is the host-automatable Fade param and lives
+    // in [`FrameParams`]; the shape here is the other half of it, and
+    // [`ViewConfig::envelope`] is where the two are put back together.
     /// How curved both ends of the note envelope are, 0..=1: 0 the straight
     /// line every layer has always faded on, 1 the sharpest curve on offer.
     /// It walks the exponent of an ease-out — see
@@ -291,8 +272,8 @@ pub struct ViewConfig {
     pub mark_thickness: f32,
     /// How long a note must HOLD an end before its ring begins to ease in,
     /// in seconds. The wait sits in front of the ease rather than stretching
-    /// it: the ring is at 0 for this long and then arrives on the usual
-    /// [`attack_time`](Self::attack_time) ramp.
+    /// it: the ring is at 0 for this long and then arrives on the same Fade
+    /// ramp ([`envelope`](Self::envelope)) every other layer arrives on.
     ///
     /// The wait is also a THRESHOLD: an end that changes hands again before
     /// the delay is up never draws a ring at all. That is what the setting is
@@ -579,17 +560,24 @@ pub struct ViewConfig {
 
 impl ViewConfig {
     /// The note envelope, assembled from the two halves it is stored in: the
-    /// shape and the attack are a LOOK and live here, the fade time is
-    /// host-automatable and lives in [`FrameParams`].
+    /// shape is a LOOK and lives here, the duration is host-automatable and
+    /// lives in [`FrameParams`].
+    ///
+    /// ONE duration at both ends, so a note comes up on the time it goes down
+    /// on and there is a single number to say how quick the lattice is. It
+    /// costs the staccato end nothing, because the two ends are sequenced
+    /// rather than overlaid — see
+    /// [`release_level`](harmonigraph_core::Voice::release_level), where that
+    /// is written and argued.
     ///
     /// One assembly point, called by everything that needs an envelope, so
-    /// the split is invisible past this line and no caller can pair a fade
-    /// time with the wrong shape. Both halves are clamped to the range their
-    /// bars offer — a hand-edited blob can hold anything, and `sanitize` only
+    /// the split is invisible past this line and no caller can pair a
+    /// duration with the wrong shape. The shape is clamped to the range its
+    /// bar offers — a hand-edited blob can hold anything, and `sanitize` only
     /// repairs the non-finite (a finite 40 would be a curve no bar can undo).
     pub fn envelope(&self, frame: &FrameParams) -> Envelope {
         Envelope {
-            attack_time: self.attack_time.clamp(0.0, ATTACK_TIME_MAX),
+            attack_time: frame.fade_time,
             fade_time: frame.fade_time,
             shape: self.fade_shape.clamp(0.0, 1.0),
         }
@@ -693,12 +681,11 @@ impl ViewConfig {
     /// these feed a rasterizer.
     ///
     /// Most repairs fall back to the fresh view's own value, which is the only
-    /// other value in the file known to be drawable. The note envelope is the
-    /// exception and lands on 0 — `attack_time`, `fade_shape` and `mark_delay`
-    /// all have a 0 that MEANS something (instant, straight, no wait), so a
-    /// blob that has lost the number gets the inert setting rather than a look
-    /// nobody asked for. It reads as a feature switched off, which is what a
-    /// lost number should look like.
+    /// other value in the file known to be drawable. `fade_shape` and
+    /// `mark_delay` are the exception and land on 0 — both have a 0 that MEANS
+    /// something (straight, no wait), so a blob that has lost the number gets
+    /// the inert setting rather than a look nobody asked for. It reads as a
+    /// feature switched off, which is what a lost number should look like.
     pub fn sanitize(&mut self) {
         let fresh = ViewConfig::default();
 
@@ -763,15 +750,15 @@ impl ViewConfig {
         // file can), which is again no guard against a NaN.
         self.mark_delay = finite_or(self.mark_delay, 0.0);
 
-        // The note envelope, against the same hole. `Envelope::approach`
+        // The envelope's shape, against the same hole. `Envelope::approach`
         // guards its own arithmetic against a non-finite duration or shape —
         // it has to, being reachable from a shell that never went through
         // this door — but it guards by treating the transition as already
-        // OVER, so a NaN attack would show as every note appearing at full
-        // with no ramp and a NaN shape as a curve that silently straightens.
-        // Both are the picture quietly drawing something other than what the
-        // bars read out, which is exactly what this door is for.
-        self.attack_time = finite_or(self.attack_time, 0.0);
+        // OVER, so a NaN shape would show as a curve that silently
+        // straightens: the picture quietly drawing something other than what
+        // the bar reads out, which is exactly what this door is for. The
+        // duration beside it is the Fade param rather than a blob field, and
+        // has no door here to need.
         self.fade_shape = finite_or(self.fade_shape, 0.0);
 
         self.shimmer_speed = finite_or(self.shimmer_speed, fresh.shimmer_speed);
@@ -872,19 +859,6 @@ impl Default for ViewConfig {
             octave_extras: 2,
             octave_extra_size: 0.387_534_47,
             octave_extra_blend: 0.562_241_4,
-            // A fifth of the ramp the octave sectors alone used to run, and
-            // short for a reason the old constant did not have to answer to:
-            // one attack now reaches the CORE, and attack and release
-            // multiply. At 0.15 a thirty-second note at 120bpm (62 ms) peaks
-            // at 42% of full and a run of them reads as a dim smear; at 0.05
-            // it clears full brightness before the key is even up, and the
-            // shortest note that dims at all is faster than the instrument
-            // plays. What it buys at that length is the hard edge off a
-            // note-on, which is the whole of what it is for — the glyph
-            // pop-in the retired constant was tuned against is softened
-            // rather than erased, and erasing it is not worth what 0.15
-            // costs the staccato end.
-            attack_time: 0.05,
             // Near enough a square law (the exponent lands at 2.05): enough
             // that a release leaves promptly and settles instead of sliding
             // out at one rate, and not so much that the tail is over before
@@ -965,10 +939,23 @@ impl Default for ViewConfig {
 /// source of truth that's dead on arrival at load time.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FrameParams {
-    /// Seconds a released note keeps fading, for EVERY layer of the node:
-    /// the pitch class core, the octave glyphs, and the melody/bass marks.
-    /// One time rather than one per layer, so a release reads as a single
-    /// gesture instead of layers going dark at different moments.
+    /// Seconds a note takes to arrive, and — once it is released — to leave,
+    /// for EVERY layer of the node: the pitch class core, the octave glyphs,
+    /// and the melody/bass marks.
+    ///
+    /// One time per DIRECTION, so the lattice answers the keys the way it
+    /// lets go of them; a note that came up quickly and left slowly would
+    /// read as two instruments. It costs a short note no brightness, only
+    /// time at full, because the arrival lands before the departure starts
+    /// (see [`ViewConfig::envelope`]).
+    ///
+    /// One time per LAYER too, so an arrival or a release reads as a single
+    /// gesture instead of pieces of the node moving at different rates. The
+    /// octave sectors and the melody/bass rings arrive on the same ramp as
+    /// the core they sit on, because a ring and the sector it links back to
+    /// belong to one note — [`ViewConfig::mark_delay`] moves a ring's ramp
+    /// LATER without changing its rate, which is the one thing that may
+    /// differ.
     pub fade_time: f32,
     /// Pitch (MIDI note) mapped to the darkest gradient color on
     /// pitch-gradient channels.

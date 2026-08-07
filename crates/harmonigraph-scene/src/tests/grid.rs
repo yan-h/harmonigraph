@@ -26,7 +26,7 @@ fn grid_segments_connect_neighbors_but_leave_node_gaps() {
         &NoteTracker::new(),
         &Tuning::default(),
         &view,
-        &FrameParams::default(),
+        &plain_frame(),
         0.0,
     );
     assert_eq!(scene.grid.len(), 12);
@@ -54,7 +54,7 @@ fn grid_segments_connect_neighbors_but_leave_node_gaps() {
         &NoteTracker::new(),
         &Tuning::default(),
         &panned,
-        &FrameParams::default(),
+        &plain_frame(),
         0.0,
     );
     assert_eq!(scene.grid.len(), 12);
@@ -86,7 +86,7 @@ fn grid_of(view: &ViewConfig) -> Vec<EdgeInstance> {
 }
 
 fn grid_of_with(view: &ViewConfig, tracker: &NoteTracker) -> Vec<EdgeInstance> {
-    scene_of(tracker, &Tuning::default(), view, &FrameParams::default(), 0.0).grid
+    scene_of(tracker, &Tuning::default(), view, &plain_frame(), 0.0).grid
 }
 
 #[test]
@@ -125,7 +125,7 @@ fn the_grid_color_drives_the_idle_nodes_too() {
         &NoteTracker::new(),
         &Tuning::default(),
         &view,
-        &FrameParams::default(),
+        &plain_frame(),
         0.0,
     );
     assert_eq!(scene.node_idle, Vec4::new(0.9, 0.1, 0.4, 1.0));
@@ -188,7 +188,7 @@ fn grid_lines_never_light_between_played_neighbors() {
         });
     }
     let view = ViewConfig { extent_threes: 3, extent_fives: 3, ..ViewConfig::default() };
-    let scene = scene_of(&tracker, &tuning, &view, &FrameParams::default(), 0.0);
+    let scene = scene_of(&tracker, &tuning, &view, &plain_frame(), 0.0);
     let base = Vec4::from_array(view.grid_color);
     let segment_at = |mid: Vec3| {
         scene
@@ -235,7 +235,7 @@ fn a_chain_stops_at_the_first_sounding_note_under_it() {
             });
         }
         let scene =
-            scene_of(&tracker, &Tuning::default(), &view, &FrameParams::default(), 0.0);
+            scene_of(&tracker, &Tuning::default(), &view, &plain_frame(), 0.0);
         // The two links of the upward column, low end first.
         let mut links: Vec<&EdgeInstance> = scene
             .grid
@@ -289,7 +289,7 @@ fn a_lit_chain_keeps_the_lattices_own_color() {
         kind: NoteEventKind::On { velocity: 1.0 },
     });
     let scene =
-        scene_of(&tracker, &Tuning::default(), &view, &FrameParams::default(), 0.0);
+        scene_of(&tracker, &Tuning::default(), &view, &plain_frame(), 0.0);
     let lit: Vec<&EdgeInstance> = scene
         .grid
         .iter()

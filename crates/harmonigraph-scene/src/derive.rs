@@ -253,6 +253,24 @@ pub fn derive_scene(
             // voice — and a ring rising as the square of the sector it
             // brackets is precisely the disagreement about how fast the note
             // arrived that one shared rate exists to prevent.
+            //
+            // The release this rides waits out the NOTE's arrival
+            // (`Voice::release_level`), which is the rule that keeps a stab's
+            // DISC at full — and it covers the ring only where the ring's own
+            // ease starts with the note. Whatever moves that ease later moves
+            // it out from under the rule, and both things that can are
+            // deliberate: the mark Delay, and an end taken by inheritance
+            // part way through a note.
+            //
+            // So a ring comes in GRADED over the band between the Delay and
+            // the Delay plus the Fade. At the fresh view (Delay 0.15, Fade
+            // 0.15) a note held 160ms peaks at 0.30, 200ms at 0.57, 250ms at
+            // 0.89, and 300ms and longer at full — while the disc under it is
+            // at full for every one of them. That band is the threshold
+            // softened rather than a second one: the Delay's own claim is
+            // that an end held briefly should not read as the line being
+            // traced, and a Delay of 0 puts the ring back exactly on the
+            // note's rule.
             let release = voice.release_level(now, &env);
             let ring = |since: Option<Time>| since.map(|s| release * ease(s, voice.state));
             FrameVoice {

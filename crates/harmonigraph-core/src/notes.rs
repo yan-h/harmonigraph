@@ -91,16 +91,13 @@ const MAX_POWER: f32 = 4.0;
 /// is what makes the pair symmetric without either end having to be written
 /// backwards (see [`Envelope::approach`]).
 ///
-/// Two DURATIONS, though, and that asymmetry is load-bearing rather than an
-/// omission — the two want the same RANGE, which is what the bars give them,
-/// and not the same value. The ends MULTIPLY: a note released mid-attack
-/// peaks at whatever its attack had reached by then, so an attack as long as
-/// the fade means anything played faster than the fade never reaches full
-/// brightness. One shared number would tie a long, deliberate release to a
-/// long, deliberate arrival, and playing into it would go DIM — the two
-/// settings are wanted at opposite ends far more often than together, a
-/// slow departure under prompt arrivals being the ordinary ask. Held apart,
-/// the shape stays global and the two times stay honest.
+/// Two DURATIONS at this level, where the type is a general primitive and the
+/// tests below drive the ends independently. The one production caller
+/// (`ViewConfig::envelope`) feeds a single number into both, so a note comes
+/// up on the same time it goes down on — which costs nothing because the ends
+/// are SEQUENCED and not merely multiplied: the departure waits for the
+/// arrival to land, so the two never run at once and no length of note dims.
+/// [`Voice::release_level`] is where that rule is written.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct Envelope {
     /// Seconds a note takes to reach full brightness from its note-on.
@@ -210,8 +207,14 @@ impl Envelope {
         self.approach(now - since, self.attack_time)
     }
 
-    /// What is LEFT of a note released at `at`, 1 down to 0 — the mirror of
-    /// [`attack`](Self::attack) on the same curve.
+    /// What is LEFT of a departure that began at `at`, 1 down to 0 — the
+    /// mirror of [`attack`](Self::attack) on the same curve.
+    ///
+    /// `at` is the moment the departure BEGINS, which for a voice is not the
+    /// key-up: it is the later of that and the end of the note's own arrival
+    /// ([`Voice::release_level`]). Handing this the key-up direct puts the two
+    /// ends back on top of each other, which is the whole of what that rule
+    /// buys off.
     pub fn release(&self, now: Time, at: Time) -> f32 {
         1.0 - self.approach(now - at, self.fade_time)
     }
@@ -243,11 +246,11 @@ pub struct Voice {
     /// the level it had reached rather than jumping to full or to nothing.
     ///
     /// The MOMENT and not the level, deliberately. What the ease has reached
-    /// depends on the Attack and the mark Delay, which are view settings a
-    /// drag can change mid-fade; baking one into the tracker would leave
-    /// every already-released ring answering to a setting that is no longer
-    /// on screen. The moment is a fact about the music, and the view is free
-    /// to re-read it every frame.
+    /// depends on the Fade duration and the mark Delay, either of which a drag
+    /// (or a host automation lane) can move mid-fade; baking one into the
+    /// tracker would leave every already-released ring answering to a setting
+    /// that is no longer on screen. The moment is a fact about the music, and
+    /// the view is free to re-read it every frame.
     pub wore_high: Option<Time>,
     /// The lowest end's stamp — see [`wore_high`](Self::wore_high).
     pub wore_low: Option<Time>,
@@ -287,7 +290,23 @@ impl Voice {
     }
 
     /// What is left of this voice's RELEASE, `[0, 1]`: 1 for the whole of a
-    /// held note, then down to 0 across the fade.
+    /// held note AND for whatever is left of its arrival, then down to 0
+    /// across the fade.
+    ///
+    /// The departure waits for the arrival to LAND, and that sequencing is the
+    /// one thing keeping the two ends of a single duration off each other.
+    /// Allowed to overlap they MULTIPLY, and a note released while its arrival
+    /// is still climbing peaks at whatever the rising ramp and the falling one
+    /// cross at — dimmer the faster it was played, in proportion to how little
+    /// of the arrival it caught. With one duration driving both ends
+    /// (`ViewConfig::envelope`) that would be every note shorter than the
+    /// Fade, so a run of staccato notes would read as a dim smear. Sequenced,
+    /// a note played at any speed reaches full brightness: what a short key
+    /// gives up is TIME at full, which is the thing a short key should cost.
+    ///
+    /// The floor under a note's life is therefore its arrival PLUS its
+    /// departure, and that is the deliberate price — a stab draws the same
+    /// gesture a held note does, minus the middle.
     ///
     /// The half of the envelope that answers "is this voice over", which is
     /// not the same question as "is it visible" — an arriving note is barely
@@ -297,13 +316,26 @@ impl Voice {
     pub fn release_level(&self, now: Time, env: &Envelope) -> f32 {
         match self.state {
             VoiceState::Held => 1.0,
-            VoiceState::Released { at } => env.release(now, at),
+            // A poisoned attack time cannot hang a voice here, either way it
+            // can fail: `f64::max` answers with its other operand against a
+            // NaN, so the wait is dropped and the note leaves on its key,
+            // and an infinite one pushes the start past every clock, which
+            // `release` reads as already over. Both END the voice, which is
+            // the side `prune` can recover from (see `Envelope::approach`).
+            VoiceState::Released { at } => {
+                env.release(now, at.max(self.on_time + f64::from(env.attack_time)))
+            }
         }
     }
 
     /// Envelope in `[0, 1]` driving the visual intensity of this voice: the
     /// attack it is easing in on times what is left of its release, both on
     /// the one curve the [`Envelope`] carries.
+    ///
+    /// A product of two ramps that never run at once — the release holds off
+    /// until the attack has landed ([`release_level`](Self::release_level)) —
+    /// so what it draws is the arrival, then full, then the departure, and a
+    /// note is never dimmed for having been short.
     ///
     /// The single source of truth for how lit a voice is, and the chokepoint
     /// every layer of a node multiplies through — the core disc, its glow,
@@ -338,7 +370,9 @@ impl Voice {
 /// The "when" is state rather than a per-frame derivation because the answer
 /// is not in the current voices: a voice that takes an end by INHERITING it,
 /// when the note outside it comes up, took it at that note's release, and
-/// that note is pruned a fade after its key does (see
+/// that note is pruned a fade after its DEPARTURE begins — which is the later
+/// of its key-up and the end of its own arrival, so at most an arrival plus a
+/// fade after the key (see [`Voice::release_level`] and
 /// [`NoteTracker::prune`]). Read off the released tail instead, the handoff
 /// moment vanishes mid-ramp — so any ramp longer than the Fade param loses
 /// its own start and lands at full in one frame, which is precisely the pop
@@ -505,10 +539,11 @@ impl NoteTracker {
     /// never recorded; the retrigger's own release covers the pitch.)
     /// Asks the RELEASE rather than the full activation, because the question
     /// here is whether the fade is over and not whether anything is currently
-    /// on screen. The two part company at exactly one moment and it is a real
-    /// one: a note switched off in the same instant it arrived has an attack
-    /// of 0, so its activation is 0 while its release has not started — read
-    /// that way, a zero-length note would be dropped before it ever drew.
+    /// on screen. The two part company for the whole of a note's arrival,
+    /// which the release waits out ([`Voice::release_level`]): a note switched
+    /// off in the same instant it arrived reads an activation of 0 while its
+    /// release has not started at all — read that way, a zero-length note
+    /// would be dropped before it ever drew.
     pub fn prune(&mut self, now: Time, env: &Envelope) {
         self.roll.trim(now);
         let history = &mut self.history;
@@ -863,22 +898,33 @@ mod tests {
         assert!(prev < 0.1, "and the top of the bar is most of the way gone by half way");
     }
 
-    /// A note switched off before its attack finishes never reaches full —
-    /// the two ends multiply — and this is the reason the attack has its own
-    /// duration rather than sharing the Fade (see [`Envelope`]).
+    /// A note released while it is still arriving reaches full anyway, and
+    /// then leaves on the whole fade: the departure waits for the arrival to
+    /// land ([`Voice::release_level`]). This is what lets ONE duration drive
+    /// both ends — multiplied instead, a quarter of an arrival would be a
+    /// quarter of the brightness for the rest of the note's life.
     #[test]
-    fn a_note_shorter_than_its_attack_peaks_below_full() {
-        let env = Envelope { attack_time: 0.2, fade_time: 1.0, shape: 0.0 };
+    fn a_note_shorter_than_its_arrival_still_reaches_full() {
+        // Both ends on one duration, the way `ViewConfig::envelope` builds it.
+        let env = Envelope { attack_time: 0.2, fade_time: 0.2, shape: 0.0 };
         let mut voice = Voice::new(0, 60, 1.0, 0.0);
+        // A key up a quarter of the way in, which is where a multiplied
+        // envelope would peak.
         voice.state = VoiceState::Released { at: 0.05 };
-        // Sampled across the whole of the note's life, peak included: the
-        // attack keeps climbing after the key is up, so the brightest moment
-        // is not the note-off.
+
+        assert_eq!(voice.activation(0.1, &env), 0.5, "still climbing, key up or not");
+        assert_eq!(voice.activation(0.2, &env), 1.0, "and full at the end of its arrival");
+        // The fade then runs from THERE rather than from the key, so it is a
+        // whole fade and not the tail of one that started early.
+        assert_eq!(voice.activation(0.3, &env), 0.5, "half the fade later, half gone");
+        assert_eq!(voice.activation(0.4, &env), 0.0, "gone one fade after it landed");
+
+        // The peak over the note's whole life, so nothing above depends on
+        // having guessed where it is.
         let peak = (0..=100)
             .map(|i| voice.activation(f64::from(i) * 0.01, &env))
             .fold(0.0f32, f32::max);
-        assert!(peak > 0.0, "a short note still draws");
-        assert!(peak < 1.0, "but a quarter of an attack cannot reach full: {peak}");
+        assert_eq!(peak, 1.0, "a note is never dimmed for having been short");
     }
 
     /// A zero-length note — on and off at one instant — still fades in rather
@@ -906,8 +952,9 @@ mod tests {
     /// been reached. The mark Delay is the whole reason the difference is
     /// visible: it works by handing [`Envelope::attack`] a start moment in the
     /// future, so a curve answering 1 regardless would draw every ring
-    /// straight through its own wait — and it would do it at an Attack of 0,
-    /// which is what every project saved before the bar existed loads on.
+    /// straight through its own wait — and it would do it at the low end of
+    /// the Fade, a duration of 0 being an ordinary setting rather than a
+    /// corner.
     #[test]
     fn a_zero_length_ramp_steps_at_its_start() {
         let env = Envelope { attack_time: 0.0, fade_time: 1.0, shape: 0.0 };
@@ -927,6 +974,12 @@ mod tests {
         for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
             let fades = Envelope { attack_time: 0.0, fade_time: bad, shape: 0.0 };
             assert_eq!(voice.release_level(1.0, &fades), 0.0, "fade_time {bad} ends the note");
+
+            // The ATTACK time reaches the release as well, being what the
+            // departure waits on, so it needs the same answer: a note that
+            // ends rather than one held at full for the rest of the session.
+            let arrives = Envelope { attack_time: bad, fade_time: 1.0, shape: 0.0 };
+            assert_eq!(voice.release_level(2.0, &arrives), 0.0, "attack_time {bad} ends it too");
 
             // A poisoned SHAPE straightens rather than ending, the duration
             // still being a real number: there is nothing to hang on.

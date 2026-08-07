@@ -1412,6 +1412,10 @@ mod tests {
     ) -> (Vec<crate::text::TextPiece>, harmonigraph_scene::Scene) {
         let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
         state.camera.distance = distance;
+        // No arrival ramp: the scene below is derived 50ms in, a fraction of
+        // any real Fade, and a label's alpha rides its node's activation.
+        // This suite is about where a label is DRAWN, not how lit it is.
+        state.frame_params.fade_time = 0.0;
         // A chord spread across the lattice, so nodes land all over the pane
         // and (zoomed in) well outside it.
         for note in [55u8, 60, 62, 64, 67, 69, 71] {

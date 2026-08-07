@@ -19,7 +19,7 @@ fn home_sheet_nodes_are_flagged_for_the_blank_ring() {
         &NoteTracker::new(),
         &Tuning::default(),
         &view,
-        &FrameParams::default(),
+        &plain_frame(),
         0.0,
     );
     for n in &scene.nodes {
@@ -45,7 +45,7 @@ fn off_sheet_grid_appears_only_where_the_music_reaches() {
         &NoteTracker::new(),
         &Tuning::default(),
         &view,
-        &FrameParams::default(),
+        &plain_frame(),
         0.0,
     );
     assert!(!scene.grid.is_empty());
@@ -64,7 +64,7 @@ fn off_sheet_grid_appears_only_where_the_music_reaches() {
         kind: NoteEventKind::On { velocity: 1.0 },
     });
     let scene =
-        scene_of(&tracker, &Tuning::default(), &view, &FrameParams::default(), 0.0);
+        scene_of(&tracker, &Tuning::default(), &view, &plain_frame(), 0.0);
     let column_links: Vec<&EdgeInstance> = scene
         .grid
         .iter()
@@ -92,7 +92,7 @@ fn the_mark_ring_thickness_reaches_the_scene_and_is_clamped() {
         &NoteTracker::new(),
         &Tuning::default(),
         &view,
-        &FrameParams::default(),
+        &plain_frame(),
         0.0,
     );
     assert_eq!(scene.mark_thickness, 0.15);
@@ -102,7 +102,7 @@ fn the_mark_ring_thickness_reaches_the_scene_and_is_clamped() {
         &NoteTracker::new(),
         &Tuning::default(),
         &off,
-        &FrameParams::default(),
+        &plain_frame(),
         0.0,
     );
     assert_eq!(scene.mark_thickness, 0.0, "0 passes through as the off state");
@@ -112,7 +112,7 @@ fn the_mark_ring_thickness_reaches_the_scene_and_is_clamped() {
         &NoteTracker::new(),
         &Tuning::default(),
         &wild,
-        &FrameParams::default(),
+        &plain_frame(),
         0.0,
     );
     assert!(scene.mark_thickness <= 0.4, "got {}", scene.mark_thickness);
@@ -128,7 +128,7 @@ fn the_octave_gap_reaches_the_scene_and_is_clamped() {
         &NoteTracker::new(),
         &Tuning::default(),
         &view,
-        &FrameParams::default(),
+        &plain_frame(),
         0.0,
     );
     assert_eq!(scene.outer_gap, 0.2);
@@ -140,7 +140,7 @@ fn the_octave_gap_reaches_the_scene_and_is_clamped() {
         &NoteTracker::new(),
         &Tuning::default(),
         &wild,
-        &FrameParams::default(),
+        &plain_frame(),
         0.0,
     );
     assert!(scene.outer_gap <= 0.4, "got {}", scene.outer_gap);
@@ -161,7 +161,7 @@ fn core_and_outer_geometry_are_sanitized_into_the_scene() {
         &NoteTracker::new(),
         &Tuning::default(),
         &view,
-        &FrameParams::default(),
+        &plain_frame(),
         0.0,
     );
     assert_eq!(scene.core_radius, 0.0, "radius 0 = core off");
@@ -181,7 +181,7 @@ fn core_and_outer_geometry_are_sanitized_into_the_scene() {
         &NoteTracker::new(),
         &Tuning::default(),
         &view,
-        &FrameParams::default(),
+        &plain_frame(),
         0.0,
     );
     assert_eq!(scene.core_radius, 0.3);
@@ -194,7 +194,7 @@ fn core_and_outer_geometry_are_sanitized_into_the_scene() {
         &NoteTracker::new(),
         &Tuning::default(),
         &view,
-        &FrameParams::default(),
+        &plain_frame(),
         0.0,
     );
     assert_eq!(scene.core_solidity, 1.0);
@@ -214,7 +214,7 @@ fn off_sheet_nodes_shrink_away_from_the_home_sheet_both_ways() {
         &NoteTracker::new(),
         &Tuning::default(),
         &view,
-        &FrameParams::default(),
+        &plain_frame(),
         0.0,
     );
     assert_eq!(node_at(&scene, LatticePos::new(0, 0, 0)).scale, 1.0);
@@ -233,7 +233,7 @@ fn sevens_size_never_enlarges_and_never_vanishes() {
     // never small enough to disappear at the far extents.
     let scene_with = |size: f32| {
         let view = ViewConfig { extent_sevens: 4, sevens_size: size, ..ViewConfig::default() };
-        scene_of(&NoteTracker::new(), &Tuning::default(), &view, &FrameParams::default(), 0.0)
+        scene_of(&NoteTracker::new(), &Tuning::default(), &view, &plain_frame(), 0.0)
     };
     let huge = scene_with(4.0);
     assert_eq!(node_at(&huge, LatticePos::new(0, 0, 4)).scale, 1.0, "clamped to no growth");
@@ -254,7 +254,7 @@ fn every_sounding_node_clears_what_is_behind_it_the_home_sheet_included() {
     // — the home sheet's goes ahead of the grid, see the renderer — but
     // that is not this layer's business.
     let view = ViewConfig { extent_sevens: 1, sevens_gutter: 0.2, ..plain_view() };
-    let scene = scene_of(&held(60), &Tuning::default(), &view, &FrameParams::default(), 0.0);
+    let scene = scene_of(&held(60), &Tuning::default(), &view, &plain_frame(), 0.0);
 
     // C sounds, so every node whose pitch class is C lights — on the home
     // sheet and off it. All of them clear; the silent ones do not.
@@ -285,7 +285,7 @@ fn a_flat_lattice_still_clears_its_grid() {
     // Gating it on the extent would make the look reachable only by growing
     // depth the view doesn't want.
     let view = ViewConfig { extent_sevens: 0, sevens_gutter: 0.2, ..plain_view() };
-    let scene = scene_of(&held(60), &Tuning::default(), &view, &FrameParams::default(), 0.0);
+    let scene = scene_of(&held(60), &Tuning::default(), &view, &plain_frame(), 0.0);
     let mut lit = 0;
     for node in &scene.nodes {
         if node.activation > 0.0 {
@@ -319,8 +319,11 @@ fn a_releasing_note_keeps_its_gutters_width() {
     let frame = FrameParams { fade_time: 1.0, ..FrameParams::default() };
     let tuning = Tuning::default();
     let mut tracker = held(60);
+    // Released a whole duration in, so the note is leaving rather than still
+    // arriving at the two samples below: the departure waits out the arrival
+    // (`Voice::release_level`).
     tracker.handle_event(NoteEvent {
-        time: 0.0,
+        time: 1.0,
         channel: 0,
         note: 60,
         kind: NoteEventKind::Off,
@@ -336,8 +339,8 @@ fn a_releasing_note_keeps_its_gutters_width() {
     };
     // A quarter and three quarters of the way through the release: the note
     // is measurably dimmer, and the clearing is exactly as wide.
-    let early = off_sheet(0.25);
-    let late = off_sheet(0.75);
+    let early = off_sheet(1.25);
+    let late = off_sheet(1.75);
     assert!(late.activation < early.activation, "the note really is fading");
     assert_eq!(early.gutter, 0.2);
     assert_eq!(late.gutter, 0.2, "the clearing holds its width through the fade");
@@ -352,7 +355,7 @@ fn the_comma_measures_the_node_against_its_own_namesake() {
     let view = ViewConfig { extent_sevens: 1, ..ViewConfig::default() };
     let tuning = Tuning::just();
     let scene =
-        scene_of(&NoteTracker::new(), &tuning, &view, &FrameParams::default(), 0.0);
+        scene_of(&NoteTracker::new(), &tuning, &view, &plain_frame(), 0.0);
 
     let seventh = LatticePos::new(0, 0, 1);
     let namesake = LatticePos::new(-2, 0, 0);
@@ -385,7 +388,7 @@ fn the_comma_takes_the_short_way_round_the_octave() {
         &NoteTracker::new(),
         &Tuning::just(),
         &view,
-        &FrameParams::default(),
+        &plain_frame(),
         0.0,
     );
     for sevens in [-3, -2, -1, 1, 2, 3] {
@@ -409,7 +412,7 @@ fn the_knockout_clears_to_the_ground_not_to_black() {
         &NoteTracker::new(),
         &Tuning::default(),
         &ViewConfig::default(),
-        &FrameParams::default(),
+        &plain_frame(),
         0.0,
     );
     let panel = crate::skin::active_skin().panel;
