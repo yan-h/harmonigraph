@@ -440,21 +440,32 @@ fn a_pane_that_folds_downwards_is_left_alone() {
     assert_eq!(window, 1000.0, "and the window its own");
 }
 
-/// With every pane in the dock folded there is no one left to hand the
-/// space to, and a root split has no parent to fold it either — so nothing
-/// folds, and the window is not asked to pay for a fold that did not
-/// happen.
+/// A dock with every pane folded is a strip of rails, and the window comes
+/// down to what that strip is worth.
+///
+/// A split is collapsed once both its children are, so folding the last pane
+/// collapses the root — and the width a folded split gives up is its PARENT's
+/// to take, which leaves a root fold nobody's. [`holds`] claims it, or the one
+/// dock folded WHOLE would be the one dock nothing reads as folded at all: full
+/// window width, with nothing drawn in it but rails.
 #[test]
-fn a_fold_with_nowhere_to_give_stays_where_it_is() {
+fn a_dock_folded_whole_is_a_strip_of_rails() {
     let mut dock = dock();
-    lay_out(&mut dock, 1000.0);
+    let mut folds = Folds::default();
+    let mut dial = Dial::default();
+    let mut window = settle(&mut folds, &mut dock, &mut dial, 1000.0);
     for tab in [Tab::Lattice, Tab::Spectral, Tab::Tuning, Tab::Notes] {
         collapse(&mut dock, tab, true);
+        window = settle(&mut folds, &mut dock, &mut dial, window);
     }
-    let window = frame(&mut Folds::default(), &mut dock, &mut Dial::default(), 1000.0);
-    assert_eq!(fraction(&dock, NodeIndex::root()), 0.7);
-    assert_eq!(fraction(&dock, PICTURES), 0.7);
-    assert_eq!(window, 1000.0);
+    // Three rails side by side: the two pictures, and the settings column as
+    // one — its panes fold onto each other's tab bars, top to bottom.
+    let (rail, separator) = (style().tab_bar.height, style().separator.width);
+    let strip = 3.0 * rail + 2.0 * separator;
+    assert!(
+        (window - strip).abs() < 1.0,
+        "the folded dock came out {window:.1} wide, not the {strip:.1} its rails are worth",
+    );
 }
 
 /// "Reset layout" throws the arrangement away with the folds still in it,
@@ -613,11 +624,20 @@ fn a_fold_that_changes_sides_pays_back_the_pane_that_opened() {
     assert!((width(&dock, SPECTRAL) - analyzer).abs() < 0.01, "and the analyzer with it");
 }
 
-/// Two folds released in the same pass, one inside the other: the outer
-/// hands its subtree a width the inner one then divides, so it has to go
-/// first. Restored the other way round, the inner fold's refund inflates
-/// what the outer measures itself against and the outer pays back a
-/// NEGATIVE width, stranding the window a fold too narrow for good.
+/// Two folds released in the same pass, one inside the other, each hand back
+/// what they took: the outer hands its subtree a width the inner one then
+/// divides, so it has to go first. Restored the other way round, the inner
+/// fold's refund inflates what the outer measures itself against and the outer
+/// pays back a NEGATIVE width, stranding the window a fold too narrow for good.
+///
+/// Folding the analyzer is where a pass does two at once: the fold its sibling
+/// took is released and one at their parent is recorded in its place. Folding
+/// the settings column releases THAT one onto the strip, and opening the panes
+/// again walks the whole thing back.
+///
+/// Eight clicks, which is past the six
+/// `every_round_trip_of_clicks_lands_where_it_started` can afford — so this is
+/// the one round trip that passes through a dock folded WHOLE.
 #[test]
 fn two_folds_released_at_once_hand_back_what_each_took() {
     let mut dock = dock();
@@ -626,17 +646,20 @@ fn two_folds_released_at_once_hand_back_what_each_took() {
     // A settled frame before the click, as the editor always has: the
     // layout is dialled in at the window it is being drawn in.
     let _ = frame(&mut folds, &mut dock, &mut dial, 1000.0);
-    collapse(&mut dock, Tab::Lattice, true);
-    let window = settle(&mut folds, &mut dock, &mut dial, 1000.0);
-    collapse(&mut dock, Tab::Spectral, true);
-    let window = settle(&mut folds, &mut dock, &mut dial, window);
-    // Collapsing the settings column too leaves the root with two collapsed
-    // children and nothing to hand anything to, so every fold is released
-    // at once — the inner one recorded first.
-    collapse(&mut dock, Tab::Tuning, true);
-    collapse(&mut dock, Tab::Notes, true);
-    let window = settle(&mut folds, &mut dock, &mut dial, window);
-    assert!((window - 1000.0).abs() < 0.01, "both folds hand back what they took");
+    let tabs = [Tab::Lattice, Tab::Spectral, Tab::Tuning, Tab::Notes];
+    let mut window = 1000.0;
+    for tab in tabs {
+        collapse(&mut dock, tab, true);
+        window = settle(&mut folds, &mut dock, &mut dial, window);
+    }
+    for tab in tabs {
+        collapse(&mut dock, tab, false);
+        window = settle(&mut folds, &mut dock, &mut dial, window);
+    }
+    assert!(
+        (window - 1000.0).abs() < 0.01,
+        "the folds handed back {window:.1} of the 1000 they took",
+    );
 }
 
 /// A window that will not go as narrow as the fold asked for keeps the
