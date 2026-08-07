@@ -529,8 +529,9 @@ fn a_row_of(tabs: &[panes::Tab]) -> egui_dock::DockState<panes::Tab> {
 
 /// "Reset layout" puts the pane WIDTHS back, not only the arrangement.
 ///
-/// The dialled widths live in `fold::Dial::panes`, and the only thing that
-/// re-seeds them from the dock is a change in the tree's node COUNT. Folding
+/// The dialled widths live in `fold::Dial`'s pass, as `Points::at`, and the
+/// only thing that re-seeds them from the dock is a change in the tree's node
+/// COUNT. Folding
 /// never changes the tree's shape and a fresh `default_dock` has the count of
 /// the dock it replaces, so a reset that does not say so leaves the widths
 /// exactly where the user dragged them — the arrangement resets around them

@@ -501,7 +501,7 @@ mod tests {
     const PPP: f32 = 2.0;
 
     /// The roll's geometry for `state`, derived exactly the way
-    /// [`spectral_pane`](super::super::axes::spectral_pane) derives it
+    /// [`spectral_pane`](super::super::spectral_pane) derives it
     /// before handing over — same axes, same pitch scale, same split.
     fn instances(state: &SharedState, now: f64) -> Vec<RollInstance> {
         let cfg = &state.spectrum_config;

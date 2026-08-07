@@ -41,10 +41,11 @@ pub enum ParamKey {
     Seven,
     /// Node matching tolerance in cents.
     Tolerance,
-    /// Seconds a released note keeps fading. ONE time for every note
-    /// indicator — the pitch class core, the octave glyphs, and the
-    /// melody/bass marks all ride it, so a release is a single gesture
-    /// across the whole node instead of layers ending at different moments.
+    /// Seconds a note takes to arrive, and to leave — both ends of it, on
+    /// the one dial and never at once. ONE time for every note indicator
+    /// too: the pitch class core, the octave glyphs, and the melody/bass
+    /// marks all ride it, so a note is a single gesture across the whole
+    /// node instead of layers starting and ending at different moments.
     Fade,
     /// Pitch (MIDI note) shown darkest on the gradient. Every note is
     /// colored by pitch, whatever channel carried it.

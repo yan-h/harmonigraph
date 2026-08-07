@@ -368,8 +368,9 @@ pub struct Scene {
     /// Which shimmer sweeps the melody/bass rings (see [`Pulse`] and
     /// [`ViewConfig::pulse_marks`]).
     ///
-    /// Folded to [`Pulse::Off`] when the rings are off
-    /// ([`mark_thickness`](Self::mark_thickness) 0), where there is no ring
+    /// Folded to [`Pulse::Off`] when the rings are off — which is
+    /// [`ViewConfig::mark_rings_draw`], a thickness of 0 OR neither end
+    /// switched on, not the thickness alone — where there is no ring
     /// to animate and the mark's own octave slice must not go on shimmering
     /// under a control the pane has grayed out.
     pub pulse_marks: Pulse,

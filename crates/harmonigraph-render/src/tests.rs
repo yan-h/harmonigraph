@@ -179,8 +179,18 @@ fn a_second_lattice_view_in_the_same_frame_does_not_break_the_submit() {
     }
 }
 
-/// The band width every fixture in this file sweeps at — the fresh view's
-/// own, so the shimmer tests measure the picture the plugin opens on.
+/// The band width every fixture in this file sweeps at: a WIDE one, chosen
+/// so a band is many pixels across at these render sizes and a probe can
+/// walk it. It is deliberately not the fresh view's width, which is 0.64 —
+/// fine enough that several bands cross a single node, which is the look the
+/// bar's tight end exists for and the wrong regime to measure a sheet's
+/// geometry in.
+///
+/// The gap is a known hole in this suite rather than a property of it: the
+/// shipped picture is only ever rendered here at the tight end's control
+/// case. Anything that goes wrong at 0.64 alone — the resolve fade closing
+/// on the pixel footprint, the crest/trough balance at softness 1 — ships
+/// green.
 ///
 /// Named because [`SHIMMER_PROBE_STEP`] is sized off it: the width is a view
 /// setting rather than the shader constant it was, so a fixture retuned in
@@ -273,8 +283,9 @@ fn parity_scene() -> Scene {
         // Off, on the same grounds as trail_mark below: a single-instant
         // parity image can't depend on which moment of a cycle it lands on.
         pulse_marks: Default::default(),
-        // The sweep's own settings, at the fresh view's values (see
-        // `ViewConfig::shimmer_speed`). Inert while the mode above is Off,
+        // The sweep's own settings, at this suite's measurable values rather
+        // than the fresh view's (see `PARITY_SHIMMER_WIDTH`). Inert while the
+        // mode above is Off,
         // and stated rather than defaulted because a test that turns a mode
         // ON — every shimmer test builds on this fixture — has to be sweeping
         // something a reader can size against SHIMMER_PROBE_STEP.
@@ -1350,7 +1361,7 @@ fn the_shimmers_speed_and_width_reach_the_picture_and_only_speed_carries_the_clo
     );
 
     // Held still: the sheet is where it started at every instant, and stays
-    // there through a width the bar can reach either side of the default.
+    // there through three widths spanning the resolvable half of the bar.
     for width in [2.5, 5.0, 12.0] {
         let (early, late) = (gpu.shot(&sweep(0.0, width, 0.4)), gpu.shot(&sweep(0.0, width, 9.7)));
         assert_eq!(
@@ -1594,10 +1605,11 @@ fn a_tight_width_puts_several_bands_across_one_node() {
         crossings
     };
 
-    // At the default width the node is a fraction of one band, so its whole
-    // paint sits on one side of the sweep or slides across at most one edge
-    // of it.
-    let wide = bands_crossing(5.0);
+    // At the WIDE end of the bar the node is a fraction of one band, so its
+    // whole paint sits on one side of the sweep or slides across at most one
+    // edge of it. (Not the fresh view's width, which sits down near the tight
+    // end — see `PARITY_SHIMMER_WIDTH`.)
+    let wide = bands_crossing(PARITY_SHIMMER_WIDTH);
     // At a tight one the node is several bands across. The fixture's node is
     // 1.1 world units in radius against a width of 0.35, so the octave band
     // alone spans about five. Measured 1 edge wide against 21 tight.
@@ -1605,15 +1617,15 @@ fn a_tight_width_puts_several_bands_across_one_node() {
     eprintln!("band edges across the node: {wide} wide, {tight} tight");
     assert!(
         wide <= 2,
-        "the default width already puts {wide} band edges across one node; the \
-         wide end is supposed to be a sheet crossing the lattice, and the two \
-         ends of the bar are then the same picture",
+        "the wide end already puts {wide} band edges across one node; it is \
+         supposed to be a sheet crossing the lattice, and the two ends of the \
+         bar are then the same picture",
     );
     assert!(
         tight >= 6,
-        "a width of 0.35 put only {tight} band edges across the node (the default \
-         puts {wide}); the tight end of the bar is not reaching the several-bands\
-         -per-node look it exists for",
+        "a width of 0.35 put only {tight} band edges across the node (the wide \
+         end puts {wide}); the tight end of the bar is not reaching the \
+         several-bands-per-node look it exists for",
     );
 }
 
