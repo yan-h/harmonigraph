@@ -968,3 +968,91 @@ fn paint(
     );
     output.shapes.into_iter().map(|s| s.shape).collect()
 }
+
+/// The roll's ink stops at the now-line: everything it draws is clipped to
+/// its own share of the pane, and none of it reaches into the spectrum.
+///
+/// The outline stands off EVERY side of a note, and a note sounding now has
+/// its leading end ON the line — so without the clip the roll paints its edge,
+/// and the halo the bloom lays over it, across the line and onto the curve.
+/// The spectrum is the one neighbour the roll shares an edge with and the one
+/// picture it has no business drawing on: a ribbon ending square on the line is
+/// what says "this note is what that peak is made of".
+///
+/// Checked in depth fractions rather than screen coordinates, and in every
+/// orientation, because which screen side the spectrum is on is exactly what
+/// the pane's four turns change.
+///
+/// Driven straight at [`roll::draw_roll`] rather than through the whole pane,
+/// so the one callback in the output is the roll's — the markings draw one of
+/// their own (`crate::text`), and theirs is allowed everywhere.
+#[test]
+fn the_rolls_ink_stops_at_the_now_line() {
+    for orientation in [
+        SpectralOrientation::Left,
+        SpectralOrientation::Right,
+        SpectralOrientation::Top,
+        SpectralOrientation::Bottom,
+    ] {
+        let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
+        state.spectrum_config.orientation = orientation;
+        state.spectrum_config.roll_fraction = 0.55;
+        // The widest outline there is, so the reach that would cross the line
+        // is as big as the setting allows, and a bloom over it.
+        state.spectrum_config.roll_outline = crate::ROLL_OUTLINE_MAX;
+        state.view.bloom_strength = 1.2;
+        // Held at `now`, so its leading end sits exactly on the line.
+        state.tracker.handle_event(NoteEvent {
+            time: 99.0,
+            channel: 0,
+            note: 60,
+            kind: NoteEventKind::On { velocity: 0.8 },
+        });
+
+        let a = axes(WIDE, orientation);
+        let split = spectrum_share(&state.spectrum_config);
+        let scale = PitchScale { min_midi: 48.0, max_midi: 84.0, span: 36.0 };
+        let ctx = egui::Context::default();
+        crate::theme::apply_theme(&ctx);
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(500.0, 500.0));
+        let output = ctx.run_ui(
+            egui::RawInput { screen_rect: Some(screen), ..Default::default() },
+            |ui| {
+                let child = ui.new_child(egui::UiBuilder::new().max_rect(WIDE));
+                roll::draw_roll(child.painter(), &a, &scale, &state, split, 100.0, 0);
+            },
+        );
+
+        let rolls: Vec<&egui::epaint::ClippedShape> = output
+            .shapes
+            .iter()
+            .filter(|s| matches!(s.shape, egui::Shape::Callback(_)))
+            .collect();
+        assert_eq!(rolls.len(), 1, "expected one roll callback, got {}", rolls.len());
+        let roll = rolls[0];
+        let egui::Shape::Callback(cb) = &roll.shape else { unreachable!() };
+
+        // Both the callback's own rect — which is what the bloom chain covers —
+        // and the clip that actually cuts the ink.
+        for (what, rect) in [("the callback rect", cb.rect), ("the clip", roll.clip_rect)] {
+            let corners =
+                [rect.left_top(), rect.right_top(), rect.left_bottom(), rect.right_bottom()];
+            for corner in corners {
+                let d = a.depth_at(corner);
+                assert!(
+                    d >= split - 1e-3,
+                    "{what} reaches depth {d} in {orientation:?}, past the now-line at {split}",
+                );
+            }
+        }
+        // And it is not clipped to nothing either — the roll still gets its
+        // whole share of the axis, or this passes by drawing no roll at all.
+        let far = a
+            .depth_at(roll.clip_rect.left_top())
+            .max(a.depth_at(roll.clip_rect.right_bottom()));
+        assert!(
+            roll.clip_rect.area() > 0.0 && far > 1.0 - 1e-3,
+            "the roll was clipped short of its own far edge in {orientation:?}",
+        );
+    }
+}

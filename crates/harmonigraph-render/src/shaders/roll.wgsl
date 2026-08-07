@@ -17,9 +17,15 @@
 // never names a screen side either.
 
 struct Locals {
-    /// egui's screen size in points (the whole surface, not the pane).
-    screen_points: vec2<f32>,
-    /// Width of the antialiasing ramp in points — one physical pixel.
+    /// Where the viewport being drawn into starts, in egui points, and how big
+    /// it is. The draw into the egui pass takes the whole surface (origin 0);
+    /// the bloom's own pass takes the roll's rect alone, so the same
+    /// instances — which are in surface points either way — land in a texture
+    /// that covers only the roll.
+    origin_points: vec2<f32>,
+    viewport_points: vec2<f32>,
+    /// Width of the antialiasing ramp in points — one pixel of whatever is
+    /// being drawn into, which is not the display's pixel in the bloom's pass.
     feather: f32,
     _pad: f32,
     /// Unit screen vectors of the pane's two axes. Pitch runs across the
@@ -94,10 +100,11 @@ fn vs_note(
     let local = corner * extent;
     let pos = center + locals.pitch_dir * local.x + locals.depth_dir * local.y;
 
+    let in_viewport = pos - locals.origin_points;
     var out: VertexOut;
     out.position = vec4<f32>(
-        2.0 * pos.x / locals.screen_points.x - 1.0,
-        1.0 - 2.0 * pos.y / locals.screen_points.y,
+        2.0 * in_viewport.x / locals.viewport_points.x - 1.0,
+        1.0 - 2.0 * in_viewport.y / locals.viewport_points.y,
         0.0,
         1.0,
     );

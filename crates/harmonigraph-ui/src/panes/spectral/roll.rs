@@ -173,11 +173,30 @@ pub(super) fn draw_roll(
     if notes.is_empty() {
         return;
     }
+    // The roll's own share of the pane, and the whole of what its ink may
+    // reach. The outline stands off EVERY side of a note, so a note sounding
+    // now — whose leading end is the now-line itself — paints its edge across
+    // the line and into the spectrum unless something stops it, and the
+    // spectrum is the one neighbour the roll has no business drawing on. The
+    // clip is what stops it: a sounding note's ribbon ends square on the line,
+    // and so does everything the roll draws around it.
+    //
+    // It bounds the far end and the pitch range too, which the pane's own clip
+    // already did — a note is deliberately allowed to overhang the window's
+    // oldest edge and slide out under the scissor (see `note_instances`), and
+    // this is the same edge in the same place.
+    let region = egui::Rect::from_two_pos(axes.at(0.0, split), axes.at(1.0, 1.0));
+    let painter = painter.with_clip_rect(painter.clip_rect().intersect(region));
     let dir = |v: egui::Vec2| [v.x, v.y];
     painter.add(harmonigraph_render::roll_paint_callback(
-        axes.rect,
+        region,
         notes,
         RollAxes { pitch_dir: dir(axes.dir_pitch()), depth_dir: dir(axes.dir_depth()) },
+        // The LATTICE's bloom, on the roll's notes. One setting for both
+        // pictures rather than a second bar here: the two are showing the same
+        // notes in the same colors, and a light a node has that its ribbon does
+        // not is a difference between them that says nothing.
+        state.view.bloom_strength.max(0.0),
         state.target_format,
         surface as u64,
     ));
@@ -390,9 +409,10 @@ pub(super) fn note_instances(
             // would blank the note's last points outright.
             //
             // Nothing else rides the outline — in particular, no band
-            // approximating the lattice's bloom. The bloom is the lattice's
-            // alone: there it is a real post-process pass, not a hand-placed
-            // band standing in for one.
+            // approximating the bloom. The bloom the notes carry is the
+            // lattice's own post-process, run over the notes themselves
+            // (`harmonigraph_render::roll`), and a band standing in for one
+            // would be a second thing to keep looking like it.
 
             // Geometry in the pane's own two axes, which is all the shader is
             // told: `Axes` maps those onto perpendicular screen axes, so
