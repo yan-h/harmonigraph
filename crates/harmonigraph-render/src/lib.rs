@@ -309,11 +309,11 @@ const _: () = assert!(harmonigraph_scene::PITCH_LUT_N == 64);
 struct GpuInstance {
     world_pos: [f32; 3],
     color: [f32; 4],
-    /// x: activation, y: melody mark level, z: bass mark level, w: outlined
-    /// (see lattice.wgsl). The mark levels ride here rather than in a vertex
-    /// attribute of their own because y and z were dead padding — the vec4
-    /// was always shipped whole.
-    params: [f32; 4],
+    /// x: activation, y: melody mark level, z: bass mark level (see
+    /// lattice.wgsl). The mark levels ride with the activation rather than in
+    /// a vertex attribute of their own: all three are levels the same node
+    /// draws at, read together by the layers that draw it.
+    params: [f32; 3],
     /// Per-octave activation, 8 bits per slot, little-endian packed
     /// (slot 0 = lowest byte of the first word).
     octaves: [u32; 3],
@@ -351,7 +351,7 @@ impl GpuInstance {
         array_stride: std::mem::size_of::<GpuInstance>() as u64,
         step_mode: wgpu::VertexStepMode::Instance,
         attributes: &wgpu::vertex_attr_array![
-            0 => Float32x3, 1 => Float32x4, 2 => Float32x4, 3 => Uint32x3,
+            0 => Float32x3, 1 => Float32x4, 2 => Float32x3, 3 => Uint32x3,
             4 => Float32, 5 => Float32, 6 => Uint32x2,
             7 => Float32x4, 8 => Float32x4, 9 => Float32, 10 => Float32x2
         ],
@@ -640,12 +640,7 @@ impl LatticeCallback {
         let to_gpu = |n: &harmonigraph_scene::NodeInstance, gutter: f32| GpuInstance {
             world_pos: n.world_pos.to_array(),
                 color: n.color.to_array(),
-                params: [
-                    n.activation,
-                    n.melody_level,
-                    n.bass_level,
-                    if n.outlined { 1.0 } else { 0.0 },
-                ],
+                params: [n.activation, n.melody_level, n.bass_level],
                 octaves: pack_octaves(&n.octaves),
                 cents: n.cents,
                 home: if n.on_home { 1.0 } else { 0.0 },

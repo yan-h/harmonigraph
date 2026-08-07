@@ -957,8 +957,7 @@ pub struct FrameParams {
     /// LATER without changing its rate, which is the one thing that may
     /// differ.
     pub fade_time: f32,
-    /// Pitch (MIDI note) mapped to the darkest gradient color on
-    /// pitch-gradient channels.
+    /// Pitch (MIDI note) mapped to the darkest gradient color.
     pub darkest_pitch: f32,
     /// Pitch mapped to the brightest gradient color.
     pub brightest_pitch: f32,

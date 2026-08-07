@@ -28,33 +28,12 @@ pub enum NoteEventKind {
     AllOff,
 }
 
-/// What a MIDI channel means for tracking and rendering, inherited verbatim
-/// from midi_lattice v1. Channels are zero-indexed here (v1's docs speak in
-/// 1-indexed MIDI convention). This is the single source of truth for the
-/// channel policy; the tracker and the scene's coloring both match on it.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum ChannelRole {
-    /// Fixed per-channel color (channels 0-8).
-    FixedColor,
-    /// Colored by pitch height on a gradient (channels 9-13).
-    PitchGradient,
-    /// Rendered as an outline ring instead of a filled disc (channel 14).
-    Outline,
-    /// Never tracked or displayed (channel 15).
-    Ignored,
-}
-
-impl ChannelRole {
-    pub fn of(channel: u8) -> ChannelRole {
-        match channel {
-            0..=8 => ChannelRole::FixedColor,
-            9..=13 => ChannelRole::PitchGradient,
-            14 => ChannelRole::Outline,
-            _ => ChannelRole::Ignored,
-        }
-    }
-}
-
+/// A note's MIDI channel carries no meaning here. It is kept on [`Voice`] and
+/// [`NoteEvent`] because it is half of a note's IDENTITY — the host's key for
+/// matching an off to its on, and what lets two lanes hold the same note
+/// number at once — and for nothing else. Every channel is tracked, drawn as
+/// a filled disc, and colored by pitch height on the gradient, so two notes
+/// of one pitch are indistinguishable whichever lanes they arrived on.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct NoteEvent {
     pub time: Time,
@@ -451,11 +430,6 @@ impl NoteTracker {
         match event.kind {
             // Control event: applies regardless of the event's channel.
             NoteEventKind::AllOff => self.all_notes_off(event.time),
-            // Returns rather than falling through to the restamp below: this
-            // channel is not tracked at all, so nothing it carries can have
-            // moved an end, and a per-note expression stream on it would
-            // otherwise pay two scans of the held chord to conclude that.
-            _ if ChannelRole::of(event.channel) == ChannelRole::Ignored => return,
             NoteEventKind::On { velocity } => {
                 // A retrigger without an Off silently replaces the held
                 // voice (same key); the old voice gets no release fade.
@@ -786,16 +760,22 @@ mod tests {
         assert_eq!(voice.octave, 3);
     }
 
+    /// Every channel is held as a voice. Channel 15 is the one worth naming:
+    /// it is v1's reserved channel, and nothing reserves it here — a note on
+    /// it sounds on the lattice like a note anywhere else, colored by its own
+    /// pitch.
     #[test]
-    fn channel_15_is_ignored() {
-        let mut tracker = NoteTracker::new();
-        tracker.handle_event(NoteEvent {
-            time: 0.0,
-            channel: 15,
-            note: 60,
-            kind: NoteEventKind::On { velocity: 0.8 },
-        });
-        assert_eq!(tracker.voices().count(), 0);
+    fn no_channel_is_dropped_on_the_way_in() {
+        for channel in 0..16u8 {
+            let mut tracker = NoteTracker::new();
+            tracker.handle_event(NoteEvent {
+                time: 0.0,
+                channel,
+                note: 60,
+                kind: NoteEventKind::On { velocity: 0.8 },
+            });
+            assert_eq!(tracker.voices().count(), 1, "channel {channel}");
+        }
     }
 
     #[test]
@@ -1036,13 +1016,4 @@ mod tests {
         assert_eq!(tracker.voices().count(), 0);
     }
 
-    #[test]
-    fn channel_role_boundaries_match_v1() {
-        assert_eq!(ChannelRole::of(0), ChannelRole::FixedColor);
-        assert_eq!(ChannelRole::of(8), ChannelRole::FixedColor);
-        assert_eq!(ChannelRole::of(9), ChannelRole::PitchGradient);
-        assert_eq!(ChannelRole::of(13), ChannelRole::PitchGradient);
-        assert_eq!(ChannelRole::of(14), ChannelRole::Outline);
-        assert_eq!(ChannelRole::of(15), ChannelRole::Ignored);
-    }
 }

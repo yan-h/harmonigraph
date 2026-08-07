@@ -139,7 +139,7 @@ fn node_rim(bass: f32) -> f32 {
 
 // How much of the outer (bass) ring this node is wearing, 0..1: it needs
 // both a slot to link back to and a level to draw at.
-fn bass_ring_level(marks: vec2<u32>, params: vec4<f32>) -> f32 {
+fn bass_ring_level(marks: vec2<u32>, params: vec3<f32>) -> f32 {
     return select(0.0, clamp(params.z, 0.0, 1.0), marks.y != 0u);
 }
 
@@ -174,8 +174,8 @@ const EARLY_OUT: bool = true;
 //   - the glow's `window` closes at 0.95, inside GLYPH_FADE_LIMIT;
 //   - the octave glyphs (and their eased-off fringe) end at
 //     GLYPH_FADE_LIMIT;
-//   - the core disc — and channel 14's ring — end at their radius plus the
-//     widest edge softness the solidity axis can ask for;
+//   - the core disc ends at its radius plus the widest edge softness the
+//     solidity axis can ask for;
 //   - the idle marker ends at its own radius, or the trail ring's;
 //   - the mark rings taper off at QUAD_MARGIN, but only exist while a slot
 //     is marked;
@@ -195,12 +195,11 @@ fn paint_reach(in: VsOut, aa: f32) -> f32 {
 struct Instance {
     @location(0) world_pos: vec3<f32>,
     @location(1) color: vec4<f32>,
-    // x: activation 0..1, w: outlined 0/1 (channel-14 voices render as a
-    // ring, not a disc). y/z: the melody and bass marks' own levels, which
+    // x: activation 0..1. y/z: the melody and bass marks' own levels, which
     // follow the marked voice rather than this node's activation — each
     // ring eases in over the scene layer's attack when its note takes that
     // end, and drops to 0 the frame the key comes up.
-    @location(2) params: vec4<f32>,
+    @location(2) params: vec3<f32>,
     // Per-octave activation, 8 bits per slot, little-endian packed.
     @location(3) octaves: vec3<u32>,
     // The node's pitch class in cents (0..1200). It both PLACES the octave
@@ -237,7 +236,7 @@ struct VsOut {
     @builtin(position) clip_pos: vec4<f32>,
     @location(0) uv: vec2<f32>, // -1..1 across the quad
     @location(1) color: vec4<f32>,
-    @location(2) params: vec4<f32>,
+    @location(2) params: vec3<f32>,
     @location(3) @interpolate(flat) octaves: vec3<u32>,
     @location(4) @interpolate(flat) cents: f32,
     @location(5) @interpolate(flat) home: f32,
@@ -854,7 +853,7 @@ fn slice_gap_half() -> f32 {
 const GHOST_LEVEL: f32 = 0.16;
 // The classic disc-edge radius: normalizes the field paint to the sized
 // orb, and stands in for the core radius where a coreless node still needs
-// one (channel 14's outline ring).
+// one.
 const CORE_R_CLASSIC: f32 = 0.46;
 // Extra half-width added to the core disc's edge as solidity drops from 1
 // to 0: at solidity 1 the edge is a crisp screen-constant band (the
@@ -962,8 +961,8 @@ const GLOW_LOBE_KAPPA: f32 = 4.0;
 // cos(angle - indicator angle), never an atan2 wrap. A lone sounding octave
 // yields its color uniformly (the single term cancels the angle dependence);
 // with a solo note or nothing sounding it falls back to `fallback`, so a
-// single voice keeps its exact color (fixed channel hues included, which the
-// pitch ramp would not reproduce).
+// single voice keeps its exact color — the ramp at the NOTE's own pitch,
+// which the lit slot's is not once a note folds onto an outer indicator.
 //
 // `kappa` is how tightly to pack those hues — at most GLOW_LOBE_KAPPA, and
 // less where the caller wants their seams held open (see `core_layer`). At 0
@@ -1188,15 +1187,14 @@ fn gutter_coverage(d: f32, rim: f32, reach: f32, soft: f32) -> f32 {
 // A layer of its own so that the one bound governing all of it can be stated
 // and taken once. Past `core_reach` every term below is exactly zero: the
 // glow's `window` closes at GLOW_LIMIT, and the disc's coverage runs out at
-// its radius plus the widest edge the solidity axis can ask for (the
-// channel-14 ring ends inside that) -- the same bound `paint_reach` takes for
-// this layer. It is worth taking because the layer is the expensive one and
-// its reach is SHORT: the mark rings live out at QUAD_MARGIN and the glyph
-// fade runs to GLYPH_FADE_LIMIT, so the outer half of a lit node's billboard
-// is past it -- an atan2 and an 11-slot color blend for a coverage of zero.
+// its radius plus the widest edge the solidity axis can ask for -- the same
+// bound `paint_reach` takes for this layer. It is worth taking because the
+// layer is the expensive one and its reach is SHORT: the mark rings live out
+// at QUAD_MARGIN and the glyph fade runs to GLYPH_FADE_LIMIT, so the outer
+// half of a lit node's billboard is past it -- an atan2 and an 11-slot color
+// blend for a coverage of zero.
 fn core_layer(in: VsOut, d: f32, aa: f32, oct: OctRing) -> vec4<f32> {
     let activation = in.params.x;
-    let outlined = in.params.w;
     let radius = max(u.misc3.x, 0.0);  // core radius; 0 = off
     let solidity = u.misc4.x;          // 0 glow .. 1 orb
     // Radius 0 is off; fade the whole core in over the first sliver of the
@@ -1208,8 +1206,6 @@ fn core_layer(in: VsOut, d: f32, aa: f32, oct: OctRing) -> vec4<f32> {
         return vec4<f32>(0.0);
     }
 
-    // Channel-14 outline ring, at the core radius.
-    let ring = aa_inside(radius, d, aa) * (1.0 - aa_inside(radius - 0.12, d, aa));
     // The opaque disc: a core of radius R whose edge softens (CORE_EDGE_SOFT)
     // and whose opacity fades as solidity drops, so a full orb (solidity 1:
     // crisp screen-constant edge, fully opaque) dissolves smoothly into
@@ -1218,7 +1214,7 @@ fn core_layer(in: VsOut, d: f32, aa: f32, oct: OctRing) -> vec4<f32> {
     let edge = aa + (1.0 - solidity) * CORE_EDGE_SOFT;
     let core_cov = 1.0 - smoothstep(radius - edge, radius + edge, d);
     let filled = core_cov * solidity;
-    let disc = mix(filled, ring, outlined) * activation * core_on;
+    let disc = filled * activation * core_on;
 
     // Soft additive-looking glow for active nodes. The exponential alone
     // never reaches zero, so the quad boundary showed as a boxy halo;
@@ -1337,10 +1333,10 @@ fn node_paint(in: VsOut) -> vec4<f32> {
     // enum, no separate flag. Solidity (u.misc4.x, 0..1) morphs the core
     // between the two ends of a single shape: 0 is a soft under-glow, 1 is
     // the classic solid orb, and in between the opaque disc fades in over
-    // its glow skirt while its edge crisps. Channel-14 voices render as an
-    // outline ring instead of a filled disc (v1 semantics) so the channel
-    // stays recognizable; unplayed nodes draw no disc (the grid gap marks
-    // the position). Activation fades the disc in and back out on release.
+    // its glow skirt while its edge crisps. Every voice draws the same
+    // shape, whatever channel carried it; unplayed nodes draw no disc (the
+    // grid gap marks the position). Activation fades the disc in and back
+    // out on release.
     let presence = activation;
     // The disc and its glow, premultiplied. Everything the layer needs is on
     // the instance or the uniforms, and nothing below reads its internals --

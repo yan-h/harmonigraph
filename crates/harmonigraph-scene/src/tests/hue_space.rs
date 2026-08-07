@@ -78,8 +78,8 @@ fn at(l_star: f64, hue: f64, chroma_fraction: f64) -> Vec4 {
 
 /// The guarantee the whole two-space design buys: turning the CHROMA knob does
 /// not move the hue. A real check and not a probe — it is the promise
-/// `PitchGradient::hue_start` makes, and the reason the ramp is not simply
-/// authored in CIELAB like the channel colors beside it.
+/// `PitchGradient::hue_start` makes, and the reason the ramp's hue is not
+/// simply a CIELAB angle like its lightness is an `L*`.
 ///
 /// Measured in Oklch off the drawn sRGB, which is a round trip rather than a
 /// restatement: the curve names an Oklab hue, and this reads back what

@@ -23,8 +23,6 @@ pub struct Visit {
     /// (per-note tuning included, so a bent voice is remembered bent).
     pub pitch: f32,
     pub pitch_class: PitchClass,
-    /// The channel of the most recent visit — what colors the mark.
-    pub channel: u8,
     /// When it last stopped sounding, for the optional memory span.
     pub last_off: Time,
 }
@@ -69,14 +67,13 @@ impl NoteHistory {
         let visit = self.visits.entry(visit_key(voice.pitch)).or_insert(Visit {
             pitch: voice.pitch,
             pitch_class: voice.pitch_class,
-            channel: voice.channel,
             last_off,
         });
-        // The freshest visit owns the entry: a pitch replayed on another
-        // channel is marked in the color it was last heard in.
+        // The freshest visit owns the entry: two playings inside one cent fold
+        // together (see `visit_key`), and the mark is drawn at — and colored
+        // by — the pitch the last of them sounded at.
         visit.pitch = voice.pitch;
         visit.pitch_class = voice.pitch_class;
-        visit.channel = voice.channel;
         visit.last_off = visit.last_off.max(last_off);
 
         if self.visits.len() > Self::MAX_VISITS {

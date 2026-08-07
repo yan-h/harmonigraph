@@ -24,7 +24,7 @@
 use glam::Vec4;
 use harmonigraph_core::{NoteHistory, PitchClass, Tuning};
 
-use crate::color::channel_color;
+use crate::color::pitch_lut_color;
 use crate::view::{FrameParams, ViewConfig};
 use crate::NodeInstance;
 
@@ -104,8 +104,7 @@ impl TrailField {
                     (1.0 - age / span).clamp(0.0, 1.0) as f32
                 };
                 (level >= MIN_LEVEL).then(|| {
-                    let color = channel_color(
-                        visit.channel,
+                    let color = pitch_lut_color(
                         visit.pitch,
                         frame.darkest_pitch,
                         frame.brightest_pitch,

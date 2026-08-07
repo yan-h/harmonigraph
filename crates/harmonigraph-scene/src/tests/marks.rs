@@ -634,14 +634,14 @@ fn held_extremes_never_names_a_released_voice() {
     assert_eq!(held_extremes(&tracker, true, true), (None, None));
 }
 
-/// `notes` held on `channel` with both ends marked and the octave wheel set to
-/// `count` octaves centered on `center`.
-fn marked(channel: u8, notes: &[u8], count: u32, center: f32) -> (Scene, FrameParams) {
+/// `notes` held with both ends marked and the octave wheel set to `count`
+/// octaves centered on `center`.
+fn marked(notes: &[u8], count: u32, center: f32) -> (Scene, FrameParams) {
     let mut tracker = NoteTracker::new();
     for &note in notes {
         tracker.handle_event(NoteEvent {
             time: 0.0,
-            channel,
+            channel: 0,
             note,
             kind: NoteEventKind::On { velocity: 1.0 },
         });
@@ -657,10 +657,10 @@ fn marked(channel: u8, notes: &[u8], count: u32, center: f32) -> (Scene, FramePa
     (scene_of(&tracker, &Tuning::default(), &view, &frame, 0.0), frame)
 }
 
-/// A lone held note on `channel` — its own melody and bass — and the origin
-/// node it lights.
-fn lone_mark(channel: u8, note: u8, count: u32, center: f32) -> (NodeInstance, FrameParams) {
-    let (scene, frame) = marked(channel, &[note], count, center);
+/// A lone held note — its own melody and bass — and the origin node it
+/// lights.
+fn lone_mark(note: u8, count: u32, center: f32) -> (NodeInstance, FrameParams) {
+    let (scene, frame) = marked(&[note], count, center);
     (*origin_node(&scene), frame)
 }
 
@@ -692,8 +692,6 @@ fn a_mark_is_the_color_of_the_sector_it_brackets() {
     // color paints C7 around the C6 indicator it is bracketing. The ring is
     // part of the octave layer, so it takes the color of the slot it links
     // back to — whatever the wheel, and whether or not the note folded.
-    // Held on channel 9, which is pitch-colored, so the note's own color is on
-    // the ramp too and the axis is the only thing under test.
     //
     // Every marked node is checked rather than the origin alone: one voice
     // lights every node its pitch class matches, and those nodes are the SAME
@@ -704,7 +702,7 @@ fn a_mark_is_the_color_of_the_sector_it_brackets() {
     for (count, center) in [(9, 60.0), (4, 74.0), (4, 60.0), (4, 48.0)] {
         for note in [96u8, 64, 108] {
             // C7, E4, C8
-            let (scene, frame) = marked(9, &[note], count, center);
+            let (scene, frame) = marked(&[note], count, center);
             let lit: Vec<_> = scene.nodes.iter().filter(|n| n.melody_slots != 0).collect();
             assert!(!lit.is_empty(), "note {note} must light a node at span {count}/{center}");
             for node in lit {
@@ -734,7 +732,7 @@ fn the_two_rings_on_one_node_carry_their_own_sectors_colors() {
     // different octaves — which is the case that says the color has to be
     // derived per slot and not once per voice. Deriving it once and handing it
     // to both would paint the bass ring at the top of the ramp.
-    let (scene, frame) = marked(9, &[36, 96], 9, 60.0); // C2 and C7
+    let (scene, frame) = marked(&[36, 96], 9, 60.0); // C2 and C7
     let node = origin_node(&scene);
     let (melody, bass) = (node.melody_slots.trailing_zeros(), node.bass_slots.trailing_zeros());
     assert_eq!((melody, bass), (8, 3), "C7 is the melody up top, C2 the bass below");
@@ -744,27 +742,28 @@ fn the_two_rings_on_one_node_carry_their_own_sectors_colors() {
 }
 
 #[test]
-fn a_fixed_color_channel_keeps_its_disc_and_marks_the_lit_sector_on_the_ramp() {
-    // A fixed-color channel colors the note itself; it does not reach the LIT
-    // glyph, which the shader tints by its own pitch whatever the channel
-    // (`pitch_lut_color`), so the ring that brackets one is on the ramp too.
-    // Otherwise a red voice wears a red ring around a ramp-colored indicator.
-    // The band's other parts still carry the channel — its ghosts are the
-    // whitened node color — which is why this is about the lit sector alone.
-    let (node, frame) = lone_mark(0, 60, 5, 60.0); // channel 0 is red
+fn a_folded_note_keeps_its_own_color_and_marks_the_lit_sector_on_the_ramp() {
+    // Every voice is colored by pitch, so which PITCH each shape reads is the
+    // whole of what separates the disc from the ring around it: the disc is
+    // the note's own pitch, the ring the pitch of the sector it brackets. A
+    // note past the end of the wheel folds onto the outermost slot, so the
+    // two come apart there — and a ring following the note instead would
+    // paint C7 around the C6 indicator it points at.
+    let (node, frame) = lone_mark(96, 4, 48.0); // C7, above a wheel centered on C3
     let slot = node.melody_slots.trailing_zeros();
+    assert_ne!(slot, 8, "C7's own slot is 8; a wheel this narrow has to fold it");
     assert_eq!(node.melody_color, sector_color(&node, slot, &frame));
     assert_eq!(
         node.color,
-        channel_color(
-            0,
-            60.0,
+        pitch_lut_color(
+            96.0,
             frame.darkest_pitch,
             frame.brightest_pitch,
             ViewConfig::default().pitch_gradient,
-        )
+        ),
+        "the disc is the note's own pitch"
     );
-    assert_ne!(node.color, node.melody_color, "the disc keeps the channel's own color");
+    assert_ne!(node.color, node.melody_color, "the fold is what puts them on different pitches");
 }
 
 

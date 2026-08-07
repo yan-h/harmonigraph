@@ -16,7 +16,7 @@
 use egui::Color32;
 use harmonigraph_core::RollNote;
 use harmonigraph_render::{RollAxes, RollInstance};
-use harmonigraph_scene::channel_color;
+use harmonigraph_scene::pitch_lut_color;
 
 use super::axes::{Axes, PitchScale, TimeAxis};
 use crate::panes::scene_color;
@@ -391,7 +391,7 @@ pub(super) fn note_instances(
             // the lattice. It is painted solid, edge to edge — the interior
             // and the boundary are one thing, and a heatmap cell showing
             // through a note said neither clearly.
-            let core = note_color(note, state, pitch, alpha);
+            let core = note_color(state, pitch, alpha);
             // Reading outward: the note, the black band standing against its
             // long edges, the white band standing against that, then whatever
             // the spectrogram is doing.
@@ -469,22 +469,18 @@ pub(super) fn note_instances(
     instances
 }
 
-/// The color of a note at `pitch`: the lattice's own, by the same
-/// [`channel_color`] the nodes are painted through, so a ribbon and the node
-/// it lit up are the same color.
+/// The color of a note at `pitch`: the lattice's own, off the same
+/// [`pitch_lut_color`] ramp the nodes are painted through, so a ribbon and the
+/// node it lit up are the same color.
 ///
-/// The only coloring there is, deliberately. The two obvious alternatives —
-/// the low-to-high pitch ramp on every channel, and one flat accent — both
-/// break the identity that makes the roll readable beside the lattice: what a
-/// color means has to be the same thing in both pictures, or reading across
-/// them is a translation.
-fn note_color(note: &RollNote, state: &SharedState, pitch: f32, alpha: f32) -> Color32 {
+/// The only coloring there is, deliberately. The obvious alternative — one
+/// flat accent for the roll — breaks the identity that makes it readable
+/// beside the lattice: what a color means has to be the same thing in both
+/// pictures, or reading across them is a translation.
+fn note_color(state: &SharedState, pitch: f32, alpha: f32) -> Color32 {
     let (darkest, brightest) =
         (state.frame_params.darkest_pitch, state.frame_params.brightest_pitch);
-    scene_color(
-        channel_color(note.channel, pitch, darkest, brightest, state.view.pitch_gradient),
-        alpha,
-    )
+    scene_color(pitch_lut_color(pitch, darkest, brightest, state.view.pitch_gradient), alpha)
 }
 
 
