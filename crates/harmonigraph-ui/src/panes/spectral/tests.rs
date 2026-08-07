@@ -777,6 +777,11 @@ fn an_off_lattice_note_gets_a_band_down_the_spectrum() {
         state.spectrum_config.orientation = SpectralOrientation::Left;
         state.spectrum_config.low_midi = 55.0;
         state.spectrum_config.high_midi = 67.0;
+        // The band rides the note's envelope, and the pane below is drawn 50ms
+        // in — a fraction of any real arrival. No envelope at all, so what is
+        // counted is whether the flag is DRAWN rather than how far its note
+        // has eased in.
+        state.frame_params.fade_time = 0.0;
         state.tracker.handle_event(NoteEvent {
             time: 0.0,
             channel: 0,

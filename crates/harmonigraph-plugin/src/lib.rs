@@ -80,9 +80,10 @@ pub struct HarmonigraphParams {
     #[id = "tuning-tolerance"]
     pub tolerance: FloatParam,
     /// Keeps the pre-merge id: this used to be the pitch class's own fade,
-    /// and it now drives every layer. Reusing the id means projects
-    /// automating it keep their value instead of snapping back to the
-    /// default. (The retired "octave-fade" id is simply ignored on load.)
+    /// and it now drives every layer, at both ends of the note. Reusing the
+    /// id means projects automating it keep their value instead of snapping
+    /// back to the default. (The retired "octave-fade" id is simply ignored
+    /// on load.)
     #[id = "pitch-class-fade"]
     pub fade: FloatParam,
     #[id = "darkest-pitch"]

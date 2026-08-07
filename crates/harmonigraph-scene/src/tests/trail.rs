@@ -30,7 +30,7 @@ fn nothing_is_remembered_while_the_trail_is_off() {
     // Explicitly off rather than `ViewConfig::default()`: the fresh-view
     // look is Yan's, and is free to ship the trail on.
     let view = trail_view(TrailMark::Off);
-    let scene = scene_of(&tracker, &Tuning::default(), &view, &FrameParams::default(), 10.0);
+    let scene = scene_of(&tracker, &Tuning::default(), &view, &plain_frame(), 10.0);
     assert!(scene.nodes.iter().all(|n| n.trail == 0.0));
 }
 
@@ -39,7 +39,7 @@ fn a_visited_node_is_marked_and_an_unvisited_one_is_not() {
     let mut tracker = NoteTracker::new();
     play_and_forget(&mut tracker, 60, 0.0, 1.0);
     let view = trail_view(TrailMark::Lift);
-    let frame = FrameParams::default();
+    let frame = plain_frame();
     let tuning = Tuning::default();
 
     // With no memory span the mark holds indefinitely: the point is a whole
@@ -65,7 +65,7 @@ fn a_memory_never_touches_any_layer_that_means_is_sounding() {
     // no amount of accumulated history can brighten the lattice.
     let mut tracker = NoteTracker::new();
     play_and_forget(&mut tracker, 60, 0.0, 1.0);
-    let frame = FrameParams::default();
+    let frame = plain_frame();
     let tuning = Tuning::default();
     let view = ViewConfig { extent_sevens: 1, ..ViewConfig::default() };
     let bare = scene_of(&tracker, &tuning, &view, &frame, 10.0);
@@ -99,7 +99,7 @@ fn a_memory_never_touches_any_layer_that_means_is_sounding() {
 fn tint_puts_the_remembered_color_on_a_silent_node_only() {
     let mut tracker = NoteTracker::new();
     play_and_forget(&mut tracker, 60, 0.0, 1.0);
-    let frame = FrameParams::default();
+    let frame = plain_frame();
     let tuning = Tuning::default();
 
     // Silent and visited: `color` carries the remembered note's color for
@@ -151,7 +151,7 @@ fn a_memory_span_fades_a_pitch_out_and_then_drops_it() {
     let mut tracker = NoteTracker::new();
     play_and_forget(&mut tracker, 60, 0.0, 1.0);
     let view = ViewConfig { trail_memory: 100.0, ..trail_view(TrailMark::Ring) };
-    let frame = FrameParams::default();
+    let frame = plain_frame();
     let tuning = Tuning::default();
     let trail_at = |now: f64| origin_node(&scene_of(&tracker, &tuning, &view, &frame, now)).trail;
 
@@ -170,7 +170,7 @@ fn an_off_sheet_node_stays_blank_even_after_it_is_played() {
     // of the same pitch class carries the memory instead.
     let view = ViewConfig { extent_sevens: 1, ..trail_view(TrailMark::Ring) };
     let tuning = Tuning::default();
-    let frame = FrameParams::default();
+    let frame = plain_frame();
     let off_sheet = LatticePos::new(0, 0, 1);
     let node_at = |scene: &Scene, pos: LatticePos| {
         *scene.nodes.iter().find(|n| n.lattice_pos == pos).unwrap()
@@ -210,7 +210,7 @@ fn clearing_the_history_wipes_every_mark() {
     play_and_forget(&mut tracker, 60, 0.0, 1.0);
     play_and_forget(&mut tracker, 64, 2.0, 3.0);
     let view = trail_view(TrailMark::Lift);
-    let frame = FrameParams::default();
+    let frame = plain_frame();
     let tuning = Tuning::default();
     assert!(scene_of(&tracker, &tuning, &view, &frame, 6.0)
         .nodes

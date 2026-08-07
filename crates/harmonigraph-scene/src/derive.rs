@@ -253,6 +253,16 @@ pub fn derive_scene(
             // voice — and a ring rising as the square of the sector it
             // brackets is precisely the disagreement about how fast the note
             // arrived that one shared rate exists to prevent.
+            //
+            // The release this rides waits out the NOTE's arrival
+            // (`Voice::release_level`), so in that ordinary case the ring is
+            // covered by the same rule the disc is and a stab rings at full.
+            // An INHERITED end is the one that is not, and deliberately: its
+            // ease starts where the end changed hands, so a note handed the
+            // melody and released a moment later rings at a fraction. That
+            // fraction is how long it held the end, which is the thing a ring
+            // is reporting — where the disc reports the note, and a note that
+            // sounded at all sounded fully.
             let release = voice.release_level(now, &env);
             let ring = |since: Option<Time>| since.map(|s| release * ease(s, voice.state));
             FrameVoice {

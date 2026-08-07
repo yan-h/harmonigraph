@@ -296,10 +296,12 @@ fn octaves_fade_independently() {
         kind: NoteEventKind::Off, // ...and released
     });
 
-    // Half a fade_time after the release.
+    // Half a fade after C5 starts LEAVING, which is when its arrival lands
+    // rather than when the key came up — a tap this short is still arriving
+    // at the key, and is not dimmed for it (`Voice::release_level`).
     let frame = FrameParams { fade_time: 1.0, ..FrameParams::default() };
     let scene =
-        scene_of(&tracker, &Tuning::default(), &ViewConfig::default(), &frame, 0.6);
+        scene_of(&tracker, &Tuning::default(), &ViewConfig::default(), &frame, 1.5);
     let origin = origin_node(&scene);
     assert_eq!(origin.activation, 1.0, "node stays lit by the held C4");
     assert_eq!(origin.octaves[MIDDLE_C_SLOT], 1.0, "held octave at full");
@@ -308,6 +310,45 @@ fn octaves_fade_independently() {
         "released octave mid-fade, got {}",
         origin.octaves[MIDDLE_C_SLOT + 1]
     );
+}
+
+#[test]
+fn a_note_shorter_than_the_fade_still_lights_every_layer_fully() {
+    // The whole point of one duration driving both ends: a stab is not dimmer
+    // than a held note, on any layer. Its arrival lands whatever the key did
+    // and the fade runs from there (`Voice::release_level`) — so the cost of
+    // playing fast is time at full, never brightness.
+    //
+    // The layers are checked TOGETHER because the failure this pins is a
+    // product of two overlapping ramps, and each layer multiplies its own
+    // pair: the disc would peak below full, and the ring below that.
+    let mut tracker = NoteTracker::new();
+    tracker.handle_event(NoteEvent {
+        time: 0.0,
+        channel: 0,
+        note: 60,
+        kind: NoteEventKind::On { velocity: 1.0 },
+    });
+    // Down for a twelfth of the Fade — a thirty-second note against a fade
+    // set for whole ones.
+    tracker.handle_event(NoteEvent { time: 0.1, channel: 0, note: 60, kind: NoteEventKind::Off });
+    let frame = FrameParams { fade_time: 1.2, ..FrameParams::default() };
+    let view = ViewConfig { mark_melody: true, mark_bass: true, ..plain_view() };
+
+    // At the end of the arrival, which is the peak of the note's whole life.
+    let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, 1.2);
+    let node = origin_node(&scene);
+    assert_eq!(node.activation, 1.0, "the core reaches full on a note held for a twelfth of it");
+    assert_eq!(node.octaves[MIDDLE_C_SLOT], 1.0, "and the octave glyph with it");
+    assert_eq!(node.melody_level, 1.0, "and the melody ring");
+    assert_eq!(node.bass_level, 1.0, "and the bass ring — a lone note wears both ends");
+
+    // And the whole fade is still ahead of it: the departure starts where the
+    // arrival landed, not back at the key.
+    let mid = scene_of(&tracker, &Tuning::default(), &view, &frame, 1.8);
+    let node = origin_node(&mid);
+    assert!((node.activation - 0.5).abs() < 1e-5, "half a fade on, half gone: {}", node.activation);
+    assert_eq!(node.melody_level, node.activation, "every layer on the one clock");
 }
 
 #[test]
@@ -325,8 +366,12 @@ fn one_fade_time_carries_every_layer_of_the_node() {
             kind: NoteEventKind::On { velocity: 1.0 },
         });
     }
+    // Held a whole duration before the keys come up, so what is sampled below
+    // is the departure and not the tail of an arrival — the two never overlap
+    // (`Voice::release_level`), and a chord released mid-arrival would read
+    // half-way down for the opposite reason.
     for note in [60u8, 67] {
-        tracker.handle_event(NoteEvent { time: 0.0, channel: 0, note, kind: NoteEventKind::Off });
+        tracker.handle_event(NoteEvent { time: 2.0, channel: 0, note, kind: NoteEventKind::Off });
     }
     let frame = FrameParams { fade_time: 2.0, ..FrameParams::default() };
     let view = ViewConfig {
@@ -334,8 +379,8 @@ fn one_fade_time_carries_every_layer_of_the_node() {
         mark_bass: true,
         ..plain_view()
     };
-    tracker.prune(1.0, &view.envelope(&frame));
-    let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, 1.0);
+    tracker.prune(3.0, &view.envelope(&frame));
+    let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, 3.0);
 
     let half = |what: &str, v: f32| {
         assert!((v - 0.5).abs() < 1e-5, "{what} should be half-faded, got {v}");
@@ -396,8 +441,9 @@ fn the_delay_is_what_keeps_a_released_chord_from_smearing_rings() {
                 kind: NoteEventKind::Off,
             });
         }
-        // Mid-fade, well within one fade time.
-        let frame = FrameParams { fade_time: 2.0, ..FrameParams::default() };
+        // Mid-fade, well within one fade time — and past the arrival the same
+        // second bought, so the discs below are on their way out.
+        let frame = FrameParams { fade_time: 1.0, ..FrameParams::default() };
         let view = ViewConfig {
             mark_melody: true,
             mark_bass: true,
@@ -464,7 +510,7 @@ fn window_center_pans_which_nodes_display() {
     // The center node renders at the world origin.
     let tracker = NoteTracker::new();
     let scene =
-        scene_of(&tracker, &Tuning::default(), &view, &FrameParams::default(), 0.0);
+        scene_of(&tracker, &Tuning::default(), &view, &plain_frame(), 0.0);
     let center_node = scene
         .nodes
         .iter()
@@ -486,7 +532,7 @@ fn channel_14_voices_render_outlined() {
         &tracker,
         &Tuning::default(),
         &plain_view(),
-        &FrameParams::default(),
+        &plain_frame(),
         0.0,
     );
     assert!(origin_node(&scene).outlined);
@@ -508,7 +554,7 @@ fn held_note_lights_matching_nodes() {
         &tracker,
         &tuning,
         &ViewConfig::default(),
-        &FrameParams::default(),
+        &plain_frame(),
         0.5,
     );
     let origin = origin_node(&scene);
@@ -540,7 +586,7 @@ fn a_note_outside_the_ring_lights_the_outermost_indicator() {
             note,
             kind: NoteEventKind::On { velocity: 1.0 },
         });
-        let scene = scene_of(&tracker, &Tuning::default(), &view, &FrameParams::default(), 0.5);
+        let scene = scene_of(&tracker, &Tuning::default(), &view, &plain_frame(), 0.5);
         let octaves = origin_node(&scene).octaves;
         let slots: Vec<usize> = (0..OCTAVE_SLOTS).filter(|&s| octaves[s] > 0.0).collect();
         assert_eq!(slots.len(), 1, "one octave sounds, got slots {slots:?}");
@@ -569,7 +615,7 @@ fn a_note_outside_the_ring_lights_the_outermost_indicator() {
         note: 96,
         kind: NoteEventKind::On { velocity: 1.0 },
     });
-    let scene = scene_of(&tracker, &Tuning::default(), &wide, &FrameParams::default(), 0.5);
+    let scene = scene_of(&tracker, &Tuning::default(), &wide, &plain_frame(), 0.5);
     assert_eq!(
         origin_node(&scene).octaves[MIDDLE_C_SLOT + 3],
         1.0,
@@ -596,7 +642,7 @@ fn a_ring_reaching_under_the_packing_folds_onto_a_slot_it_has() {
     // about the packing's own edge, which a fringe would move.
     let view =
         ViewConfig { octave_count: 5, octave_center: 12.0, octave_extras: 0, ..ViewConfig::default() };
-    let scene = scene_of(&held(0), &tuning, &view, &FrameParams::default(), 0.5);
+    let scene = scene_of(&held(0), &tuning, &view, &plain_frame(), 0.5);
     let node_cents = tuning.pitch_class(LatticePos::ORIGIN).to_cents();
     assert!(node_cents > 1190.0, "the origin must sit just under the wrap, got {node_cents}");
     assert_eq!(
@@ -669,7 +715,7 @@ fn the_views_fringe_reaches_the_wheel() {
         &sounding(),
         &Tuning::default(),
         &view,
-        &FrameParams::default(),
+        &plain_frame(),
         0.5,
     );
     assert_eq!(
@@ -747,7 +793,7 @@ fn a_lit_octave_indicator_stands_for_the_pitch_it_is_drawn_at() {
     // 12-TET, the origin 0.4c flat, matched within the default 0.5c tolerance.
     let tuning = Tuning::from_cents(-0.4, 700.0, 400.0, 1000.0, 0.5);
     let view = ViewConfig::default();
-    let scene = scene_of(&held(60), &tuning, &view, &FrameParams::default(), 0.5);
+    let scene = scene_of(&held(60), &tuning, &view, &plain_frame(), 0.5);
     let origin = origin_node(&scene);
 
     let node_cents = tuning.pitch_class(LatticePos::ORIGIN).to_cents();

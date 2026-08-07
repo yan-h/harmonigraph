@@ -15,7 +15,7 @@ use super::harness::*;
 /// as the arithmetic at the end of it.
 fn slide_at(speed: f32, width: f32, now: f64) -> f32 {
     let view = ViewConfig { shimmer_speed: speed, shimmer_width: width, ..ViewConfig::default() };
-    scene_of(&sounding(), &Tuning::default(), &view, &FrameParams::default(), now).shimmer_slide()
+    scene_of(&sounding(), &Tuning::default(), &view, &plain_frame(), now).shimmer_slide()
 }
 
 /// The sheet travels at one steady rate, with no instant anywhere in a long
