@@ -68,6 +68,9 @@ struct FrameVoice<'a> {
     /// The note's own envelope, attack times what is left of the release:
     /// what the disc, the glow, the gutter and the octave sector all draw at.
     activation: f32,
+    /// Whether this voice's departure has begun (see
+    /// [`NodeInstance::departing`](crate::NodeInstance::departing)).
+    departing: bool,
     /// What this voice's melody ring draws at, or `None` where it wears no
     /// melody end. The RELEASE alone under the ring's own ease — see the ease
     /// in [`derive_scene`], and
@@ -279,6 +282,10 @@ pub fn derive_scene(
                 voice,
                 color,
                 activation: voice.activation(now, &env),
+                // Below full is the departure under way, and only that: the
+                // release holds at 1 until the key comes up AND the arrival
+                // has landed, so this cannot be a note still easing in.
+                departing: release < 1.0,
                 melody: ring(melody_since),
                 bass: ring(bass_since),
             }
@@ -294,6 +301,10 @@ pub fn derive_scene(
         // nearest ones, and the ring is turned to match.
         let (low_slot, high_slot) = octave_layout.slots(node_cents);
         let mut activation = 0.0f32;
+        // Follows the voice that WINS the activation, so the flag describes
+        // the same voice the node is lit and colored by rather than any other
+        // one that happens to match this pitch class.
+        let mut departing = false;
         let mut octaves = [0f32; OCTAVE_SLOTS];
         let mut color = node_idle;
         let mut melody = Mark::default();
@@ -308,6 +319,7 @@ pub fn derive_scene(
                 if envelope > activation {
                     activation = envelope;
                     color = lit.color;
+                    departing = lit.departing;
                 }
                 // The slot whose own pitch on THIS node is the one sounding —
                 // `slot_pitch` solved for the slot, which is what keeps the
@@ -451,6 +463,7 @@ pub fn derive_scene(
             world_pos,
             color,
             activation,
+            departing,
             octaves,
             hovered: hovered == Some(pos),
             on_home: pos.sevens == view.center_sevens,

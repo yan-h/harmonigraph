@@ -220,6 +220,9 @@ fn parity_scene() -> Scene {
             world_pos: Vec3::new(f * 0.45 - 1.1, (f % 3.0) * 0.4 - 0.4, f * 0.3 - 0.75),
             color: Vec4::new(0.25 + f * 0.12, 0.55 - f * 0.05, 0.95 - f * 0.1, 1.0),
             activation: if i % 3 == 0 { 1.0 } else { 0.3 + f * 0.1 },
+            // Nothing the shader draws reads this — it is the label layer's,
+            // and labels are the UI crate's text pass, not the lattice pass.
+            departing: false,
             octaves,
             hovered: i == 1,
             on_home: i % 2 == 0,
@@ -1163,6 +1166,8 @@ fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
         world_pos: Vec3::ZERO,
         color: Vec4::new(0.35, 0.55, 0.85, 1.0),
         activation: 1.0,
+        // Held at full, so neither end of the envelope is running.
+        departing: false,
         octaves,
         hovered: false,
         on_home: true,
