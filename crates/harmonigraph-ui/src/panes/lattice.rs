@@ -190,6 +190,14 @@ const TRAIL_LABEL_STRENGTH: f32 = 0.5;
 /// trail pops it back a frame later — the "flash back in" that made one label
 /// read as two.
 ///
+/// Reserved on the way OUT only, which is what `node.departing` is read for.
+/// The argument above is entirely about a record that is coming, and nothing
+/// is coming for a note easing IN — a low activation there is a note that has
+/// barely started rather than one nearly gone. Reserving on both ends puts
+/// the name at half brightness the instant a key goes down, over a node still
+/// at a fraction of it, which is the same "steady, then switched" the reserve
+/// exists to remove, mirrored.
+///
 /// Reserved only where a trail can actually land, which is the home sheet:
 /// off-sheet nodes are deliberately never marked (a lone memory floating out
 /// in the sevens dimension reads as noise — see `harmonigraph_scene::trail`), so
@@ -208,7 +216,7 @@ fn label_strength(node: &harmonigraph_scene::NodeInstance, trailed: bool, keeps_
         return 1.0;
     }
     let recorded = if trailed { TRAIL_LABEL_STRENGTH * node.trail } else { 0.0 };
-    let reserved = if keeps_names && node.on_home && node.activation > 0.0 {
+    let reserved = if keeps_names && node.on_home && node.departing && node.activation > 0.0 {
         TRAIL_LABEL_STRENGTH
     } else {
         0.0
@@ -1589,12 +1597,17 @@ mod tests {
 
     /// A node with `activation`, on the home sheet or off it, and nothing
     /// else going on — the two inputs the reserve turns on.
+    ///
+    /// Departing, as the name says: every level below is a note on its way
+    /// out, which is the only end the reserve is for. The arrival is
+    /// `a_name_arriving_is_no_brighter_than_the_note_it_names`.
     fn fading(activation: f32, on_home: bool) -> harmonigraph_scene::NodeInstance {
         harmonigraph_scene::NodeInstance {
             lattice_pos: harmonigraph_core::LatticePos::new(0, 0, if on_home { 0 } else { 1 }),
             world_pos: glam::Vec3::ZERO,
             color: glam::Vec4::ONE,
             activation,
+            departing: true,
             octaves: [0.0; harmonigraph_scene::OCTAVE_SLOTS],
             hovered: false,
             on_home,
@@ -1649,6 +1662,90 @@ mod tests {
         assert_eq!(label_strength(&kept, true, true), TRAIL_LABEL_STRENGTH);
         kept.trail = 0.5;
         assert_eq!(label_strength(&kept, true, true), TRAIL_LABEL_STRENGTH * 0.5);
+    }
+
+    /// A name ARRIVES on its own note's envelope, like every other layer.
+    ///
+    /// The reserve is a departure device and its argument only holds there:
+    /// it stands in for a record that `node.trail` does not carry until the
+    /// frame the release finishes. A note on its way IN has no record coming
+    /// and nothing to settle onto, so reserving there pins the name at half
+    /// brightness over a node still at a fraction of it — the same "holding
+    /// steady and then switching" the reserve exists to remove, at the other
+    /// end of the note.
+    ///
+    /// The band `0 < activation < TRAIL_LABEL_STRENGTH` was reachable only on
+    /// the way out when the reserve was written, because a note's core simply
+    /// appeared at full. It is now climbed on every note-on, and at the fresh
+    /// view — trail marks and their names both on — that is every lit node.
+    #[test]
+    fn a_name_arriving_is_no_brighter_than_the_note_it_names() {
+        let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
+        // A long arrival, so the climb through the reserve's band is a stretch
+        // to sample rather than a frame of it.
+        state.frame_params.fade_time = 1.0;
+        state.tracker.handle_event(NoteEvent {
+            time: 0.0,
+            channel: 0,
+            note: 60,
+            kind: NoteEventKind::On { velocity: 1.0 },
+        });
+        let scene = derive_scene(
+            &state.tracker,
+            &state.tuning,
+            &state.view,
+            &state.frame_params,
+            state.camera,
+            None,
+            0.05,
+        );
+        let keeps_names = state.view.trail_labels && state.view.trail_mark != TrailMark::Off;
+        assert!(keeps_names, "the fresh view keeps names; without that this proves nothing");
+        let node = scene.nodes.iter().find(|n| n.activation > 0.0).expect("the note lit a node");
+        assert!(node.on_home, "the lit node is off the home sheet, where nothing is reserved");
+        assert!(
+            node.activation < TRAIL_LABEL_STRENGTH,
+            "sampled past the reserve's band at {}, so this cannot see the plateau",
+            node.activation,
+        );
+        assert_eq!(
+            label_strength(node, false, keeps_names),
+            node.activation,
+            "an arriving name was drawn at the trail reserve, not at its note's own level",
+        );
+
+        // The other end, through the same derive rather than a hand-built
+        // node: the key comes up once the arrival has landed, and at the same
+        // depth into the departure the reserve DOES hold the name up. Without
+        // this half, a fix that simply never reserved would pass the half
+        // above.
+        state.tracker.handle_event(NoteEvent {
+            time: 1.0,
+            channel: 0,
+            note: 60,
+            kind: NoteEventKind::Off,
+        });
+        let scene = derive_scene(
+            &state.tracker,
+            &state.tuning,
+            &state.view,
+            &state.frame_params,
+            state.camera,
+            None,
+            1.9,
+        );
+        let node = scene.nodes.iter().find(|n| n.activation > 0.0).expect("the note still lights");
+        assert!(node.departing, "the key is up and the arrival landed, so this is a departure");
+        assert!(
+            node.activation < TRAIL_LABEL_STRENGTH,
+            "sampled at {}, above the reserve, so this cannot see it hold",
+            node.activation,
+        );
+        assert_eq!(
+            label_strength(node, false, keeps_names),
+            TRAIL_LABEL_STRENGTH,
+            "a departing name stopped reserving the level its trail record takes over at",
+        );
     }
 
     /// The rim bitmap IS the stamped halo: the mark's own shape grown by the

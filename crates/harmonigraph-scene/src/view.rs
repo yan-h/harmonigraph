@@ -218,8 +218,12 @@ pub struct ViewConfig {
     /// envelope, and which stays deliberately linear (see
     /// [`trail`](mod@crate::trail)).
     ///
-    /// A bare `#[serde(default)]`: 0 is the straight line, so a blob that
-    /// predates the bar loads drawing exactly what it was saved drawing.
+    /// 0.35 fresh, which is a gentle power rather than the straight line 0
+    /// draws — a note that leaves quickly at first and then lingers reads as
+    /// decaying rather than as being wound down. A blob with no `fade_shape`
+    /// key gets that, like every other missing key: the container-level
+    /// `#[serde(default)]` makes `impl Default` the one fallback, and
+    /// `a_view_missing_any_one_key_reloads_at_the_fresh_value` holds it.
     pub fade_shape: f32,
     // ---- Idle (unlit) node marker ----------------------------------------
     // A minimal grey marker at each home-sheet node, drawn ALWAYS —
@@ -307,8 +311,10 @@ pub struct ViewConfig {
     /// into the other layer is the mark being the ring together with the slice
     /// it names, so light crossing one crosses the other — and it is the whole
     /// of where the sheet goes, the octave layer drawing steady everywhere a
-    /// ring does not point. [`Pulse::Off`] is both the fresh-view and the
-    /// old-blob fallback, so a bare `#[serde(default)]` covers it.
+    /// ring does not point. [`Pulse::Bands`] fresh, so the sweep is on out of
+    /// the box; a blob with no `pulse_marks` key gets that same value, the
+    /// container-level `#[serde(default)]` making `impl Default` the one
+    /// fallback for this field as for every other.
     pub pulse_marks: Pulse,
 
     // ---- Shimmer ---------------------------------------------------------
@@ -450,9 +456,11 @@ pub struct ViewConfig {
     // The one part of the view about the past rather than the present. It
     // rides the IDLE layer only -- see the `trail` module for why that is
     // the whole design and not an implementation detail.
-    /// How a node the music has visited is marked (see [`TrailMark`]). Off
-    /// by default: showing only what is audible is what every saved view
-    /// was drawn with, and leaving marks behind is a deliberate choice.
+    /// How a node the music has visited is marked (see [`TrailMark`]).
+    /// [`TrailMark::Lift`] fresh: where the music has been is most of what
+    /// the lattice is for, and a lift reads as a node standing slightly
+    /// proud rather than as a second kind of lit. `Off` is the setting for
+    /// showing only what is audible.
     pub trail_mark: TrailMark,
     /// How far the mark departs from a plain idle node, 0..1 — how much
     /// lighter the Lift grey, how visible the Ring, how much color the
@@ -680,12 +688,19 @@ impl ViewConfig {
     /// A bar cannot produce a nonsense value but a hand-edited RON can, and
     /// these feed a rasterizer.
     ///
+    /// This repairs a value that is PRESENT and unusable — a NaN, an infinity,
+    /// something past what its bar can reach. A key that is missing outright
+    /// never arrives here at all: the container-level `#[serde(default)]`
+    /// has already filled it from `impl Default`, which is the fresh view's
+    /// value and the whole of that arrangement.
+    ///
     /// Most repairs fall back to the fresh view's own value, which is the only
     /// other value in the file known to be drawable. `fade_shape` and
     /// `mark_delay` are the exception and land on 0 — both have a 0 that MEANS
-    /// something (straight, no wait), so a blob that has lost the number gets
-    /// the inert setting rather than a look nobody asked for. It reads as a
-    /// feature switched off, which is what a lost number should look like.
+    /// something (straight, no wait), so a blob carrying a nonsense number for
+    /// one gets the inert setting rather than a look nobody asked for. It
+    /// reads as a feature switched off, which is what a broken number should
+    /// look like. Fresh, they are 0.35 and 0.15, not 0.
     pub fn sanitize(&mut self) {
         let fresh = ViewConfig::default();
 

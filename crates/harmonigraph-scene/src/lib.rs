@@ -129,6 +129,21 @@ pub struct NodeInstance {
     pub color: Vec4,
     /// 0 = idle, 1 = fully lit. Held notes are 1; released notes decay.
     pub activation: f32,
+    /// Whether the voice this node is lit by is on its way OUT — its key is
+    /// up and its departure has begun.
+    ///
+    /// [`activation`](Self::activation) alone cannot answer this: it is the
+    /// arrival times what is left of the departure, so a level part-way up
+    /// and the same level part-way down are one number. The two ends run on
+    /// one dial and never overlap, which is what makes a single flag enough
+    /// to tell them apart — a voice is arriving, or full, or departing.
+    ///
+    /// What needs it is anything that reads a low activation as "nearly
+    /// gone" and acts on it, which is only true on the way out. The kept
+    /// note names are the case: their level is reserved ahead of the trail
+    /// record that takes over when the release finishes, and reserving that
+    /// on the way IN draws a name ahead of the note it names.
+    pub departing: bool,
     /// Per-octave activation (slot = MIDI octave + 1, clamped into the span
     /// the view shows — see [`octaves`]): each octave's indicator fades on
     /// its own voice's envelope, independent of the node's overall
@@ -353,8 +368,9 @@ pub struct Scene {
     /// Which shimmer sweeps the melody/bass rings (see [`Pulse`] and
     /// [`ViewConfig::pulse_marks`]).
     ///
-    /// Folded to [`Pulse::Off`] when the rings are off
-    /// ([`mark_thickness`](Self::mark_thickness) 0), where there is no ring
+    /// Folded to [`Pulse::Off`] when the rings are off — which is
+    /// [`ViewConfig::mark_rings_draw`], a thickness of 0 OR neither end
+    /// switched on, not the thickness alone — where there is no ring
     /// to animate and the mark's own octave slice must not go on shimmering
     /// under a control the pane has grayed out.
     pub pulse_marks: Pulse,

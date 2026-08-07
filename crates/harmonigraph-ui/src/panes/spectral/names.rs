@@ -874,7 +874,7 @@ mod tests {
     }
 
     /// The names `state` would draw at `now`, placed exactly the way
-    /// [`spectral_pane`](super::super::axes::spectral_pane) places them.
+    /// [`spectral_pane`](super::super::spectral_pane) places them.
     fn labels(state: &SharedState, now: f64) -> Vec<NoteLabel> {
         labels_in(state, now, PANE)
     }

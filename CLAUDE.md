@@ -186,6 +186,11 @@ dispatch and deleted by whoever fixes it, so an investigation parked in it
 dies with the fix. It is for things that take five seconds to notice and
 need no context to act on.
 
+It is also no longer tracked in git — it is gitignored and per-clone, so a
+worktree session has no copy of it and cannot read or add to one. That makes
+the issue the only durable channel a session actually has, which sharpens
+rather than weakens the rule above.
+
 Issue #121 is the worked example and the reason this is written down: four
 hypotheses eliminated by instrumentation across a whole session, and the
 first instinct was to compress that into one backlog line. The measurements

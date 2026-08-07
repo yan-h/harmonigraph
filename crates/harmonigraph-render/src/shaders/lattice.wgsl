@@ -851,9 +851,11 @@ fn slice_gap_half() -> f32 {
 // ones. Moving it moves how a note attacks and releases as well as how
 // loudly the silent octaves carry the ring's shape.
 const GHOST_LEVEL: f32 = 0.16;
-// The classic disc-edge radius: normalizes the field paint to the sized
-// orb, and stands in for the core radius where a coreless node still needs
-// one.
+// The disc-edge radius the glow's falloff is written against: its one use
+// is scaling that falloff's domain by `CORE_R_CLASSIC / radius`, so a core
+// dialled smaller carries its glow in with it rather than keeping a halo
+// sized for a disc that is no longer there. A reference length, not a
+// radius anything is drawn at.
 const CORE_R_CLASSIC: f32 = 0.46;
 // Extra half-width added to the core disc's edge as solidity drops from 1
 // to 0: at solidity 1 the edge is a crisp screen-constant band (the
