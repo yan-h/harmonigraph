@@ -35,24 +35,26 @@ fn default_cabinet_scale() -> f32 {
 }
 
 /// Simple orbit camera. Angles in radians.
+///
+/// Container-level `default`, like every other persisted struct: `impl
+/// Default` below is the one source of a field's fallback, so a blob
+/// missing a key costs that key alone rather than failing the parse and
+/// taking the whole persist with it.
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct Camera {
     pub target: Vec3,
     pub yaw: f32,
     pub pitch: f32,
     pub distance: f32,
     pub fov_y: f32,
-    /// serde(default) keeps pre-projection persisted blobs loadable.
-    #[serde(default)]
     pub projection: Projection,
     /// Cabinet only: on-screen direction of the sevens axis, radians
     /// counterclockwise from screen-right (drafting convention picks 30°,
     /// 45°, or 60°; default 45°).
-    #[serde(default = "default_cabinet_angle")]
     pub cabinet_angle: f32,
     /// Cabinet only: screen length of one seventh-step as a fraction of a
     /// front-plane step (0.5 = classic cabinet, 1.0 = cavalier).
-    #[serde(default = "default_cabinet_scale")]
     pub cabinet_scale: f32,
 }
 

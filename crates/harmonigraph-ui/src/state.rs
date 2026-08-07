@@ -568,6 +568,12 @@ impl SharedState {
     /// corrupt input is ignored (fresh defaults win over a broken restore), and
     /// so is anything older than [`UI_PERSIST_VERSION`].
     ///
+    /// Answers whether the blob was APPLIED, and says why on the console when
+    /// it was not. Both refusals cost the whole document — dock, camera, view,
+    /// spectrum and render at once — so a caller with nowhere to show a
+    /// console (the offline renderer) has to say so itself, and the return
+    /// value is what lets it.
+    ///
     /// Refusing an older blob rather than migrating it is safe because no
     /// older blob can reach this build THROUGH THE HOST. The version reached 2
     /// on 2026-07-23; the plugin's `CLAP_ID` and `VST3_CLASS_ID` changed on
@@ -591,42 +597,62 @@ impl SharedState {
     /// real projects at defaults, which is a cost worth naming in the PR
     /// rather than a reason not to — but it is loud, and a blob half-read is
     /// the thing this floor exists to prevent.
-    pub fn load_persist(&mut self, serialized: &str) {
-        if let Ok(persist) = ron::from_str::<UiPersist>(serialized) {
-            if persist.version < UI_PERSIST_VERSION {
-                return;
+    pub fn load_persist(&mut self, serialized: &str) -> bool {
+        let persist = match ron::from_str::<UiPersist>(serialized) {
+            Ok(persist) => persist,
+            // SAYING SO is the whole point of this arm. Nothing in the tree
+            // reads an older spelling any more, so a blob naming a variant
+            // this build has dropped — a retired palette, orientation or
+            // sweep mode — fails the parse HERE, and what falls out is the
+            // dock, the camera and every view setting reverting at once. The
+            // version floor cannot catch it: the version is read out of a
+            // value that never parsed. An accepted break, but not a silent
+            // one — a project opening at defaults with no explanation reads
+            // as data loss, and this is the difference between that and a
+            // break someone chose.
+            Err(err) => {
+                self.log(format!("persist ignored — the blob did not parse ({err})"));
+                return false;
             }
-            // The dock being installed is not the one the dial's points were
-            // measured against, and its node count cannot say so (see
-            // [`fold::Dial::forget`]) — so the load has to. What the incoming
-            // layout is dialled to is the fractions in the blob's own dock,
-            // plus the widths its folds carry.
-            self.dial.forget();
-            self.folds = persist.folds;
-            self.dock = persist.dock;
-            self.camera = persist.camera;
-            self.view = persist.view;
-            // The incoming project's comma modes are its own, so the verdicts
-            // this session reached about the tuning it was showing say nothing
-            // about them, and the detect has to look again. Held back, an
-            // editor that loads a project at the tuning it already had would
-            // never look (see `temper_judged`); a host pushing state into a
-            // live editor, on undo or a preset change, is exactly that case.
-            self.temper_judged = [None; Comma::COUNT];
-            // Both fit a deserialized blob to what its controls can produce,
-            // which a hand-edited RON need not have.
-            self.view.sanitize();
-            self.camera_presets = persist.camera_presets;
-            self.spectrum_config = persist.spectrum;
-            self.spectrum_config.sanitize();
-            self.take.render_config = persist.render;
-            self.fps_cap = persist.fps_cap;
-            // Clamped here rather than only where it is drawn, so the control
-            // cannot read out a number the chrome is not at: `set_ui_scale`
-            // would take a hand-edited 5.0 down to the top of the range while
-            // the bar went on saying 500%.
-            self.ui_scale = crate::theme::sane_ui_scale(persist.ui_scale);
+        };
+        if persist.version < UI_PERSIST_VERSION {
+            self.log(format!(
+                "persist ignored — version {} is below the floor of {UI_PERSIST_VERSION}",
+                persist.version,
+            ));
+            return false;
         }
+        // The dock being installed is not the one the dial's points were
+        // measured against, and its node count cannot say so (see
+        // [`fold::Dial::forget`]) — so the load has to. What the incoming
+        // layout is dialled to is the fractions in the blob's own dock,
+        // plus the widths its folds carry.
+        self.dial.forget();
+        self.folds = persist.folds;
+        self.dock = persist.dock;
+        self.camera = persist.camera;
+        self.view = persist.view;
+        // The incoming project's comma modes are its own, so the verdicts
+        // this session reached about the tuning it was showing say nothing
+        // about them, and the detect has to look again. Held back, an
+        // editor that loads a project at the tuning it already had would
+        // never look (see `temper_judged`); a host pushing state into a
+        // live editor, on undo or a preset change, is exactly that case.
+        self.temper_judged = [None; Comma::COUNT];
+        // Both fit a deserialized blob to what its controls can produce,
+        // which a hand-edited RON need not have.
+        self.view.sanitize();
+        self.camera_presets = persist.camera_presets;
+        self.spectrum_config = persist.spectrum;
+        self.spectrum_config.sanitize();
+        self.take.render_config = persist.render;
+        self.fps_cap = persist.fps_cap;
+        // Clamped here rather than only where it is drawn, so the control
+        // cannot read out a number the chrome is not at: `set_ui_scale`
+        // would take a hand-edited 5.0 down to the top of the range while
+        // the bar went on saying 500%.
+        self.ui_scale = crate::theme::sane_ui_scale(persist.ui_scale);
+        true
     }
 }
 
@@ -665,15 +691,23 @@ pub(crate) struct UiPersist {
     #[serde(default)]
     pub(crate) version: u32,
     pub(crate) dock: DockState<panes::Tab>,
-    // The sections below carry `serde(default)` so a blob missing one costs
-    // that section alone rather than the whole document. The reachable case is
-    // a HAND-AUTHORED blob — `harmonigraph-offline --ui-state FILE`, the
-    // standalone's `app.ron`, anything `read-plugin-state.py` produced — and
-    // `a_persist_blob_missing_the_render_section_keeps_the_rest_of_the_blob`
-    // is what holds it.
+    // EVERY section below carries `serde(default)`, so a blob missing one
+    // costs that section alone rather than the whole document. The reachable
+    // case is a HAND-AUTHORED blob — `harmonigraph-offline --ui-state FILE`,
+    // the standalone's `app.ron`, anything `read-plugin-state.py` produced —
+    // and such a file is written to set ONE thing, so the section it omits is
+    // most of them. `a_persist_blob_missing_any_one_section_keeps_the_rest`
+    // is what holds it, per section rather than once, because nothing at a
+    // declaration says whether the attribute is there.
+    //
+    // `dock` is the deliberate exception: it has no `impl Default` to fall
+    // back to, and a blob with no dock has no layout to restore, which is the
+    // one case where reverting the whole document is the honest answer.
     #[serde(default)]
     pub(crate) folds: fold::Folds,
+    #[serde(default)]
     pub(crate) camera: Camera,
+    #[serde(default)]
     pub(crate) view: ViewConfig,
     #[serde(default)]
     pub(crate) camera_presets: Vec<CameraPreset>,
@@ -684,7 +718,9 @@ pub(crate) struct UiPersist {
     /// A missing cap reads as uncapped.
     #[serde(default)]
     pub(crate) fps_cap: Option<f32>,
-    /// Pre-scale blobs load at the design size — see [`default_ui_scale`].
+    /// A blob without one loads at the design size — see [`default_ui_scale`],
+    /// and note that this is the one field-level `default = "..."` left in the
+    /// tree, because an `f32`'s own default of 0.0 is a scale of nothing.
     #[serde(default = "default_ui_scale")]
     pub(crate) ui_scale: f32,
 }

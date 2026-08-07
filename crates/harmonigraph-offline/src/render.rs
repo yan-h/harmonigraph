@@ -64,7 +64,17 @@ pub fn render(
 
     let mut state = SharedState::new(TextureFormat::Rgba8Unorm);
     if let Some(blob) = replay.take().header.ui_state.clone() {
-        state.load_persist(&blob);
+        // On stderr, because a refusal here is invisible otherwise: the
+        // console the editor would log to is not drawn offline, and what a
+        // refused blob produces is a render at wholly default camera, view
+        // and frame — a plausible-looking mp4 that reproduces nothing about
+        // the session it was recorded in. Better a line than a silent one.
+        if !state.load_persist(&blob) {
+            eprintln!(
+                "warning: this take's ui_state was refused; rendering at defaults \
+                 (camera, view, spectrum and frame)",
+            );
+        }
     }
     // Nothing offline is interactive, and both would draw over the
     // picture: no armed-mode pulse, no hover highlight.

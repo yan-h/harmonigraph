@@ -100,9 +100,6 @@ pub struct ViewConfig {
     /// What text an off-sheet node's label carries (see [`SevensLabel`]).
     /// Only meaningful while `show_labels` is on.
     pub sevens_label: SevensLabel,
-    /// Stroke weight of the DRAWN label marks (`+`, `-`, and the septimal
-    /// shape), as a fraction of the mark's own font size.
-    ///
     /// Draw note-name labels on hovered and sounding nodes.
     pub show_labels: bool,
     /// Overall size of a node's label, as a multiple of its built-in sizes —
@@ -693,9 +690,15 @@ impl ViewConfig {
     /// Fit a deserialized view to what its controls can actually produce.
     ///
     /// A bar cannot produce a nonsense value but a hand-edited RON can, and
-    /// these feed a rasterizer. Where a value is past repair the fresh view's
-    /// own is what it falls back to, which is the only other value in the
-    /// file that is known to be drawable.
+    /// these feed a rasterizer.
+    ///
+    /// Most repairs fall back to the fresh view's own value, which is the only
+    /// other value in the file known to be drawable. The note envelope is the
+    /// exception and lands on 0 — `attack_time`, `fade_shape` and `mark_delay`
+    /// all have a 0 that MEANS something (instant, straight, no wait), so a
+    /// blob that has lost the number gets the inert setting rather than a look
+    /// nobody asked for. It reads as a feature switched off, which is what a
+    /// lost number should look like.
     pub fn sanitize(&mut self) {
         let fresh = ViewConfig::default();
 
