@@ -38,9 +38,16 @@ them via `mdfind`. Auto-backups count as saves.
 
 ## Scope check before you edit any default
 
-- `ViewConfig::default()` is the fresh-view look — this is what you change.
-- The `default_*` serde fns are what a blob PREDATING a field was drawn with.
-  Don't touch those or you restyle already-saved views.
+- `ViewConfig::default()` is the fresh-view look, and since PR #251 it is the
+  ONLY place to change: the struct carries a container-level
+  `#[serde(default)]`, so `impl Default` is also every field's serde fallback.
+  There is no second set of values to keep in step, and no `default_*` block
+  to leave alone — retuning the look here is free.
+- What that costs is worth knowing before you retune: a saved blob MISSING a
+  key now picks the new value up. That is the intended trade (backwards
+  compatibility is not a constraint — see CLAUDE.md), not an accident, but it
+  means "restyle the fresh view" and "restyle an under-specified saved view"
+  are the same edit.
 - Camera zoom and dock are navigation state, deliberately not baked into
   defaults.
 

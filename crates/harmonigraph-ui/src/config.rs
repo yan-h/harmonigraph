@@ -1,7 +1,7 @@
 //! The display settings the UI persists: the Spectral pane's analyzer
 //! configuration and the shared bar ranges it is edited through. Serde-facing
-//! — every `default_*` here names what a blob saved before its field existed
-//! loads as.
+//! — [`SpectrumConfig`] carries a container-level `default`, so a key missing
+//! from a blob comes back at the fresh-install value and costs only itself.
 //!
 //! The video render settings persist alongside these but live in
 //! `harmonigraph-take`, because a take carries the frame it was composed at.

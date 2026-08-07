@@ -30,6 +30,10 @@
 /// [`pitch_ramp_lut`](crate::pitch_ramp_lut)), so `lattice.wgsl` never learns
 /// any of it exists.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+// Container-level, like every other persisted struct: `impl Default` is the
+// one source of a field's fallback, so a blob carrying a PARTIAL gradient
+// picks the rest up from there rather than from a second set of values.
+#[serde(default)]
 pub struct PitchGradient {
     /// OKLAB hue the BOTTOM of the pitch range takes, in degrees. Wrapped into
     /// 0..360 by [`sanitized`](Self::sanitized), since it names a point on a
@@ -40,9 +44,8 @@ pub struct PitchGradient {
     ///
     /// An angle here is Oklab with nothing marking it as such, which is what
     /// makes the choice of space a one-way door: a stored angle cannot say
-    /// which space it was written in. Anything ADDED here still owes a
-    /// default (see [`default_hue_start`]).
-    #[serde(default = "default_hue_start")]
+    /// which space it was written in. Anything ADDED here owes an entry in
+    /// `impl Default` below, which the container-level `default` reads.
     pub hue_start: f32,
     /// How far round the hue circle the range walks, in degrees — SIGNED, so
     /// its sign is which way round the circle the pitch runs and flipping it
@@ -56,18 +59,15 @@ pub struct PitchGradient {
     ///
     /// Oklab degrees, for the reason [`hue_start`](Self::hue_start) gives —
     /// including what that means for a span sitting in an already-saved blob.
-    #[serde(default = "default_hue_span")]
     pub hue_span: f32,
     /// `L*` at the CENTRE of the pitch range, 0..100 — the middle of the
     /// gradient rather than either end, so that
     /// [`lightness_ramp`](Self::lightness_ramp) opens symmetrically about it
     /// and this knob keeps meaning "how bright is the picture" at every ramp.
-    #[serde(default = "default_lightness")]
     pub lightness: f32,
     /// Signed `L*` difference from the bottom of the range to the top: how
     /// much of the gradient's separation is spent on brightness. 0 is exactly
     /// isoluminant, negative puts the bright end at the bottom.
-    #[serde(default = "default_lightness_ramp")]
     pub lightness_ramp: f32,
     /// How much color, as a fraction 0..1 of the most the sRGB gamut holds at
     /// each point of the curve — NOT an absolute chroma.
@@ -84,7 +84,6 @@ pub struct PitchGradient {
     /// actually available, every setting is reachable, monotone, and in gamut
     /// by construction; the cost is that absolute chroma varies along the arc,
     /// since the hues that can hold more are given more.
-    #[serde(default = "default_chroma")]
     pub chroma: f32,
 }
 

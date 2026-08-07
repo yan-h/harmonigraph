@@ -119,17 +119,18 @@ pub const MIN_EXTRA_SIZE: f32 = 0.1;
 
 /// The size an extra falls back to, as a fraction of an even slice: small
 /// enough to read as fringe at a glance rather than as a slightly short
-/// octave, wide enough to see what pitch it is lighting. This is what a
-/// non-finite size recovers to, plus the size most test fixtures build on —
-/// NOT the fresh look, which opens on a wider fringe of its own (see
-/// [`ViewConfig`](crate::ViewConfig)).
+/// octave, wide enough to see what pitch it is lighting. What
+/// [`octave_layout`] falls back to for a non-finite size, plus the size most
+/// test fixtures build on — NOT the fresh look, which opens on a wider fringe
+/// of its own, and NOT what `ViewConfig::sanitize` repairs to, which is that
+/// fresh value (see [`ViewConfig`](crate::ViewConfig)).
 pub const DEFAULT_EXTRA_SIZE: f32 = 0.35;
 
 /// The blend an extra falls back to: none, so every extra is the same size
 /// and the wheel is exactly two tiers. The alternative is a graded ramp, and
-/// that is what a fresh view opens on — this constant is what a non-finite
-/// blend recovers to. See [`octave_layout`] and
-/// [`ViewConfig`](crate::ViewConfig).
+/// that is what a fresh view opens on — this is what [`octave_layout`] falls
+/// back to for a non-finite blend, where `ViewConfig::sanitize` repairs to
+/// the fresh value instead. See [`ViewConfig`](crate::ViewConfig).
 pub const DEFAULT_EXTRA_BLEND: f32 = 0.0;
 
 /// Semitones to the octave, as a float: this module is all pitch arithmetic

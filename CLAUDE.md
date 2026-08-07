@@ -145,21 +145,33 @@ Don't write the next one: a rename is a rename, a dropped variant is dropped.
 
 Two mechanisms carry the weight instead, and they are worth keeping straight:
 
-- **`ViewConfig`, `SpectrumConfig`, `RenderConfig` and `RenderFrame` carry a
-  container-level `#[serde(default)]`.** `impl Default` is therefore the one
-  and only source of a field's fallback — there is no second set of values,
-  and retuning the fresh look is free. A key missing from a blob costs that
-  key alone; `a_view_missing_any_one_key_reloads_at_the_fresh_value` and
-  `a_persist_blob_missing_a_spectrum_field_keeps_the_rest_of_the_blob` hold
-  it. Do not add a field-level `default = "..."` back.
-- **`UI_PERSIST_VERSION` is the floor**, and it is what makes removal cheap:
-  a blob below it is refused whole rather than half-read.
+- **Every persisted struct carries a container-level `#[serde(default)]`** —
+  `ViewConfig`, `SpectrumConfig`, `RenderConfig`, `RenderFrame`, `Camera`,
+  `PitchGradient`, and each `UiPersist` section but `dock`. `impl Default` is
+  therefore the one and only source of a field's fallback: no second set of
+  values, and retuning the fresh look is free. A key missing from a blob
+  costs that key alone —
+  `a_view_missing_any_one_key_reloads_at_the_fresh_value` and
+  `a_persist_blob_missing_any_one_section_keeps_the_rest` sweep for it rather
+  than pinning one field, because a struct added without the attribute is
+  invisible at its declaration. `UiPersist::ui_scale` is the one field-level
+  `default = "..."` left, and only because an `f32`'s own default of 0.0 is a
+  scale of nothing. Don't add others.
+- **`UI_PERSIST_VERSION` is the floor**: a blob below it is refused whole
+  rather than half-read. Note what it does NOT cover — see below.
 
 What survives from an old blob is now only what serde gives free: an unknown
 KEY is skipped, so retiring a field is safe. An unknown VARIANT is not — it
-fails the parse and drops the entire persist, layout and camera with it. That
-is an accepted break, not a bug to shim around, but it is the one worth
-naming in a PR body when you drop an enum variant.
+fails the parse and drops the entire persist, layout and camera with it.
+
+**The floor is no guard against that**, and it is worth being exact, because
+it is easy to assume otherwise: the version is read out of a struct that
+never parsed, so the check never runs. Raising the floor does nothing for a
+dropped variant at any value. What makes it acceptable is that it is LOUD —
+`load_persist` returns whether it applied and writes the reason to the
+console, the offline renderer prints to stderr, and `a_refused_blob_says_why`
+holds both. Dropping an enum variant is still fine; say so in the PR body,
+and keep the refusal audible.
 
 ## What you could not finish goes to an ISSUE, not the backlog
 

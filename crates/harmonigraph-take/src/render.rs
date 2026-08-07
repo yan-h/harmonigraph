@@ -57,15 +57,14 @@ pub enum RenderTrigger {
 /// separate binary with a headless GPU device and an ffmpeg pipe, and
 /// nothing about it belongs inside a real-time audio plugin. What the
 /// plugin can do is *run* it, the moment a take is complete.
-/// Container-level `default`, so a key this struct gained after a blob was
-/// written loads with the value a fresh install gets — `impl Default`'s,
-/// field by field. Per-field `default = "..."` fns said the same thing one
-/// field at a time and had to be kept in step with `impl Default` by hand;
-/// a pair that drifted meant a blob omitting that key loaded as a config
-/// nobody chose. Where a field's fallback must instead be what the blob was
-/// SAVED with, rather than what a fresh install gets, it needs its own fn
-/// back — `ViewConfig` is the worked example, and its `default_*` block says
-/// so.
+/// Container-level `default`, so a key missing from a blob loads with the
+/// value a fresh install gets — `impl Default`'s, field by field. Per-field
+/// `default = "..."` fns said the same thing one field at a time and had to
+/// be kept in step with `impl Default` by hand; a pair that drifted meant a
+/// blob omitting that key loaded as a config nobody chose. Every persisted
+/// struct in the tree is built this way now, and none of them keeps a second
+/// set of values for what a blob was SAVED with — see CLAUDE.md's compat
+/// section, which makes that an invariant rather than a coincidence.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct RenderConfig {

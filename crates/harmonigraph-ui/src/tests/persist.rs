@@ -187,9 +187,14 @@ fn a_blob_written_against_the_taper_keeps_what_it_still_says() {
     let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
     restored.load_persist(&tapered);
     assert_eq!(restored.view.octave_count, 7, "the count the blob names survives the taper keys");
+    // The fresh fringe as this count can hold it, not the fresh fringe raw:
+    // `sanitize` clamps the PAIR, and seven octaves leave room for two extras
+    // a side. Spelling the clamp out keeps this measuring the fallback rather
+    // than failing the day someone retunes the fresh fringe past what fits.
+    let (_, fits) = harmonigraph_scene::clamp_wheel(7, fresh.octave_extras);
     assert_eq!(
-        restored.view.octave_extras, fresh.octave_extras,
-        "and the fringe it is missing comes back at the fresh value",
+        restored.view.octave_extras, fits,
+        "and the fringe it is missing comes back at the fresh value, as the count can hold it",
     );
     assert_eq!(restored.camera.yaw, 1.23, "the rest of the blob still restores");
 }
@@ -257,8 +262,50 @@ fn a_render_frame_round_trips_through_both_doors() {
 fn corrupt_persist_is_ignored() {
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
     let default_distance = state.camera.distance;
-    state.load_persist("not json at all");
+    assert!(!state.load_persist("not json at all"), "a corrupt blob is not applied");
     assert_eq!(state.camera.distance, default_distance);
+}
+
+/// A refused blob SAYS SO. Both refusals cost the whole document — dock,
+/// camera, view, spectrum and render at once — and a project reopening at
+/// defaults with nothing written anywhere reads as data loss rather than as a
+/// break someone chose.
+///
+/// The variant case is the one worth a test of its own, because it is the one
+/// this build can still meet in the wild: no code reads an older spelling any
+/// more, so a blob naming a palette, orientation or sweep mode that has since
+/// been dropped fails the parse — and it fails BEFORE the version is read, so
+/// the floor cannot catch it however high it is set.
+#[test]
+fn a_refused_blob_says_why() {
+    // A dropped enum variant, spliced where a live one sat.
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    state.spectrum_config.spectrogram_color = crate::SpectrogramColor::Aurora;
+    let saved = state.save_persist();
+    let dropped = saved.replace("spectrogram_color:Aurora", "spectrogram_color:Heat");
+    assert_ne!(dropped, saved, "the splice must land for this to test anything");
+
+    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+    assert!(!restored.load_persist(&dropped), "a dropped variant is not applied");
+    assert!(
+        restored.console.lines().any(|line| line.contains("did not parse")),
+        "the refusal was silent; console holds {:?}",
+        restored.console.lines().collect::<Vec<_>>(),
+    );
+
+    // And the floor's own refusal, which is the other way a whole document
+    // goes and must be just as loud.
+    let stale = saved.replacen(
+        &format!("version:{UI_PERSIST_VERSION}"),
+        &format!("version:{}", UI_PERSIST_VERSION - 1),
+        1,
+    );
+    let mut older = SharedState::new(TextureFormat::Bgra8Unorm);
+    assert!(!older.load_persist(&stale), "a blob below the floor is not applied");
+    assert!(
+        older.console.lines().any(|line| line.contains("below the floor")),
+        "the floor's refusal was silent",
+    );
 }
 
 #[test]
@@ -553,6 +600,50 @@ fn a_persist_blob_missing_the_render_section_keeps_the_rest_of_the_blob() {
         fresh,
         "the renderer's door must answer the same, rather than refusing the blob",
     );
+}
+
+/// The same property for EVERY section that carries the attribute, not just
+/// `render`: dropping one costs that section alone.
+///
+/// Swept rather than pinned one at a time, because nothing at a declaration
+/// says whether `#[serde(default)]` is there — `camera` and `view` went
+/// without it for a while precisely because the omission is invisible, and a
+/// hand-authored `--ui-state` file setting one thing omits most of the rest.
+/// A section added without the attribute fails here rather than the day a
+/// blob is short of it.
+///
+/// `dock` is the exception and is not swept: it has no `impl Default`, so a
+/// blob with no dock has no layout to restore and refusing the document is
+/// the honest answer.
+#[test]
+fn a_persist_blob_missing_any_one_section_keeps_the_rest() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    // A witness in a section that is never the one dropped below, so "the
+    // blob survived" is distinguishable from "it sank and everything
+    // reverted". The camera is not swept for that reason.
+    state.camera.yaw = 1.23;
+    state.view.extent_sevens = 3;
+    let saved = state.save_persist();
+
+    for (key, _) in top_level_pairs(&saved) {
+        if key == "version" || key == "dock" || key == "camera" {
+            continue;
+        }
+        let kept: Vec<String> = top_level_pairs(&saved)
+            .into_iter()
+            .filter(|(k, _)| *k != key)
+            .map(|(_, text)| text)
+            .collect();
+        let without = format!("({})", kept.join(","));
+        assert_ne!(without, saved, "{key:?} must be in the blob to drop");
+
+        let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+        assert!(
+            restored.load_persist(&without),
+            "dropping {key:?} sank the whole document instead of costing itself",
+        );
+        assert_eq!(restored.camera.yaw, 1.23, "dropping {key:?} cost the camera too");
+    }
 }
 
 #[test]
