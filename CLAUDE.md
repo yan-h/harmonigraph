@@ -89,24 +89,30 @@ filter" becomes "a window mean rather than an EMA, which IS the wrong
 filter".
 
 The exception is where the past tense is load-bearing, and it is a real
-category rather than an escape hatch. Comments about **blobs still sitting
-in saved projects** must stay historical — the `default_*` block, what
-`sanitize` folds and the note standing where the retired `node_style` key
-was, all in `view.rs`, the serde aliases for deleted palettes and sweep
-modes, `legacy_stacked` and `legacy_extra_args` in
-`harmonigraph-take`'s `render.rs`, and the `legacy_*` fields read through
-`bare_as_some` (`legacy_octave_low`, `legacy_octave_high`,
-`legacy_octave_span`, `legacy_highlight_extremes`), where the bare token a
-previous build wrote is the whole reason the shim is shaped that way — and
-so must the fade
-param's pre-merge id, where the id is a persistence contract that outlives
-the rename. There the history *is* the current constraint,
-and flattening it destroys real information. `DISPLAY_OVERSAMPLE` in
-`editor.rs` carries an explicit `HISTORICAL NOTE` on the same grounds: it
-exists to stop someone tightening the constant on reasoning that no longer
-holds. Runtime "old" and "no longer" — a previously-held voice, the ring's
-previously-written columns — describe state rather than builds, and are not
-in scope at all.
+category rather than an escape hatch. It is now a SMALL category: the
+`legacy_*` fields, the `bare_as_some` shim, the serde aliases and the
+historical `default_*` block are all gone (see the compat section below), and
+with them most of what used to live here. What is left:
+
+- The **fade param's pre-merge id** (`pitch-class-fade`, in
+  `harmonigraph-plugin`'s `lib.rs` and `harmonigraph-take`'s `params.rs`),
+  where the id is a live contract with the host's automation lane and the
+  rename it outlived is the whole reason it looks wrong.
+- The note standing where the retired `node_style` key was, in `view.rs` —
+  the only surviving record of a set of seventeen, kept deliberately.
+- `DISPLAY_OVERSAMPLE` in `editor.rs`, which carries an explicit
+  `HISTORICAL NOTE`: it exists to stop someone tightening the constant on
+  reasoning that no longer holds.
+
+There the history *is* the current constraint, and flattening it destroys
+real information. Runtime "old" and "no longer" — a previously-held voice,
+the ring's previously-written columns — describe state rather than builds,
+and are not in scope at all.
+
+A comment justifying a value by what an OLD BLOB was drawn with is no longer
+in the exception; it is now the ordinary rot case, because no code reads an
+old blob differently. State what the value is and why, not which build wrote
+it.
 
 This matters more here than in most repos: comments are ~36% of the non-blank
 lines under `crates/`, a quarter of it doc comments, and the codebase is
@@ -130,11 +136,30 @@ clamp or repair keeps the two agreeing (`ViewConfig::sanitize`, and the
 `derive_scene` clamps it deliberately leaves to the picture). A blob that
 reads out one number while drawing another is a bug at any compat policy.
 
-The `legacy_*` fields, serde aliases and `bare_as_some` shims in the tree
-are sediment rather than policy — each was cheaper to write than to argue
-about. They stay, and the comment-tense exception above still describes
-them, because a shim that exists has to say why it is shaped that way.
-Nothing obliges the next one to exist.
+The tree carries **no compat shims at all**, and that is now the invariant to
+hold rather than a state it happens to be in. The `legacy_*` fields, the
+`bare_as_some` reader, both `migrate_legacy` passes, the serde aliases for
+deleted palettes/orientations/sweep modes, and the `default_*` block whose
+job was to keep an old blob from being restyled were all removed at once.
+Don't write the next one: a rename is a rename, a dropped variant is dropped.
+
+Two mechanisms carry the weight instead, and they are worth keeping straight:
+
+- **`ViewConfig`, `SpectrumConfig`, `RenderConfig` and `RenderFrame` carry a
+  container-level `#[serde(default)]`.** `impl Default` is therefore the one
+  and only source of a field's fallback — there is no second set of values,
+  and retuning the fresh look is free. A key missing from a blob costs that
+  key alone; `a_view_missing_any_one_key_reloads_at_the_fresh_value` and
+  `a_persist_blob_missing_a_spectrum_field_keeps_the_rest_of_the_blob` hold
+  it. Do not add a field-level `default = "..."` back.
+- **`UI_PERSIST_VERSION` is the floor**, and it is what makes removal cheap:
+  a blob below it is refused whole rather than half-read.
+
+What survives from an old blob is now only what serde gives free: an unknown
+KEY is skipped, so retiring a field is safe. An unknown VARIANT is not — it
+fails the parse and drops the entire persist, layout and camera with it. That
+is an accepted break, not a bug to shim around, but it is the one worth
+naming in a PR body when you drop an enum variant.
 
 ## What you could not finish goes to an ISSUE, not the backlog
 

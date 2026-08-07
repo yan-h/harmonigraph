@@ -645,10 +645,9 @@ fn lone_mark(channel: u8, note: u8, count: u32, center: f32) -> (NodeInstance, F
 /// two call sites agree.
 ///
 /// The gradient comes off the view the helpers above build with, NOT from
-/// `PitchGradient::default()` — that one is the serde fallback for a blob
-/// predating the gradient, and it is free to differ from what a fresh view
-/// opens on. Reading it here would pin the two together and fail the moment
-/// either moves.
+/// `PitchGradient::default()` — that one is the gradient type's own default
+/// and is free to differ from what a fresh view opens on. Reading it here
+/// would pin the two together and fail the moment either moves.
 fn sector_color(node: &NodeInstance, slot: u32, frame: &FrameParams) -> Vec4 {
     let pitch = slot as f32 * 12.0 + node.cents / 100.0;
     let lut = pitch_ramp_lut(ViewConfig::default().pitch_gradient);

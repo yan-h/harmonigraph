@@ -11,8 +11,7 @@
 //! see [`RenderConfig::short_edge`].
 //!
 //! They are serde-facing: each round-trips through a saved project's UI blob
-//! and through the `ui_state` a take carries, so a field's `default` is what a
-//! blob written before it existed loads as.
+//! and through the `ui_state` a take carries.
 //!
 //! [`RenderProgress`] is the one member that is NEITHER — no serde, and it
 //! never enters a take. It is counted off the renderer subprocess's stdout and
@@ -100,21 +99,6 @@ pub struct RenderConfig {
     /// the MIDI onsets, a number passes `--align`. A string so "empty = auto"
     /// reads naturally and it matches the other free-text fields.
     pub audio_offset: String,
-    /// Load-only shim: the Video pane used to carry an "Options" field of raw
-    /// `harmonigraph-offline` flags, and blobs written then still hold it.
-    /// Read for the `--size` inside it — see
-    /// [`migrate_legacy`](Self::migrate_legacy), which is what stops a saved
-    /// project going on rendering at a size that outranks its own Aspect —
-    /// and never written back.
-    ///
-    /// The field went because every flag it could reach is reachable by
-    /// running the renderer on the take by hand, with completion and `--help`
-    /// and real errors, which a whitespace-split text box in a plugin pane has
-    /// none of. What it uniquely bought was a STANDING non-default for
-    /// auto-render, and that was worth less than a row of a pane whose height
-    /// budget has a test of its own.
-    #[serde(skip_serializing, rename = "extra_args")]
-    pub legacy_extra_args: String,
     /// Whole-song playhead spectrogram: lay the take out at once and sweep a
     /// playhead through it, instead of the live scrolling window. Read by the
     /// offline renderer from the take; `--playhead` on the command line also
@@ -165,7 +149,6 @@ impl Default for RenderConfig {
             renderer_path: String::new(),
             audio_path: String::new(),
             audio_offset: String::new(),
-            legacy_extra_args: String::new(),
             playhead: false,
             // None: the render opens where the recording did, so the run-up
             // actually played is already in the video. Padding beyond it is a
@@ -180,81 +163,6 @@ impl Default for RenderConfig {
             short_edge: 1080,
         }
     }
-}
-
-impl RenderConfig {
-    /// Fold older blob layouts onto the current fields; call after
-    /// deserializing a persisted config.
-    ///
-    /// Blobs written before the Resolution control carry the size in
-    /// `extra_args` as a literal `--size WxH` — for most of them the old
-    /// default, `--size 1920x1080`, which was applied whatever the Aspect row
-    /// said. Lifting its short edge into [`short_edge`](Self::short_edge) and
-    /// dropping the flag is what makes a saved project pick up the aspect it
-    /// always displayed: the frame decides the shape, the lifted number
-    /// decides only how big.
-    ///
-    /// It lifts EVERY `--size`, not only the retired default, and the cost of
-    /// that is worth naming: a `--size` deliberately typed at an aspect the
-    /// frame does not have — a landscape render of a portrait composition —
-    /// comes back after a reload as the frame's own shape at that size. The
-    /// blob cannot tell that apart from the bug (both are a `--size` fighting
-    /// the aspect), so one of the two has to lose, and leaving the bug in
-    /// place would mean every project that never touched the field keeps
-    /// rendering the wrong shape. The deliberate case is re-typed in a
-    /// second, is warned about on every render, and is the rarer by far.
-    pub fn migrate_legacy(&mut self) {
-        self.frame.migrate_legacy();
-        if let Some(short) = take_size_flag(&mut self.legacy_extra_args) {
-            self.short_edge = short;
-        }
-    }
-}
-
-/// Remove a `--size WxH` (or `-s WxH`) pair from a whitespace-split flag
-/// string, returning the size's short edge.
-///
-/// Only the LAST one decides, because that is what the renderer's own parser
-/// does with a repeated flag — so a migration reading a different size than
-/// the render used would be a migration that changes the picture.
-fn take_size_flag(args: &mut String) -> Option<u32> {
-    let mut short = None;
-    // `kept` borrows `args`, so it has to become an owned string before the
-    // assignment below can touch `args` again.
-    let kept = {
-        let tokens: Vec<&str> = args.split_whitespace().collect();
-        let mut kept: Vec<&str> = Vec::with_capacity(tokens.len());
-        let mut i = 0;
-        while i < tokens.len() {
-            let is_size = matches!(tokens[i], "--size" | "-s");
-            match (is_size, tokens.get(i + 1).and_then(|v| parse_wxh(v))) {
-                (true, Some((w, h))) => {
-                    short = Some(w.min(h));
-                    i += 2;
-                }
-                _ => {
-                    kept.push(tokens[i]);
-                    i += 1;
-                }
-            }
-        }
-        kept.join(" ")
-    };
-    // A `--size` with an unparseable value is left in place: the renderer
-    // should reject it and say so, rather than this quietly eating it.
-    if short.is_some() {
-        *args = kept;
-    }
-    short
-}
-
-/// `WxH` as the renderer's `--size` accepts it. A zero edge is treated as
-/// unparseable rather than lifted: it would leave the control on a size no
-/// button shows, and the renderer is the right place to reject it.
-fn parse_wxh(text: &str) -> Option<(u32, u32)> {
-    let (w, h) = text.split_once(['x', 'X', '*'])?;
-    let (w, h) = (w.parse().ok()?, h.parse().ok()?);
-    (w > 0 && h > 0).then_some((w, h))
 }
 
 /// Which side of the video frame the lattice takes; the Spectral pane takes
@@ -329,29 +237,9 @@ pub struct RenderFrame {
     pub split: f32,
     /// Where the lattice sits; see [`LatticeSide`].
     pub lattice: LatticeSide,
-    /// Load-only shim: blobs written before the four sides — and the
-    /// `ui_state` carried inside takes recorded then — say `stacked: bool`
-    /// here, the two-way choice this replaced. Folded into
-    /// [`lattice`](Self::lattice) by
-    /// [`migrate_legacy`](Self::migrate_legacy) and never written back.
-    #[serde(skip_serializing, rename = "stacked")]
-    pub legacy_stacked: bool,
 }
 
 impl RenderFrame {
-    /// Fold `stacked: bool` onto [`lattice`](Self::lattice); call after
-    /// deserializing a persisted frame.
-    ///
-    /// `true` meant lattice above the Spectral pane and `false` meant lattice
-    /// to its left, so only the stacked half has anything to say — and a blob
-    /// new enough to name a side carries no `stacked` at all, which is what
-    /// keeps this from overwriting one.
-    pub fn migrate_legacy(&mut self) {
-        if std::mem::take(&mut self.legacy_stacked) {
-            self.lattice = LatticeSide::Top;
-        }
-    }
-
     /// Output pixels for this aspect with its SHORT edge at `short_edge`: 16:9
     /// at 1080 is 1920x1080, 9:16 at 1080 is 1080x1920.
     ///
@@ -389,7 +277,6 @@ impl Default for RenderFrame {
             // its time axis, so width buys it seconds on screen.
             split: 0.20,
             lattice: LatticeSide::Left,
-            legacy_stacked: false,
         }
     }
 }

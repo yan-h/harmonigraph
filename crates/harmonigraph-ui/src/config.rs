@@ -48,22 +48,13 @@ pub enum SpectralOrientation {
     /// Time runs left(now)->right(past) along the pane, pitch climbs
     /// bottom->top, and the spectrum sits on the left, joined to the
     /// spectrogram.
-    ///
-    /// The aliases are what this variant was called across two renamings. It
-    /// was `Horizontal`, from when the name meant the PITCH axis; and it takes
-    /// `Auto` — a fourth setting that resolved to whichever layout gave the
-    /// scrolling spectrogram the pane's long side — because a blob naming a
-    /// variant that no longer exists does not just lose its orientation, the
-    /// parse fails and drops the WHOLE persist, layout and camera with it.
     #[default]
-    #[serde(alias = "Horizontal", alias = "Auto")]
     Left,
     /// Time runs right(now)->left(past); pitch climbs bottom->top, and the
     /// spectrum sits on the right.
     Right,
     /// Time runs top(now)->bottom(past) down the pane, pitch runs left->right,
     /// and the spectrum sits on top, joined to the spectrogram.
-    #[serde(alias = "Vertical")]
     Top,
     /// Time runs bottom(now)->top(past); pitch runs left->right, and the
     /// spectrum sits along the bottom.
@@ -135,16 +126,6 @@ pub enum SpectrogramColor {
     Aurora,
     /// Black → indigo → magenta → orange → cream. Warmer than
     /// [`Self::Aurora`] and evenly stepped like it.
-    ///
-    /// The aliases absorb palettes that used to exist: Heat (the familiar
-    /// black-red-orange-yellow-white spectrogram, dropped for spending most
-    /// of its range in the reds — Magma is that warmth evenly stepped),
-    /// Pitch, which tinted each cell with the lattice's own low-to-high
-    /// pitch color, and Paper, an inverted ramp for light backgrounds.
-    /// Without them a blob still naming one wouldn't just lose its palette:
-    /// the parse would fail and drop the WHOLE persist, layout and camera
-    /// with it.
-    #[serde(alias = "Heat", alias = "Pitch", alias = "Paper")]
     Magma,
 }
 
@@ -181,7 +162,7 @@ pub struct SpectrumConfig {
     /// bass-emphasizing direction, matching convention.
     ///
     /// One of the fields the struct's container-level `default` earns its
-    /// keep on: a blob predating it loads with the slope a fresh install
+    /// keep on: a blob missing the key loads with the slope a fresh install
     /// gets, where a bare `f32` default would hand it raw-power 0.
     pub tilt: f32,
     /// Overall size of the pane's own markings — the frequency labels along the
@@ -253,9 +234,9 @@ pub struct SpectrumConfig {
     // roll's depth region on the roll's own time axis — so each column of
     // spectral energy lines up with the notes that made it.
     /// Draw the spectrogram heatmap (over the roll's time window). A blob
-    /// predating the field loads with it ON, as a fresh install has it,
-    /// rather than the `false` a bare `bool` default would mean; one that
-    /// really did turn it off carries `false` and still round-trips.
+    /// missing the key loads with it ON, as a fresh install has it, rather
+    /// than the `false` a bare `bool` default would mean; one that really did
+    /// turn it off carries `false` and still round-trips.
     pub show_spectrogram: bool,
     /// The heatmap's color ramp — the only thing about it left to choose.
     ///

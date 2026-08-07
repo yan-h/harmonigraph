@@ -8,8 +8,8 @@
 //!   [`NodeInstance`], [`EdgeInstance`], and the constants they share.
 //! - [`derive`](mod@derive) — the per-frame derivation ([`derive_scene`]): note tracker
 //!   + tuning -> node/edge lists. Envelope and animation policy.
-//! - [`view`] — [`ViewConfig`] (persisted visual settings, serde defaults,
-//!   legacy-blob migration) and [`FrameParams`].
+//! - [`view`] — [`ViewConfig`] (persisted visual settings and their serde
+//!   defaults) and [`FrameParams`].
 //! - [`style`] — the visual-style enums and their shader indices, and the
 //!   pitch gradient's knobs.
 //! - [`octaves`] — where the octave indicators sit around a node: how many,
@@ -40,7 +40,7 @@ pub use octaves::{
     DEFAULT_EXTRA_BLEND, DEFAULT_EXTRA_SIZE, MAX_EXTRAS, MAX_SPAN, MIDDLE_C_SLOT, MIN_COUNT,
     MIN_EXTRA_SIZE, MIN_SPAN, OCTAVE_SLOTS, PITCH_CEIL, PITCH_FLOOR,
 };
-pub use style::{HighlightExtremes, IdleMarker, PitchGradient, Pulse, SevensLabel};
+pub use style::{IdleMarker, PitchGradient, Pulse, SevensLabel};
 pub use trail::TrailMark;
 pub use view::{FrameParams, ViewConfig};
 

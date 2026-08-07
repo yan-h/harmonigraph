@@ -1,5 +1,6 @@
 //! What survives a session: round-trips through [`UiPersist`], the version
-//! floor under it, and the migrations for changes made since that floor.
+//! floor under it, and what a blob costs when a key it carries — or one it is
+//! missing — is not the shape this build expects.
 
 use crate::*;
 use crate::state::UI_PERSIST_VERSION;
@@ -147,14 +148,17 @@ fn a_blob_naming_more_wheel_than_fits_opens_on_what_fits() {
     assert_eq!(restored.camera.yaw, 1.23, "the rest of the blob still restores");
 }
 
-/// The wheel's two-bar TAPER is gone, and a project saved against it carries
-/// the pair of keys nothing reads now. It has to open on the count it always
-/// drew, evenly — an unknown field being ignored rather than refused is the
-/// whole of why that works, and it is a property of how the blob is read
-/// rather than anything this crate spells out, so it is worth a blob to say
-/// so.
+/// The wheel's two-bar TAPER is gone, and a blob carrying the pair of keys
+/// nothing reads now keeps everything else it says. An unknown field being
+/// ignored rather than refused is the whole of why that works, and it is a
+/// property of how the blob is read rather than anything this crate spells
+/// out, so it is worth a blob to say so.
+///
+/// The fringe the taper predates is dropped from the same blob, which is the
+/// other half of the read: a key that is ABSENT costs its own field and comes
+/// back at the fresh value, where a key that is UNKNOWN costs nothing at all.
 #[test]
-fn a_blob_written_against_the_taper_opens_on_an_even_wheel() {
+fn a_blob_written_against_the_taper_keeps_what_it_still_says() {
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
     state.camera.yaw = 1.23;
     state.view.octave_count = 7;
@@ -179,10 +183,14 @@ fn a_blob_written_against_the_taper_opens_on_an_even_wheel() {
         saved.replace(&count, &format!("{count}octave_taper_amount:0.6,octave_taper_shape:0.25,"));
     assert_ne!(tapered, saved, "the taper's keys did not go into the blob");
 
+    let fresh = harmonigraph_scene::ViewConfig::default();
     let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
     restored.load_persist(&tapered);
-    assert_eq!(restored.view.octave_count, 7, "the count the project drew");
-    assert_eq!(restored.view.octave_extras, 0, "and no fringe, which is an even wheel");
+    assert_eq!(restored.view.octave_count, 7, "the count the blob names survives the taper keys");
+    assert_eq!(
+        restored.view.octave_extras, fresh.octave_extras,
+        "and the fringe it is missing comes back at the fresh value",
+    );
     assert_eq!(restored.camera.yaw, 1.23, "the rest of the blob still restores");
 }
 
@@ -223,236 +231,26 @@ fn a_blob_written_against_the_octave_shimmer_opens_with_the_glyphs_steady() {
     );
 }
 
-/// The keys a blob written against an older wheel carries instead of the count
-/// and center, and what they have to open on.
-fn opens_as(keys: &str, count: u32, center: f32) {
+/// The render frame round-trips its side and the split beside it, through
+/// BOTH doors into the blob — the editor's and the offline renderer's.
+#[test]
+fn a_render_frame_round_trips_through_both_doors() {
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
     state.camera.yaw = 1.23;
-    // The count and center are what an older blob does NOT carry, so swapping
-    // the pair for the older keys is exactly that blob.
-    let mut saved = state.save_persist().replace(
-        &format!(
-            "octave_count:{},octave_center:{:?}",
-            state.view.octave_count, state.view.octave_center
-        ),
-        keys,
-    );
-    assert_ne!(saved, state.save_persist(), "replacement must have hit for {keys}");
-    // The wheel this blob was written against predates the fringe too, so a
-    // faithful stand-in carries none of its three keys either — the same
-    // stripping `a_blob_written_against_the_taper_opens_on_an_even_wheel`
-    // does, or a fresh view's own fringe would ride along into every window
-    // and span the table below folds in, quietly changing what MIN_SPAN's
-    // clamp has left to open onto.
-    for key in [
-        format!("octave_extras:{},", state.view.octave_extras),
-        format!("octave_extra_size:{:?},", state.view.octave_extra_size),
-        format!("octave_extra_blend:{:?},", state.view.octave_extra_blend),
-    ] {
-        let stripped = saved.replace(&key, "");
-        assert_ne!(stripped, saved, "{key:?} is not in the blob to remove");
-        saved = stripped;
-    }
-
-    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
-    restored.load_persist(&saved);
-    assert_eq!(
-        (restored.view.octave_count, restored.view.octave_center),
-        (count, center),
-        "{keys} names {count} octaves at {center}"
-    );
-    assert_eq!(restored.camera.yaw, 1.23, "rest of the blob still restores ({keys})");
-}
-
-/// The octave wheel was a COUNT of octaves either side of middle C's two
-/// models back, and a project saved against it has to open on the same
-/// picture: `2 * span + 1` octaves, centered on middle C. Every one of them
-/// is reachable now — ±5 is eleven octaves, which is the whole MIDI range and
-/// exactly the widest span there is.
-#[test]
-fn a_blob_written_against_the_octave_count_opens_on_the_wheel_it_named() {
-    for (span, count) in [(2u32, 5u32), (3, 7), (4, 9), (5, 11)] {
-        opens_as(&format!("octave_span:{span}"), count, 60.0);
-    }
-}
-
-/// The wheel after that was a pitch WINDOW, and it opens on the count and
-/// center that most nearly draw it: the window's middle was the pitch at the
-/// top, and the octaves it spanned are the count.
-///
-/// A window that is not a whole number of octaves has to round, and that is
-/// the whole of what this rework changed — the half octave it loses is
-/// exactly the sliver that used to cut the end indicators short. The rounding
-/// is worth pinning rather than leaving to whatever the clamp happens to do,
-/// since it is a whole octave of the wheel either way.
-#[test]
-fn a_blob_written_against_the_pitch_window_opens_on_the_wheel_it_most_nearly_named() {
-    for (low, high, count, center) in [
-        (6.0f32, 114.0f32, 9u32, 60.0f32),
-        (30.0, 90.0, 5, 60.0),
-        (36.0, 84.0, 4, 60.0),
-        (27.5, 101.25, 6, 64.375),
-        // Nine and a half octaves — the case the migration comment is written
-        // about, and the only shape of window that says which way the rounding
-        // goes. Truncation would open this on nine, a whole octave narrower
-        // than the project asked for.
-        (3.0, 117.0, 10, 60.0),
-        // Under the narrowest span the wheel can draw, which the clamp opens
-        // back up — the center is what the blob asked for either way.
-        (48.0, 60.0, 2, 54.0),
-    ] {
-        opens_as(&format!("octave_low:{low:?},octave_high:{high:?}"), count, center);
-    }
-}
-
-#[test]
-fn a_pre_split_melody_bass_blob_loads_as_the_two_flags() {
-    // The two marks were one four-way enum before they became the pair of
-    // flags they always were. An old blob carries `highlight_extremes` and
-    // NEITHER flag, and it writes the variant BARE — so without the
-    // load-only shim the token wouldn't parse into an Option and the failed
-    // parse would drop the WHOLE persist, camera and layout with it.
-    for (token, melody, bass) in [
-        ("Off", false, false),
-        ("Melody", true, false),
-        ("Bass", false, true),
-        ("Both", true, true),
-    ] {
-        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
-        state.camera.yaw = 1.23;
-        state.view.mark_melody = false;
-        state.view.mark_bass = false;
-        let saved = state.save_persist().replace(
-            "mark_melody:false,mark_bass:false",
-            &format!("highlight_extremes:{token}"),
-        );
-        assert_ne!(saved, state.save_persist(), "replacement must have hit for {token}");
-
-        let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
-        restored.load_persist(&saved);
-        assert_eq!(restored.view.mark_melody, melody, "{token} -> melody");
-        assert_eq!(restored.view.mark_bass, bass, "{token} -> bass");
-        assert_eq!(restored.camera.yaw, 1.23, "rest of the blob still restores ({token})");
-    }
-}
-
-#[test]
-fn a_render_frame_saved_as_stacked_loads_as_the_side_it_meant() {
-    // The frame's arrangement was `stacked: bool` before it became four named
-    // sides: `true` put the lattice above the spectral pane, `false` to its
-    // left. Old blobs carry the flag and no `lattice`, and so does the
-    // `ui_state` inside every take recorded then — which is why both doors
-    // into the blob have to fold it, or a take framed stacked re-renders side
-    // by side.
-    for (flag, side) in [(true, LatticeSide::Top), (false, LatticeSide::Left)] {
-        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
-        state.camera.yaw = 1.23;
-        // A side the migration can't reach by accident, so a shim that failed
-        // to fire is visible rather than looking like the default.
-        state.take.render_config.frame.lattice = LatticeSide::Right;
-        state.take.render_config.frame.split = 0.42;
-        let saved = state.save_persist().replace("lattice:Right", &format!("stacked:{flag}"));
-        assert_ne!(saved, state.save_persist(), "replacement must have hit for {flag}");
-
-        let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
-        restored.load_persist(&saved);
-        assert_eq!(restored.take.render_config.frame.lattice, side, "stacked:{flag}");
-        assert_eq!(restored.take.render_config.frame.split, 0.42, "the rest of the frame survives");
-        assert_eq!(restored.camera.yaw, 1.23, "rest of the blob still restores");
-
-        // The offline renderer's own door into the blob.
-        let render = crate::render_config_from_persist(&saved).expect("still parses");
-        assert_eq!(render.frame.lattice, side, "stacked:{flag} through render_config_from_persist");
-    }
-}
-
-/// The flag is load-only: a saved frame names its side and says nothing about
-/// `stacked`, so a blob written now cannot be read back as a migration.
-#[test]
-fn a_saved_render_frame_carries_the_side_and_not_the_old_flag() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
     state.take.render_config.frame.lattice = LatticeSide::Bottom;
+    state.take.render_config.frame.split = 0.42;
     let saved = state.save_persist();
     assert!(saved.contains("lattice:Bottom"), "the side is what gets written");
-    assert!(!saved.contains("stacked:"), "the shim must never be written back");
 
     let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
     restored.load_persist(&saved);
     assert_eq!(restored.take.render_config.frame.lattice, LatticeSide::Bottom);
-}
+    assert_eq!(restored.take.render_config.frame.split, 0.42);
+    assert_eq!(restored.camera.yaw, 1.23, "rest of the blob still restores");
 
-/// A saved `--size` in the Options text becomes the Resolution control, and
-/// stops overriding the aspect it was saved beside.
-///
-/// This is the whole point of the migration: `--size 1920x1080` was the
-/// Options DEFAULT, so every project carries it, and it was read after the
-/// Aspect row — a 9:16 frame previewed tall and rendered 16:9. Lifting the
-/// short edge out keeps the size the user chose and hands the shape back to
-/// the frame.
-#[test]
-fn a_size_saved_in_the_options_text_loads_as_the_resolution() {
-    let mut config = crate::RenderConfig {
-        legacy_extra_args: "--size 1920x1080".into(),
-        frame: crate::RenderFrame { aspect_w: 9, aspect_h: 16, ..Default::default() },
-        ..Default::default()
-    };
-    config.migrate_legacy();
-    assert_eq!(config.short_edge, 1080, "the short edge is what the flag meant");
-    assert_eq!(config.legacy_extra_args, "", "and the flag itself is gone");
-    // The frame now decides the shape, which it never got to before.
-    assert_eq!(config.frame.pixels(config.short_edge), [1080, 1920]);
-}
-
-/// The migration reads sizes the way the renderer does, and leaves everything
-/// it does not understand for the renderer to answer for.
-#[test]
-fn lifting_a_size_out_of_the_options_text_leaves_the_rest_of_it_alone() {
-    let migrated = |args: &str| {
-        let mut config =
-            crate::RenderConfig { legacy_extra_args: args.into(), ..Default::default() };
-        config.migrate_legacy();
-        (config.short_edge, config.legacy_extra_args)
-    };
-
-    // Other flags keep their order and their spacing is normalized.
-    assert_eq!(
-        migrated("--fps 30 --size 3840x2160 --layout stacked"),
-        (2160, "--fps 30 --layout stacked".to_string())
-    );
-    // The short edge, not the width: a portrait size means a portrait render.
-    assert_eq!(migrated("--size 1080x1920"), (1080, String::new()));
-    // The renderer keeps the LAST of a repeated flag, so the migration has to
-    // agree with it or it would change the picture it claims to preserve.
-    assert_eq!(migrated("--size 1920x1080 --size 2560x1440"), (1440, String::new()));
-    // The renderer's other spellings.
-    assert_eq!(migrated("-s 3840X2160"), (2160, String::new()));
-    // No size to lift: the control keeps its default and the text is untouched.
-    assert_eq!(migrated("--fps 30"), (1080, "--fps 30".to_string()));
-    // An unparseable size stays put, for the renderer to reject out loud
-    // rather than being silently eaten here.
-    assert_eq!(migrated("--size wide"), (1080, "--size wide".to_string()));
-}
-
-/// The lift happens on the real load path, not just when called directly.
-///
-/// The blob is doctored rather than saved from state, because the field is
-/// `skip_serializing` and a round trip through `save_persist` could no longer
-/// produce one — which is the point of the shim: what it reads is a blob some
-/// EARLIER build wrote, and this build has no way to write another.
-#[test]
-fn a_loaded_blob_has_its_options_size_lifted() {
-    let state = SharedState::new(TextureFormat::Bgra8Unorm);
-    let saved = state.save_persist();
-    assert!(!saved.contains("extra_args"), "the shim must never be written back");
-    // Where an Options field sat in the render config, beside the control it
-    // used to outrank.
-    let old = saved.replace("short_edge:", "extra_args:\"--size 2560x1440\",short_edge:");
-    assert_ne!(old, saved, "the injection must have hit");
-
-    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
-    restored.load_persist(&old);
-    assert_eq!(restored.take.render_config.short_edge, 1440, "the size became the Resolution");
-    assert_eq!(restored.take.render_config.legacy_extra_args, "", "and the text was consumed");
+    let render = crate::render_config_from_persist(&saved).expect("still parses");
+    assert_eq!(render.frame.lattice, LatticeSide::Bottom, "through render_config_from_persist");
+    assert_eq!(render.frame.split, 0.42);
 }
 
 #[test]
@@ -787,64 +585,6 @@ fn pre_cap_persist_blobs_load_as_uncapped() {
     assert_eq!(restored.view.extent_sevens, 3, "the rest of the blob must survive");
 }
 
-/// Orientations that no longer exist must still PARSE, and land where the
-/// setting they named would put the picture.
-///
-/// The same threat the palette aliases below answer: a blob naming a variant
-/// the enum has dropped fails to parse, and takes the WHOLE persist with it
-/// rather than the one setting. `Horizontal` and `Vertical` were the names
-/// while they meant the pitch axis; `Auto` picked a layout off the pane's
-/// shape and has no successor, so it lands on the default the pane opens at.
-#[test]
-fn removed_spectral_orientations_load_as_their_successors() {
-    use crate::SpectralOrientation;
-    for (removed, want) in [
-        ("Horizontal", SpectralOrientation::Left),
-        ("Vertical", SpectralOrientation::Top),
-        ("Auto", SpectralOrientation::Left),
-    ] {
-        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
-        state.spectrum_config.orientation = SpectralOrientation::Bottom;
-        state.view.extent_sevens = 3;
-        let saved = state
-            .save_persist()
-            .replace("orientation:Bottom", &format!("orientation:{removed}"));
-        assert_ne!(saved, state.save_persist(), "replacement must have hit for {removed}");
-
-        let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
-        restored.load_persist(&saved);
-        assert_eq!(restored.spectrum_config.orientation, want, "{removed} loaded elsewhere");
-        assert_eq!(restored.view.extent_sevens, 3, "the rest of the blob must survive");
-    }
-}
-
-/// Palettes that no longer exist must still PARSE. Serde aliases fold them
-/// onto Magma, the nearest surviving ramp; without them the failed parse
-/// would drop the whole persist — layout, camera and every view setting with
-/// it — not just the palette. Injected as strings, since the enum can no
-/// longer name them.
-#[test]
-fn removed_spectrogram_palettes_load_as_magma() {
-    for removed in ["Heat", "Pitch", "Paper"] {
-        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
-        state.spectrum_config.spectrogram_color = crate::SpectrogramColor::Aurora;
-        state.view.extent_sevens = 3;
-        let saved = state
-            .save_persist()
-            .replace("spectrogram_color:Aurora", &format!("spectrogram_color:{removed}"));
-        assert_ne!(saved, state.save_persist(), "replacement must have hit for {removed}");
-
-        let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
-        restored.load_persist(&saved);
-        assert_eq!(
-            restored.spectrum_config.spectrogram_color,
-            crate::SpectrogramColor::Magma,
-            "{removed} should fold onto the nearest surviving ramp",
-        );
-        assert_eq!(restored.view.extent_sevens, 3, "the rest of the blob must survive");
-    }
-}
-
 /// A key this build has RETIRED does not cost the blob it sits in.
 ///
 /// `load_persist` takes the whole `UiPersist` or nothing (`if let Ok(persist)`),
@@ -857,11 +597,12 @@ fn removed_spectrogram_palettes_load_as_magma() {
 ///
 /// Both SHAPES of value, because they are not the same risk. A retired key
 /// holding a NUMBER is skipped by any parser worth the name. One holding a bare
-/// identifier is the shape that has actually cost a blob here — a
-/// `SpectrogramColor` naming a palette this build no longer has takes the whole
-/// persist with it, which is why the deleted palettes keep serde aliases. What
-/// separates the two is that retiring a FIELD is safe where retiring a VARIANT
-/// is not, and a test that only ever splices a number cannot tell them apart.
+/// identifier is the shape that has actually cost a blob here. What separates
+/// the two is that retiring a FIELD is safe where retiring a VARIANT is not —
+/// a blob naming a variant the enum has dropped fails to parse and takes the
+/// whole persist with it, which is a break this build accepts rather than
+/// carries an alias for — and a test that only ever splices a number cannot
+/// tell them apart.
 #[test]
 fn a_retired_setting_does_not_discard_the_blob_it_was_saved_in() {
     for retired in ["roll_gap:2.5,", "roll_color:Pitch,"] {
@@ -1023,9 +764,6 @@ fn a_blob_older_than_the_version_floor_is_refused_whole() {
 /// identity gate either. What keeps this from being reachable today is only
 /// that every take on disk is at the current version — which the next bump
 /// ends, for all of them at once.
-///
-/// Costs no shim: `stacked` and the `--size` inside `extra_args` are both
-/// NEWER than the floor, so every blob they migrate is at the floor already.
 #[test]
 fn both_doors_into_a_blob_agree_about_the_version_floor() {
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
@@ -1097,129 +835,41 @@ fn loading_a_project_re_opens_the_comma_verdicts() {
 
 
 
-/// [`ViewConfig`](harmonigraph_scene::ViewConfig)'s serde fallbacks and its
-/// `impl Default` answer DIFFERENTLY on purpose, and this pins which fields.
+/// Dropping any one key from a serialized view costs THAT KEY alone, and the
+/// value it comes back with is the fresh-install one.
 ///
-/// The rule the struct is built on: a serde fallback is what a blob written
-/// before that field existed was DRAWN with, so loading an old view does not
-/// restyle it, while `impl Default` is the look a fresh view opens in. Where
-/// the two disagree the value is written literally in `impl Default`, so
-/// retuning the out-of-the-box look never reaches someone's saved project.
+/// [`ViewConfig`](harmonigraph_scene::ViewConfig) carries a container-level
+/// `#[serde(default)]`, so `impl Default` is the single source of every
+/// field's fallback. That is the whole arrangement, and this is what holds it:
+/// nothing at a declaration says whether a field can survive being absent, so
+/// the property is probed from the outside instead — rebuild the blob without
+/// one key at a time, which is exactly the shape a hand-edited RON or a
+/// `--ui-state` file can arrive in, and reload.
 ///
-/// That rule is carried by hand, by two mechanisms that look nothing alike: a
-/// named `default_*` fn where the old value has to be stated, and a BARE
-/// `#[serde(default)]` where `T::default()` already is the old value —
-/// `IdleMarker::Circle` (the classic placeholder look), `TrailMark::Off`, a
-/// bloom of 0 from before the chain existed. Nothing at a declaration says
-/// which of those two a field is using, or whether anyone chose.
-///
-/// So this probes it from the outside instead: drop one key at a time from a
-/// serialized fresh view and reload, which is exactly what an old blob is.
-/// A field whose name is listed below reloads as something OTHER than the
-/// fresh-install value — which is the intent for every name currently on it.
-///
-/// A name APPEARING here means a field just stopped handing old blobs the
-/// fresh value; a name LEAVING means a saved view will now be restyled by a
-/// change to `impl Default`, which is the failure the whole arrangement
-/// exists to prevent. Either way the diff is the review question, and
-/// updating this list is the deliberate edit that answers it.
-///
-/// Deliberately NOT the same call as `SpectrumConfig`'s, which collapsed its
-/// per-field fallbacks into one container-level `#[serde(default)]`. That is
-/// right there because its fallbacks and its `impl Default` are meant to
-/// agree; here they are meant not to.
+/// A field that fails here either sank the whole view (no fallback) or came
+/// back as something other than the fresh value (a second default hiding
+/// behind a field-level attribute). Both are the same bug one layer up, where
+/// `a_persist_blob_missing_a_spectrum_field_keeps_the_rest_of_the_blob` pins
+/// it for `SpectrumConfig`: a missing key must cost only itself.
 #[test]
-fn the_view_fields_an_old_blob_reloads_differently_are_exactly_these() {
-    // In serialization order, which is the order the probe reports them.
-    const LEGACY: &[&str] = &[
-        "sevens_gutter",
-        "sevens_gutter_soft",
-        // A blob with no gradient predates it having knobs at all, and reloads
-        // on the arc the retired CIELAB one converts to
-        // (`the_defaults_are_the_retired_arc_converted`, which is what pins
-        // `PitchGradient::default()` there). A fresh view opens on a shorter,
-        // dimmer arc of its own — see `impl Default for ViewConfig`.
-        "pitch_gradient",
-        "core_solidity",
-        "core_radius",
-        "outer_inner",
-        "outer_outer",
-        "outer_gap",
-        // A blob with no count at all predates the wheel being a setting, and
-        // was drawn with ten fixed sectors — nine octaves is the nearest
-        // honest reading of that, where a fresh view starts at five. The
-        // center is NOT here: a blob that old was centered on middle C, which
-        // is where a fresh view puts it too.
-        "octave_count",
-        // A blob with no fringe keys predates the fringe, and was drawn on an
-        // even wheel — where a fresh view now opens with a two-octave fringe
-        // of its own (see `impl Default for ViewConfig`).
-        "octave_extras",
-        "octave_extra_size",
-        "octave_extra_blend",
-        // A blob with no envelope keys predates the note having a settable
-        // arrival and curve, and reloads on the pair that draws what it was
-        // saved drawing: no attack, so the core lights the instant a note
-        // sounds, and a straight-line fade. A fresh view opens with a short
-        // attack and a gentle curve instead. The one thing the fallback
-        // cannot carry over is the fixed 0.15 s ramp the octave sectors used
-        // to run on alone — there is one attack now, and the core is the
-        // layer that gets to keep its behavior (see `ViewConfig::attack_time`).
-        "attack_time",
-        "fade_shape",
-        "idle_marker",
-        "idle_radius",
-        "mark_thickness",
-        // A blob with no pattern on the mark rings predates the sheet being
-        // laid over them, and reloads steady; a fresh view opens with the
-        // rings in Bands.
-        "pulse_marks",
-        // And a blob with no shimmer keys predates each bar, so it reloads at
-        // the width and depth the sweep was fixed at (the `default_shimmer_*`
-        // fns), where a fresh view opens on the tight, slow, half-depth
-        // texture the mark rings above wear.
-        "shimmer_speed",
-        "shimmer_width",
-        "shimmer_intensity",
-        "shimmer_softness",
-        "grid_thickness",
-        "grid_inset",
-        "trail_mark",
-        "trail_labels",
-        "bloom_strength",
-    ];
-    // These have no fallback at all: drop one and the WHOLE view fails to
-    // parse, taking every other field with it. Harmless only because all four
-    // predate the persist version floor, so no blob that exists is missing
-    // one. The list must not GROW — a new field landing here is the bug
-    // `a_persist_blob_missing_a_spectrum_field_keeps_the_rest_of_the_blob`
-    // was written for, one layer up.
-    const NO_FALLBACK: &[&str] = &["spacing", "extent_threes", "extent_fives", "extent_sevens"];
-
+fn a_view_missing_any_one_key_reloads_at_the_fresh_value() {
     let fresh = harmonigraph_scene::ViewConfig::default();
     let full = ron::to_string(&fresh).expect("a view serializes");
     let pairs = top_level_pairs(&full);
     assert!(pairs.len() > 40, "the probe must see the whole struct, got {}", pairs.len());
 
-    let (mut legacy, mut no_fallback) = (Vec::new(), Vec::new());
     for (key, _) in &pairs {
-        // The blob rebuilt without this one key IS a blob written before the
-        // field existed, which is the case the fallbacks are for.
         let kept: Vec<&str> =
             pairs.iter().filter(|(k, _)| k != key).map(|(_, text)| text.as_str()).collect();
         let without = format!("({})", kept.join(","));
-        match ron::from_str::<harmonigraph_scene::ViewConfig>(&without) {
-            Err(_) => no_fallback.push(key.as_str()),
-            Ok(loaded) => {
-                if ron::to_string(&loaded).expect("a view serializes") != full {
-                    legacy.push(key.as_str());
-                }
-            }
-        }
+        let loaded = ron::from_str::<harmonigraph_scene::ViewConfig>(&without)
+            .unwrap_or_else(|e| panic!("dropping {key:?} sank the whole view: {e}"));
+        assert_eq!(
+            ron::to_string(&loaded).expect("a view serializes"),
+            full,
+            "dropping {key:?} did not come back at the fresh-install value",
+        );
     }
-
-    assert_eq!(legacy, LEGACY, "the fields an old blob reloads differently have changed");
-    assert_eq!(no_fallback, NO_FALLBACK, "a field without a serde fallback sinks the whole view");
 }
 
 /// Split a serialized struct into its top-level `key:value` pairs, as

@@ -38,15 +38,10 @@ pub struct PitchGradient {
     /// Oklab and not CIELAB: a CIELAB hue angle does not hold its hue as the
     /// other knobs turn, and drifts hardest through the blues this opens on.
     ///
-    /// A blob saved before the ramp took its hue from Oklab holds a CIELAB
-    /// angle in this field, and loads unchanged — there is no version tag to
-    /// migrate on, and the two spaces disagree by up to 13 degrees, so such a
-    /// view opens on a hue that near neighbour rather than the one it stored.
-    /// Deliberate, and the reason there is no `legacy_` shim here: the arc is a
-    /// look someone dialled by eye, a hue that far off is a nudge back rather
-    /// than a broken project, and a shim would owe every future reader an
-    /// answer about which space an unmarked angle is in. Anything ADDED here
-    /// still owes a default (see [`default_hue_start`]).
+    /// An angle here is Oklab with nothing marking it as such, which is what
+    /// makes the choice of space a one-way door: a stored angle cannot say
+    /// which space it was written in. Anything ADDED here still owes a
+    /// default (see [`default_hue_start`]).
     #[serde(default = "default_hue_start")]
     pub hue_start: f32,
     /// How far round the hue circle the range walks, in degrees — SIGNED, so
@@ -278,15 +273,6 @@ pub enum Pulse {
     Off,
     /// Parallel bands laid diagonally, travelling along their own normal: one
     /// grating, and the plainest reading of light passing over the lattice.
-    ///
-    /// Persisted blobs carry three older tokens that land here. `Shimmer` is
-    /// this exact pattern under its former name, from before there was more
-    /// than one. `Together` and `Alternating` were a different animation
-    /// altogether — a slow breathe playing the octave a melody or bass ring
-    /// pointed at against the rest of the layer — and they are gone; a view
-    /// that asked for one of them asked for the layer to move, so it loads as
-    /// the sweep rather than as [`Off`](Pulse::Off).
-    #[serde(alias = "Shimmer", alias = "Together", alias = "Alternating")]
     Bands,
     /// Two gratings crossed at right angles and multiplied, which is a
     /// checkerboard with the corners rounded off: cells of light and cells of
@@ -333,41 +319,6 @@ impl Pulse {
     }
 }
 
-/// Legacy load-only spelling of the melody/bass marks, from before they
-/// became the two independent flags they always were:
-/// [`ViewConfig::mark_melody`](crate::ViewConfig::mark_melody) and
-/// [`mark_bass`](crate::ViewConfig::mark_bass). Four variants for two bits
-/// meant the UI offered a row of alternatives to a question with two
-/// answers, and "Both" had to be argued for as a default rather than
-/// falling out of two boxes both being ticked.
-///
-/// Persisted blobs still carry a `highlight_extremes` token;
-/// [`ViewConfig::sanitize`](crate::ViewConfig::sanitize) folds
-/// it into the pair and it is never written back. Kept as a distinct type
-/// only so those tokens keep deserializing.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
-pub enum HighlightExtremes {
-    Off,
-    /// The highest held note — the melody.
-    Melody,
-    /// The lowest held note — the bass.
-    Bass,
-    /// Both, which is what a blob predating the setting entirely picks up.
-    #[default]
-    Both,
-}
-
-impl HighlightExtremes {
-    pub fn marks_melody(self) -> bool {
-        matches!(self, HighlightExtremes::Melody | HighlightExtremes::Both)
-    }
-
-    pub fn marks_bass(self) -> bool {
-        matches!(self, HighlightExtremes::Bass | HighlightExtremes::Both)
-    }
-}
-
-
 /// What text an OFF-SHEET node's label carries — a node on any sevens sheet
 /// but the center one.
 ///
@@ -387,12 +338,7 @@ impl HighlightExtremes {
 pub enum SevensLabel {
     /// The note name, which off the home sheet now carries the septimal
     /// mark that tells it from its namesake.
-    ///
-    /// Aliases the retired `Comma` mode — the name plus the signed cents to
-    /// that namesake — which existed to supply exactly the information the
-    /// mark now carries in the name itself.
     #[default]
-    #[serde(alias = "Comma")]
     Name,
     /// The pitch class in cents under the current tuning, alone. Says what
     /// the node is and nothing it isn't, at the cost of saying where it is.

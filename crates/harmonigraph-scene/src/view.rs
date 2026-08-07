@@ -1,9 +1,9 @@
-//! [`ViewConfig`] — the persisted, non-automatable visual settings — its
-//! serde defaults and legacy-blob migration, plus the per-frame
-//! [`FrameParams`] mirror of the host-automatable appearance parameters.
+//! [`ViewConfig`] — the persisted, non-automatable visual settings — plus the
+//! per-frame [`FrameParams`] mirror of the host-automatable appearance
+//! parameters.
 
 use crate::skin;
-use crate::style::{HighlightExtremes, IdleMarker, PitchGradient, Pulse, SevensLabel};
+use crate::style::{IdleMarker, PitchGradient, Pulse, SevensLabel};
 use crate::trail::TrailMark;
 use crate::ATTACK_TIME_MAX;
 use harmonigraph_core::{coords, Comma, Envelope, LatticePos, Tempered};
@@ -11,6 +11,10 @@ use harmonigraph_core::{coords, Comma, Envelope, LatticePos, Tempered};
 /// Purely-visual settings (not host-automatable parameters). The UI layer
 /// persists these separately from plugin parameters.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+// Every field falls back to `impl Default` below, so a blob missing one costs
+// that key alone rather than failing to parse and taking the whole persist —
+// the camera, the dock and every other setting — down with it.
+#[serde(default)]
 pub struct ViewConfig {
     /// World-space distance between adjacent nodes.
     pub spacing: f32,
@@ -22,11 +26,8 @@ pub struct ViewConfig {
     /// Center of the displayed window, in lattice steps from C (v1's Grid
     /// X/Y/Z). The center node renders at the world origin, so panning the
     /// window doesn't walk the content away from the camera.
-    #[serde(default)]
     pub center_threes: i32,
-    #[serde(default)]
     pub center_fives: i32,
-    #[serde(default)]
     pub center_sevens: i32,
     // ---- The sevens layer ------------------------------------------------
     // How the sheets other than the home one draw. `sevens_size` and
@@ -51,7 +52,6 @@ pub struct ViewConfig {
     /// thing worth reading: the home sheet is the ground the music is heard
     /// against, so it stays the largest thing on screen whichever way the
     /// sevens axis runs.
-    #[serde(default = "default_sevens_size")]
     pub sevens_size: f32,
     /// Width of the dark gutter a node clears around itself, in quad UV
     /// units — the units a FULL-SIZE node uses, so the gap comes out the
@@ -85,7 +85,6 @@ pub struct ViewConfig {
     /// the home sheet clears too, and at any sevenths extent — with the
     /// lattice flat there is no sheet behind to hide, but the grid lines
     /// are still cut, which is a look worth having on its own.
-    #[serde(default)]
     pub sevens_gutter: f32,
     /// How wide the clearing's fade is, same units — and deliberately NOT
     /// derived from the reach above. Tying the two into one number (fade
@@ -97,18 +96,14 @@ pub struct ViewConfig {
     /// fade does. Floored at the node's own rim: a fade wider than the
     /// reach would otherwise start eating into the node's own footprint,
     /// which is the one part that must always be cleared.
-    #[serde(default = "default_sevens_gutter_soft")]
     pub sevens_gutter_soft: f32,
     /// What text an off-sheet node's label carries (see [`SevensLabel`]).
     /// Only meaningful while `show_labels` is on.
-    #[serde(default = "default_sevens_label")]
     pub sevens_label: SevensLabel,
     /// Stroke weight of the DRAWN label marks (`+`, `-`, and the septimal
     /// shape), as a fraction of the mark's own font size.
     ///
     /// Draw note-name labels on hovered and sounding nodes.
-    /// serde(default) keeps older persisted blobs loadable.
-    #[serde(default = "default_true")]
     pub show_labels: bool,
     /// Overall size of a node's label, as a multiple of its built-in sizes —
     /// the note name, the marks stacked beside it and the cents line under it
@@ -120,11 +115,9 @@ pub struct ViewConfig {
     /// [`Camera::screen_scale`](crate::Camera::screen_scale)), which is what
     /// keeps a name the same size on its node at every zoom; this says what
     /// that size is.
-    #[serde(default = "default_label_scale")]
     pub label_scale: f32,
     /// Under each note-name label, also show the node's pitch class in
     /// cents. Only meaningful while `show_labels` is on.
-    #[serde(default = "default_true")]
     pub show_cents: bool,
     // How a sounding node's core is painted has no field here: the core is
     // the steady disc-and-glow, and nothing switches it. The field styles
@@ -140,28 +133,21 @@ pub struct ViewConfig {
     /// The curve the low-to-high pitch gradient follows, as its four knobs
     /// (see [`PitchGradient`]). Every pitch-colored shape in the scene reads
     /// it through one table, so this is the only place the gradient is set.
-    #[serde(default)]
     pub pitch_gradient: PitchGradient,
     /// The core's solidity, 0..1: a soft glow at 0, morphing continuously
     /// to the classic solid orb at 1 (the disc fades in over its glow
     /// skirt and its edge crisps). Inert while the core is off.
-    #[serde(default = "default_core_solidity")]
     pub core_solidity: f32,
     /// The core's radius, in quad UV units (0 = node center, 1 = quad
     /// edge; the classic disc edge sits at 0.46). Sizes the disc and its
     /// glow together. **A radius of 0 turns the core off** — the outer
     /// octave glyphs then carry the note alone.
-    #[serde(default = "default_core_radius")]
     pub core_radius: f32,
     /// The outer octave layer's radial band (same UV units): every outer
-    /// style fits its glyphs' radial footprint to this. The `slice_inner` /
-    /// `slice_outer` spellings these replaced were pre-floor, so no blob
-    /// this build accepts carries them and no alias is kept for them;
-    /// derive_scene keeps outer ahead of inner, so any dragged
-    /// combination still renders a visible band.
-    #[serde(default = "default_outer_inner")]
+    /// style fits its glyphs' radial footprint to this. derive_scene keeps
+    /// outer ahead of inner, so any dragged combination still renders a
+    /// visible band.
     pub outer_inner: f32,
-    #[serde(default = "default_outer_outer")]
     pub outer_outer: f32,
     // The octave layer's backdrop and solidity are fixed at 1 in the shader
     // and have no fields here. The backdrop — the silent octaves ghosted
@@ -181,7 +167,6 @@ pub struct ViewConfig {
     /// Was fixed at 0.12 (the sectors' gap; the rings used a narrower one
     /// of their own). 0 closes the sectors into a solid annulus and seats
     /// the rings right against it.
-    #[serde(default = "default_outer_gap")]
     pub outer_gap: f32,
     /// How many octaves one turn of a node covers at FULL SIZE (see
     /// [`octaves`](crate::octaves)), 1..=11 — not how many it draws, which is
@@ -190,65 +175,27 @@ pub struct ViewConfig {
     /// how many degrees an octave of the main register is worth. Notes past
     /// either end of the whole wheel light the outermost indicator on their
     /// side.
-    #[serde(default = "default_octave_count")]
     pub octave_count: u32,
     /// The MIDI pitch at the TOP of the wheel — on every node, whatever its
     /// pitch class: a node's ring is turned so that its own octaves land on
     /// their pitches, by up to half a slice either way.
     /// [`sanitize`](Self::sanitize) holds it to the settable limits.
-    #[serde(default = "default_octave_center")]
     pub octave_center: f32,
-    /// The pre-count pitch WINDOW, low end and high, in MIDI note numbers: the
-    /// wheel was a continuous pitch range that the octaves were divided out
-    /// of, so its ends fell wherever they liked between two of a node's
-    /// octaves and the two indicators there were short by however much.
-    /// [`sanitize`](Self::sanitize) reads the pair as the count and center it
-    /// most nearly named, and never writes it back.
-    ///
-    /// Both read through `bare_as_some` for the reason the melody/bass shim
-    /// above does: the old blobs write the ends BARE, which RON will not read
-    /// into an `Option`'s `Some`, and a failed parse drops the whole persist
-    /// rather than just this field.
-    #[serde(default, skip_serializing, rename = "octave_low", deserialize_with = "bare_as_some")]
-    pub legacy_octave_low: Option<f32>,
-    /// See [`legacy_octave_low`](Self::legacy_octave_low).
-    #[serde(default, skip_serializing, rename = "octave_high", deserialize_with = "bare_as_some")]
-    pub legacy_octave_high: Option<f32>,
-    /// The pre-window octave COUNT: how many octaves either side of middle C's
-    /// the wheel showed, 2..=5, so `2 * span + 1` octaves in all centered on
-    /// middle C. Two model generations back, and NOT the count above — a blob
-    /// carrying 3 here asked for seven octaves, not three.
-    /// [`sanitize`](Self::sanitize) folds it in and never writes it back.
-    #[serde(
-        default,
-        skip_serializing,
-        rename = "octave_span",
-        deserialize_with = "bare_as_some"
-    )]
-    pub legacy_octave_span: Option<u32>,
     /// Extra octaves at EACH end of the wheel, drawn small: 0..=5, and never
     /// so many that the whole wheel passes eleven slices. Each one reaches an
     /// octave further up AND down the keyboard for a sliver of the turn, where
     /// an octave of count is paid for by every full-size octave at once.
-    ///
-    /// A blob written before the fringe existed carries the two bars it
-    /// replaced, `octave_taper_amount` and `octave_taper_shape`. Nothing reads
-    /// them — an unknown field is ignored rather than refused — so such a
-    /// project opens on the same count of octaves it always drew, evenly.
-    #[serde(default = "default_octave_extras")]
     pub octave_extras: u32,
     /// How wide one extra is, as a fraction of an EVEN slice (the turn over
     /// the whole wheel, extras included), 0.1..=1. Under 1 an extra is always
     /// narrower than a full-size octave, whatever the count and however many
     /// extras there are, and 1 is an even wheel.
-    #[serde(default = "default_octave_extra_size")]
     pub octave_extra_size: f32,
     /// How much the extras GRADE from the outermost inward, 0..1: 0 is a flat
     /// fringe of equal slivers and 1 is a ramp that meets the full-size
     /// octaves in a step the size of its own. The outermost extra is the size
     /// above whatever this is, so it is a shape rather than a second
     /// strength — and it is inert without two extras to differ.
-    #[serde(default = "default_octave_extra_blend")]
     pub octave_extra_blend: f32,
     // Which shimmer sweeps the octave glyphs has no field here: the sheet is
     // the melody/bass rings' alone (`pulse_marks`), and the octave layer draws
@@ -276,11 +223,8 @@ pub struct ViewConfig {
     /// all. Now the core, its glow, the gutter it clears and the piano roll
     /// arrive on this too, and the fixed constant behind the sectors is gone.
     ///
-    /// 0 is that instant core, and is what a blob predating the bar loads at:
-    /// the sectors it was saved with eased in and the core did not, and of
-    /// the two, the core is the one the picture was composed around. A blob
-    /// wanting the old sector ramp back sets 0.15.
-    #[serde(default)]
+    /// 0 is that instant core: every layer appears at full the moment the
+    /// note sounds. 0.15 is the sector ramp the fixed constant ran.
     pub attack_time: f32,
     /// How curved both ends of the note envelope are, 0..=1: 0 the straight
     /// line every layer has always faded on, 1 the sharpest curve on offer.
@@ -298,7 +242,6 @@ pub struct ViewConfig {
     ///
     /// A bare `#[serde(default)]`: 0 is the straight line, so a blob that
     /// predates the bar loads drawing exactly what it was saved drawing.
-    #[serde(default)]
     pub fade_shape: f32,
     // ---- Idle (unlit) node marker ----------------------------------------
     // A minimal grey marker at each home-sheet node, drawn ALWAYS —
@@ -307,11 +250,9 @@ pub struct ViewConfig {
     // nodes draw nothing (the grid marks them).
     /// What the idle marker is (see [`IdleMarker`]): nothing, a filled dot,
     /// or an outline circle.
-    #[serde(default)]
     pub idle_marker: IdleMarker,
     /// The idle marker's radius (dot fill / circle) in quad UV units.
     /// Independent of the active `core_radius`.
-    #[serde(default = "default_idle_radius")]
     pub idle_radius: f32,
     // ---- Melody / bass highlight -----------------------------------------
     // Mark the outer held notes, so the melody and/or bass line reads at a
@@ -332,25 +273,9 @@ pub struct ViewConfig {
     /// octave band, bass outside) rather than by hue, so a note that is at
     /// once the highest and the lowest — a lone held note, or a chord whose
     /// top and bottom share a pitch class — simply gets both.
-    #[serde(default = "default_true")]
     pub mark_melody: bool,
     /// Mark the lowest held note. See [`mark_melody`](Self::mark_melody).
-    #[serde(default = "default_true")]
     pub mark_bass: bool,
-    /// Load-only shim: blobs from before the two marks became independent
-    /// flags carry one `highlight_extremes` token (Off/Melody/Bass/Both).
-    /// Folded into the pair by [`sanitize`](Self::sanitize) and
-    /// never written back. It reads through `bare_as_some` because the old
-    /// blobs wrote the variant BARE, which RON will not read into an
-    /// `Option`'s `Some`, and a failed parse drops the whole persist rather
-    /// than just this field — losing the user's layout and camera too.
-    #[serde(
-        default,
-        skip_serializing,
-        rename = "highlight_extremes",
-        deserialize_with = "bare_as_some"
-    )]
-    pub legacy_highlight_extremes: Option<HighlightExtremes>,
     /// How thick each melody/bass ring is, in quad UV units — the same
     /// units as the band radii and [`outer_gap`](Self::outer_gap), so the
     /// three read against each other directly. One thickness for both
@@ -366,7 +291,6 @@ pub struct ViewConfig {
     /// 0 turns the rings off, as a radius of 0 turns the core off. Was
     /// fixed at 0.16 of the band's WIDTH, which moved the rings whenever
     /// the band was resized; absolute holds them still.
-    #[serde(default = "default_mark_thickness")]
     pub mark_thickness: f32,
     /// How long a note must HOLD an end before its ring begins to ease in,
     /// in seconds. The wait sits in front of the ease rather than stretching
@@ -396,13 +320,9 @@ pub struct ViewConfig {
     /// any delay past the Fade would outlive the note that handed the end
     /// over.
     ///
-    /// 0 is the ring arriving with its note, and it is not what either door
-    /// opens on: a blob that predates the bar loads the same wait a fresh
-    /// view does (see [`default_mark_delay`]). Those blobs were saved drawing
-    /// rings that answer immediately, and are reinterpreted deliberately —
-    /// what a bare 0 loads is the chord-release smear rather than a look
-    /// anyone chose.
-    #[serde(default = "default_mark_delay")]
+    /// 0 is the ring arriving with its note, and is deliberately not what a
+    /// fresh view opens on — see `impl Default`, where the wait that stops
+    /// the chord-release smear is written out.
     pub mark_delay: f32,
     /// Which shimmer sweeps the melody/bass rings (see [`Pulse`]): the sheet
     /// takes both rings AND the octave slice each one points at. That reach
@@ -411,7 +331,6 @@ pub struct ViewConfig {
     /// of where the sheet goes, the octave layer drawing steady everywhere a
     /// ring does not point. [`Pulse::Off`] is both the fresh-view and the
     /// old-blob fallback, so a bare `#[serde(default)]` covers it.
-    #[serde(default)]
     pub pulse_marks: Pulse,
 
     // ---- Shimmer ---------------------------------------------------------
@@ -426,7 +345,6 @@ pub struct ViewConfig {
     /// normal for the gratings, outward from the origin for
     /// [`Pulse::Rings`]. 0 freezes the sheet where it stands, which is a look
     /// rather than an off switch (the mode is the switch).
-    #[serde(default = "default_shimmer_speed")]
     pub shimmer_speed: f32,
     /// How wide the pattern is, in the same world units: the distance from one
     /// bright peak to the next, which sizes the lit part and the dark
@@ -466,7 +384,6 @@ pub struct ViewConfig {
     /// SAMPLING, and the fade is what makes running out look like an ending
     /// rather than a fault. Frame the shot at the zoom the tight end is
     /// chosen for.
-    #[serde(default = "default_shimmer_width")]
     pub shimmer_width: f32,
     /// How strong the sweep is where it passes, 0..1 being none to the full
     /// tuned depth: ONE number drives both of what a band does — how much
@@ -496,7 +413,6 @@ pub struct ViewConfig {
     /// What the light costs is real at any setting, and it is the point of
     /// the bar: under a strong band an indicator says "an octave sounds here"
     /// without saying which.
-    #[serde(default = "default_shimmer_intensity")]
     pub shimmer_intensity: f32,
     /// How the light is shared out ACROSS one period, 0..1 — where
     /// [`shimmer_intensity`](Self::shimmer_intensity) says how much light
@@ -518,7 +434,6 @@ pub struct ViewConfig {
     /// part narrows exactly as the dark part widens, so a period always adds
     /// up to itself and no setting can leave the sheet mostly-lit and
     /// mostly-dark at once.
-    #[serde(default = "default_shimmer_softness")]
     pub shimmer_softness: f32,
 
     // ---- Home grid -------------------------------------------------------
@@ -538,11 +453,9 @@ pub struct ViewConfig {
     /// color always came from; the skin has no runtime setter, so a
     /// user-chosen color has to live here. Lit segments still take their
     /// sounding notes' color.
-    #[serde(default = "default_grid_color")]
     pub grid_color: [f32; 4],
     /// Grid line thickness as a multiple of the built-in width. 1 is the
     /// classic hairline; the shader scales its grid half-width by this.
-    #[serde(default = "default_grid_thickness")]
     pub grid_thickness: f32,
     /// How far a grid segment stops short of each node center, as a factor
     /// of the node radius — the padding between a line end and the
@@ -550,12 +463,10 @@ pub struct ViewConfig {
     /// 1.05 sits slightly wider than the disc's visual radius, so the gap
     /// fully contains a sounding note's circle.
     ///
-    #[serde(default = "default_grid_inset")]
     pub grid_inset: f32,
     /// Draw the in-plane grid lines dashed. The sevens-axis links are
     /// always dashed regardless — that dash is what distinguishes a depth
     /// link from an in-sheet line, and isn't a style choice.
-    #[serde(default)]
     pub grid_dashed: bool,
     // ---- Trail (where the music has already been) ------------------------
     // The one part of the view about the past rather than the present. It
@@ -564,24 +475,20 @@ pub struct ViewConfig {
     /// How a node the music has visited is marked (see [`TrailMark`]). Off
     /// by default: showing only what is audible is what every saved view
     /// was drawn with, and leaving marks behind is a deliberate choice.
-    #[serde(default)]
     pub trail_mark: TrailMark,
     /// How far the mark departs from a plain idle node, 0..1 — how much
     /// lighter the Lift grey, how visible the Ring, how much color the
     /// Tint. 1 is still quiet by construction; every mark is bounded well
     /// short of reading as a sounding note.
-    #[serde(default = "default_trail_strength")]
     pub trail_strength: f32,
     /// Seconds before a pitch is forgotten, measured from when it last
     /// sounded. **0 means never** -- the default, and the point of the
     /// feature: a whole piece's territory rather than a rolling window.
-    #[serde(default)]
     pub trail_memory: f32,
     /// Keep the note name and cents on a visited node, not just on sounding
     /// and hovered ones -- so the harmonic space can be read off the screen
     /// by name, with its tuning. Independent of the mark above: the text is
     /// its own channel and is useful with the marks off.
-    #[serde(default)]
     pub trail_labels: bool,
 
     /// Meantone mode: lock the major-third tuning to four perfect fifths
@@ -597,7 +504,6 @@ pub struct ViewConfig {
     /// Whether this engages by itself is [`Self::meantone_auto`]'s business;
     /// releasing it is always an edit of the major third (or this switch,
     /// while the auto-detect is off).
-    #[serde(default)]
     pub meantone: bool,
     /// Auto-detect meantone: engage [`Self::meantone`] whenever the tuning
     /// params land within `TEMPER_TOLERANCE` of the meantone identity —
@@ -611,12 +517,11 @@ pub struct ViewConfig {
     /// that can mean nothing else — pulling the major third itself more
     /// than the tolerance away from the derived value.
     ///
-    /// On by default, and `default_true` so a blob written before it
-    /// existed opts in too: a project saved at 12-TET (400 = 4·700 − 2400)
-    /// is meantone whether or not anyone said so, and its E and E- name one
-    /// pitch. Switching this off leaves the mode wherever it is and hands
+    /// On by default: a project at 12-TET (400 = 4·700 − 2400) is meantone
+    /// whether or not anyone said so, and its E and E- name one pitch, so
+    /// the detect has something to say about most tunings without being
+    /// asked. Switching this off leaves the mode wherever it is and hands
     /// the switch back.
-    #[serde(default = "default_true")]
     pub meantone_auto: bool,
     /// Marvel mode: lock the harmonic-seventh tuning to two fifths plus two
     /// thirds (temper out the septimal kleisma, 225/224). The same switch as
@@ -628,21 +533,17 @@ pub struct ViewConfig {
     /// The third it derives from is the one in USE, so with meantone on too
     /// the pair composes into septimal meantone (a seventh of ten fifths) and
     /// every name on the lattice comes out a plain letter.
-    #[serde(default)]
     pub marvel: bool,
     /// Auto-detect marvel: [`Self::meantone_auto`]'s twin, engage-only for
     /// the same reason — the lock has to survive dragging the fifth or the
     /// third, either of which moves the derived seventh out from under a
     /// seventh param that is inert while the lock holds.
     ///
-    /// On by default, and `default_true` on the same grounds as the meantone
-    /// detect: 12-TET tempers 225/224 out as well (1000 = 2·700 + 2·400 −
-    /// 1200), so a project saved there has one pitch under `B♭↓` and `A♯`
-    /// whether or not anyone said "marvel". A blob written before this
-    /// existed therefore opts in, and reopening it respells the sevens sheet
-    /// — which is the tuning's own arithmetic finally showing up in the
-    /// names, not a change of mind about the project.
-    #[serde(default = "default_true")]
+    /// On by default, on the same grounds as the meantone detect: 12-TET
+    /// tempers 225/224 out as well (1000 = 2·700 + 2·400 − 1200), so a
+    /// project there has one pitch under `B♭↓` and `A♯` whether or not
+    /// anyone said "marvel", and the detect respelling the sevens sheet is
+    /// the tuning's own arithmetic showing up in the names.
     pub marvel_auto: bool,
     /// Hide every tab bar so adjacent panes — lattice above spectrum, in the
     /// default layout — record as one seamless surface. Tab toggles it.
@@ -650,7 +551,6 @@ pub struct ViewConfig {
     /// The separators keep their regular width, so the spacing between panes
     /// is the same in both modes and a take framed in one is framed in the
     /// other.
-    #[serde(default)]
     pub frameless: bool,
     /// Show the performance overlay (a small corner HUD with frame rate,
     /// memory and workload counts; per-stage CPU time waits for
@@ -661,10 +561,6 @@ pub struct ViewConfig {
     /// the picture the plugin exists to draw. The Panel pane's Performance
     /// section is where it gets switched on.
     ///
-    /// Plain `default`, matching the struct default, so a fresh install and a
-    /// pre-`show_perf` blob both open with it off. A project that explicitly
-    /// turned it on carries `true` and still round-trips.
-    #[serde(default)]
     pub show_perf: bool,
     /// Expand the overlay from the headline numbers into the full per-stage
     /// breakdown of where a frame goes.
@@ -672,229 +568,16 @@ pub struct ViewConfig {
     /// Off by default: the breakdown exists to answer "which stage is eating
     /// the frame", and once it has, a dozen rows of scaffolding is not what
     /// you want sitting over the picture. Inert while `show_perf` is off.
-    #[serde(default)]
     pub show_perf_detail: bool,
     /// Offscreen render resolution as a multiple of the pane's native pixel
     /// size: >1 supersamples (crisper glyph edges), <1 renders coarse and
     /// upscales. 1.0 reproduces the pre-offscreen-pass output exactly.
-    #[serde(default = "default_render_scale")]
     pub render_scale: f32,
     /// Bloom post-process: how much blurred brightness gets added back
     /// as a halo around bright notes. 0 disables the chain entirely — the
     /// composite is then exactly the plain scene, so there is deliberately
     /// no separate on/off toggle.
-    #[serde(default)]
     pub bloom_strength: f32,
-}
-
-fn default_true() -> bool {
-    true
-}
-
-/// Read a legacy BARE value — `true`, `Both` — into an `Option<T>` that
-/// means "the key was there". A plain `Option<T>` field can't do this: RON
-/// writes options as `Some(true)`/`None`, so it rejects the bare token the
-/// old blobs actually contain. `serde(default)` still supplies `None` when
-/// the key is absent — this only runs when it is present.
-fn bare_as_some<'de, D, T>(d: D) -> Result<Option<T>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-    T: serde::Deserialize<'de>,
-{
-    serde::Deserialize::deserialize(d).map(Some)
-}
-
-// The `default_*` fns below are serde fallbacks for keys a persisted blob
-// PREDATES, not the out-of-the-box look — each returns what that blob was
-// drawn with before the field existed, so loading an old view doesn't
-// restyle it. A fresh view's values live in `impl Default` instead.
-
-/// The classic disc edge radius, from before the core was sizable.
-fn default_core_radius() -> f32 {
-    0.46
-}
-
-/// Every sheet the same size — what a blob predating the sevens layer's own
-/// settings was drawn with. (`sevens_gutter` takes the plain `0` default for
-/// the same reason: no gutter existed to draw.)
-fn default_sevens_size() -> f32 {
-    1.0
-}
-
-/// The fade a blob predating this key was drawn with, near enough: it was
-/// pinned to twice the reach, and the reach it shipped with was 0.12.
-fn default_sevens_gutter_soft() -> f32 {
-    0.24
-}
-
-/// The note name, which every earlier build drew off the home sheet too —
-/// but unambiguously now, the septimal mark having given an off-sheet name
-/// its own spelling rather than its namesake's.
-fn default_sevens_label() -> SevensLabel {
-    SevensLabel::Name
-}
-
-/// Labels at their built-in size.
-///
-/// The deliberate exception to what these `default_*` fns are for. An older
-/// blob was drawn at HALF this — the letter was 15pt and is now 30 — so this
-/// restyles it, where every other default here exists precisely not to. The
-/// bar this field belongs to went to 2 the first time it was tried and stayed
-/// there, which said the built-in size was wrong rather than merely one
-/// choice; a size that was wrong is worth correcting everywhere it was used,
-/// and a saved view that kept it would be preserving a mistake, not a look.
-fn default_label_scale() -> f32 {
-    1.0
-}
-
-/// The classic solid orb — the identity end of the solidity axis.
-fn default_core_solidity() -> f32 {
-    1.0
-}
-
-/// What 0.16 of the band's width came to at the default band, which is
-/// what the rings were fixed at before this was a bar.
-fn default_mark_thickness() -> f32 {
-    0.09
-}
-
-/// Just past a passing sixteenth — 125ms at 120bpm — which is where the wait
-/// stops rejecting notes anyone is listening to and starts rejecting the ones
-/// nobody is.
-///
-/// A default rather than the 0 the bar's low end offers, because a ring
-/// outlives its key ([`ViewConfig::mark_delay`]): at 0 every momentary
-/// crowning rings its way OUT over the whole Fade, so lifting a chord one key
-/// at a time leaves a fading ring on nearly every note of it. The threshold is
-/// what stops that, and opening at 0 would ship the mechanism switched off.
-///
-/// The same value at both doors — a fresh view and a blob with no key — since
-/// the smear is not a look a blob can be said to have chosen.
-fn default_mark_delay() -> f32 {
-    0.15
-}
-
-/// The gap the sectors always had (SLICE_GAP_HALF was 0.06 either side of
-/// the boundary), now also the rings' padding from the band.
-fn default_outer_gap() -> f32 {
-    0.12
-}
-
-/// The rate the sweep was fixed at before it was a bar: about one band every
-/// three seconds at the width below, which is the calm end of what still reads
-/// as moving. A fresh view opens slower and tighter than this whole set — see
-/// `ViewConfig::default`, which writes its own four.
-fn default_shimmer_speed() -> f32 {
-    1.6
-}
-
-/// The band size the sweep was fixed at: about five nodes at the default
-/// spacing, so a band spans several of them and reads as one crossing the
-/// lattice rather than as a marking on each.
-fn default_shimmer_width() -> f32 {
-    5.0
-}
-
-/// The full tuned depth — what the sweep is fixed at without the bar: a band
-/// carrying the whole of the light one adds over a shallow dip, which is the
-/// balance the two shader constants are dialed to.
-fn default_shimmer_intensity() -> f32 {
-    1.0
-}
-
-/// Well up the gradual half of the bar (an exponent of about 1.5): the peak
-/// reads as one place the light is brightest rather than as a band with
-/// edges, and the fall from it takes most of the period.
-///
-/// The alternative is a crest — anywhere below about 0.6, where the exponent
-/// passes 2.4 and the lit part narrows to a fraction of the period. That
-/// reads as white stripes laid ON the layer rather than as light crossing it,
-/// the more so the tighter the width, and it is the whole reason this is a
-/// setting rather than a constant.
-fn default_shimmer_softness() -> f32 {
-    0.8
-}
-
-/// Nine octaves, which is what a blob written before the wheel was a setting
-/// at all was drawn with: ten fixed 45-degree sectors covering MIDI octaves
-/// 0..9. Nine of them is the nearest honest reading of that, and unlike the
-/// ten it divides the circle evenly instead of wrapping the top two octaves
-/// back over the bottom two. A blob written against the pitch WINDOW carries
-/// `octave_low`/`octave_high` instead, and one written against the octave
-/// COUNT carries `octave_span`; `sanitize` folds both in.
-fn default_octave_count() -> u32 {
-    9
-}
-
-/// Middle C, which every wheel this predates was centered on.
-fn default_octave_center() -> f32 {
-    crate::octaves::DEFAULT_CENTER
-}
-
-/// No fringe: the count is the whole of what a blob written before the extras
-/// asked for, so it opens on an even wheel and any fringe is a choice made
-/// from there.
-fn default_octave_extras() -> u32 {
-    0
-}
-
-/// The size an extra took before the size was settable, and inert until
-/// there is one. A fresh view opens on a wider fringe than this.
-fn default_octave_extra_size() -> f32 {
-    crate::octaves::DEFAULT_EXTRA_SIZE
-}
-
-/// A flat fringe — the bottom of the Blend bar, and inert until there are two
-/// extras to grade between.
-fn default_octave_extra_blend() -> f32 {
-    crate::octaves::DEFAULT_EXTRA_BLEND
-}
-
-/// Idle marker at the classic disc radius, so a pre-field blob (whose
-/// marker is a Circle) reproduces the old placeholder ring — now
-/// independent of the core and of the playing state.
-fn default_idle_radius() -> f32 {
-    0.46
-}
-
-/// The classic annulus (SLICE_IN/OUT, from before the band was
-/// parameterized), which is what a blob predating these keys was drawn
-/// with. A fresh view uses a narrower band, set further off the core, in
-/// `impl Default` instead.
-fn default_outer_inner() -> f32 {
-    0.56
-}
-
-fn default_outer_outer() -> f32 {
-    0.93
-}
-
-fn default_render_scale() -> f32 {
-    1.0
-}
-
-/// Half travel on a bar whose whole range is quiet: clearly a different
-/// node, still clearly not a lit one.
-fn default_trail_strength() -> f32 {
-    0.5
-}
-
-/// The grid's color comes from the skin by default, which is the only
-/// place it came from before the grid became customizable.
-fn default_grid_color() -> [f32; 4] {
-    skin::active_skin().grid_line.to_array()
-}
-
-fn default_grid_thickness() -> f32 {
-    1.0
-}
-
-/// The fixed inset from before the grid became customizable: a factor of
-/// the node radius, slightly larger than the disc's visual radius (~0.83 ×
-/// radius, see the quad math in lattice.wgsl) so the gap fully contains
-/// the circle a sounding note draws there, with a slim margin.
-fn default_grid_inset() -> f32 {
-    1.05
 }
 
 impl ViewConfig {
@@ -1007,12 +690,15 @@ impl ViewConfig {
         }
     }
 
-    /// Fit a deserialized view to what its controls can actually produce, and
-    /// fold the fields a loadable blob may still spell an older way.
+    /// Fit a deserialized view to what its controls can actually produce.
     ///
-    /// The clamping is not about old blobs: a bar cannot produce a nonsense
-    /// value but a hand-edited RON can, and these feed a rasterizer.
+    /// A bar cannot produce a nonsense value but a hand-edited RON can, and
+    /// these feed a rasterizer. Where a value is past repair the fresh view's
+    /// own is what it falls back to, which is the only other value in the
+    /// file that is known to be drawable.
     pub fn sanitize(&mut self) {
+        let fresh = ViewConfig::default();
+
         // Fit the label scale to what its bar offers. It multiplies a FONT
         // SIZE, and the bar cannot produce a nonsense value where a
         // hand-edited blob can: a non-finite one reaches egui as a glyph with
@@ -1021,7 +707,7 @@ impl ViewConfig {
         self.label_scale = if self.label_scale.is_finite() {
             self.label_scale.clamp(0.3, 3.0)
         } else {
-            default_label_scale()
+            fresh.label_scale
         };
 
         // The pitch gradient's four knobs, for the same reason as the label
@@ -1030,40 +716,6 @@ impl ViewConfig {
         // cache on every lookup as well as drawing a NaN.
         self.pitch_gradient = self.pitch_gradient.sanitized();
 
-        // The melody/bass marks' pre-split enum, which was exactly these two
-        // bits packed into four names.
-        if let Some(which) = self.legacy_highlight_extremes.take() {
-            self.mark_melody = which.marks_melody();
-            self.mark_bass = which.marks_bass();
-        }
-
-        // The octave wheel's two earlier models, oldest first so the newer one
-        // wins if a blob somehow carries both.
-        //
-        // The pre-window COUNT named `2 * span + 1` octaves centered on middle
-        // C, which the count and center say directly.
-        if let Some(span) = self.legacy_octave_span.take() {
-            // 2..=5 because that is what the layout clamped the count to, and
-            // a blob outside it was drawn at the clamp.
-            self.octave_count = 2 * span.clamp(2, 5) + 1;
-            self.octave_center = 60.0;
-        }
-        // The pre-count pitch WINDOW, read as the wheel that most nearly draws
-        // it: the window's own middle was the pitch at the top, so it becomes
-        // the center, and the octaves it spanned become the count. The window
-        // was continuous, so that count is generally a rounding — a project
-        // whose window was nine and a half octaves wide has to open on one of
-        // the two whole numbers either side of it, and the half octave it
-        // loses is exactly the sliver that used to cut its end indicators
-        // short.
-        let window = (self.legacy_octave_low.take(), self.legacy_octave_high.take());
-        if let (Some(low), Some(high)) = window {
-            if low.is_finite() && high.is_finite() {
-                let (low, high) = if low <= high { (low, high) } else { (high, low) };
-                self.octave_center = 0.5 * (low + high);
-                self.octave_count = ((high - low) / 12.0).round().max(0.0) as u32;
-            }
-        }
         // Together, because the pair is what has to fit the boundary table and
         // either one alone can be legal in a wheel that isn't.
         (self.octave_count, self.octave_extras) =
@@ -1078,12 +730,12 @@ impl ViewConfig {
         self.octave_extra_size = if self.octave_extra_size.is_finite() {
             self.octave_extra_size.clamp(crate::octaves::MIN_EXTRA_SIZE, 1.0)
         } else {
-            default_octave_extra_size()
+            fresh.octave_extra_size
         };
         self.octave_extra_blend = if self.octave_extra_blend.is_finite() {
             self.octave_extra_blend.clamp(0.0, 1.0)
         } else {
-            default_octave_extra_blend()
+            fresh.octave_extra_blend
         };
 
         // The shimmer's four knobs, on the same grounds and against the same
@@ -1119,10 +771,10 @@ impl ViewConfig {
         self.attack_time = finite_or(self.attack_time, 0.0);
         self.fade_shape = finite_or(self.fade_shape, 0.0);
 
-        self.shimmer_speed = finite_or(self.shimmer_speed, default_shimmer_speed());
-        self.shimmer_width = finite_or(self.shimmer_width, default_shimmer_width());
-        self.shimmer_intensity = finite_or(self.shimmer_intensity, default_shimmer_intensity());
-        self.shimmer_softness = finite_or(self.shimmer_softness, default_shimmer_softness());
+        self.shimmer_speed = finite_or(self.shimmer_speed, fresh.shimmer_speed);
+        self.shimmer_width = finite_or(self.shimmer_width, fresh.shimmer_width);
+        self.shimmer_intensity = finite_or(self.shimmer_intensity, fresh.shimmer_intensity);
+        self.shimmer_softness = finite_or(self.shimmer_softness, fresh.shimmer_softness);
     }
 }
 
@@ -1140,11 +792,9 @@ fn finite_or(value: f32, fallback: f32) -> f32 {
     }
 }
 
-/// The look a fresh view starts in — deliberately NOT the same thing as the
-/// `default_*` fns above, which exist to keep a blob saved before a field
-/// existed looking the way it did then. Where the two disagree the value is
-/// written literally here, so tuning the out-of-the-box look never
-/// retroactively restyles someone's saved view.
+/// The look a fresh view starts in, and the single source of every field's
+/// fallback: the container-level `#[serde(default)]` on the struct means a
+/// blob missing a key picks its value up from here.
 impl Default for ViewConfig {
     fn default() -> Self {
         ViewConfig {
@@ -1178,16 +828,16 @@ impl Default for ViewConfig {
             sevens_gutter_soft: 0.271_047_7,
             sevens_label: SevensLabel::Name,
             show_labels: true,
-            label_scale: default_label_scale(),
+            // Labels at their built-in size.
+            label_scale: 1.0,
             show_cents: true,
             // Written out rather than taken from `PitchGradient::default()`,
-            // which has the other job: it is the fallback a blob predating the
-            // gradient loads with, and it has to go on naming the retired
-            // CIELAB arc it was converted from
-            // (`the_defaults_are_the_retired_arc_converted`). What a fresh
-            // view opens on is free to move without restyling those blobs, and
-            // this is a shorter arc than the retired one, a dimmer middle over
-            // a shallower brightness ramp, and a little more chroma.
+            // which is the gradient TYPE's own default — the CIELAB arc
+            // converted, which `the_defaults_are_the_retired_arc_converted`
+            // holds it to, and what a gradient assembled in code opens on.
+            // The composed look is free to differ, and does: a shorter arc,
+            // a dimmer middle over a shallower brightness ramp, and a little
+            // more chroma.
             pitch_gradient: PitchGradient {
                 hue_start: 257.842_65,
                 hue_span: 190.0,
@@ -1216,9 +866,6 @@ impl Default for ViewConfig {
             // the outer edge in.
             octave_count: crate::octaves::DEFAULT_COUNT,
             octave_center: crate::octaves::DEFAULT_CENTER,
-            legacy_octave_low: None,
-            legacy_octave_high: None,
-            legacy_octave_span: None,
             octave_extras: 2,
             octave_extra_size: 0.387_534_47,
             octave_extra_blend: 0.562_241_4,
@@ -1239,7 +886,7 @@ impl Default for ViewConfig {
             // that a release leaves promptly and settles instead of sliding
             // out at one rate, and not so much that the tail is over before
             // the ear has finished the note. The straight line is still one
-            // drag away, and is what every saved project opens on.
+            // drag away.
             fade_shape: 0.35,
             // No idle marker: the grid lines alone carry the lattice's
             // shape where nothing is playing, leaving the node positions
@@ -1253,31 +900,32 @@ impl Default for ViewConfig {
             // having to go turn something on first.
             mark_melody: true,
             mark_bass: true,
-            legacy_highlight_extremes: None,
             // Thin rings, slit at the marked octave's boundaries.
             mark_thickness: 0.078_269_88,
-            // Long enough to reject a passing sixteenth, which is what keeps
-            // a chord's release from smearing a fading ring across it — see
-            // `default_mark_delay`, the same value a blob with no key loads.
-            mark_delay: default_mark_delay(),
+            // Just past a passing sixteenth — 125ms at 120bpm — which is
+            // where the wait stops rejecting notes anyone is listening to and
+            // starts rejecting the ones nobody is. Not the 0 the bar's low
+            // end offers, because a ring outlives its key (see `mark_delay`):
+            // at 0 every momentary crowning rings its way OUT over the whole
+            // Fade, so lifting a chord one key at a time leaves a fading ring
+            // on nearly every note of it, and opening there would ship the
+            // mechanism switched off.
+            mark_delay: 0.15,
             pulse_marks: Pulse::Bands,
             // The sheet the rings above wear. A period well under one node's
             // spacing puts several of them across every ring, so this reads as
             // a fine texture ON the marks rather than as light crossing the
             // lattice — which is what keeps it off the reading of the octave
             // slice each ring points at, the one place the sheet touches the
-            // glyph layer. Half depth and a
-            // slow pace hold it there; at the tuned width and depth the
-            // `default_shimmer_*` fns carry it would be a sweep instead.
-            //
-            // Written out rather than taken from those fns, which have the
-            // other job: they are what a blob predating each bar is drawn at,
-            // and they stay where they are.
+            // glyph layer. Half depth and a slow pace hold it there; wider
+            // and deeper it would be a sweep crossing the lattice instead.
             shimmer_speed: 0.335_761_5,
             shimmer_width: 0.639_271_56,
             shimmer_intensity: 0.517_033_16,
             shimmer_softness: 1.0,
-            grid_color: default_grid_color(),
+            // The grid's color comes from the skin, which is the only place
+            // it comes from until someone customizes it.
+            grid_color: skin::active_skin().grid_line.to_array(),
             grid_thickness: 1.103_806_3,
             grid_inset: 0.3,
             grid_dashed: false,
@@ -1286,7 +934,9 @@ impl Default for ViewConfig {
             // None above, so out of the box the trail shows as the labels
             // alone. See TrailMark::needs_idle_marker.
             trail_mark: TrailMark::Lift,
-            trail_strength: default_trail_strength(),
+            // Half travel on a bar whose whole range is quiet: clearly a
+            // different node, still clearly not a lit one.
+            trail_strength: 0.5,
             trail_memory: 0.0,
             trail_labels: true,
             meantone: false,
@@ -1296,7 +946,7 @@ impl Default for ViewConfig {
             frameless: false,
             show_perf: false,
             show_perf_detail: false,
-            render_scale: default_render_scale(),
+            render_scale: 1.0,
             // A halo at about four fifths strength: the small soft core and
             // the thin octave marks are quiet shapes, and the bloom is what
             // gives them presence.
