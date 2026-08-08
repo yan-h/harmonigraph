@@ -117,6 +117,54 @@ fn every_settings_pane_scrolls_when_its_content_overflows() {
     }
 }
 
+/// The Nodes pane's Shape bar draws the curve the NOTES run on, not a second
+/// copy of the formula that happens to look like it.
+///
+/// The whole value of a preview is that it cannot disagree with what it
+/// previews, and a disagreement here is invisible: a line that bends the wrong
+/// amount still looks like a curve, and the number beside it reads 0.35 either
+/// way. So the bar is painted for real and every point on the line is checked
+/// against `Envelope` — the one place the shape is written.
+///
+/// The line's own ends calibrate the plot box, rather than the paint constants
+/// being restated here: an approach starts at nothing and lands on full, so the
+/// first point IS the floor and the last IS the ceiling. That leaves the test
+/// measuring the SHAPE of the line and nothing about where the widget chose to
+/// put it — inset, height and scale are all free to change under it.
+#[test]
+fn the_shape_bars_preview_is_the_curve_the_notes_run_on() {
+    let shapes: Vec<egui::Shape> = settings_pane_at_width(
+        panes::Tab::Nodes,
+        320.0,
+        harmonigraph_scene::Projection::default(),
+    )
+    .into_iter()
+    .map(|cs| cs.shape)
+    .collect();
+    let points = crate::widgets::curve_points(&shapes);
+    assert!(points.len() > 8, "the Nodes pane drew {} preview points", points.len());
+
+    let shape = harmonigraph_scene::ViewConfig::default().fade_shape;
+    let envelope =
+        harmonigraph_core::Envelope { attack_time: 1.0, shape, ..Default::default() };
+    let (left, right) = (points[0].x, points[points.len() - 1].x);
+    let (floor, ceiling) = (points[0].y, points[points.len() - 1].y);
+    assert!(right > left, "the line runs backwards, {left} to {right}");
+    assert!(floor > ceiling, "the line runs downward: it is an arrival, and rises");
+    for point in &points {
+        let p = (point.x - left) / (right - left);
+        let want = floor - (floor - ceiling) * envelope.attack(p as f64, 0.0);
+        assert!(
+            (point.y - want).abs() < 0.5,
+            "at {p} through the transition the line is at {} and the envelope at {want}",
+            point.y,
+        );
+    }
+    // A straight line satisfies the loop above at shape 0 and nowhere else, so
+    // the fresh view being curved is what gives it teeth.
+    assert!(shape > 0.0, "a fresh view fades on a straight line; the test above proves nothing");
+}
+
 /// The Video pane drawn through the REAL dock, soloed, for a shell that can or
 /// cannot record takes — the one thing that changes which section leads it.
 ///
