@@ -5896,7 +5896,19 @@ mod tests {
     ///
     /// The pairs above nearly reach this and stop short — a press ON a handle
     /// dragged OUTWARD is still just inside the reach twelve points later,
-    /// which is what the live position had left. Inward is where it runs out.
+    /// which is what the live position leaves. Inward is where it runs out.
+    ///
+    /// Asserted on the two ENDS rather than on the stored pair, which is the
+    /// only form of the claim that holds in both bars. "A slide leaves the ramp
+    /// alone" is false on the chroma bar: `snapped` recomposes the pair through
+    /// a hundredth-wide grid and `legal` runs it through `sanitize`, both in
+    /// f32, so a middle slide shifts `chroma_ramp` by an ulp at some runs and
+    /// not others — and a test that reads the ramp then passes against the live
+    /// position for exactly the runs where it does not. The ends say which
+    /// gesture ran: an end grab moves one and leaves the other standing, a
+    /// slide carries both. Held to a share of each bar's own axis so the one
+    /// assertion spans two units, and loose enough at the far end that an ulp
+    /// of recomposition is not a moved handle.
     #[test]
     fn a_press_within_a_spread_ends_reach_takes_that_end_whichever_way_it_runs() {
         let bars = [(Spread::Brightness, (64.0f32, 44.0f32)), (Spread::Chroma, (0.64, 0.44))];
@@ -5904,19 +5916,25 @@ mod tests {
             let (min, max) = spread.axis();
             let bar = filled_rects(&paint_bar(spread, pair))[0].0;
             let track = bar.shrink2(Vec2::new(HANDLE_INSET, 0.0));
-            let low = pair.0 - pair.1 * 0.5;
-            let handle = track.left() + track.width() * (low - min) / (max - min);
+            let was = ends(pair);
+            let handle = track.left() + track.width() * (was.0 - min) / (max - min);
             let frac = |x: f32| (x - bar.left()) / bar.width();
             for reach in [-GRAB_PX * 0.8, GRAB_PX * 0.8] {
                 for run in [-40.0f32, 40.0] {
                     let from = handle + reach;
-                    let moved = drag_bar(spread, pair, (frac(from), frac(from + run)));
+                    let moved = ends(drag_bar(spread, pair, (frac(from), frac(from + run))));
                     let aimed = format!("{spread:?}: pressed {reach} from the low end, ran {run}");
-                    assert_ne!(moved.1, pair.1, "{aimed}: the ramp held still, so no end moved");
-                    // A slide carries the ramp unchanged and moves the middle;
-                    // an end opens or closes it. The pair says which happened
-                    // without either bar's units coming into it.
-                    assert_ne!(moved, pair, "{aimed}: nothing moved at all");
+                    let share = |a: f32, b: f32| (a - b).abs() / (max - min);
+                    assert!(
+                        share(moved.1, was.1) < 1e-4,
+                        "{aimed}: the high end came along, by {} of the axis",
+                        share(moved.1, was.1),
+                    );
+                    assert!(
+                        share(moved.0, was.0) > 0.02,
+                        "{aimed}: the low end moved {} of the axis, which is nothing",
+                        share(moved.0, was.0),
+                    );
                 }
             }
         }
