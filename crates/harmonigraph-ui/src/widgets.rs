@@ -2491,6 +2491,72 @@ mod tests {
         }
     }
 
+    /// A column with no room for both gives the row to the flip button, and
+    /// gives it the row rather than a sliver of one.
+    ///
+    /// The branch is a deliberate choice — `spectrum_track_width` floors at
+    /// zero, so past that point the track stops shrinking and the button stops
+    /// moving — and no sweep reaches it: `no_settings_pane_overruns_a_narrow_column`
+    /// bottoms out at 120pt and this needs 20. Which leaves the arithmetic
+    /// under it unexercised, and it is the arithmetic most likely to go
+    /// negative: a track laid out from the RIGHT edge inward.
+    #[test]
+    fn a_column_too_narrow_for_both_gives_the_row_to_the_button() {
+        for column in [FLIP_W + PIECE_GAP + 30.0, FLIP_W + PIECE_GAP, FLIP_W, 6.0, 1.0] {
+            let ctx = egui::Context::default();
+            crate::theme::apply_theme(&ctx);
+            let mut g = ViewConfig::default().pitch_gradient;
+            let seen = std::cell::Cell::new(egui::Rect::NOTHING);
+            let out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::pos2(0.0, 0.0),
+                        egui::vec2(column, 80.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| seen.set(SpectrumBar::new(&mut g).show(ui).rect),
+            );
+            let track = seen.get();
+            let shapes: Vec<egui::Shape> = out.shapes.into_iter().map(|s| s.shape).collect();
+            // The button is the one thing painted in the theme's resting widget
+            // fill; the well under the track is `well()` and the handle is
+            // `text()`. Finding none would mean the paint no longer reads that
+            // fill, which is its own failure.
+            let buttons: Vec<egui::Rect> = filled_rects(&shapes)
+                .into_iter()
+                .filter(|(_, fill)| *fill == theme::widget())
+                .map(|(r, _)| r)
+                .collect();
+            assert_eq!(buttons.len(), 1, "at {column}pt the bar drew {buttons:?} buttons");
+            let button = buttons[0];
+
+            assert!(track.width() >= 0.0, "at {column}pt the track came out {track:?}");
+            assert!(
+                button.right() <= track.left() + 0.01,
+                "at {column}pt the button {button:?} runs into the track {track:?}",
+            );
+            // Below the threshold the track is gone and the button holds the
+            // row: everything except the gap it would have kept clear.
+            if column <= FLIP_W + PIECE_GAP {
+                assert_eq!(track.width(), 0.0, "at {column}pt the track kept {}", track.width());
+                assert!(
+                    button.width() >= track.right() - button.left() - PIECE_GAP - 0.01,
+                    "at {column}pt the button shrank to {} of a {}pt row",
+                    button.width(),
+                    track.right() - button.left(),
+                );
+            } else {
+                assert!(track.width() > 0.0, "at {column}pt the track vanished early");
+                assert!(
+                    (button.width() - FLIP_W).abs() < 0.01,
+                    "at {column}pt the button is {}, not its full {FLIP_W}",
+                    button.width(),
+                );
+            }
+        }
+    }
+
     /// Where the bar drew its handle.
     fn spectrum_handle_x(shapes: &[egui::Shape]) -> f32 {
         let hs = handles(shapes);
