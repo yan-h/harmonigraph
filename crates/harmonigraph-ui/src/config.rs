@@ -199,11 +199,18 @@ impl SpectrogramPreset {
     /// shows.
     ///
     /// The chroma pair is where a fraction of the gamut earns its keep. It does
-    /// not fall to 0 at the quiet end and does not need to: the gamut's own
-    /// maximum collapses toward 0 as `L*` approaches either end of its axis, so
-    /// a constant share already draws black at the bottom, saturated in the
-    /// middle and pale at the top — the shape all three colored ramps were
-    /// hand-picked to have. See [`Gradient::chroma`].
+    /// not fall to 0 at the quiet end and does not need to: what the fraction is
+    /// OF collapses toward 0 as `L*` approaches either end of its axis, so a
+    /// constant share already draws black at the bottom, saturated in the middle
+    /// and pale at the top — the shape all three colored ramps were hand-picked
+    /// to have. See [`Gradient::chroma`].
+    ///
+    /// The shares are denominated in the floor every hue can hold rather than in
+    /// each hue's own ceiling, which is a tighter axis and sits them high: each
+    /// pair is the one holding ITS preset's mean colorfulness where the ceiling
+    /// held it at the pair these were hand-dialled as (Ice 0.55..0.90, Aurora
+    /// 0.40..0.85, Magma 0.70..0.85). A preset is its look, not its numbers, so
+    /// the numbers move when the denominator does.
     pub fn gradient(self) -> Gradient {
         let of = |(l_lo, l_hi): (f32, f32), hue: (f32, f32), (c_lo, c_hi): (f32, f32)| Gradient {
             hue_start: hue.0,
@@ -219,9 +226,9 @@ impl SpectrogramPreset {
             // dragged off 0 opens on a color rather than on whatever angle 0
             // happened to be spelled with.
             SpectrogramPreset::Mono => of((0.0, 100.0), (269.0, 0.0), (0.0, 0.0)),
-            SpectrogramPreset::Ice => of((0.0, 92.0), (269.0, -70.0), (0.55, 0.90)),
-            SpectrogramPreset::Aurora => of((0.0, 88.0), (302.0, -193.0), (0.40, 0.85)),
-            SpectrogramPreset::Magma => of((0.0, 90.0), (295.0, 136.0), (0.70, 0.85)),
+            SpectrogramPreset::Ice => of((0.0, 92.0), (269.0, -70.0), (0.635, 0.985)),
+            SpectrogramPreset::Aurora => of((0.0, 88.0), (302.0, -193.0), (0.518, 0.968)),
+            SpectrogramPreset::Magma => of((0.0, 90.0), (295.0, 136.0), (0.819, 0.969)),
         }
     }
 }
@@ -503,11 +510,11 @@ impl SpectrumConfig {
 /// ([`SpectrumConfig::sanitize`]), takes included — so a video rendered
 /// from an old take renders at the wider range too.
 ///
-/// Named for the analyzer alone, and read by nothing else. The Nodes tab's
-/// colour range is a span of pitch as well and used to borrow this; it has
-/// [`COLOR_RANGE_MIN_SPAN`] of its own now, because the reasoning above is
-/// about the size of TYPE and says nothing whatever about how tightly a
-/// gradient may be aimed.
+/// The analyzer's alone, and read by nothing else. The Nodes tab carries a
+/// Pitch range of its own — the span the color gradient is spread over — and it
+/// is bounded by [`COLOR_RANGE_MIN_SPAN`] rather than by this: the reasoning
+/// above is about the size of TYPE and says nothing whatever about how tightly
+/// a gradient may be aimed.
 pub(crate) const PITCH_RANGE_MIN_SPAN: f32 = 24.0;
 
 /// A persisted text scale, fit to the range its bar offers.
@@ -529,9 +536,12 @@ pub(crate) fn sane_scale(scale: f32) -> f32 {
 /// whether they mean the same thing by 2.
 pub const SCALE_BAR_RANGE: std::ops::RangeInclusive<f32> = 0.3..=3.0;
 
-/// Closest the two ends of the Nodes tab's colour range may come: an octave,
-/// which is where it sat while it shared [`PITCH_RANGE_MIN_SPAN`] and had no
-/// reason to move when that one did.
+/// Closest the two ends of the Nodes tab's Pitch range may come — the span the
+/// color gradient covers, which is a different bar from the analyzer's window
+/// on the same axis. An octave: a gradient aimed tighter than one has notes a
+/// semitone apart at opposite ends of the spectrum, and nothing about the
+/// analyzer's own floor ([`PITCH_RANGE_MIN_SPAN`], which is about how small
+/// type may be drawn) says anything about that.
 pub(crate) const COLOR_RANGE_MIN_SPAN: f32 = 12.0;
 
 /// How far the roll's time span may be taken, in seconds. Named because two

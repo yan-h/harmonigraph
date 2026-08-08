@@ -198,9 +198,9 @@ pub struct ViewConfig {
     // Which shimmer sweeps the octave glyphs has no field here: the sheet is
     // the melody/bass rings' alone (`pulse_marks`), and the octave layer draws
     // steady whatever those are doing. Saved blobs still carry the
-    // `pulse_octaves` key, naming any of the six patterns `Pulse` answers to;
-    // serde ignores unknown keys, so such a blob loads intact, opens on the
-    // steady octave layer, and drops the key on the next save.
+    // `pulse_octaves` key, naming a pattern nothing reads any more; serde
+    // ignores unknown keys, so such a blob loads intact, opens on the steady
+    // octave layer, and drops the key on the next save.
     // ---- Note envelope ---------------------------------------------------
     // How a note ARRIVES and how it LEAVES, for every layer of the node at
     // once. The DURATION of both is the host-automatable Fade param and lives
@@ -322,9 +322,8 @@ pub struct ViewConfig {
     /// How fast the shimmer travels, in world units per second — the
     /// lattice's own units, so the DAW window and an exported video sweep at
     /// the same rate across the same nodes, where a rate in screen pixels
-    /// would not. Which WAY it travels is the pattern's own: along the bands'
-    /// normal for the gratings, outward from the origin for
-    /// [`Pulse::Rings`]. 0 freezes the sheet where it stands, which is a look
+    /// would not. It travels along the bands' own normal, every pattern here
+    /// being gratings. 0 freezes the sheet where it stands, which is a look
     /// rather than an off switch (the mode is the switch).
     pub shimmer_speed: f32,
     /// How wide the pattern is, in the same world units: the distance from one
@@ -839,13 +838,21 @@ impl Default for ViewConfig {
             // holds it to, and what a gradient assembled in code opens on.
             // The composed look is free to differ, and does: a shorter arc,
             // a dimmer middle over a shallower brightness ramp, and a little
-            // more chroma.
+            // less chroma.
             pitch_gradient: Gradient {
                 hue_start: 257.842_65,
                 hue_span: 190.0,
                 lightness: 53.0,
                 lightness_ramp: 31.0,
-                chroma: 0.601_670_8,
+                // Denominated in the floor every hue can hold (see
+                // `chroma_of`), which is a tighter axis than the per-hue
+                // ceiling: this is the fraction holding the mean colorfulness
+                // of THIS arc where 0.601_670_8 of the ceiling held it, so the
+                // lattice a fresh install draws is as colored as it was and
+                // only spends that color evenly. Retuning the type's own
+                // `default_chroma` does not reach here — the two are
+                // independent numbers, which is the point of writing this out.
+                chroma: 0.793_2,
                 // Flat, where the brightness ramp is not: the hue arc is
                 // already spending color on pitch, and a chroma ramp over it
                 // would say the same thing twice at the price of one end of

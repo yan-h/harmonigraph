@@ -383,10 +383,11 @@ fn every_settings_row_is_one_row_high() {
 /// panes below, and a seventh added later is covered on the day it is drawn
 /// rather than on the day someone remembers to add it to a list here.
 ///
-/// The `SpectrumBar` is the one bar deliberately taller than a row — a track
-/// with a pitch strip under it — and it is not excused: its TRACK is a row and
-/// the strip is `STRIP_H`, so it contributes a row-high rect like the rest and
-/// its extra piece is a different height that this never sees.
+/// The `SpectrumBar` is a row like the rest, and its width is the one thing
+/// that differs — the flip button takes the right end of the row. The gradient
+/// preview above it is deliberately SHORTER than a row and is not swept: it
+/// paints no well, being a picture rather than a track, so the sniffing below
+/// never reaches it.
 #[test]
 fn every_bar_is_one_row_high() {
     for tab in [panes::Tab::Tuning, panes::Tab::Nodes, panes::Tab::Analyzer, panes::Tab::Video] {
@@ -395,7 +396,7 @@ fn every_bar_is_one_row_high() {
             let want = crate::theme::row_height(scale);
             let shapes = settings_pane_at_scale(tab, scale);
             // Found by WIDTH, never by height: a bar fills the column (the
-            // spectrum's track gives its left end to the flip button and is
+            // spectrum's track gives its right end to the flip button and is
             // the one exception), so that is a property this test does not
             // depend on. Sniffing for row-high rects instead would drop a
             // mis-sized bar out of the sweep rather than failing on it, which
