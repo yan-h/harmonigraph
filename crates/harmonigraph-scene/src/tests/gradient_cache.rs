@@ -8,9 +8,14 @@
 //! that rebuilds tables it is still holding. What that costs is the whole reason
 //! the table exists: a rebuild is `PITCH_LUT_N` gamut bisections, each a Newton
 //! solve and an Oklab->sRGB conversion.
+//!
+//! The hue circle's memo is here too, for the half of that argument which
+//! applies to it. It holds ONE slot, every caller asking for the same pair, so
+//! what a value test cannot see about it is not eviction but whether it looks
+//! at its key at all.
 
 use crate::color::{LUT_SLOTS, REBUILDS};
-use crate::{gradient_color, Gradient};
+use crate::{gradient_color, hue_circle, Gradient};
 
 /// One gradient per number, differing in a knob that certainly changes the
 /// table — a hue arc nothing else in the tree opens on.
@@ -146,6 +151,33 @@ fn a_level_off_the_range_lands_on_the_nearest_end() {
         nan.is_finite(),
         "a NaN level rode out as {nan:?}, which nothing downstream would report",
     );
+}
+
+/// The hue circle's own memo answers the pair it is ASKED for, and not the one
+/// it happens to be holding.
+///
+/// One slot and, in this tree, one caller — a spectrum bar's track, which hands
+/// it two constants. That is what makes this worth pinning rather than
+/// obvious: a memo that returned its entry without comparing the key would
+/// serve the first circle ever built to everyone, and nothing else here would
+/// notice, because nothing else asks for a second pair. The branch is there for
+/// the second caller `hue_circle`'s doc invites, and this is what stands behind
+/// it until one arrives.
+///
+/// Both knobs, because the key is a pair and half a key is a key that looks
+/// right on the test that only moves the other half.
+#[test]
+fn the_hue_circle_answers_the_pair_it_is_asked_for() {
+    let dark = hue_circle(30.0, 0.85);
+    let light = hue_circle(70.0, 0.85);
+    assert_ne!(dark, light, "two lightnesses drew one circle");
+    let pale = hue_circle(30.0, 0.35);
+    assert_ne!(pale, dark, "two chromas drew one circle");
+    // Asked again, out of the order they were built in: each comes back as
+    // itself rather than as whatever the slot last held.
+    assert_eq!(hue_circle(70.0, 0.85), light, "the light circle came back changed");
+    assert_eq!(hue_circle(30.0, 0.85), dark, "the dark circle came back changed");
+    assert_eq!(hue_circle(30.0, 0.35), pale, "the pale circle came back changed");
 }
 
 /// A gradient that sanitizes to the one already held is the SAME entry, not a
