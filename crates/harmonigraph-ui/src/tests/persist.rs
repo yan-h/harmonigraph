@@ -267,7 +267,8 @@ fn a_double_click_on_a_soft_edge_restores_the_fresh_pair() {
     };
     click(&mut reach, &mut fade, vec![]);
     for _ in 0..2 {
-        click(&mut reach, &mut fade, vec![egui::Event::PointerMoved(at), press(true), press(false)]);
+        let events = vec![egui::Event::PointerMoved(at), press(true), press(false)];
+        click(&mut reach, &mut fade, events);
     }
     assert_eq!(
         (reach, fade),
