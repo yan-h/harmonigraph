@@ -1,6 +1,6 @@
 //! Where the music has already been (see the [`trail`](crate::trail)
 //! module). The claim under test throughout is that a memory reaches the
-//! IDLE layer and nothing else — that is what keeps it from reading as a
+//! LABEL layer and nothing else — that is what keeps it from reading as a
 //! note.
 
 use crate::*;
@@ -19,8 +19,10 @@ fn play_and_forget(tracker: &mut NoteTracker, note: u8, on: f64, off: f64) {
     tracker.prune(off + 2.0, &Envelope::default());
 }
 
-fn trail_view(mark: TrailMark) -> ViewConfig {
-    ViewConfig { trail_mark: mark, ..ViewConfig::default() }
+/// The trail switched explicitly on or off. The kept note names ARE the
+/// trail, so that one flag is its on/off — nothing fills `trail` without it.
+fn trail_view(on: bool) -> ViewConfig {
+    ViewConfig { trail_labels: on, ..ViewConfig::default() }
 }
 
 #[test]
@@ -29,7 +31,7 @@ fn nothing_is_remembered_while_the_trail_is_off() {
     play_and_forget(&mut tracker, 60, 0.0, 1.0);
     // Explicitly off rather than `ViewConfig::default()`: the fresh-view
     // look is Yan's, and is free to ship the trail on.
-    let view = trail_view(TrailMark::Off);
+    let view = trail_view(false);
     let scene = scene_of(&tracker, &Tuning::default(), &view, &plain_frame(), 10.0);
     assert!(scene.nodes.iter().all(|n| n.trail == 0.0));
 }
@@ -38,7 +40,7 @@ fn nothing_is_remembered_while_the_trail_is_off() {
 fn a_visited_node_is_marked_and_an_unvisited_one_is_not() {
     let mut tracker = NoteTracker::new();
     play_and_forget(&mut tracker, 60, 0.0, 1.0);
-    let view = trail_view(TrailMark::Lift);
+    let view = trail_view(true);
     let frame = plain_frame();
     let tuning = Tuning::default();
 
@@ -59,25 +61,39 @@ fn a_visited_node_is_marked_and_an_unvisited_one_is_not() {
 }
 
 #[test]
-fn a_memory_never_touches_any_layer_that_means_is_sounding() {
+fn a_memory_touches_no_field_but_trail() {
     // The load-bearing claim of the whole design. A trailed node must be
-    // indistinguishable from an untouched one in every active channel, so
-    // no amount of accumulated history can brighten the lattice.
+    // indistinguishable from an untouched one in EVERY other field, so no
+    // amount of accumulated history can change the picture: the labels read
+    // `trail`, and nothing that draws does.
+    //
+    // `color` is in the sweep deliberately. It is the one field a trail ever
+    // wrote — a remembered node used to carry its note's color for the idle
+    // marker to tint with — and with the marker gone that write would be a
+    // silent hand on the disc's own channel.
     let mut tracker = NoteTracker::new();
     play_and_forget(&mut tracker, 60, 0.0, 1.0);
     let frame = plain_frame();
     let tuning = Tuning::default();
     let view = ViewConfig { extent_sevens: 1, ..ViewConfig::default() };
-    let bare = scene_of(&tracker, &tuning, &view, &frame, 10.0);
-    let marked = scene_of(
+    let bare = scene_of(
         &tracker,
         &tuning,
-        &ViewConfig { trail_mark: TrailMark::Tint, ..view.clone() },
+        &ViewConfig { trail_labels: false, ..view.clone() },
         &frame,
         10.0,
     );
+    let marked = scene_of(
+        &tracker,
+        &tuning,
+        &ViewConfig { trail_labels: true, ..view.clone() },
+        &frame,
+        10.0,
+    );
+    assert!(marked.nodes.iter().any(|n| n.trail > 0.0), "nothing was remembered at all");
 
     for (a, b) in bare.nodes.iter().zip(&marked.nodes) {
+        assert_eq!(a.color, b.color, "at {:?}", a.lattice_pos);
         assert_eq!(a.activation, b.activation, "at {:?}", a.lattice_pos);
         assert_eq!(a.octaves, b.octaves, "at {:?}", a.lattice_pos);
         assert_eq!(a.melody_slots, b.melody_slots);
@@ -96,59 +112,10 @@ fn a_memory_never_touches_any_layer_that_means_is_sounding() {
 }
 
 #[test]
-fn tint_puts_the_remembered_color_on_a_silent_node_only() {
-    let mut tracker = NoteTracker::new();
-    play_and_forget(&mut tracker, 60, 0.0, 1.0);
-    let frame = plain_frame();
-    let tuning = Tuning::default();
-
-    // Silent and visited: `color` carries the remembered note's color for
-    // the shader's idle branch to tint with, in place of the idle grey.
-    let scene = scene_of(&tracker, &tuning, &trail_view(TrailMark::Tint), &frame, 10.0);
-    let remembered = origin_node(&scene).color;
-    // Against a trail that is OFF, which is what leaves the idle grey in
-    // place -- every mark rewrites a silent visited node's color.
-    let idle = origin_node(&scene_of(
-        &tracker,
-        &tuning,
-        &trail_view(TrailMark::Off),
-        &frame,
-        10.0,
-    ))
-    .color;
-    let gradient = ViewConfig::default().pitch_gradient;
-    assert_ne!(remembered, idle);
-    assert_eq!(
-        remembered,
-        pitch_lut_color(60.0, frame.darkest_pitch, frame.brightest_pitch, gradient)
-    );
-
-    // Sounding again: the live note owns `color`, memory or not. An octave
-    // up from the remembered note — the same pitch class, so it lights the
-    // same node, and a different pitch, so it is a different color on the
-    // ramp and the two answers can be told apart.
-    tracker.handle_event(NoteEvent {
-        time: 10.0,
-        channel: 0,
-        note: 72,
-        kind: NoteEventKind::On { velocity: 1.0 },
-    });
-    let scene = scene_of(&tracker, &tuning, &trail_view(TrailMark::Tint), &frame, 10.5);
-    let node = origin_node(&scene);
-    assert_eq!(node.activation, 1.0);
-    assert_eq!(node.trail, 1.0, "still remembered");
-    assert_eq!(
-        node.color,
-        pitch_lut_color(72.0, frame.darkest_pitch, frame.brightest_pitch, gradient),
-        "the sounding voice's own color, not the memory's"
-    );
-}
-
-#[test]
 fn a_memory_span_fades_a_pitch_out_and_then_drops_it() {
     let mut tracker = NoteTracker::new();
     play_and_forget(&mut tracker, 60, 0.0, 1.0);
-    let view = ViewConfig { trail_memory: 100.0, ..trail_view(TrailMark::Ring) };
+    let view = ViewConfig { trail_memory: 100.0, ..trail_view(true) };
     let frame = plain_frame();
     let tuning = Tuning::default();
     let trail_at = |now: f64| origin_node(&scene_of(&tracker, &tuning, &view, &frame, now)).trail;
@@ -163,10 +130,10 @@ fn a_memory_span_fades_a_pitch_out_and_then_drops_it() {
 #[test]
 fn an_off_sheet_node_stays_blank_even_after_it_is_played() {
     // Trails live on the home sheet only. The history remembers the note
-    // wherever it landed, but an off-sheet node stays blank — a lone mark out
+    // wherever it landed, but an off-sheet node stays blank — a lone name out
     // in the sevens dimension reads as noise, not as territory. The home node
     // of the same pitch class carries the memory instead.
-    let view = ViewConfig { extent_sevens: 1, ..trail_view(TrailMark::Ring) };
+    let view = ViewConfig { extent_sevens: 1, ..trail_view(true) };
     let tuning = Tuning::default();
     let frame = plain_frame();
     let off_sheet = LatticePos::new(0, 0, 1);
@@ -207,7 +174,7 @@ fn clearing_the_history_wipes_every_mark() {
     let mut tracker = NoteTracker::new();
     play_and_forget(&mut tracker, 60, 0.0, 1.0);
     play_and_forget(&mut tracker, 64, 2.0, 3.0);
-    let view = trail_view(TrailMark::Lift);
+    let view = trail_view(true);
     let frame = plain_frame();
     let tuning = Tuning::default();
     assert!(scene_of(&tracker, &tuning, &view, &frame, 6.0)

@@ -232,18 +232,12 @@ struct Uniforms {
     /// Pitch->color lookup for the dots octave style (see harmonigraph_scene's
     /// `pitch_ramp_lut`), matching the node disc gradient.
     pitch_lut: [[f32; 4]; harmonigraph_scene::PITCH_LUT_N],
-    /// Idle node color (the view's grid color at full alpha, so the grid
-    /// lines and idle markers read as one layer): the home-sheet
-    /// placeholder ring is drawn in this ONE constant color, so a
-    /// releasing note's ring never shows the note's own color or snaps
-    /// color when the voice is pruned.
-    node_idle: [f32; 4],
     /// x: core solidity (0 = soft glow, 1 = solid orb), the single axis the
-    /// core layer runs on; y unused (it carried the outer solidity, now
-    /// fixed crisp in the shader — retired in place, like `misc3.w`);
-    /// z: idle marker radius; w: idle marker style (0 none, 1 dot, 2
-    /// circle). (The blit pipeline binds only the head of this buffer, so
-    /// trailing fields are safe to add here.)
+    /// core layer runs on; y/z/w unused — y carried the outer solidity, now
+    /// fixed crisp in the shader, and z/w the idle marker's radius and
+    /// style, from when an unlit node drew a placeholder. Retired in place,
+    /// like `misc3.w`. (The blit pipeline binds only the head of this
+    /// buffer, so trailing fields are safe to add here.)
     misc4: [f32; 4],
     /// x: grid line thickness as a multiple of the shader's built-in grid
     /// width; y unused (a retired slot rather than a repack, like `misc3.w`);
@@ -255,10 +249,9 @@ struct Uniforms {
     /// spoken for, so the grid's knob starts a new one — safe per the note on
     /// `misc4`.
     misc5: [f32; 4],
-    /// x: trail mark style (0 off, 1 lift, 2 ring, 3 tint); y: trail
-    /// strength 0..1 — both feed the idle-marker branch alone (see
-    /// `TrailMark`); misc5 carried no room the trail could take without a
-    /// repack, so it started its own slot.
+    /// x/y unused — they carried the trail's mark style and strength, from
+    /// when a memory was a change to the idle marker rather than a kept note
+    /// name. Retired in place.
     /// z: the sevens knockout's fade width, in the uv of a full-size node
     /// (`Scene::sevens_soft`); w: the melody/bass mark rings' shimmer pattern
     /// (0 off, then one index per pattern — see `Pulse::shader_index`).
@@ -336,9 +329,6 @@ struct GpuInstance {
     /// at that pitch's angle on the shared axis and in that pitch's color
     /// (see `harmonigraph_scene::octaves`).
     cents: f32,
-    /// 1 when the node is on the home (center sevens) sheet: idle home
-    /// nodes draw a blank placeholder ring.
-    home: f32,
     /// Melody/bass marks: `[melody_slots, bass_slots]`, one bit per octave
     /// slot (see `NodeInstance::melody_slots`). Kept as integers rather
     /// than folded into the dead `params.y`/`params.z` floats because the
@@ -349,10 +339,6 @@ struct GpuInstance {
     /// indicator it points at.
     melody_color: [f32; 4],
     bass_color: [f32; 4],
-    /// How strongly the music is remembered at this node, 0..1 (see
-    /// `NodeInstance::trail`). Reaches only the shader's idle-marker
-    /// branch — a memory must never read as a sounding note.
-    visited: f32,
     /// The sevens layer, packed: x = billboard size factor (1 on the home
     /// sheet), y = knockout gutter width in uv units (0 on the home sheet).
     /// See `NodeInstance::scale` / `::gutter`.
@@ -363,10 +349,17 @@ impl GpuInstance {
     const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
         array_stride: std::mem::size_of::<GpuInstance>() as u64,
         step_mode: wgpu::VertexStepMode::Instance,
+        // Locations 5 and 9 are absent, not renumbered: they carried the
+        // home-sheet flag and the trail level, both read only by the idle
+        // marker the nodes no longer draw. The macro names each location and
+        // takes each OFFSET from the sequence, so dropping two entries shrinks
+        // the stride to match the struct without moving the rest off their
+        // numbers — which is what keeps this list and lattice.wgsl's
+        // `Instance` readable side by side.
         attributes: &wgpu::vertex_attr_array![
             0 => Float32x3, 1 => Float32x4, 2 => Float32x3, 3 => Uint32x3,
-            4 => Float32, 5 => Float32, 6 => Uint32x2,
-            7 => Float32x4, 8 => Float32x4, 9 => Float32, 10 => Float32x2
+            4 => Float32, 6 => Uint32x2,
+            7 => Float32x4, 8 => Float32x4, 10 => Float32x2
         ],
     };
 }
@@ -656,11 +649,9 @@ impl LatticeCallback {
                 params: [n.activation, n.melody_level, n.bass_level],
                 octaves: pack_octaves(&n.octaves),
                 cents: n.cents,
-                home: if n.on_home { 1.0 } else { 0.0 },
                 marks: [n.melody_slots, n.bass_slots],
                 melody_color: n.melody_color.to_array(),
                 bass_color: n.bass_color.to_array(),
-                visited: n.trail,
                 sevens: [n.scale, gutter],
         };
 
@@ -672,38 +663,22 @@ impl LatticeCallback {
         // already discards it per fragment, but the billboard is deliberately
         // bigger than the node (QUAD_MARGIN and then some), so the discard is
         // paid a fragment at a time over a quad the disc never reaches — and
-        // an unplayed lattice is almost entirely such nodes. With the default
-        // idle marker (None) and trails off, ALL of them are: a still lattice
-        // then ships its grid and nothing else.
+        // an unplayed lattice is ENTIRELY such nodes: an idle node draws no
+        // marker and carries no trail mark, so a still lattice ships its grid
+        // and nothing else.
         //
-        // The gates are the ones `fs_main`'s idle branch and `idle_marker`
-        // read, in the same order, off the packed instance rather than the
-        // scene node — so this asks the question the shader answers, not a
-        // restatement of it that could drift. Reading the PACKED octave word
-        // is what makes that exact rather than close: an octave level under
-        // half a byte quantizes to zero on the way to the GPU, and a node
-        // dropped for that is a node the shader would have discarded anyway.
-        // The two settings it does NOT read — the idle radius, and the trail
-        // ring's own constants — can only make a kept node paint less, never
-        // make a dropped one paint, so they err toward keeping a quad.
-        let trail_level = |visited: f32| match scene.trail_mark {
-            harmonigraph_scene::TrailMark::Off => 0.0,
-            _ => visited.clamp(0.0, 1.0) * scene.trail_strength.clamp(0.0, 1.0),
-        };
+        // The gates are the ones `fs_main`'s idle branch reads, in the same
+        // order, off the packed instance rather than the scene node — so this
+        // asks the question the shader answers, not a restatement of it that
+        // could drift. Reading the PACKED octave word is what makes that exact
+        // rather than close: an octave level under half a byte quantizes to
+        // zero on the way to the GPU, and a node dropped for that is a node
+        // the shader would have discarded anyway.
         let paints = |g: &GpuInstance| {
-            if g.params[0] > 0.0
+            g.params[0] > 0.0
                 || g.params[1] > 0.0
                 || g.params[2] > 0.0
                 || (g.octaves[0] | g.octaves[1] | g.octaves[2]) != 0
-            {
-                return true;
-            }
-            let trail = trail_level(g.visited);
-            // The idle marker needs a style, and a home sheet or a memory to
-            // show on; the trail's pale ring draws with the marker off.
-            let marked = scene.idle_marker != harmonigraph_scene::IdleMarker::None
-                && (g.home >= 0.5 || trail > 0.0);
-            marked || (scene.trail_mark == harmonigraph_scene::TrailMark::Ring && trail > 0.0)
         };
         // Where a node's own label goes, per node: after everything drawn up
         // to and including that node, counted over the KEPT instances. Not its
@@ -767,20 +742,9 @@ impl LatticeCallback {
                 ],
                 misc3: [scene.core_radius, scene.outer_inner, scene.outer_outer, 0.0],
                 pitch_lut: std::array::from_fn(|k| scene.pitch_lut[k].to_array()),
-                node_idle: scene.node_idle.to_array(),
-                misc4: [
-                    scene.core_solidity,
-                    0.0,
-                    scene.idle_radius,
-                    scene.idle_marker.shader_index() as f32,
-                ],
+                misc4: [scene.core_solidity, 0.0, 0.0, 0.0],
                 misc5: [scene.grid_thickness, 0.0, scene.outer_gap, scene.mark_thickness],
-                misc6: [
-                    scene.trail_mark.shader_index() as f32,
-                    scene.trail_strength,
-                    scene.sevens_soft,
-                    scene.pulse_marks.shader_index() as f32,
-                ],
+                misc6: [0.0, 0.0, scene.sevens_soft, scene.pulse_marks.shader_index() as f32],
                 background: scene.background.to_array(),
                 misc7: [scene.octave_layout.span as f32, scene.octave_layout.center, 0.0, 0.0],
                 misc8: [
@@ -1911,9 +1875,9 @@ impl CallbackTrait for LatticeCallback {
         let screen_size = px_size(1.0);
         // Nothing to draw (matches paint()'s early-out): skip the offscreen
         // target and pass entirely. The EDGES count as much as the nodes —
-        // `from_scene` drops nodes that can paint nothing, so a still lattice
-        // with the idle marker off is exactly a frame of grid and no
-        // instances, and keying this on the instances alone would take the
+        // `from_scene` drops nodes that can paint nothing, and an idle node
+        // paints nothing, so a still lattice is exactly a frame of grid and
+        // no instances — and keying this on the instances alone would take the
         // grid down with them. So do the LABELS, for the same reason from the
         // other end: a hovered idle node paints nothing and is named, so a
         // lattice can be a frame of one label and nothing else.
@@ -2158,10 +2122,15 @@ impl CallbackTrait for LatticeCallback {
             // number from whenever the lattice last drew.
             //
             // The distinction is why GPU_TIME_PENDING exists at all — a frozen
-            // reading and a live one are the same bits otherwise. A lattice
-            // CAN sit here indefinitely: with the grid's alpha at zero, no
-            // idle marker and no trail, a silent lattice ships neither a node
-            // nor an edge.
+            // reading and a live one are the same bits otherwise, and a pane
+            // that encodes no pass can sit here indefinitely rather than for a
+            // frame. A silent lattice already ships no NODE, every idle one
+            // being culled; what it takes to ship no edge either is a window
+            // holding no adjacent pair, which the extent bars do not reach
+            // (they stop at 1). So the state is currently out of a user's
+            // reach and stays guarded on purpose: it is one lattice-sizing
+            // change away, and the symptom would be a stale figure rather
+            // than a crash — the kind nobody reports.
             out.gpu_ms.store(GPU_TIME_PENDING, std::sync::atomic::Ordering::Relaxed);
         }
 
