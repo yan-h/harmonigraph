@@ -783,8 +783,8 @@ impl ViewConfig {
         // The gutter and its fade, which are ONE control (the Nodes tab's
         // Gutter bar) over two numbers: the fade is a distance measured back
         // from the reach, so a fade wider than the reach is a low end off the
-        // bottom of the axis. It has always DRAWN as a fade over the whole
-        // reach — the shader floors it at the node's rim, which is the one part
+        // bottom of the axis. It draws as a fade over the whole reach either
+        // way — the shader floors it at the node's rim, which is the one part
         // that must stay cleared — so holding it there costs the picture
         // nothing and keeps the bar reading out the number the blob holds.
         self.sevens_gutter = finite_or(self.sevens_gutter, fresh.sevens_gutter).clamp(0.0, 0.5);

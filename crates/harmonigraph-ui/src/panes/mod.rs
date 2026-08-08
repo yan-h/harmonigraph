@@ -351,7 +351,7 @@ pub(super) fn param_range_bar(
 /// they are, the fade is the distance between them, and
 /// [`fade_span`](RangeBar::fade_span) paints the fill to match.
 ///
-/// The gestures are exactly the two separate bars this replaces, plus one:
+/// The gestures are everything two bars of their own would give, plus one:
 /// sliding the span moves the reach at a fixed fade, the low end moves the fade
 /// at a fixed reach, and the high end pins where softening STARTS and moves
 /// where it ends. Nothing here ties the fade to the reach — that would make a

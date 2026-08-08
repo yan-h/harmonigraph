@@ -280,13 +280,13 @@ fn a_double_click_on_a_soft_edge_restores_the_fresh_pair() {
 /// outline — open on a pair their own bar can reach: a fade no wider than the
 /// reach it is measured back from.
 ///
-/// The picture never cared. Both shaders floor the fade at the edge it
-/// surrounds, so a fade dialled past its reach has always DRAWN as a fade over
-/// the whole of it — which is exactly why the repair is safe to make, and why
-/// it has to be made here rather than left to the draw path: the two are now
-/// one bar reading out two points on one axis, and an unclamped fade puts its
-/// low end off the bottom of that axis, where the bar would report a number
-/// the blob does not hold.
+/// The picture does not care. Both shaders floor the fade at the edge it
+/// surrounds, so a fade dialled past its reach DRAWS as a fade over the whole
+/// of it — which is exactly why the repair is safe to make, and why it has to
+/// be made here rather than left to the draw path: the two are one bar reading
+/// out two points on one axis, and an unclamped fade puts its low end off the
+/// bottom of that axis, where the bar would report a number the blob does not
+/// hold.
 #[test]
 fn a_blob_naming_a_fade_wider_than_its_edge_opens_on_one_that_fits() {
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);

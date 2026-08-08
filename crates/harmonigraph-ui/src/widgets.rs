@@ -832,8 +832,8 @@ impl<'a> RangeBar<'a> {
     /// track, says the opposite of: it fills exactly the part that is fading
     /// and leaves the solid part bare.
     ///
-    /// Only the paint. The gestures are a range's own, and they are the two
-    /// separate bars this replaces: sliding the span is the reach at a fixed
+    /// Only the paint. The gestures are a range's own, and they are everything
+    /// a bar apiece would give: sliding the span is the reach at a fixed
     /// fade, and the low end is the fade at a fixed reach. Which is the whole
     /// reason this is one CONTROL and not one NUMBER — a fade tied to its
     /// reach as a fraction would make a wider edge always a blurrier one, and
@@ -3317,8 +3317,8 @@ mod tests {
     ///
     /// The state is a hard edge on a [`RangeBar::fade_span`] bar — the reach
     /// and the fade that ends it, with no fade — which is an ordinary setting
-    /// rather than a degenerate one, and the two gestures are the two separate
-    /// bars that pair used to be: widen without softening (slide), and soften
+    /// rather than a degenerate one, and the two gestures are the two a bar
+    /// apiece would give: widen without softening (slide), and soften
     /// (the low end). Every measurement is a tie when the ends coincide, so
     /// without the rule the tie-break hands every press to `Low`, which is
     /// pinned against `hi` and moves nothing at all.
