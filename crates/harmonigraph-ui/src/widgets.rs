@@ -1327,10 +1327,11 @@ fn reset_arc() -> (f32, f32) {
 ///
 /// Every piece wears the shared [`CONTROL_RADIUS`](theme::CONTROL_RADIUS) and
 /// sits on the pane, with no frame drawn round the set: the button is a button
-/// down to its fill and its hover stroke, and the two bands round exactly like
-/// the fill of a [`ValueBar`] above them. A well large enough to hold all three
-/// would ring the control in a border nothing else in a settings pane wears —
-/// see [`gradient_strip`], which is where the alternative was paid for.
+/// down to the table its colors are read out of, and the two bands round
+/// exactly like the fill of a [`ValueBar`] above them. A well large enough to
+/// hold all three would ring the control in a border nothing else in a settings
+/// pane wears — see [`gradient_strip`], which is where the alternative was paid
+/// for.
 ///
 /// Drag the handle to set how far round the circle the range walks; drag the
 /// track to turn the whole circle under it; double-click to reset. Which
@@ -1651,26 +1652,33 @@ impl<'a> SpectrumBar<'a> {
         });
 
         // ---- The flip button ------------------------------------------------
-        // Painted as the theme paints a button and not as a thing of its own:
-        // the same resting and hovered fills, the same corner, and the hover
-        // stroke that every other button in the pane answers a pointer with.
-        // The mark is the only part this widget invents.
-        let (fill, stroke) = if flip.hovered() {
-            (theme::widget_hover(), theme::accent_edge())
+        // Painted out of the theme's own widget visuals, state for state, and
+        // not out of a set of colors chosen to look like them: the fill, the
+        // edge and the corner are read from the same table egui hands a
+        // `Button`, and the state is picked the way `Style::interact` picks it.
+        // Naming the colors here instead is how it drifts — a resting fill
+        // copied correctly and a hovered edge given a scaled width the theme
+        // does not scale, and a pressed state simply forgotten, so the one
+        // control in the pane that does not answer a click is this one.
+        let visuals = if flip.is_pointer_button_down_on() {
+            &ui.style().visuals.widgets.active
+        } else if flip.hovered() {
+            &ui.style().visuals.widgets.hovered
         } else {
-            (theme::widget(), egui::Color32::TRANSPARENT)
+            &ui.style().visuals.widgets.inactive
         };
-        painter.rect_filled(flip_rect, radius, fill);
-        if flip.hovered() {
+        painter.rect_filled(flip_rect, visuals.corner_radius, visuals.weak_bg_fill);
+        if visuals.bg_stroke.width > 0.0 {
             painter.rect_stroke(
                 flip_rect,
-                radius,
-                egui::Stroke::new(scale.max(1.0), stroke),
+                visuals.corner_radius,
+                visuals.bg_stroke,
                 egui::StrokeKind::Inside,
             );
         }
-        let mark = if flip.hovered() { theme::text() } else { theme::text_dim() };
-        flip_mark(painter, flip_rect, mark, scale);
+        // The MARK is what this widget invents; its color is the theme's, the
+        // one a button's own label is drawn in.
+        flip_mark(painter, flip_rect, visuals.fg_stroke.color, scale);
 
         // The cursor says which gesture a press would start before committing
         // to a drag, as a RangeBar's does: the handle resizes the arc, the
