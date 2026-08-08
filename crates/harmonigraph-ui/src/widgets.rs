@@ -1525,6 +1525,332 @@ impl<'a> SpectrumBar<'a> {
     }
 }
 
+/// The `L*` axis a brightness pair stands on, both ends included: 0 is black
+/// and 100 is white, and a gradient is allowed to sit on either — flat, since a
+/// ramp there has nowhere to open.
+const L_STAR_AXIS: (f32, f32) = (0.0, 100.0);
+
+/// How far toward a handle the middle's own grab zone reaches, once the two are
+/// far enough apart to compete for the pointer. Half, so aiming at one can
+/// never land on the other, and each keeps a target that grows with the ramp
+/// rather than a fixed one that a wide ramp would leave stranded in the middle.
+const MIDDLE_REACH_SHARE: f32 = 0.5;
+
+/// The brightness pair a double-click on a [`BrightnessBar`] goes home to.
+///
+/// Off [`ViewConfig::default`] for the reason [`reset_arc`] is, and it is the
+/// same drift being guarded: the composed default is a dimmer middle over a
+/// shallower ramp than `PitchGradient::default()`, and the bar carries no text
+/// entry to dial a lost pair back with.
+fn reset_brightness() -> (f32, f32) {
+    let fresh = ViewConfig::default().pitch_gradient;
+    (fresh.lightness, fresh.lightness_ramp)
+}
+
+/// Which part of a [`BrightnessBar`] a drag took hold of. Decided on the first
+/// frame of the gesture and remembered for the rest of it, as a [`Grab`] is —
+/// and the memory earns more here: an end dragged past the middle swaps which
+/// SIDE of the bar it stands on, so "the handle nearest the pointer" names the
+/// other end by the next frame.
+///
+/// The two ends are named for the pitch they carry rather than for where they
+/// stand: [`Low`](SpreadGrab::Low) is the bottom of the pitch range, which is
+/// the left-hand handle at a positive ramp and the right-hand one at a negative.
+///
+/// (`Default` is derived only to satisfy egui's `remove_temp` bound; the value
+/// is always written by drag-start before anything reads it.)
+#[derive(Clone, Copy, Debug, Default)]
+enum SpreadGrab {
+    #[default]
+    Low,
+    High,
+    /// The middle, sliding the pair along the axis at a fixed ramp: `offset` is
+    /// how far from the centre the pointer took hold and `spread` how wide the
+    /// ramp was at that moment, both fixed for the gesture, as [`Grab::Span`]
+    /// fixes its own two — so a slide that runs the ramp out of room and back
+    /// gets the ramp it started with rather than the one the wall left it.
+    Middle { offset: f32, spread: f32 },
+}
+
+impl SpreadGrab {
+    /// What a drag starting at value `v` takes hold of: the middle if the
+    /// pointer is inside its zone, otherwise whichever end's handle is nearer.
+    fn at(v: f32, (centre, spread): (f32, f32), near: f32) -> SpreadGrab {
+        let half = spread.abs() * 0.5;
+        // A wide ramp divides the space: the zone reaches half way to a handle
+        // and the handles own the rest. A narrow one has nothing to divide —
+        // at a FLAT ramp all three sit on the same point — so the zone takes
+        // its full reach there and the ends are what the rest of the bar
+        // grabs. Without that the middle would be unreachable at exactly the
+        // setting where it is the only thing left to drag.
+        let reach = if half <= near { near } else { half * MIDDLE_REACH_SHARE };
+        if (v - centre).abs() <= reach {
+            return SpreadGrab::Middle { offset: v - centre, spread };
+        }
+        // A tie goes to the low-pitch end, which is again the flat-ramp case:
+        // the two handles stand on the same point and nothing distinguishes
+        // them, and taking the low end means dragging DOWN the axis opens the
+        // ramp the way the picture's default runs — dark at the bottom of the
+        // pitch range.
+        if (v - (centre - spread * 0.5)).abs() <= (v - (centre + spread * 0.5)).abs() {
+            SpreadGrab::Low
+        } else {
+            SpreadGrab::High
+        }
+    }
+
+    /// Where the pair ends up when this grab is dragged to value `v`. Pure, so
+    /// what actually matters — both ends stay on the axis, the middle holds
+    /// still while an end is dragged, and an end crossing the middle inverts
+    /// the ramp rather than stopping against it — is testable without a
+    /// pointer.
+    ///
+    /// The live SPREAD is not a parameter, and its absence is the invariant:
+    /// an end drag derives the spread from the pointer alone, and a middle drag
+    /// from the width its own gesture began at, so neither can read back a
+    /// number it is itself writing. Nor is the live centre, for a middle drag:
+    /// the centre it slides from is folded into `offset` at drag-start.
+    fn apply(self, v: f32, centre: f32, (min, max): (f32, f32)) -> (f32, f32) {
+        match self {
+            // An end moves BOTH handles, symmetrically: a ramp is a spread
+            // about its centre, so the far one mirrors the one under the
+            // pointer. Past the middle the spread changes SIGN rather than
+            // stopping there, which is how the low-pitch end becomes the bright
+            // one — the gesture keeps hold of the end it grabbed, and the two
+            // handles simply trade sides.
+            SpreadGrab::Low | SpreadGrab::High => {
+                let room = (centre - min).min(max - centre);
+                let half = if matches!(self, SpreadGrab::High) { v - centre } else { centre - v };
+                (centre, 2.0 * half.clamp(-room, room))
+            }
+            SpreadGrab::Middle { offset, spread } => {
+                // The middle goes where the pointer says and the ramp closes to
+                // whatever the axis leaves it there, so dragging the picture
+                // toward white flattens the ramp rather than jamming against
+                // the wall. Reading the ramp the GESTURE began with, never the
+                // closed one it just wrote, is what opens it back out on the
+                // way home.
+                //
+                // A [`Grab::Span`] squishes the other way about — the leading
+                // end pins and the trailing one carries on — and the difference
+                // is what the pointer has hold of. There it is a POINT inside a
+                // span, which keeps following while the span deforms around it;
+                // here it is the middle itself, which the bar reads out, so a
+                // middle that lagged the pointer would have the number
+                // disagreeing with the gesture that set it.
+                let centre = (v - offset).clamp(min, max);
+                let room = 2.0 * (centre - min).min(max - centre);
+                (centre, spread.clamp(-room, room))
+            }
+        }
+    }
+}
+
+/// The pair a bar actually writes: whole `L*` on both, which is what its
+/// readout says, and the ramp brought back inside what the rounded centre
+/// leaves room for.
+///
+/// Ordered — the centre first, then the ramp against it — because rounding the
+/// two independently can turn a legal pair illegal: a centre of 89.6 has room
+/// for a ramp of 20.8, and keeping 21 of it at a centre of 90, which has room
+/// for 20, would put the bright end off the axis.
+fn snapped((centre, spread): (f32, f32), (min, max): (f32, f32)) -> (f32, f32) {
+    let centre = centre.round();
+    let widest = 2.0 * (centre - min).min(max - centre);
+    (centre, spread.round().clamp(-widest, widest))
+}
+
+/// The pitch gradient's brightness: where the middle of the pitch range sits on
+/// the `L*` axis, and how far the two ends of the range open either side of it.
+///
+/// Drag the middle to slide the pair along the axis, drag either handle to open
+/// the ramp about that middle — both handles move, which is what makes it a
+/// ramp and not two ends — drag a handle past the middle to invert it, and
+/// double-click to reset.
+///
+/// **One control because the pair is already shaped this way.** The gradient
+/// holds an `L*` at the CENTRE of the pitch range and a SIGNED difference
+/// between its ends, so the ends are `lightness ± ramp/2` and this bar is a
+/// literal picture of the two fields rather than a reparameterization of them.
+/// Two separate bars named the same two numbers and drew neither the range they
+/// compose nor the room the axis has left for it, and cost the pane a row it
+/// does not have (see `spectrum_group`).
+///
+/// **The sign is spelled, because the bar cannot show it.** A ramp and its
+/// negative put the two handles in exactly the same places, so the readout
+/// carries it, the way a [`SpectrumBar`]'s carries the direction of an arc for
+/// the same reason. What the sign MEANS is one row up: the strip under the
+/// spectrum bar draws the gradient in pitch order, so it is the thing that
+/// visibly reverses when the ramp goes negative.
+///
+/// **Both ends stay on the axis at every setting.** That is the bar's own
+/// geometry — a handle off the track is not a value it can express — and
+/// [`PitchGradient::sanitized`] holds the same line for a pair that arrives
+/// from a hand-edited file instead of through a gesture.
+/// `the_bar_can_only_reach_pairs_sanitize_leaves_alone` is what keeps the two
+/// from drifting into disagreeing about which pairs are legal.
+pub struct BrightnessBar<'a> {
+    gradient: &'a mut PitchGradient,
+    label: &'a str,
+}
+
+impl<'a> BrightnessBar<'a> {
+    pub fn new(gradient: &'a mut PitchGradient, label: &'a str) -> Self {
+        BrightnessBar { gradient, label }
+    }
+
+    /// The centre and the ramp, in that order, as the row reads them out. Both
+    /// whole, since that is what a gesture writes, and the ramp signed because
+    /// its sign is half of what it says.
+    fn readout((centre, spread): (f32, f32)) -> String {
+        format!("{centre:.0}  {spread:+.0}")
+    }
+
+    pub fn show(self, ui: &mut Ui) -> Response {
+        let scale = theme::ui_scale(ui.ctx());
+        let width = bar_width(ui);
+        let (rect, mut response) =
+            ui.allocate_exact_size(Vec2::new(width, BAR_HEIGHT * scale), Sense::click_and_drag());
+        let (min, max) = L_STAR_AXIS;
+        // Values live on an inset track, so both limits are places a handle can
+        // stand rather than edges it merges into. See HANDLE_INSET.
+        let track = rect.shrink2(Vec2::new(HANDLE_INSET * scale, 0.0));
+        let x_of =
+            |v: f32| track.left() + track.width() * ((v - min) / (max - min)).clamp(0.0, 1.0);
+        let value_at = |x: f32| {
+            min + ((x - track.left()) / track.width().max(1.0)).clamp(0.0, 1.0) * (max - min)
+        };
+        let pair = |g: PitchGradient| (g.lightness, g.lightness_ramp);
+
+        // ---- Interaction ----------------------------------------------------
+        let grab_id = response.id.with("spread_grab");
+        let near = GRAB_PX / track.width().max(1.0) * (max - min);
+        // Reset rather than text entry, the bargain a [`RangeBar`] makes: a bar
+        // holding two numbers has no single value to type into it.
+        if response.double_clicked() {
+            (self.gradient.lightness, self.gradient.lightness_ramp) = reset_brightness();
+            response.mark_changed();
+        }
+        if response.dragged() {
+            if let Some(p) = response.interact_pointer_pos() {
+                let v = value_at(p.x);
+                let aimed = pair(self.gradient.sanitized());
+                // Read and write as separate statements: nesting a `data_mut`
+                // inside a `data` closure takes the context lock twice.
+                let stored = ui.data(|d| d.get_temp::<SpreadGrab>(grab_id));
+                let grab = match stored {
+                    Some(grab) => grab,
+                    None => {
+                        let grab = SpreadGrab::at(v, aimed, near);
+                        ui.data_mut(|d| d.insert_temp(grab_id, grab));
+                        grab
+                    }
+                };
+                let next = snapped(grab.apply(v, aimed.0, L_STAR_AXIS), L_STAR_AXIS);
+                if next != pair(*self.gradient) {
+                    (self.gradient.lightness, self.gradient.lightness_ramp) = next;
+                    response.mark_changed();
+                }
+            }
+        }
+        if response.drag_stopped() {
+            ui.data_mut(|d| d.remove_temp::<SpreadGrab>(grab_id));
+        }
+
+        // ---- Paint ----------------------------------------------------------
+        // The pair read BACK, not the one the gesture was aimed at: a drag has
+        // just written it, and painting the earlier value leaves the handles a
+        // whole frame behind the pointer. Every other bar here re-reads for the
+        // same reason.
+        let (centre, spread) = pair(self.gradient.sanitized());
+        let (lo, hi) = (centre - spread.abs() * 0.5, centre + spread.abs() * 0.5);
+        let radius = CornerRadius::same(bar_radius(scale));
+        let painter = ui.painter();
+        painter.rect_filled(rect, radius, theme::well());
+
+        let fill_color = if response.dragged() {
+            theme::accent_fill_drag()
+        } else if response.hovered() {
+            theme::accent_fill_hover()
+        } else {
+            theme::accent_fill()
+        };
+        // The stretch of the axis the picture spends, which is what the pair
+        // MEANS: a flat ramp fills nothing, and that is the honest drawing of
+        // brightness spent on pitch.
+        let (lx, hx) = (x_of(lo), x_of(hi));
+        let mut span = rect;
+        span.min.x = lx;
+        span.max.x = hx;
+        painter.rect_filled(span, radius, fill_color);
+
+        // Name and readout exactly as a ValueBar lays them out — the row is one
+        // — with the same reserve trick: the width kept clear for the numbers
+        // is measured off a pair that never changes rather than off the one
+        // currently in the bar, so the name cannot re-elide mid-drag. A whole
+        // axis of ramp at a middle of white is not a pair any setting reaches,
+        // and does not need to be: the reserve wants an upper bound that holds
+        // still, and this is the widest string either number can spell.
+        let text_color = if response.hovered() || response.dragged() {
+            theme::text()
+        } else {
+            theme::text_dim()
+        };
+        let mono = TextStyle::Monospace.resolve(ui.style());
+        let value =
+            painter.layout_no_wrap(Self::readout((centre, spread)), mono.clone(), theme::text());
+        let reserve = painter
+            .layout_no_wrap(Self::readout((max, max - min)), mono, theme::text())
+            .size()
+            .x;
+        let body = TextStyle::Body.resolve(ui.style());
+        let mut job = egui::text::LayoutJob::simple_singleline(
+            self.label.to_owned(),
+            body,
+            text_color,
+        );
+        let text_pad = BAR_TEXT_PAD * scale;
+        job.wrap.max_width =
+            (rect.width() - 2.0 * text_pad - BAR_LABEL_GAP * scale - reserve).max(0.0);
+        job.wrap.max_rows = 1;
+        job.wrap.overflow_character = Some('\u{2026}');
+        let label = painter.layout_job(job);
+        let centered =
+            |galley: &egui::Galley, x: f32| egui::pos2(x, rect.center().y - galley.size().y * 0.5);
+        painter.galley(centered(&label, rect.left() + text_pad), label, text_color);
+        painter.galley(
+            centered(&value, rect.right() - text_pad - value.size().x),
+            value,
+            theme::text(),
+        );
+
+        // The handles on top of the text, a RangeBar's bargain: they are the
+        // part you operate, and a digit sliding under one beats a handle
+        // disappearing behind a digit. At a flat ramp the two coincide, and one
+        // thumb standing in the middle of an empty track is the right picture —
+        // there is one place the whole range is.
+        let handle_w = HANDLE_W * scale;
+        for x in [lx, hx] {
+            painter.rect_filled(
+                egui::Rect::from_center_size(
+                    egui::pos2(x, rect.center().y),
+                    Vec2::new(handle_w, rect.height() - 3.0 * scale),
+                ),
+                CornerRadius::same(theme::scaled_points(2, scale)),
+                theme::text(),
+            );
+        }
+
+        // The cursor says which gesture a press would start before committing
+        // to it: a handle opens the ramp, the middle picks the whole thing up.
+        match response.hover_pos().map(|p| SpreadGrab::at(value_at(p.x), (centre, spread), near)) {
+            Some(SpreadGrab::Middle { .. }) => response.on_hover_cursor(egui::CursorIcon::Grab),
+            Some(_) => response.on_hover_cursor(egui::CursorIcon::ResizeHorizontal),
+            None => response,
+        }
+    }
+}
+
 /// A band of `segments + 1` colored columns across `rect`, each column's color
 /// taken from `color` at its own index and at its position along the band (0 at
 /// the left edge, 1 at the right), and interpolated between columns.
@@ -3171,5 +3497,323 @@ mod tests {
             (5, 1),
             "a press just outside the handle moved the count"
         );
+    }
+
+    /// A reach in value units wide enough to reach a handle from well away
+    /// from it, standing in for the `GRAB_PX` a real bar converts.
+    const NEAR: f32 = 4.0;
+
+    /// Dragging a handle opens the ramp EITHER SIDE of a middle that does not
+    /// move: that is the whole of what "symmetric" buys, and it is why one bar
+    /// can carry both numbers. The pointer lands on the end it grabbed, so the
+    /// ramp is twice the distance out.
+    #[test]
+    fn a_dragged_end_opens_the_ramp_about_a_held_middle() {
+        assert_eq!(
+            SpreadGrab::High.apply(70.0, 50.0, L_STAR_AXIS),
+            (50.0, 40.0),
+            "the high-pitch end at L* 70 about a middle of 50 is a ramp of 40",
+        );
+        assert_eq!(
+            SpreadGrab::Low.apply(30.0, 50.0, L_STAR_AXIS),
+            (50.0, 40.0),
+            "the low end reaching the same distance the other way says the same ramp",
+        );
+    }
+
+    /// Past the middle the ramp INVERTS rather than stopping there, which is
+    /// the one thing a pair of handles cannot say by where they stand: the
+    /// gesture keeps hold of the end it grabbed, so the two simply trade sides
+    /// and the sign follows the pointer through zero without a discontinuity.
+    #[test]
+    fn an_end_dragged_past_the_middle_inverts_the_ramp() {
+        let walk: Vec<f32> = [60.0, 50.0, 40.0]
+            .into_iter()
+            .map(|v| SpreadGrab::Low.apply(v, 50.0, L_STAR_AXIS).1)
+            .collect();
+        assert_eq!(walk, vec![-20.0, 0.0, 20.0], "the low end crossing the middle went {walk:?}");
+    }
+
+    /// The ramp stops where the AXIS does, and the room it has is what the
+    /// middle leaves — the whole axis at the centre of it, nothing at either
+    /// end. A ramp past that would put an end off the bar, with the picture
+    /// drawing a plateau the numbers do not mention.
+    #[test]
+    fn the_ramp_stops_where_the_axis_does() {
+        assert_eq!(SpreadGrab::High.apply(500.0, 50.0, L_STAR_AXIS).1, 100.0, "at the middle");
+        assert_eq!(SpreadGrab::High.apply(500.0, 90.0, L_STAR_AXIS).1, 20.0, "ten from the top");
+        // The same room the other way about: the low-pitch end dragged UP is
+        // the inverted picture, and it runs out at the same ten points.
+        assert_eq!(SpreadGrab::Low.apply(500.0, 90.0, L_STAR_AXIS).1, -20.0, "and inverted");
+        assert_eq!(SpreadGrab::High.apply(500.0, 100.0, L_STAR_AXIS).1, 0.0, "white holds none");
+    }
+
+    /// Sliding the middle carries the ramp along at the width the gesture
+    /// began with, so making the picture brighter is one gesture and does not
+    /// quietly restyle how much brightness the pitch range spends.
+    #[test]
+    fn a_slid_middle_carries_the_ramp_at_its_grabbed_width() {
+        let grab = SpreadGrab::Middle { offset: 4.0, spread: 40.0 };
+        assert_eq!(grab.apply(64.0, 50.0, L_STAR_AXIS), (60.0, 40.0));
+        // And a negative ramp stays negative: its SIGN is not the middle's to
+        // change, and a slide that flipped the picture would be a surprise
+        // nothing on the bar announced.
+        let inverted = SpreadGrab::Middle { offset: 4.0, spread: -40.0 };
+        assert_eq!(inverted.apply(64.0, 50.0, L_STAR_AXIS), (60.0, -40.0));
+    }
+
+    /// Slid into an end the ramp closes rather than the drag jamming: the
+    /// middle stays under the pointer and keeps whatever room is left, so
+    /// brightness dragged at white flattens instead of refusing to move. And it
+    /// opens back out on the way home, because it reads the ramp its own
+    /// gesture began at and never the closed one it just wrote — the invariant
+    /// a [`Grab::Span`] keeps for the same reason.
+    #[test]
+    fn a_slid_middle_closes_the_ramp_against_the_end_it_meets() {
+        // Grabbed dead centre of a 40-point ramp at L* 50.
+        let grab = SpreadGrab::Middle { offset: 0.0, spread: 40.0 };
+        assert_eq!(grab.apply(90.0, 50.0, L_STAR_AXIS), (90.0, 20.0), "ten from white leaves 20");
+        assert_eq!(grab.apply(100.0, 50.0, L_STAR_AXIS), (100.0, 0.0), "at white nothing is left");
+        // Already closed, same pointer: the answer must not creep further.
+        assert_eq!(grab.apply(90.0, 90.0, L_STAR_AXIS), (90.0, 20.0));
+        // And back down the axis, the ramp the gesture started with returns.
+        assert_eq!(grab.apply(50.0, 90.0, L_STAR_AXIS), (50.0, 40.0));
+    }
+
+    /// At a FLAT ramp all three grabs stand on the same point, and the middle
+    /// is the one that has to win: it is the only thing left to drag, and a
+    /// bar whose brightness could not be moved at exactly the isoluminant
+    /// setting would strand anyone who dialled their way into it.
+    ///
+    /// Away from that point the ends take over, and a tie goes to the LOW
+    /// end — so dragging down the axis opens the ramp the way the picture's
+    /// default runs, dark at the bottom of the pitch range.
+    #[test]
+    fn the_middle_stays_grabbable_at_a_flat_ramp() {
+        assert!(matches!(SpreadGrab::at(50.0, (50.0, 0.0), NEAR), SpreadGrab::Middle { .. }));
+        let out = SpreadGrab::at(20.0, (50.0, 0.0), NEAR);
+        assert!(matches!(out, SpreadGrab::Low), "a press out on the track took {out:?}");
+        assert_eq!(out.apply(20.0, 50.0, L_STAR_AXIS).1, 60.0, "and it opens dark-at-the-bottom");
+    }
+
+    /// A wide ramp divides the bar between the three: the handles keep a
+    /// target that grows with the ramp, and the middle keeps the inner half.
+    /// Neither can be reached by aiming at the other, which is what stops a
+    /// press meant for a handle from picking the whole picture up instead.
+    #[test]
+    fn a_wide_ramp_leaves_both_the_handles_and_the_middle_reachable() {
+        let wide = (50.0, 80.0);
+        assert!(matches!(SpreadGrab::at(10.0, wide, NEAR), SpreadGrab::Low), "the low handle");
+        assert!(matches!(SpreadGrab::at(90.0, wide, NEAR), SpreadGrab::High), "the high handle");
+        assert!(matches!(SpreadGrab::at(50.0, wide, NEAR), SpreadGrab::Middle { .. }), "middle");
+        // The zone reaches half way out, so the boundary sits 20 points from
+        // the centre of an 80-point ramp — not at the flat NEAR, which would
+        // leave the middle a pinprick under a wide ramp.
+        assert!(matches!(SpreadGrab::at(69.0, wide, NEAR), SpreadGrab::Middle { .. }), "inside");
+        assert!(matches!(SpreadGrab::at(71.0, wide, NEAR), SpreadGrab::High), "past the boundary");
+    }
+
+    /// The pair the bar writes is whole on both numbers, which is what its
+    /// readout shows — and the ramp is rounded against the ROUNDED middle, or
+    /// the rounding itself would push an end off the axis.
+    #[test]
+    fn the_pair_a_bar_writes_is_whole_and_still_on_the_axis() {
+        assert_eq!(snapped((63.6, 40.4), L_STAR_AXIS), (64.0, 40.0));
+        // A middle of 89.6 has room for 20.8 of ramp; rounded to 90 it has 20.
+        assert_eq!(
+            snapped((89.6, 20.8), L_STAR_AXIS),
+            (90.0, 20.0),
+            "rounding the two independently would keep 21 at a middle with room for 20",
+        );
+    }
+
+    /// What the bar can reach is exactly what `sanitized` leaves alone. The two
+    /// say the same thing in different places — the bar because a handle off
+    /// the track is not a value it can express, the gradient because a pair out
+    /// of a hand-edited file never came through a bar — and nothing but this
+    /// stops them drifting into disagreeing about which pairs are legal. A bar
+    /// that could write a pair sanitize pulls in would draw one picture and
+    /// hold another.
+    #[test]
+    fn the_bar_can_only_reach_pairs_sanitize_leaves_alone() {
+        let mut checked = 0;
+        for centre in [0.0f32, 1.0, 12.5, 50.0, 63.6, 89.6, 99.0, 100.0] {
+            for spread in [0.0f32, 7.0, -33.0, 100.0, -100.0] {
+                // Every grab the bar can settle on, against pointer positions
+                // running the whole axis and a good way off both ends of it —
+                // a real drag leaves the bar, and `value_at` clamps rather than
+                // refusing, so those are positions the arithmetic really sees.
+                let grabs = [
+                    SpreadGrab::Low,
+                    SpreadGrab::High,
+                    SpreadGrab::Middle { offset: 0.0, spread },
+                    SpreadGrab::Middle { offset: 13.5, spread },
+                    SpreadGrab::Middle { offset: -13.5, spread },
+                ];
+                for grab in grabs {
+                    for step in -20..=120 {
+                        let v = step as f32;
+                        let (l, r) = snapped(grab.apply(v, centre, L_STAR_AXIS), L_STAR_AXIS);
+                        let written =
+                            PitchGradient { lightness: l, lightness_ramp: r, ..Default::default() };
+                        assert_eq!(
+                            written.sanitized(),
+                            written,
+                            "the bar wrote a middle of {l} and a ramp of {r}, which sanitize \
+                             does not accept as it stands",
+                        );
+                        checked += 1;
+                    }
+                }
+            }
+        }
+        assert!(checked > 10_000, "only {checked} pairs — the sweep stopped covering the bar");
+    }
+
+    /// Where a double-click lands has to BE the pair a fresh view opens with,
+    /// for the reason the wheel's reset does: the bar carries no text entry, so
+    /// a reset that missed would leave the shipped look unreachable by gesture.
+    #[test]
+    fn a_brightness_double_click_goes_home_to_the_pair_a_fresh_view_opens_with() {
+        let fresh = ViewConfig::default().pitch_gradient;
+        assert_eq!(reset_brightness(), (fresh.lightness, fresh.lightness_ramp));
+        assert_ne!(
+            reset_brightness(),
+            (PitchGradient::default().lightness, PitchGradient::default().lightness_ramp),
+            "the type's own default and the composed one agree today, so this reset \
+             cannot tell whether it is reading the one the plugin actually opens on",
+        );
+    }
+
+    /// Paint one brightness bar across a 300pt row and return what it emitted.
+    fn paint_brightness_bar((centre, spread): (f32, f32)) -> Vec<egui::Shape> {
+        let ctx = egui::Context::default();
+        crate::theme::apply_theme(&ctx);
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(300.0, 100.0));
+        let mut g = PitchGradient {
+            lightness: centre,
+            lightness_ramp: spread,
+            ..PitchGradient::default()
+        };
+        let out = ctx.run_ui(
+            egui::RawInput { screen_rect: Some(screen), ..Default::default() },
+            |ui| {
+                BrightnessBar::new(&mut g, "Brightness").show(ui);
+            },
+        );
+        out.shapes.into_iter().map(|s| s.shape).collect()
+    }
+
+    /// The bar draws the pair it holds: a handle at each end of the ramp, on an
+    /// axis running black to white across the track. That is the whole claim
+    /// the control makes, and handles standing anywhere else would be a picture
+    /// of some other pair.
+    ///
+    /// The inverted case is here because it is the one the picture CANNOT tell
+    /// apart: a ramp and its negative put the two handles in exactly the same
+    /// places, which is why the readout spells the sign out.
+    #[test]
+    fn a_brightness_bar_stands_its_handles_where_its_numbers_say() {
+        for spread in [44.0f32, -44.0] {
+            let shapes = paint_brightness_bar((64.0, spread));
+            let bar = filled_rects(&shapes)[0].0;
+            let hs = handles(&shapes);
+            assert_eq!(hs.len(), 2, "a ramp of {spread} did not paint two handles");
+            // The track a handle travels: the bar less the inset at either end.
+            let track = bar.shrink2(Vec2::new(HANDLE_INSET, 0.0));
+            for (want, h) in [(64.0 - 22.0, hs[0]), (64.0 + 22.0, hs[1])] {
+                let at = track.left() + track.width() * (want / 100.0);
+                assert!(
+                    (h.center().x - at).abs() < 0.5,
+                    "a ramp of {spread} puts an end at L* {want}, which is {at} across, \
+                     and the handle stands at {}",
+                    h.center().x,
+                );
+            }
+        }
+        // A flat ramp is one handle's worth of picture in the middle of an
+        // empty track: no brightness is spent on pitch, and there is exactly
+        // one place the whole range is.
+        let hs = handles(&paint_brightness_bar((30.0, 0.0)));
+        assert_eq!(hs[0], hs[1], "a flat ramp drew its two handles apart");
+    }
+
+    /// Both numbers, and the sign among them, since the bar cannot show which
+    /// end of the PITCH range is the bright one — the handles stand in the same
+    /// two places either way.
+    #[test]
+    fn a_brightness_bar_reads_out_the_pair_it_holds() {
+        let texts: Vec<String> =
+            text_boxes(&paint_brightness_bar((64.0, -44.0))).into_iter().map(|(_, s)| s).collect();
+        assert_eq!(texts.len(), 2, "a name and one readout, not {texts:?}");
+        assert_eq!(texts[0], "Brightness");
+        assert_eq!(texts[1], "64  -44");
+    }
+
+    /// Drag a brightness bar across a 300pt row, from `from` to `to` as
+    /// fractions of its width, and answer the pair it wrote. A real gesture
+    /// through a real context, for the reason the range bar's is: what a
+    /// gesture has hold of is decided on the first frame egui calls the press a
+    /// drag and then remembered in context data, so a synthetic call exercises
+    /// neither the decision nor the memory.
+    fn drag_brightness_bar(pair: (f32, f32), (from, to): (f32, f32)) -> (f32, f32) {
+        let ctx = egui::Context::default();
+        crate::theme::apply_theme(&ctx);
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(300.0, 100.0));
+        let mut g = PitchGradient {
+            lightness: pair.0,
+            lightness_ramp: pair.1,
+            ..PitchGradient::default()
+        };
+        let bar = std::cell::Cell::new(egui::Rect::NOTHING);
+        let mut t = 0.0;
+        let mut frame = |g: &mut PitchGradient, events: Vec<egui::Event>| {
+            t += 1.0 / 60.0;
+            let _ = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    time: Some(t),
+                    events,
+                    ..Default::default()
+                },
+                |ui| bar.set(BrightnessBar::new(g, "Brightness").show(ui).rect),
+            );
+        };
+        // A frame with no input first: egui resolves the pointer against the
+        // previous pass's rects, so a press cannot land on a bar that has never
+        // been drawn.
+        frame(&mut g, vec![]);
+        let rect = bar.get();
+        let at = |x: f32| egui::pos2(rect.left() + rect.width() * x, rect.center().y);
+        frame(&mut g, vec![egui::Event::PointerMoved(at(from))]);
+        frame(&mut g, vec![egui::Event::PointerMoved(at(from)), press(at(from), true)]);
+        // A step clear of egui's drag threshold first, then the rest of the
+        // way: the grab is settled on the first LIVE frame, which a gesture
+        // that jumps straight to its target would settle at the target.
+        let step = 12.0 / rect.width() * (to - from).signum();
+        frame(&mut g, vec![egui::Event::PointerMoved(at(from + step))]);
+        frame(&mut g, vec![egui::Event::PointerMoved(at(to))]);
+        (g.lightness, g.lightness_ramp)
+    }
+
+    /// The wiring, once, through a real pointer: a press on a handle opens the
+    /// ramp and leaves the middle where it was, and a press in the middle
+    /// slides the pair without restyling the ramp. Both land on whole numbers,
+    /// which is what the readout claims they are.
+    #[test]
+    fn a_real_drag_on_a_brightness_bar_keeps_the_gesture_it_started() {
+        // The default pair sits at 64 with a 44-point ramp, so its handles are
+        // at L* 42 and 86 — a press at 0.86 of the way across is the bright
+        // one, dragged out to the top of the axis.
+        let (centre, ramp) = drag_brightness_bar((64.0, 44.0), (0.86, 1.0));
+        assert_eq!(centre, 64.0, "an end drag moved the middle");
+        assert_eq!(ramp, 72.0, "the ramp opened to what a middle of 64 leaves, not {ramp}");
+
+        // And the middle, from between the handles: brighter by a quarter of
+        // the axis, carrying its ramp.
+        let (centre, ramp) = drag_brightness_bar((50.0, 40.0), (0.5, 0.75));
+        assert!(centre > 60.0, "the middle barely moved, landing at {centre}");
+        assert_eq!(ramp, 40.0, "the slide restyled the ramp to {ramp}");
+        assert_eq!(centre, centre.round(), "{centre} is not a whole L*");
     }
 }

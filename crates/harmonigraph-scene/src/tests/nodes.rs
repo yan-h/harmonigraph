@@ -33,8 +33,12 @@ fn luminance(c: glam::Vec4) -> f32 {
 /// A spread of gradients wide enough to cover what the controls can reach:
 /// each knob at both limits and somewhere in between, including the
 /// degenerate settings — no hue arc at all, a full turn, no color, all the
-/// color there is, and a ramp steeper than the `L*` axis so it flattens
-/// against black and white.
+/// color there is, and a ramp steeper than the middle it opens about leaves
+/// room for.
+///
+/// That last one is written RAW and pulled in by `sanitized`, which every
+/// consumer of a gradient applies, so the sweep covers the clamp itself as well
+/// as the settings either side of it.
 ///
 /// `L*` 0 and 100 are in the list rather than only reachable through a steep
 /// ramp, and the difference is what a FLAT ramp there can be asked: the two
@@ -62,6 +66,44 @@ fn gradient_sweep() -> Vec<PitchGradient> {
         }
     }
     out
+}
+
+/// Both ends of the curve are `L*` the axis actually holds, at every setting a
+/// control or a hand-edited file can name — and they are the pair's OWN ends,
+/// half the ramp either side of the middle, rather than a clamp's idea of them.
+///
+/// The failure this is against is a plateau. A ramp steeper than its middle
+/// leaves room for runs off the axis and flattens there, which draws part of
+/// the pitch range at one brightness while the pair goes on reading as a
+/// straight ramp — a picture and a pair of numbers saying different things.
+/// It is also what the Brightness bar cannot express: it stands its two handles
+/// at exactly these ends, and an end off the axis is an end off the bar.
+#[test]
+fn neither_end_of_the_curve_leaves_the_l_star_axis() {
+    for lightness in [-50.0, 0.0, 1.0, 42.0, 64.0, 99.0, 100.0, 150.0, f32::NAN] {
+        for lightness_ramp in [0.0, 12.0, -12.0, 44.0, 100.0, -100.0, 400.0, -400.0, f32::NAN] {
+            let raw = PitchGradient { lightness, lightness_ramp, ..PitchGradient::default() };
+            let sane = raw.sanitized();
+            assert_eq!(sane.sanitized(), sane, "{raw:?} sanitizes to a pair sanitize rejects");
+            for t in [0.0, 1.0] {
+                let end = sane.lightness_and_hue(t).0;
+                assert!(
+                    (0.0..=100.0).contains(&end),
+                    "{raw:?} puts the end at t {t} on L* {end}, off the axis",
+                );
+                // The clamp inside `lightness_and_hue` is a guard against the
+                // arithmetic's own rounding and nothing else, so what it
+                // returns has to be the straight ramp to well inside a point
+                // of `L*` — a plateau would be points out, not fractions.
+                let want = f64::from(sane.lightness) + (t - 0.5) * f64::from(sane.lightness_ramp);
+                assert!(
+                    (end - want).abs() < 1e-4,
+                    "{raw:?} draws L* {end} at t {t} where its pair names {want}: the ramp \
+                     flattens against the axis instead of ending on it",
+                );
+            }
+        }
+    }
 }
 
 /// The promise that lets all four knobs be free: whatever they are set to,
