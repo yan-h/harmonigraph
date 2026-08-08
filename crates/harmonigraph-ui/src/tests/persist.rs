@@ -508,16 +508,18 @@ fn corrupt_persist_is_ignored() {
 ///
 /// The variant case is the one worth a test of its own, because it is the one
 /// this build can still meet in the wild: no code reads an older spelling any
-/// more, so a blob naming a palette, orientation or sweep mode that has since
-/// been dropped fails the parse — and it fails BEFORE the version is read, so
-/// the floor cannot catch it however high it is set.
+/// more, so a blob naming an orientation or sweep mode that has since been
+/// dropped fails the parse — and it fails BEFORE the version is read, so the
+/// floor cannot catch it however high it is set.
 #[test]
 fn a_refused_blob_says_why() {
-    // A dropped enum variant, spliced where a live one sat.
+    // A dropped enum variant, spliced where a live one sat. The orientation,
+    // the heatmap's look being six numbers rather than an enum — and a number
+    // out of range is repaired rather than refused, which is the other test.
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
-    state.spectrum_config.spectrogram_color = crate::SpectrogramColor::Aurora;
+    state.spectrum_config.orientation = crate::SpectralOrientation::Left;
     let saved = state.save_persist();
-    let dropped = saved.replace("spectrogram_color:Aurora", "spectrogram_color:Heat");
+    let dropped = saved.replace("orientation:Left", "orientation:Diagonal");
     assert_ne!(dropped, saved, "the splice must land for this to test anything");
 
     let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
@@ -551,7 +553,16 @@ fn spectrum_config_round_trips_through_persist() {
     state.spectrum_config.window = SpectrumWindow::Precise;
     state.spectrum_config.low_midi = 40.5;
     state.spectrum_config.show_spectrogram = true;
-    state.spectrum_config.spectrogram_color = crate::SpectrogramColor::Aurora;
+    // A gradient no preset writes, so what round-trips is the six numbers and
+    // not a name that happens to rebuild them.
+    state.spectrum_config.spectrogram_gradient = harmonigraph_scene::Gradient {
+        hue_start: 137.5,
+        hue_span: -85.25,
+        lightness: 44.0,
+        lightness_ramp: 71.5,
+        chroma: 0.375,
+        chroma_ramp: -0.25,
+    };
     let saved = state.save_persist();
 
     let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
@@ -563,7 +574,11 @@ fn spectrum_config_round_trips_through_persist() {
     // have expressed at all.
     assert_eq!(restored.spectrum_config.low_midi, 40.5);
     assert!(restored.spectrum_config.show_spectrogram);
-    assert_eq!(restored.spectrum_config.spectrogram_color, crate::SpectrogramColor::Aurora);
+    assert_eq!(
+        restored.spectrum_config.spectrogram_gradient,
+        state.spectrum_config.spectrogram_gradient,
+        "every knob of the heatmap's gradient, not just the ones a preset moves",
+    );
 }
 
 /// A range saved while the axis ran MIDI 12..132 (16 Hz to 16.7 kHz) starts
@@ -657,14 +672,21 @@ fn a_spliced_blob_survives_both_doors(anchor: &str, spliced: &str) {
 /// stored precision was being judged by eye; the other five are the heatmap's
 /// opacity, contrast and private dB window, which every project saved before
 /// they were dropped still carries.
+///
+/// `spectrogram_color` rides with them, and it is the case that makes this test
+/// worth more than a sweep of numbers: it is an ENUM TOKEN, so a reader strict
+/// about keys it has no field for would need a type to parse `Aurora` into, and
+/// there is none any more — the heatmap's look is a gradient now. Every project
+/// saved before that carries the key.
 #[test]
 fn a_persist_blob_carrying_a_since_removed_field_still_loads() {
     // Put the departed fields back, exactly as those builds wrote them.
     a_spliced_blob_survives_both_doors(
-        "spectrogram_color:",
-        "spectrogram_fine_levels:true,spectrogram_opacity:0.85,\
-         spectrogram_own_range:true,spectrogram_floor_db:-60.0,\
-         spectrogram_ceiling_db:-20.0,spectrogram_gamma:1.6,",
+        "spectrogram_gradient:",
+        "spectrogram_color:Aurora,spectrogram_fine_levels:true,\
+         spectrogram_opacity:0.85,spectrogram_own_range:true,\
+         spectrogram_floor_db:-60.0,spectrogram_ceiling_db:-20.0,\
+         spectrogram_gamma:1.6,",
     );
 }
 
@@ -1037,6 +1059,53 @@ fn a_blob_with_a_nonsense_pitch_range_loads_at_the_design_range() {
         } else {
             assert_eq!(low, 40.5, "the good end still loads");
         }
+    }
+}
+
+/// The heatmap's gradient comes back drawable, the third field on this door
+/// after the pitch range and the UI scale — and the one whose repair is easiest
+/// to leave out, `Gradient` having a `sanitized` of its own that the DRAW path
+/// calls anyway.
+///
+/// That is exactly why it needs a test rather than an argument. The picture is
+/// right either way, because `with_lut` sanitizes at the table and the bars
+/// sanitize before they paint; what is wrong without the repair is that the
+/// FILE keeps a pair the picture is not at, indefinitely, and nothing rewrites
+/// it until someone drags that bar. CLAUDE.md is the line this is held to: "The
+/// value on screen must still be the value the file holds."
+///
+/// Two shapes, because they fail differently. A ramp wider than its middle
+/// leaves is a legal pair of floats that names an illegal picture — sanitize
+/// pulls it in. A NaN is not a number at all, and it is the one that would ride
+/// into a color conversion and out into the instance buffer unannounced.
+#[test]
+fn a_blob_with_a_nonsense_heatmap_gradient_loads_at_a_drawable_one() {
+    for (key, broken) in [("lightness", "5.0"), ("chroma", "NaN")] {
+        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        // A gradient off the defaults, and one sanitize leaves alone, so the
+        // splice has something to name and the untouched knobs prove they
+        // survived rather than matching a fresh install by luck.
+        state.spectrum_config.spectrogram_gradient = harmonigraph_scene::Gradient {
+            hue_start: 137.5,
+            hue_span: -85.25,
+            lightness: 44.0,
+            lightness_ramp: 71.5,
+            chroma: 0.375,
+            chroma_ramp: -0.25,
+        };
+        let saved = state.save_persist();
+        let was = if key == "lightness" { "44.0" } else { "0.375" };
+        let spliced = saved.replacen(&format!("{key}:{was}"), &format!("{key}:{broken}"), 1);
+        assert_ne!(spliced, saved, "the {key} splice must land for this to test anything");
+
+        let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+        restored.load_persist(&spliced);
+        let g = restored.spectrum_config.spectrogram_gradient;
+        assert_eq!(g.sanitized(), g, "{key}:{broken} left the file holding {g:?}");
+        // And the knobs the splice did not touch keep what the blob said, so
+        // the repair cannot pass by resetting the whole gradient.
+        assert_eq!(g.hue_start, 137.5, "{key}:{broken}: an untouched knob was reset");
+        assert_eq!(g.hue_span, -85.25, "{key}:{broken}: an untouched knob was reset");
     }
 }
 

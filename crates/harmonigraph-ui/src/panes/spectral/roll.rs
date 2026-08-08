@@ -79,12 +79,12 @@ const MIN_LENGTH_DEVICE_PX: f32 = 2.0;
 /// The light edge drawn along the spectrum's profile, at `cfg.keyline`
 /// strength — `None` when the setting is off or too faint to be worth a shape.
 ///
-/// The curve's own colors come from the spectrogram palette, so where it is
-/// quiet it is drawn in that palette's dark end against the pane's dark
+/// The curve takes its colors from the spectrogram gradient, so where it is
+/// quiet it is drawn at that gradient's dark end against the pane's dark
 /// background, with no edge, and the shape stops existing. A light rim gives
 /// it an edge to be seen by. It is a setting because how much is right depends
-/// entirely on which palette is in play — Mono runs to white and swallows a rim
-/// the even ramps leave standing.
+/// entirely on the gradient in play — one running to white swallows a rim that
+/// a dimmer or more colored one leaves standing, and the bars reach both.
 ///
 /// The threshold is a fade-out floor: below it the line is too faint to be
 /// worth a shape at all.
@@ -103,12 +103,17 @@ pub(super) fn keyline(cfg: &crate::SpectrumConfig, alpha: f32) -> Option<Color32
 /// what it is at full coverage.
 ///
 /// BLACK, and not a setting. The outline's job is to give a note a boundary
-/// against a spectrogram whose palette runs from black to near-white, and the
-/// one color that can be told from every cell of every palette is the one the
-/// pane's own background is: a note reads as an object sitting over the
-/// picture, with the picture darkened around it. A colored surround would be a
-/// second hue competing with the ribbon's own, which is the one thing on a note
-/// that carries meaning.
+/// against a heatmap, and the pane's own background is the color that tells
+/// against the most of one: every preset opens at `L*` 0 and climbs, so black
+/// is what the cells are furthest from nearly everywhere. A note then reads as
+/// an object sitting over the picture, with the picture darkened around it. A
+/// colored surround would be a second hue competing with the ribbon's own,
+/// which is the one thing on a note that carries meaning.
+///
+/// A gradient dark at BOTH ends is reachable on the bars, and there this
+/// separates nothing — a picture someone dialled rather than one the pane can
+/// be left in by accident, and the ribbon still carries its own color where
+/// the surround has stopped saying anything.
 ///
 /// Opaque where it is solid, and translucent only through the fade — never a
 /// flat tint. A uniformly translucent surround takes its color from whatever is

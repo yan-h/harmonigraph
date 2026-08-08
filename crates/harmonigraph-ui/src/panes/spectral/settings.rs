@@ -46,10 +46,90 @@ pub(super) fn span_readout(seconds: f32) -> String {
     }
 }
 
+/// The heatmap's level->color gradient on the same three bars the Nodes tab
+/// dials the lattice's pitch gradient with, over a row of presets.
+///
+/// Three bars and not four: the group is the arc on the spectrum bar, the
+/// brightness pair on one of its own and the chroma pair on another, each a
+/// picture of what its numbers COMPOSE — see `panes::nodes::spectrum_group`,
+/// which is the same set over the same type and says why a six-number gradient
+/// costs three rows rather than six.
+///
+/// **What differs is the axis, and only the readouts show it.** There the
+/// range is pitch, so a bar's two ends are the lowest and highest notes; here
+/// it is the analyzer's Level, so they are silence and a full bucket. The bars
+/// themselves cannot tell — they are handed a [`harmonigraph_scene::Gradient`]
+/// and a home to reset to, and nothing in either names an axis — so what says
+/// which is the tooltip, and the tooltips below are written for level rather
+/// than shared with the Nodes tab's.
+///
+/// **The presets come first**, which is the opposite of the group in the Nodes
+/// tab and deliberate: a heatmap palette is a thing people pick by name before
+/// they dial it, and the four names are what this pane offered before it
+/// offered any knobs at all. They write the bars below and are not a mode — see
+/// [`crate::SpectrogramPreset`].
+fn spectrogram_gradient_group(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig) {
+    use crate::widgets::{SpectrumBar, SpreadBar};
+    use crate::SpectrogramPreset;
+
+    // The gradient a double-click on any of the three goes home to. The fresh
+    // heatmap's, NOT the lattice's, which is what the bars assume when a caller
+    // names none: a Spectral pane resetting onto the Nodes tab's arc would land
+    // on a picture this pane has never opened on, and the bars carry no text
+    // entry to dial it back with.
+    let home = crate::SpectrumConfig::default().spectrogram_gradient;
+    button_row(ui, |ui| {
+        ui.label("Palette").on_hover_text(
+            "Four looks the heatmap opens on, each written straight into the \
+             bars below — press one and then dial it. Nothing remembers which \
+             was pressed, a look being six numbers rather than a mode: once a \
+             bar has moved, the picture is the picture.",
+        );
+        for preset in SpectrogramPreset::ALL {
+            if ui
+                .button(preset.label())
+                .on_hover_text(preset.hint())
+                .clicked()
+            {
+                cfg.spectrogram_gradient = preset.gradient();
+            }
+        }
+    });
+    SpectrumBar::new(&mut cfg.spectrogram_gradient).home(home).show(ui).on_hover_text(
+        "The level->color spectrum: how far round the color circle the level \
+         range walks, out of the whole turn the bar stands for. The colors it \
+         takes fill from the left, silence first; the ones it does not are \
+         dimmed. Drag the handle to widen or narrow it, drag the track to turn \
+         the circle under it, double-click to reset. The strip beneath is the \
+         same gradient at full width, quiet to loud; the button at the left \
+         runs it the other way round the circle.",
+    );
+    SpreadBar::brightness(&mut cfg.spectrogram_gradient).home(home).show(ui).on_hover_text(
+        "The stretch of brightness the level range spends, in CIELab L*: the \
+         two numbers are silence and a full bucket, in that order. Silence \
+         wants 0 — the heatmap is laid on a black bed, so a lifted floor draws \
+         the plane's own edge where the history runs out, which is occasionally \
+         what you want to see. Drag either end to move it, drag between them to \
+         slide the whole stretch, drag one end past the other to draw loud dark \
+         on a pale field, double-click to reset.",
+    );
+    SpreadBar::chroma(&mut cfg.spectrogram_gradient).home(home).show(ui).on_hover_text(
+        "The stretch of color the level range spends, each end as a share of \
+         the most that cell's own brightness and hue can hold — 100% is as \
+         vivid as the screen goes without distorting the color, 0 is grey. The \
+         two numbers are silence and a full bucket, in that order. Closing them \
+         together gives every level the same share of the color available to \
+         it, which is what the three colored presets do; taking both to 0 is \
+         Mono. Near the top the ramp rides the gamut's own boundary, whose \
+         corners between the screen's primaries show up as steps in an \
+         otherwise smooth sweep.",
+    );
+}
+
 /// Settings for the Spectral pane's display and analyzer (persisted with
 /// the UI state).
 pub(crate) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState) {
-    use crate::{SpectralOrientation, SpectrogramColor, SpectrumWindow};
+    use crate::{SpectralOrientation, SpectrumWindow};
 
     // ---- Axes -----------------------------------------------------------
     // Which way the plot runs, and how much of the pitch axis it shows. Time's
@@ -244,16 +324,17 @@ pub(crate) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
         "How far a dark surround stands off a note, in points, and how much of \
          that it spends fading out. It wraps every side, so a note is a bounded \
          object over the spectrogram rather than a ribbon dissolving into it — \
-         and dark, because the spectrogram's palettes run to near-white and \
-         that is the one color no cell of one can hide. 0 draws none.\n\nIn \
-         points rather than semitones, so it is the same edge at every zoom; at \
-         a wide zoom the ribbons are thinner than this and neighbours' outlines \
-         reach over each other.\n\nThe bar is the outline itself, read outward \
-         from the note: solid to the first handle, then fading, and gone by the \
-         second. Drag between them to stand the note further off without \
-         blurring its edge, the inner handle to soften it (together they close \
-         for a hard edge), the outer one to reach further out from where it \
-         already starts to soften.",
+         and dark, because every heatmap PRESET starts at black and climbs, so \
+         black is what its cells are furthest from. (Take the Brightness bar's \
+         low end up and that stops being true; the ribbon still carries its own \
+         color.) 0 draws none.\n\nIn points rather than semitones, so it is the \
+         same edge at every zoom; at a wide zoom the ribbons are thinner than \
+         this and neighbours' outlines reach over each other.\n\nThe bar is the \
+         outline itself, read outward from the note: solid to the first handle, \
+         then fading, and gone by the second. Drag between them to stand the \
+         note further off without blurring its edge, the inner handle to soften \
+         it (together they close for a hard edge), the outer one to reach \
+         further out from where it already starts to soften.",
     );
     ui.checkbox(&mut cfg.note_names, "Note names").on_hover_text(
         "Write each note's name on its own ribbon, at the leading edge — so a \
@@ -299,20 +380,11 @@ pub(crate) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
          with the notes that made it. Reads the Spectrum's Level and Tilt \
          for intensity. Turn Note history off to see the heatmap alone.",
     );
-    choice_row(
-        ui,
-        "Palette",
-        &mut cfg.spectrogram_color,
-        &[
-            (SpectrogramColor::Mono, "Mono", "Grayscale; the most neutral over the roll"),
-            (SpectrogramColor::Ice, "Ice", "Black-blue-cyan-white"),
-            (SpectrogramColor::Aurora, "Aurora", "Violet-teal-green-yellow (even ramp)"),
-            (SpectrogramColor::Magma, "Magma", "Indigo-magenta-orange-cream (even ramp)"),
-        ],
-    );
-    // The palette is the whole of it. An opacity, a contrast curve and a
+    spectrogram_gradient_group(ui, cfg);
+    // The gradient is the whole of it. An opacity, a contrast curve and a
     // private level range would each go here and each is deliberately absent —
-    // see [`spectrogram_color`](crate::SpectrumConfig::spectrogram_color) for
+    // see
+    // [`spectrogram_gradient`](crate::SpectrumConfig::spectrogram_gradient) for
     // why the neutral setting is the only one worth having.
     button_row(ui, |ui| {
         if ui

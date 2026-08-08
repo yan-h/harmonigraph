@@ -33,14 +33,14 @@ pub mod trail;
 pub mod view;
 
 pub use camera::{Camera, Projection, Projector};
-pub use color::{hue_circle, pitch_lut_color, pitch_ramp_lut, HUE_CIRCLE_N};
+pub use color::{gradient_color, hue_circle, pitch_lut_color, pitch_ramp_lut, HUE_CIRCLE_N};
 pub use derive::derive_scene;
 pub use octaves::{
     clamp_center, clamp_wheel, octave_layout, OctaveLayout, Ring, DEFAULT_CENTER, DEFAULT_COUNT,
     DEFAULT_EXTRA_BLEND, DEFAULT_EXTRA_SIZE, MAX_EXTRAS, MAX_SPAN, MIDDLE_C_SLOT, MIN_COUNT,
     MIN_EXTRA_SIZE, MIN_SPAN, OCTAVE_SLOTS, PITCH_CEIL, PITCH_FLOOR,
 };
-pub use style::{IdleMarker, PitchGradient, Pulse, SevensLabel};
+pub use style::{Gradient, IdleMarker, Pulse, SevensLabel};
 pub use trail::TrailMark;
 pub use view::{FrameParams, ViewConfig};
 
@@ -86,7 +86,7 @@ pub const MARK_DELAY_MAX: f32 = 1.0;
 /// shapes agree — that is structural (see `color::pitch_lut_color`). It buys
 /// only the table's own fidelity to the designed curve, and it buys that
 /// unevenly, because the curve is not smooth. Its chroma follows the sRGB
-/// gamut's own boundary (see [`PitchGradient::chroma`]), and that boundary is
+/// gamut's own boundary (see [`Gradient::chroma`]), and that boundary is
 /// the surface of a CUBE: where the widest chroma at a lightness passes from
 /// one face of it to another, the maximum has a corner, and so does the curve
 /// riding at a fixed fraction of it. Linear interpolation across a corner
