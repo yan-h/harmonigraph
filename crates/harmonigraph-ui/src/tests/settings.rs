@@ -306,6 +306,59 @@ fn every_bar_in_a_settings_pane_is_the_width_of_the_pane() {
     assert!(bars >= 10, "only found {bars} bar tracks in the Tuning pane; has the paint changed?");
 }
 
+/// Each gradient group opens with its preview: one band of color the width of
+/// the column, standing ABOVE the spectrum track that is the first of the three
+/// bars writing it.
+///
+/// The order is the whole claim. Nothing else here would notice it moving — the
+/// preview paints no well, so the width and height sweeps both step over it,
+/// and a group that drew its picture at the bottom, or dropped it, would leave
+/// every other test green. Both panes are asked, because the two groups are
+/// separate calls over the same widgets and only one of them has the preset row
+/// above (see `spectrogram_gradient_group`).
+#[test]
+fn every_gradient_group_previews_itself_above_its_bars() {
+    const WIDTH: f32 = 400.0;
+    for tab in [panes::Tab::Nodes, panes::Tab::Analyzer] {
+        let shapes = settings_pane_at_width(tab, WIDTH, PROJECTIONS[0]);
+        // A preview is the one full-column band of color in a settings pane: a
+        // spectrum's circle is the track's width and a fade ramp is a row high,
+        // so the pair of measurements tells all three apart.
+        let previews: Vec<egui::Rect> = shapes
+            .iter()
+            .filter_map(|cs| match &cs.shape {
+                egui::Shape::Mesh(m) => Some(m.calc_bounds()),
+                _ => None,
+            })
+            .filter(|b| {
+                (b.width() - WIDTH).abs() < 1.0
+                    && (b.height() - crate::widgets::preview_height(1.0)).abs() < 0.6
+            })
+            .collect();
+        assert_eq!(previews.len(), 1, "{tab:?} drew {previews:?} as gradient previews, not one");
+        let track = crate::widgets::spectrum_track_width(WIDTH, 1.0);
+        let tracks: Vec<egui::Rect> = shapes
+            .iter()
+            .filter_map(|cs| match &cs.shape {
+                egui::Shape::Rect(r)
+                    if r.fill == crate::theme::well()
+                        && (r.rect.width() - track).abs() < 1.0 =>
+                {
+                    Some(r.rect)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(tracks.len(), 1, "{tab:?} drew {tracks:?} as spectrum tracks, not one");
+        assert!(
+            previews[0].bottom() <= tracks[0].top(),
+            "{tab:?} drew its preview at {:?}, not above the spectrum bar at {:?}",
+            previews[0],
+            tracks[0],
+        );
+    }
+}
+
 /// The render bar fills to the share of frames done — which is the whole
 /// reason it is a bar and not another sentence in the status line, since a
 /// render is minutes long and the sentence never changes while it runs.

@@ -7,7 +7,8 @@
 use super::{edge_bar, param_bar, section};
 use crate::params::{seconds, ParamBackend, ParamKey};
 use crate::widgets::{
-    button_row, choice_row, OctaveStrip, RangeBar, SpectrumBar, SpreadBar, ValueBar,
+    button_row, choice_row, gradient_preview, OctaveStrip, RangeBar, SpectrumBar, SpreadBar,
+    ValueBar,
 };
 use crate::SharedState;
 use harmonigraph_scene::{
@@ -381,10 +382,18 @@ fn pitch_readout(midi: f32) -> String {
     format!("{name}{}", harmonigraph_core::notes::display_octave_of(n))
 }
 
-/// The pitch gradient on three bars, one per stretch: the arc on the spectrum
-/// bar, the brightness pair on one of its own, and the chroma pair on another.
-/// Each bar is a picture of what its numbers COMPOSE rather than a row per
-/// number, which is what keeps a six-number gradient down to three rows.
+/// The pitch gradient as a picture over three bars: the gradient itself across
+/// the top, and under it the arc on the spectrum bar, the brightness pair on
+/// one of its own, and the chroma pair on another. Each bar is a picture of
+/// what its numbers COMPOSE rather than a row per number, which is what keeps a
+/// six-number gradient down to three rows and a preview.
+///
+/// **The preview stands above all three because it answers all three.** It is
+/// the only thing here that shows what the six knobs make together — each bar
+/// below can only draw its own two — so it belongs to the group rather than to
+/// any one bar, and a reader dialling any of them watches the same picture.
+/// The order is the reading order: the result first, then the three settings
+/// that write it, coarsest first.
 ///
 /// One column of full-width bars, like every other settings group —
 /// which here is a budget as much as a habit, and the reason the spectrum is a
@@ -405,34 +414,25 @@ fn pitch_readout(midi: f32) -> String {
 /// would be 284pt of 400 and would not.
 ///
 /// A bar costs one row and says the same thing — see [`SpectrumBar`] for how a
-/// circle fits on one, and for why the flip and the arc share that row rather
-/// than taking two. The same budget is why the bar carries no name of its own,
-/// and it is the one bar in the dock that does not carry one: the section
-/// heading above it names the group, the spread bars below it are the rest of
-/// the gradient, and the only rainbow in the pane needs no caption to be found.
-/// What a name would say the tooltip says at more length.
-///
-/// It is the odd one out on purpose rather than by omission. Every other bar
-/// here writes its name along its own track, over a well or an accent fill
-/// that a word can be read on; this one's track is a whole turn of saturated
-/// color, and a turn crosses hues a dark word can be read on and hues it
-/// cannot, so a name laid along it is legible over part of its own length and
-/// lost over the rest. That is true of every gradient and not just some, the
-/// track being the same circle whatever the six knobs say — which settles it
-/// rather than leaving it a matter of which picture is dialled. A label on a
-/// row of its own is what that would cost, and the row is the thing this
-/// control does not have.
+/// circle fits on one, for why the flip and the arc share that row rather than
+/// taking two, and for why the bar's own name stands in a gutter of the track
+/// rather than along the circle.
 fn spectrum_group(ui: &mut egui::Ui, view: &mut ViewConfig) {
+    gradient_preview(ui, &view.pitch_gradient).on_hover_text(
+        "The gradient itself, low note on the left: every one of the six \
+         numbers the bars below carry, composed into the colors the lattice \
+         draws with. A picture rather than a control — the three bars under it \
+         are what move it.",
+    );
     SpectrumBar::new(&mut view.pitch_gradient).show(ui).on_hover_text(
         "The pitch->color spectrum: how far round the color circle the pitch \
          range walks, out of the whole turn the bar stands for. The hues it \
          takes fill from the left, low note first; the ones it does not are \
          dimmed. The track is hue alone — the brightness and chroma bars below \
-         move the strip, not the arc. Drag the handle to widen or narrow it, \
-         drag the track to turn the circle under it, double-click to reset. \
-         The strip beneath is the gradient itself at full width, in pitch \
-         order, all six numbers together; the button at the left runs it the \
-         other way round the circle.",
+         move the picture above, not the arc. Drag the handle to widen or \
+         narrow it, drag the track to turn the circle under it, double-click \
+         to reset. The button at the left runs the whole thing the other way \
+         round the circle.",
     );
     SpreadBar::brightness(&mut view.pitch_gradient).show(ui).on_hover_text(
         "The stretch of brightness the pitch range spends, in CIELab L*: the \
