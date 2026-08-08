@@ -3183,12 +3183,17 @@ fn the_grid_seam_counts_the_nodes_that_ship() {
 /// The reading is a cross-frame value: it is only overwritten when the
 /// timer's readback cycle turns over, and that cycle is driven from inside
 /// the scene pass. Since nodes that paint nothing are no longer shipped, a
-/// lattice can encode no pass at all — with the grid's alpha at zero, no
-/// idle marker and no trail, a silent one ships neither a node nor an edge —
-/// and it can sit there indefinitely. Left alone, the overlay would keep
-/// re-averaging a figure from whenever the lattice last drew, which is the
-/// one thing `GPU_TIME_PENDING` exists to make impossible to confuse with a
-/// live reading.
+/// lattice can encode no pass at all, and can then sit there indefinitely
+/// rather than for a frame. Left alone, the overlay would keep re-averaging
+/// a figure from whenever the lattice last drew, which is the one thing
+/// `GPU_TIME_PENDING` exists to make impossible to confuse with a live
+/// reading.
+///
+/// The scene is built empty here rather than dialled empty, and that is the
+/// honest way round: a silent lattice ships no node already, but its grid
+/// survives every setting the panes offer — the line alpha is a constant now
+/// and the extent bars stop at 1, so no window a user can ask for is without
+/// an adjacent pair. This pins the guard against the day one is.
 #[test]
 fn a_lattice_with_nothing_to_draw_reports_no_gpu_time() {
     let Some((device, queue)) = headless_device_with_timestamps() else {

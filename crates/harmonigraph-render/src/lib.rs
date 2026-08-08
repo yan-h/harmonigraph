@@ -2122,10 +2122,15 @@ impl CallbackTrait for LatticeCallback {
             // number from whenever the lattice last drew.
             //
             // The distinction is why GPU_TIME_PENDING exists at all — a frozen
-            // reading and a live one are the same bits otherwise. A lattice
-            // CAN sit here indefinitely: with the grid's alpha at zero, no
-            // idle marker and no trail, a silent lattice ships neither a node
-            // nor an edge.
+            // reading and a live one are the same bits otherwise, and a pane
+            // that encodes no pass can sit here indefinitely rather than for a
+            // frame. A silent lattice already ships no NODE, every idle one
+            // being culled; what it takes to ship no edge either is a window
+            // holding no adjacent pair, which the extent bars do not reach
+            // (they stop at 1). So the state is currently out of a user's
+            // reach and stays guarded on purpose: it is one lattice-sizing
+            // change away, and the symptom would be a stale figure rather
+            // than a crash — the kind nobody reports.
             out.gpu_ms.store(GPU_TIME_PENDING, std::sync::atomic::Ordering::Relaxed);
         }
 
