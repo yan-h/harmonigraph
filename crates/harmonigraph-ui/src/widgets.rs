@@ -2658,16 +2658,51 @@ fn corner_inset(from_end: f32, radius: f32) -> f32 {
     radius - (radius * radius - across * across).max(0.0).sqrt()
 }
 
+/// A single-line text field a row high, for the one settings row that holds one
+/// (the camera preset's name).
+///
+/// A text field is the only control here that egui sizes from neither
+/// `interact_size` nor a size handed to it: a `TextEdit` is its font's row plus
+/// its own margin and nothing else, so the `interact_size` floor that brings
+/// every other control to [`theme::ROW_HEIGHT`] does not reach it, and neither
+/// does `add_sized`. Its default margin is a whole-point constant besides —
+/// 2 points top and bottom at every [chrome scale](theme::ui_scale) — which is
+/// a tenth of a row at the design size and a seventh of one at 0.7. Left alone
+/// it is the one row in the dock that is not a row high.
+///
+/// The margin is therefore the lever, and it takes the largest whole number of
+/// points that still FITS rather than the one nearest the row. egui stores a
+/// margin as whole points, so a field can only land on its text plus an even
+/// number and 20 is not one of them; rounding up puts the field back over the
+/// row and takes the row up with it, which is the whole defect. Rounding down
+/// leaves it a point inside a row that the button beside it holds open, where
+/// it reads as an inset field rather than as a row out of line.
+/// Takes the `Ui` it will be added to, because the margin is measured against
+/// the type that `Ui` is carrying; everything else about the field — its hint,
+/// its width — is the caller's, so this hands back the builder rather than
+/// adding it.
+pub fn row_field<'t>(ui: &Ui, text: &'t mut String) -> TextEdit<'t> {
+    let scale = theme::ui_scale(ui.ctx());
+    let room = theme::row_height(scale) - ui.text_style_height(&TextStyle::Body);
+    TextEdit::singleline(text).margin(egui::Margin::symmetric(
+        // The side margin is egui's own, scaled: a field's WIDTH is nobody's
+        // alignment problem, unlike its height.
+        i8::try_from(theme::scaled_points(4, scale)).unwrap_or(i8::MAX),
+        (room * 0.5).floor().max(0.0) as i8,
+    ))
+}
+
 /// A horizontal row of controls in a settings column, wrapping onto further
 /// lines when the column is too narrow to hold it.
 ///
-/// Height is not its business, and that is worth saying because it used to be:
-/// a row starts at `interact_size.y` and grows under the first widget taller
-/// than that, so as long as one control in a row overshot the height everything
-/// shorter beside it sat above the row's text. Nothing overshoots now — the
-/// theme's `interact_size` is [`theme::ROW_HEIGHT`] and every control in a
-/// settings pane is sized by it — so the row is the row height because the
-/// things in it are, and a label centers on a button without help.
+/// Height is not its business: a row starts at `interact_size.y` and grows
+/// under the first widget taller than that, and nothing in a settings pane is
+/// taller than that — the theme's `interact_size` is [`theme::ROW_HEIGHT`] and
+/// every control here is sized by it or, where egui's floor does not reach
+/// ([`row_field`], [`toggle_switch`], [`record_button`]), asks for it. So the
+/// row is a row high because the things in it are, and a bare label centers on
+/// the button beside it without help. A control that overshot would take the
+/// row with it and leave everything shorter in it sitting above the line.
 ///
 /// The single row helper, deliberately: a settings pane is a column whose width
 /// the dock hands it, and a row that cannot wrap runs its last buttons out past
@@ -4694,10 +4729,10 @@ mod tests {
             "three wide buttons stayed on one line: {rects:?}"
         );
         // The second half, made self-evident rather than incidental: a button
-        // taller than one padded text row is one whose label wrapped.
-        let row = 25.0;
+        // taller than a row is one whose label took a second line, a row being
+        // exactly what a one-line button stands at (`every_settings_row_is_one_row_high`).
         assert!(
-            rects.iter().any(|r| r.height() > row + 5.0),
+            rects.iter().any(|r| r.height() > theme::ROW_HEIGHT + 5.0),
             "no label wrapped, so only the row-wrap half is under test: {rects:?}"
         );
     }

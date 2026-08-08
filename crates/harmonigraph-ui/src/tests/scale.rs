@@ -5,6 +5,10 @@ use crate::*;
 use harmonigraph_render::wgpu::TextureFormat;
 use super::harness::*;
 
+/// The content width [`settings_pane_at_scale`] gives a pane — the column, not
+/// the tab body, which is a margin wider on each side.
+const PANE_WIDTH: f32 = 400.0;
+
 /// One settings pane drawn at a given [chrome scale](crate::theme::ui_scale),
 /// as the shapes it emitted. The same nesting as
 /// [`settings_pane_at_width`] — the dock's clip outside the pane's content box
@@ -18,7 +22,7 @@ fn settings_pane_at_scale(tab: panes::Tab, scale: f32) -> Vec<egui::epaint::Clip
     crate::theme::set_ui_scale(&ctx, scale);
     let margin = crate::theme::pane_inner_margin(scale);
     let body =
-        egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0 + 2.0 * margin, 2400.0));
+        egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(PANE_WIDTH + 2.0 * margin, 2400.0));
     let out = ctx.run_ui(
         egui::RawInput { screen_rect: Some(body), time: Some(0.0), ..Default::default() },
         |ui| {
@@ -167,19 +171,37 @@ fn a_tab_bar_tracks_the_scale_and_still_fits_the_collapse_arrow() {
 
 /// The controls a settings row is built from: egui's own `button` (the
 /// momentary presets — Just, 12-TET, Reset layout), its `selectable_value`
-/// (every [`choice_row`](crate::widgets::choice_row)) and its `checkbox`, then
-/// the two of ours that allocate their own geometry.
+/// (every [`choice_row`](crate::widgets::choice_row)), its `checkbox` and its
+/// `TextEdit` (the camera preset's name), then the two of ours that allocate
+/// their own geometry.
 #[derive(Clone, Copy, Debug)]
 enum Control {
     Button,
     Selectable,
     Checkbox,
+    Field,
     Switch,
     Record,
 }
 
-/// A row of four `kind` controls at `scale`, as the rects they allocated, with
-/// the pointer parked at `pointer` and optionally held down there.
+/// Every one of them, so a sweep cannot quietly cover four.
+const CONTROLS: [Control; 6] = [
+    Control::Button,
+    Control::Selectable,
+    Control::Checkbox,
+    Control::Field,
+    Control::Switch,
+    Control::Record,
+];
+
+/// A row of four `kind` controls at `scale`: the rect the ROW came out at,
+/// then the rects the four controls allocated inside it, with the pointer
+/// parked at `pointer` and optionally held down there.
+///
+/// The row is reported alongside the controls because it is the thing a reader
+/// of a settings pane actually sees the height of. A control is free to be
+/// shorter than the row it sits in — the switch's pill is, and a text field is
+/// at most scales — and only a control that OVERSHOOTS moves the row.
 ///
 /// Several frames because a widget's visual state comes from the PREVIOUS
 /// frame's response: the first frame after the pointer arrives still draws the
@@ -189,17 +211,19 @@ fn control_row(
     scale: f32,
     pointer: Option<egui::Pos2>,
     pressed: bool,
-) -> Vec<egui::Rect> {
+) -> (egui::Rect, Vec<egui::Rect>) {
     let ctx = egui::Context::default();
     crate::theme::apply_theme(&ctx);
     crate::theme::set_ui_scale(&ctx, scale);
     let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600.0, 200.0));
     let rects = std::cell::RefCell::new(Vec::new());
+    let mut row = egui::Rect::NOTHING;
     // Live state, so a control that reads its own value (the switch's knob, the
     // record dot, the selected choice) is drawn in whatever state the pointer
     // has put it in rather than always in its resting one.
     let mut selected = 1usize;
     let mut flag = false;
+    let mut name = String::from("Front");
     for frame in 0..4 {
         rects.borrow_mut().clear();
         let mut events = Vec::new();
@@ -224,13 +248,20 @@ fn control_row(
             ..Default::default()
         };
         let _ = ctx.run_ui(input, |ui| {
-            ui.horizontal(|ui| {
+            row = ui.horizontal(|ui| {
                 for i in 0..4 {
                     let label = format!("Item {i}");
                     let response = match kind {
                         Control::Button => ui.button(label),
                         Control::Selectable => ui.selectable_value(&mut selected, i, label),
                         Control::Checkbox => ui.checkbox(&mut flag, label),
+                        // The Tuning pane's preset-name field, at the width it
+                        // asks for there.
+                        Control::Field => {
+                            let field = crate::widgets::row_field(ui, &mut name)
+                                .desired_width(110.0 * scale);
+                            ui.add(field)
+                        }
                         Control::Switch => crate::widgets::toggle_switch(ui, &mut flag, &label),
                         Control::Record => {
                             crate::widgets::record_button(ui, &mut flag, false, &label)
@@ -238,10 +269,12 @@ fn control_row(
                     };
                     rects.borrow_mut().push(response.rect);
                 }
-            });
+            })
+            .response
+            .rect;
         });
     }
-    rects.into_inner()
+    (row, rects.into_inner())
 }
 
 /// Hovering or pressing a control changes how it looks and not where anything
@@ -262,15 +295,13 @@ fn control_row(
 /// at the design size the numbers happen to cancel and nothing moves.
 #[test]
 fn pointing_at_a_control_leaves_the_row_where_it_is() {
-    for kind in
-        [Control::Button, Control::Selectable, Control::Checkbox, Control::Switch, Control::Record]
-    {
+    for kind in CONTROLS {
         for step in 0..=16u8 {
             let scale = 0.7 + 0.05 * f32::from(step);
             let resting = control_row(kind, scale, None, false);
             // The pointer goes to the middle of the FIRST control, so anything
             // that moves has three neighbours to its right to show it in.
-            let target = resting[0].center();
+            let target = resting.1[0].center();
             for (state, pressed) in [("hovered", false), ("pressed", true)] {
                 let pointed = control_row(kind, scale, Some(target), pressed);
                 assert_eq!(
@@ -282,40 +313,112 @@ fn pointing_at_a_control_leaves_the_row_where_it_is() {
     }
 }
 
-/// Every control a settings row can be built from stands exactly one
-/// [`ROW_HEIGHT`](crate::theme::ROW_HEIGHT) high — the bars, and all five of the
-/// things that go in a row beside them — so a pane reads as a column of rows
-/// rather than as a stack that changes gauge wherever a button appears.
+/// A row of any of the six controls a settings row can be built from stands
+/// exactly one [`ROW_HEIGHT`](crate::theme::ROW_HEIGHT), so a pane reads as a
+/// column of rows rather than as a stack that changes gauge wherever a button
+/// or a text field appears.
 ///
-/// What holds it is the `interact_size` FLOOR rather than any of the controls
-/// agreeing to a number, and that is the part worth pinning. A button is as
-/// tall as its text plus `button_padding`, or the floor, whichever is more, and
-/// only the floor is a round height: egui stores a frame's margin as whole
-/// points, so a button sized by its padding alone lands on its text plus an
-/// even number and can miss a 20-point row by a point in either direction.
+/// The ROW is what is pinned to the number, and the controls only to not
+/// exceeding it, because those are two different questions and only the first
+/// is what a reader sees. A control shorter than its row is inset in it — the
+/// switch's pill is 15 points in a 20-point row deliberately, and a text field
+/// lands a point under at most scales because egui stores its margin as whole
+/// points. A control TALLER than its row takes the row with it, which is the
+/// misalignment this is here about.
 ///
-/// Which makes the padding the thing that breaks this, quietly and from a
-/// distance: raise the type or the padding until their sum clears the floor and
-/// the floor stops applying, one control at a time. The sweep is the whole
-/// [scale range](crate::theme::UI_SCALE_RANGE) because the sum clears the floor
-/// at some scales before others — the type rounds to whole pixels and the
-/// padding to whole points, so the headroom between them is not the same
-/// fraction twice.
+/// What holds the row is the `interact_size` FLOOR rather than any of the
+/// controls agreeing on a number, and that is the part worth pinning. A button
+/// is as tall as its text plus `button_padding`, or the floor, whichever is
+/// more, and only the floor is a round height: a frame's margin is whole points
+/// too, so a button sized by its padding alone lands on its text plus an even
+/// number and can miss a 20-point row either way.
+///
+/// Which makes the padding what breaks this, quietly and from a distance: raise
+/// the type or the padding until their sum clears the floor and the floor stops
+/// applying, one control at a time. The sweep is the whole [scale
+/// range](crate::theme::UI_SCALE_RANGE) because the sum clears it at some
+/// scales before others — the margin rounds to whole points while the type it
+/// wraps does not, so the headroom is not the same fraction twice. It is at its
+/// narrowest at the two ends: 0.28pt at 0.7, and 0.88pt at 1.5 where the
+/// padding rounds up to 2.
+///
+/// [`every_bar_is_one_row_high`] covers the other half of a settings pane, the
+/// bars, which reach the height by allocating it rather than by any floor.
 #[test]
 fn every_settings_row_is_one_row_high() {
-    for kind in
-        [Control::Button, Control::Selectable, Control::Checkbox, Control::Switch, Control::Record]
-    {
+    for kind in CONTROLS {
         for step in 0..=16u8 {
             let scale = 0.7 + 0.05 * f32::from(step);
             let want = crate::theme::row_height(scale);
-            for rect in control_row(kind, scale, None, false) {
+            let (row, controls) = control_row(kind, scale, None, false);
+            assert!(
+                (row.height() - want).abs() < 0.01,
+                "a row of {kind:?} at scale {scale} stands {}pt high, not {want}pt",
+                row.height(),
+            );
+            for rect in controls {
                 assert!(
-                    (rect.height() - want).abs() < 0.01,
-                    "a {kind:?} at scale {scale} stands {}pt high, not the row's {want}pt",
+                    rect.height() <= want + 0.01,
+                    "a {kind:?} at scale {scale} stands {}pt high and takes its {want}pt row \
+                     up with it",
                     rect.height(),
                 );
             }
+        }
+    }
+}
+
+/// Every bar a settings pane draws is one
+/// [`ROW_HEIGHT`](crate::theme::ROW_HEIGHT) tall, at every scale.
+///
+/// The bars are the other half of a settings pane and they reach the height by
+/// a different route — each allocates it outright, rather than being grown to
+/// it by the `interact_size` floor that catches everything in
+/// [`every_settings_row_is_one_row_high`]. Two routes to one number is exactly
+/// what drifts, so both are pinned.
+///
+/// Swept through the real panes rather than by building the six bar types by
+/// hand, which is what makes this cover them: `ValueBar`, `RangeBar`,
+/// `OctaveStrip`, `SpreadBar` and the render `progress_bar` are all in the
+/// panes below, and a seventh added later is covered on the day it is drawn
+/// rather than on the day someone remembers to add it to a list here.
+///
+/// The `SpectrumBar` is the one bar deliberately taller than a row — a track
+/// with a pitch strip under it — and it is not excused: its TRACK is a row and
+/// the strip is `STRIP_H`, so it contributes a row-high rect like the rest and
+/// its extra piece is a different height that this never sees.
+#[test]
+fn every_bar_is_one_row_high() {
+    for tab in [panes::Tab::Tuning, panes::Tab::Nodes, panes::Tab::Analyzer, panes::Tab::Video] {
+        for step in 0..=16u8 {
+            let scale = 0.7 + 0.05 * f32::from(step);
+            let want = crate::theme::row_height(scale);
+            let shapes = settings_pane_at_scale(tab, scale);
+            // Found by WIDTH, never by height: a bar fills the column (the
+            // spectrum's track gives its left end to the flip button and is
+            // the one exception), so that is a property this test does not
+            // depend on. Sniffing for row-high rects instead would drop a
+            // mis-sized bar out of the sweep rather than failing on it, which
+            // is a test that passes by finding nothing.
+            let track = crate::widgets::spectrum_track_width(PANE_WIDTH, scale);
+            let mut found = 0;
+            for cs in &shapes {
+                let egui::Shape::Rect(r) = &cs.shape else { continue };
+                let width = r.rect.width();
+                if r.fill != crate::theme::well()
+                    || !r.rect.is_finite()
+                    || ((width - PANE_WIDTH).abs() > 1.0 && (width - track).abs() > 1.0)
+                {
+                    continue;
+                }
+                found += 1;
+                assert!(
+                    (r.rect.height() - want).abs() < 0.01,
+                    "{tab:?} at scale {scale} drew a {}pt bar, not {want}pt",
+                    r.rect.height(),
+                );
+            }
+            assert!(found > 0, "{tab:?} at scale {scale} drew no bar tracks to measure");
         }
     }
 }
