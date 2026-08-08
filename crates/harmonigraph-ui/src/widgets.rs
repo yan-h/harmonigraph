@@ -1539,8 +1539,8 @@ fn default_home() -> Gradient {
 ///
 /// One circle either side of the handle is also what makes the two halves of
 /// the track meet FLUSH at every setting, rather than only where both ramps
-/// happen to be flat: the same hue is drawn at two strengths, so the handle
-/// marks where the arc stops and nothing else changes across it.
+/// happen to be flat: the same hue is drawn at two strengths, so where the arc
+/// stops is a change of strength and nothing else.
 ///
 /// **The flip is a button because the track cannot carry the gesture.** The arc
 /// is laid out from its own start, so both directions draw the same stretch of
@@ -1564,12 +1564,15 @@ fn default_home() -> Gradient {
 /// bar's worth of space away. Three pieces on the pane at one rhythm read as
 /// one control; anything looser reads as a bar with things near it.
 ///
-/// **What the flip changes on screen is the sign, and which end each band
-/// starts at.** Both read low note at the left — the track from the hue the
-/// bottom of the range takes, the strip from the color it takes — so both turn
-/// around with the gradient, and the strip's two ramps turn around with it,
-/// which is exactly the change drawn where the change is. The readout spells
-/// the direction out on top of that, because an arc and its flip claim exactly
+/// **What the flip changes on screen is the sign, and the HUE of both bands.**
+/// Each reads low note at the left — the track from the hue the bottom of the
+/// range takes, the strip from the color it takes — so the arc runs the other
+/// way round the circle in both, which is exactly the change drawn where the
+/// change is. Neither RAMP turns around with it: [`Gradient::flipped`] rewrites
+/// the hue pair and carries brightness and chroma through untouched, so the
+/// strip keeps its dark end where it was and the two spread bars under it read
+/// out the same pair after a flip as before it. The readout spells the
+/// direction out on top of all that, because an arc and its flip claim exactly
 /// the same colors.
 pub struct SpectrumBar<'a> {
     gradient: &'a mut Gradient,
