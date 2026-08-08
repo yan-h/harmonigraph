@@ -504,10 +504,10 @@ impl SpectrumConfig {
 /// from an old take renders at the wider range too.
 ///
 /// The analyzer's alone, and read by nothing else. The Nodes tab carries a
-/// Pitch range of its own — the span the color gradient is spread over — which
-/// used to borrow this; it has [`COLOR_RANGE_MIN_SPAN`] instead, because the
-/// reasoning above is about the size of TYPE and says nothing whatever about
-/// how tightly a gradient may be aimed.
+/// Pitch range of its own — the span the color gradient is spread over — and it
+/// is bounded by [`COLOR_RANGE_MIN_SPAN`] rather than by this: the reasoning
+/// above is about the size of TYPE and says nothing whatever about how tightly
+/// a gradient may be aimed.
 pub(crate) const PITCH_RANGE_MIN_SPAN: f32 = 24.0;
 
 /// A persisted text scale, fit to the range its bar offers.
@@ -531,8 +531,10 @@ pub const SCALE_BAR_RANGE: std::ops::RangeInclusive<f32> = 0.3..=3.0;
 
 /// Closest the two ends of the Nodes tab's Pitch range may come — the span the
 /// color gradient covers, which is a different bar from the analyzer's window
-/// on the same axis. An octave, which is where it sat while it shared
-/// [`PITCH_RANGE_MIN_SPAN`] and had no reason to move when that one did.
+/// on the same axis. An octave: a gradient aimed tighter than one has notes a
+/// semitone apart at opposite ends of the spectrum, and nothing about the
+/// analyzer's own floor ([`PITCH_RANGE_MIN_SPAN`], which is about how small
+/// type may be drawn) says anything about that.
 pub(crate) const COLOR_RANGE_MIN_SPAN: f32 = 12.0;
 
 /// How far the roll's time span may be taken, in seconds. Named because two
