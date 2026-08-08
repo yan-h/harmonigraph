@@ -100,9 +100,10 @@ fn spectrogram_gradient_group(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig
          range walks, out of the whole turn the bar stands for. The hues it \
          takes fill from the left, silence first; the ones it does not are \
          dimmed. The track is hue alone — the brightness and chroma bars below \
-         move the strip, not the arc, which is what leaves the arc readable at \
-         Mono. Drag the handle to widen or narrow it, drag the track to turn \
-         the circle under it, double-click to reset. The strip beneath is the \
+         move the strip, not the circle, which is what leaves the hues showing \
+         at Mono, where the arc itself has no width. Drag the handle to widen \
+         or narrow it, drag the track to turn the circle under it, \
+         double-click to reset. The strip beneath is the \
          gradient itself at full width, quiet to loud, all six numbers \
          together; the button at the left runs it the other way round the \
          circle.",
