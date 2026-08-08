@@ -126,7 +126,7 @@ pub struct ViewConfig {
     // Rings, Tiles, Pinwheel). Serde ignores unknown keys, so such a blob
     // loads intact and drops the key on the next save. This is the only
     // surviving record of that set, which is why it names it in full.
-    /// The curve the low-to-high pitch gradient follows, as its four knobs
+    /// The curve the low-to-high pitch gradient follows, as its five knobs
     /// (see [`PitchGradient`]). Every pitch-colored shape in the scene reads
     /// it through one table, so this is the only place the gradient is set.
     pub pitch_gradient: PitchGradient,
@@ -715,7 +715,7 @@ impl ViewConfig {
             fresh.label_scale
         };
 
-        // The pitch gradient's four knobs, for the same reason as the label
+        // The pitch gradient's five knobs, for the same reason as the label
         // scale above and one more: they are the memo key of the color table
         // every pitch-colored shape reads, so a non-finite one would miss the
         // cache on every lookup as well as drawing a NaN.
@@ -849,6 +849,13 @@ impl Default for ViewConfig {
                 lightness: 53.0,
                 lightness_ramp: 31.0,
                 chroma: 0.601_670_8,
+                // Flat, where the brightness ramp is not: the hue arc is
+                // already spending color on pitch, and a chroma ramp over it
+                // would say the same thing twice at the price of one end of
+                // the range going grey. Dialled rather than opened on — see
+                // `default_chroma_ramp`, which the type's own default takes
+                // for the same reason.
+                chroma_ramp: 0.0,
             },
             // A small, soft core inside the octave band, with the band's
             // silent slots ghosted in: the pitch class reads as a compact

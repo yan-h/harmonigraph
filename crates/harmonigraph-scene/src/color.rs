@@ -361,9 +361,9 @@ fn oklab_srgb(l_star: f64, h: f64, c: f64) -> Vec4 {
 /// reads (see [`pitch_lut_color`]). Keeping one caller means the table and
 /// the curve can never drift into two different answers for one pitch.
 ///
-/// Chroma is the only one of the four knobs that is not simply read off
+/// The chroma pair is the one part of the gradient not simply read off
 /// [`PitchGradient`]: it arrives as a FRACTION of what the gamut holds here,
-/// so the curve stays inside sRGB at every setting of the other three and
+/// so the curve stays inside sRGB at every setting of the other knobs and
 /// `L*` — hence the luminance — is exactly what was asked for. See
 /// [`PitchGradient::chroma`] for why an absolute chroma cannot be, and
 /// `the_gradient_is_in_gamut_and_flat_when_its_ramp_is` for what holds this to
@@ -386,11 +386,11 @@ fn pitch_ramp_color(t: f64, gradient: PitchGradient) -> Vec4 {
 /// once for a whole table (and keys the memo on the result),
 /// `designed_pitch_ramp` does it for the test path, and
 /// [`PitchGradient::lightness_and_hue`] holds up its own public end. Only
-/// `chroma` is read raw here, which is what lets the gamut test hand in the
-/// out-of-range fraction a control cannot produce.
+/// [`PitchGradient::chroma_at`] is read raw, which is what lets the gamut test
+/// hand in the out-of-range fraction a control cannot produce.
 fn pitch_ramp_coords(t: f64, gradient: PitchGradient) -> (f64, f64, f64) {
     let (l, h) = gradient.lightness_and_hue(t);
-    (l, h, f64::from(gradient.chroma) * max_chroma(l, h))
+    (l, h, gradient.chroma_at(t) * max_chroma(l, h))
 }
 
 /// Whether the curve's ask at `t` is a color sRGB can actually show, put to the
@@ -433,9 +433,9 @@ pub(crate) fn designed_pitch_ramp(t: f64, gradient: PitchGradient) -> Vec4 {
 
 /// Run `read` over one gradient's table, without copying it.
 ///
-/// The table is memoized on the gradient that built it, in ONE slot: the four
+/// The table is memoized on the gradient that built it, in ONE slot: the five
 /// knobs hold still except while a control is being dragged, so a single slot
-/// hits on essentially every call, and a map keyed on five floats would spend
+/// hits on essentially every call, and a map keyed on six floats would spend
 /// more on hashing than the hit saves. A miss rebuilds — [`PITCH_LUT_N`]
 /// entries, each a gamut bisection and an Oklab->sRGB conversion — which is why
 /// this is worth caching at all: the per-node draw path asks for a color
@@ -482,7 +482,7 @@ fn with_lut<R>(gradient: PitchGradient, read: impl FnOnce(&[Vec4; PITCH_LUT_N]) 
 ///
 /// Each side maps a pitch to a `t` FIRST and indexes with that, so the
 /// gradient's endpoints never reach the table and it stays range-independent.
-/// The four knobs are the only thing it varies with — which is why the memo is
+/// The five knobs are the only thing it varies with — which is why the memo is
 /// keyed on those and NOT on the range. A change that folded
 /// `darkest_pitch`/`brightest_pitch` into the entries would make that cache
 /// wrong, not just stale.
@@ -501,8 +501,10 @@ pub fn pitch_ramp_lut(gradient: PitchGradient) -> [Vec4; PITCH_LUT_N] {
 /// of the ring at the size the pane draws it.
 pub const HUE_CIRCLE_N: usize = 96;
 
-/// The whole hue circle at one lightness and chroma — what a gradient's four
-/// knobs would give at every hue, not just the arc it takes.
+/// The whole hue circle at one lightness and chroma — what a gradient's five
+/// knobs would give at every hue, not just the arc it takes. The pair handed in
+/// is the MIDDLE of each ramp, which is the one point of the curve a circle
+/// standing for every hue at once can be drawn at.
 ///
 /// This is what lets the pane draw the spectrum a gradient has NOT claimed
 /// beside the part it has, from the same curve, so the two cannot disagree
