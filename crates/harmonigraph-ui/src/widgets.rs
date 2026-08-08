@@ -1482,6 +1482,28 @@ const FULL_TURN: f32 = 360.0;
 /// whatever the pane is instead of ringing itself in a slightly wrong color.
 const UNCLAIMED_ALPHA: f32 = 74.0 / 255.0;
 
+/// The `L*` and the share of the gamut the track's hue circle is drawn at —
+/// FIXED, and not the gradient's own pair.
+///
+/// The track is the HUE control, and the two knobs it does not set have bars of
+/// their own directly beneath it. A circle drawn at the gradient's own
+/// brightness and chroma answers those bars as well, and answers them by going
+/// blind: at a chroma of 0 the whole turn is grey, at a dark setting it is
+/// nearly black, and both are one click away — Mono, on the Analyzer tab's
+/// Palette row, is exactly the first of them. The one control that has to show
+/// hues would show none at the settings a reader is most likely to be dialling
+/// their way out of. What the six knobs COMPOSE is the strip underneath, which
+/// is drawn from the same table the picture is.
+///
+/// Mid `L*`, so no part of the circle is crowded against either end of the
+/// axis, and short of the gamut boundary for the reason [`Gradient`]'s own
+/// default chroma is short of it: at a fraction of 1 the maximum's kinks
+/// between the sRGB primaries show up as bumps in a sweep whose whole job is to
+/// read as an even turn.
+const TRACK_LIGHTNESS: f32 = 60.0;
+/// The gamut fraction that goes with [`TRACK_LIGHTNESS`].
+const TRACK_CHROMA: f32 = 0.85;
+
 /// Height of the pitch-order strip under a [`SpectrumBar`]'s track. Shorter
 /// than the track, because it is a picture and not a control: a press on it
 /// is declined ([`SpectrumGrab::Outside`]), and a full-height second bar would
@@ -1590,7 +1612,7 @@ fn default_home() -> Gradient {
 /// The pitch gradient's hue arc, as three pieces of one control: the button
 /// that reverses it at the left end, and beside that a full turn of the color
 /// circle laid along a track, CUT at the arc's own start, with the stretch the
-/// gradient walks filled from the track's left edge and the hues it does not
+/// gradient walks lit from the track's left edge and the hues it does not
 /// reach dimmed beyond it. Under the track, a gap below it, the gradient itself
 /// in pitch order, low note on the left.
 ///
@@ -1616,21 +1638,20 @@ fn default_home() -> Gradient {
 /// say where on the circle it is in absolute terms, which is a number nobody
 /// reads a color off anyway — the track is painted in the colors themselves.
 ///
-/// **It previews all six knobs, not just the one it sets.** The claimed
-/// stretch is painted straight out of [`pitch_ramp_lut`], the same table the
-/// lattice draws from, so brightness and chroma show up in it too and the
-/// preview cannot drift from the picture. A swatch drawn from the widget's own
-/// idea of the gradient would be a second definition of the color, wrong the
-/// first time either changed. The dimmed remainder comes from [`hue_circle`]
-/// at the gradient's BASE lightness and chroma — the middle of each of its two
-/// ramps — so it reads as the same gradient continued rather than as decoration.
+/// **The track is hue and nothing else; the strip is the picture.** Both bands
+/// are read out of a table rather than mixed here, so neither can drift from
+/// what the lattice draws — but they are read out of DIFFERENT tables, and
+/// that split is the shape of the control. The track is [`hue_circle`] at one
+/// fixed lightness and chroma ([`TRACK_LIGHTNESS`]), full strength over the
+/// stretch the arc claims and dimmed beyond it; the strip is
+/// [`pitch_ramp_lut`], all six knobs composed. Brightness and chroma therefore
+/// show up in the strip alone, which is where they can be read against the
+/// bars that set them.
 ///
-/// Which means it meets the claimed arc flush only when both ramps are FLAT:
-/// the arc ends at the top of them, and the remainder carries on from the
-/// middle, so a steep ramp puts a step at the handle. Continuing the ramp
-/// instead would close that step and pay for it at the top of the knob, where
-/// an arc reaching `L*` 100 would dim out into a white band saying nothing
-/// about which hues are left — and the remainder's whole job is to say that.
+/// One circle either side of the handle is also what makes the two halves of
+/// the track meet FLUSH at every setting, rather than only where both ramps
+/// happen to be flat: the same hue is drawn at two strengths, so where the arc
+/// stops is a change of strength and nothing else.
 ///
 /// **The flip is a button because the track cannot carry the gesture.** The arc
 /// is laid out from its own start, so both directions draw the same stretch of
@@ -1640,25 +1661,30 @@ fn default_home() -> Gradient {
 /// together are the arc and the direction it runs, and a row spent on one
 /// button pushes every knob under it further down a pane that already scrolls.
 ///
-/// **The strip is not redundant with the track.** They agree wherever both say
-/// anything — the claimed stretch IS the gradient — but the claimed stretch is
-/// as wide as the span, so at a span of zero it has no width at all, and a
-/// single-hue gradient with a brightness ramp is a real setting that the track
-/// alone would draw as nothing. It is also the one place the gradient is drawn
-/// at a fixed scale: the track squeezes it into whatever fraction of the turn
-/// the arc claims, so a narrow arc's ramp is a sliver there and full width
-/// here.
+/// **The strip is the whole of what the gradient looks like.** It is not a
+/// second view of the track — the two say different things — and it is the only
+/// one of the pair that survives every setting: at a span of zero the arc has
+/// no width at all, and a single hue over a brightness ramp is a real gradient
+/// that a track alone would draw as one column of nothing. It is also drawn at
+/// a fixed scale, low note to high across the full width, where a track
+/// carrying the gradient would squeeze it into whatever fraction of the turn
+/// the arc claimed.
 ///
 /// It sits a hair under the track — [`PIECE_GAP`], the one gap this control
 /// uses, which is also what separates the button from both — rather than a
 /// bar's worth of space away. Three pieces on the pane at one rhythm read as
 /// one control; anything looser reads as a bar with things near it.
 ///
-/// **What the flip changes on screen is the sign, and both ramps' ends.** The
-/// claimed stretch and the strip are the same pitch ramp, low note at the left,
-/// so both reverse with the gradient — which is exactly the change, drawn where
-/// the change is. The readout spells the direction out on top of that, because
-/// an arc and its flip claim exactly the same colors.
+/// **What the flip changes on screen is the sign, and the HUE of both bands.**
+/// Each reads low note at the left — the track from the hue the bottom of the
+/// range takes, the strip from the color it takes — so the arc runs the other
+/// way round the circle in both, which is exactly the change drawn where the
+/// change is. Neither RAMP turns around with it: [`Gradient::flipped`] rewrites
+/// the hue pair and carries brightness and chroma through untouched, so the
+/// strip keeps its dark end where it was and the two spread bars under it read
+/// out the same pair after a flip as before it. The readout spells the
+/// direction out on top of all that, because an arc and its flip claim exactly
+/// the same colors.
 pub struct SpectrumBar<'a> {
     gradient: &'a mut Gradient,
     home: Gradient,
@@ -1835,43 +1861,26 @@ impl<'a> SpectrumBar<'a> {
         // re-read their values here for the same reason.
         let g = self.gradient.sanitized();
         let (winding, claimed, handle_x) = laid_out(g);
-        let lut = pitch_ramp_lut(g);
-        let circle = hue_circle(g.lightness, g.chroma);
+        let circle = hue_circle(TRACK_LIGHTNESS, TRACK_CHROMA);
         let corner = bar_radius(scale);
         let radius = CornerRadius::same(corner);
         let painter = ui.painter();
-        // The pitch ramp at `p` along itself, read out of the same table the
-        // lattice draws from so the preview cannot drift from the picture. Both
-        // bands want it — the track squeezed into the claimed stretch, the strip
-        // end to end — and reading the table twice is how they would stop
-        // agreeing.
-        let ramp_at = |p: f32| {
-            let f = p.clamp(0.0, 1.0) * (PITCH_LUT_N - 1) as f32;
-            let i0 = f.floor() as usize;
-            lut[i0].lerp(lut[(i0 + 1).min(PITCH_LUT_N - 1)], f - f.floor())
-        };
         // A well under the track and nothing under the strip, because the
         // dimmed hues are drawn with alpha and need a recessed ground to sit
         // on — the same ground the unfilled end of a ValueBar shows. The strip
         // is opaque end to end and covers whatever it is given.
         painter.rect_filled(track_rect, radius, theme::well());
+        // ONE circle across the whole track, at full strength over the stretch
+        // the arc claims and held back to ground beyond it. The same hue on
+        // both sides of the handle, so the two meet flush at every setting and
+        // what the handle marks is how far round the turn the gradient reaches
+        // — which is the only thing this track is for.
         gradient_strip(painter, track_rect, SPECTRUM_SEGMENTS, corner as f32, |p| {
-            if claimed > 0.0 && p <= claimed {
-                // Along the gradient, not around the circle: the two agree by
-                // construction here, and reading the table is what keeps them
-                // agreeing if they ever stop.
-                scene_color(ramp_at(p / claimed), 1.0)
-            } else {
-                // The hues the gradient does not reach, held back far enough to
-                // read as ground.
-                let hue = g.hue_start + p * FULL_TURN * winding;
-                let f = hue.rem_euclid(FULL_TURN) / FULL_TURN * HUE_CIRCLE_N as f32;
-                let i0 = f.floor() as usize % HUE_CIRCLE_N;
-                scene_color(
-                    circle[i0].lerp(circle[(i0 + 1) % HUE_CIRCLE_N], f - f.floor()),
-                    UNCLAIMED_ALPHA,
-                )
-            }
+            let hue = g.hue_start + p * FULL_TURN * winding;
+            let f = hue.rem_euclid(FULL_TURN) / FULL_TURN * HUE_CIRCLE_N as f32;
+            let i0 = f.floor() as usize % HUE_CIRCLE_N;
+            let alpha = if claimed > 0.0 && p <= claimed { 1.0 } else { UNCLAIMED_ALPHA };
+            scene_color(circle[i0].lerp(circle[(i0 + 1) % HUE_CIRCLE_N], f - f.floor()), alpha)
         });
 
         // How far round the circle the arc reaches, read out beside the handle
@@ -1922,14 +1931,22 @@ impl<'a> SpectrumBar<'a> {
             theme::text(),
         );
 
-        // ---- The same gradient, in pitch order ------------------------------
+        // ---- The gradient itself, in pitch order ----------------------------
         // A gap under the track, aligned with it end to end: two rows of one
         // control, not a second bar. One column per table entry, so every color
         // in the table lands on a column of its own and only the vertices
         // between two of them are interpolated.
+        //
+        // Read out of the same table the lattice draws from, so the one place
+        // this control previews all six knobs cannot drift from the picture. A
+        // band mixed here from the widget's own idea of the gradient would be a
+        // second definition of the color, wrong the first time either changed.
+        let lut = pitch_ramp_lut(g);
         let strip_corner = corner as f32;
         gradient_strip(painter, strip_rect, PITCH_LUT_N - 1, strip_corner, |p| {
-            scene_color(ramp_at(p), 1.0)
+            let f = p.clamp(0.0, 1.0) * (PITCH_LUT_N - 1) as f32;
+            let i0 = f.floor() as usize;
+            scene_color(lut[i0].lerp(lut[(i0 + 1).min(PITCH_LUT_N - 1)], f - f.floor()), 1.0)
         });
 
         // ---- The flip button ------------------------------------------------
@@ -2543,12 +2560,11 @@ impl<'a> SpreadBar<'a> {
 /// the right) and interpolated between columns, with the band's ends rounded to
 /// `radius`.
 ///
-/// One builder for a [`SpectrumBar`]'s two bands — the track, whose color comes
-/// off the hue circle and the pitch ramp either side of the handle, and the
-/// pitch-order strip below it, which is the ramp end to end. A quad strip
-/// written out twice is two places to get the vertex order or the first-column
-/// case wrong, and the second copy is the one that quietly keeps the older
-/// answer.
+/// One builder for a [`SpectrumBar`]'s two bands — the track, which is the hue
+/// circle lit and then dimmed either side of the handle, and the pitch-order
+/// strip below it, which is the pitch ramp end to end. A quad strip written out
+/// twice is two places to get the vertex order or the first-column case wrong,
+/// and the second copy is the one that quietly keeps the older answer.
 ///
 /// **The rounding is in the MESH, and that is the whole reason this is not a
 /// square band inside a rounded well.** A well showing round an inset mesh is
@@ -3636,6 +3652,147 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    /// The color each of a band's columns was painted in, left to right — the
+    /// two vertices of a column carry the same one.
+    fn band_colors(mesh: &egui::Mesh) -> Vec<egui::Color32> {
+        mesh.vertices.chunks(2).map(|column| column[0].color).collect()
+    }
+
+    /// The track is hue and nothing else: the brightness and chroma bars move
+    /// the strip beneath it and leave the arc alone.
+    ///
+    /// That division is the whole of what the two bands are for, and it is
+    /// invisible to every other test here — a track painted out of the pitch
+    /// ramp draws the same rounded mesh in the same place at the same size, and
+    /// passes all of them. What it costs is the control: Mono is one click on
+    /// the Analyzer tab, and a track that answered the chroma pair would be a
+    /// hue picker drawn in grey.
+    #[test]
+    fn the_track_is_hue_alone_and_the_strip_is_the_gradient() {
+        let base = Gradient {
+            hue_start: 30.0,
+            hue_span: 180.0,
+            lightness: 60.0,
+            lightness_ramp: 0.0,
+            chroma: 0.6,
+            chroma_ramp: 0.0,
+        };
+        let painted = |g: Gradient| {
+            let mut g = g;
+            let mut h = Spectrum::settled(&mut g);
+            let shapes = h.frame(&mut g, vec![]);
+            let bands = bands(&shapes);
+            assert_eq!(bands.len(), 2, "a spectrum bar paints two bands, not {}", bands.len());
+            (band_colors(&bands[0]), band_colors(&bands[1]))
+        };
+        let (track, strip) = painted(base);
+        for (what, dialled) in [
+            (
+                "a steep brightness ramp",
+                Gradient { lightness: 50.0, lightness_ramp: 100.0, ..base },
+            ),
+            ("a steep chroma ramp", Gradient { chroma: 0.5, chroma_ramp: 1.0, ..base }),
+            ("a dark picture", Gradient { lightness: 12.0, ..base }),
+            ("Mono", Gradient { lightness: 50.0, lightness_ramp: 100.0, chroma: 0.0, ..base }),
+        ] {
+            let (moved, drawn) = painted(dialled);
+            assert_eq!(moved, track, "{what} moved the hue track");
+            // Without this half the claim above is satisfied by a bar that
+            // draws nothing at all: the strip is where those two knobs live,
+            // and a gradient that changed neither band would prove nothing.
+            assert_ne!(drawn, strip, "{what} left the strip alone too");
+        }
+        // And the track does answer the two knobs it IS: the equality above is
+        // a track holding still under the other four, not a picture that never
+        // moves.
+        for (what, dialled) in [
+            ("turning the circle", Gradient { hue_start: base.hue_start + 40.0, ..base }),
+            ("widening the arc", Gradient { hue_span: base.hue_span + 60.0, ..base }),
+        ] {
+            assert_ne!(painted(dialled).0, track, "{what} left the track alone");
+        }
+    }
+
+    /// Past the handle the track carries on in the hues the arc WOULD take if
+    /// it reached them, held back — one circle at two strengths, so the two
+    /// halves meet flush at every setting.
+    ///
+    /// Measured against the same bar with its arc opened to a whole turn, which
+    /// is the only way to ask the question without writing the color out a
+    /// second time here: every column past the handle must be the color that
+    /// column is painted when the arc claims it, at [`UNCLAIMED_ALPHA`].
+    #[test]
+    fn the_dimmed_remainder_is_the_same_circle_held_back() {
+        let arc = Gradient {
+            hue_start: 200.0,
+            hue_span: 120.0,
+            lightness: 50.0,
+            lightness_ramp: 60.0,
+            chroma: 0.5,
+            chroma_ramp: 0.6,
+        };
+        let track_of = |g: Gradient| {
+            let mut g = g;
+            let mut h = Spectrum::settled(&mut g);
+            let shapes = h.frame(&mut g, vec![]);
+            band_colors(&bands(&shapes)[0])
+        };
+        let part = track_of(arc);
+        let whole = track_of(Gradient { hue_span: FULL_TURN, ..arc });
+        assert_eq!(part.len(), whole.len(), "the two bars drew different columns");
+        let dim = (UNCLAIMED_ALPHA * 255.0) as u8;
+        // Past the handle first, and the two halves in separate passes: this is
+        // the claim, and it is the one a track drawn out of the gradient misses
+        // by a mile, where the lit half below it would miss by a byte or two at
+        // the left edge — the two arcs starting on the same color — and report
+        // a difference no reader could tell from rounding.
+        let mut held = 0;
+        for (i, (drawn, lit)) in part.iter().zip(&whole).enumerate() {
+            if drawn.a() == 255 {
+                continue;
+            }
+            held += 1;
+            assert_eq!(drawn.a(), dim, "column {i} is past the handle at some other strength");
+            // Premultiplied, so the stored bytes are the lit ones scaled by the
+            // alpha. Within a byte or two of it: the color is quantized once on
+            // the way out of the table and again by the multiply.
+            for (channel, (d, l)) in [
+                ("r", (drawn.r(), lit.r())),
+                ("g", (drawn.g(), lit.g())),
+                ("b", (drawn.b(), lit.b())),
+            ] {
+                let want = f32::from(l) * UNCLAIMED_ALPHA;
+                assert!(
+                    (f32::from(d) - want).abs() <= 2.0,
+                    "column {i}'s {channel} is {d}, not the {want} a held-back {l} would be",
+                );
+            }
+        }
+        assert!(held > 0, "the arc claimed the whole track, so nothing was compared");
+        // And the stretch both arcs claim is one color at one strength, the
+        // circle not caring how far round it the gradient reaches.
+        for (i, (drawn, lit)) in part.iter().zip(&whole).enumerate() {
+            if drawn.a() == 255 {
+                assert_eq!(drawn, lit, "column {i} is inside both arcs and must be one color");
+            }
+        }
+        // A span of nothing claims nothing, which is what the `claimed > 0.0`
+        // half of the guard is for and the only thing left holding it up: it
+        // stopped a divide by zero while the claimed stretch was the ramp
+        // squeezed into it, and now it stops `p <= claimed` from lighting the
+        // one column at `p == 0`. A lit column at the left edge of a track
+        // claiming nothing is a picture that says the gradient reaches the
+        // first hue, and Mono is one click away on the Analyzer tab.
+        let nothing = track_of(Gradient { hue_span: 0.0, ..arc });
+        let lit: Vec<usize> = nothing
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.a() != dim)
+            .map(|(i, _)| i)
+            .collect();
+        assert!(lit.is_empty(), "a span of nothing lit columns {lit:?} of {}", nothing.len());
     }
 
     /// Both bands are rounded by their own mesh, on the corner circle, and
