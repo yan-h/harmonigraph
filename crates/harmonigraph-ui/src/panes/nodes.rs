@@ -398,39 +398,18 @@ fn pitch_readout(midi: f32) -> String {
 /// a wheel are 284pt of a 400pt column.
 ///
 /// A bar costs one row and says the same thing — see [`SpectrumBar`] for how a
-/// circle fits on one.
+/// circle fits on one, and for why the flip and the arc share that row rather
+/// than taking two. The same budget is why the bar carries no name of its own:
+/// the section heading above it names the group, the three knobs below it are
+/// the rest of the gradient, and the only rainbow in the pane needs no caption
+/// to be found. What a name would say the tooltip says at more length.
 fn spectrum_group(ui: &mut egui::Ui, view: &mut ViewConfig) {
-    button_row(ui, |ui| {
-        ui.label("Spectrum");
-        // Direction is a button rather than a gesture on the bar, and the bar
-        // is the reason: it lays the arc out from its own start, so both
-        // directions draw the same stretch of color in the same place and
-        // there is nothing on it to drag the other way. Which is the right
-        // division — a flip changes only the direction, and the arc it lands
-        // on is exactly the arc it left, read backwards.
-        if ui
-            .button("Flip")
-            .on_hover_text(
-                "Run the spectrum the other way round the circle — the same \
-                 colors, low and high swapped",
-            )
-            .clicked()
-        {
-            // The arithmetic lives on the gradient rather than here: what a
-            // flip IS — the far end becoming the near one, so the arc keeps its
-            // place on the circle — is a property of the gradient that the bar
-            // beside this button previews and a test pins, and a second
-            // spelling of it here is the one that would drift.
-            view.pitch_gradient = view.pitch_gradient.flipped();
-        }
-    });
     SpectrumBar::new(&mut view.pitch_gradient).show(ui).on_hover_text(
-        "How far round the color circle the pitch range walks, out of the \
-         whole turn the bar stands for: the colors it takes fill from the \
-         left, the ones it does not are dimmed. Drag the handle to widen or \
-         narrow it, drag the track to turn the circle under it, double-click \
-         to reset. The strip beneath is the same gradient in pitch order, low \
-         note on the left.",
+        "The pitch->color spectrum: how far round the color circle the pitch \
+         range walks, out of the whole turn the bar stands for. The colors it \
+         takes fill from the left, low note first; the ones it does not are \
+         dimmed. Drag the handle to widen or narrow it, drag the track to turn \
+         the circle under it, double-click to reset.",
     );
     ValueBar::new(&mut view.pitch_gradient.lightness, 0.0..=100.0, "Brightness")
         .integer()
