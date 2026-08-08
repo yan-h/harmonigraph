@@ -414,10 +414,14 @@ fn pitch_readout(midi: f32) -> String {
 ///
 /// It is the odd one out on purpose rather than by omission. Every other bar
 /// here writes its name along its own track, over a well or an accent fill
-/// that a word can be read on; this one's track is saturated color end to end
-/// at every setting, so a name laid on it is legible at some gradients and not
-/// at others. A label on a row of its own is what that would cost, and the row
-/// is the thing this control does not have.
+/// that a word can be read on; this one's track is a whole turn of saturated
+/// color, and a turn crosses hues a dark word can be read on and hues it
+/// cannot, so a name laid along it is legible over part of its own length and
+/// lost over the rest. That is true of every gradient and not just some, the
+/// track being the same circle whatever the six knobs say — which settles it
+/// rather than leaving it a matter of which picture is dialled. A label on a
+/// row of its own is what that would cost, and the row is the thing this
+/// control does not have.
 fn spectrum_group(ui: &mut egui::Ui, view: &mut ViewConfig) {
     SpectrumBar::new(&mut view.pitch_gradient).show(ui).on_hover_text(
         "The pitch->color spectrum: how far round the color circle the pitch \
