@@ -2336,13 +2336,21 @@ impl SpreadGrab {
 /// from drifting into disagreeing about which pairs are legal, and
 /// [`Spread::legal`] is how a write earns it.
 ///
-/// **A thumb stands in that readout at rest**, which is the price of parking
-/// one run at the right rather than placing two the way a [`RangeBar`] does:
-/// both bars open with their high end past four fifths of the axis, which on a
-/// 300pt row puts the grip on the readout's leading digit. Neither run here can
-/// dodge — the name is pinned left and the readout is parked right — so both
-/// are knocked out through the thumbs by [`grip_over_text`], and a crossed
-/// digit inverts rather than disappearing.
+/// **A thumb reaches that readout**, which is the price of parking one run at
+/// the right rather than placing two the way a [`RangeBar`] does. Neither run
+/// here can dodge — the name is pinned left, the readout parked right — so both
+/// are knocked out through the thumbs by [`grip_over_text`] and a crossed digit
+/// inverts rather than disappearing.
+///
+/// How near it comes at REST is worth having straight, because a parked run
+/// invites the wider claim. Swept over the four bars the panes build, at the
+/// pairs they open with, by
+/// `the_bars_the_panes_build_are_knocked_out_wherever_they_rest_under_a_thumb`:
+/// the spectrogram's two rest under their readout on a 300pt row — Aurora
+/// opens them past four fifths of their axes — and stand clear of it by the
+/// ~423pt the settings column opens at. The nodes pane's two rest clear at
+/// every width. So at rest this is a narrow-column problem; at a normal width
+/// it is reached by dragging, which is the ordinary use of the control.
 pub struct SpreadBar<'a> {
     gradient: &'a mut Gradient,
     spread: Spread,
@@ -2497,10 +2505,10 @@ impl<'a> SpreadBar<'a> {
         // does it for its name alone, and the difference is that neither of
         // these can move. A RangeBar picks a run of clear track for each of its
         // numbers; this bar spells its two ends into ONE readout parked at the
-        // right, which buys the pair a single run to read but puts it exactly
-        // where a handle taken past about four fifths of the bar comes to rest
-        // — and that is where these two bars rest, not an edge case: brightness
-        // opens with its high end at white and chroma with its own at full.
+        // right, which buys the pair a single run to read but stands it where a
+        // handle taken past about four fifths of the axis arrives. Which end of
+        // the axis that is depends on the pair — see the type's docs for where
+        // the four bars the panes build actually rest.
         let handle_w = HANDLE_W * scale;
         for x in [lx, hx] {
             grip_over_text(
@@ -5202,9 +5210,20 @@ mod tests {
     /// still carrying the clip rect it was painted through — which is the only
     /// thing that tells a knockout pass from the run it doubles.
     fn paint_bar_clipped(spread: Spread, pair: (f32, f32)) -> Vec<egui::epaint::ClippedShape> {
+        paint_bar_wide(300.0, spread, pair)
+    }
+
+    /// The same across a row of any width, for the sweeps that care where a
+    /// thumb falls relative to a run — which is a question about points, so it
+    /// moves with the row even at a fixed pair.
+    fn paint_bar_wide(
+        width: f32,
+        spread: Spread,
+        pair: (f32, f32),
+    ) -> Vec<egui::epaint::ClippedShape> {
         let ctx = egui::Context::default();
         crate::theme::apply_theme(&ctx);
-        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(300.0, 100.0));
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(width, 100.0));
         let mut g = holding(spread, pair);
         let out = ctx.run_ui(
             egui::RawInput { screen_rect: Some(screen), ..Default::default() },
@@ -5227,13 +5246,12 @@ mod tests {
     /// single run to read but stands it exactly where a handle taken up the
     /// axis comes to rest.
     ///
-    /// That resting place is the point, and it is not a corner you have to drag
-    /// the bar into. The first fixture is each bar AS IT OPENS, and on a 300pt
-    /// row both stand their high thumb on the readout's LEADING digit: the
-    /// brightness pair opens at `L*` 42 to 86, which puts the grip at x 252
-    /// against a readout starting at 250, so "42 → 86" shows its 4 swallowed by
-    /// a thumb the same near-white the digits are. Chroma opens the same way.
-    /// This is the picture the pane draws the first time it is looked at.
+    /// The pairs here are picked to walk the code — a thumb high enough to
+    /// reach the readout, one low enough to reach the name, and a flat ramp
+    /// that puts both grips at one x — and they are picked, so they say nothing
+    /// about where the shipped bars stand. That is
+    /// `the_bars_the_panes_build_are_knocked_out_wherever_they_rest_under_a_thumb`,
+    /// which reads the real defaults and is the one a retune can move.
     #[test]
     fn a_spread_bar_knocks_out_both_its_runs_under_a_thumb() {
         let mut hit = Vec::new();
@@ -5242,7 +5260,7 @@ mod tests {
             let of = |v: f32| min + v * (max - min);
             let span = |v: f32| v * (max - min);
             for (pair, what) in [
-                ((of(0.64), span(0.44)), "as the bar opens"),
+                ((of(0.64), span(0.44)), "a ramp across the middle of the axis"),
                 ((of(0.9), span(0.18)), "a ramp up against the top of the axis"),
                 ((of(0.08), span(0.14)), "a ramp down at the bottom, under the name"),
                 // A FLAT ramp under the readout, which puts the two grips at
@@ -5304,6 +5322,71 @@ mod tests {
             hit.iter().any(|s| s == "Brightness" || s == "Chroma"),
             "the fixtures stopped standing a thumb in a name: {hit:?}",
         );
+    }
+
+    /// The four spread bars the panes actually build, at the pairs they
+    /// actually open with, rather than at a pair chosen to make the point.
+    ///
+    /// This is the test that ties the knockout to something that ships. The
+    /// fixtures above are hand-picked to walk the code, and a hand-picked pair
+    /// cannot notice a default being retuned out from under it — retune
+    /// `ViewConfig::default().pitch_gradient` or the Aurora preset and only
+    /// this one moves.
+    ///
+    /// What it finds is narrower than "you see it the moment you open the
+    /// pane", and the numbers are worth keeping because the temptation is to
+    /// state it wider. Measured at 300, 423 and 680pt: the nodes pane's two
+    /// bars rest clear of both runs at every width — brightness at `L*`
+    /// 37.5→68.5, and chroma FLAT at 60.2%, both thumbs at one x. The
+    /// spectrogram's two rest under their readout at 300pt only — Aurora opens
+    /// them at `L*` 0→88 and 40%→85%, both past four fifths of their axis —
+    /// and stand clear by 423pt, which is about where the settings column
+    /// opens. So the crossing at rest belongs to a narrow column; at a normal
+    /// width it is a thing you drag into, which is most of what a two-ended
+    /// bar is for.
+    #[test]
+    fn the_bars_the_panes_build_are_knocked_out_wherever_they_rest_under_a_thumb() {
+        let nodes = harmonigraph_scene::view::ViewConfig::default().pitch_gradient;
+        let spectral = crate::config::SpectrogramPreset::Aurora.gradient();
+        let mut crossings = 0;
+        for (pane, g) in [("nodes", nodes), ("spectral", spectral)] {
+            for spread in [Spread::Brightness, Spread::Chroma] {
+                let pair = match spread {
+                    Spread::Brightness => (g.lightness, g.lightness_ramp),
+                    Spread::Chroma => (g.chroma, g.chroma_ramp),
+                };
+                for width in [300.0f32, 423.0, 680.0] {
+                    let shapes = paint_bar_wide(width, spread, pair);
+                    let flat: Vec<_> = shapes.iter().map(|s| s.shape.clone()).collect();
+                    let (grips, runs) = (handles(&flat), text_boxes(&flat));
+                    let knocked = knockouts(&shapes);
+                    let want: Vec<_> = grips
+                        .iter()
+                        .flat_map(|gp| {
+                            runs.iter().filter(move |(r, _)| gp.intersects(*r)).map(|(_, s)| s)
+                        })
+                        .collect();
+                    assert_eq!(
+                        knocked.len(),
+                        want.len(),
+                        "{pane} {spread:?} at {width}pt: {} knockouts for {} crossings ({want:?})",
+                        knocked.len(),
+                        want.len(),
+                    );
+                    for (clip, _, text, colour) in &knocked {
+                        assert_eq!(*colour, Some(theme::panel()), "{pane} {spread:?} {width}pt");
+                        assert!(
+                            grips.iter().any(|gp| gp == clip),
+                            "{pane} {spread:?} {width}pt: a knockout of {text:?} is not on a thumb",
+                        );
+                    }
+                    crossings += want.len();
+                }
+            }
+        }
+        // A floor, so a retune that moves every bar clear of its readout says
+        // so here rather than leaving the whole test asserting nothing.
+        assert!(crossings > 0, "no bar the panes build rests under a thumb at any swept width");
     }
 
     /// The bar draws the pair it holds: a handle at each end of the ramp, at its
