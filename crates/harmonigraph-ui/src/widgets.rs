@@ -3824,11 +3824,19 @@ mod tests {
         /// pointer against the PREVIOUS pass's rects, so a press cannot land on
         /// a bar that has never been drawn.
         fn settled(g: &mut Gradient) -> Spectrum {
+            Spectrum::settled_at(g, 300.0)
+        }
+
+        /// The same, in a column of a named width — for the questions whose
+        /// answer is arithmetic against the width rather than against the
+        /// gradient. 173pt is the narrowest column the dock gives a pane, so a
+        /// sweep that reaches it has reached everything a reader can drag to.
+        fn settled_at(g: &mut Gradient, width: f32) -> Spectrum {
             let ctx = egui::Context::default();
             crate::theme::apply_theme(&ctx);
             let mut h = Spectrum {
                 ctx,
-                screen: egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(300.0, 100.0)),
+                screen: egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(width, 100.0)),
                 rect: egui::Rect::NOTHING,
                 preview: egui::Rect::NOTHING,
                 t: 0.0,
@@ -4388,32 +4396,63 @@ mod tests {
     /// handle, which is the one arrangement that aims it at the name.
     #[test]
     fn the_name_rides_the_circle_and_the_number_keeps_off_it() {
-        for span in [0.0f32, 45.0, 190.0, 330.0, 360.0, -360.0] {
+        // Swept across the column as well as the arc: the reserve the name is
+        // elided against, the stretch it leaves the readout and the clamp that
+        // holds the readout there are all arithmetic against the WIDTH, and one
+        // width exercises one answer.
+        //
+        // Past the dock's own 173pt floor on purpose. Above it the name is
+        // drawn whole and the reserve never binds — a sweep that stopped there
+        // passes with the reserve deleted, which is a test measuring nothing.
+        // The pane sweeps reach this bar at 80pt
+        // (`every_bar_in_a_settings_pane_is_the_width_of_the_pane`), and what
+        // has to hold down there is not the name but the arrangement: elided,
+        // and still clear of the number.
+        const SPANS: [f32; 6] = [0.0, 45.0, 190.0, 330.0, 360.0, -360.0];
+        /// The narrowest column the dock gives a pane, and so the width at
+        /// which the name is still owed in full.
+        const DOCK_FLOOR: f32 = 173.0;
+        for (width, span) in [300.0f32, 240.0, 200.0, DOCK_FLOOR, 140.0, 110.0, 80.0]
+            .into_iter()
+            .flat_map(|width| SPANS.map(move |span| (width, span)))
+        {
+            let aimed = format!("a span of {span} in a {width}pt column");
             let mut g = Gradient { hue_span: span, ..Gradient::default() };
-            let mut h = Spectrum::settled(&mut g);
+            let mut h = Spectrum::settled_at(&mut g, width);
             let shapes = h.frame(&mut g, vec![]);
             let texts = spectrum_texts(&shapes);
             assert_eq!(
                 texts.len(),
                 2,
-                "a span of {span} drew {texts:?} rather than a name and a readout",
+                "{aimed} drew {texts:?} rather than a name and a readout",
             );
             let (name, written, name_color) = texts[0].clone();
             let (readout, _, readout_color) = texts[1].clone();
-            // The name in full, which is what catches one elided into a track
-            // too narrow for it.
-            assert_eq!(written, SPAN_LABEL, "the bar wrote {written:?} as its name");
+            // The name in full at every width a reader can drag the column to,
+            // and below that a truthful elision of it — the tail eaten, never
+            // the head, so what survives still names the bar. Where the elision
+            // STARTS is left to the font: the claim is that it cannot start
+            // above the floor.
+            if written != SPAN_LABEL {
+                let kept = written.trim_end_matches('\u{2026}');
+                assert!(
+                    width < DOCK_FLOOR
+                        && written.ends_with('\u{2026}')
+                        && SPAN_LABEL.starts_with(kept),
+                    "{aimed}: the bar wrote {written:?} where {SPAN_LABEL:?} was owed",
+                );
+            }
             // The circle end to end under it, no gutter anywhere.
             let circle = spectrum_bands(&shapes).1.calc_bounds();
             assert!(
                 (circle.left() - h.rect.left()).abs() < 0.01
                     && (circle.right() - h.rect.right()).abs() < 0.01,
-                "the circle covers {circle:?} of a track that runs {:?}",
+                "{aimed}: the circle covers {circle:?} of a track that runs {:?}",
                 h.rect,
             );
             assert!(
                 name.left() < circle.right() && name.right() > circle.left(),
-                "the name at {name:?} is not on the circle {circle:?} at all",
+                "{aimed}: the name at {name:?} is not on the circle {circle:?} at all",
             );
             // Dark, and darker than the number beside it: the two stand on
             // different halves of the track and take opposite ends of the
@@ -4422,20 +4461,20 @@ mod tests {
             assert_eq!(
                 name_color,
                 span_name_color(),
-                "the name is drawn in {name_color:?}, not the ground color it is meant to be",
+                "{aimed}: the name is {name_color:?}, not the ground color it is meant to be",
             );
             let luma = |c: Color32| f32::from(c.r()) + f32::from(c.g()) + f32::from(c.b());
             assert!(
                 luma(name_color) < luma(readout_color),
-                "the name {name_color:?} is no darker than the readout {readout_color:?}",
+                "{aimed}: the name {name_color:?} is no darker than the readout {readout_color:?}",
             );
             assert!(
                 readout.left() >= name.right(),
-                "a span of {span} put the readout at {readout:?}, back into the name {name:?}",
+                "{aimed} put the readout at {readout:?}, back into the name {name:?}",
             );
             assert!(
                 readout.right() <= h.rect.right() + 0.01,
-                "a span of {span} ran the readout past the track's end: {readout:?}",
+                "{aimed} ran the readout past the track's end: {readout:?}",
             );
         }
     }
