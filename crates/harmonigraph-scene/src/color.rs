@@ -18,7 +18,6 @@
 //! cheaper half of that trade and the whole of it that matters here — see
 //! `tests/hue_space.rs`, which measures both and prices them.
 
-use crate::view::ViewConfig;
 use crate::style::Gradient;
 use crate::PITCH_LUT_N;
 use glam::Vec4;
@@ -719,11 +718,10 @@ pub(crate) fn ramp_luminance(l_star: f64, h: f64, c: f64) -> (f64, f64) {
     (target_y, 0.2126 * r + 0.7152 * g + 0.0722 * b)
 }
 
-/// The idle layer's color: the grid color's RGB at full alpha. The grid's
-/// alpha is the LINE opacity and doesn't belong to the markers, which have
-/// their own presence — so it's dropped here rather than dimming them
-/// along with the lines.
-pub(crate) fn idle_color(view: &ViewConfig) -> Vec4 {
-    let c = view.grid_color;
-    Vec4::new(c[0], c[1], c[2], 1.0)
+/// The idle layer's color: the [grid line](crate::skin::grid_line)'s RGB at
+/// full alpha. That alpha is the LINE opacity and doesn't belong to the
+/// markers, which have their own presence — so it's dropped here rather than
+/// dimming them along with the lines.
+pub(crate) fn idle_color() -> Vec4 {
+    crate::skin::grid_line().with_w(1.0)
 }

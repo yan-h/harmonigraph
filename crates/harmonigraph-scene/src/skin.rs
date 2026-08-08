@@ -1,7 +1,8 @@
-//! The skin: one struct owning every color the product draws, both the 3D
-//! scene's and the UI chrome's, so a look is defined in exactly one place.
-//! `harmonigraph-ui::theme` converts the chrome bytes into egui colors; the
-//! scene reads its colors directly.
+//! The skin: one struct owning every color the product draws, so a look is
+//! defined in exactly one place. `harmonigraph-ui::theme` converts the bytes
+//! into egui colors for the panel chrome; the scene reaches the same bytes
+//! through [`grid_line`] and [`panel_color`], which is what keeps the picture
+//! and the panel around it the same grey rather than two greys that agree.
 //!
 //! Only one built-in skin exists so far (the original dark look). Adding a
 //! skin = another `Skin` value plus a way to select it (a `set_skin`
@@ -15,13 +16,9 @@ use glam::Vec4;
 
 #[derive(Clone, Debug)]
 pub struct Skin {
-    // ---- 3D scene ----
-    /// The faint background grid between node positions; alpha is the
-    /// line opacity. Only the DEFAULT for `ViewConfig::grid_color`, which
-    /// is what the scene actually reads.
-    pub grid_line: Vec4,
-
     // ---- UI chrome (sRGB bytes; converted to egui colors in theme) ----
+    // The scene has no colors of its own here: the one it used to keep, the
+    // home grid's, is `hairline` (see `grid_line`).
     /// Window/panel background.
     pub panel: [u8; 3],
     /// Recessed areas: console scrollback, tab bar, meters.
@@ -71,7 +68,6 @@ impl Default for Skin {
     /// grid brighten to match. See git history for the pre-pass values.
     fn default() -> Self {
         Skin {
-            grid_line: Vec4::new(0.27, 0.29, 0.34, 0.62),
             panel: [24, 25, 29],
             well: [15, 16, 19],
             surface_faint: [46, 48, 57],
@@ -98,6 +94,31 @@ static ACTIVE: OnceLock<Skin> = OnceLock::new();
 /// The active skin (currently always [`Skin::default`]).
 pub fn active_skin() -> &'static Skin {
     ACTIVE.get_or_init(Skin::default)
+}
+
+/// How faint an unlit home-sheet grid line draws — the alpha half of
+/// [`grid_line`], and the whole of what separates the picture's rules from
+/// the panel's. Opaque, the structure reads as firmly as the notes standing
+/// on it, which is the wrong way round: the grid is what the lattice looks
+/// like at rest, not a thing to be looked at.
+///
+/// Only the LINES take it. The idle markers keep the RGB at full alpha (see
+/// `color::idle_color`), so a faint grid doesn't dissolve them with it.
+const GRID_LINE_ALPHA: f32 = 0.62;
+
+/// The home grid's color: the chrome's [`hairline`](Skin::hairline) grey, at
+/// [`GRID_LINE_ALPHA`].
+///
+/// The same grey that rules a settings pane rules the lattice, which is the
+/// point — the grid and the hairline are the same object seen in two places,
+/// one drawn by egui and one by the shader, and a skin that gave the scene
+/// its own near-copy of a chrome color could only ever drift from it. It was
+/// within four points per channel of `hairline` when it was its own field.
+pub fn grid_line() -> Vec4 {
+    let [r, g, b] = active_skin().hairline;
+    let mut c = ground_color((r, g, b));
+    c.w = GRID_LINE_ALPHA;
+    c
 }
 
 /// An sRGB byte triple as the opaque RGBA vector the renderer wants.

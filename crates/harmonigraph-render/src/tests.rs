@@ -308,16 +308,8 @@ fn parity_scene() -> Scene {
         // paths composite, so the indicators are the ones every other
         // setting is a departure from.
         octave_layout: harmonigraph_scene::OctaveLayout::default(),
-        idle_marker: harmonigraph_scene::IdleMarker::None,
-        idle_radius: 0.0,
         grid,
         grid_thickness: 1.0,
-        // The parity image is about how a NOTE is drawn; the trail marks
-        // only idle nodes and has its own tests. Off keeps this baseline
-        // comparable to the ones taken before it existed.
-        trail_mark: Default::default(),
-        trail_strength: 0.0,
-        node_idle: Vec4::new(0.27, 0.29, 0.34, 1.0),
         // A blue->red sweep across the whole table, so a glyph's color is a
         // reading of which entry it landed on. Spanned off PITCH_LUT_N rather
         // than a literal: `from_fn` sizes itself from the field, so a literal
@@ -2786,15 +2778,6 @@ fn sheets_draw_back_to_front_along_the_sevens_axis() {
         extent_threes: 1,
         extent_fives: 1,
         extent_sevens: 2,
-        // The pale trail ring, which draws with no idle marker and on any
-        // sheet — the one mark that can put something at EVERY position.
-        // An idle marker cannot: it reaches only the home sheet or a visited
-        // node (`idle_marker` in lattice.wgsl), and trails are recorded on
-        // the home sheet alone (`TrailField::apply`), so with one of those
-        // the cull leaves a single sheet and the order below is one depth
-        // compared against itself.
-        trail_mark: harmonigraph_scene::TrailMark::Ring,
-        trail_strength: 1.0,
         ..ViewConfig::default()
     };
     for projection in [Projection::Cabinet, Projection::Perspective, Projection::Orthographic]
@@ -2811,11 +2794,15 @@ fn sheets_draw_back_to_front_along_the_sevens_axis() {
             None,
             0.0,
         );
-        // Every position visited. Set here rather than played in, because
+        // Every position SOUNDING. Set here rather than played in, because
         // what this test needs is one node per position on every sheet, and
         // which nodes a tracker lights is a question about tuning.
+        //
+        // Sounding is the only way to get one: an idle node paints nothing at
+        // all now, so the cull drops it, and a scene of idle nodes would leave
+        // the order below comparing an empty list with itself.
         for node in &mut scene.nodes {
-            node.trail = 1.0;
+            node.activation = 1.0;
         }
         let call = LatticeCallback::from_scene(
             &scene,
@@ -2855,10 +2842,16 @@ fn sheets_draw_back_to_front_along_the_sevens_axis() {
 }
 
 /// Every node idle: no note, no marks, no octaves — the state most of a
-/// lattice is in most of the time, and the one the fragment shader's idle
-/// branch takes. Markers and trails ON, since they are the only thing an
-/// idle node paints and therefore the only thing that branch has to get
-/// right.
+/// lattice is in most of the time, and the state in which a node paints
+/// NOTHING. There is no idle marker and no trail mark to draw one; what
+/// says a position is there is the grid's gap around it, which belongs to
+/// the edge pass. So every test below expects these nodes to be culled, and
+/// the fixture exists to make "nothing to draw" easy to ask for.
+///
+/// `on_home` and `trail` are still set, on different cycles, because the
+/// CPU still reads both — the trail feeds the labels, and the home flag the
+/// grid — and a fixture where the two sets coincide could not tell a
+/// predicate that reads one from a predicate that reads the other.
 fn idle_scene() -> Scene {
     let mut scene = parity_scene();
     for (i, node) in scene.nodes.iter_mut().enumerate() {
@@ -2870,18 +2863,8 @@ fn idle_scene() -> Scene {
         node.bass_level = 0.0;
         node.hovered = false;
         node.on_home = i % 2 == 0;
-        // Visited on a DIFFERENT cycle from the home sheet, so the two are
-        // separable: `idle_marker` shows where the node is home OR visited,
-        // and a fixture whose visited set is its home set makes that
-        // disjunction untestable — either branch alone reproduces it, and so
-        // does the complement of either. Node 3 is the one that matters: off
-        // the home sheet and visited, so it draws for exactly one reason.
         node.trail = if i % 3 == 0 { 0.8 } else { 0.0 };
     }
-    scene.idle_marker = harmonigraph_scene::IdleMarker::Circle;
-    scene.idle_radius = 0.24;
-    scene.trail_mark = harmonigraph_scene::TrailMark::Ring;
-    scene.trail_strength = 1.0;
     scene
 }
 
@@ -2934,9 +2917,13 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         scene.pulse_marks = harmonigraph_scene::Pulse::Bands;
         scene
     };
+    // No all-idle fixture: an idle node paints nothing, so the cull ships
+    // none of them and the comparison would be two empty images. What the
+    // idle branch does is now pinned by
+    // `a_silent_lattice_ships_no_nodes_and_still_draws_its_grid` instead,
+    // on the CPU side where the decision actually lives.
     for (name, scene) in [
         ("lit", parity_scene()),
-        ("idle", idle_scene()),
         ("fat core", fat_core()),
         ("shimmering", shimmering()),
     ] {
@@ -2999,21 +2986,14 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
 ///
 /// The billboard is deliberately bigger than the node, so a node the shader
 /// discards every fragment of still costs a quad's worth of rasterizing; on
-/// an unplayed lattice that is nearly every node. With the default idle
-/// marker (None) and trails off it is ALL of them, which is the case worth
-/// pinning: the frame drops to a grid and nothing else, and the callback
-/// has to keep drawing that grid, which is why neither `prepare` nor `paint`
-/// may read "no instances" as "nothing to draw": that test takes the grid
-/// down with the nodes.
+/// an unplayed lattice that is EVERY node, there being no idle marker and no
+/// trail mark for one to draw. So the frame drops to a grid and nothing
+/// else, and the callback has to keep drawing that grid — which is why
+/// neither `prepare` nor `paint` may read "no instances" as "nothing to
+/// draw": that test takes the grid down with the nodes.
 #[test]
 fn a_silent_lattice_ships_no_nodes_and_still_draws_its_grid() {
-    let scene = {
-        let mut scene = idle_scene();
-        // What a fresh view opens at: nothing to show at an unplayed node.
-        scene.idle_marker = harmonigraph_scene::IdleMarker::None;
-        scene.trail_mark = harmonigraph_scene::TrailMark::Off;
-        scene
-    };
+    let scene = idle_scene();
     assert!(!scene.grid.is_empty(), "the fixture has to carry a grid");
     let cb = LatticeCallback::from_scene(
         &scene,
@@ -3066,92 +3046,6 @@ fn format_of(cb: &LatticeCallback) -> wgpu::TextureFormat {
     cb.target_format
 }
 
-/// What brings a silent node back: the two marks an idle node can wear.
-/// Each is read off a different uniform by a different branch of
-/// `idle_marker`, so each needs its own case — the cull has to ask the same
-/// question the shader does, and a cull that only knew about one of them
-/// would blank the other with no symptom but a missing mark.
-///
-/// Asserted as the SET of positions kept, not how many. A count cannot tell
-/// a predicate from its complement: `idle_scene` has three home nodes, and a
-/// cull that shipped the three off-home ones instead would agree with every
-/// count this could make.
-#[test]
-fn an_idle_marker_or_a_trail_ring_keeps_its_nodes() {
-    let ships = |scene: &Scene| {
-        let kept = LatticeCallback::from_scene(
-            scene,
-            LatticeLabels::default(),
-            egui::vec2(256.0, 256.0),
-            wgpu::TextureFormat::Rgba8Unorm,
-            32,
-            None,
-        )
-        .instances;
-        // The home flag and the memory are what the predicate reads, so they
-        // are what identifies a kept node here.
-        let mut ids: Vec<(bool, bool)> =
-            kept.iter().map(|g| (g.home >= 0.5, g.visited > 0.0)).collect();
-        ids.sort();
-        ids
-    };
-    let of = |f: fn(&harmonigraph_scene::NodeInstance) -> bool| {
-        let mut ids: Vec<(bool, bool)> = idle_scene()
-            .nodes
-            .iter()
-            .filter(|n| f(n))
-            .map(|n| (n.on_home, n.trail > 0.0))
-            .collect();
-        ids.sort();
-        ids
-    };
-    // The fixture separates the two: home and visited are different sets, and
-    // node 3 is visited OFF the home sheet, which is the only node that can
-    // tell the marker's `home || trail` disjunction from its `home` half.
-    assert_ne!(of(|n| n.on_home), of(|n| n.trail > 0.0), "the two sets must differ");
-    assert!(
-        idle_scene().nodes.iter().any(|n| !n.on_home && n.trail > 0.0),
-        "one node has to be visited off the home sheet",
-    );
-
-    // The marker alone: it shows where the node is home OR carries a memory.
-    let mut marker_only = idle_scene();
-    marker_only.trail_mark = harmonigraph_scene::TrailMark::Off;
-    // Trails Off zeroes the memory the marker would also have shown on, so
-    // this is the home sheet exactly.
-    assert_eq!(
-        ships(&marker_only),
-        of(|n| n.on_home),
-        "with trails off the idle marker draws on the home sheet",
-    );
-
-    // The marker with trails on reaches one node further: the off-sheet one
-    // the music visited. That node is the whole of the disjunction.
-    let mut marker_and_trail = idle_scene();
-    marker_and_trail.trail_mark = harmonigraph_scene::TrailMark::Lift;
-    assert_eq!(
-        ships(&marker_and_trail),
-        of(|n| n.on_home || n.trail > 0.0),
-        "a visited node keeps its marker off the home sheet",
-    );
-
-    // The pale ring alone: it draws with the marker off, on what was visited,
-    // wherever that is.
-    let mut ring_only = idle_scene();
-    ring_only.idle_marker = harmonigraph_scene::IdleMarker::None;
-    assert_eq!(
-        ships(&ring_only),
-        of(|n| n.trail > 0.0),
-        "the trail ring draws on visited nodes, home sheet or not",
-    );
-
-    // And a strength of zero is a ring that isn't there.
-    let mut faded = idle_scene();
-    faded.idle_marker = harmonigraph_scene::IdleMarker::None;
-    faded.trail_strength = 0.0;
-    assert!(ships(&faded).is_empty(), "a ring at zero strength paints nothing");
-}
-
 /// One way of making a node sound, for the table in the test below.
 type LightUp = fn(&mut harmonigraph_scene::NodeInstance);
 
@@ -3179,10 +3073,8 @@ type LightUp = fn(&mut harmonigraph_scene::NodeInstance);
 fn each_thing_that_makes_a_node_sounding_keeps_it_alone() {
     let bare = || {
         let mut scene = idle_scene();
-        // Nothing an IDLE node could draw, so the only reason to keep one is
-        // the term under test.
-        scene.idle_marker = harmonigraph_scene::IdleMarker::None;
-        scene.trail_mark = harmonigraph_scene::TrailMark::Off;
+        // An idle node draws nothing whatever its memory, so the only reason
+        // to keep one is the term under test.
         for node in &mut scene.nodes {
             node.trail = 0.0;
         }
@@ -3253,8 +3145,6 @@ fn each_thing_that_makes_a_node_sounding_keeps_it_alone() {
 #[test]
 fn the_grid_seam_counts_the_nodes_that_ship() {
     let mut scene = idle_scene();
-    scene.idle_marker = harmonigraph_scene::IdleMarker::None;
-    scene.trail_mark = harmonigraph_scene::TrailMark::Off;
     scene.nodes.truncate(3);
     for node in &mut scene.nodes {
         node.trail = 0.0;
@@ -3344,8 +3234,6 @@ fn a_lattice_with_nothing_to_draw_reports_no_gpu_time() {
 
     // Now the same pane with nothing at all in it.
     let mut empty = idle_scene();
-    empty.idle_marker = harmonigraph_scene::IdleMarker::None;
-    empty.trail_mark = harmonigraph_scene::TrailMark::Off;
     empty.grid.clear();
     let blank = LatticeCallback::from_scene(
         &empty,
@@ -3569,8 +3457,6 @@ fn a_label_takes_its_own_nodes_place_in_the_order() {
         ..Default::default()
     };
     scene.grid.clear();
-    scene.idle_marker = harmonigraph_scene::IdleMarker::None;
-    scene.trail_mark = harmonigraph_scene::TrailMark::Off;
     let node = |z: f32, activation: f32| harmonigraph_scene::NodeInstance {
         world_pos: glam::Vec3::new(0.0, 0.0, z),
         activation,
@@ -3657,10 +3543,8 @@ fn a_culled_home_nodes_name_draws_over_the_grid_it_shares_a_seam_with() {
         pitch: 0.0,
         ..Default::default()
     };
-    // The stock resting state: one sheet, no idle disc, the trail lifting
-    // rather than ringing, so an untouched node paints nothing at all.
-    scene.idle_marker = harmonigraph_scene::IdleMarker::None;
-    scene.trail_mark = harmonigraph_scene::TrailMark::Lift;
+    // The stock resting state: one sheet, and an untouched node painting
+    // nothing at all, which is every idle node.
     let node = |activation: f32| harmonigraph_scene::NodeInstance {
         world_pos: glam::Vec3::new(0.0, 0.0, 0.0),
         activation,

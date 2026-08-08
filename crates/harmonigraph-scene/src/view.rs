@@ -2,9 +2,7 @@
 //! per-frame [`FrameParams`] mirror of the host-automatable appearance
 //! parameters.
 
-use crate::skin;
-use crate::style::{IdleMarker, Gradient, Pulse, SevensLabel};
-use crate::trail::TrailMark;
+use crate::style::{Gradient, Pulse, SevensLabel};
 use harmonigraph_core::{coords, Comma, Envelope, LatticePos, Tempered};
 
 /// Purely-visual settings (not host-automatable parameters). The UI layer
@@ -229,17 +227,10 @@ pub struct ViewConfig {
     /// `#[serde(default)]` makes `impl Default` the one fallback, and
     /// `a_view_missing_any_one_key_reloads_at_the_fresh_value` holds it.
     pub fade_shape: f32,
-    // ---- Idle (unlit) node marker ----------------------------------------
-    // A minimal grey marker at each home-sheet node, drawn ALWAYS —
-    // independent of both the active appearance and whether a note is
-    // playing there (an active note simply composites over it). Off-sheet
-    // nodes draw nothing (the grid marks them).
-    /// What the idle marker is (see [`IdleMarker`]): nothing, a filled dot,
-    /// or an outline circle.
-    pub idle_marker: IdleMarker,
-    /// The idle marker's radius (dot fill / circle) in quad UV units.
-    /// Independent of the active `core_radius`.
-    pub idle_radius: f32,
+    // An unlit node has no mark of its own: the grid lines between node
+    // positions are the whole of what says a position is there, on the home
+    // sheet and off it alike. So a resting lattice is its own drawing rather
+    // than a field of placeholders, and every disc on screen is a note.
     // ---- Melody / bass highlight -----------------------------------------
     // Mark the outer held notes, so the melody and/or bass line reads at a
     // glance out of a chord. "Outer" is by sounding pitch (`Voice::pitch`,
@@ -425,60 +416,41 @@ pub struct ViewConfig {
     pub shimmer_softness: f32,
 
     // ---- Home grid -------------------------------------------------------
-    // The faint structural grid between node positions (see `derive_grid`).
-    // Color, inset, thickness and dashing are all settings; the fields
-    // below are the whole of its look.
-    /// Color of the whole idle structure, linear RGBA: the grid lines AND
-    /// the idle node markers, which are one visual layer — what carries
-    /// the lattice's shape when nothing is playing — and so share a color.
-    ///
-    /// Alpha is the idle LINE opacity: the strength an unlit home-sheet
-    /// segment draws at. The idle markers take only the RGB and keep their
-    /// own presence, so dialing the lines faint doesn't quietly dissolve
-    /// the markers with them.
-    ///
-    /// Defaults to the skin's `grid_line`, which is where the lines'
-    /// color always came from; the skin has no runtime setter, so a
-    /// user-chosen color has to live here. Lit segments still take their
-    /// sounding notes' color.
-    pub grid_color: [f32; 4],
+    // The faint structural grid between node positions (see `derive_grid`),
+    // and with no idle marker under it, the whole of what an unplayed lattice
+    // draws. Thickness and inset are its settings; its COLOR is not among
+    // them — it draws in the skin's hairline grey (`skin::grid_line`), the
+    // same one the panel rules itself with, and a lit segment takes its
+    // note's color.
     /// Grid line thickness as a multiple of the built-in width. 1 is the
-    /// classic hairline; the shader scales its grid half-width by this.
+    /// classic hairline; the shader scales its grid half-width by this, so 0
+    /// takes the lines away and with them the lattice's resting picture.
     pub grid_thickness: f32,
     /// How far a grid segment stops short of each node center, as a factor
-    /// of the node radius — the padding between a line end and the
-    /// dot/circle drawn there. 0 runs the lines right into the centers;
-    /// 1.05 sits slightly wider than the disc's visual radius, so the gap
-    /// fully contains a sounding note's circle.
+    /// of the node radius — the gap a line leaves around the position it
+    /// runs to. 0 runs the lines right into the centers; 1.05 sits slightly
+    /// wider than the disc's visual radius, so the gap fully contains a
+    /// sounding note's circle.
     ///
+    /// The gap is what a node position looks like at rest, nothing being
+    /// drawn inside it: the lines say a node is there by stopping short of
+    /// it.
     pub grid_inset: f32,
-    /// Draw the in-plane grid lines dashed. The sevens-axis links are
-    /// always dashed regardless — that dash is what distinguishes a depth
-    /// link from an in-sheet line, and isn't a style choice.
-    pub grid_dashed: bool,
     // ---- Trail (where the music has already been) ------------------------
-    // The one part of the view about the past rather than the present. It
-    // rides the IDLE layer only -- see the `trail` module for why that is
-    // the whole design and not an implementation detail.
-    /// How a node the music has visited is marked (see [`TrailMark`]).
-    /// [`TrailMark::Lift`] fresh: where the music has been is most of what
-    /// the lattice is for, and a lift reads as a node standing slightly
-    /// proud rather than as a second kind of lit. `Off` is the setting for
-    /// showing only what is audible.
-    pub trail_mark: TrailMark,
-    /// How far the mark departs from a plain idle node, 0..1 — how much
-    /// lighter the Lift grey, how visible the Ring, how much color the
-    /// Tint. 1 is still quiet by construction; every mark is bounded well
-    /// short of reading as a sounding note.
-    pub trail_strength: f32,
+    // The one part of the view about the past rather than the present, and it
+    // is drawn in TYPE alone -- see the `trail` module for why that is the
+    // whole design and not an implementation detail.
     /// Seconds before a pitch is forgotten, measured from when it last
     /// sounded. **0 means never** -- the default, and the point of the
     /// feature: a whole piece's territory rather than a rolling window.
     pub trail_memory: f32,
     /// Keep the note name and cents on a visited node, not just on sounding
     /// and hovered ones -- so the harmonic space can be read off the screen
-    /// by name, with its tuning. Independent of the mark above: the text is
-    /// its own channel and is useful with the marks off.
+    /// by name, with its tuning.
+    ///
+    /// The trail's on/off, the names being the whole of what a memory draws:
+    /// with this off nothing fills [`NodeInstance::trail`](crate::NodeInstance::trail)
+    /// at all.
     pub trail_labels: bool,
 
     /// Meantone mode: lock the major-third tuning to four perfect fifths
@@ -902,13 +874,6 @@ impl Default for ViewConfig {
             // the ear has finished the note. The straight line is still one
             // drag away.
             fade_shape: 0.35,
-            // No idle marker: the grid lines alone carry the lattice's
-            // shape where nothing is playing, leaving the node positions
-            // themselves empty. (`idle_radius` rides along inert, so
-            // switching a marker back on lands at the compact size that
-            // matches the core.)
-            idle_marker: IdleMarker::None,
-            idle_radius: 0.1,
             // Both ends marked: the rings are subtle enough to live with
             // always on, and a chord's outer voices are worth seeing without
             // having to go turn something on first.
@@ -937,20 +902,12 @@ impl Default for ViewConfig {
             shimmer_width: 0.639_271_56,
             shimmer_intensity: 0.517_033_16,
             shimmer_softness: 1.0,
-            // The grid's color comes from the skin, which is the only place
-            // it comes from until someone customizes it.
-            grid_color: skin::active_skin().grid_line.to_array(),
             grid_thickness: 1.103_806_3,
             grid_inset: 0.3,
-            grid_dashed: false,
-            // Trail on, with the note names kept on visited nodes. NOTE:
-            // Lift works by lightening the idle marker, and the marker is
-            // None above, so out of the box the trail shows as the labels
-            // alone. See TrailMark::needs_idle_marker.
-            trail_mark: TrailMark::Lift,
-            // Half travel on a bar whose whole range is quiet: clearly a
-            // different node, still clearly not a lit one.
-            trail_strength: 0.5,
+            // The trail on, and never forgetting: where the music has been is
+            // most of what the lattice is for, and the names are quiet enough
+            // to accumulate over a whole piece without ever competing with
+            // what is sounding.
             trail_memory: 0.0,
             trail_labels: true,
             meantone: false,
