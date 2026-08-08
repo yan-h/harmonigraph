@@ -1175,8 +1175,26 @@ impl<'a> RangeBar<'a> {
                 // put the head past the fill's own end.
                 let split = lx.clamp(fill.left(), hx);
                 let r = bar_radius(scale);
+                // Held to the reach, so the head below can be widened past it
+                // without ever drawing reach the edge does not have. Only the
+                // far end is cut — the sides are pushed out of the way so the
+                // fill's own antialiasing is not shaved with them.
+                let mut clip = rect.expand(2.0);
+                clip.max.x = hx;
+                let painter = painter.with_clip_rect(clip);
                 let mut head = fill;
-                head.max.x = split;
+                // Never narrow enough for its own corner to be clamped. epaint
+                // holds a corner radius to half the rect's shortest side, so a
+                // head cut to fit — the handle inset, four points, is where a
+                // fade dragged fully open leaves it — would round at two points
+                // where the well rounds at five, and poke out through the
+                // well's arc. That is the bar changing shape as a handle
+                // reaches the end of its travel.
+                //
+                // Twice the radius is what leaves the corner alone, and it
+                // costs nothing to ask for: the ramp is drawn over the excess,
+                // and past the reach the clip takes it.
+                head.max.x = split.max(fill.left() + 2.0 * f32::from(r));
                 // Square where the ramp continues it, round where the bar is:
                 // a rounded right end here would cut a notch out of a fill that
                 // does not stop there.
@@ -1193,7 +1211,7 @@ impl<'a> RangeBar<'a> {
                 if ramp.width() > 0.0 {
                     let from = egui::Rgba::from(fill_color);
                     let to = egui::Rgba::from(theme::well());
-                    gradient_strip(painter, ramp, FADE_SEGMENTS, (0.0, f32::from(r)), |p| {
+                    gradient_strip(&painter, ramp, FADE_SEGMENTS, (0.0, f32::from(r)), |p| {
                         egui::lerp(from..=to, p).into()
                     });
                 }
@@ -3067,10 +3085,10 @@ mod tests {
         paint_range_bar_wide(300.0, low, high)
     }
 
-    /// Paint one [`RangeBar::fade_span`] bar across a 300pt row. No `min_span`,
-    /// as the bars that ask for this paint have none: their span closes for a
-    /// hard edge.
-    fn paint_fade_bar(low: f32, high: f32) -> Vec<egui::Shape> {
+    /// Paint one [`RangeBar::fade_span`] bar across a 300pt row, each shape
+    /// still carrying the rect it is clipped to. No `min_span`, as the bars
+    /// that ask for this paint have none: their span closes for a hard edge.
+    fn paint_fade_bar_clipped(low: f32, high: f32) -> Vec<egui::epaint::ClippedShape> {
         let ctx = egui::Context::default();
         crate::theme::apply_theme(&ctx);
         let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(300.0, 100.0));
@@ -3081,7 +3099,12 @@ mod tests {
                 RangeBar::new(&mut lo, &mut hi, AXIS.0..=AXIS.1, NAME).fade_span().show(ui);
             },
         );
-        out.shapes.into_iter().map(|s| s.shape).collect()
+        out.shapes
+    }
+
+    /// The same, as bare shapes — what every reading but the clip wants.
+    fn paint_fade_bar(low: f32, high: f32) -> Vec<egui::Shape> {
+        paint_fade_bar_clipped(low, high).into_iter().map(|s| s.shape).collect()
     }
 
     /// The SOLID head of a [`RangeBar::fade_span`] fill — the stretch left of
@@ -3673,6 +3696,80 @@ mod tests {
             );
             previous = from_well(color);
         }
+    }
+
+    /// A fade dragged fully OPEN keeps the bar's corner, which takes widening
+    /// the solid head past where it is painted.
+    ///
+    /// The low end at the axis floor puts the head at the handle inset, four
+    /// points, and epaint holds a corner radius to half the rect's shortest
+    /// side — so the head would round at two points where the well rounds at
+    /// five and poke out through the well's own arc. The bar changing shape as
+    /// a handle reaches the end of its travel is the thing to keep out, and it
+    /// is invisible in the shapes themselves: the radius handed to
+    /// `rect_filled` is the same either way, and only the tessellator clamps
+    /// it. So the width is what this asks about.
+    ///
+    /// The ramp is what makes the widening free, and it has to still start at
+    /// the LOW end for that: cover the head from anywhere else and the
+    /// widening is fill the bar does not mean.
+    #[test]
+    fn a_fully_soft_edge_keeps_the_fills_corner_round() {
+        let shapes = paint_fade_bar(AXIS.0, 100.0);
+        let bar = filled_rects(&shapes)[0].0;
+        let (head, _) = fade_head(&shapes).expect("a fully soft edge painted no solid head");
+        let radius = f32::from(bar_radius(1.0));
+        assert!(
+            head.width() >= 2.0 * radius,
+            "the head is {:.1}pt wide, under the {:.1}pt its own corner needs",
+            head.width(),
+            2.0 * radius,
+        );
+        let ramp = fill_ramp(&shapes);
+        let first = ramp.first().expect("a fully soft edge painted no ramp").0;
+        assert!(
+            (first - (bar.left() + HANDLE_INSET)).abs() < 0.01,
+            "the ramp starts at {first} rather than at the low end ({})",
+            bar.left() + HANDLE_INSET,
+        );
+    }
+
+    /// The widening is cut back at the reach, and the CLIP is what cuts it.
+    ///
+    /// A reach under twice the corner radius leaves the head running past
+    /// `high` — which is the whole point of widening it, since the alternative
+    /// is a corner clamped to half of whatever room is left. Nothing in the
+    /// rect itself then says where the fill stops, so the one thing standing
+    /// between a two-point gutter and ten points of solid bar is the clip. Read
+    /// it directly: a shape's own geometry cannot show it.
+    #[test]
+    fn a_widened_head_is_still_cut_back_at_the_reach() {
+        // A hundredth of the axis: a couple of points of reach on this row.
+        let high = AXIS.0 + (AXIS.1 - AXIS.0) * 0.01;
+        let painted = paint_fade_bar_clipped(AXIS.0, high);
+        let bar = filled_rects(&paint_fade_bar(AXIS.0, high))[0].0;
+        let hx = bar.left()
+            + HANDLE_INSET
+            + (bar.width() - 2.0 * HANDLE_INSET) * (high - AXIS.0) / (AXIS.1 - AXIS.0);
+        let (clip, head) = painted
+            .iter()
+            .find_map(|s| match &s.shape {
+                egui::Shape::Rect(r) if r.fill == theme::accent_fill() => {
+                    Some((s.clip_rect, r.rect))
+                }
+                _ => None,
+            })
+            .expect("a fade span painted no solid head");
+        assert!(
+            head.right() > hx + 0.01,
+            "the head stops at {} without reaching past `high` ({hx}), so this pins nothing",
+            head.right(),
+        );
+        assert!(
+            (clip.right() - hx).abs() < 0.01,
+            "the fill is cut at {} rather than at the reach ({hx})",
+            clip.right(),
+        );
     }
 
     /// An edge of no reach paints NOTHING — neither part of the fill — and it
