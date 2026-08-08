@@ -116,11 +116,12 @@ pub(crate) const PANE_INNER_MARGIN: f32 = 8.0;
 ///
 /// ONE number for all of them, because a settings pane is read as a column of
 /// rows, and a row a few points taller than its neighbours reads as a
-/// misalignment rather than as emphasis. They reach it by two different routes,
-/// which is what makes a shared number worth naming rather than assuming: the
-/// bars in [`crate::widgets`] allocate it as their exact size, and everything
-/// else is grown to it by `interact_size` (see [`style_at`], which is also
-/// where the one control that could overshoot it is held down).
+/// misalignment rather than as emphasis. They reach it by three different
+/// routes, which is what makes a shared number worth naming rather than
+/// assuming: egui's own controls are grown to it by `interact_size` (see
+/// [`style_at`]), the bars allocate it as their exact size, and the three that
+/// egui's floor does not reach — a text field, the toggle switch, the record
+/// button — ask for it (see [`crate::widgets`]).
 ///
 /// The design size, at [scale](ui_scale) 1.0; anything drawing with it wants
 /// [`row_height`].
@@ -380,11 +381,18 @@ fn style_at(scale: f32) -> egui::Style {
     //
     // Which leaves the vertical padding one job: stay out of the way. A button
     // is as tall as its text plus this, or the floor, whichever is more, so
-    // anything that fits under the floor gives the same button and anything
-    // over it is a button standing taller than its row. 1 point fits with room
-    // to spare at every scale in [`UI_SCALE_RANGE`] (13.5pt type sets a 16.7pt
-    // line in a 20pt row), and `every_settings_row_is_one_row_high` is what
-    // says so after a change to the type.
+    // any value that fits under the floor draws the same button and any value
+    // over it is a button standing taller than its row.
+    //
+    // 1 point fits at every scale in [`UI_SCALE_RANGE`], but not by much, and
+    // the margin is worth stating because it is what a session retuning the
+    // type is spending: the padding reaches egui as a whole-point margin while
+    // the type it wraps does not round, so the headroom is narrowest at the two
+    // ENDS of the range rather than at the small end. It is 0.28pt at 0.7
+    // (an 11.72pt line, plus 2, in a 14pt row) and 0.88pt at 1.5, where the
+    // padding rounds up to 2; the design size is the roomiest at 1.28.
+    // `every_settings_row_is_one_row_high` sweeps the range and is what says so
+    // after a change to either.
     style.spacing.button_padding = Vec2::new(9.0, 1.0);
     style.spacing.interact_size = Vec2::new(36.0, ROW_HEIGHT);
     style.spacing.slider_width = 160.0;
