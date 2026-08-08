@@ -131,6 +131,13 @@ fn every_settings_pane_scrolls_when_its_content_overflows() {
 /// first point IS the floor and the last IS the ceiling. That leaves the test
 /// measuring the SHAPE of the line and nothing about where the widget chose to
 /// put it — inset, height and scale are all free to change under it.
+///
+/// The envelope comes through [`ViewConfig::envelope`], which is where a NOTE's
+/// curve comes from, and that is the half that makes the name true. Read off
+/// the `fade_shape` field instead and the test compares the bar against the
+/// number it was handed rather than against the notes: put a mapping between
+/// the two — a rescale of how hard the setting bends, say — and the picture
+/// drifts from the lattice with this still green.
 #[test]
 fn the_shape_bars_preview_is_the_curve_the_notes_run_on() {
     let shapes: Vec<egui::Shape> = settings_pane_at_width(
@@ -144,9 +151,10 @@ fn the_shape_bars_preview_is_the_curve_the_notes_run_on() {
     let points = crate::widgets::curve_points(&shapes);
     assert!(points.len() > 8, "the Nodes pane drew {} preview points", points.len());
 
-    let shape = harmonigraph_scene::ViewConfig::default().fade_shape;
-    let envelope =
-        harmonigraph_core::Envelope { attack_time: 1.0, shape, ..Default::default() };
+    // A unit-length arrival, which is the whole curve: the shape lives in the
+    // fraction and not in the seconds, so any positive duration draws it.
+    let envelope = harmonigraph_scene::ViewConfig::default()
+        .envelope(&harmonigraph_scene::FrameParams { fade_time: 1.0, ..Default::default() });
     let (left, right) = (points[0].x, points[points.len() - 1].x);
     let (floor, ceiling) = (points[0].y, points[points.len() - 1].y);
     assert!(right > left, "the line runs backwards, {left} to {right}");
@@ -162,7 +170,10 @@ fn the_shape_bars_preview_is_the_curve_the_notes_run_on() {
     }
     // A straight line satisfies the loop above at shape 0 and nowhere else, so
     // the fresh view being curved is what gives it teeth.
-    assert!(shape > 0.0, "a fresh view fades on a straight line; the test above proves nothing");
+    assert!(
+        envelope.shape > 0.0,
+        "a fresh view fades on a straight line; the test above proves nothing",
+    );
 }
 
 /// The Video pane drawn through the REAL dock, soloed, for a shell that can or
