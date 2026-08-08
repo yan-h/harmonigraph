@@ -3299,8 +3299,14 @@ mod tests {
     }
 
     /// A hard edge closes the span, and the fill is then solid the whole way
-    /// with no ramp at all — the divide that places the ramp has no width to
-    /// work in, and a bar that painted a NaN there would vanish.
+    /// with no ramp at all — which is the picture of a hard edge, and the one
+    /// setting where this bar and the plain fill it replaces look the same.
+    ///
+    /// Not a NaN guard, though the shape invites reading it as one: a closed
+    /// span puts the solid fraction at exactly 1, `gradient_strip` samples no
+    /// further than 1, so the `p <= solid` arm takes every column and the
+    /// divide is never reached. The `solid >= 1.0` beside it is belt and
+    /// braces against float wobble, and deleting it leaves this passing.
     #[test]
     fn a_closed_fade_span_paints_a_solid_fill() {
         let shapes = paint_fade_bar(60.0, 60.0);

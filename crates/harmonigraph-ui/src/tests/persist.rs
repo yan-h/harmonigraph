@@ -326,6 +326,62 @@ fn a_blob_naming_a_fade_wider_than_its_edge_opens_on_one_that_fits() {
     assert_eq!(restored.camera.yaw, 1.23, "the rest of the blob still restores");
 }
 
+/// And a non-finite REACH opens on a drawable pair rather than taking the
+/// editor down with it.
+///
+/// This is the one that has to be repaired rather than clamped, and the clamp
+/// beside it is why: the reach is the fade's own upper bound, so a NaN reach
+/// reaches `f32::clamp` as its `max`, and `clamp` asserts `min <= max` — which
+/// NaN fails, panicking inside the host as the project opens. A NaN fade is
+/// the milder half of the same input and survives its own clamp untouched,
+/// leaving the bar to place a handle at a position that is not a number.
+///
+/// Both bars can produce neither shape, so a hand-edited or corrupted blob is
+/// the only way in — the same standing this pair's neighbours have, and the
+/// reason `a_blob_naming_an_undrawable_level_range_opens_on_a_drawable_one`
+/// exists a few tests up.
+#[test]
+fn a_blob_naming_a_nonsense_soft_edge_opens_on_a_drawable_one() {
+    let cases: [(&str, &str, &str); 4] = [
+        ("sevens_gutter", "NaN", "a NaN gutter"),
+        ("sevens_gutter_soft", "NaN", "a NaN gutter fade"),
+        ("roll_outline", "inf", "an infinite outline"),
+        ("roll_outline_fade", "NaN", "a NaN outline fade"),
+    ];
+    for (key, value, hint) in cases {
+        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        state.camera.yaw = 1.23;
+        let saved = state.save_persist();
+        let was = match key {
+            "sevens_gutter" => state.view.sevens_gutter,
+            "sevens_gutter_soft" => state.view.sevens_gutter_soft,
+            "roll_outline" => state.spectrum_config.roll_outline,
+            _ => state.spectrum_config.roll_outline_fade,
+        };
+        let edited = saved.replace(&format!("{key}:{was:?},"), &format!("{key}:{value},"));
+        assert_ne!(edited, saved, "{hint}: `{key}` is not in the blob to edit");
+
+        let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+        restored.load_persist(&edited);
+        let view = &restored.view;
+        let cfg = &restored.spectrum_config;
+        for (name, v) in [
+            ("sevens_gutter", view.sevens_gutter),
+            ("sevens_gutter_soft", view.sevens_gutter_soft),
+            ("roll_outline", cfg.roll_outline),
+            ("roll_outline_fade", cfg.roll_outline_fade),
+        ] {
+            assert!(v.is_finite(), "{hint}: `{name}` opened at {v}");
+        }
+        assert!(
+            view.sevens_gutter_soft <= view.sevens_gutter
+                && cfg.roll_outline_fade <= cfg.roll_outline,
+            "{hint}: opened on a fade wider than its reach",
+        );
+        assert_eq!(restored.camera.yaw, 1.23, "{hint}: the rest of the blob still restores");
+    }
+}
+
 /// The wheel's two-bar TAPER is gone, and a blob carrying the pair of keys
 /// nothing reads now keeps everything else it says. An unknown field being
 /// ignored rather than refused is the whole of why that works, and it is a
