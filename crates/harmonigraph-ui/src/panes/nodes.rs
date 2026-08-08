@@ -395,47 +395,38 @@ fn pitch_readout(midi: f32) -> String {
 /// runs past the column at the window this UI was dialled against (1512x886),
 /// so a wheel would add 140pt on top of a list that has started to scroll,
 /// and every knob under it would be that much further down. Setting the wheel
-/// BESIDE these three knobs recovers the height, and breaks the other rule
-/// instead — the one still pinned by a test: every bar in a
-/// settings pane is the width of its column, so that dragging the column
-/// narrower narrows all of them together
-/// (`every_bar_in_a_settings_pane_is_the_width_of_the_pane`), and knobs beside
-/// a wheel are 284pt of a 400pt column.
+/// BESIDE the bars below recovers the height, and breaks the other rule
+/// instead — the one still pinned by a test: a bar in a settings pane is the
+/// width of its column, so that dragging the column narrower narrows all of
+/// them together (`every_bar_in_a_settings_pane_is_the_width_of_the_pane`).
+/// The spectrum bar is the one exception the test allows, and the size of the
+/// exception is the point: it gives up 20pt of a 400pt column to the flip
+/// button and narrows with the column for the rest, where knobs beside a wheel
+/// would be 284pt of 400 and would not.
 ///
 /// A bar costs one row and says the same thing — see [`SpectrumBar`] for how a
-/// circle fits on one.
+/// circle fits on one, and for why the flip and the arc share that row rather
+/// than taking two. The same budget is why the bar carries no name of its own,
+/// and it is the one bar in the dock that does not carry one: the section
+/// heading above it names the group, the spread bars below it are the rest of
+/// the gradient, and the only rainbow in the pane needs no caption to be found.
+/// What a name would say the tooltip says at more length.
+///
+/// It is the odd one out on purpose rather than by omission. Every other bar
+/// here writes its name along its own track, over a well or an accent fill
+/// that a word can be read on; this one's track is saturated color end to end
+/// at every setting, so a name laid on it is legible at some gradients and not
+/// at others. A label on a row of its own is what that would cost, and the row
+/// is the thing this control does not have.
 fn spectrum_group(ui: &mut egui::Ui, view: &mut ViewConfig) {
-    button_row(ui, |ui| {
-        ui.label("Spectrum");
-        // Direction is a button rather than a gesture on the bar, and the bar
-        // is the reason: it lays the arc out from its own start, so both
-        // directions draw the same stretch of color in the same place and
-        // there is nothing on it to drag the other way. Which is the right
-        // division — a flip changes only the direction, and the arc it lands
-        // on is exactly the arc it left, read backwards.
-        if ui
-            .button("Flip")
-            .on_hover_text(
-                "Run the spectrum the other way round the circle — the same \
-                 colors, low and high swapped",
-            )
-            .clicked()
-        {
-            // The arithmetic lives on the gradient rather than here: what a
-            // flip IS — the far end becoming the near one, so the arc keeps its
-            // place on the circle — is a property of the gradient that the bar
-            // beside this button previews and a test pins, and a second
-            // spelling of it here is the one that would drift.
-            view.pitch_gradient = view.pitch_gradient.flipped();
-        }
-    });
     SpectrumBar::new(&mut view.pitch_gradient).show(ui).on_hover_text(
-        "How far round the color circle the pitch range walks, out of the \
-         whole turn the bar stands for: the colors it takes fill from the \
-         left, the ones it does not are dimmed. Drag the handle to widen or \
-         narrow it, drag the track to turn the circle under it, double-click \
-         to reset. The strip beneath is the same gradient in pitch order, low \
-         note on the left.",
+        "The pitch->color spectrum: how far round the color circle the pitch \
+         range walks, out of the whole turn the bar stands for. The colors it \
+         takes fill from the left, low note first; the ones it does not are \
+         dimmed. Drag the handle to widen or narrow it, drag the track to turn \
+         the circle under it, double-click to reset. The strip beneath is the \
+         same gradient at full width, in pitch order; the button at the left \
+         runs it the other way round the circle.",
     );
     SpreadBar::brightness(&mut view.pitch_gradient).show(ui).on_hover_text(
         "The stretch of brightness the pitch range spends, in CIELab L*: the \

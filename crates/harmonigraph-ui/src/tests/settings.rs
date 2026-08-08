@@ -238,13 +238,39 @@ fn every_bar_in_a_settings_pane_is_the_width_of_the_pane() {
         for tab in SETTINGS_TABS {
             for &projection in projections_for(tab) {
                 let widths = bar_track_widths(&settings_pane_at_width(tab, width, projection));
+                // One bar in the dock is deliberately shorter: the spectrum
+                // track, which gives the left end of its row to the flip
+                // button. It still narrows with the column, which is what this
+                // is about, so it is allowed its own length rather than excused
+                // from the sweep.
+                //
+                // COUNTED, not merely permitted. A sweep that accepts either
+                // length from any bar accepts a spectrum track that never
+                // reserved the button's width at all — it comes out at the
+                // column's own length and passes on the first alternative,
+                // with the button painted over its left end. So the short
+                // length is allowed exactly once, and only on the pane that
+                // holds the bar.
+                let track = crate::widgets::spectrum_track_width(width, 1.0);
+                let mut short = 0;
                 for bar in &widths {
+                    if (bar - width).abs() < 1.0 {
+                        continue;
+                    }
+                    short += 1;
                     assert!(
-                        (bar - width).abs() < 1.0,
-                        "{tab:?}/{projection:?} at {width}pt drew a {bar}pt bar \
+                        (bar - track).abs() < 1.0,
+                        "{tab:?}/{projection:?} at {width}pt drew a {bar}pt bar, \
+                         neither the column nor the spectrum track's {track}pt \
                          (all of {widths:?})"
                     );
                 }
+                let want = usize::from(tab == panes::Tab::Nodes);
+                assert_eq!(
+                    short, want,
+                    "{tab:?}/{projection:?} at {width}pt drew {short} short bars, not {want} \
+                     (all of {widths:?})"
+                );
             }
         }
     }

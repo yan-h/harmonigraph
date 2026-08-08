@@ -1371,15 +1371,61 @@ const FULL_TURN: f32 = 360.0;
 /// whatever the pane is instead of ringing itself in a slightly wrong color.
 const UNCLAIMED_ALPHA: f32 = 74.0 / 255.0;
 
-/// Height of the pitch-order strip under the spectrum bar, and the gap above
-/// it. Shorter than a bar, because it is a picture and not a control: nothing
-/// on it can be grabbed, and a full-height second bar would say otherwise.
+/// Height of the pitch-order strip under a [`SpectrumBar`]'s track. Shorter
+/// than the track, because it is a picture and not a control: a press on it
+/// is declined ([`SpectrumGrab::Outside`]), and a full-height second bar would
+/// say otherwise.
 const STRIP_H: f32 = 11.0;
-const STRIP_GAP: f32 = 3.0;
 
-/// Which part of a [`SpectrumBar`] a drag took hold of. Decided once, at
-/// drag-start, and remembered for the gesture, exactly as [`Grab`] is: a span
-/// dragged to nothing would otherwise hand the rest of the gesture to the
+/// The pane showing between the three pieces of a [`SpectrumBar`] — beside the
+/// button, and between the track and the strip. ONE value for both, because
+/// what it buys is that the three read as one control: two gaps of different
+/// sizes would group the pieces, and the grouping would be wrong either way
+/// round.
+///
+/// Narrow enough to be tighter than the pane's own row spacing, so the strip
+/// belongs to the track above it rather than to the bar below.
+const PIECE_GAP: f32 = 2.0;
+
+/// A [`SpectrumBar`] stands two rows tall: the track, the strip under it, and
+/// the gap between.
+fn spectrum_bar_height(scale: f32) -> f32 {
+    (BAR_HEIGHT + PIECE_GAP + STRIP_H) * scale
+}
+
+/// What a [`SpectrumBar`]'s track and strip measure in a column `column` points
+/// wide: the column, less the flip button at the left end and the gap beside
+/// it.
+///
+/// Shared with the settings tests, whose sweep pins every bar in a pane to the
+/// width of its column. This is the one bar that is narrower, and the sweep has
+/// to know by how much or it is choosing between failing on a bar that is
+/// correct and passing on one that has stopped tracking the column.
+pub(crate) fn spectrum_track_width(column: f32, scale: f32) -> f32 {
+    (column - (FLIP_W + PIECE_GAP) * scale).max(0.0)
+}
+
+/// Width of the flip button at the LEFT end of a [`SpectrumBar`], taken out of
+/// the row the bar already has rather than off a row of its own.
+///
+/// It costs the track that much travel, which is the whole trade and a cheap
+/// one: the track stands for a whole turn at any length, so a shorter one is a
+/// coarser drag and nothing else — 18pt of 400 is a twentieth of a degree per
+/// pixel. A row costs 20pt of a column that already scrolls.
+///
+/// The left end rather than the right because a settings pane scrolls, and its
+/// scroll bar is drawn INSIDE the column over the right edge of every bar in
+/// it. A track under it loses nothing that can be read — the dimmed remainder
+/// says the least of anything on the bar — but a button under it is a button
+/// with a bar across it, and the last few pixels of one are not clickable at
+/// all. Nothing else in the row minds the swap: the arc is laid out from the
+/// track's own left edge either way, so it still reads low-to-high, left to
+/// right.
+const FLIP_W: f32 = 18.0;
+
+/// Which part of a [`SpectrumBar`]'s track a drag took hold of. Decided once,
+/// at drag-start, and remembered for the gesture, exactly as [`Grab`] is: a
+/// span dragged to nothing would otherwise hand the rest of the gesture to the
 /// rotate branch the moment the handle reached the left edge.
 #[derive(Clone, Copy, Default)]
 enum SpectrumGrab {
@@ -1391,10 +1437,17 @@ enum SpectrumGrab {
     /// gesture is "keep that hue under the pointer"; fixed for the gesture, so
     /// a turn never reads back the circle it is itself moving.
     Rotate { held: f32 },
-    /// A press that landed off the track — on the pitch-order strip, or in the
-    /// gap between the two. The widget senses one rectangle covering both, so
-    /// this is what keeps [`STRIP_H`]'s promise that the strip is a picture:
-    /// without it a sideways drag begun on the strip turns the whole circle.
+    /// A press that landed off the track, which for this widget means on the
+    /// pitch-order strip below it.
+    ///
+    /// A rectangle the strip is not inside is NOT enough to keep a press on it
+    /// out of the track, and that is the whole reason this variant exists:
+    /// egui's hit test gathers every widget within
+    /// `interaction.interact_radius` of the pointer and, when the press hits
+    /// none of them squarely, gives it to the nearest. At the default radius of
+    /// 5 the track reaches five points below its own bottom edge — past
+    /// [`PIECE_GAP`] and into the strip — so the widget is handed drags it has
+    /// to decline by position.
     ///
     /// Remembered for the gesture like the other two, so a drag that started
     /// off the track does not catch hold the moment the pointer crosses onto
@@ -1402,14 +1455,42 @@ enum SpectrumGrab {
     Outside,
 }
 
-/// The pitch gradient's hue arc: a full turn of the color circle laid along a
-/// bar, CUT at the arc's own start, with the stretch the gradient walks filled
-/// from the left edge and the hues it does not reach dimmed beyond it. Under
-/// it, the gradient itself in pitch order, low note on the left.
+/// The arc a double-click on the track goes home to: the one a fresh view
+/// opens with.
+///
+/// Read off [`ViewConfig::default`] for the reason [`reset_wheel`] is, and
+/// the drift it warns about is live here rather than hypothetical:
+/// `ViewConfig::default` COMPOSES its gradient — a shorter arc over a
+/// shallower brightness ramp — instead of taking `PitchGradient::default()`,
+/// which is the type's own CIELAB-converted arc. Resetting to the type's
+/// default lands the bar on a pair the plugin has never opened on, and the
+/// bar carries no text entry to dial it back with, so the shipped arc would
+/// be unrecoverable by gesture.
+///
+/// Only the two hue fields, because only those two are what the track sets.
+fn reset_arc() -> (f32, f32) {
+    let fresh = ViewConfig::default().pitch_gradient;
+    (fresh.hue_start, fresh.hue_span)
+}
+
+/// The pitch gradient's hue arc, as three pieces of one control: the button
+/// that reverses it at the left end, and beside that a full turn of the color
+/// circle laid along a track, CUT at the arc's own start, with the stretch the
+/// gradient walks filled from the track's left edge and the hues it does not
+/// reach dimmed beyond it. Under the track, a gap below it, the gradient itself
+/// in pitch order, low note on the left.
+///
+/// Every piece wears the shared [`CONTROL_RADIUS`](theme::CONTROL_RADIUS) and
+/// sits on the pane, with no frame drawn round the set: the button is a button
+/// down to the table its colors are read out of, and the two bands round
+/// exactly like the fill of a [`ValueBar`] above them. A well large enough to
+/// hold all three would ring the control in a border nothing else in a settings
+/// pane wears — see [`gradient_strip`], which is where the alternative was paid
+/// for.
 ///
 /// Drag the handle to set how far round the circle the range walks; drag the
 /// track to turn the whole circle under it; double-click to reset. Which
-/// DIRECTION it runs is the Flip button beside it, not a gesture — see below.
+/// DIRECTION it runs is the flip button, not a gesture — see below.
 ///
 /// **Cut at the start, which is what makes a circle fit on a bar.** Hue wraps,
 /// so an arc laid on a fixed 0..360 track is drawn in two pieces whenever it
@@ -1437,30 +1518,33 @@ enum SpectrumGrab {
 /// an arc reaching `L*` 100 would dim out into a white band saying nothing
 /// about which hues are left — and the remainder's whole job is to say that.
 ///
+/// **The flip is a button because the track cannot carry the gesture.** The arc
+/// is laid out from its own start, so both directions draw the same stretch of
+/// color in the same place and there is nothing on the track to drag the other
+/// way. It lives in the bar's own row rather than beside it because a settings
+/// column is short of rows and not of width: the two things a reader wants
+/// together are the arc and the direction it runs, and a row spent on one
+/// button pushes every knob under it further down a pane that already scrolls.
+///
 /// **The strip is not redundant with the track.** They agree wherever both say
 /// anything — the claimed stretch IS the gradient — but the claimed stretch is
 /// as wide as the span, so at a span of zero it has no width at all, and a
 /// single-hue gradient with a brightness ramp is a real setting that the track
-/// alone would draw as nothing. The strip is also what makes a flip visible:
-/// the arc keeps its colors and its width, and only the strip reverses.
-/// The arc a double-click on the track goes home to: the one a fresh view
-/// opens with.
+/// alone would draw as nothing. It is also the one place the gradient is drawn
+/// at a fixed scale: the track squeezes it into whatever fraction of the turn
+/// the arc claims, so a narrow arc's ramp is a sliver there and full width
+/// here.
 ///
-/// Read off [`ViewConfig::default`] for the reason [`reset_wheel`] is, and
-/// the drift it warns about is live here rather than hypothetical:
-/// `ViewConfig::default` COMPOSES its gradient — a shorter arc over a
-/// shallower brightness ramp — instead of taking `PitchGradient::default()`,
-/// which is the type's own CIELAB-converted arc. Resetting to the type's
-/// default lands the bar on a pair the plugin has never opened on, and the
-/// bar carries no text entry to dial it back with, so the shipped arc would
-/// be unrecoverable by gesture.
+/// It sits a hair under the track — [`PIECE_GAP`], the one gap this control
+/// uses, which is also what separates the button from both — rather than a
+/// bar's worth of space away. Three pieces on the pane at one rhythm read as
+/// one control; anything looser reads as a bar with things near it.
 ///
-/// Only the two hue fields, because only those two are what the track sets.
-fn reset_arc() -> (f32, f32) {
-    let fresh = ViewConfig::default().pitch_gradient;
-    (fresh.hue_start, fresh.hue_span)
-}
-
+/// **What the flip changes on screen is the sign, and both ramps' ends.** The
+/// claimed stretch and the strip are the same pitch ramp, low note at the left,
+/// so both reverse with the gradient — which is exactly the change, drawn where
+/// the change is. The readout spells the direction out on top of that, because
+/// an arc and its flip claim exactly the same colors.
 pub struct SpectrumBar<'a> {
     gradient: &'a mut PitchGradient,
 }
@@ -1473,15 +1557,45 @@ impl<'a> SpectrumBar<'a> {
     pub fn show(self, ui: &mut Ui) -> Response {
         let scale = theme::ui_scale(ui.ctx());
         let width = bar_width(ui);
-        let strip_h = STRIP_H * scale;
-        let (rect, mut response) = ui.allocate_exact_size(
-            Vec2::new(width, BAR_HEIGHT * scale + STRIP_GAP * scale + strip_h),
-            Sense::click_and_drag(),
+        // Space first, senses after: the row holds two controls side by side,
+        // and each is interacted with over its OWN rectangle. That is what
+        // keeps a press on the flip button out of the track. One rectangle
+        // sensed for both would hand a sideways drag begun on the button
+        // straight to the rotate branch, and asking the widget where the press
+        // LANDED is no answer either — egui calls a press a drag only once it
+        // has moved, by which time the pointer can be over the track.
+        let piece_gap = PIECE_GAP * scale;
+        let (id, rect) = ui.allocate_space(Vec2::new(width, spectrum_bar_height(scale)));
+        // The track's width is what the two bands and the settings sweep all
+        // measure, so the row is laid out from it rather than from the button:
+        // a column too narrow to leave the track anything then gives the button
+        // the row, which is the right way round. A coarse handle beats an
+        // unreachable one, but a button with no width cannot be pressed at all.
+        let split = rect.right() - spectrum_track_width(rect.width(), scale);
+        // The button stands the full height of both rows, because it reverses
+        // what both of them draw.
+        let flip_rect = egui::Rect::from_min_max(
+            rect.min,
+            egui::pos2((split - piece_gap).max(rect.left()), rect.bottom()),
         );
         let track_rect = egui::Rect::from_min_max(
-            rect.min,
+            egui::pos2(split, rect.top()),
             egui::pos2(rect.right(), rect.top() + BAR_HEIGHT * scale),
         );
+        // Only the track is sensed, and the strip is a picture — but sensing
+        // stops short of the strip rather than keeping presses off it. What
+        // does that is `on_track` below; see [`SpectrumGrab::Outside`].
+        let strip_rect = egui::Rect::from_min_max(
+            egui::pos2(track_rect.left(), track_rect.bottom() + piece_gap),
+            rect.max,
+        );
+        let mut response = ui.interact(track_rect, id.with("track"), Sense::click_and_drag());
+        let flip = ui
+            .interact(flip_rect, id.with("flip"), Sense::click())
+            .on_hover_text(
+                "Run the spectrum the other way round the circle — the same \
+                 colors, low and high swapped",
+            );
         // The handle sits ON a position rather than between two, so the track
         // is inset by half of one at each end and both limits — a span of zero
         // and a whole turn — are places it can stand rather than edges it
@@ -1501,12 +1615,25 @@ impl<'a> SpectrumBar<'a> {
             let claimed = (g.hue_span / FULL_TURN).abs().clamp(0.0, 1.0);
             (winding, claimed, track.left() + track.width() * claimed)
         };
-        // Whether a point is on the control at all, as opposed to on the
-        // picture below it. One rectangle is sensed for both, so this is the
-        // only thing standing between a press on the strip and a gesture.
+        // Whether a point is on the control, as opposed to on the picture below
+        // it. The track's sensed rectangle stops at the gap, and this is still
+        // the only thing standing between a press on the strip and a gesture —
+        // see [`SpectrumGrab::Outside`] for why the rectangle is not enough.
         let on_track = |p: &egui::Pos2| track_rect.contains(*p);
 
         // ---- Interaction ----------------------------------------------------
+        // Ahead of the snapshot below, so the frame that flips is the frame
+        // that draws it flipped — the same reason the paint re-reads the
+        // gradient rather than the value a drag was aimed at.
+        if flip.clicked() {
+            // The arithmetic lives on the gradient rather than here: what a
+            // flip IS — the far end becoming the near one, so the arc keeps its
+            // place on the circle — is a property of the gradient that this bar
+            // previews and a test pins, and a second spelling of it here is the
+            // one that would drift.
+            *self.gradient = self.gradient.flipped();
+            response.mark_changed();
+        }
         let aimed = self.gradient.sanitized();
         let (winding, _, handle_x) = laid_out(aimed);
         // Where a point across the track sits on the circle, as a signed
@@ -1552,7 +1679,7 @@ impl<'a> SpectrumBar<'a> {
                     }
                 };
                 let next = match grab {
-                    // The magnitude only. Its SIGN is the Flip button's, and
+                    // The magnitude only. Its SIGN is the flip button's, and
                     // leaving it there is what lets the handle reach zero
                     // without the arc turning inside out on the way past.
                     SpectrumGrab::Span => Some(PitchGradient {
@@ -1586,20 +1713,30 @@ impl<'a> SpectrumBar<'a> {
         let (winding, claimed, handle_x) = laid_out(g);
         let lut = pitch_ramp_lut(g);
         let circle = hue_circle(g.lightness, g.chroma);
-        let radius = CornerRadius::same(bar_radius(scale));
+        let corner = bar_radius(scale);
+        let radius = CornerRadius::same(corner);
         let painter = ui.painter();
+        // The pitch ramp at `p` along itself, read out of the same table the
+        // lattice draws from so the preview cannot drift from the picture. Both
+        // bands want it — the track squeezed into the claimed stretch, the strip
+        // end to end — and reading the table twice is how they would stop
+        // agreeing.
+        let ramp_at = |p: f32| {
+            let f = p.clamp(0.0, 1.0) * (PITCH_LUT_N - 1) as f32;
+            let i0 = f.floor() as usize;
+            lut[i0].lerp(lut[(i0 + 1).min(PITCH_LUT_N - 1)], f - f.floor())
+        };
+        // A well under the track and nothing under the strip, because the
+        // dimmed hues are drawn with alpha and need a recessed ground to sit
+        // on — the same ground the unfilled end of a ValueBar shows. The strip
+        // is opaque end to end and covers whatever it is given.
         painter.rect_filled(track_rect, radius, theme::well());
-        // The colors go inside that well, which is what rounds them: a mesh
-        // has square corners, and the ring of well left showing reads as the
-        // track's own border rather than as a gap.
-        gradient_strip(painter, track_rect.shrink(scale.max(1.0)), SPECTRUM_SEGMENTS, |_, p| {
+        gradient_strip(painter, track_rect, SPECTRUM_SEGMENTS, corner as f32, |p| {
             if claimed > 0.0 && p <= claimed {
                 // Along the gradient, not around the circle: the two agree by
                 // construction here, and reading the table is what keeps them
                 // agreeing if they ever stop.
-                let f = (p / claimed).clamp(0.0, 1.0) * (PITCH_LUT_N - 1) as f32;
-                let i0 = f.floor() as usize;
-                scene_color(lut[i0].lerp(lut[(i0 + 1).min(PITCH_LUT_N - 1)], f - f.floor()), 1.0)
+                scene_color(ramp_at(p / claimed), 1.0)
             } else {
                 // The hues the gradient does not reach, held back far enough to
                 // read as ground.
@@ -1622,7 +1759,12 @@ impl<'a> SpectrumBar<'a> {
         // direction, and it is spelled out because the track cannot show it:
         // an arc and its flip claim exactly the same colors.
         let font = TextStyle::Monospace.resolve(ui.style());
-        let text_color = if response.hovered() || response.dragged() {
+        // Lit by a pointer ON the track, not merely by one egui has decided the
+        // track is nearest to — which reaches into the strip below. A readout
+        // that brightens while the pointer is over the picture says the picture
+        // is the control.
+        let pointing = response.hover_pos().filter(on_track);
+        let text_color = if pointing.is_some() || response.dragged() {
             theme::text()
         } else {
             theme::text_dim()
@@ -1657,22 +1799,49 @@ impl<'a> SpectrumBar<'a> {
         );
 
         // ---- The same gradient, in pitch order ------------------------------
-        let strip = egui::Rect::from_min_max(
-            egui::pos2(rect.left(), rect.bottom() - strip_h),
-            egui::pos2(rect.right(), rect.bottom()),
-        );
-        painter.rect_filled(strip, CornerRadius::same(bar_radius(scale)), theme::well());
-        // One entry per segment, so every color in the table is drawn where it
-        // falls and only the vertices between two of them are interpolated.
-        gradient_strip(painter, strip.shrink(scale.max(1.0)), PITCH_LUT_N - 1, |i, _| {
-            scene_color(lut[i], 1.0)
+        // A gap under the track, aligned with it end to end: two rows of one
+        // control, not a second bar. One column per table entry, so every color
+        // in the table lands on a column of its own and only the vertices
+        // between two of them are interpolated.
+        let strip_corner = corner as f32;
+        gradient_strip(painter, strip_rect, PITCH_LUT_N - 1, strip_corner, |p| {
+            scene_color(ramp_at(p), 1.0)
         });
+
+        // ---- The flip button ------------------------------------------------
+        // Painted out of the theme's own widget visuals, state for state, and
+        // not out of a set of colors chosen to look like them: the fill, the
+        // edge and the corner are read from the same table egui hands a
+        // `Button`, and the state is picked the way `Style::interact` picks it.
+        // Naming the colors here instead is how it drifts — a resting fill
+        // copied correctly and a hovered edge given a scaled width the theme
+        // does not scale, and a pressed state simply forgotten, so the one
+        // control in the pane that does not answer a click is this one.
+        let visuals = if flip.is_pointer_button_down_on() {
+            &ui.style().visuals.widgets.active
+        } else if flip.hovered() {
+            &ui.style().visuals.widgets.hovered
+        } else {
+            &ui.style().visuals.widgets.inactive
+        };
+        painter.rect_filled(flip_rect, visuals.corner_radius, visuals.weak_bg_fill);
+        if visuals.bg_stroke.width > 0.0 {
+            painter.rect_stroke(
+                flip_rect,
+                visuals.corner_radius,
+                visuals.bg_stroke,
+                egui::StrokeKind::Inside,
+            );
+        }
+        // The MARK is what this widget invents; its color is the theme's, the
+        // one a button's own label is drawn in.
+        flip_mark(painter, flip_rect, visuals.fg_stroke.color, scale);
 
         // The cursor says which gesture a press would start before committing
         // to a drag, as a RangeBar's does: the handle resizes the arc, the
         // track turns the circle under it. Off the track it says neither,
         // because a press there starts nothing — see [`SpectrumGrab::Outside`].
-        match response.hover_pos().filter(on_track) {
+        match pointing {
             Some(p) if (p.x - handle_x).abs() <= GRAB_PX * scale => {
                 response.on_hover_cursor(egui::CursorIcon::ResizeHorizontal)
             }
@@ -1681,6 +1850,56 @@ impl<'a> SpectrumBar<'a> {
         }
     }
 }
+
+/// The reverse mark on a [`SpectrumBar`]'s flip button: two arrows, one over
+/// the other, pointing opposite ways.
+///
+/// Symmetric on purpose. A flip is its own undo and the track claims the same
+/// colors either way round, so an arrow committing to a direction would be
+/// pointing at nothing on screen; which way the arc currently runs is the sign
+/// on the readout. Painted rather than set as a glyph, because the two product
+/// faces are text faces and an arrow found in whichever fallback egui reaches
+/// for would be the one piece of this UI drawn in an unknown font.
+fn flip_mark(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32, scale: f32) {
+    let head = 3.5 * scale; // length of an arrowhead
+    let half = 2.5 * scale; // and half its width
+    let gap = 3.0 * scale; // how far each arrow sits off the center line
+    let shaft = (rect.width() - 4.0 * scale).max(head);
+    let stroke = egui::Stroke::new((1.0 * scale).max(1.0), color);
+    let (left, right) = (rect.center().x - shaft * 0.5, rect.center().x + shaft * 0.5);
+    for (y, tip, tail) in [
+        (rect.center().y - gap, left, right),
+        (rect.center().y + gap, right, left),
+    ] {
+        painter.line_segment([egui::pos2(tail, y), egui::pos2(tip, y)], stroke);
+        let back = tip + (tail - tip).signum() * head;
+        painter.add(egui::Shape::convex_polygon(
+            vec![
+                egui::pos2(tip, y),
+                egui::pos2(back, y - half),
+                egui::pos2(back, y + half),
+            ],
+            color,
+            egui::Stroke::NONE,
+        ));
+    }
+}
+
+/// Samples taken through each of a band's corner arcs, on top of the columns
+/// the band is already drawn in.
+///
+/// Those columns are far too coarse to round with on their own, and the strip
+/// is the case that settles it: 63 columns across the column this pane opens
+/// at puts them 6pt apart, wider than the radius, so a corner crosses fewer
+/// than ONE of them and is drawn from its two endpoints — a diagonal cut. The
+/// track's 192 are 2pt apart and give a corner three steps, which is a chamfer.
+/// egui does not antialias a mesh edge, so how finely the arc is sampled is the
+/// only smoothness there is.
+///
+/// Both figures move with the column, and in the direction that makes the
+/// strip's case the one to size for: narrow the pane and every column narrows
+/// while the radius holds, so the samples matter most where the pane is widest.
+const CORNER_SAMPLES: usize = 8;
 
 /// The `L*` axis a brightness pair stands on, both ends included: 0 is black
 /// and 100 is white, and a gradient is allowed to sit on either — flat, since a
@@ -2197,8 +2416,9 @@ impl<'a> SpreadBar<'a> {
 }
 
 /// A band of `segments + 1` colored columns across `rect`, each column's color
-/// taken from `color` at its own index and at its position along the band (0 at
-/// the left edge, 1 at the right), and interpolated between columns.
+/// taken from `color` at its position along the band (0 at the left edge, 1 at
+/// the right) and interpolated between columns, with the band's ends rounded to
+/// `radius`.
 ///
 /// One builder for a [`SpectrumBar`]'s two bands — the track, whose color comes
 /// off the hue circle and the pitch ramp either side of the handle, and the
@@ -2206,26 +2426,66 @@ impl<'a> SpreadBar<'a> {
 /// written out twice is two places to get the vertex order or the first-column
 /// case wrong, and the second copy is the one that quietly keeps the older
 /// answer.
+///
+/// **The rounding is in the MESH, and that is the whole reason this is not a
+/// square band inside a rounded well.** A well showing round an inset mesh is
+/// the ordinary way to round colors that a quad strip cannot round itself, and
+/// it costs a ring of the well's own color drawn around the content — a border
+/// no other control in a settings pane wears, and at the shared
+/// [`CONTROL_RADIUS`](theme::CONTROL_RADIUS) of 5 a one-point inset does not
+/// even cover the arc, so the band's square corners poke out through it.
+/// Pinching the columns to the corner circle instead lets the colors go edge to
+/// edge and round exactly like the fill of a [`ValueBar`] beside them.
 fn gradient_strip(
     painter: &egui::Painter,
     rect: egui::Rect,
     segments: usize,
-    color: impl Fn(usize, f32) -> egui::Color32,
+    radius: f32,
+    color: impl Fn(f32) -> egui::Color32,
 ) {
+    let radius = radius.clamp(0.0, (rect.height() * 0.5).min(rect.width() * 0.5));
+    let mut xs: Vec<f32> = (0..=segments)
+        .map(|i| rect.left() + rect.width() * i as f32 / segments as f32)
+        .collect();
+    for k in 1..CORNER_SAMPLES {
+        let t = radius * k as f32 / CORNER_SAMPLES as f32;
+        xs.push(rect.left() + t);
+        xs.push(rect.right() - t);
+    }
+    xs.sort_by(f32::total_cmp);
+
     let mut mesh = egui::Mesh::default();
-    for i in 0..=segments {
-        let p = i as f32 / segments as f32;
-        let x = rect.left() + rect.width() * p;
-        let c = color(i, p);
+    let mut drawn = f32::NEG_INFINITY;
+    for x in xs {
+        // Two samples landing on one column would build a triangle of no area,
+        // which draws nothing and costs the same as one that does.
+        if x - drawn < 0.01 {
+            continue;
+        }
+        drawn = x;
+        let inset = corner_inset((x - rect.left()).min(rect.right() - x), radius);
+        let p = ((x - rect.left()) / rect.width().max(1.0)).clamp(0.0, 1.0);
+        let c = color(p);
         let v = mesh.vertices.len() as u32;
-        mesh.colored_vertex(egui::pos2(x, rect.top()), c);
-        mesh.colored_vertex(egui::pos2(x, rect.bottom()), c);
-        if i > 0 {
+        mesh.colored_vertex(egui::pos2(x, rect.top() + inset), c);
+        mesh.colored_vertex(egui::pos2(x, rect.bottom() - inset), c);
+        if v > 0 {
             mesh.add_triangle(v - 2, v - 1, v);
             mesh.add_triangle(v - 1, v + 1, v);
         }
     }
     painter.add(egui::Shape::mesh(mesh));
+}
+
+/// How far a rounded band's edge is pinched in, top and bottom, at a column
+/// `from_end` points from its nearer end: nothing along the straight run, and
+/// the corner circle's own profile inside the last `radius`.
+fn corner_inset(from_end: f32, radius: f32) -> f32 {
+    if from_end >= radius {
+        return 0.0;
+    }
+    let across = radius - from_end.max(0.0);
+    radius - (radius * radius - across * across).max(0.0).sqrt()
 }
 
 /// A horizontal row of controls in a settings column, sized up front to
@@ -2928,14 +3188,32 @@ mod tests {
             out.shapes.into_iter().map(|s| s.shape).collect()
         }
 
-        /// The track a handle actually travels: the bar's own rect above the
-        /// gap and the pitch strip, less the inset at either end.
+        /// The track a handle actually travels. The bar hands back the TRACK's
+        /// rect rather than the whole row it allocated — the flip button beside
+        /// it carries its own tooltip — so the inset at either end is all that
+        /// separates the two.
         fn track(&self) -> egui::Rect {
-            egui::Rect::from_min_max(
-                self.rect.min,
-                egui::pos2(self.rect.right(), self.rect.top() + BAR_HEIGHT),
+            self.rect.shrink2(Vec2::new(HANDLE_INSET, 0.0))
+        }
+
+        /// The middle of the flip button, in the gutter before the track's left
+        /// edge.
+        fn on_flip(&self) -> egui::Pos2 {
+            egui::pos2(self.rect.left() - FLIP_W * 0.5, self.rect.center().y)
+        }
+
+        /// A point on the pitch-order strip, `across` of the way along it and
+        /// `down` of the way through it — 0 at the edge nearest the track,
+        /// which is the depth that matters. egui hands a press that hits
+        /// nothing to the nearest widget within `interact_radius`, so the top
+        /// of the strip is the part a gap alone does not protect, and a probe
+        /// at the strip's middle sits clear of the only place the geometry can
+        /// fail.
+        fn on_strip(&self, across: f32, down: f32) -> egui::Pos2 {
+            egui::pos2(
+                self.rect.left() + self.rect.width() * across,
+                self.rect.bottom() + PIECE_GAP + STRIP_H * down,
             )
-            .shrink2(Vec2::new(HANDLE_INSET, 0.0))
         }
 
         /// Where a span of `span` degrees stands the handle.
@@ -2945,10 +3223,12 @@ mod tests {
             egui::pos2(track.left() + track.width() * across, track.center().y)
         }
 
-        /// A point across the pitch-order strip under the bar.
-        fn on_strip(&self, across: f32) -> egui::Pos2 {
-            let x = self.rect.left() + self.rect.width() * across;
-            egui::pos2(x, self.rect.bottom() - STRIP_H * 0.5)
+        /// Press and release at one spot, answering what the frame carrying
+        /// the release painted — which is the frame a click lands on.
+        fn click(&mut self, g: &mut PitchGradient, at: egui::Pos2) -> Vec<egui::Shape> {
+            self.frame(g, vec![egui::Event::PointerMoved(at)]);
+            self.frame(g, vec![press(at, true)]);
+            self.frame(g, vec![press(at, false)])
         }
 
         /// Press at `from` and drag to `to`, answering what the arriving frame
@@ -2982,6 +3262,163 @@ mod tests {
         let texts: Vec<String> = text_boxes(shapes).into_iter().map(|(_, s)| s).collect();
         assert_eq!(texts.len(), 1, "a spectrum bar draws one readout, not {texts:?}");
         texts.into_iter().next().expect("checked just above")
+    }
+
+    /// The colored bands a spectrum bar paints — the track, then the
+    /// pitch-order strip. Everything else it draws is a rect, a line or a
+    /// convex polygon, so a mesh is a band and nothing else is.
+    fn bands(shapes: &[egui::Shape]) -> Vec<egui::Mesh> {
+        shapes
+            .iter()
+            .filter_map(|s| match s {
+                egui::Shape::Mesh(m) => Some((**m).clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Both bands are rounded by their own mesh, on the corner circle, and
+    /// sampled through the arc rather than chamfered across it.
+    ///
+    /// Nothing else in the suite looks at a mesh, so without this the entire
+    /// rounding mechanism — [`corner_inset`], [`CORNER_SAMPLES`], the radius
+    /// handed to [`gradient_strip`] — could be deleted and every test would
+    /// stay green. What it holds is the reason the bands are drawn edge to edge
+    /// at all: a square mesh inside a rounded well needs a ring of well showing
+    /// round it to look rounded, and that ring is a border no other bar in a
+    /// settings pane wears.
+    ///
+    /// Three claims, because they fail apart. Pinning the corner vertices to
+    /// the arc catches a chamfer and an inset that has stopped following the
+    /// circle, but not a corner drawn from its two endpoints alone — the
+    /// endpoints are ON the arc. The sample count catches that. And the
+    /// straight run catches a radius that has grown to swallow the band.
+    #[test]
+    fn both_colour_bands_are_rounded_by_their_own_mesh() {
+        let mut g = ViewConfig::default().pitch_gradient;
+        let mut h = Spectrum::settled(&mut g);
+        let shapes = h.frame(&mut g, vec![]);
+        let bands = bands(&shapes);
+        assert_eq!(bands.len(), 2, "a spectrum bar paints two bands, not {}", bands.len());
+        let radius = f32::from(bar_radius(1.0));
+        for (which, mesh) in ["track", "strip"].into_iter().zip(&bands) {
+            // The strip is 11pt against a radius of 5, so its ends are all but
+            // semicircular and its straight run is a point tall. That is a
+            // shape, not a limit — what the radius may not do is eat the band's
+            // LENGTH, which the straight-run count below is what catches.
+            let box_ = mesh.calc_bounds();
+            let (mut near, mut far, mut full_height) = (0, 0, 0);
+            // Two vertices per column, top then bottom, left to right.
+            for column in mesh.vertices.chunks(2) {
+                let (top, bottom) = (column[0].pos, column[1].pos);
+                assert!((top.x - bottom.x).abs() < 1e-3, "{which}: a column is not vertical");
+                let from_end = (top.x - box_.left()).min(box_.right() - top.x);
+                if from_end >= radius - 1e-3 {
+                    full_height += 1;
+                    assert!(
+                        (top.y - box_.top()).abs() < 1e-3
+                            && (bottom.y - box_.bottom()).abs() < 1e-3,
+                        "{which}: a column {from_end} from the end, past the corner, is pinched",
+                    );
+                    continue;
+                }
+                let cx = if top.x - box_.left() < radius {
+                    near += 1;
+                    box_.left() + radius
+                } else {
+                    far += 1;
+                    box_.right() - radius
+                };
+                for (y, cy) in
+                    [(top.y, box_.top() + radius), (bottom.y, box_.bottom() - radius)]
+                {
+                    let reach = ((top.x - cx).powi(2) + (y - cy).powi(2)).sqrt();
+                    assert!(
+                        (reach - radius).abs() < 0.05,
+                        "{which}: a corner vertex sits {reach} from the arc's centre, not {radius}",
+                    );
+                }
+            }
+            // Each corner counted on its own, against a flat four rather than
+            // against anything derived from [`CORNER_SAMPLES`]. A floor read
+            // off the constant it is meant to pin goes to zero with it and
+            // passes on a chamfer; four is the claim itself — fewer than four
+            // columns through a quarter turn reads as steps at any radius this
+            // control uses.
+            for (end, count) in [("near", near), ("far", far)] {
+                assert!(
+                    count >= 4,
+                    "{which}: {count} columns through the {end} corner — a chamfer, not an arc",
+                );
+            }
+            assert!(full_height > 0, "{which}: the radius swallowed the whole band");
+        }
+    }
+
+    /// A column with no room for both gives the row to the flip button, and
+    /// gives it the row rather than a sliver of one.
+    ///
+    /// The branch is a deliberate choice — `spectrum_track_width` floors at
+    /// zero, so past that point the track stops shrinking and the button stops
+    /// moving — and no sweep reaches it: `no_settings_pane_overruns_a_narrow_column`
+    /// bottoms out at 120pt and this needs 20. Which leaves the arithmetic
+    /// under it unexercised, and it is the arithmetic most likely to go
+    /// negative: a track laid out from the RIGHT edge inward.
+    #[test]
+    fn a_column_too_narrow_for_both_gives_the_row_to_the_button() {
+        for column in [FLIP_W + PIECE_GAP + 30.0, FLIP_W + PIECE_GAP, FLIP_W, 6.0, 1.0] {
+            let ctx = egui::Context::default();
+            crate::theme::apply_theme(&ctx);
+            let mut g = ViewConfig::default().pitch_gradient;
+            let seen = std::cell::Cell::new(egui::Rect::NOTHING);
+            let out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::pos2(0.0, 0.0),
+                        egui::vec2(column, 80.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| seen.set(SpectrumBar::new(&mut g).show(ui).rect),
+            );
+            let track = seen.get();
+            let shapes: Vec<egui::Shape> = out.shapes.into_iter().map(|s| s.shape).collect();
+            // The button is the one thing painted in the theme's resting widget
+            // fill; the well under the track is `well()` and the handle is
+            // `text()`. Finding none would mean the paint no longer reads that
+            // fill, which is its own failure.
+            let buttons: Vec<egui::Rect> = filled_rects(&shapes)
+                .into_iter()
+                .filter(|(_, fill)| *fill == theme::widget())
+                .map(|(r, _)| r)
+                .collect();
+            assert_eq!(buttons.len(), 1, "at {column}pt the bar drew {buttons:?} buttons");
+            let button = buttons[0];
+
+            assert!(track.width() >= 0.0, "at {column}pt the track came out {track:?}");
+            assert!(
+                button.right() <= track.left() + 0.01,
+                "at {column}pt the button {button:?} runs into the track {track:?}",
+            );
+            // Below the threshold the track is gone and the button holds the
+            // row: everything except the gap it would have kept clear.
+            if column <= FLIP_W + PIECE_GAP {
+                assert_eq!(track.width(), 0.0, "at {column}pt the track kept {}", track.width());
+                assert!(
+                    button.width() >= track.right() - button.left() - PIECE_GAP - 0.01,
+                    "at {column}pt the button shrank to {} of a {}pt row",
+                    button.width(),
+                    track.right() - button.left(),
+                );
+            } else {
+                assert!(track.width() > 0.0, "at {column}pt the track vanished early");
+                assert!(
+                    (button.width() - FLIP_W).abs() < 0.01,
+                    "at {column}pt the button is {}, not its full {FLIP_W}",
+                    button.width(),
+                );
+            }
+        }
     }
 
     /// Where the bar drew its handle.
@@ -3075,56 +3512,104 @@ mod tests {
         );
     }
 
-    /// The pitch-order strip is a picture, and a press on it starts nothing.
+    /// The flip button reverses the arc, in the frame it is clicked.
     ///
-    /// One rectangle is sensed for the bar and the strip together, so the only
-    /// thing separating them is where a press LANDED — and asking where the
-    /// pointer has since reached would not do, because egui calls a press a drag
-    /// only once it has moved, by which time it can be over the track.
+    /// The value half is what says the button is wired to the gradient's own
+    /// flip and not to a second spelling of it here; the picture half is the
+    /// same claim `a_spectrum_drag_draws_the_arc_it_just_set` makes about the
+    /// handle, and it fails the same way — a click handled after the snapshot
+    /// the paint reads leaves the bar a frame behind the button.
+    #[test]
+    fn the_flip_button_reads_the_arc_backwards() {
+        let mut g =
+            PitchGradient { hue_start: 260.0, hue_span: 190.0, ..PitchGradient::default() };
+        let before = g.sanitized();
+        let mut h = Spectrum::settled(&mut g);
+        let shapes = h.click(&mut g, h.on_flip());
+        assert_eq!(g, before.flipped(), "the click left the arc at {g:?}");
+        assert_eq!(
+            spectrum_readout(&shapes),
+            format!("{:+.0}°", g.hue_span),
+            "the readout names a direction other than the one the click just set",
+        );
+    }
+
+    /// The button is a button and the track beside it is a track: a sideways
+    /// drag begun on the button turns nothing.
+    ///
+    /// They share a row, and what keeps them apart is that each is interacted
+    /// with over its OWN rectangle — which works HERE, where the strip below
+    /// needs a position check as well, because the button senses clicks and not
+    /// drags: a press on it produces no drag hit for the track to inherit, at
+    /// any distance. Sensed together, a press that began on the button reaches
+    /// the track's rotate branch the moment egui calls it a drag, and the
+    /// circle spins under a pointer that pressed a button.
+    #[test]
+    fn a_drag_begun_on_the_flip_button_turns_nothing() {
+        let before =
+            PitchGradient { hue_start: 0.0, hue_span: 90.0, ..PitchGradient::default() };
+        let mut g = before;
+        let mut h = Spectrum::settled(&mut g);
+        let to = h.at_span(120.0);
+        h.drag(&mut g, h.on_flip(), to);
+        assert_eq!(g, before, "a drag begun on the flip button moved the arc to {g:?}");
+
+        // The same drag from just inside the track does move it, so the harness
+        // is delivering something the widget can act on.
+        let mut g = before;
+        let mut h = Spectrum::settled(&mut g);
+        let from = egui::pos2(h.track().right(), h.track().center().y);
+        h.drag(&mut g, from, to);
+        assert_ne!(g, before, "the same drag on the track moved nothing, so this proves nothing");
+    }
+
+    /// The pitch-order strip is a picture, and a press anywhere on it —
+    /// including hard against the track above — starts nothing.
+    ///
+    /// Swept from the strip's top edge down, because a gap is not by itself a
+    /// barrier: egui's hit test collects every widget within
+    /// `interact_radius` of the pointer and, when the press hits nothing
+    /// directly, hands it to the nearest one. At the default radius of 5 that
+    /// reaches five points past the track's bottom edge — over twice
+    /// [`PIECE_GAP`] — so the strip's own top is inside the track's reach and
+    /// only the position check in `show` keeps it out. A probe at the strip's
+    /// middle alone would sit clear of the one region where this can fail.
     #[test]
     fn the_pitch_strip_is_a_picture_and_not_a_control() {
-        // The arc the track's own reset lands on, so the control half below
-        // reads the reset rather than a constant that merely used to match it
+        // The arc the track's own reset lands on, so the control halves below
+        // read the reset rather than a constant that merely used to match it
         // (see `a_double_click_on_the_spectrum_goes_home_to_the_arc_a_fresh_view_opens_on`).
         let (hue_start, hue_span) = reset_arc();
         let home = PitchGradient { hue_start, hue_span, ..ViewConfig::default().pitch_gradient };
-
-        // A drag begun on the strip and run up into the track.
-        let mut g = home;
-        let mut h = Spectrum::settled(&mut g);
-        let (from, to) = (h.on_strip(0.2), egui::pos2(h.on_strip(0.8).x, h.track().center().y));
-        h.drag(&mut g, from, to);
-        assert_eq!(g, home, "a drag begun on the pitch strip turned the circle under it");
-
-        // The same gesture one bar higher does move it, so the harness is
-        // delivering something the widget can act on.
-        let mut g = home;
-        let mut h = Spectrum::settled(&mut g);
-        let from = egui::pos2(h.on_strip(0.2).x, h.track().center().y);
-        h.drag(&mut g, from, to);
-        assert_ne!(g, home, "the same drag on the track moved nothing, so this proves nothing");
-
-        // And a double-click on the strip does not reset the arc, while the
-        // same pair one bar up does. A fresh bar for each: run back to back on
-        // one, the second pair lands inside the first's double-click window and
-        // arrives as the third click of a sequence, which is a different
-        // gesture and would make the strip's half of this vacuous.
         let dialled = PitchGradient { hue_start: 12.0, hue_span: 33.0, ..home };
-        let mut g = dialled;
-        let mut h = Spectrum::settled(&mut g);
-        let at = h.on_strip(0.5);
-        h.double_click(&mut g, at);
-        assert_eq!(g, dialled, "a double-click on the pitch strip reset the arc");
 
-        let mut g = dialled;
-        let mut h = Spectrum::settled(&mut g);
-        let at = egui::pos2(h.on_strip(0.5).x, h.track().center().y);
-        h.double_click(&mut g, at);
-        assert_eq!(
-            (g.hue_start, g.hue_span),
-            (home.hue_start, home.hue_span),
-            "a double-click on the track did not reset, so the strip half proves nothing",
-        );
+        for down in [0.0f32, 0.05, 0.25, 0.5, 1.0] {
+            // A drag begun on the strip and run up into the track.
+            let mut g = home;
+            let mut h = Spectrum::settled(&mut g);
+            let from = h.on_strip(0.2, down);
+            let to = egui::pos2(h.on_strip(0.8, down).x, h.track().center().y);
+            h.drag(&mut g, from, to);
+            assert_eq!(g, home, "a drag begun {down} down the pitch strip turned the circle");
+
+            // The same gesture one row higher does move it, so the harness is
+            // delivering something the widget can act on.
+            let mut g = home;
+            let mut h = Spectrum::settled(&mut g);
+            let from = egui::pos2(from.x, h.track().center().y);
+            h.drag(&mut g, from, to);
+            assert_ne!(g, home, "the same drag on the track moved nothing, so this proves nothing");
+
+            // And a double-click on the strip does not reset the arc. A fresh
+            // bar for each pair: run back to back on one, the second lands
+            // inside the first's double-click window and arrives as the third
+            // click of a sequence, which is a different gesture.
+            let mut g = dialled;
+            let mut h = Spectrum::settled(&mut g);
+            let at = h.on_strip(0.5, down);
+            h.double_click(&mut g, at);
+            assert_eq!(g, dialled, "a double-click {down} down the pitch strip reset the arc");
+        }
     }
 
     /// The arc a double-click goes home to is the one a fresh view OPENS on,
@@ -3146,7 +3631,7 @@ mod tests {
 
         let mut g = dialled;
         let mut h = Spectrum::settled(&mut g);
-        let at = egui::pos2(h.on_strip(0.5).x, h.track().center().y);
+        let at = h.track().center();
         h.double_click(&mut g, at);
         assert_eq!(
             (g.hue_start, g.hue_span),
