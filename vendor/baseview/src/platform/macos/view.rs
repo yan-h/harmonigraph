@@ -343,10 +343,14 @@ impl BaseviewView {
 
         this.buttons_reported_down.set(this.buttons_reported_down.get() & !confirmed);
         let modifiers = make_modifiers(this.keyboard_state.last_mods());
-        for (bit, button) in
-            [(0, MouseButton::Left), (1, MouseButton::Right), (2, MouseButton::Middle)]
-        {
-            if confirmed & (1 << bit) != 0 {
+        // Which bit stands for which button is `button_bit`'s to answer, asked
+        // rather than restated. A table written out here would be an inverse
+        // with nothing holding it to the original, and one entry out of step
+        // reports the wrong button going up: a stuck RIGHT button released as
+        // Middle leaves the right one held, and every scroll area shut — the
+        // bug this whole path exists to repair, silently back.
+        for button in [MouseButton::Left, MouseButton::Right, MouseButton::Middle] {
+            if confirmed & button_bit(button) != 0 {
                 Self::trigger_deferrable_event(
                     this,
                     Event::Mouse(ButtonReleased { button, modifiers }),
