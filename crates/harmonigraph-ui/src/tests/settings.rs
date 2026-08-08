@@ -238,7 +238,7 @@ fn every_bar_in_a_settings_pane_is_the_width_of_the_pane() {
         for tab in SETTINGS_TABS {
             for &projection in projections_for(tab) {
                 let widths = bar_track_widths(&settings_pane_at_width(tab, width, projection));
-                // One bar in the dock is deliberately shorter: the spectrum
+                // One bar per gradient is deliberately shorter: the spectrum
                 // track, which gives the left end of its row to the flip
                 // button. It still narrows with the column, which is what this
                 // is about, so it is allowed its own length rather than excused
@@ -249,8 +249,10 @@ fn every_bar_in_a_settings_pane_is_the_width_of_the_pane() {
                 // reserved the button's width at all — it comes out at the
                 // column's own length and passes on the first alternative,
                 // with the button painted over its left end. So the short
-                // length is allowed exactly once, and only on the pane that
-                // holds the bar.
+                // length is allowed exactly once per pane that holds one, and
+                // two panes now do: Nodes dials the lattice's pitch gradient
+                // and Analyzer the heatmap's level gradient, on the same three
+                // bars over the same type.
                 let track = crate::widgets::spectrum_track_width(width, 1.0);
                 let mut short = 0;
                 for bar in &widths {
@@ -265,7 +267,8 @@ fn every_bar_in_a_settings_pane_is_the_width_of_the_pane() {
                          (all of {widths:?})"
                     );
                 }
-                let want = usize::from(tab == panes::Tab::Nodes);
+                let want =
+                    usize::from(matches!(tab, panes::Tab::Nodes | panes::Tab::Analyzer));
                 assert_eq!(
                     short, want,
                     "{tab:?}/{projection:?} at {width}pt drew {short} short bars, not {want} \

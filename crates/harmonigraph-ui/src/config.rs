@@ -6,6 +6,8 @@
 //! The video render settings persist alongside these but live in
 //! `harmonigraph-take`, because a take carries the frame it was composed at.
 
+use harmonigraph_scene::Gradient;
+
 /// The Spectral pane's analysis window length, picked in the Spectrum
 /// settings tab: longer windows resolve bass pitch more sharply but
 /// respond more slowly (the tradeoff is physics, not implementation).
@@ -107,26 +109,118 @@ impl SpectralOrientation {
     }
 }
 
-/// The color ramp a spectrogram cell's intensity maps through. A set of
-/// looks to pick from — the spectrogram is a heatmap, and the palette is
-/// most of its character. Intensity always runs dark (quiet) to bright
-/// (loud); these differ only in the hues it passes through.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum SpectrogramColor {
-    /// Grayscale: black to white. The classic, and the most neutral over
-    /// the roll's own colors.
+/// A look the spectrogram's gradient can be set to in one press: the four
+/// named ramps the heatmap used to choose between, each read back as the
+/// [`Gradient`] that draws it.
+///
+/// A starting point and NOT a mode. Nothing stores which one was last pressed,
+/// because a press writes six numbers a bar can then move, and a name that went
+/// on claiming the picture after a drag would be naming a look that is no longer
+/// on screen. What each is worth is therefore what it opens on, which is why
+/// they are stated as gradients here rather than as the stop lists they were:
+/// the stop lists interpolated in sRGB BYTES, which is not a perceptual space —
+/// their grey ramp put mid-grey at `L*` 54 rather than 50, and their color ramps
+/// wandered off the straight line between their ends by as much as a tenth of
+/// the black-to-white distance in Oklab. What is kept is each one's CHARACTER —
+/// where its arc starts and how far it runs, how bright it closes, how much
+/// color it carries — and what is dropped is the wandering.
+///
+/// So a preset is a reading of the old ramp, not a reproduction of it, and the
+/// difference is visible side by side. It is also, on the argument above, the
+/// better half: an even ramp is what reads a heatmap's quiet detail honestly,
+/// and that is exactly what a straight line in `L*` is and a straight line in
+/// bytes is not.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpectrogramPreset {
+    /// Black to white with no color at all — the classic, and the most neutral
+    /// over the roll's own ribbons.
     Mono,
-    /// Black → navy → blue → cyan → white. The cool ramp.
+    /// Navy through blue to cyan. The cool ramp.
     Ice,
-    /// Black → violet → teal → green → yellow. A perceptually even ramp
-    /// (viridis-like) where every step reads as an equal change — the
-    /// default, because an even ramp is the one that reads a heatmap's
-    /// quiet detail honestly.
-    #[default]
+    /// Violet through teal and green to yellow (viridis-like) — what a fresh
+    /// install opens on.
     Aurora,
-    /// Black → indigo → magenta → orange → cream. Warmer than
-    /// [`Self::Aurora`] and evenly stepped like it.
+    /// Indigo through magenta and orange to cream: [`Self::Aurora`]'s warm
+    /// counterpart, over the other half of the circle.
     Magma,
+}
+
+impl SpectrogramPreset {
+    /// Every preset, in the order the row offers them: the neutral one first,
+    /// then the three colored ones.
+    ///
+    /// Built from an exhaustive `match` rather than written out as a literal,
+    /// the same way [`SpectralOrientation::ALL`] is and for the same reason: a
+    /// fifth look cannot reach the enum without reaching the row.
+    pub const ALL: [SpectrogramPreset; 4] = {
+        use SpectrogramPreset::*;
+        const fn covered(p: SpectrogramPreset) {
+            match p {
+                Mono | Ice | Aurora | Magma => (),
+            }
+        }
+        covered(Mono);
+        [Mono, Ice, Aurora, Magma]
+    };
+
+    /// The name the button carries.
+    pub fn label(self) -> &'static str {
+        match self {
+            SpectrogramPreset::Mono => "Mono",
+            SpectrogramPreset::Ice => "Ice",
+            SpectrogramPreset::Aurora => "Aurora",
+            SpectrogramPreset::Magma => "Magma",
+        }
+    }
+
+    /// What the button's tooltip says: the arc, in the colors it walks
+    /// through. Not the six numbers — the bars below say those, and say them
+    /// as the reader will next want to drag them.
+    pub fn hint(self) -> &'static str {
+        match self {
+            SpectrogramPreset::Mono => "Black to white; the most neutral over the roll",
+            SpectrogramPreset::Ice => "Navy to blue to cyan",
+            SpectrogramPreset::Aurora => "Violet to teal to green to yellow",
+            SpectrogramPreset::Magma => "Indigo to magenta to orange to cream",
+        }
+    }
+
+    /// The six numbers the press writes.
+    ///
+    /// Each is stated as the two ENDS its bars read out — the `L*` and the
+    /// chroma share that silence and a full bucket are drawn at — and composed
+    /// into the middle-and-signed-ramp pair the gradient stores, so that what is
+    /// written here is what the pane says back. Every one of them opens at `L*`
+    /// 0, which is the heatmap's own requirement rather than a taste: the region
+    /// is laid on a black bed, so silence has to BE black or the plane's edge
+    /// shows.
+    ///
+    /// The chroma pair is where a fraction of the gamut earns its keep. It does
+    /// not fall to 0 at the quiet end and does not need to: the gamut's own
+    /// maximum collapses toward 0 as `L*` approaches either end of its axis, so
+    /// a constant share already draws black at the bottom, saturated in the
+    /// middle and pale at the top — the shape all three colored ramps were
+    /// hand-picked to have. See [`Gradient::chroma`].
+    pub fn gradient(self) -> Gradient {
+        let of = |(l_lo, l_hi): (f32, f32), hue: (f32, f32), (c_lo, c_hi): (f32, f32)| Gradient {
+            hue_start: hue.0,
+            hue_span: hue.1,
+            lightness: (l_lo + l_hi) * 0.5,
+            lightness_ramp: l_hi - l_lo,
+            chroma: (c_lo + c_hi) * 0.5,
+            chroma_ramp: c_hi - c_lo,
+        };
+        match self {
+            // The hue is unreachable at chroma 0 and is written as the one the
+            // colored presets are read against anyway, so that a Mono picture
+            // dragged off 0 opens on a color rather than on whatever angle 0
+            // happened to be spelled with.
+            SpectrogramPreset::Mono => of((0.0, 100.0), (269.0, 0.0), (0.0, 0.0)),
+            SpectrogramPreset::Ice => of((0.0, 92.0), (269.0, -70.0), (0.55, 0.90)),
+            SpectrogramPreset::Aurora => of((0.0, 88.0), (302.0, -193.0), (0.40, 0.85)),
+            SpectrogramPreset::Magma => of((0.0, 90.0), (295.0, 136.0), (0.70, 0.85)),
+        }
+    }
 }
 
 
@@ -263,24 +357,42 @@ pub struct SpectrumConfig {
     /// than the `false` a bare `bool` default would mean; one that really did
     /// turn it off carries `false` and still round-trips.
     pub show_spectrogram: bool,
-    /// The heatmap's color ramp — the only thing about it left to choose.
+    /// The heatmap's color ramp: the same six-knob [`Gradient`] the lattice
+    /// colors pitch through, spanning the analyzer's LEVEL instead — its bottom
+    /// is what reads as silence and its top what reads as a full bucket, which
+    /// is the Spectrum's own Level window and not a second one.
+    ///
+    /// One type for both, because a heatmap's palette and a pitch ramp are the
+    /// same object asked of different axes, and the six knobs say more about a
+    /// ramp than a list of four names can: how far round the circle it walks,
+    /// how much brightness it spends on level, how much color, and which end
+    /// carries each. [`SpectrogramPreset`] is where the four names went — a row
+    /// of buttons that WRITE these six, rather than a mode the picture is in.
+    ///
+    /// Its bottom wants to sit at `L*` 0 and the presets all do, the heatmap
+    /// being laid on a black bed (see `spectral_pane`): silence drawn at
+    /// anything else puts a visible plane edge where the analyzer's history
+    /// runs out. Nothing enforces it — a gradient that lifts the floor is a
+    /// legal picture and an occasionally useful one, showing exactly how far
+    /// back the history reaches.
     ///
     /// Three more knobs belong here on the obvious reading and are absent on
     /// purpose, each because its neutral position is the one worth looking at.
     /// An overall opacity fades the heatmap out from under the notes, at the
     /// price of the scheme it shares with the curve (see `heatmap_mesh`); a
-    /// contrast curve bends the level a palette is already chosen to spread
-    /// evenly; and a private dB window lets the same bucket mean two things in
-    /// one pane. The window is the Spectrum's Level, always: one range means
-    /// "loud" is the same claim in the curve and in the heatmap, which is the
-    /// whole reason they share
+    /// contrast curve bends the level a gradient is already even in; and a
+    /// private dB window lets the same bucket mean two things in one pane. The
+    /// window is the Spectrum's Level, always: one range means "loud" is the
+    /// same claim in the curve and in the heatmap, which is the whole reason
+    /// they share
     /// [`loudness_db`](crate::panes::spectral::axes::loudness_db).
     ///
-    /// Their fields are gone from the blob too. That costs nothing on load —
-    /// serde ignores keys it has no field for, which
+    /// Their fields are gone from the blob too, and so is the
+    /// `spectrogram_color` this replaces. That costs nothing on load — serde
+    /// ignores keys it has no field for, which
     /// `a_persist_blob_carrying_a_since_removed_field_still_loads` pins — so a
-    /// project saved with an opacity simply loads without one.
-    pub spectrogram_color: SpectrogramColor,
+    /// project saved with a palette name simply loads at the fresh gradient.
+    pub spectrogram_gradient: Gradient,
 }
 
 impl SpectrumConfig {
@@ -332,6 +444,12 @@ impl SpectrumConfig {
         self.floor_db = self.floor_db.clamp(LEVEL_MIN_DB, LEVEL_MAX_DB - LEVEL_RANGE_MIN_SPAN);
         self.ceiling_db =
             self.ceiling_db.clamp(self.floor_db + LEVEL_RANGE_MIN_SPAN, LEVEL_MAX_DB);
+        // And the heatmap's gradient, which `ViewConfig::sanitize` does for the
+        // lattice's one door over. Asked of the type rather than restated, so
+        // the pane and the file agree about which gradients are legal — the
+        // draw path sanitizes again at the table, but a blob left unrepaired
+        // here would draw one picture and read out another on the bars.
+        self.spectrogram_gradient = self.spectrogram_gradient.sanitized();
     }
 }
 
@@ -471,7 +589,9 @@ impl Default for SpectrumConfig {
             note_names: true,
             note_name_scale: 1.0,
             show_spectrogram: true,
-            spectrogram_color: SpectrogramColor::default(),
+            // The even ramp, which is the one that reads a heatmap's quiet
+            // detail honestly — and now even in `L*` rather than in bytes.
+            spectrogram_gradient: SpectrogramPreset::Aurora.gradient(),
         }
     }
 }

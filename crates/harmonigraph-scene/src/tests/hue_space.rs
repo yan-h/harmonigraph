@@ -6,7 +6,7 @@
 //! them with
 //! `cargo test -p harmonigraph-scene hue_space -- --nocapture --ignored`.
 
-use crate::style::PitchGradient;
+use crate::style::Gradient;
 use glam::Vec4;
 
 /// Oklch of a color that is already sRGB, which is what the LUT holds.
@@ -57,7 +57,7 @@ const RETIRED_ARC_SPAN: f64 = 190.0;
 
 /// The color the shipped path draws at `t` for this gradient, off the curve
 /// rather than the table, so table resolution is not in the measurement.
-fn sample(t: f64, gradient: PitchGradient) -> Vec4 {
+fn sample(t: f64, gradient: Gradient) -> Vec4 {
     crate::color::designed_pitch_ramp(t, gradient)
 }
 
@@ -66,7 +66,7 @@ fn sample(t: f64, gradient: PitchGradient) -> Vec4 {
 fn at(l_star: f64, hue: f64, chroma_fraction: f64) -> Vec4 {
     sample(
         0.5,
-        PitchGradient {
+        Gradient {
             hue_start: hue as f32,
             hue_span: 0.0,
             lightness: l_star as f32,
@@ -79,7 +79,7 @@ fn at(l_star: f64, hue: f64, chroma_fraction: f64) -> Vec4 {
 
 /// The guarantee the whole two-space design buys: turning the CHROMA knob does
 /// not move the hue. A real check and not a probe — it is the promise
-/// `PitchGradient::hue_start` makes, and the reason the ramp's hue is not
+/// `Gradient::hue_start` makes, and the reason the ramp's hue is not
 /// simply a CIELAB angle like its lightness is an `L*`.
 ///
 /// Measured in Oklch off the drawn sRGB, which is a round trip rather than a
@@ -95,15 +95,15 @@ fn at(l_star: f64, hue: f64, chroma_fraction: f64) -> Vec4 {
 #[test]
 fn the_chroma_knob_does_not_move_the_hue() {
     let arcs = [
-        PitchGradient::default(),
-        PitchGradient { hue_start: 250.0, hue_span: 60.0, ..PitchGradient::default() },
-        PitchGradient { hue_start: 20.0, hue_span: 60.0, ..PitchGradient::default() },
-        PitchGradient { hue_start: 120.0, hue_span: 60.0, ..PitchGradient::default() },
-        PitchGradient { lightness: 30.0, lightness_ramp: 0.0, ..PitchGradient::default() },
+        Gradient::default(),
+        Gradient { hue_start: 250.0, hue_span: 60.0, ..Gradient::default() },
+        Gradient { hue_start: 20.0, hue_span: 60.0, ..Gradient::default() },
+        Gradient { hue_start: 120.0, hue_span: 60.0, ..Gradient::default() },
+        Gradient { lightness: 30.0, lightness_ramp: 0.0, ..Gradient::default() },
         // Steep and inverted, but stopping short of `L*` 100: a ramp that
         // clamps against the top pins several deciles at pure white, where the
         // assertion below has nothing to measure (see the guard).
-        PitchGradient { lightness: 65.0, lightness_ramp: -60.0, ..PitchGradient::default() },
+        Gradient { lightness: 65.0, lightness_ramp: -60.0, ..Gradient::default() },
     ];
     for arc in arcs {
         for t in deciles() {
@@ -119,7 +119,7 @@ fn the_chroma_knob_does_not_move_the_hue() {
                 "{arc:?} at t {t:.1}: L* {l:.1} leaves no chroma to carry a hue, \
                  so this sample would assert nothing",
             );
-            let hue_at = |c: f32| oklch(sample(t, PitchGradient { chroma: c, ..arc })).2;
+            let hue_at = |c: f32| oklch(sample(t, Gradient { chroma: c, ..arc })).2;
             let anchor = hue_at(0.15);
             for chroma in [0.3, 0.5, 0.75, 1.0] {
                 let drift = hue_delta(anchor, hue_at(chroma));
@@ -225,7 +225,7 @@ fn the_hybrid_at_the_edges() {
 #[ignore = "a probe: prints measurements, asserts nothing"]
 fn equal_lab_steps_are_uneven_in_oklch() {
     for chroma in [0.2, 0.5, 1.0] {
-        let arc = PitchGradient { chroma, ..PitchGradient::default() };
+        let arc = Gradient { chroma, ..Gradient::default() };
         println!("\n=== default arc at chroma {:.0}%: evenness of the sweep ===", chroma * 100.0);
         println!("   t  Lab h   ok h     step   share of arc   (even would be)");
         // The retired arc's own angles, at the lightness this ramp puts each
@@ -315,7 +315,7 @@ fn the_hue_circle_in_both_spaces() {
 #[test]
 #[ignore = "a probe: prints measurements, asserts nothing"]
 fn the_oklab_hybrid_against_googles_hct() {
-    let arc = PitchGradient::default();
+    let arc = Gradient::default();
 
     println!("\n=== CAM16 hue drift over the shipped chroma knob (20% -> 100%) ===");
     println!("   t   L*    Oklab hue held    CAM16 drift");
@@ -422,7 +422,7 @@ fn oklab_hue_of_retired_lab_hue(l_star: f64, lab_hue: f64, chroma_fraction: f64)
 
 /// The `L*` and Oklab hue the retired CIELAB arc drew at the two ends of the
 /// pitch range, for the gradient's other knobs.
-fn retired_arc(lab_start: f64, lab_span: f64, g: PitchGradient) -> (f32, f32) {
+fn retired_arc(lab_start: f64, lab_span: f64, g: Gradient) -> (f32, f32) {
     let end_lightness = |t: f64| {
         (f64::from(g.lightness) + (t - 0.5) * f64::from(g.lightness_ramp)).clamp(0.0, 100.0)
     };
@@ -445,7 +445,7 @@ fn retired_arc(lab_start: f64, lab_span: f64, g: PitchGradient) -> (f32, f32) {
 /// `default_hue_start` and `default_hue_span` quote have no other source.
 #[test]
 fn the_defaults_are_the_retired_arc_converted() {
-    let now = PitchGradient::default();
+    let now = Gradient::default();
     let (start, span) = retired_arc(RETIRED_ARC_START, RETIRED_ARC_SPAN, now);
     // A tenth of a degree, which is what the defaults are rounded to. Tighter
     // would only pin the rounding; looser would stop noticing a real move.
@@ -458,12 +458,12 @@ fn the_defaults_are_the_retired_arc_converted() {
     );
 }
 
-/// The chroma figures [`PitchGradient::chroma`]'s docs quote, measured. A doc
+/// The chroma figures [`Gradient::chroma`]'s docs quote, measured. A doc
 /// number nothing checks is a number that rots the first time the curve moves,
 /// and this one is the argument for the knob being a FRACTION at all.
 #[test]
 fn the_default_arcs_chroma_ceiling_is_what_the_docs_say() {
-    let g = PitchGradient::default();
+    let g = Gradient::default();
     let (mut lo, mut hi) = (f64::MAX, 0.0f64);
     for k in 0..=200 {
         let (l, h) = g.lightness_and_hue(f64::from(k) / 200.0);
@@ -473,7 +473,7 @@ fn the_default_arcs_chroma_ceiling_is_what_the_docs_say() {
     }
     assert!(
         (lo - 0.115).abs() < 0.001 && (hi - 0.320).abs() < 0.001,
-        "PitchGradient::chroma quotes 0.115..0.320 across the default arc; it is {lo:.4}..{hi:.4}",
+        "Gradient::chroma quotes 0.115..0.320 across the default arc; it is {lo:.4}..{hi:.4}",
     );
 }
 
@@ -492,7 +492,7 @@ fn the_default_arcs_chroma_ceiling_is_what_the_docs_say() {
 #[test]
 #[ignore = "a probe: prints measurements, asserts nothing"]
 fn what_going_on_to_cam16_would_buy() {
-    let arc = PitchGradient::default();
+    let arc = Gradient::default();
     // Unwrapped as it goes, so an arc crossing 0 stays monotone and the shares
     // below are cumulative distance rather than an angle.
     let samples: Vec<f64> = (0..=100)

@@ -12,3 +12,4 @@ mod camera;
 mod trail;
 mod hue_space;
 mod shimmer;
+mod gradient_cache;

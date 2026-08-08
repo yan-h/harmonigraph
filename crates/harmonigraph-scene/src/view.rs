@@ -3,7 +3,7 @@
 //! parameters.
 
 use crate::skin;
-use crate::style::{IdleMarker, PitchGradient, Pulse, SevensLabel};
+use crate::style::{IdleMarker, Gradient, Pulse, SevensLabel};
 use crate::trail::TrailMark;
 use harmonigraph_core::{coords, Comma, Envelope, LatticePos, Tempered};
 
@@ -127,9 +127,9 @@ pub struct ViewConfig {
     // loads intact and drops the key on the next save. This is the only
     // surviving record of that set, which is why it names it in full.
     /// The curve the low-to-high pitch gradient follows, as its five knobs
-    /// (see [`PitchGradient`]). Every pitch-colored shape in the scene reads
+    /// (see [`Gradient`]). Every pitch-colored shape in the scene reads
     /// it through one table, so this is the only place the gradient is set.
-    pub pitch_gradient: PitchGradient,
+    pub pitch_gradient: Gradient,
     /// The core's solidity, 0..1: a soft glow at 0, morphing continuously
     /// to the classic solid orb at 1 (the disc fades in over its glow
     /// skirt and its edge crisps). Inert while the core is off.
@@ -836,14 +836,14 @@ impl Default for ViewConfig {
             // Labels at their built-in size.
             label_scale: 1.0,
             show_cents: true,
-            // Written out rather than taken from `PitchGradient::default()`,
+            // Written out rather than taken from `Gradient::default()`,
             // which is the gradient TYPE's own default — the CIELAB arc
             // converted, which `the_defaults_are_the_retired_arc_converted`
             // holds it to, and what a gradient assembled in code opens on.
             // The composed look is free to differ, and does: a shorter arc,
             // a dimmer middle over a shallower brightness ramp, and a little
             // more chroma.
-            pitch_gradient: PitchGradient {
+            pitch_gradient: Gradient {
                 hue_start: 257.842_65,
                 hue_span: 190.0,
                 lightness: 53.0,

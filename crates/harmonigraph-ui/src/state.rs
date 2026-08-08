@@ -602,8 +602,8 @@ impl SharedState {
             Ok(persist) => persist,
             // SAYING SO is the whole point of this arm. Nothing in the tree
             // reads an older spelling any more, so a blob naming a variant
-            // this build has dropped — a retired palette, orientation or
-            // sweep mode — fails the parse HERE, and what falls out is the
+            // this build has dropped — a retired orientation, sweep mode or
+            // node style — fails the parse HERE, and what falls out is the
             // dock, the camera and every view setting reverting at once. The
             // version floor cannot catch it: the version is read out of a
             // value that never parsed. An accepted break, but not a silent

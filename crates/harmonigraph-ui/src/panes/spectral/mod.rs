@@ -209,19 +209,19 @@ pub(crate) fn spectral_pane(
                 })
                 .collect();
 
-            // Color from the SAME palette as the spectrogram, keyed by the same
+            // Color from the SAME gradient as the spectrogram, keyed by the same
             // loudness, so the curve reads in the heatmap's scheme rather than a
-            // flat accent. `tint` keeps the palette's hue/brightness and only
+            // flat accent. `tint` keeps the gradient's hue/brightness and only
             // sets opacity (gamma_multiply would darken it toward black).
             let hue = |power: f32, midi: f32| {
-                spectrogram::cell_color(cfg.spectrogram_color, loudness(&cfg, power, midi))
+                spectrogram::cell_color(cfg.spectrogram_gradient, loudness(&cfg, power, midi))
             };
             let tint = |c: egui::Color32, a: u8| {
                 egui::Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), a)
             };
 
             // The spectrum is a filled shape, like the spectrogram — no outline
-            // curve. Each slab is one bucket in its own palette color, opaque
+            // curve. Each slab is one bucket in its own gradient color, opaque
             // enough to read as a solid fill; densely packed, their tops make
             // the shape's edge (no separate line to fray).
             let slab = axes.pitch_len() / cols as f32 + 0.5;
@@ -237,8 +237,8 @@ pub(crate) fn spectral_pane(
 
             // ...and a light rim along their tops, the same edge the note
             // ribbons carry. The spectrum's own colors come from the
-            // spectrogram's palette, so where the curve is quiet it is drawn
-            // in that palette's dark end — against the pane's dark background,
+            // spectrogram's gradient, so where the curve is quiet it is drawn
+            // at that gradient's dark end — against the pane's dark background,
             // with no edge, the shape simply stops existing. Follows the
             // profile the slabs make rather than being a separate curve.
             if let Some(edge) = roll::keyline(&cfg, 1.0) {
