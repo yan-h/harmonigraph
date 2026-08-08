@@ -1653,10 +1653,10 @@ impl Spread {
     /// same one in f32 once the axis is a fraction. Whole `L*` recomposes
     /// exactly, so this moves nothing a brightness bar writes — none of the
     /// 10201 whole-point end pairs. A hundredth is no binary fraction, so 42 of
-    /// the same 10201 chroma pairs recompose to a ramp one ulp past what their
-    /// own middle holds, `7%..100%` being the widest of them at 6e-8 over — and
-    /// a bar writing one would leave the gradient drawing a picture off the pair
-    /// the bar reads out.
+    /// the same 10201 chroma pairs recompose to a ramp past what their own
+    /// middle holds — every one of them by exactly one ulp, 6e-8, `7%..100%`
+    /// the first — and a bar writing one would leave the gradient drawing a
+    /// picture off the pair the bar reads out.
     fn legal(self, pair: (f32, f32)) -> (f32, f32) {
         let mut g = PitchGradient::default();
         self.set(&mut g, pair);
