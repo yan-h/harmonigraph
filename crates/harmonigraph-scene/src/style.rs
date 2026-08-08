@@ -111,8 +111,24 @@ pub struct Gradient {
     /// quietly stop being true — and the top of the control would be dead over
     /// whatever part of the arc had already run out. Denominated in what is
     /// actually available, every setting is reachable, monotone, and in gamut
-    /// by construction; the cost is that absolute chroma varies along the arc,
-    /// since the hues that can hold more are given more.
+    /// by construction.
+    ///
+    /// **What it is a fraction OF is the whole question**, and a fraction of
+    /// the per-HUE ceiling is the wrong answer: it draws one setting at 2.4x
+    /// the chroma in magenta that it draws in the teal-blues, 3.5x at `L*` 42
+    /// and 4.8x at 86, because the sRGB solid is far wider at some hues than
+    /// others. That is not a subtlety — it is the picture reading as though the
+    /// magentas and oranges had been turned up, and Ottosson names the same
+    /// defect in HSLuv, which is built exactly that way.
+    /// `chroma_of`, in [`color`](crate::color), resolves it instead against a
+    /// floor every hue can hold, opening flat across hue
+    /// and reaching each hue's own ceiling only at 1.0. See there for the shape
+    /// and what each end of it costs.
+    ///
+    /// What survives the fix and cannot be designed away is the LIGHTNESS term:
+    /// the gamut genuinely closes toward black and white, so a gradient
+    /// spending `L*` on its range is less colorful at the bright end whatever
+    /// this knob says. On the default arc that is most of the variation left.
     pub chroma: f32,
     /// Signed difference in that fraction from the bottom of the range to the
     /// top: how much of the gradient's separation is spent on COLOR. 0 gives
@@ -173,12 +189,18 @@ fn default_lightness_ramp() -> f32 {
     44.0
 }
 
-/// Half the available chroma. Enough that the hues read as colors, and well
-/// short of the gamut boundary, where the maximum's own kinks between the sRGB
-/// primaries start to show up as bumps in the sweep — which is what the top of
-/// the knob is for, not what it should open on.
+/// Two thirds of the way up a knob whose bottom is flat across hue and whose
+/// top is each hue's own ceiling. Enough that the hues read as colors, and
+/// short of the boundary, where the ceiling's own kinks between the sRGB
+/// primaries come back as bumps in the sweep — which is what the top of the
+/// knob is for, not what it should open on.
+///
+/// The figure that holds the default arc's MEAN colorfulness where a fraction
+/// of the per-hue ceiling put it at 0.5, so the picture opens about as colored
+/// as it did and spends that color evenly instead of banking it in the
+/// magentas. `the_default_opens_at_the_colorfulness_it_used_to` measures it.
 fn default_chroma() -> f32 {
-    0.5
+    0.669
 }
 
 /// Flat: every note gets the same share of the color available to it.
