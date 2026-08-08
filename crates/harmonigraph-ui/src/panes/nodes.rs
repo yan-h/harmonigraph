@@ -485,7 +485,7 @@ fn every_layer_section(
         (ParamKey::DarkestPitch, ParamKey::BrightestPitch),
         0.0..=120.0,
         crate::COLOR_RANGE_MIN_SPAN,
-        "Color range",
+        "Pitch range",
         pitch_readout,
     )
     .on_hover_text(

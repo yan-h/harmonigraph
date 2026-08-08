@@ -7,7 +7,7 @@
 
 use std::ops::RangeInclusive;
 
-use egui::{CornerRadius, Key, Response, Sense, TextEdit, TextStyle, Ui, Vec2};
+use egui::{Color32, CornerRadius, Key, Response, Sense, TextEdit, TextStyle, Ui, Vec2};
 use harmonigraph_scene::{
     clamp_wheel, hue_circle, octave_layout, pitch_ramp_lut, Gradient, ViewConfig,
     DEFAULT_CENTER, DEFAULT_COUNT, HUE_CIRCLE_N, MAX_SPAN, MIN_SPAN, PITCH_LUT_N,
@@ -1614,7 +1614,7 @@ pub(crate) fn spectrum_track_width(column: f32, scale: f32) -> f32 {
     (column - (FLIP_W + FLIP_GAP) * scale).max(0.0)
 }
 
-/// Width of the flip button at the LEFT end of a [`SpectrumBar`], taken out of
+/// Width of the flip button at the RIGHT end of a [`SpectrumBar`], taken out of
 /// the row the bar already has rather than off a row of its own.
 ///
 /// It costs the track that much travel, which is the whole trade and a cheap
@@ -1622,14 +1622,12 @@ pub(crate) fn spectrum_track_width(column: f32, scale: f32) -> f32 {
 /// coarser drag and nothing else — 18pt of 400 is a twentieth of a degree per
 /// pixel. A row costs 20pt of a column that already scrolls.
 ///
-/// The left end rather than the right because a settings pane scrolls, and its
-/// scroll bar is drawn INSIDE the column over the right edge of every bar in
-/// it. A track under it loses nothing that can be read — the dimmed remainder
-/// says the least of anything on the bar — but a button under it is a button
-/// with a bar across it, and the last few pixels of one are not clickable at
-/// all. Nothing else in the row minds the swap: the arc is laid out from the
-/// track's own left edge either way, so it still reads low-to-high, left to
-/// right.
+/// The far end from where the arc starts, so the button sits past the end of
+/// the reading rather than in front of it: the track is cut at the arc's own
+/// start and fills from the left, and the thing that reverses it belongs after
+/// what it reverses. The cost is the settings pane's scroll bar, which is drawn
+/// INSIDE the column over the right edge of every bar in it — so when the pane
+/// scrolls, the button's last couple of points sit under it.
 const FLIP_W: f32 = 18.0;
 
 /// The name a [`SpectrumBar`] writes along its own track.
@@ -1639,6 +1637,49 @@ const FLIP_W: f32 = 18.0;
 /// is, and a name passed separately is a way for one pane to call it something
 /// the next pane does not.
 const SPAN_LABEL: &str = "Color span";
+
+/// How far a rimmed word's ground is drawn out around it, at the design scale.
+/// One point: enough to separate a glyph from the color behind it, and short of
+/// the weight that reads as an outlined typeface rather than a word on a busy
+/// ground.
+const TEXT_RIM: f32 = 1.0;
+
+/// Paints `galley` with a rim of the bar's own ground around it, for the two
+/// text runs that stand ON the hue circle.
+///
+/// **The circle is drawn at ONE lightness ([`TRACK_LIGHTNESS`]), so a word on it
+/// has exactly two possible grounds** whatever the six knobs say: the circle at
+/// `L*` 60 where the arc claims it, and that same circle held back to the well
+/// beyond the handle. No color reads on both — the theme's own text is about
+/// 6:1 against the held-back half and about 2.5:1 against the claimed one, and
+/// a dark word swaps those round. That is the whole reason this track carried
+/// no name until now, and a name is worth more than the alternative costs: four
+/// offset copies of the same galley in the ground color, so the reader's color
+/// meets the well rather than the hue whichever half of the track it stands on.
+///
+/// The galley is laid out ONCE, in [`Color32::PLACEHOLDER`], and each copy names
+/// the color it is painted in — laying it out twice would be two galleys to
+/// keep at one size.
+fn rimmed_galley(
+    painter: &egui::Painter,
+    pos: egui::Pos2,
+    galley: std::sync::Arc<egui::Galley>,
+    color: Color32,
+    scale: f32,
+) {
+    // At least a whole point, so the rim survives a UI scaled below 1.0 — under
+    // it the copies land on the same pixel as the word and draw nothing.
+    let reach = (TEXT_RIM * scale).max(1.0);
+    for offset in [
+        Vec2::new(-reach, 0.0),
+        Vec2::new(reach, 0.0),
+        Vec2::new(0.0, -reach),
+        Vec2::new(0.0, reach),
+    ] {
+        painter.galley(pos + offset, galley.clone(), theme::well());
+    }
+    painter.galley(pos, galley, color);
+}
 
 /// Which part of a [`SpectrumBar`]'s track a drag took hold of. Decided once,
 /// at drag-start, and remembered for the gesture, exactly as [`Grab`] is: a
@@ -1736,11 +1777,11 @@ pub fn gradient_preview(ui: &mut Ui, gradient: &Gradient) -> Response {
     response
 }
 
-/// The pitch gradient's hue arc, as two pieces of one control: the button that
-/// reverses it at the left end, and beside that a track carrying the bar's name
-/// and a full turn of the color circle, CUT at the arc's own start, with the
-/// stretch the gradient walks lit from the circle's left edge and the hues it
-/// does not reach dimmed beyond it.
+/// The pitch gradient's hue arc, as two pieces of one control: a track carrying
+/// a full turn of the color circle, CUT at the arc's own start, with the stretch
+/// the gradient walks lit from the track's left edge and the hues it does not
+/// reach dimmed beyond it — and past the right end of that, the button which
+/// reverses it. The bar's name stands on the circle at the left.
 ///
 /// What the arc COMPOSES with the other four knobs is not here at all: it is
 /// the [`gradient_preview`] the group stands under. This bar is the hue pair
@@ -1779,17 +1820,17 @@ pub fn gradient_preview(ui: &mut Ui, gradient: &Gradient) -> Response {
 /// happen to be flat: the same hue is drawn at two strengths, so where the arc
 /// stops is a change of strength and nothing else.
 ///
-/// **The name takes a gutter out of the track's left end, and the circle is
-/// laid along what is left.** Every other bar in the dock writes its name along
-/// its own track, over a well or an accent fill that a word can be read on;
-/// a turn of saturated color is not one of those — it crosses hues a dark word
-/// can be read on and hues it cannot, so a name laid ON the circle is legible
-/// over part of its own length and lost over the rest, whatever the six knobs
-/// say. Standing the name in a gutter of the track's own well gives it the same
-/// flat ground every other name has. What it costs is arc travel, which is the
-/// trade the flip button already makes and just as cheap: the circle stands for
-/// a whole turn at any length, so a shorter one is a coarser drag and nothing
-/// else.
+/// **The name stands ON the circle, in the place every other bar puts its own,
+/// and carries its own ground with it.** A word laid on a turn of color is the
+/// one thing this track cannot render legibly by choosing a color — see
+/// [`rimmed_galley`], which is where the two grounds are counted and the rim
+/// paid for. The circle then runs the whole track rather than starting past a
+/// gutter, which is what keeps the arc reading from the bar's own left edge.
+///
+/// The readout is held to the stretch RIGHT of the name, exactly as a
+/// [`RangeBar`]'s numbers are, so the two text runs cannot meet however wide
+/// the arc grows. The handle is not: it travels the whole circle, name
+/// included, being the part you operate and drawn over everything.
 ///
 /// **The flip is a button because the track cannot carry the gesture.** The arc
 /// is laid out from its own start, so both directions draw the same stretch of
@@ -1798,6 +1839,7 @@ pub fn gradient_preview(ui: &mut Ui, gradient: &Gradient) -> Response {
 /// settings column is short of rows and not of width: the two things a reader
 /// wants together are the arc and the direction it runs, and a row spent on one
 /// button pushes every knob under it further down a pane that already scrolls.
+/// It sits past the far end of the arc — see [`FLIP_W`] for why that end.
 ///
 /// **What the flip changes on screen is the sign, and the HUE of the circle and
 /// the preview alike.** Each reads low note at the left — the circle from the
@@ -1851,12 +1893,13 @@ impl<'a> SpectrumBar<'a> {
         // a column too narrow to leave the track anything then gives the button
         // the row, which is the right way round. A coarse handle beats an
         // unreachable one, but a button with no width cannot be pressed at all.
-        let split = rect.right() - spectrum_track_width(rect.width(), scale);
+        let split = rect.left() + spectrum_track_width(rect.width(), scale);
+        let track_rect =
+            egui::Rect::from_min_max(rect.min, egui::pos2(split, rect.bottom()));
         let flip_rect = egui::Rect::from_min_max(
-            rect.min,
-            egui::pos2((split - flip_gap).max(rect.left()), rect.bottom()),
+            egui::pos2((split + flip_gap).min(rect.right()), rect.top()),
+            rect.max,
         );
-        let track_rect = egui::Rect::from_min_max(egui::pos2(split, rect.top()), rect.max);
         let mut response = ui.interact(track_rect, id.with("track"), Sense::click_and_drag());
         let flip = ui
             .interact(flip_rect, id.with("flip"), Sense::click())
@@ -1865,10 +1908,9 @@ impl<'a> SpectrumBar<'a> {
                  colors, low and high swapped",
             );
 
-        // ---- The name, and the circle laid along what it leaves --------------
-        // Laid out HERE rather than with the rest of the paint, because the
-        // gutter it takes is what the circle — and so every position on it a
-        // gesture is read against — is measured from.
+        // ---- The name, and the stretch it keeps the readout out of ----------
+        // Laid out HERE rather than with the rest of the paint, so its width is
+        // in hand before anything else is placed against it.
         let painter = ui.painter();
         // Whether a point is on the control, as opposed to on the picture above
         // it or in the row spacing either side. The track's sensed rectangle
@@ -1898,10 +1940,13 @@ impl<'a> SpectrumBar<'a> {
             .layout_no_wrap(format!("{:+.0}°", -FULL_TURN), mono.clone(), theme::text())
             .size()
             .x;
+        // In [`Color32::PLACEHOLDER`], which is what lets the same galley be
+        // painted in the ground color for its rim and in the reader's color on
+        // top — see [`rimmed_galley`].
         let mut job = egui::text::LayoutJob::simple_singleline(
             SPAN_LABEL.to_owned(),
             TextStyle::Body.resolve(ui.style()),
-            text_color,
+            Color32::PLACEHOLDER,
         );
         let text_pad = BAR_TEXT_PAD * scale;
         job.wrap.max_width =
@@ -1909,23 +1954,20 @@ impl<'a> SpectrumBar<'a> {
         job.wrap.max_rows = 1;
         job.wrap.overflow_character = Some('\u{2026}');
         let label = painter.layout_job(job);
-        // What is left of the track once the name has taken its gutter, and the
-        // whole of what the circle, the handle and the readout are laid out
-        // over. Never past the track's right edge, so a column too narrow for
-        // the name leaves a band of nothing rather than one drawn backwards.
-        let band = egui::Rect::from_min_max(
-            egui::pos2(
-                (track_rect.left() + text_pad + label.size().x + BAR_LABEL_GAP * scale)
-                    .min(track_rect.right()),
-                track_rect.top(),
-            ),
-            track_rect.max,
-        );
-        // What the handle travels: the circle, less half a handle at each end,
+        // Where the name ends, and so the only part of the track the readout is
+        // allowed into. The name was laid out against a width with the widest
+        // readout already subtracted, so what is left here holds it: the name
+        // can no more be pushed off by the number than the number can push into
+        // the name.
+        let readable_left =
+            track_rect.left() + text_pad + label.size().x + BAR_LABEL_GAP * scale;
+        // What the handle travels: the track, less half a handle at each end,
         // so both limits — a span of zero and a whole turn — are places it can
         // stand rather than edges it merges into. Same reason as HANDLE_INSET.
-        // Named apart from the track, which is the whole well the name shares.
-        let travel = band.shrink2(Vec2::new(HANDLE_INSET * scale, 0.0));
+        // The whole track, name and all: a handle standing in the name is the
+        // same bargain a RangeBar's ends make, and the handle is the part you
+        // operate.
+        let travel = track_rect.shrink2(Vec2::new(HANDLE_INSET * scale, 0.0));
         // Where a gradient puts itself on that: which way round the circle it
         // runs, how much of the turn it claims, and where that leaves the
         // handle. A function rather than three bindings because the answer is
@@ -2036,17 +2078,17 @@ impl<'a> SpectrumBar<'a> {
         let circle = hue_circle(TRACK_LIGHTNESS, TRACK_CHROMA);
         let corner = bar_radius(scale);
         let radius = CornerRadius::same(corner);
-        // A well under the WHOLE track, name gutter included: it is the flat
-        // ground the name is read on, and under the circle it is what the
-        // dimmed hues sit on — those are drawn with alpha and need a recessed
-        // ground, the same one the unfilled end of a ValueBar shows.
+        // A well under the whole track, because the dimmed hues are drawn with
+        // alpha and need a recessed ground to sit on — the same ground the
+        // unfilled end of a ValueBar shows, and the same one both text runs are
+        // rimmed in.
         painter.rect_filled(track_rect, radius, theme::well());
-        // ONE circle across the whole band, at full strength over the stretch
+        // ONE circle across the whole track, at full strength over the stretch
         // the arc claims and held back to ground beyond it. The same hue on
         // both sides of the handle, so the two meet flush at every setting and
         // what the handle marks is how far round the turn the gradient reaches
         // — which is the only thing this track is for.
-        gradient_strip(painter, band, SPECTRUM_SEGMENTS, corner as f32, |p| {
+        gradient_strip(painter, track_rect, SPECTRUM_SEGMENTS, corner as f32, |p| {
             let hue = g.hue_start + p * FULL_TURN * winding;
             let f = hue.rem_euclid(FULL_TURN) / FULL_TURN * HUE_CIRCLE_N as f32;
             let i0 = f.floor() as usize % HUE_CIRCLE_N;
@@ -2056,7 +2098,13 @@ impl<'a> SpectrumBar<'a> {
         let centered = |galley: &egui::Galley, x: f32| {
             egui::pos2(x, track_rect.center().y - galley.size().y * 0.5)
         };
-        painter.galley(centered(&label, track_rect.left() + text_pad), label, text_color);
+        rimmed_galley(
+            painter,
+            centered(&label, track_rect.left() + text_pad),
+            label,
+            text_color,
+            scale,
+        );
 
         // How far round the circle the arc reaches, read out beside the handle
         // — on the dimmed side, where it sits on flat color, and on the claimed
@@ -2067,24 +2115,24 @@ impl<'a> SpectrumBar<'a> {
         // is spelled out because the track cannot show it: an arc and its flip
         // claim exactly the same colors.
         //
-        // Held inside the BAND at both ends rather than inside the track, which
-        // is the whole of what keeps it off the name: the number is confined to
-        // the circle and the name to its gutter, and the room the number needs
-        // came out of the name's width above.
-        let galley = painter.layout_no_wrap(format!("{:+.0}°", g.hue_span), mono, text_color);
+        // Held clear of the NAME at its left, which is the one text run it
+        // cannot slide under: the name is a word and the two would read as one
+        // string. Its room came out of the name's own width above.
+        let galley =
+            painter.layout_no_wrap(format!("{:+.0}°", g.hue_span), mono, Color32::PLACEHOLDER);
         let reach = HANDLE_W * 0.5 * scale + text_gap;
         let outside = handle_x + reach;
-        let left = if outside + galley.size().x <= band.right() - text_gap {
+        let left = if outside + galley.size().x <= track_rect.right() - text_gap {
             outside
         } else {
             handle_x - reach - galley.size().x
         };
         let left = left.clamp(
-            band.left() + text_gap,
-            (band.right() - text_gap - galley.size().x).max(band.left() + text_gap),
+            readable_left,
+            (track_rect.right() - text_gap - galley.size().x).max(readable_left),
         );
         let at = centered(&galley, left);
-        painter.galley(at, galley, text_color);
+        rimmed_galley(painter, at, galley, text_color, scale);
 
         // The handle on top of everything, readout included: it is the part
         // you operate, and a digit sliding under it beats it disappearing
@@ -3617,7 +3665,7 @@ mod tests {
     ///
     /// `min_span` bounds what the bar PRODUCES, not what it is handed, so
     /// every bar that declares one can still be given a pair that breaks it:
-    /// the Nodes tab's colour range is two host params with nothing between
+    /// the Nodes tab's Pitch range is two host params with nothing between
     /// them, and the Band bar's pair reaches `ViewConfig` from a blob
     /// unsanitized. The slide is what a closed span needs and it carries its
     /// width forward, so without the floor below it carries a zero — and the
@@ -3750,12 +3798,8 @@ mod tests {
         ctx: egui::Context,
         screen: egui::Rect,
         rect: egui::Rect,
-        /// The preview above the bar, and the stretch of track the circle is
-        /// laid along — both read back off the frame just drawn, since where
-        /// the name leaves off is a matter of font metrics rather than of a
-        /// constant a test could restate.
+        /// The preview above the bar, read back off the frame just drawn.
         preview: egui::Rect,
-        band: egui::Rect,
         t: f64,
         /// What the bar is told to reset to, or `None` to leave the builder
         /// alone — which is a caller naming no home, and a different code path
@@ -3775,7 +3819,6 @@ mod tests {
                 screen: egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(300.0, 100.0)),
                 rect: egui::Rect::NOTHING,
                 preview: egui::Rect::NOTHING,
-                band: egui::Rect::NOTHING,
                 t: 0.0,
                 home: None,
             };
@@ -3818,23 +3861,21 @@ mod tests {
             );
             self.rect = rect.get();
             self.preview = preview.get();
-            let shapes: Vec<egui::Shape> = out.shapes.into_iter().map(|s| s.shape).collect();
-            self.band = spectrum_bands(&shapes).1.calc_bounds();
-            shapes
+            out.shapes.into_iter().map(|s| s.shape).collect()
         }
 
-        /// The stretch a handle actually travels: the circle, less the inset at
-        /// either end. The bar hands back the whole TRACK — the well, name
-        /// gutter and all — so the gutter is read off the circle the frame
-        /// painted rather than measured a second time here.
+        /// The stretch a handle travels. The bar hands back the TRACK's rect
+        /// rather than the whole row it allocated — the flip button beside it
+        /// carries its own tooltip — so the inset at either end is all that
+        /// separates the two.
         fn track(&self) -> egui::Rect {
-            self.band.shrink2(Vec2::new(HANDLE_INSET, 0.0))
+            self.rect.shrink2(Vec2::new(HANDLE_INSET, 0.0))
         }
 
-        /// The middle of the flip button, in the gutter before the track's left
+        /// The middle of the flip button, in the gutter past the track's right
         /// edge.
         fn on_flip(&self) -> egui::Pos2 {
-            egui::pos2(self.rect.left() - FLIP_W * 0.5, self.rect.center().y)
+            egui::pos2(self.rect.right() + FLIP_W * 0.5, self.rect.center().y)
         }
 
         /// A point on the preview, `across` of the way along it and `up` of the
@@ -3898,11 +3939,29 @@ mod tests {
         }
     }
 
-    /// The span a spectrum bar reads out, as against the name it writes in the
-    /// track's gutter. Both are asserted, so a name that has stopped being
-    /// drawn is a failure rather than a readout read off the wrong run.
+    /// The two text runs a spectrum bar draws, rim copies dropped: a rimmed run
+    /// is one galley painted five times, four of them in the ground color to
+    /// separate it from the circle, and only the last carries the color a
+    /// reader sees. Told apart by that color, rather than by counting or by
+    /// position, so a rim that grows a copy is still one run here.
+    fn spectrum_texts(shapes: &[egui::Shape]) -> Vec<(egui::Rect, String)> {
+        shapes
+            .iter()
+            .filter_map(|s| match s {
+                egui::Shape::Text(t) if t.fallback_color != theme::well() => Some((
+                    egui::Rect::from_min_size(t.pos, t.galley.size()),
+                    t.galley.text().to_owned(),
+                )),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The span a spectrum bar reads out, as against the name it writes at the
+    /// left. Both are asserted, so a name that has stopped being drawn is a
+    /// failure rather than a readout read off the wrong run.
     fn spectrum_readout(shapes: &[egui::Shape]) -> String {
-        let texts: Vec<String> = text_boxes(shapes).into_iter().map(|(_, s)| s).collect();
+        let texts: Vec<String> = spectrum_texts(shapes).into_iter().map(|(_, s)| s).collect();
         assert_eq!(
             texts.len(),
             2,
@@ -4172,8 +4231,8 @@ mod tests {
     /// zero, so past that point the track stops shrinking and the button stops
     /// moving — and no sweep reaches it: `no_settings_pane_overruns_a_narrow_column`
     /// bottoms out at 120pt and this needs 20. Which leaves the arithmetic
-    /// under it unexercised, and it is the arithmetic most likely to go
-    /// negative: a track laid out from the RIGHT edge inward.
+    /// under it unexercised, and it is the arithmetic most likely to put the
+    /// button's own left edge past the right edge of the row.
     #[test]
     fn a_column_too_narrow_for_both_gives_the_row_to_the_button() {
         for column in [FLIP_W + FLIP_GAP + 30.0, FLIP_W + FLIP_GAP, FLIP_W, 6.0, 1.0] {
@@ -4207,7 +4266,7 @@ mod tests {
 
             assert!(track.width() >= 0.0, "at {column}pt the track came out {track:?}");
             assert!(
-                button.right() <= track.left() + 0.01,
+                button.left() >= track.right() - 0.01,
                 "at {column}pt the button {button:?} runs into the track {track:?}",
             );
             // Below the threshold the track is gone and the button holds the
@@ -4215,10 +4274,10 @@ mod tests {
             if column <= FLIP_W + FLIP_GAP {
                 assert_eq!(track.width(), 0.0, "at {column}pt the track kept {}", track.width());
                 assert!(
-                    button.width() >= track.right() - button.left() - FLIP_GAP - 0.01,
+                    button.width() >= button.right() - track.left() - FLIP_GAP - 0.01,
                     "at {column}pt the button shrank to {} of a {}pt row",
                     button.width(),
-                    track.right() - button.left(),
+                    button.right() - track.left(),
                 );
             } else {
                 assert!(track.width() > 0.0, "at {column}pt the track vanished early");
@@ -4290,23 +4349,24 @@ mod tests {
         assert!(handles(&shapes)[0].right() <= h.rect.right(), "a whole turn hangs the handle off");
     }
 
-    /// The name stands in a gutter of the track's own well, and the two things
-    /// that roam keep out of it: the circle starts where the name ends, and the
-    /// readout is confined to the circle however wide the arc grows.
+    /// The name rides the circle — which runs the track end to end — carrying
+    /// its own ground, and the readout never reaches it.
     ///
-    /// The gutter is the whole reason this bar can carry a name at all — a word
-    /// laid along the circle is legible over part of its own length and lost
-    /// over the rest, whatever the six knobs say — and it is worth nothing if
-    /// anything else may stand in it. Swept to a whole turn because that is
-    /// where the readout crosses to the near side of the handle, which is the
-    /// one arrangement that aims it at the name.
+    /// Three claims that fail apart. The circle runs the WHOLE track, so the
+    /// arc still reads from the bar's own left edge and nothing has quietly
+    /// taken a gutter back. The name is rimmed, which is the only thing
+    /// standing between a word and a turn of saturated color: without it the
+    /// name is legible over part of its own length and lost over the rest,
+    /// which no test of position can see. And the readout keeps off the name at
+    /// every span — swept to a whole turn, where it crosses to the near side of
+    /// the handle, which is the one arrangement that aims it at the name.
     #[test]
-    fn the_name_keeps_its_gutter_and_the_circle_starts_where_it_ends() {
+    fn the_name_rides_the_circle_and_the_number_keeps_off_it() {
         for span in [0.0f32, 45.0, 190.0, 330.0, 360.0, -360.0] {
             let mut g = Gradient { hue_span: span, ..Gradient::default() };
             let mut h = Spectrum::settled(&mut g);
             let shapes = h.frame(&mut g, vec![]);
-            let texts = text_boxes(&shapes);
+            let texts = spectrum_texts(&shapes);
             assert_eq!(
                 texts.len(),
                 2,
@@ -4314,42 +4374,42 @@ mod tests {
             );
             let (name, written) = texts[0].clone();
             let readout = texts[1].0;
-            // The name in full, which is also what catches a gutter so narrow
-            // the name was elided into it.
+            // The name in full, which is what catches one elided into a track
+            // too narrow for it.
             assert_eq!(written, SPAN_LABEL, "the bar wrote {written:?} as its name");
-            // A gutter at all: the circle starts inside the track rather than
-            // at its left edge, and still runs to the far end.
+            // The circle end to end under it, no gutter anywhere.
+            let circle = spectrum_bands(&shapes).1.calc_bounds();
             assert!(
-                h.band.left() > h.rect.left() + name.width(),
-                "the circle starts at {} on a track from {}, which is no room for a name",
-                h.band.left(),
-                h.rect.left(),
+                (circle.left() - h.rect.left()).abs() < 0.01
+                    && (circle.right() - h.rect.right()).abs() < 0.01,
+                "the circle covers {circle:?} of a track that runs {:?}",
+                h.rect,
             );
             assert!(
-                (h.band.right() - h.rect.right()).abs() < 0.01,
-                "the circle stops at {} rather than the track's own right edge {}",
-                h.band.right(),
-                h.rect.right(),
+                name.left() < circle.right() && name.right() > circle.left(),
+                "the name at {name:?} is not on the circle {circle:?} at all",
+            );
+            // Every copy of the name is one galley in one place, four of them
+            // in the ground color: what makes it legible on either half of the
+            // circle. Counted rather than looked at, `spectrum_texts` having
+            // just dropped exactly these.
+            let rim = shapes
+                .iter()
+                .filter(|s| match s {
+                    egui::Shape::Text(t) => {
+                        t.fallback_color == theme::well() && t.galley.text() == SPAN_LABEL
+                    }
+                    _ => false,
+                })
+                .count();
+            assert_eq!(rim, 4, "the name was rimmed by {rim} copies of itself, not 4");
+            assert!(
+                readout.left() >= name.right(),
+                "a span of {span} put the readout at {readout:?}, back into the name {name:?}",
             );
             assert!(
-                name.right() <= h.band.left() + 0.01,
-                "the name reaches {} into a circle that starts at {}",
-                name.right(),
-                h.band.left(),
-            );
-            assert!(
-                readout.left() >= h.band.left() - 0.01
-                    && readout.right() <= h.band.right() + 0.01,
-                "a span of {span} put the readout at {readout:?}, outside the circle \
-                 {:?} it belongs to",
-                h.band,
-            );
-            // And the handle, which travels the circle and nothing else.
-            let handle = spectrum_handle_x(&shapes);
-            assert!(
-                handle >= h.band.left() && handle <= h.band.right(),
-                "a span of {span} stood the handle at {handle}, off the circle {:?}",
-                h.band,
+                readout.right() <= h.rect.right() + 0.01,
+                "a span of {span} ran the readout past the track's end: {readout:?}",
             );
         }
     }
