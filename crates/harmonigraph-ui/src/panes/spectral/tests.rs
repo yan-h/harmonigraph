@@ -639,13 +639,14 @@ fn the_curve_clears_the_pane_edge_by_the_same_points_at_any_size() {
     assert_eq!(plot_budget(1.0, 0.4), 0.0, "a sub-point axis is not a pane to draw on");
     assert_eq!(plot_budget(1.0, 0.0), 0.0, "and a zero-length one divides to a floor, not a NaN");
 
-    // Painted, at two sizes four times apart on the depth axis: a tone well
-    // over the ceiling clamps, so the curve is drawn at the full budget and
-    // the nearest slab end to the outer edge IS the clearance.
-    let reach = |rect: egui::Rect| {
-        let axes = Axes::new(rect, &SpectrumConfig::default());
+    // Painted: a tone well over the ceiling clamps, so the curve is drawn at
+    // the full budget and the slab end nearest `edge` IS the clearance. `edge`
+    // is the depth the curve grows toward, which is the only thing the two
+    // layouts below disagree about.
+    let reach = |rect: egui::Rect, cfg: SpectrumConfig, edge: f32| {
+        let axes = Axes::new(rect, &cfg);
         let mut nearest = f32::INFINITY;
-        for shape in paint_tone(rect) {
+        for shape in paint_tone(rect, cfg) {
             // The spectrum's slabs, and nothing else on the pane: they are the
             // only shapes drawn in a palette color at this opacity.
             if let egui::Shape::LineSegment { points, stroke } = shape {
@@ -653,30 +654,47 @@ fn the_curve_clears_the_pane_edge_by_the_same_points_at_any_size() {
                     continue;
                 }
                 for point in points {
-                    nearest = nearest.min(axes.depth_at(point) * axes.depth_len());
+                    let depth = (axes.depth_at(point) - edge).abs();
+                    nearest = nearest.min(depth * axes.depth_len());
                 }
             }
         }
         assert!(nearest.is_finite(), "{rect:?} drew no spectrum at all");
         nearest
     };
-    for size in [egui::vec2(300.0, 100.0), egui::vec2(1200.0, 400.0)] {
-        let rect = egui::Rect::from_min_size(egui::pos2(10.0, 20.0), size);
-        let gap = reach(rect);
-        assert!(
-            (gap - PLOT_HEADROOM_PT).abs() < 0.1,
-            "a {size:?} pane left {gap} points at its edge, not {PLOT_HEADROOM_PT}",
-        );
+    // Both layouts the pane has, because they place the curve against
+    // different edges and reach the clearance down different branches of `sd`:
+    // joined to the spectrogram it grows from the now-line toward depth 0, and
+    // with the roll and spectrogram both off it owns the axis and grows from
+    // depth 0 toward 1. A headroom applied to the wrong end shows up in one and
+    // not the other.
+    let alone = SpectrumConfig {
+        show_roll: false,
+        show_spectrogram: false,
+        ..SpectrumConfig::default()
+    };
+    for (cfg, edge, layout) in
+        [(SpectrumConfig::default(), 0.0, "joined"), (alone, 1.0, "whole-axis")]
+    {
+        for size in [egui::vec2(300.0, 100.0), egui::vec2(1200.0, 400.0)] {
+            let rect = egui::Rect::from_min_size(egui::pos2(10.0, 20.0), size);
+            let gap = reach(rect, cfg, edge);
+            assert!(
+                (gap - PLOT_HEADROOM_PT).abs() < 0.1,
+                "a {layout} {size:?} pane left {gap} points at its edge, \
+                 not {PLOT_HEADROOM_PT}",
+            );
+        }
     }
 }
 
-/// The pane painted with a 1 kHz tone loud enough to clamp against the
-/// default ceiling, so the spectrum curve is drawn at its full depth budget.
-/// 1 kHz because it is the tilt's own pivot, where the slope takes nothing
-/// off and the level is the tone's alone.
-fn paint_tone(rect: egui::Rect) -> Vec<egui::Shape> {
+/// The pane under `cfg`, painted with a 1 kHz tone loud enough to clamp
+/// against the default ceiling, so the spectrum curve is drawn at its full
+/// depth budget. 1 kHz because it is the tilt's own pivot, where the slope
+/// takes nothing off and the level is the tone's alone.
+fn paint_tone(rect: egui::Rect, cfg: SpectrumConfig) -> Vec<egui::Shape> {
     let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
-    let cfg = state.spectrum_config;
+    state.spectrum_config = cfg;
     let sr = 48_000.0;
     let samples: Vec<f32> = (0..48_000)
         .map(|i| (std::f32::consts::TAU * 1_000.0 * i as f32 / sr).sin())
