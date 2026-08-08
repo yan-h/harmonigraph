@@ -71,7 +71,7 @@ pub(super) fn span_readout(seconds: f32) -> String {
 /// [`crate::SpectrogramPreset`]. The preview then sits between the names and
 /// the bars, which is where both of them are read against it.
 fn spectrogram_gradient_group(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig) {
-    use crate::widgets::{gradient_preview, SpectrumBar, SpreadBar};
+    use crate::widgets::{GradientPreview, SpectrumBar, SpreadBar};
     use crate::SpectrogramPreset;
 
     // The gradient a double-click on any of the three goes home to. The fresh
@@ -97,12 +97,8 @@ fn spectrogram_gradient_group(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig
             }
         }
     });
-    gradient_preview(ui, &cfg.spectrogram_gradient).on_hover_text(
-        "The gradient itself, silence on the left and a full bucket on the \
-         right: every one of the six numbers the bars below carry, composed \
-         into the colors the heatmap draws with. A picture rather than a \
-         control — the three bars under it are what move it.",
-    );
+    // The row first, the colors last — see [`GradientPreview`].
+    let preview = GradientPreview::reserve(ui);
     SpectrumBar::new(&mut cfg.spectrogram_gradient).home(home).show(ui).on_hover_text(
         "The level->color spectrum: how far round the color circle the level \
          range walks, out of the whole turn the bar stands for. The hues it \
@@ -133,6 +129,12 @@ fn spectrogram_gradient_group(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig
          Mono. Near the top the ramp rides the gamut's own boundary, whose \
          corners between the screen's primaries show up as steps in an \
          otherwise smooth sweep.",
+    );
+    preview.show(ui, &cfg.spectrogram_gradient).on_hover_text(
+        "The gradient itself, silence on the left and a full bucket on the \
+         right: every one of the six numbers the bars below carry, composed \
+         into the colors the heatmap draws with. A picture rather than a \
+         control — the three bars under it are what move it.",
     );
 }
 

@@ -1742,20 +1742,57 @@ fn default_home() -> Gradient {
 /// Full column width and no well beneath it, unlike every bar: it is opaque end
 /// to end and covers whatever ground it is given, and a recessed track under a
 /// picture would say there is a value in there somewhere.
-pub fn gradient_preview(ui: &mut Ui, gradient: &Gradient) -> Response {
-    let scale = theme::ui_scale(ui.ctx());
-    let width = bar_width(ui);
-    let (rect, response) =
-        ui.allocate_exact_size(Vec2::new(width, preview_height(scale)), Sense::hover());
-    // One column per table entry, so every color in the table lands on a column
-    // of its own and only the vertices between two of them are interpolated.
-    let lut = pitch_ramp_lut(gradient.sanitized());
-    gradient_strip(ui.painter(), rect, PITCH_LUT_N - 1, f32::from(bar_radius(scale)), |p| {
-        let f = p.clamp(0.0, 1.0) * (PITCH_LUT_N - 1) as f32;
-        let i0 = f.floor() as usize;
-        scene_color(lut[i0].lerp(lut[(i0 + 1).min(PITCH_LUT_N - 1)], f - f.floor()), 1.0)
-    });
-    response
+///
+/// **Its space is taken first and its paint happens last, and the two are
+/// separate calls for exactly that reason.** A settings pane draws top-down, so
+/// a picture drawn where it STANDS is drawn from the value the bars below it
+/// were handed rather than the one they just wrote: every frame of every drag
+/// in the group would show the gradient as it was one frame ago, above three
+/// bars showing it as it is. `harmonigraph_scene::color`'s `LUT_SLOTS` counts
+/// that frame from the other side — everything above a bar reads what the bar
+/// wrote last frame, which is why the bar re-reads before painting — and a
+/// picture is the one thing in a settings pane that can afford neither the lag
+/// nor a row further down. `a_spectrum_drag_draws_the_preview_it_just_set` is
+/// what holds the order.
+///
+/// Reserving is what makes that possible: the row is claimed at the top of the
+/// group, so the bars land under it, and the colors are read at the bottom of
+/// the group, after every one of them has written.
+pub struct GradientPreview {
+    rect: egui::Rect,
+    id: egui::Id,
+}
+
+impl GradientPreview {
+    /// Claim the row, before the bars that write the gradient are drawn.
+    pub fn reserve(ui: &mut Ui) -> Self {
+        let scale = theme::ui_scale(ui.ctx());
+        let width = bar_width(ui);
+        let (id, rect) = ui.allocate_space(Vec2::new(width, preview_height(scale)));
+        GradientPreview { rect, id }
+    }
+
+    /// Paint it, after them.
+    pub fn show(self, ui: &Ui, gradient: &Gradient) -> Response {
+        let scale = theme::ui_scale(ui.ctx());
+        let response = ui.interact(self.rect, self.id, Sense::hover());
+        // One column per table entry, so every color in the table lands on a
+        // column of its own and only the vertices between two of them are
+        // interpolated.
+        let lut = pitch_ramp_lut(gradient.sanitized());
+        gradient_strip(
+            ui.painter(),
+            self.rect,
+            PITCH_LUT_N - 1,
+            f32::from(bar_radius(scale)),
+            |p| {
+                let f = p.clamp(0.0, 1.0) * (PITCH_LUT_N - 1) as f32;
+                let i0 = f.floor() as usize;
+                scene_color(lut[i0].lerp(lut[(i0 + 1).min(PITCH_LUT_N - 1)], f - f.floor()), 1.0)
+            },
+        );
+        response
+    }
 }
 
 /// The pitch gradient's hue arc, as two pieces of one control: a track carrying
@@ -3825,13 +3862,20 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| {
-                    preview.set(gradient_preview(ui, g).rect);
+                    // The group's own order: the preview's row taken first, its
+                    // colors read after the bar has written — see
+                    // [`GradientPreview`]. A harness that painted it where it
+                    // stands would model a pane this repo does not have and
+                    // would pass `a_spectrum_drag_draws_the_preview_it_just_set`
+                    // against a picture that lags.
+                    let slot = GradientPreview::reserve(ui);
                     let bar = SpectrumBar::new(g);
                     let bar = match self.home {
                         Some(home) => bar.home(home),
                         None => bar,
                     };
-                    rect.set(bar.show(ui).rect)
+                    rect.set(bar.show(ui).rect);
+                    preview.set(slot.show(ui, g).rect);
                 },
             );
             self.rect = rect.get();
@@ -3946,10 +3990,9 @@ mod tests {
         texts.into_iter().nth(1).expect("checked just above")
     }
 
-    /// The colored bands the harness paints, in the order they are drawn: the
-    /// preview above, then the bar's own hue circle. Everything else either
-    /// draws is a rect, a line or a convex polygon, so a mesh is a band and
-    /// nothing else is.
+    /// The colored bands the harness paints: the preview and the bar's own hue
+    /// circle. Everything else either draws is a rect, a line or a convex
+    /// polygon, so a mesh is a band and nothing else is.
     fn bands(shapes: &[egui::Shape]) -> Vec<egui::Mesh> {
         shapes
             .iter()
@@ -3961,22 +4004,26 @@ mod tests {
     }
 
     /// The same two, named: `(preview, circle)`.
+    ///
+    /// Told apart by WHERE they are rather than by the order they are drawn in.
+    /// The preview is painted last on purpose (see [`GradientPreview`]), so
+    /// draw order says nothing about which band is which, and a helper that
+    /// read it would have quietly swapped the two the day that changed.
     fn spectrum_bands(shapes: &[egui::Shape]) -> (egui::Mesh, egui::Mesh) {
-        let bands = bands(shapes);
+        let mut bands = bands(shapes);
         assert_eq!(
             bands.len(),
             2,
             "a preview and a spectrum bar paint two bands, not {}",
             bands.len(),
         );
+        bands.sort_by(|a, b| a.calc_bounds().top().total_cmp(&b.calc_bounds().top()));
         let mut bands = bands.into_iter();
         let preview = bands.next().expect("checked just above");
         let circle = bands.next().expect("checked just above");
-        // Drawn in that order and told apart by it, which holds only while the
-        // preview really is the upper of the two.
         assert!(
             preview.calc_bounds().bottom() <= circle.calc_bounds().top(),
-            "the preview is not above the bar, so the two bands are the other way round",
+            "the two bands overlap, so neither is the picture above the other",
         );
         (preview, circle)
     }
@@ -4419,6 +4466,39 @@ mod tests {
             spectrum_readout(&shapes),
             format!("{:+.0}°", g.hue_span),
             "the readout names a span other than the one the drag just set",
+        );
+    }
+
+    /// The preview draws the arc the drag just SET, exactly as the bar under it
+    /// does.
+    ///
+    /// A settings pane draws top-down, so a picture drawn WHERE IT STANDS is
+    /// drawn from the value the bars below it were handed rather than the one
+    /// they just wrote — `harmonigraph_scene::color`'s `LUT_SLOTS` counts that
+    /// very frame ("everything above the bar in a frame reads the value the bar
+    /// wrote LAST frame"), and it is the reason the bar itself re-reads. The
+    /// preview is above all three bars, so it is the group's one piece that can
+    /// spend a whole gesture a frame behind the control being dragged, and the
+    /// only fix is to take its space first and paint it last.
+    ///
+    /// Measured against the picture the SAME gradient draws with nothing in
+    /// flight, rather than against a color written out here: the claim is that
+    /// the frame is not stale, and the settled bar is what "not stale" means.
+    #[test]
+    fn a_spectrum_drag_draws_the_preview_it_just_set() {
+        let mut g = Gradient { hue_span: 90.0, ..Gradient::default() };
+        let mut h = Spectrum::settled(&mut g);
+        let shapes = h.drag(&mut g, h.at_span(90.0), h.at_span(270.0));
+        let live = band_colors(&spectrum_bands(&shapes).0);
+
+        let mut landed = g;
+        let mut settled = Spectrum::settled(&mut landed);
+        let shapes = settled.frame(&mut landed, vec![]);
+        let want = band_colors(&spectrum_bands(&shapes).0);
+        assert_eq!(
+            live, want,
+            "the preview drew a gradient other than the one the drag left at \
+             {landed:?} — a frame behind the bar it stands over",
         );
     }
 

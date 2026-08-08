@@ -7,7 +7,7 @@
 use super::{edge_bar, param_bar, section};
 use crate::params::{seconds, ParamBackend, ParamKey};
 use crate::widgets::{
-    button_row, choice_row, gradient_preview, OctaveStrip, RangeBar, SpectrumBar, SpreadBar,
+    button_row, choice_row, GradientPreview, OctaveStrip, RangeBar, SpectrumBar, SpreadBar,
     ValueBar,
 };
 use crate::SharedState;
@@ -418,12 +418,10 @@ fn pitch_readout(midi: f32) -> String {
 /// taking two, and for why the bar's own name is the one text run in the dock
 /// drawn dark.
 fn spectrum_group(ui: &mut egui::Ui, view: &mut ViewConfig) {
-    gradient_preview(ui, &view.pitch_gradient).on_hover_text(
-        "The gradient itself, low note on the left: every one of the six \
-         numbers the bars below carry, composed into the colors the lattice \
-         draws with. A picture rather than a control — the three bars under it \
-         are what move it.",
-    );
+    // The row first, the colors last — see [`GradientPreview`]: read where it
+    // stands, the picture would spend every frame of every drag below it one
+    // frame behind the bar being dragged.
+    let preview = GradientPreview::reserve(ui);
     SpectrumBar::new(&mut view.pitch_gradient).show(ui).on_hover_text(
         "The pitch->color spectrum: how far round the color circle the pitch \
          range walks, out of the whole turn the bar stands for. The hues it \
@@ -454,6 +452,12 @@ fn spectrum_group(ui: &mut egui::Ui, view: &mut ViewConfig) {
          whole stretch, drag one end past the other to swap which end is \
          vivid, double-click to reset. Closing the two together gives every \
          note the same share of the color available to it.",
+    );
+    preview.show(ui, &view.pitch_gradient).on_hover_text(
+        "The gradient itself, low note on the left: every one of the six \
+         numbers the bars below carry, composed into the colors the lattice \
+         draws with. A picture rather than a control — the three bars under it \
+         are what move it.",
     );
 }
 
