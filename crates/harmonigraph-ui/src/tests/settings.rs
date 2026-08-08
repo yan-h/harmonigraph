@@ -200,12 +200,33 @@ fn the_video_pane_does_not_start_with_a_rule() {
     }
 }
 
+/// The bar tracks a pane drew, by width.
+///
+/// A `ValueBar`/`RangeBar` track is a `theme::ROW_HEIGHT`-tall rect in `well()`,
+/// which the accent fill over it does not answer to — that is the same height in
+/// a different color. The record button's panel does: it is a control in a
+/// settings row, so it is a row high like everything else in one, and it is
+/// painted in the same track color. The dot inside it is what tells the two
+/// apart, and it is read out of the paint rather than the panel being skipped
+/// for having an odd width — a width is exactly what is under test here, so
+/// excusing a rect for being an odd length would excuse the bug.
 fn bar_track_widths(shapes: &[egui::epaint::ClippedShape]) -> Vec<f32> {
     let well = crate::theme::well();
+    let dots: Vec<egui::Pos2> = shapes
+        .iter()
+        .filter_map(|cs| match &cs.shape {
+            egui::Shape::Circle(c) => Some(c.center),
+            _ => None,
+        })
+        .collect();
     shapes
         .iter()
         .filter_map(|cs| match &cs.shape {
-            egui::Shape::Rect(r) if r.fill == well && (r.rect.height() - 20.0).abs() < 0.6 => {
+            egui::Shape::Rect(r)
+                if r.fill == well
+                    && (r.rect.height() - crate::theme::ROW_HEIGHT).abs() < 0.6
+                    && !dots.iter().any(|&dot| r.rect.contains(dot)) =>
+            {
                 Some(r.rect.width())
             }
             _ => None,

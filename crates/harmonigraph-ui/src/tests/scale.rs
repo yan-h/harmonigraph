@@ -281,3 +281,41 @@ fn pointing_at_a_control_leaves_the_row_where_it_is() {
         }
     }
 }
+
+/// Every control a settings row can be built from stands exactly one
+/// [`ROW_HEIGHT`](crate::theme::ROW_HEIGHT) high — the bars, and all five of the
+/// things that go in a row beside them — so a pane reads as a column of rows
+/// rather than as a stack that changes gauge wherever a button appears.
+///
+/// What holds it is the `interact_size` FLOOR rather than any of the controls
+/// agreeing to a number, and that is the part worth pinning. A button is as
+/// tall as its text plus `button_padding`, or the floor, whichever is more, and
+/// only the floor is a round height: egui stores a frame's margin as whole
+/// points, so a button sized by its padding alone lands on its text plus an
+/// even number and can miss a 20-point row by a point in either direction.
+///
+/// Which makes the padding the thing that breaks this, quietly and from a
+/// distance: raise the type or the padding until their sum clears the floor and
+/// the floor stops applying, one control at a time. The sweep is the whole
+/// [scale range](crate::theme::UI_SCALE_RANGE) because the sum clears the floor
+/// at some scales before others — the type rounds to whole pixels and the
+/// padding to whole points, so the headroom between them is not the same
+/// fraction twice.
+#[test]
+fn every_settings_row_is_one_row_high() {
+    for kind in
+        [Control::Button, Control::Selectable, Control::Checkbox, Control::Switch, Control::Record]
+    {
+        for step in 0..=16u8 {
+            let scale = 0.7 + 0.05 * f32::from(step);
+            let want = crate::theme::row_height(scale);
+            for rect in control_row(kind, scale, None, false) {
+                assert!(
+                    (rect.height() - want).abs() < 0.01,
+                    "a {kind:?} at scale {scale} stands {}pt high, not the row's {want}pt",
+                    rect.height(),
+                );
+            }
+        }
+    }
+}
