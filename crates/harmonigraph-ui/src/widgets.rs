@@ -1217,8 +1217,9 @@ const FULL_TURN: f32 = 360.0;
 const UNCLAIMED_ALPHA: f32 = 74.0 / 255.0;
 
 /// Height of the pitch-order strip under a [`SpectrumBar`]'s track. Shorter
-/// than the track, because it is a picture and not a control: nothing on it
-/// can be grabbed, and a full-height second bar would say otherwise.
+/// than the track, because it is a picture and not a control: a press on it
+/// is declined ([`SpectrumGrab::Outside`]), and a full-height second bar would
+/// say otherwise.
 const STRIP_H: f32 = 11.0;
 
 /// The pane showing between the three pieces of a [`SpectrumBar`] — beside the
@@ -1281,6 +1282,22 @@ enum SpectrumGrab {
     /// gesture is "keep that hue under the pointer"; fixed for the gesture, so
     /// a turn never reads back the circle it is itself moving.
     Rotate { held: f32 },
+    /// A press that landed off the track, which for this widget means on the
+    /// pitch-order strip below it.
+    ///
+    /// A rectangle the strip is not inside is NOT enough to keep a press on it
+    /// out of the track, and that is the whole reason this variant exists:
+    /// egui's hit test gathers every widget within
+    /// `interaction.interact_radius` of the pointer and, when the press hits
+    /// none of them squarely, gives it to the nearest. At the default radius of
+    /// 5 the track reaches five points below its own bottom edge — past
+    /// [`PIECE_GAP`] and into the strip — so the widget is handed drags it has
+    /// to decline by position.
+    ///
+    /// Remembered for the gesture like the other two, so a drag that started
+    /// off the track does not catch hold the moment the pointer crosses onto
+    /// it.
+    Outside,
 }
 
 /// The arc a double-click on the track goes home to: the one a fresh view
@@ -1409,9 +1426,9 @@ impl<'a> SpectrumBar<'a> {
             egui::pos2(split, rect.top()),
             egui::pos2(rect.right(), rect.top() + BAR_HEIGHT * scale),
         );
-        // Only the track is sensed. The strip is a picture and a press on it
-        // reaches nothing at all, which is a stronger promise than the widget
-        // could make while one rectangle covered both.
+        // Only the track is sensed, and the strip is a picture — but sensing
+        // stops short of the strip rather than keeping presses off it. What
+        // does that is `on_track` below; see [`SpectrumGrab::Outside`].
         let strip_rect = egui::Rect::from_min_max(
             egui::pos2(track_rect.left(), track_rect.bottom() + gap),
             rect.max,
@@ -1442,6 +1459,11 @@ impl<'a> SpectrumBar<'a> {
             let claimed = (g.hue_span / FULL_TURN).abs().clamp(0.0, 1.0);
             (winding, claimed, track.left() + track.width() * claimed)
         };
+        // Whether a point is on the control, as opposed to on the picture below
+        // it. The track's sensed rectangle stops at the gap, and this is still
+        // the only thing standing between a press on the strip and a gesture —
+        // see [`SpectrumGrab::Outside`] for why the rectangle is not enough.
+        let on_track = |p: &egui::Pos2| track_rect.contains(*p);
 
         // ---- Interaction ----------------------------------------------------
         // Ahead of the snapshot below, so the frame that flips is the frame
@@ -1464,7 +1486,8 @@ impl<'a> SpectrumBar<'a> {
             ((x - track.left()) / track.width().max(1.0)).clamp(0.0, 1.0) * FULL_TURN * winding
         };
         let grab_id = response.id.with("spectrum_grab");
-        if response.double_clicked() {
+        let clicked_track = response.interact_pointer_pos().is_some_and(|p| on_track(&p));
+        if response.double_clicked() && clicked_track {
             let (hue_start, hue_span) = reset_arc();
             self.gradient.hue_start = hue_start;
             self.gradient.hue_span = hue_span;
@@ -1478,10 +1501,19 @@ impl<'a> SpectrumBar<'a> {
                 let grab = match stored {
                     Some(grab) => grab,
                     None => {
-                        // Settled on the first live frame from where the
-                        // pointer has REACHED, exactly as [`Grab`]'s is, so the
-                        // two bars answer a mid-gesture jump the same way.
-                        let grab = if (p.x - handle_x).abs() <= GRAB_PX * scale {
+                        // Whether the gesture is ours is asked of where the
+                        // press LANDED, and which grab it is of where the
+                        // pointer has reached. Two positions on purpose: egui
+                        // only calls a press a drag once it has moved past a
+                        // threshold, so by this frame a press that began on the
+                        // strip may already be over the track — while the
+                        // handle-or-track question is settled on the first live
+                        // frame exactly as [`Grab`]'s is, so the two bars answer
+                        // a mid-gesture jump the same way.
+                        let origin = ui.input(|i| i.pointer.press_origin()).unwrap_or(p);
+                        let grab = if !on_track(&origin) {
+                            SpectrumGrab::Outside
+                        } else if (p.x - handle_x).abs() <= GRAB_PX * scale {
                             SpectrumGrab::Span
                         } else {
                             SpectrumGrab::Rotate { held: aimed.hue_start + offset_at(p.x) }
@@ -1494,16 +1526,17 @@ impl<'a> SpectrumBar<'a> {
                     // The magnitude only. Its SIGN is the flip button's, and
                     // leaving it there is what lets the handle reach zero
                     // without the arc turning inside out on the way past.
-                    SpectrumGrab::Span => PitchGradient {
+                    SpectrumGrab::Span => Some(PitchGradient {
                         hue_span: winding * offset_at(p.x).abs(),
                         ..aimed
-                    },
-                    SpectrumGrab::Rotate { held } => PitchGradient {
+                    }),
+                    SpectrumGrab::Rotate { held } => Some(PitchGradient {
                         hue_start: (held - offset_at(p.x)).rem_euclid(FULL_TURN),
                         ..aimed
-                    },
+                    }),
+                    SpectrumGrab::Outside => None,
                 };
-                if next != *self.gradient {
+                if let Some(next) = next.filter(|next| *next != *self.gradient) {
                     *self.gradient = next;
                     response.mark_changed();
                 }
@@ -1568,7 +1601,12 @@ impl<'a> SpectrumBar<'a> {
         // and it is spelled out because the track cannot show it: an arc and
         // its flip claim exactly the same colors.
         let font = TextStyle::Monospace.resolve(ui.style());
-        let text_color = if response.hovered() || response.dragged() {
+        // Lit by a pointer ON the track, not merely by one egui has decided the
+        // track is nearest to — which reaches into the strip below. A readout
+        // that brightens while the pointer is over the picture says the picture
+        // is the control.
+        let pointing = response.hover_pos().filter(on_track);
+        let text_color = if pointing.is_some() || response.dragged() {
             theme::text()
         } else {
             theme::text_dim()
@@ -1636,8 +1674,9 @@ impl<'a> SpectrumBar<'a> {
 
         // The cursor says which gesture a press would start before committing
         // to a drag, as a RangeBar's does: the handle resizes the arc, the
-        // track turns the circle under it.
-        match response.hover_pos() {
+        // track turns the circle under it. Off the track it says neither,
+        // because a press there starts nothing — see [`SpectrumGrab::Outside`].
+        match pointing {
             Some(p) if (p.x - handle_x).abs() <= GRAB_PX * scale => {
                 response.on_hover_cursor(egui::CursorIcon::ResizeHorizontal)
             }
@@ -2282,11 +2321,17 @@ mod tests {
             egui::pos2(self.rect.left() - FLIP_W * 0.5, self.rect.center().y)
         }
 
-        /// A point across the pitch-order strip, a seam below the track.
-        fn on_strip(&self, across: f32) -> egui::Pos2 {
+        /// A point on the pitch-order strip, `across` of the way along it and
+        /// `down` of the way through it — 0 at the edge nearest the track,
+        /// which is the depth that matters. egui hands a press that hits
+        /// nothing to the nearest widget within `interact_radius`, so the top
+        /// of the strip is the part a gap alone does not protect, and a probe
+        /// at the strip's middle sits clear of the only place the geometry can
+        /// fail.
+        fn on_strip(&self, across: f32, down: f32) -> egui::Pos2 {
             egui::pos2(
                 self.rect.left() + self.rect.width() * across,
-                self.rect.bottom() + PIECE_GAP + STRIP_H * 0.5,
+                self.rect.bottom() + PIECE_GAP + STRIP_H * down,
             )
         }
 
@@ -2454,11 +2499,13 @@ mod tests {
     /// The button is a button and the track beside it is a track: a sideways
     /// drag begun on the button turns nothing.
     ///
-    /// They share a row and a well, and the only thing keeping them apart is
-    /// that each is interacted with over its OWN rectangle. Sensed together, a
-    /// press that began on the button reaches the track's rotate branch the
-    /// moment egui calls it a drag, and the circle spins under a pointer that
-    /// pressed a button.
+    /// They share a row, and what keeps them apart is that each is interacted
+    /// with over its OWN rectangle — which works HERE, where the strip below
+    /// needs a position check as well, because the button senses clicks and not
+    /// drags: a press on it produces no drag hit for the track to inherit, at
+    /// any distance. Sensed together, a press that began on the button reaches
+    /// the track's rotate branch the moment egui calls it a drag, and the
+    /// circle spins under a pointer that pressed a button.
     #[test]
     fn a_drag_begun_on_the_flip_button_turns_nothing() {
         let before =
@@ -2478,12 +2525,17 @@ mod tests {
         assert_ne!(g, before, "the same drag on the track moved nothing, so this proves nothing");
     }
 
-    /// The pitch-order strip is a picture, and a press on it starts nothing.
+    /// The pitch-order strip is a picture, and a press anywhere on it —
+    /// including hard against the track above — starts nothing.
     ///
-    /// Nothing senses it — the track's rectangle stops at the seam — so this
-    /// pins a geometry, not a branch: grow the sensed rectangle to the whole
-    /// widget and a sideways drag begun on the strip turns the circle under a
-    /// picture that cannot be dragged.
+    /// Swept from the strip's top edge down, because a gap is not by itself a
+    /// barrier: egui's hit test collects every widget within
+    /// `interact_radius` of the pointer and, when the press hits nothing
+    /// directly, hands it to the nearest one. At the default radius of 5 that
+    /// reaches five points past the track's bottom edge — over twice
+    /// [`PIECE_GAP`] — so the strip's own top is inside the track's reach and
+    /// only the position check in `show` keeps it out. A probe at the strip's
+    /// middle alone would sit clear of the one region where this can fail.
     #[test]
     fn the_pitch_strip_is_a_picture_and_not_a_control() {
         // The arc the track's own reset lands on, so the control halves below
@@ -2491,32 +2543,35 @@ mod tests {
         // (see `a_double_click_on_the_spectrum_goes_home_to_the_arc_a_fresh_view_opens_on`).
         let (hue_start, hue_span) = reset_arc();
         let home = PitchGradient { hue_start, hue_span, ..ViewConfig::default().pitch_gradient };
-
-        // A drag begun on the strip and run up into the track.
-        let mut g = home;
-        let mut h = Spectrum::settled(&mut g);
-        let (from, to) = (h.on_strip(0.2), egui::pos2(h.on_strip(0.8).x, h.track().center().y));
-        h.drag(&mut g, from, to);
-        assert_eq!(g, home, "a drag begun on the pitch strip turned the circle under it");
-
-        // The same gesture one row higher does move it, so the harness is
-        // delivering something the widget can act on.
-        let mut g = home;
-        let mut h = Spectrum::settled(&mut g);
-        let from = egui::pos2(h.on_strip(0.2).x, h.track().center().y);
-        h.drag(&mut g, from, to);
-        assert_ne!(g, home, "the same drag on the track moved nothing, so this proves nothing");
-
-        // And a double-click on the strip does not reset the arc. A fresh bar
-        // for each pair: run back to back on one, the second lands inside the
-        // first's double-click window and arrives as the third click of a
-        // sequence, which is a different gesture.
         let dialled = PitchGradient { hue_start: 12.0, hue_span: 33.0, ..home };
-        let mut g = dialled;
-        let mut h = Spectrum::settled(&mut g);
-        let at = h.on_strip(0.5);
-        h.double_click(&mut g, at);
-        assert_eq!(g, dialled, "a double-click on the pitch strip reset the arc");
+
+        for down in [0.0f32, 0.05, 0.25, 0.5, 1.0] {
+            // A drag begun on the strip and run up into the track.
+            let mut g = home;
+            let mut h = Spectrum::settled(&mut g);
+            let from = h.on_strip(0.2, down);
+            let to = egui::pos2(h.on_strip(0.8, down).x, h.track().center().y);
+            h.drag(&mut g, from, to);
+            assert_eq!(g, home, "a drag begun {down} down the pitch strip turned the circle");
+
+            // The same gesture one row higher does move it, so the harness is
+            // delivering something the widget can act on.
+            let mut g = home;
+            let mut h = Spectrum::settled(&mut g);
+            let from = egui::pos2(from.x, h.track().center().y);
+            h.drag(&mut g, from, to);
+            assert_ne!(g, home, "the same drag on the track moved nothing, so this proves nothing");
+
+            // And a double-click on the strip does not reset the arc. A fresh
+            // bar for each pair: run back to back on one, the second lands
+            // inside the first's double-click window and arrives as the third
+            // click of a sequence, which is a different gesture.
+            let mut g = dialled;
+            let mut h = Spectrum::settled(&mut g);
+            let at = h.on_strip(0.5, down);
+            h.double_click(&mut g, at);
+            assert_eq!(g, dialled, "a double-click {down} down the pitch strip reset the arc");
+        }
     }
 
     /// The arc a double-click goes home to is the one a fresh view OPENS on,
