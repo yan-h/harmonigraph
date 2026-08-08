@@ -200,21 +200,12 @@ fn the_video_pane_does_not_start_with_a_rule() {
     }
 }
 
-/// The heights a bar's well is drawn at, so the sweep below can pick bars out
-/// of a pane's shapes without a list of which panes hold which. Two, because
-/// the spectrum bar stands two rows tall — and it is named rather than
-/// measured because a bar the sniff stops recognizing is a bar the sweep
-/// silently stops checking.
 fn bar_track_widths(shapes: &[egui::epaint::ClippedShape]) -> Vec<f32> {
     let well = crate::theme::well();
-    let heights = [20.0, crate::widgets::spectrum_bar_height(1.0)];
     shapes
         .iter()
         .filter_map(|cs| match &cs.shape {
-            egui::Shape::Rect(r)
-                if r.fill == well
-                    && heights.iter().any(|h| (r.rect.height() - h).abs() < 0.6) =>
-            {
+            egui::Shape::Rect(r) if r.fill == well && (r.rect.height() - 20.0).abs() < 0.6 => {
                 Some(r.rect.width())
             }
             _ => None,
@@ -247,10 +238,18 @@ fn every_bar_in_a_settings_pane_is_the_width_of_the_pane() {
         for tab in SETTINGS_TABS {
             for &projection in projections_for(tab) {
                 let widths = bar_track_widths(&settings_pane_at_width(tab, width, projection));
+                // The spectrum bar's track is the one that is deliberately
+                // shorter: it gives the left end of its row to the flip button.
+                // It still narrows with the column, which is what this is
+                // about, so it is allowed its own length rather than excused
+                // from the sweep — excusing it would pass just as happily on a
+                // track that had stopped following the column at all.
+                let track = crate::widgets::spectrum_track_width(width, 1.0);
                 for bar in &widths {
                     assert!(
-                        (bar - width).abs() < 1.0,
-                        "{tab:?}/{projection:?} at {width}pt drew a {bar}pt bar \
+                        (bar - width).abs() < 1.0 || (bar - track).abs() < 1.0,
+                        "{tab:?}/{projection:?} at {width}pt drew a {bar}pt bar, \
+                         neither the column nor the spectrum track's {track}pt \
                          (all of {widths:?})"
                     );
                 }

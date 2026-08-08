@@ -1221,23 +1221,32 @@ const UNCLAIMED_ALPHA: f32 = 74.0 / 255.0;
 /// can be grabbed, and a full-height second bar would say otherwise.
 const STRIP_H: f32 = 11.0;
 
-/// The well left showing between the pieces of a [`SpectrumBar`] — around the
-/// track, around the strip, and in the line that separates them. One value
-/// rather than three, because what it buys is that they read as one control
-/// with its parts ruled off, and a seam wider than the border would read as
-/// two controls that happen to touch.
+/// The pane showing between the three pieces of a [`SpectrumBar`] — beside the
+/// button, and between the track and the strip. ONE value for both, because
+/// what it buys is that the three read as one control: two gaps of different
+/// sizes would group the pieces, and the grouping would be wrong either way
+/// round.
 ///
-/// At least a point at any scale: below one physical pixel the seam vanishes
-/// and the strip fuses to the track it is meant to sit under.
-fn seam(scale: f32) -> f32 {
-    scale.max(1.0)
-}
+/// Narrow enough to be tighter than the pane's own row spacing, so the strip
+/// belongs to the track above it rather than to the bar below.
+const PIECE_GAP: f32 = 2.0;
 
 /// A [`SpectrumBar`] stands two rows tall: the track, the strip under it, and
-/// the seam between. Shared with the settings tests, which sniff a pane's bars
-/// out of its shapes by height and would quietly stop counting this one.
-pub(crate) fn spectrum_bar_height(scale: f32) -> f32 {
-    BAR_HEIGHT * scale + seam(scale) + STRIP_H * scale
+/// the gap between.
+fn spectrum_bar_height(scale: f32) -> f32 {
+    (BAR_HEIGHT + PIECE_GAP + STRIP_H) * scale
+}
+
+/// What a [`SpectrumBar`]'s track and strip measure in a column `column` points
+/// wide: the column, less the flip button at the left end and the gap beside
+/// it.
+///
+/// Shared with the settings tests, whose sweep pins every bar in a pane to the
+/// width of its column. This is the one bar that is narrower, and the sweep has
+/// to know by how much or it is choosing between failing on a bar that is
+/// correct and passing on one that has stopped tracking the column.
+pub(crate) fn spectrum_track_width(column: f32, scale: f32) -> f32 {
+    (column - (FLIP_W + PIECE_GAP) * scale).max(0.0)
 }
 
 /// Width of the flip button at the LEFT end of a [`SpectrumBar`], taken out of
@@ -1292,12 +1301,19 @@ fn reset_arc() -> (f32, f32) {
     (fresh.hue_start, fresh.hue_span)
 }
 
-/// The pitch gradient's hue arc, as one control in one well: the button that
-/// reverses it in a gutter at the left end, and beside that a full turn of the
-/// color circle laid along a track, CUT at the arc's own start, with the
-/// stretch the gradient walks filled from the track's left edge and the hues it
-/// does not reach dimmed beyond it. Under the track, a seam of well below it,
-/// the gradient itself in pitch order, low note on the left.
+/// The pitch gradient's hue arc, as three pieces of one control: the button
+/// that reverses it at the left end, and beside that a full turn of the color
+/// circle laid along a track, CUT at the arc's own start, with the stretch the
+/// gradient walks filled from the track's left edge and the hues it does not
+/// reach dimmed beyond it. Under the track, a gap below it, the gradient itself
+/// in pitch order, low note on the left.
+///
+/// Every piece wears the shared [`CONTROL_RADIUS`](theme::CONTROL_RADIUS) and
+/// sits on the pane, with no frame drawn round the set: the button is a button
+/// down to its fill and its hover stroke, and the two bands round exactly like
+/// the fill of a [`ValueBar`] above them. A well large enough to hold all three
+/// would ring the control in a border nothing else in a settings pane wears —
+/// see [`gradient_strip`], which is where the alternative was paid for.
 ///
 /// Drag the handle to set how far round the circle the range walks; drag the
 /// track to turn the whole circle under it; double-click to reset. Which
@@ -1346,11 +1362,10 @@ fn reset_arc() -> (f32, f32) {
 /// the arc claims, so a narrow arc's ramp is a sliver there and full width
 /// here.
 ///
-/// It sits INSIDE the bar's own well with a seam of well between the two,
-/// rather than floating below on a well of its own. Two rows of one control:
-/// the seam rules them off exactly as the border rules the track off from the
-/// button, and nothing about the pair reads as a second bar that happens to be
-/// nearby.
+/// It sits a hair under the track — [`PIECE_GAP`], the one gap this control
+/// uses, which is also what separates the button from both — rather than a
+/// bar's worth of space away. Three pieces on the pane at one rhythm read as
+/// one control; anything looser reads as a bar with things near it.
 ///
 /// **What the flip changes on screen is the sign, and both ramps' ends.** The
 /// claimed stretch and the strip are the same pitch ramp, low note at the left,
@@ -1376,17 +1391,20 @@ impl<'a> SpectrumBar<'a> {
         // straight to the rotate branch, and asking the widget where the press
         // LANDED is no answer either — egui calls a press a drag only once it
         // has moved, by which time the pointer can be over the track.
-        let ring = seam(scale);
+        let gap = PIECE_GAP * scale;
         let (id, rect) = ui.allocate_space(Vec2::new(width, spectrum_bar_height(scale)));
-        // A column too narrow to leave the track anything gives the button the
-        // row: a coarse handle beats an unreachable one, but a button with no
-        // width cannot be pressed at all.
-        let flip_w = (FLIP_W * scale).min(rect.width());
-        let split = rect.left() + flip_w;
+        // The track's width is what the two bands and the settings sweep all
+        // measure, so the row is laid out from it rather than from the button:
+        // a column too narrow to leave the track anything then gives the button
+        // the row, which is the right way round. A coarse handle beats an
+        // unreachable one, but a button with no width cannot be pressed at all.
+        let split = rect.right() - spectrum_track_width(rect.width(), scale);
         // The button stands the full height of both rows, because it reverses
         // what both of them draw.
-        let flip_rect =
-            egui::Rect::from_min_max(rect.min, egui::pos2(split, rect.bottom()));
+        let flip_rect = egui::Rect::from_min_max(
+            rect.min,
+            egui::pos2((split - gap).max(rect.left()), rect.bottom()),
+        );
         let track_rect = egui::Rect::from_min_max(
             egui::pos2(split, rect.top()),
             egui::pos2(rect.right(), rect.top() + BAR_HEIGHT * scale),
@@ -1395,7 +1413,7 @@ impl<'a> SpectrumBar<'a> {
         // reaches nothing at all, which is a stronger promise than the widget
         // could make while one rectangle covered both.
         let strip_rect = egui::Rect::from_min_max(
-            egui::pos2(split, track_rect.bottom() + ring),
+            egui::pos2(track_rect.left(), track_rect.bottom() + gap),
             rect.max,
         );
         let mut response = ui.interact(track_rect, id.with("track"), Sense::click_and_drag());
@@ -1506,27 +1524,30 @@ impl<'a> SpectrumBar<'a> {
         let (winding, claimed, handle_x) = laid_out(g);
         let lut = pitch_ramp_lut(g);
         let circle = hue_circle(g.lightness, g.chroma);
-        let radius = CornerRadius::same(bar_radius(scale));
+        let corner = bar_radius(scale);
+        let radius = CornerRadius::same(corner);
         let painter = ui.painter();
-        // One well under all three, so the button, the track and the strip read
-        // as one control rather than as a bar with things parked around it. It
-        // is also what rounds them: a mesh has square corners, and the ring of
-        // well left showing between the pieces reads as their border.
-        painter.rect_filled(rect, radius, theme::well());
-        // Flush with the strip's seam at the bottom — the ring between the two
-        // is drawn once, by `strip_rect` starting a ring below this.
-        let arc_rect = egui::Rect::from_min_max(
-            egui::pos2(track_rect.left(), track_rect.top() + ring),
-            egui::pos2(track_rect.right() - ring, track_rect.bottom()),
-        );
-        gradient_strip(painter, arc_rect, SPECTRUM_SEGMENTS, |_, p| {
+        // The pitch ramp at `p` along itself, read out of the same table the
+        // lattice draws from so the preview cannot drift from the picture. Both
+        // bands want it — the track squeezed into the claimed stretch, the strip
+        // end to end — and reading the table twice is how they would stop
+        // agreeing.
+        let ramp_at = |p: f32| {
+            let f = p.clamp(0.0, 1.0) * (PITCH_LUT_N - 1) as f32;
+            let i0 = f.floor() as usize;
+            lut[i0].lerp(lut[(i0 + 1).min(PITCH_LUT_N - 1)], f - f.floor())
+        };
+        // A well under the track and nothing under the strip, because the
+        // dimmed hues are drawn with alpha and need a recessed ground to sit
+        // on — the same ground the unfilled end of a ValueBar shows. The strip
+        // is opaque end to end and covers whatever it is given.
+        painter.rect_filled(track_rect, radius, theme::well());
+        gradient_strip(painter, track_rect, SPECTRUM_SEGMENTS, corner as f32, |p| {
             if claimed > 0.0 && p <= claimed {
                 // Along the gradient, not around the circle: the two agree by
                 // construction here, and reading the table is what keeps them
                 // agreeing if they ever stop.
-                let f = (p / claimed).clamp(0.0, 1.0) * (PITCH_LUT_N - 1) as f32;
-                let i0 = f.floor() as usize;
-                scene_color(lut[i0].lerp(lut[(i0 + 1).min(PITCH_LUT_N - 1)], f - f.floor()), 1.0)
+                scene_color(ramp_at(p / claimed), 1.0)
             } else {
                 // The hues the gradient does not reach, held back far enough to
                 // read as ground.
@@ -1582,32 +1603,36 @@ impl<'a> SpectrumBar<'a> {
         );
 
         // ---- The same gradient, in pitch order ------------------------------
-        // Directly under the track with one ring of well between them, inside
-        // the same well: two rows of one control, not a second bar. One entry
-        // per segment, so every color in the table is drawn where it falls and
-        // only the vertices between two of them are interpolated.
-        gradient_strip(
-            painter,
-            egui::Rect::from_min_max(
-                strip_rect.min,
-                egui::pos2(strip_rect.right() - ring, strip_rect.bottom() - ring),
-            ),
-            PITCH_LUT_N - 1,
-            |i, _| scene_color(lut[i], 1.0),
-        );
+        // A gap under the track, aligned with it end to end: two rows of one
+        // control, not a second bar. One column per table entry, so every color
+        // in the table lands on a column of its own and only the vertices
+        // between two of them are interpolated.
+        let strip_corner = corner as f32;
+        gradient_strip(painter, strip_rect, PITCH_LUT_N - 1, strip_corner, |p| {
+            scene_color(ramp_at(p), 1.0)
+        });
 
         // ---- The flip button ------------------------------------------------
-        // A raised chip inside the well, so it reads as pressable against a
-        // track that is painted in colors and cannot carry a resting fill of
-        // its own.
-        let chip = flip_rect.shrink(ring);
-        painter.rect_filled(
-            chip,
-            radius,
-            if flip.hovered() { theme::widget_hover() } else { theme::widget() },
-        );
+        // Painted as the theme paints a button and not as a thing of its own:
+        // the same resting and hovered fills, the same corner, and the hover
+        // stroke that every other button in the pane answers a pointer with.
+        // The mark is the only part this widget invents.
+        let (fill, stroke) = if flip.hovered() {
+            (theme::widget_hover(), theme::accent_edge())
+        } else {
+            (theme::widget(), egui::Color32::TRANSPARENT)
+        };
+        painter.rect_filled(flip_rect, radius, fill);
+        if flip.hovered() {
+            painter.rect_stroke(
+                flip_rect,
+                radius,
+                egui::Stroke::new(scale.max(1.0), stroke),
+                egui::StrokeKind::Inside,
+            );
+        }
         let mark = if flip.hovered() { theme::text() } else { theme::text_dim() };
-        flip_mark(painter, chip, mark, scale);
+        flip_mark(painter, flip_rect, mark, scale);
 
         // The cursor says which gesture a press would start before committing
         // to a drag, as a RangeBar's does: the handle resizes the arc, the
@@ -1656,9 +1681,17 @@ fn flip_mark(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32, sc
     }
 }
 
+/// Samples taken through each of a band's corner arcs, on top of the columns
+/// the band is already drawn in. A radius of 5 crosses two or three of those,
+/// and three steps is a chamfer rather than a corner — while egui does not
+/// antialias a mesh edge, so how finely the arc is sampled is the only
+/// smoothness it gets.
+const CORNER_SAMPLES: usize = 8;
+
 /// A band of `segments + 1` colored columns across `rect`, each column's color
-/// taken from `color` at its own index and at its position along the band (0 at
-/// the left edge, 1 at the right), and interpolated between columns.
+/// taken from `color` at its position along the band (0 at the left edge, 1 at
+/// the right) and interpolated between columns, with the band's ends rounded to
+/// `radius`.
 ///
 /// One builder for a [`SpectrumBar`]'s two bands — the track, whose color comes
 /// off the hue circle and the pitch ramp either side of the handle, and the
@@ -1666,26 +1699,66 @@ fn flip_mark(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32, sc
 /// written out twice is two places to get the vertex order or the first-column
 /// case wrong, and the second copy is the one that quietly keeps the older
 /// answer.
+///
+/// **The rounding is in the MESH, and that is the whole reason this is not a
+/// square band inside a rounded well.** A well showing round an inset mesh is
+/// the ordinary way to round colors that a quad strip cannot round itself, and
+/// it costs a ring of the well's own color drawn around the content — a border
+/// no other control in a settings pane wears, and at the shared
+/// [`CONTROL_RADIUS`](theme::CONTROL_RADIUS) of 5 a one-point inset does not
+/// even cover the arc, so the band's square corners poke out through it.
+/// Pinching the columns to the corner circle instead lets the colors go edge to
+/// edge and round exactly like the fill of a [`ValueBar`] beside them.
 fn gradient_strip(
     painter: &egui::Painter,
     rect: egui::Rect,
     segments: usize,
-    color: impl Fn(usize, f32) -> egui::Color32,
+    radius: f32,
+    color: impl Fn(f32) -> egui::Color32,
 ) {
+    let radius = radius.clamp(0.0, (rect.height() * 0.5).min(rect.width() * 0.5));
+    let mut xs: Vec<f32> = (0..=segments)
+        .map(|i| rect.left() + rect.width() * i as f32 / segments as f32)
+        .collect();
+    for k in 1..CORNER_SAMPLES {
+        let t = radius * k as f32 / CORNER_SAMPLES as f32;
+        xs.push(rect.left() + t);
+        xs.push(rect.right() - t);
+    }
+    xs.sort_by(f32::total_cmp);
+
     let mut mesh = egui::Mesh::default();
-    for i in 0..=segments {
-        let p = i as f32 / segments as f32;
-        let x = rect.left() + rect.width() * p;
-        let c = color(i, p);
+    let mut drawn = f32::NEG_INFINITY;
+    for x in xs {
+        // Two samples landing on one column would build a triangle of no area,
+        // which draws nothing and costs the same as one that does.
+        if x - drawn < 0.01 {
+            continue;
+        }
+        drawn = x;
+        let inset = corner_inset((x - rect.left()).min(rect.right() - x), radius);
+        let p = ((x - rect.left()) / rect.width().max(1.0)).clamp(0.0, 1.0);
+        let c = color(p);
         let v = mesh.vertices.len() as u32;
-        mesh.colored_vertex(egui::pos2(x, rect.top()), c);
-        mesh.colored_vertex(egui::pos2(x, rect.bottom()), c);
-        if i > 0 {
+        mesh.colored_vertex(egui::pos2(x, rect.top() + inset), c);
+        mesh.colored_vertex(egui::pos2(x, rect.bottom() - inset), c);
+        if v > 0 {
             mesh.add_triangle(v - 2, v - 1, v);
             mesh.add_triangle(v - 1, v + 1, v);
         }
     }
     painter.add(egui::Shape::mesh(mesh));
+}
+
+/// How far a rounded band's edge is pinched in, top and bottom, at a column
+/// `from_end` points from its nearer end: nothing along the straight run, and
+/// the corner circle's own profile inside the last `radius`.
+fn corner_inset(from_end: f32, radius: f32) -> f32 {
+    if from_end >= radius {
+        return 0.0;
+    }
+    let across = radius - from_end.max(0.0);
+    radius - (radius * radius - across * across).max(0.0).sqrt()
 }
 
 /// A horizontal row of controls in a settings column, sized up front to
@@ -2213,7 +2286,7 @@ mod tests {
         fn on_strip(&self, across: f32) -> egui::Pos2 {
             egui::pos2(
                 self.rect.left() + self.rect.width() * across,
-                self.rect.bottom() + seam(1.0) + STRIP_H * 0.5,
+                self.rect.bottom() + PIECE_GAP + STRIP_H * 0.5,
             )
         }
 
