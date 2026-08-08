@@ -3890,8 +3890,16 @@ mod tests {
                     let (c, s) = spread.snapped((centre, spread_v));
                     for end in [c - s * 0.5, c + s * 0.5] {
                         let units = end * unit;
+                        // A thousandth of a unit, which is a tolerance on the
+                        // RECOMPOSITION and not on the snap: the pair is written
+                        // as a middle and a ramp, so reading the ends back off
+                        // it costs an ulp of the fraction — worst measured at
+                        // 7.6e-6 of a percent, over every whole-percent pair of
+                        // ends — where a snap that had actually missed the grid
+                        // would miss by half a unit, five orders the other side
+                        // of this.
                         assert!(
-                            (units - units.round()).abs() < 0.1,
+                            (units - units.round()).abs() < 1e-3,
                             "{spread:?}: {centre}/{spread_v} lands an end on {units} units",
                         );
                         assert!(
