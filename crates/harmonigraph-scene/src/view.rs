@@ -556,11 +556,19 @@ impl ViewConfig {
     /// [`release_level`](harmonigraph_core::Voice::release_level), where that
     /// is written and argued.
     ///
-    /// One assembly point, called by everything that needs an envelope, so
-    /// the split is invisible past this line and no caller can pair a
-    /// duration with the wrong shape. The shape is clamped to the range its
-    /// bar offers — a hand-edited blob can hold anything, and `sanitize` only
-    /// repairs the non-finite (a finite 40 would be a curve no bar can undo).
+    /// One assembly point for every envelope a NOTE runs on, so the split is
+    /// invisible past this line and no caller can pair a duration with the
+    /// wrong shape. The shape is clamped to the range its bar offers — a
+    /// hand-edited blob can hold anything, and `sanitize` only repairs the
+    /// non-finite (a finite 40 would be a curve no bar can undo).
+    ///
+    /// The Nodes pane's Shape bar builds one of its own, and it is the single
+    /// exception rather than a second assembly point: it is drawing a PICTURE
+    /// of the curve, over a unit duration that is nothing a note ever fades
+    /// on, so it has no note's seconds to pair with and could not reach for
+    /// them here. What it must not do is re-derive the SHAPE, and
+    /// `the_shape_bars_preview_is_the_curve_the_notes_run_on` is what holds
+    /// it to this function's answer.
     pub fn envelope(&self, frame: &FrameParams) -> Envelope {
         Envelope {
             attack_time: frame.fade_time,

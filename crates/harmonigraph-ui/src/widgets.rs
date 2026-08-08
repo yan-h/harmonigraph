@@ -7,7 +7,7 @@
 
 use std::ops::RangeInclusive;
 
-use egui::{CornerRadius, Key, Response, Sense, TextEdit, TextStyle, Ui, Vec2};
+use egui::{Color32, CornerRadius, Key, Response, Sense, TextEdit, TextStyle, Ui, Vec2};
 use harmonigraph_scene::{
     clamp_wheel, hue_circle, octave_layout, pitch_ramp_lut, Gradient, ViewConfig,
     DEFAULT_CENTER, DEFAULT_COUNT, HUE_CIRCLE_N, MAX_SPAN, MIN_SPAN, PITCH_LUT_N,
@@ -203,6 +203,55 @@ const BAR_TEXT_PAD: f32 = 8.0;
 /// number rather than touching it.
 const BAR_LABEL_GAP: f32 = 6.0;
 
+/// How many segments a [`ValueBar::curve`] preview is drawn in.
+///
+/// The preview is one bend and no more, so the count only has to keep that
+/// bend from reading as a corner — 64 puts a vertex every few points at the
+/// widest a settings column opens to, and the sharpest curve on offer spends
+/// a dozen of them on its knee.
+const CURVE_SEGMENTS: usize = 64;
+
+/// How far a [`ValueBar::curve`] preview is held off the top and bottom of the
+/// track, so the flat ends of the curve read as a line rather than as the
+/// track's own rim.
+const CURVE_INSET: f32 = 3.5;
+
+/// Thickness of the preview line.
+const CURVE_WIDTH: f32 = 1.5;
+
+/// The preview line's color: the dim text, softened again.
+///
+/// It crosses both halves of the track — accent fill up to the value, bare
+/// well past it — so it cannot be a color that only reads on one of them. Dim
+/// on purpose beyond that: the line is a PICTURE of what the number means and
+/// the number itself is the reading, so it stays under the two text runs it
+/// passes behind rather than competing with them.
+pub(crate) fn curve_color() -> Color32 {
+    theme::text_dim().gamma_multiply(0.55)
+}
+
+/// The preview line in `shapes`, as the points it was drawn through.
+///
+/// Shared by the two places that ask: the bar's own tests, which check WHERE
+/// the line is drawn, and the Nodes pane's, which checks WHICH curve it is.
+/// The color is what identifies it — nothing else in a settings pane draws an
+/// open path in it.
+#[cfg(test)]
+pub(crate) fn curve_points(shapes: &[egui::Shape]) -> Vec<egui::Pos2> {
+    shapes
+        .iter()
+        .filter_map(|shape| match shape {
+            egui::Shape::Path(path)
+                if path.stroke.color == egui::epaint::ColorMode::Solid(curve_color()) =>
+            {
+                Some(path.points.clone())
+            }
+            _ => None,
+        })
+        .flatten()
+        .collect()
+}
+
 /// How wide a bar draws: the width the layout offers, but never past the
 /// visible edge of the pane. Shared by [`ValueBar`] and [`RangeBar`], so every
 /// bar in a settings column comes out the same length and they all narrow
@@ -256,6 +305,9 @@ pub struct ValueBar<'a> {
     /// How the value READS OUT, when plain decimals won't say it (see
     /// [`ValueBar::display`]). Never how it is typed in.
     display: Option<fn(f32) -> String>,
+    /// A picture of what the value MEANS, drawn across the track (see
+    /// [`ValueBar::curve`]).
+    curve: Option<fn(f32, f32) -> f32>,
 }
 
 impl<'a> ValueBar<'a> {
@@ -270,6 +322,7 @@ impl<'a> ValueBar<'a> {
             badge: None,
             magnet: None,
             display: None,
+            curve: None,
         }
     }
 
@@ -332,6 +385,31 @@ impl<'a> ValueBar<'a> {
     /// formatter does to the readout the value stays typeable.
     pub fn display(mut self, display: fn(f32) -> String) -> Self {
         self.display = Some(display);
+        self
+    }
+
+    /// Draw what the value DOES across the track: `curve(value, p)` for `p`
+    /// walking 0 to 1 gives the level reached that far through, and the line
+    /// is those points. For the Nodes pane's Shape bar, whose number names a
+    /// curve and says nothing about its character — the difference between a
+    /// straight line and a knee is the whole setting, and 0.35 does not carry
+    /// it.
+    ///
+    /// **The curve's x is not the bar's own axis**, and it spans the whole
+    /// track at every value because of that: the bar's x is where the value
+    /// sits in its range, the curve's is progress through the transition the
+    /// value shapes. Two rulers over one rectangle is what a preview drawn
+    /// inside a control costs, and the alternative — a picture in a row of its
+    /// own — costs the row instead. What keeps it readable is that the curve
+    /// is drawn as a LINE and the value as a filled slice, so neither reads as
+    /// a measurement of the other.
+    ///
+    /// Hand it the same function the thing being previewed runs on rather than
+    /// a copy of the formula: a preview that drifts from what it previews is
+    /// worse than none, and there is nothing on screen that would show the
+    /// drift.
+    pub fn curve(mut self, curve: fn(f32, f32) -> f32) -> Self {
+        self.curve = Some(curve);
         self
     }
 
@@ -471,6 +549,34 @@ impl<'a> ValueBar<'a> {
         let mut fill = rect;
         fill.set_width(rect.width() * t);
         painter.rect_filled(fill, radius, fill_color);
+
+        // Over the fill and under the text: the fill is what the curve is
+        // drawn ON and the two text runs are what it is drawn UNDER, which is
+        // the order that keeps the number legible where the line passes behind
+        // it (`a_curve_preview_is_drawn_over_the_fill_and_under_the_bars_own_text`).
+        // The fill half is not a nicety — an accent mix is fully opaque, so a
+        // line drawn under it is erased rather than dimmed.
+        if let Some(curve) = self.curve {
+            let plot = rect.shrink2(Vec2::new(BAR_TEXT_PAD * scale, CURVE_INSET * scale));
+            let points = (0..=CURVE_SEGMENTS)
+                .map(|i| {
+                    let p = i as f32 / CURVE_SEGMENTS as f32;
+                    // Clamped because the caller's function is the real one and
+                    // not a drawing routine: it answers for the thing being
+                    // previewed, and a level off either end would draw over the
+                    // bars above and below rather than being cut off here.
+                    let level = curve(*self.value, p).clamp(0.0, 1.0);
+                    egui::pos2(
+                        plot.left() + plot.width() * p,
+                        plot.bottom() - plot.height() * level,
+                    )
+                })
+                .collect::<Vec<_>>();
+            painter.add(egui::Shape::line(
+                points,
+                egui::Stroke::new(CURVE_WIDTH * scale, curve_color()),
+            ));
+        }
 
         let text_color = if response.hovered() || response.dragged() {
             theme::text()
@@ -4526,6 +4632,155 @@ mod tests {
             spectrum_readout(&shapes),
             "+0°",
             "a span of nothing read out as running left",
+        );
+    }
+
+    /// Paint one value bar across a `width`-point row and return what it
+    /// emitted, with or without a preview curve.
+    fn paint_value_bar(
+        width: f32,
+        value: f32,
+        curve: Option<fn(f32, f32) -> f32>,
+    ) -> Vec<egui::Shape> {
+        let ctx = egui::Context::default();
+        crate::theme::apply_theme(&ctx);
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(width, 100.0));
+        let mut value = value;
+        let out = ctx.run_ui(
+            egui::RawInput { screen_rect: Some(screen), ..Default::default() },
+            |ui| {
+                let mut bar = ValueBar::new(&mut value, 0.0..=1.0, "Shape");
+                if let Some(curve) = curve {
+                    bar = bar.curve(curve);
+                }
+                bar.show(ui);
+            },
+        );
+        out.shapes.into_iter().map(|cs| cs.shape).collect()
+    }
+
+    /// A straight line, which is what a preview of nothing in particular looks
+    /// like: the tests below are about WHERE the curve is drawn, and the one
+    /// that cares which curve it is samples the real bar in the real pane
+    /// (`the_shape_bars_preview_is_the_curve_the_notes_run_on`).
+    fn ramp(_value: f32, p: f32) -> f32 {
+        p
+    }
+
+    /// The preview is a picture of the transition and not a second reading of
+    /// the value, so it spans the whole track wherever the value sits — the two
+    /// axes over one rectangle that [`ValueBar::curve`] is about. A preview
+    /// that stopped at the fill would read as the part of the curve that has
+    /// happened, which is a claim about time the bar cannot make.
+    #[test]
+    fn a_curve_preview_spans_the_track_at_every_value() {
+        let ends = |value: f32| {
+            let shapes = paint_value_bar(240.0, value, Some(ramp));
+            let points = curve_points(&shapes);
+            assert!(points.len() > 2, "a preview of {value} drew {} points", points.len());
+            (points[0].x, points[points.len() - 1].x)
+        };
+        let empty = ends(0.0);
+        for value in [0.35f32, 1.0] {
+            assert_eq!(
+                ends(value),
+                empty,
+                "the preview moved with the value, which makes its x the bar's own axis",
+            );
+        }
+    }
+
+    /// The line goes over the fill and under the text, and BOTH halves are the
+    /// contract. Text over it, because the curve crosses the whole track and so
+    /// passes behind both runs wherever they sit, and a bar whose number is
+    /// hard to read is a bar that has given up what it is FOR to decorate
+    /// itself. Fill under it, because the fill is opaque — every accent mix is,
+    /// deliberately (see `theme`) — so a line painted first is not dimmed by it
+    /// but erased, over the whole filled part of the track and over all of it
+    /// at the top of the range.
+    ///
+    /// Z-order and not geometry, which is why this reads indices: both halves
+    /// leave every point exactly where it was, so nothing that samples the
+    /// line's own coordinates can see either one go wrong.
+    #[test]
+    fn a_curve_preview_is_drawn_over_the_fill_and_under_the_bars_own_text() {
+        // Mid-range, so there IS a fill to be buried by and empty track past it.
+        let shapes = paint_value_bar(240.0, 0.5, Some(ramp));
+        let line = shapes
+            .iter()
+            .position(|shape| match shape {
+                egui::Shape::Path(path) => {
+                    path.stroke.color == egui::epaint::ColorMode::Solid(curve_color())
+                }
+                _ => false,
+            })
+            .expect("the bar painted no preview");
+        // The fill and not the well: they are both rects and only one of them
+        // is the one the line has to clear.
+        let fill = shapes
+            .iter()
+            .position(|shape| match shape {
+                egui::Shape::Rect(rect) => rect.fill == theme::accent_fill(),
+                _ => false,
+            })
+            .expect("the bar painted no fill");
+        assert!(fill < line, "the fill at {fill} was painted over the line at {line}");
+        let texts: Vec<usize> = shapes
+            .iter()
+            .enumerate()
+            .filter(|(_, shape)| matches!(shape, egui::Shape::Text(_)))
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(texts.len(), 2, "the bar painted {} text runs", texts.len());
+        for text in texts {
+            assert!(text > line, "a text run at {text} was painted under the line at {line}");
+        }
+    }
+
+    /// A caller whose function leaves 0..=1 is drawn inside the bar anyway.
+    ///
+    /// The guard exists because the function handed to [`ValueBar::curve`] is
+    /// the REAL one — it answers for the thing being previewed and owes the
+    /// widget nothing — so the widget cannot assume a level it can draw. The
+    /// one caller in the tree is bounded by construction, which is exactly why
+    /// this needs a fixture rather than a reader: without one the clamp can be
+    /// deleted and the whole suite stays green.
+    ///
+    /// A bar is one row in a column of them, so the cost of getting this wrong
+    /// is not a clipped line but ink over the neighbours' tracks.
+    #[test]
+    fn a_curve_preview_stays_inside_the_bar_when_its_caller_does_not() {
+        // Runs -0.5 to 1.5: half a plot-height below the bar and half above.
+        let shapes = paint_value_bar(240.0, 0.5, Some(|_, p| p * 2.0 - 0.5));
+        let track = shapes
+            .iter()
+            .find_map(|shape| match shape {
+                egui::Shape::Rect(rect) if rect.fill == theme::well() => Some(rect.rect),
+                _ => None,
+            })
+            .expect("the bar painted no track");
+        let points = curve_points(&shapes);
+        assert!(!points.is_empty(), "the bar painted no preview");
+        for point in &points {
+            assert!(
+                point.y >= track.top() && point.y <= track.bottom(),
+                "a preview point at y {} left a track of {}..{}",
+                point.y,
+                track.top(),
+                track.bottom(),
+            );
+        }
+    }
+
+    /// The preview is opt-in, and every other bar in the tree is the bar it
+    /// always was: no line, and no extra shape for the paint tests around it to
+    /// trip over.
+    #[test]
+    fn a_bar_with_no_curve_paints_no_line() {
+        let shapes = paint_value_bar(240.0, 0.35, None);
+        assert!(
+            curve_points(&shapes).is_empty(),
+            "a plain bar painted a preview line",
         );
     }
 
