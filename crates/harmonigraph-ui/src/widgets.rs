@@ -1726,14 +1726,23 @@ impl<'a> BrightnessBar<'a> {
     /// The two ends the ramp reaches, in PITCH order: the bottom of the pitch
     /// range first, whatever brightness it happens to carry.
     ///
-    /// Concrete where a centre and a signed ramp were arithmetic — these are
-    /// the `L*` the darkest and brightest notes are actually drawn at, and they
+    /// Concrete where a centre and a signed ramp are arithmetic — these are the
+    /// `L*` the darkest and brightest notes are actually drawn at, and they
     /// name the two handles standing under them. It is also how the sign gets
     /// said: an inverted ramp reads out backwards, high to low, where a signed
-    /// number left the reader to work out which end it meant.
+    /// number leaves the reader to work out which end it means.
+    ///
+    /// A tenth of a point where an end is not whole, and no decimal where it
+    /// is. Whole is what a drag leaves, since [`snapped`] puts both ends there
+    /// — but a fresh view, a double-click and a saved blob all arrive without
+    /// passing it, and `ViewConfig`'s own gradient is one of them: 53 over a
+    /// ramp of 31 stands its ends on 37.5 and 68.5. Spelled to the whole point
+    /// those read `38 → 68`, a span of 30 over a gradient that spends 31 — the
+    /// readout claiming a picture the bar is not drawing, which is the one
+    /// thing it cannot do and stay worth reading.
     fn readout((centre, spread): (f32, f32)) -> String {
-        let (low, high) = (centre - spread * 0.5, centre + spread * 0.5);
-        format!("{low:.0} \u{2192} {high:.0}")
+        let end = |v: f32| if v == v.round() { format!("{v:.0}") } else { format!("{v:.1}") };
+        format!("{} \u{2192} {}", end(centre - spread * 0.5), end(centre + spread * 0.5))
     }
 
     pub fn show(self, ui: &mut Ui) -> Response {
@@ -1816,10 +1825,12 @@ impl<'a> BrightnessBar<'a> {
 
         // Name and readout exactly as a ValueBar lays them out — the row is one
         // — with the same reserve trick: the width kept clear for the numbers
-        // is measured off a pair that never changes rather than off the one
-        // currently in the bar, so the name cannot re-elide mid-drag. A flat
-        // ramp at white is the widest the readout goes, both ends spelling
-        // three digits, and no end can carry a sign to add a fourth.
+        // is measured off a string that never changes rather than off the pair
+        // currently in the bar, so the name cannot re-elide mid-drag. Three
+        // digits and a tenth at each end is as wide as [`Self::readout`] goes,
+        // and only its LENGTH matters, the numbers being monospace. No end can
+        // carry a sign, both of them living on the 0..100 axis.
+        const WIDEST_READOUT: &str = "100.0 \u{2192} 100.0";
         let text_color = if response.hovered() || response.dragged() {
             theme::text()
         } else {
@@ -1829,7 +1840,7 @@ impl<'a> BrightnessBar<'a> {
         let value =
             painter.layout_no_wrap(Self::readout((centre, spread)), mono.clone(), theme::text());
         let reserve =
-            painter.layout_no_wrap(Self::readout((max, 0.0)), mono, theme::text()).size().x;
+            painter.layout_no_wrap(WIDEST_READOUT.to_owned(), mono, theme::text()).size().x;
         let body = TextStyle::Body.resolve(ui.style());
         let mut job = egui::text::LayoutJob::simple_singleline(
             self.label.to_owned(),
@@ -3812,6 +3823,56 @@ mod tests {
         for pair in [(64.0f32, 44.0f32), (64.0, -44.0), (30.0, 0.0)] {
             let hs = handles(&paint_brightness_bar(pair));
             assert_eq!(hs.len(), 2, "{pair:?} put {} marks on the track", hs.len());
+        }
+    }
+
+    /// The readout names the `L*` the curve actually draws at both ends of the
+    /// pitch range, at every pair the bar can be handed — not only at the ones
+    /// a drag leaves behind.
+    ///
+    /// A drag snaps both ends to whole `L*`, so a bar that has been touched
+    /// reads out exactly whatever it does. Everything else arrives unsnapped:
+    /// the pair a fresh view opens on, the one a double-click goes home to, and
+    /// anything a saved blob or a hand-edited file carries. `ViewConfig`'s own
+    /// gradient is 53 over a ramp of 31, whose ends are 37.5 and 68.5 — the
+    /// case `snapped` is written to keep a DRAG off, arriving by the one road
+    /// that does not pass it.
+    ///
+    /// A tenth of a point, because that is well under anything a viewer could
+    /// see and well over the half-point a whole-number readout costs at these
+    /// ends: the failure is a bar reading `38 → 68`, a span of 30, over a
+    /// gradient spending 31.
+    #[test]
+    fn a_brightness_readout_names_the_ends_the_curve_draws() {
+        for pair in [
+            (ViewConfig::default().pitch_gradient.lightness, ViewConfig::default().pitch_gradient.lightness_ramp),
+            (64.0, 44.0),
+            (64.0, -45.0),
+            (20.0, 7.0),
+        ] {
+            let g = PitchGradient {
+                lightness: pair.0,
+                lightness_ramp: pair.1,
+                ..PitchGradient::default()
+            };
+            let shown = text_boxes(&paint_brightness_bar(pair))
+                .into_iter()
+                .map(|(_, s)| s)
+                .next_back()
+                .expect("the bar draws a readout");
+            let said: Vec<f32> = shown
+                .split('\u{2192}')
+                .map(|s| s.trim().parse().expect("a readout is two numbers"))
+                .collect();
+            // In PITCH order, which is what the readout claims to be in: the
+            // curve at t 0 and t 1, not the darker end and the brighter one.
+            for (t, said) in [0.0, 1.0].into_iter().zip(said) {
+                let drawn = g.lightness_and_hue(t).0 as f32;
+                assert!(
+                    (said - drawn).abs() < 0.1,
+                    "{pair:?} reads out {shown:?}, saying L* {said} where the curve draws {drawn}",
+                );
+            }
         }
     }
 
