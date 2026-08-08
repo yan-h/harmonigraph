@@ -795,14 +795,18 @@ impl Grab {
 /// and both still on the bar. Order is what makes them a range rather than two
 /// numbers.
 ///
-/// **The NAME is crossed by the low handle** where the numbers are not — a
-/// thumb roams the whole track, so no fixed text can dodge it, and the name is
-/// the run that stands where one comes to rest. It happens only while the low
-/// end is dragged down into the name's own share of the bar: about a sixth of
-/// the axis at the width the settings column opens at, a tenth on a bar twice
-/// that wide. Where the four bars rest it does not arise at all — the two that
-/// open at the full axis stand their low handle a point clear of the name, and
-/// the Level and Band bars open at 40% and 66% of theirs.
+/// **The NAME is crossed by the low handle** where the numbers are not, and the
+/// difference is that the name cannot be placed: it is pinned to the left of
+/// the bar so the row reads as a row, while a number is free to take whichever
+/// run of clear track is going. A thumb roams the whole track, so the one fixed
+/// run is the one it eventually stands in.
+///
+/// It happens only while the low end is dragged down into the name's own share
+/// of the bar: about a sixth of the axis at the width the settings column opens
+/// at, a tenth on a bar twice that wide. Where the four bars REST it does not
+/// arise — the two that open at the full axis stand their low handle a point
+/// clear of the name, and the Level and Band bars open at 40% and 66% of
+/// theirs — which `the_name_is_painted_once_where_no_thumb_reaches_it` pins.
 ///
 /// **The crossing costs no letter**, because the name is painted a second time
 /// clipped to the thumb, in the panel colour, so its letters cross the grip in
