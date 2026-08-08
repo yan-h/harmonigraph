@@ -1729,10 +1729,19 @@ fn flip_mark(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32, sc
 }
 
 /// Samples taken through each of a band's corner arcs, on top of the columns
-/// the band is already drawn in. A radius of 5 crosses two or three of those,
-/// and three steps is a chamfer rather than a corner — while egui does not
-/// antialias a mesh edge, so how finely the arc is sampled is the only
-/// smoothness it gets.
+/// the band is already drawn in.
+///
+/// Those columns are far too coarse to round with on their own, and the strip
+/// is the case that settles it: 63 columns across the column this pane opens
+/// at puts them 6pt apart, wider than the radius, so a corner crosses fewer
+/// than ONE of them and is drawn from its two endpoints — a diagonal cut. The
+/// track's 192 are 2pt apart and give a corner three steps, which is a chamfer.
+/// egui does not antialias a mesh edge, so how finely the arc is sampled is the
+/// only smoothness there is.
+///
+/// Both figures move with the column, and in the direction that makes the
+/// strip's case the one to size for: narrow the pane and every column narrows
+/// while the radius holds, so the samples matter most where the pane is widest.
 const CORNER_SAMPLES: usize = 8;
 
 /// A band of `segments + 1` colored columns across `rect`, each column's color
