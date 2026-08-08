@@ -3968,7 +3968,10 @@ mod tests {
             .filter_map(|s| match s {
                 egui::Shape::Text(t) => Some((
                     egui::Rect::from_min_size(t.pos, t.galley.size()),
-                    t.galley.text().to_owned(),
+                    // The GLYPHS, not `Galley::text()`, which answers with the
+                    // string the galley was laid out from and so reads the same
+                    // whether or not the name fitted — see [`painted_text`].
+                    painted_text(&t.galley),
                     t.galley.job.sections.first().map_or(t.fallback_color, |s| s.format.color),
                 )),
                 _ => None,
