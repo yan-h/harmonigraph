@@ -120,10 +120,12 @@ pub struct Gradient {
     /// others. That is not a subtlety — it is the picture reading as though the
     /// magentas and oranges had been turned up, and Ottosson names the same
     /// defect in HSLuv, which is built exactly that way.
-    /// `chroma_of`, in [`color`](crate::color), resolves it instead against a
-    /// floor every hue can hold, opening flat across hue
-    /// and reaching each hue's own ceiling only at 1.0. See there for the shape
-    /// and what each end of it costs.
+    /// `chroma_of`, in [`color`](crate::color), resolves it instead against the
+    /// floor every hue can hold at that lightness, so hue drops out of the
+    /// chroma entirely and one setting is one colorfulness exactly. The cost is
+    /// the top of the axis: the vivid hues could hold up to 4.8x what the
+    /// narrowest one can and are never asked for it, so the most saturated
+    /// colors sRGB has stop being reachable at all. See there.
     ///
     /// What survives the fix and cannot be designed away is the LIGHTNESS term:
     /// the gamut genuinely closes toward black and white, so a gradient
@@ -189,18 +191,22 @@ fn default_lightness_ramp() -> f32 {
     44.0
 }
 
-/// Two thirds of the way up a knob whose bottom is flat across hue and whose
-/// top is each hue's own ceiling. Enough that the hues read as colors, and
-/// short of the boundary, where the ceiling's own kinks between the sRGB
-/// primaries come back as bumps in the sweep — which is what the top of the
-/// knob is for, not what it should open on.
+/// Nearly the whole of a knob denominated in what EVERY hue can hold, which is
+/// a tight axis: its top is the narrowest hue's ceiling, so most of the sRGB
+/// solid sits above the bar rather than on it.
 ///
 /// The figure that holds the default arc's MEAN colorfulness where a fraction
 /// of the per-hue ceiling put it at 0.5, so the picture opens about as colored
 /// as it did and spends that color evenly instead of banking it in the
 /// magentas. `the_default_opens_at_the_colorfulness_it_used_to` measures it.
+///
+/// It sits this high because the denominator is a floor rather than a ceiling,
+/// and that has a cost worth naming: [`chroma_ramp`](Gradient::chroma_ramp) is
+/// bounded by what this leaves on the 0..1 axis, so a default here leaves the
+/// ramp about 0.09 to open into where half the axis left it a full 1.0. The
+/// color ramp is very nearly dead at the fresh setting.
 fn default_chroma() -> f32 {
-    0.669
+    0.955
 }
 
 /// Flat: every note gets the same share of the color available to it.

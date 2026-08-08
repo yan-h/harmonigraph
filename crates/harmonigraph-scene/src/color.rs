@@ -151,6 +151,7 @@ const LUMINANCE_STEPS: u32 = 5;
 /// where the failure lives. At `L*` 0 this asks for luminance 0 exactly, which
 /// is the right question: black is the only color at that luminance, and a
 /// solve that reached any other has not found it.
+#[allow(dead_code)]
 const LUMINANCE_MISS: f64 = 1e-9;
 
 /// One hue, with everything a gamut search at that hue needs worked out once.
@@ -249,6 +250,7 @@ impl RampHue {
     /// end of the `L*` axis. Read off the same linear RGB the box test runs on,
     /// so what is checked is the luminance of the color that would actually be
     /// drawn rather than of the coordinates it came from.
+    #[allow(dead_code)]
     fn in_gamut(&self, c: f64, target_y: f64, box_: (f64, f64)) -> bool {
         let (r, g, b) = self.linear_srgb(c, target_y);
         let reached = 0.2126 * r + 0.7152 * g + 0.0722 * b;
@@ -281,6 +283,7 @@ fn linear_of_encoded(v: f64) -> f64 {
 /// A zero slack costs nothing and changes nothing: the transfer function fixes
 /// both 0 and 1, so the box comes back exactly 0..1 and [`max_chroma`]'s strict
 /// predicate is the same predicate it was in linear light.
+#[allow(dead_code)]
 fn gamut_box(slack: f64) -> (f64, f64) {
     (-linear_of_encoded(slack / 255.0), linear_of_encoded(1.0 + slack / 255.0))
 }
@@ -300,11 +303,13 @@ fn in_gamut_within(l_star: f64, h: f64, c: f64, slack: f64) -> bool {
 /// `0..MAX_SEARCH_CHROMA` settles to well under a millionth of a chroma unit —
 /// far finer than the 1/255 the answer is eventually quantized to, and the
 /// whole search runs only when the gradient changes.
+#[allow(dead_code)]
 const GAMUT_BISECTIONS: u32 = 20;
 
 /// Chroma the search brackets from above. Oklab's most saturated sRGB color
 /// reaches about 0.32, so nothing is ever cut off by this; it is the bracket
 /// rather than a limit.
+#[allow(dead_code)]
 const MAX_SEARCH_CHROMA: f64 = 0.4;
 
 /// The largest Oklab chroma sRGB can show at this `L*` and hue.
@@ -319,6 +324,11 @@ const MAX_SEARCH_CHROMA: f64 = 0.4;
 /// with BOTH lightness and hue, over a boundary with no closed form, so a
 /// gradient free to move either one cannot carry a chroma figure that was
 /// worked out in advance.
+// Off the draw path entirely now that the denominator is a floor: the only
+// callers left are tests, which check `HUE_FLOOR` against the search it was
+// baked from. Kept compiled rather than `cfg(test)` so the dozen doc links
+// into the gamut search from items that ARE live still resolve.
+#[allow(dead_code)]
 fn max_chroma(l_star: f64, h: f64) -> f64 {
     let hue = RampHue::at(h);
     let target_y = luminance_of_lightness(l_star);
@@ -398,44 +408,30 @@ fn hue_floor(l_star: f64) -> f64 {
     f64::from(HUE_FLOOR[i]) * (1.0 - f) + f64::from(HUE_FLOOR[i + 1]) * f
 }
 
-/// The absolute Oklab chroma a FRACTION asks for at one point of a curve: the
-/// floor every hue can hold at the bottom of the knob, this hue's own ceiling
-/// at the top, and one curve joining them.
+/// The absolute Oklab chroma a FRACTION asks for at one point of a curve: a
+/// share of the floor every hue can hold there, and nothing about which hue it
+/// happens to be.
 ///
 /// ```text
-/// C = m*f / (1 - f*(1 - m/M))     m = hue_floor(L*), M = max_chroma(L*, h)
+/// C = m*f                          m = hue_floor(L*)
 /// ```
 ///
-/// The shape is what the two ends are worth. Denominating in `M` alone is what
-/// makes one setting read as three different colorfulnesses around the circle;
-/// denominating in `m` alone fixes that and costs the top of the knob its
-/// reach, since the vivid hues could hold 2.4x what the narrowest one can and
-/// would never be asked for it. This is neither: near 0 it is `m*f`, flat
-/// across hue to within 17% at a quarter of the knob and 41% at half, and at
-/// `f` = 1 it is exactly `M`, the gamut boundary, with nothing given up.
+/// Hue drops out of the chroma entirely, which is the point: one setting is one
+/// colorfulness around the whole circle, exactly, at every setting rather than
+/// approaching it near the bottom. That is the strongest form of what the knob
+/// can promise, and it is the whole of what the knob gives up as well — the
+/// vivid hues hold up to 2.4x what the narrowest one does at the same lightness
+/// (4.8x at `L*` 86) and are never asked for it, so the most saturated colors
+/// sRGB can show are no longer reachable from any setting of the six knobs.
 ///
-/// Ottosson's Okhsl reaches for the same compromise against the same problem —
-/// he anchors three chromas per hue and interpolates, to "keep the unevenness
-/// local to colors close to the edge of the gamut". One rational curve says it
-/// with no anchors to choose, which is the version worth having here.
-///
-/// **In gamut for any `m` at all**, which is why the table above buys
-/// uniformity rather than safety: `C/M` is `r*f / (1 - f + r*f)` for
-/// `r = m/M`, and `r*f <= 1 - f + r*f` reduces to `f <= 1`. A fraction past 1
-/// is the one ask that can leave the gamut, and it is meant to — see
-/// `ramp_sample_in_gamut`.
-fn chroma_of(fraction: f64, l_star: f64, h: f64) -> f64 {
-    let ceiling = max_chroma(l_star, h);
-    // Black and white, where the circle has closed to a point and every
-    // fraction of it is the neutral.
-    if ceiling <= 0.0 {
-        return 0.0;
-    }
-    let r = hue_floor(l_star) / ceiling;
-    // The denominator reaches 0 only past `f` = 1, where the ask is already
-    // outside the gamut; the floor keeps that an enormous chroma rather than a
-    // sign flip, so the check that asks "was this drawable?" still says no.
-    hue_floor(l_star) * fraction / (1.0 - fraction * (1.0 - r)).max(1e-6)
+/// **The table's conservatism is what keeps this in gamut**, unlike a curve
+/// that ends on `max_chroma`: nothing here consults this hue's own ceiling, so
+/// an entry of `HUE_FLOOR` sitting a hair ABOVE the true floor is a color some
+/// hue cannot show and a channel that clips — which moves the luminance and
+/// takes the isoluminance promise with it. See `HUE_FLOOR`, and
+/// `the_hue_floor_is_never_above_the_gamut`.
+fn chroma_of(fraction: f64, l_star: f64, _h: f64) -> f64 {
+    hue_floor(l_star) * fraction
 }
 
 /// One color of the ramp: `L*` for lightness, an Oklab hue, and an ABSOLUTE
@@ -677,17 +673,18 @@ pub const HUE_CIRCLE_N: usize = 96;
 /// side by side — the Nodes tab and the Analyzer tab — therefore share the one
 /// entry, and no drag of any knob moves this table at all. A second caller
 /// wanting a pair of its own is what would make this want [`LUT_SLOTS`]-style
-/// slots, and it would be worth giving them rather than rebuilding on every
-/// alternation: a rebuild is `HUE_CIRCLE_N` x [`GAMUT_BISECTIONS`] gamut
-/// probes, each a Newton solve and an Oklab->sRGB conversion, and a frame that
-/// misses in this table and the pitch table both measures 412us on the UI
-/// thread.
+/// slots, though the case is much weaker than it was: a rebuild is now
+/// `HUE_CIRCLE_N` Oklab->sRGB conversions and one [`hue_floor`] lookup, where a
+/// chroma following the per-hue gamut made it that many BISECTIONS as well —
+/// 412us on the UI thread for a frame missing in this table and the pitch table
+/// both.
 ///
-/// That is the standing price of a chroma that follows the gamut instead of a
-/// figure worked out in advance (see [`max_chroma`]). Cutting it means either
-/// coarsening the bisection, which MOVES THE COLORS every pixel test is pinned
-/// to, or caching `max_chroma` against a quantized lightness — a second table
-/// with its own staleness to keep honest, for a cost nothing but a drag pays.
+/// **The gamut search is gone from the draw path entirely**, which is the
+/// structural dividend of denominating in a floor: how much chroma is safe here
+/// is a function of lightness alone, so it bakes into a table, and nothing
+/// drawn ever asks where this particular hue's boundary is. [`max_chroma`] and
+/// the bisection around it are left with no caller but the tests, where
+/// `the_hue_floor_is_never_above_the_gamut` checks the table against them.
 pub fn hue_circle(lightness: f32, chroma: f32) -> [Vec4; HUE_CIRCLE_N] {
     /// The circle last built, and the lightness/chroma pair it was built for.
     type Memo = Option<((f32, f32), [Vec4; HUE_CIRCLE_N])>;

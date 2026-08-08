@@ -591,9 +591,9 @@ fn the_hue_floor_is_never_above_the_gamut() {
 /// Stated as a bound on the SPREAD around the hue circle rather than on any one
 /// hue, and checked against what a fraction of the per-hue ceiling would have
 /// drawn at the same setting, so the test says what was bought rather than
-/// merely that a number is small. The bound loosens with the fraction by
-/// construction: `chroma_of` opens flat and reaches each hue's own ceiling at
-/// 1.0, where the spread is the gamut's own and nothing can be claimed.
+/// merely that a number is small. The bound does not loosen with the fraction:
+/// hue is absent from `chroma_of` altogether, so the spread is 1 at every
+/// setting including the top of the knob, and that exactness is the claim.
 #[test]
 fn one_chroma_setting_is_one_colorfulness_across_hue() {
     let spread = |f: &dyn Fn(f64) -> f64| {
@@ -601,7 +601,7 @@ fn one_chroma_setting_is_one_colorfulness_across_hue() {
         cs.iter().cloned().fold(0.0f64, f64::max) / cs.iter().cloned().fold(f64::INFINITY, f64::min)
     };
     for l in [42.0f64, 64.0, 86.0] {
-        for (fraction, bound) in [(0.25f64, 1.30f64), (0.5, 1.70)] {
+        for (fraction, bound) in [(0.25f64, 1.0f64), (0.5, 1.0), (1.0, 1.0)] {
             let got = spread(&|h| crate::color::chroma_of_for_docs(fraction, l, h));
             let ceiling = spread(&|h| fraction * crate::color::max_chroma_for_docs(l, h));
             assert!(
