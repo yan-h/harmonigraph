@@ -1131,36 +1131,45 @@ impl<'a> RangeBar<'a> {
         };
         let (lx, hx) = (x_of(*self.low), x_of(*self.high));
         if self.fade_span {
-            // One fill from the axis floor out to `high`, solid as far as
+            // One fill from the bar's left edge out to `high`, solid as far as
             // `low` and ramping to the well over the rest — the picture of the
             // edge this pair sets. Mixed toward the WELL rather than painted
             // with alpha, so the ramp ends on exactly the color the bare track
             // beyond it already is and the fill has no seam at its own end.
             //
-            // It stands on the TRACK rather than on the bar's rect, so that
-            // its extent is the reach and nothing else: the rect starts a
-            // handle's half-width earlier (see HANDLE_INSET), which would
-            // leave a stub of fill under an edge switched off entirely and
-            // overstate every reach above it by the same amount. What that
-            // costs is a sliver of bare track at the far left, which is the
-            // same sliver every handle needs to sit clear in.
-            let mut fill = rect;
-            fill.min.x = track.left();
-            fill.max.x = hx.max(track.left());
-            // Where the ramp starts as a fraction of the FILL, which is what
-            // `gradient_strip` measures its samples in. A hard edge closes the
-            // span, which puts the whole fill solid and the ramp nowhere — and
-            // is the one value the divide below cannot take.
-            let solid = ((lx - fill.left()) / fill.width().max(1.0)).clamp(0.0, 1.0);
-            gradient_strip(painter, fill, FADE_SEGMENTS, f32::from(bar_radius(scale)), |p| {
-                if p <= solid || solid >= 1.0 {
-                    fill_color
-                } else {
-                    let t = (p - solid) / (1.0 - solid);
-                    egui::lerp(egui::Rgba::from(fill_color)..=egui::Rgba::from(theme::well()), t)
+            // It starts on the bar's RECT and not on the inset track it is
+            // measured along, so that it is the same fill as the ValueBars it
+            // sits among. Standing it on the track instead leaves a sliver of
+            // bare well at the far left — HANDLE_INSET of it, the room a handle
+            // parked at the floor needs — and that sliver reads as a notch cut
+            // out of the control rather than as reach the edge has not got to,
+            // because no other bar in the pane has one.
+            //
+            // What it adds is a head of SOLID fill, which is what everything
+            // left of `low` is anyway, so the ramp still starts and ends under
+            // the two handles. The one thing it cannot say is a reach of zero,
+            // which would still have the inset to paint — hence the test.
+            if *self.high > min {
+                let mut fill = rect;
+                fill.max.x = hx;
+                // Where the ramp starts as a fraction of the FILL, which is
+                // what `gradient_strip` measures its samples in. A hard edge
+                // closes the span, which puts the whole fill solid and the ramp
+                // nowhere — and is the one value the divide below cannot take.
+                let solid = ((lx - fill.left()) / fill.width().max(1.0)).clamp(0.0, 1.0);
+                gradient_strip(painter, fill, FADE_SEGMENTS, f32::from(bar_radius(scale)), |p| {
+                    if p <= solid || solid >= 1.0 {
+                        fill_color
+                    } else {
+                        let t = (p - solid) / (1.0 - solid);
+                        egui::lerp(
+                            egui::Rgba::from(fill_color)..=egui::Rgba::from(theme::well()),
+                            t,
+                        )
                         .into()
-                }
-            });
+                    }
+                });
+            }
         } else {
             let mut span = rect;
             span.min.x = lx;
@@ -3516,32 +3525,36 @@ mod tests {
     }
 
     /// A `fade_span` bar paints the pair as the edge it describes: one fill
-    /// from the axis floor, solid as far as `low`, ramping out to the bare
+    /// from the bar's left edge, solid as far as `low`, ramping out to the bare
     /// track by `high`.
     ///
     /// The default paint says the opposite of this — it fills exactly the part
     /// that is FADING and leaves the solid part bare — which on a pair that is
     /// a reach and its fade reads as a bright band floating off the node it is
     /// measured from.
+    ///
+    /// The left edge is the BAR's, not the inset track's: a fill starting where
+    /// the values do leaves a sliver of bare well no other bar in the pane has,
+    /// and it reads as a notch in the control. See the paint for the trade.
     #[test]
     fn a_fade_span_fills_from_the_floor_and_ramps_out() {
         let (low, high) = (60.0, 100.0);
         let shapes = paint_fade_bar(low, high);
-        let track = filled_rects(&shapes)[0].0;
+        let bar = filled_rects(&shapes)[0].0;
         let x_of = |v: f32| {
             let inset = HANDLE_INSET;
-            let inner = track.left() + inset;
-            inner + (track.width() - 2.0 * inset) * (v - AXIS.0) / (AXIS.1 - AXIS.0)
+            let inner = bar.left() + inset;
+            inner + (bar.width() - 2.0 * inset) * (v - AXIS.0) / (AXIS.1 - AXIS.0)
         };
         let ramp = fill_ramp(&shapes);
         assert!(!ramp.is_empty(), "a fade span painted no fill");
 
         let (first, last) = (ramp[0], ramp[ramp.len() - 1]);
         assert!(
-            (first.0 - x_of(AXIS.0)).abs() < 0.01,
-            "the fill starts at {} rather than at the axis floor {}",
+            (first.0 - bar.left()).abs() < 0.01,
+            "the fill starts at {} rather than at the bar's left edge {}",
             first.0,
-            x_of(AXIS.0),
+            bar.left(),
         );
         assert!(
             (last.0 - x_of(high)).abs() < 0.01,
@@ -3596,11 +3609,11 @@ mod tests {
         }
     }
 
-    /// An edge of no reach paints NOTHING. The fill stands on the value axis,
-    /// which is the inset track the handles are placed on — not the bar's own
-    /// rect, which starts a handle's half-width earlier and would leave a stub
-    /// of fill under a control that is switched off, and overstate every reach
-    /// above it by the same amount.
+    /// An edge of no reach paints NOTHING, and it takes a check of its own to
+    /// say so. The fill runs from the bar's left edge, which is a handle's
+    /// half-width outside the axis floor (see HANDLE_INSET), so a reach of
+    /// zero has that inset left to paint and would show as a stub of fill
+    /// under a control that is switched off.
     #[test]
     fn an_edge_of_no_reach_paints_no_fill() {
         let shapes = paint_fade_bar(AXIS.0, AXIS.0);
