@@ -1571,7 +1571,7 @@ const UNCLAIMED_ALPHA: f32 = 74.0 / 255.0;
 /// nearly black, and both are one click away — Mono, on the Analyzer tab's
 /// Palette row, is exactly the first of them. The one control that has to show
 /// hues would show none at the settings a reader is most likely to be dialling
-/// their way out of. What the six knobs COMPOSE is the [`gradient_preview`]
+/// their way out of. What the six knobs COMPOSE is the [`GradientPreview`]
 /// the group stands under, which is drawn from the same table the picture is.
 ///
 /// Mid `L*`, so no part of the circle is crowded against either end of the
@@ -1583,7 +1583,7 @@ const TRACK_LIGHTNESS: f32 = 60.0;
 /// The gamut fraction that goes with [`TRACK_LIGHTNESS`].
 const TRACK_CHROMA: f32 = 0.85;
 
-/// Height of a [`gradient_preview`]. Shorter than a row, because it is a
+/// Height of a [`GradientPreview`]. Shorter than a row, because it is a
 /// picture and not a control: nothing on it can be dragged, and a band standing
 /// as tall as the bars under it would read as a fourth bar that has lost its
 /// handle.
@@ -1677,7 +1677,7 @@ enum SpectrumGrab {
     /// a turn never reads back the circle it is itself moving.
     Rotate { held: f32 },
     /// A press that landed off the track, which for this widget means on the
-    /// [`gradient_preview`] above it — or in the pane's own row spacing either
+    /// [`GradientPreview`] above it — or in the pane's own row spacing either
     /// side.
     ///
     /// A rectangle the preview is not inside is NOT enough to keep a press on
@@ -1802,7 +1802,7 @@ impl GradientPreview {
 /// reverses it. The bar's name stands on the circle at the left.
 ///
 /// What the arc COMPOSES with the other four knobs is not here at all: it is
-/// the [`gradient_preview`] the group stands under. This bar is the hue pair
+/// the [`GradientPreview`] the group stands under. This bar is the hue pair
 /// and nothing else, and the two spread bars below it are the other four.
 ///
 /// Every piece wears the shared [`CONTROL_RADIUS`](theme::CONTROL_RADIUS) and
@@ -2581,7 +2581,7 @@ impl SpreadGrab {
 /// its negative put the two handles in exactly the same places, so the bar
 /// cannot draw the difference, and an inverted ramp reads out backwards
 /// instead, high to low. (What the sign means for the picture is at the top of
-/// the group, on the [`gradient_preview`], which draws the gradient in pitch
+/// the group, on the [`GradientPreview`], which draws the gradient in pitch
 /// order and so reverses with it.)
 ///
 /// **Both ends stay on the axis at every setting.** That is the bar's own
@@ -2774,7 +2774,7 @@ impl<'a> SpreadBar<'a> {
 ///
 /// One builder for both bands a gradient group draws — a [`SpectrumBar`]'s
 /// track, which is the hue circle lit and then dimmed either side of the
-/// handle, and the [`gradient_preview`] above it, which is the pitch ramp end
+/// handle, and the [`GradientPreview`] above it, which is the pitch ramp end
 /// to end. A quad strip written out twice is two places to get the vertex order
 /// or the first-column case wrong, and the second copy is the one that quietly
 /// keeps the older answer.
@@ -3790,7 +3790,7 @@ mod tests {
         }
     }
 
-    /// A [`SpectrumBar`] under a [`gradient_preview`] in a 300pt context,
+    /// A [`SpectrumBar`] under a [`GradientPreview`] in a 300pt context,
     /// driven one frame at a time.
     ///
     /// Real events through a real context, because nothing less reaches the

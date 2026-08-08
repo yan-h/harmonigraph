@@ -359,7 +359,8 @@ fn every_gradient_group_previews_itself_above_its_bars() {
             let want = crate::panes::scene_color(want, 1.0);
             assert_eq!(
                 drew, want,
-                "{tab:?} drew its preview's {end} end in {drew:?}, not the {want:?} its                  own gradient reaches — is the group previewing the other pane's?",
+                "{tab:?} drew its preview's {end} end in {drew:?}, not the \
+                 {want:?} its own gradient reaches — the other pane's?",
             );
         }
         let track = crate::widgets::spectrum_track_width(WIDTH, 1.0);
