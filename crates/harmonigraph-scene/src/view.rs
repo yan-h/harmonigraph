@@ -228,9 +228,11 @@ pub struct ViewConfig {
     /// `a_view_missing_any_one_key_reloads_at_the_fresh_value` holds it.
     pub fade_shape: f32,
     // An unlit node has no mark of its own: the grid lines between node
-    // positions are the whole of what says a position is there, on the home
-    // sheet and off it alike. So a resting lattice is its own drawing rather
-    // than a field of placeholders, and every disc on screen is a note.
+    // positions are the whole of what says a position is there, and they say
+    // it on the home sheet alone (see `derive_grid`) — off it, a position at
+    // rest is unmarked, which is the same reason it is not hoverable. So a
+    // resting lattice is its own drawing rather than a field of
+    // placeholders, and every disc on screen is a note.
     // ---- Melody / bass highlight -----------------------------------------
     // Mark the outer held notes, so the melody and/or bass line reads at a
     // glance out of a chord. "Outer" is by sounding pitch (`Voice::pitch`,
