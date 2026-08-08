@@ -89,14 +89,12 @@ pub(crate) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
     choice_row(ui, "Now-line", &mut cfg.orientation, &sides);
     // One control for both ends, because the two ends are one thing: the
     // window onto the analyzer's axis. Dragged in MIDI note (which is what
-    // makes it a log-frequency zoom) and read out in Hz. Labelled, since a
-    // RangeBar carries no label of its own and the heading above is naming
-    // the group rather than this bar.
-    ui.label("Pitch range");
+    // makes it a log-frequency zoom) and read out in Hz.
     RangeBar::new(
         &mut cfg.low_midi,
         &mut cfg.high_midi,
         harmonigraph_core::spectrum::SPECTRUM_MIN_MIDI..=harmonigraph_core::spectrum::SPECTRUM_MAX_MIDI,
+        "Pitch range",
     )
     .min_span(crate::PITCH_RANGE_MIN_SPAN)
     .display(hz_readout)
@@ -152,23 +150,25 @@ pub(crate) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
 
     // Both ends of the height scale on one control, like the pitch range: the
     // window on the spectrum's dynamics rather than just where it bottoms out.
-    // Named by a label of its own — a RangeBar carries no label, and the
-    // section heading above it is naming the whole group here, not this bar.
-    ui.label("Level");
-    RangeBar::new(&mut cfg.floor_db, &mut cfg.ceiling_db, crate::LEVEL_MIN_DB..=crate::LEVEL_MAX_DB)
-        .min_span(crate::LEVEL_RANGE_MIN_SPAN)
-        .display(db_readout)
-        .show(ui)
-        .on_hover_text(
-            "The slice of the level scale on show. The low end is what reads \
-             as silence; the high end is what reads as full height — and as \
-             the brightest spectrogram cell — so pulling it down from 0 dB (a \
-             full-scale sine) lifts quiet material into the whole picture \
-             instead of the bottom of it. Drag either end to move it, drag \
-             between them to slide the window, double-click for the full \
-             scale.\n\nOr set the high end on the display itself: drag the \
-             spectrum along the depth axis, away from its baseline to zoom in.",
-        );
+    RangeBar::new(
+        &mut cfg.floor_db,
+        &mut cfg.ceiling_db,
+        crate::LEVEL_MIN_DB..=crate::LEVEL_MAX_DB,
+        "Level",
+    )
+    .min_span(crate::LEVEL_RANGE_MIN_SPAN)
+    .display(db_readout)
+    .show(ui)
+    .on_hover_text(
+        "The slice of the level scale on show. The low end is what reads \
+         as silence; the high end is what reads as full height — and as \
+         the brightest spectrogram cell — so pulling it down from 0 dB (a \
+         full-scale sine) lifts quiet material into the whole picture \
+         instead of the bottom of it. Drag either end to move it, drag \
+         between them to slide the window, double-click for the full \
+         scale.\n\nOr set the high end on the display itself: drag the \
+         spectrum along the depth axis, away from its baseline to zoom in.",
+    );
     ValueBar::new(&mut cfg.smoothing, 0.0..=0.9, "Smoothing")
         .show(ui)
         .on_hover_text("Display inertia: 0 reacts instantly, 0.9 glides");
