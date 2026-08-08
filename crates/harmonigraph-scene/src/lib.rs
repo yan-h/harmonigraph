@@ -412,7 +412,7 @@ pub struct Scene {
 /// gratings sixty degrees apart, and the outer two take the travel through a
 /// `cos 60°` — so they run at half the sheet's own frequency along their axes
 /// and only close a cycle over two of its periods. Reduce by one and Hex flips
-/// sign at every wrap. The other four patterns take the travel whole and
+/// sign at every wrap. The other two patterns take the travel whole and
 /// repeat over either.
 impl Scene {
     pub fn shimmer_slide(&self) -> f32 {

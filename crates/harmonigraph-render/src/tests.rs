@@ -663,14 +663,7 @@ fn every_shimmer_pattern_draws_a_different_picture() {
 
     // Off first, so the loop below has the steady picture to measure against
     // as well as the other patterns.
-    let modes = [
-        Pulse::Off,
-        Pulse::Bands,
-        Pulse::Checker,
-        Pulse::Hex,
-        Pulse::Weave,
-        Pulse::Rings,
-    ];
+    let modes = [Pulse::Off, Pulse::Bands, Pulse::Checker, Pulse::Hex];
     // One node with an end marked: the sheet needs a ring to belong to.
     let shots: Vec<(Pulse, Vec<u8>)> = modes
         .iter()
@@ -693,7 +686,7 @@ fn every_shimmer_pattern_draws_a_different_picture() {
     }
 }
 
-/// One period of travel returns four of the five patterns to the picture they
+/// One period of travel returns two of the three patterns to the picture they
 /// drew, and Hex to its opposite.
 ///
 /// This is the shape the shader's periodicity actually has, and
@@ -735,7 +728,7 @@ fn one_period_of_travel_repeats_every_pattern_but_hex() {
     // the first half by drawing its rest state twice.
     const BASE: f64 = 0.3;
 
-    for mode in [Pulse::Bands, Pulse::Checker, Pulse::Weave, Pulse::Rings] {
+    for mode in [Pulse::Bands, Pulse::Checker] {
         let (before, after) = (gpu.shot(&at(mode, BASE)), gpu.shot(&at(mode, BASE + period)));
         // Half a percent rather than byte-equality, though it measures zero
         // here: the two shots reach the same phase by different arithmetic —

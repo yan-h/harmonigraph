@@ -383,14 +383,6 @@ pub enum Pulse {
     /// with them instead of across them, and a hexagon's neighbours are all
     /// edge-to-edge where a square's touch at the corners.
     Hex,
-    /// The same two crossed gratings as [`Checker`](Pulse::Checker) with the
-    /// BRIGHTER taken instead of the product: a lattice of light lines rather
-    /// than of cells, crossing at bright knots.
-    Weave,
-    /// Concentric rings travelling outward from the lattice's origin — the
-    /// one pattern with a center, and so the one that says where the light is
-    /// coming from rather than only which way it goes.
-    Rings,
 }
 
 impl Pulse {
@@ -403,8 +395,6 @@ impl Pulse {
             Pulse::Bands => 1,
             Pulse::Checker => 2,
             Pulse::Hex => 3,
-            Pulse::Weave => 4,
-            Pulse::Rings => 5,
         }
     }
 
