@@ -28,8 +28,9 @@ where `/code-review` cannot: it spawns a single `diff-reviewer` subagent on
 bugs, cache keys and test reach. A session has full context on what it just
 wrote, which makes this cheap; it is also biased toward its own work, which
 is what the subagent corrects for, since it did not write it. This half
-catches the bugs that live entirely inside one branch — a stale invalidation
-key, an underflow, a test whose fixture never reaches the new path.
+catches the bugs that live entirely inside one branch — a cache key carrying
+the wrong inputs in either direction, an underflow, a test whose fixture never
+reaches the new path.
 
 The findings come back **unverified** — there is no refuter pass — so the
 calling session is the only thing between a first reading and a commit. The
