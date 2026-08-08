@@ -347,11 +347,11 @@ fn one_pitch_gives_the_disc_and_the_glyph_one_color() {
     // loop walks each dimension by stride/(product of the ones inside it), so a
     // stride sharing a factor with that product lands on a SUBGROUP of the
     // dimension and never leaves it. Six is exactly that trap here: six chroma
-    // pairs are the innermost dimension, so a stride of 6 takes the same pair
-    // every time and four of the six would never be selected at all. Two and
-    // three are the same trap halfway. A stride coprime with the sweep's whole
-    // length walks all of it, which 5 is; the check below is what notices if a
-    // knob is ever added or a stride retuned into a subgroup.
+    // pairs are the innermost dimension, so a stride of 6 takes the first pair
+    // every time and the other five are never selected at all. Two and three
+    // are the same trap halfway. A stride coprime with the sweep's whole length
+    // walks all of it, which 5 is against 3456 = 2^7 * 3^3; the check below is
+    // what notices if a knob is ever added or a stride retuned into a subgroup.
     let (dark, bright) = (24.0f32, 108.0f32);
     let full = gradient_sweep();
     let cast: Vec<PitchGradient> = full.iter().copied().step_by(5).collect();
