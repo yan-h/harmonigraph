@@ -595,6 +595,118 @@ fn label_anchors_grow_into_the_pane() {
     }
 }
 
+/// The pitch range the whole analyzer covers, plus a hair either side, so a
+/// frequency landing exactly on an end is inside the range rather than on the
+/// float boundary of it — 20 Hz and 20 kHz are what the axis is DEFINED as, and
+/// whether `hz_to_midi` lands a ulp above or below the constant is not what any
+/// test here is about.
+fn whole_axis() -> PitchScale {
+    use harmonigraph_core::spectrum::{SPECTRUM_MAX_MIDI, SPECTRUM_MIN_MIDI};
+    let (min_midi, max_midi) = (SPECTRUM_MIN_MIDI - 0.5, SPECTRUM_MAX_MIDI + 0.5);
+    PitchScale { min_midi, max_midi, span: max_midi - min_midi }
+}
+
+/// The frequency grid is a decade ladder — every 10 Hz below 100, every 100 Hz
+/// below 1 kHz, every 1 kHz below 10 — and the 1-2-5 series of each decade is
+/// the part of it that carries a number.
+#[test]
+fn the_frequency_grid_rules_one_step_per_decade() {
+    // A long axis, so nothing is thinned for room (that is the next test) and
+    // what comes back is the whole ladder.
+    let grid = frequency_grid(&whole_axis(), 4_000.0);
+    let hz: Vec<f32> = grid.iter().map(|r| r.hz).collect();
+    // From 20 Hz, where the analyzer's axis starts — 10 Hz is a step of this
+    // ladder and simply falls off the bottom of the range.
+    let ladder: Vec<f32> = (2..=9)
+        .map(|s| s as f32 * 10.0)
+        .chain((1..=9).map(|s| s as f32 * 100.0))
+        .chain((1..=9).map(|s| s as f32 * 1_000.0))
+        .chain([10_000.0, 20_000.0])
+        .collect();
+    assert_eq!(hz, ladder, "the ladder is not one even step per decade");
+
+    // The numbered marks, which are the axis labels this replaced the hardcoded
+    // list of: an analyzer's 1-2-5 series, and nothing added or lost.
+    let majors: Vec<f32> = grid.iter().filter(|r| r.major).map(|r| r.hz).collect();
+    assert_eq!(
+        majors,
+        vec![20.0, 50.0, 100.0, 200.0, 500.0, 1_000.0, 2_000.0, 5_000.0, 10_000.0, 20_000.0],
+    );
+
+    // Low to high, and on the axis: the pane draws these in the order they come
+    // back and clips nothing.
+    assert!(grid.windows(2).all(|w| w[0].t < w[1].t), "the ladder came back out of order");
+    assert!(grid.iter().all(|r| (0.0..=1.0).contains(&r.t)), "a ruling landed off the axis");
+
+    // A range showing part of a decade gets that part and no more.
+    let octave = PitchScale { min_midi: 60.0, max_midi: 72.0, span: 12.0 }; // 262..523 Hz
+    let inside: Vec<f32> = frequency_grid(&octave, 4_000.0).iter().map(|r| r.hz).collect();
+    assert_eq!(inside, vec![300.0, 400.0, 500.0]);
+}
+
+/// A short axis thins the ladder rather than smearing it, and thins it the
+/// same way in every decade — but never drops a numbered mark, which would
+/// leave a label sitting on nothing.
+#[test]
+fn a_short_axis_thins_the_ladder_and_keeps_the_numbers() {
+    let scale = whole_axis();
+    let long = frequency_grid(&scale, 4_000.0);
+    let short = frequency_grid(&scale, 200.0);
+    assert!(short.len() < long.len(), "a 200-point axis kept the whole ladder");
+
+    let majors = |grid: &[Ruling]| -> Vec<f32> {
+        grid.iter().filter(|r| r.major).map(|r| r.hz).collect()
+    };
+    assert_eq!(majors(&short), majors(&long), "thinning ate a numbered mark");
+
+    // Which steps survive turns on the length of a decade, which is the same
+    // everywhere on a log axis — so the two full decades on this range keep the
+    // same steps as each other rather than the grid thinning out along the axis.
+    let steps = |grid: &[Ruling], base: f32| -> Vec<i32> {
+        grid.iter()
+            .filter(|r| r.hz >= base && r.hz < base * 10.0)
+            .map(|r| (r.hz / base).round() as i32)
+            .collect()
+    };
+    assert_eq!(steps(&short, 100.0), steps(&short, 1_000.0));
+    assert!(steps(&short, 100.0).len() < 9, "nothing was thinned at all");
+
+    // And what is left is spaced far enough apart to read as separate lines.
+    for pair in short.windows(2) {
+        let gap = (pair[1].t - pair[0].t) * 200.0;
+        assert!(
+            gap >= MIN_RULING_GAP_PT,
+            "{} Hz and {} Hz came out {gap} points apart",
+            pair[0].hz,
+            pair[1].hz,
+        );
+    }
+
+    // Squeezed hard enough it wears down to the numbers alone, rather than to
+    // some arbitrary subset that happens to fit.
+    let tiny = frequency_grid(&scale, 100.0);
+    assert_eq!(tiny.iter().map(|r| r.hz).collect::<Vec<_>>(), majors(&long));
+}
+
+/// A collapsed, inverted or NaN pitch range — which the bars cannot produce and
+/// a hand-edited state blob can — rules nothing at all. Its span is what a
+/// position divides by, so any ruling it kept would be placed at a NaN, and egui
+/// panics on NaN geometry.
+#[test]
+fn a_collapsed_range_rules_nothing() {
+    // A frequency landing EXACTLY on a collapsed range is the case that gets
+    // through a guard on the decade length alone: 1 kHz is inside `60.0..60.0`
+    // once the range is written at 1 kHz's own pitch.
+    let khz = harmonigraph_core::spectrum::hz_to_midi(1_000.0);
+    for (min_midi, max_midi) in [(khz, khz), (60.0, 60.0), (90.0, 30.0), (f32::NAN, f32::NAN)] {
+        let scale = PitchScale { min_midi, max_midi, span: max_midi - min_midi };
+        assert!(
+            frequency_grid(&scale, 300.0).is_empty(),
+            "{min_midi}..{max_midi} ruled a line on an axis with no length",
+        );
+    }
+}
+
 /// With the roll off, the spectrum gets the whole depth axis — the
 /// layout the voice-bar/curve calibration was set up against.
 #[test]
@@ -1136,6 +1248,59 @@ fn the_axis_labels_are_rimmed() {
         out.shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Callback(_))),
         "the pane drew no label callback at all",
     );
+}
+
+/// The frequency rulings go UNDER the picture and stop where the spectrum
+/// does.
+///
+/// Both halves are the whole case for ruling this pane at all. Over the
+/// spectrum's fill they would be a mesh laid across a picture for a reading the
+/// numbers already give; under it they are what the picture stands on. And run
+/// the full depth they would cross the roll's ribbons and outrun the
+/// spectrogram's heatmap, which only grows out from the now-line as history
+/// accumulates — leaving the far part of every line sitting bare on the bed.
+#[test]
+fn the_rulings_go_under_the_spectrum_and_stop_at_the_now_line() {
+    let cfg = SpectrumConfig::default();
+    let rect = reference_pane();
+    let axes = Axes::new(rect, &cfg);
+    let split = spectrum_share(&cfg);
+    assert!(split > 0.0 && split < 1.0, "this needs a pane the spectrum shares");
+
+    let faded = |fade: f32| theme::hairline().gamma_multiply(fade);
+    let mut rulings = Vec::new();
+    let mut slabs = Vec::new();
+    for (i, shape) in paint_tone(rect, cfg).into_iter().enumerate() {
+        let egui::Shape::LineSegment { points, stroke } = shape else { continue };
+        if stroke.color == faded(RULING_FADE.0) || stroke.color == faded(RULING_FADE.1) {
+            rulings.push((i, points));
+        } else if stroke.color.a() == 210 {
+            // The spectrum's own slabs — the one thing on the pane drawn in a
+            // gradient color at that opacity.
+            slabs.push(i);
+        }
+    }
+    assert!(rulings.len() > 4, "the pane ruled {} frequencies", rulings.len());
+    assert!(!slabs.is_empty(), "the tone drew no spectrum to be behind");
+    assert!(
+        rulings.last().unwrap().0 < slabs[0],
+        "a ruling is painted over the spectrum's fill",
+    );
+
+    for (_, points) in &rulings {
+        for point in points {
+            let d = axes.depth_at(*point);
+            assert!(
+                (-1e-3..=split + 1e-3).contains(&d),
+                "a ruling reaches depth {d}, past the now-line at {split}",
+            );
+        }
+    }
+    // ...and it is the WHOLE of the spectrum's share that gets ruled, not a
+    // stub of it: the two ends of a line are the two ends of that region.
+    let ends: Vec<f32> =
+        rulings[0].1.iter().map(|p| axes.depth_at(*p)).collect();
+    assert!(ends.iter().any(|d| d.abs() < 1e-3) && ends.iter().any(|d| (d - split).abs() < 1e-3));
 }
 
 /// The readout names its own unit, and switches to kHz where an analyzer
