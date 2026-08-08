@@ -718,10 +718,14 @@ pub(crate) fn ramp_luminance(l_star: f64, h: f64, c: f64) -> (f64, f64) {
     (target_y, 0.2126 * r + 0.7152 * g + 0.0722 * b)
 }
 
-/// The idle layer's color: the [grid line](crate::skin::grid_line)'s RGB at
-/// full alpha. That alpha is the LINE opacity and doesn't belong to the
-/// markers, which have their own presence — so it's dropped here rather than
-/// dimming them along with the lines.
+/// What a node with no voice on it is colored: the
+/// [grid line](crate::skin::grid_line)'s RGB, at full alpha because the
+/// line's own alpha is a LINE opacity and says nothing about a node.
+///
+/// No layer draws a node while it holds this — an idle node paints no pixel
+/// — so it is the neutral such a node falls back to rather than a look. It
+/// is the grid's grey rather than an arbitrary one so that a node arriving
+/// or leaving crosses no seam against the lines around it.
 pub(crate) fn idle_color() -> Vec4 {
     crate::skin::grid_line().with_w(1.0)
 }

@@ -102,8 +102,9 @@ pub fn active_skin() -> &'static Skin {
 /// on it, which is the wrong way round: the grid is what the lattice looks
 /// like at rest, not a thing to be looked at.
 ///
-/// Only the LINES take it. The idle markers keep the RGB at full alpha (see
-/// `color::idle_color`), so a faint grid doesn't dissolve them with it.
+/// Only a home-sheet line takes it. `color::idle_color` reads the same grey
+/// at full alpha as the color a node with no voice on it falls back to —
+/// which nothing draws while it holds it, an idle node painting no pixel.
 const GRID_LINE_ALPHA: f32 = 0.62;
 
 /// The home grid's color: the chrome's [`hairline`](Skin::hairline) grey, at
