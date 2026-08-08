@@ -553,7 +553,9 @@ impl<'a> ValueBar<'a> {
         // Over the fill and under the text: the fill is what the curve is
         // drawn ON and the two text runs are what it is drawn UNDER, which is
         // the order that keeps the number legible where the line passes behind
-        // it (`a_curve_preview_is_drawn_under_the_bars_own_text`).
+        // it (`a_curve_preview_is_drawn_over_the_fill_and_under_the_bars_own_text`).
+        // The fill half is not a nicety — an accent mix is fully opaque, so a
+        // line drawn under it is erased rather than dimmed.
         if let Some(curve) = self.curve {
             let plot = rect.shrink2(Vec2::new(BAR_TEXT_PAD * scale, CURVE_INSET * scale));
             let points = (0..=CURVE_SEGMENTS)
@@ -4688,13 +4690,22 @@ mod tests {
         }
     }
 
-    /// Text over the line, not under it. The curve crosses the whole track and
-    /// so passes behind both runs wherever they sit, and a bar whose number is
+    /// The line goes over the fill and under the text, and BOTH halves are the
+    /// contract. Text over it, because the curve crosses the whole track and so
+    /// passes behind both runs wherever they sit, and a bar whose number is
     /// hard to read is a bar that has given up what it is FOR to decorate
-    /// itself.
+    /// itself. Fill under it, because the fill is opaque — every accent mix is,
+    /// deliberately (see `theme`) — so a line painted first is not dimmed by it
+    /// but erased, over the whole filled part of the track and over all of it
+    /// at the top of the range.
+    ///
+    /// Z-order and not geometry, which is why this reads indices: both halves
+    /// leave every point exactly where it was, so nothing that samples the
+    /// line's own coordinates can see either one go wrong.
     #[test]
-    fn a_curve_preview_is_drawn_under_the_bars_own_text() {
-        let shapes = paint_value_bar(240.0, 0.35, Some(ramp));
+    fn a_curve_preview_is_drawn_over_the_fill_and_under_the_bars_own_text() {
+        // Mid-range, so there IS a fill to be buried by and empty track past it.
+        let shapes = paint_value_bar(240.0, 0.5, Some(ramp));
         let line = shapes
             .iter()
             .position(|shape| match shape {
@@ -4704,6 +4715,16 @@ mod tests {
                 _ => false,
             })
             .expect("the bar painted no preview");
+        // The fill and not the well: they are both rects and only one of them
+        // is the one the line has to clear.
+        let fill = shapes
+            .iter()
+            .position(|shape| match shape {
+                egui::Shape::Rect(rect) => rect.fill == theme::accent_fill(),
+                _ => false,
+            })
+            .expect("the bar painted no fill");
+        assert!(fill < line, "the fill at {fill} was painted over the line at {line}");
         let texts: Vec<usize> = shapes
             .iter()
             .enumerate()
