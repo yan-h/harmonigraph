@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
-# Local mirror of .github/workflows/ci.yml: the exact four gates the cloud CI
-# runs — clippy across all targets with warnings denied, the full test suite,
-# the doc-link check, then the harmonigraph-core dependency guard. Nothing more,
-# nothing less, on the toolchain pinned by rust-toolchain.toml — so a green run
-# here means a green run there.
+# Local mirror of .github/workflows/ci.yml: clippy across all targets with
+# warnings denied, the full test suite, the vendored crates' own tests, the
+# doc-link check, then the harmonigraph-core dependency guard — on the
+# toolchain pinned by rust-toolchain.toml.
 #
 # Run it directly:              ./ci.sh
 # Or gate every push on it:     git config core.hooksPath .githooks
@@ -15,6 +14,13 @@ run() { echo; echo "▶ $*"; "$@"; }
 
 run cargo clippy --workspace --all-targets -- -D warnings
 run cargo test --workspace
+
+# The vendored crates are `exclude`d from the workspace (see `[patch.crates-io]`
+# in Cargo.toml), so `--workspace` compiles them as dependencies and runs none
+# of their tests. The patches they carry are the reason to run them: the ones in
+# baseview's macOS view decide when a gesture is over, which is not something to
+# find out about in the DAW.
+run cargo test --manifest-path vendor/baseview/Cargo.toml
 
 # Doc links, which is the only mechanical check on comments this tree has.
 # Comments are ~38% of the non-blank lines under crates/ and carry the
@@ -52,4 +58,4 @@ fi
 echo "  ok — no dependencies"
 
 echo
-echo "✅ local CI passed (clippy + tests + doc links + harmonigraph-core dep guard)"
+echo "✅ local CI passed (clippy + tests + vendored + doc links + harmonigraph-core dep guard)"

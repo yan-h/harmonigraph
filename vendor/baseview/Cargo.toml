@@ -9,6 +9,15 @@
 # will likely look very different (and much more reasonable).
 # See Cargo.toml.orig for the original contents.
 
+# A workspace of its own, so `cargo test --manifest-path` reaches the unit
+# tests this vendored copy carries (ci.sh runs them; `cargo test --workspace`
+# cannot, because the crate is `exclude`d from the workspace above it and so
+# is never a member whose tests run). Without this, cargo walks up to the
+# nearest ancestor manifest and refuses — and from a nested worktree that
+# ancestor is the MAIN checkout, whose `exclude` names a path that is not this
+# one.
+[workspace]
+
 [package]
 edition = "2021"
 rust-version = "1.80"
