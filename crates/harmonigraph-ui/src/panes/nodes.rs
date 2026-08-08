@@ -442,11 +442,12 @@ fn spectrum_group(ui: &mut egui::Ui, view: &mut ViewConfig) {
         "The stretch of brightness the pitch range spends, in CIELab L*: the \
          two numbers are the bottom of the pitch range and the top, in that \
          order, so a picture with its bright end at the bottom reads out \
-         backwards. Drag the middle mark to make the whole picture brighter or \
-         darker, drag a handle to open the ramp either side of it, drag one \
-         past the middle to swap which end is bright, double-click to reset. A \
-         closed ramp makes every note exactly as bright as every other and \
-         leaves hue to carry the pitch alone.",
+         backwards. Drag either end to move it, drag between them to slide the \
+         whole stretch brighter or darker, drag one end past the other to swap \
+         which end is bright, double-click to reset. The mark between them is \
+         the middle of the range. Closing the two together makes every note \
+         exactly as bright as every other and leaves hue to carry the pitch \
+         alone.",
     );
     ValueBar::new(&mut view.pitch_gradient.chroma, 0.0..=1.0, "Chroma")
         .display(|v| format!("{:.0}%", v * 100.0))
