@@ -212,6 +212,56 @@ fn a_blob_naming_an_undrawable_level_range_opens_on_a_drawable_one() {
     }
 }
 
+/// Both soft edges — the lattice's knockout gutter and the roll's note
+/// outline — open on a pair their own bar can reach: a fade no wider than the
+/// reach it is measured back from.
+///
+/// The picture never cared. Both shaders floor the fade at the edge it
+/// surrounds, so a fade dialled past its reach has always DRAWN as a fade over
+/// the whole of it — which is exactly why the repair is safe to make, and why
+/// it has to be made here rather than left to the draw path: the two are now
+/// one bar reading out two points on one axis, and an unclamped fade puts its
+/// low end off the bottom of that axis, where the bar would report a number
+/// the blob does not hold.
+#[test]
+fn a_blob_naming_a_fade_wider_than_its_edge_opens_on_one_that_fits() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    state.camera.yaw = 1.23;
+    let saved = state.save_persist();
+    let edited = saved
+        .replace(
+            &format!("sevens_gutter_soft:{:?},", state.view.sevens_gutter_soft),
+            "sevens_gutter_soft:0.5,",
+        )
+        .replace(
+            &format!("sevens_gutter:{:?},", state.view.sevens_gutter),
+            "sevens_gutter:0.1,",
+        )
+        .replace(
+            &format!("roll_outline_fade:{:?},", state.spectrum_config.roll_outline_fade),
+            "roll_outline_fade:9.0,",
+        )
+        .replace(
+            &format!("roll_outline:{:?},", state.spectrum_config.roll_outline),
+            "roll_outline:1.0,",
+        );
+    assert_ne!(edited, saved, "the edge keys are not in the blob to edit");
+
+    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+    restored.load_persist(&edited);
+    assert_eq!(
+        (restored.view.sevens_gutter, restored.view.sevens_gutter_soft),
+        (0.1, 0.1),
+        "the gutter's fade opened wider than the gutter",
+    );
+    assert_eq!(
+        (restored.spectrum_config.roll_outline, restored.spectrum_config.roll_outline_fade),
+        (1.0, 1.0),
+        "the outline's fade opened wider than the outline",
+    );
+    assert_eq!(restored.camera.yaw, 1.23, "the rest of the blob still restores");
+}
+
 /// The wheel's two-bar TAPER is gone, and a blob carrying the pair of keys
 /// nothing reads now keeps everything else it says. An unknown field being
 /// ignored rather than refused is the whole of why that works, and it is a

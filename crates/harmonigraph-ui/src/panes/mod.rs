@@ -341,6 +341,50 @@ pub(super) fn param_range_bar(
     response
 }
 
+/// One bar for a soft edge: how far it REACHES past whatever it surrounds, and
+/// how much of that reach it spends FADING out. The lattice's knockout gutter
+/// and the piano roll's note outline are both this shape.
+///
+/// The pair is stored as a reach and a fade WIDTH, and dragged as the two
+/// points those describe — solid out to `reach - fade`, gone by `reach` — which
+/// is what a [`RangeBar`] already is. So the two ends read out as the places
+/// they are, the fade is the distance between them, and
+/// [`fade_span`](RangeBar::fade_span) paints the fill to match.
+///
+/// The gestures are exactly the two separate bars this replaces, plus one:
+/// sliding the span moves the reach at a fixed fade, the low end moves the fade
+/// at a fixed reach, and the high end pins where softening STARTS and moves
+/// where it ends. Nothing here ties the fade to the reach — that would make a
+/// wider edge always a blurrier one, which is the whole reason these are two
+/// numbers.
+///
+/// A hard edge (fade 0) closes the span, which is why this bar takes no
+/// `min_span` and why [`Grab::at`](crate::widgets) has a rule for a closed one.
+///
+/// Both numbers are distances from the same place, so the axis floors at 0 and
+/// the caller passes only its far end.
+pub(super) fn edge_bar(
+    ui: &mut egui::Ui,
+    (reach, fade): (&mut f32, &mut f32),
+    max: f32,
+    label: &str,
+    display: fn(f32) -> String,
+) -> egui::Response {
+    // Clamped rather than trusted: a fade wider than its reach draws the same
+    // as one exactly as wide (both shaders floor the fade at the edge it
+    // surrounds), but it has no pair of points to put on the axis, and the
+    // low end would read out somewhere the value does not say.
+    // `ViewConfig::sanitize` and `SpectrumConfig::sanitize` hold the stored
+    // pair to the same bound, so this only ever catches a live one.
+    let (mut low, mut high) = ((*reach - *fade).max(0.0), *reach);
+    let response =
+        RangeBar::new(&mut low, &mut high, 0.0..=max, label).fade_span().display(display).show(ui);
+    if response.changed() {
+        (*reach, *fade) = (high, high - low);
+    }
+    response
+}
+
 /// A section header inside a settings pane: a little breathing room, a thin
 /// rule, then the group's name in the heading (bold) face — so each block
 /// of related controls is easy to pick out at a glance.

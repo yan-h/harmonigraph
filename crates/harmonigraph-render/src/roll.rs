@@ -93,7 +93,9 @@ pub struct RollInstance {
     ///
     /// Separate from the reach rather than a fraction of it, exactly as the
     /// lattice's gutter and gutter fade are separate: tying the two makes a
-    /// wider outline always a blurrier one.
+    /// wider outline always a blurrier one. Separate NUMBERS — the pane sets
+    /// both on one bar, as two points on the axis running out from the note's
+    /// edge.
     pub outline_fade: f32,
     /// Premultiplied sRGB bytes, straight out of [`egui::Color32`].
     pub core: [u8; 4],
@@ -1127,7 +1129,7 @@ mod tests {
     /// rather than ending it: solid where it meets the note, gone at the reach,
     /// and monotone between.
     ///
-    /// The pair is the lattice's knockout gutter's, and two settings rather
+    /// The pair is the lattice's knockout gutter's, and two numbers rather
     /// than one for the same reason — a fade tied to the reach makes a wider
     /// outline always a blurrier one. So this measures the fade against a
     /// hard-edged outline of the SAME reach: both must end in the same place,
