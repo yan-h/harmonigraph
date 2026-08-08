@@ -2,6 +2,24 @@
 // rectangle in the note's own color, wrapped on every side by an outline that
 // fades out, both falling out of a signed distance field.
 //
+// TWO LAYERS, drawn as two passes over the same instances rather than
+// composited per note: every note's outline (`fs_outline_*`), then every
+// note's body (`fs_core_*`). One quad's worth of geometry drawn twice.
+//
+// The order is the whole point. The outline is opaque where it meets its own
+// note — it has to be, or it takes its color from the spectrogram cell behind
+// it and washes out over the bright end of a palette — so an outline
+// composited with its own note lands on the NEIGHBOURING notes it reaches
+// into, and along time those neighbours are the next note: repeats of one key
+// butt together there, and the later one blanked the tail of the earlier.
+// Under every body instead, an outline can only ever darken the picture, never
+// another note.
+//
+// What that costs is the seam between two notes that TOUCH: same key, no gap,
+// and the bodies now meet directly in one color where the outline used to
+// stand between them. A gap of a point or more still reads as two notes, since
+// the outline fills it.
+//
 // The outline is a color the pane hands over, not a decision made here: this
 // shader is told how far it reaches, how gradually it goes, and what color it
 // is, and invents none of the three.
@@ -158,8 +176,10 @@ fn outline_coverage(in: VertexOut, d: f32) -> f32 {
     return clamp((in.outline_reach - max(d, 0.0)) / w, 0.0, 1.0);
 }
 
-/// Premultiplied gamma-space color of one fragment of a note.
-fn note_color(in: VertexOut) -> vec4<f32> {
+/// Signed distance from this fragment to the note's own box, in points:
+/// negative inside it, positive outside, and measured PERPENDICULAR to the
+/// note's long edges rather than along the pitch axis.
+fn box_distance(in: VertexOut) -> f32 {
     let slope = in.shear;
     // A bent note is a sheared box: its long edges run at `slope`, its ends
     // stay square across the depth axis. Shearing the sample point back
@@ -178,26 +198,40 @@ fn note_color(in: VertexOut) -> vec4<f32> {
     // constant distance from a square one, and that is the shape a note wants
     // wrapped around it.
     let q = vec2<f32>(abs(across) - half_across, abs(in.local.y) - in.half_extent.y);
-    let d = min(max(q.x, q.y), 0.0) + length(max(q, vec2<f32>(0.0)));
+    return min(max(q.x, q.y), 0.0) + length(max(q, vec2<f32>(0.0)));
+}
 
-    // Reading outward: the note, solid in its own color right to its edge, then
-    // the outline standing against that edge on every side and fading out.
-    //
-    // The outline stands entirely OUTSIDE the note, which is why it is read off
-    // the distance rather than stroked along the note's path: a centered stroke
-    // grows inward exactly as much as outward, and at the ribbon widths this
-    // pane is used at the two long edges would meet in the middle and flood the
-    // note with the outline's own color. Coverage taken at a positive distance
-    // cannot reach back inside the box however thin the ribbon is.
-    //
-    // Composited in order rather than summed — the note over the outline —
-    // since the two overlap by a ramp at the boundary. The alternative is to
-    // butt the outline against the fill's own edge, which leaves the seam
-    // between them showing whatever is behind the note.
-    let fill = inside(d, 0.0);
-    var out = in.core * fill;
-    out += in.outline * outline_coverage(in, d) * (1.0 - fill);
-    return out;
+/// Premultiplied gamma-space color of the OUTLINE layer: the dark surround
+/// standing against every one of the note's edges and fading out.
+///
+/// The outline stands entirely OUTSIDE the note, which is why it is read off
+/// the distance rather than stroked along the note's path: a centered stroke
+/// grows inward exactly as much as outward, and at the ribbon widths this pane
+/// is used at the two long edges would meet in the middle and flood the note
+/// with the outline's own color.
+///
+/// Masked by the note's OWN fill, which is the one thing this layer still
+/// knows about its body. `outline_coverage` clamps the distance at the note's
+/// edge, so without the mask the outline runs solid across the interior and a
+/// note drawn in anything less than an opaque color has a black slab under it.
+/// The mask is that note's fill and no other's, so it takes nothing back off
+/// the fix: over a NEIGHBOUR the outline still paints in full, and the
+/// neighbour's body — drawn in the pass after this one — covers it.
+///
+/// The ramp is what pairs with it. Coverage here is `1 - fill` where the body
+/// is `fill`, so the two sum to one across the note's antialiased boundary and
+/// the seam between them never shows what is behind the note — the same
+/// arithmetic the two had when they were composited in one fragment, split
+/// across two passes.
+fn outline_color(in: VertexOut) -> vec4<f32> {
+    let d = box_distance(in);
+    return in.outline * outline_coverage(in, d) * (1.0 - inside(d, 0.0));
+}
+
+/// Premultiplied gamma-space color of the BODY layer: the note, solid in its
+/// own color right to its edge.
+fn core_color(in: VertexOut) -> vec4<f32> {
+    return in.core * inside(box_distance(in), 0.0);
 }
 
 // 0-1 linear from 0-1 sRGB gamma. Lifted from egui's own shader, and used
@@ -212,12 +246,23 @@ fn linear_from_gamma_rgb(srgb: vec3<f32>) -> vec3<f32> {
 }
 
 @fragment
-fn fs_note_gamma(in: VertexOut) -> @location(0) vec4<f32> {
-    return note_color(in);
+fn fs_outline_gamma(in: VertexOut) -> @location(0) vec4<f32> {
+    return outline_color(in);
 }
 
 @fragment
-fn fs_note_linear(in: VertexOut) -> @location(0) vec4<f32> {
-    let gamma = note_color(in);
+fn fs_outline_linear(in: VertexOut) -> @location(0) vec4<f32> {
+    let gamma = outline_color(in);
+    return vec4<f32>(linear_from_gamma_rgb(gamma.rgb), gamma.a);
+}
+
+@fragment
+fn fs_core_gamma(in: VertexOut) -> @location(0) vec4<f32> {
+    return core_color(in);
+}
+
+@fragment
+fn fs_core_linear(in: VertexOut) -> @location(0) vec4<f32> {
+    let gamma = core_color(in);
     return vec4<f32>(linear_from_gamma_rgb(gamma.rgb), gamma.a);
 }

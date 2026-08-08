@@ -1054,5 +1054,33 @@ fn the_rolls_ink_stops_at_the_now_line() {
             roll.clip_rect.area() > 0.0 && far > 1.0 - 1e-3,
             "the roll was clipped short of its own far edge in {orientation:?}",
         );
+
+        // The other axis, which the depth checks above say nothing about: a
+        // region that kept every one of them and covered half the pitch range
+        // would throw away half the notes at every orientation.
+        //
+        // By AREA, which is the one statement here that goes through neither
+        // `at` nor its inverse: `pitch_len` and `depth_len` are the pane
+        // rect's own two sides, so a region the whole pitch axis wide and the
+        // roll's share of depth long has exactly this area whichever way the
+        // pane is turned — and a mapping that lost an axis cannot produce it.
+        for (what, rect) in [("the callback rect", cb.rect), ("the clip", roll.clip_rect)] {
+            let want = a.pitch_len() * a.depth_len() * (1.0 - split);
+            assert!(
+                (rect.area() - want).abs() < 1.0,
+                "{what} covers {} of the pane in {orientation:?}, against {want}",
+                rect.area(),
+            );
+        }
+        // And the ends of the pitch axis are inside it, so the area above is
+        // the roll's own share of the pane rather than the same area somewhere
+        // else on it.
+        for p in [0.0, 1.0] {
+            let corner = a.at(p, (split + 1.0) * 0.5);
+            assert!(
+                cb.rect.expand(1e-3).contains(corner),
+                "pitch {p} sits outside the roll's region in {orientation:?}",
+            );
+        }
     }
 }
