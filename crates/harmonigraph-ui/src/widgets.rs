@@ -766,12 +766,15 @@ impl Grab {
 /// for, no thumb stands in a number at 300pt or above, and the settings column
 /// opens around 423.
 ///
-/// A crossing is no longer unreadable — [`grip_over_text`] knocks a crossed run
-/// out through the thumb, which is what a [`SpreadBar`]'s parked readout leans
-/// on. Placement is still the better answer where it is available: a digit on
-/// flat track is a plainer thing to read than one inverted inside a 6pt grip,
-/// and the sweep that keeps the numbers off the thumbs would lose its teeth if
-/// they had a knockout to fail into.
+/// A crossed run CAN be made readable — [`grip_over_text`] knocks one out
+/// through the thumb, which is what a [`SpreadBar`]'s parked readout leans on —
+/// but this bar's two numbers do not get that treatment and a thumb standing in
+/// one still swallows a digit. Only the name is knocked out here. Placement is
+/// the better answer where it is available: a digit on flat track is a plainer
+/// thing to read than one inverted inside a 6pt grip, and the sweep that keeps
+/// the numbers off the thumbs would lose its teeth if they had a knockout to
+/// fail into. Below the width that placement holds to, a crossed digit is what
+/// this bar ships — see the paragraph below.
 ///
 /// Under about 240pt that stops being reachable — a span narrower than the two
 /// numbers it carries has no run of clear bar left that holds them — and what
