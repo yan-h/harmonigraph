@@ -1266,7 +1266,7 @@ enum SpectrumGrab {
 /// say where on the circle it is in absolute terms, which is a number nobody
 /// reads a color off anyway — the track is painted in the colors themselves.
 ///
-/// **It previews all four knobs, not just the one it sets.** The claimed
+/// **It previews all five knobs, not just the one it sets.** The claimed
 /// stretch is painted straight out of [`pitch_ramp_lut`], the same table the
 /// lattice draws from, so brightness and chroma show up in it too and the
 /// preview cannot drift from the picture. A swatch drawn from the widget's own
