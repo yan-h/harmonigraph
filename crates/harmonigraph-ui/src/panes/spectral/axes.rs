@@ -401,8 +401,8 @@ pub(super) const DECADE_SEMITONES: f32 = 12.0 * std::f32::consts::LOG2_10;
 /// in every decade, so it looks like a feature of the picture rather than of the
 /// drawing. Dropping the steps that no longer fit is what a log axis does
 /// anywhere, and it degrades in the right direction: squeezed hard enough the
-/// ladder wears down to the numbered marks alone, which is the axis the pane had
-/// before it was ruled at all.
+/// ladder wears down to the numbered marks alone — a line under every number
+/// and nothing else, which is a legible axis rather than a broken one.
 pub(super) const MIN_RULING_GAP_PT: f32 = 8.0;
 
 /// One frequency ruled across the pitch axis.
@@ -434,10 +434,12 @@ pub(super) struct Ruling {
 /// one step per decade, so the grid makes the same claim about every part of
 /// the axis instead of a finer one down where the numbers happen to be smaller.
 ///
-/// Only the steps `scale` shows come back, and only those with room for
-/// themselves ([`MIN_RULING_GAP_PT`]). Which steps have room turns on the length
-/// of a DECADE alone — not on where the decade sits — so it is settled once and
-/// the surviving ladder is identical in every decade on the axis.
+/// Only the steps `scale` shows come back, and of the UNNUMBERED ones only
+/// those with room for themselves ([`MIN_RULING_GAP_PT`]) — a numbered step
+/// draws at any spacing, since a label with no line under it is worse than two
+/// lines close together. Which of the rest have room turns on the length of a
+/// DECADE alone, not on where the decade sits, so it is settled once and the
+/// surviving ladder is identical in every decade on the axis.
 pub(super) fn frequency_grid(scale: &PitchScale, pitch_len: f32) -> Vec<Ruling> {
     // A collapsed or inverted range has no axis to rule: `t_of` divides by its
     // span, so every ruling would be placed at a NaN, and egui panics on NaN

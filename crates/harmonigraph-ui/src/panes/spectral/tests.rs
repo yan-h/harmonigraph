@@ -625,8 +625,10 @@ fn the_frequency_grid_rules_one_step_per_decade() {
         .collect();
     assert_eq!(hz, ladder, "the ladder is not one even step per decade");
 
-    // The numbered marks, which are the axis labels this replaced the hardcoded
-    // list of: an analyzer's 1-2-5 series, and nothing added or lost.
+    // The numbered marks: an analyzer's 1-2-5 series, which is exactly the set
+    // the pane writes a label beside. Pinned as a list rather than a count, so
+    // a ladder that swapped one number for another is named and not just
+    // tallied.
     let numbered: Vec<f32> = grid.iter().filter(|r| r.numbered).map(|r| r.hz).collect();
     assert_eq!(
         numbered,
