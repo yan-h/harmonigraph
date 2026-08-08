@@ -599,6 +599,58 @@ const HANDLE_INSET: f32 = HANDLE_W * 0.5 + 1.0;
 /// the bar's edge.
 const TEXT_GAP: f32 = 5.0;
 
+/// Draw one handle, and any text run standing under it a second time INSIDE
+/// it — the same galley at the same origin, clipped to the grip and overridden
+/// to the panel colour, so the letters cross the thumb in reverse instead of
+/// vanishing into it.
+///
+/// A thumb and this tree's text are both near-white, so a crossing swallows
+/// whichever of the two paints first, and "-60 dB" reading "-60 B" is the
+/// concrete thing that costs. Where a run can be PLACED clear of the thumbs
+/// that is the better answer and [`RangeBar`] does it for its two numbers; this
+/// is for the runs that cannot move — a name pinned to the left of the bar, or
+/// a [`SpreadBar`] readout parked at the right that a handle crosses at rest.
+///
+/// Sliding such a run out of the way was built and dropped: it has to snap back
+/// the moment the handle passes, and text jumping its own width mid-drag reads
+/// worse than a letter that merely inverts.
+///
+/// Contrast goes UP across the crossing rather than down — panel on near-white
+/// is about 14:1, against the 4.6:1 a dimmed name has on the track — so the
+/// crossed letters read a touch bolder than their run, never fainter.
+///
+/// The knockout is painted per grip and immediately after that grip's own fill,
+/// which is what keeps overlapping thumbs right: at a flat ramp a
+/// [`SpreadBar`]'s two coincide exactly, and the second fill covering the first
+/// knockout is repaired by the second knockout over the same ground.
+///
+/// The clip is square where the grip is rounded, so a glyph pixel in one of the
+/// 2pt corner notches lands on the track rather than the thumb. Nothing is done
+/// about it because nothing shows: the knockout is the PANEL colour and the
+/// track is barely lighter, so a stray pixel there is dark on dark. It is the
+/// choice of colour that makes a square clip safe, not the geometry — a
+/// galley's box and a grip's are the same height to the point.
+///
+/// Guarded on a rect intersection, so a bar whose thumbs stand clear of its
+/// text pays nothing: epaint culls text per ROW and not per glyph, so an
+/// unguarded clipped pass would tessellate a whole galley only to scissor it
+/// away again.
+fn grip_over_text(
+    painter: &egui::Painter,
+    grip: egui::Rect,
+    radius: CornerRadius,
+    runs: &[(egui::Pos2, std::sync::Arc<egui::Galley>)],
+) {
+    painter.rect_filled(grip, radius, theme::text());
+    for (pos, galley) in runs {
+        if grip.intersects(egui::Rect::from_min_size(*pos, galley.size())) {
+            painter
+                .with_clip_rect(grip)
+                .galley_with_override_text_color(*pos, galley.clone(), theme::panel());
+        }
+    }
+}
+
 /// Which part of a [`RangeBar`] a drag took hold of. Decided once, at
 /// drag-start, and remembered for the gesture — otherwise dragging one end
 /// past the other would hand the drag to whichever handle is nearest now.
@@ -703,12 +755,18 @@ impl Grab {
 /// spells its two ends into one readout, and the reason is the thumb rather
 /// than the room: a parked run is crossed by any handle dragged past about
 /// four fifths of the bar, which is where the Level bar's ceiling and the Band
-/// bar's outer radius both sit at rest, and the thumb and the digits are the
-/// same near-white — so whichever of the two paints last, the other cannot be
-/// read. A number goes in a run of CLEAR bar instead, which is what keeps a
-/// thumb's own width between it and every thumb; swept with the pitch range's
-/// `hz_readout`, the widest readout any pane asks for, no thumb stands in a
-/// number at 300pt or above, and the settings column opens around 423.
+/// bar's outer radius both sit at rest. A number goes in a run of CLEAR bar
+/// instead, which is what keeps a thumb's own width between it and every thumb;
+/// swept with the pitch range's `hz_readout`, the widest readout any pane asks
+/// for, no thumb stands in a number at 300pt or above, and the settings column
+/// opens around 423.
+///
+/// A crossing is no longer unreadable — [`grip_over_text`] knocks a crossed run
+/// out through the thumb, which is what a [`SpreadBar`]'s parked readout leans
+/// on. Placement is still the better answer where it is available: a digit on
+/// flat track is a plainer thing to read than one inverted inside a 6pt grip,
+/// and the sweep that keeps the numbers off the thumbs would lose its teeth if
+/// they had a knockout to fail into.
 ///
 /// Under about 240pt that stops being reachable — a span narrower than the two
 /// numbers it carries has no run of clear bar left that holds them — and what
@@ -913,7 +971,6 @@ impl<'a> RangeBar<'a> {
         let centered =
             |galley: &egui::Galley, x: f32| egui::pos2(x, rect.center().y - galley.size().y * 0.5);
         let label_pos = centered(&label, rect.left() + text_pad);
-        let label_rect = egui::Rect::from_min_size(label_pos, label.size());
         painter.galley(label_pos, label.clone(), text_color);
 
         // What is left of the row once the name has taken its place, and the
@@ -1020,50 +1077,31 @@ impl<'a> RangeBar<'a> {
 
         // The handles go on top of everything, text included: they are the
         // part you operate, and a readout digit sliding under one is a better
-        // outcome than a handle disappearing behind a digit. The name is the
-        // one run that gets a say in that, and takes it below — it is the run a
-        // thumb can actually reach, where the readouts are placed to dodge one.
+        // outcome than a handle disappearing behind a digit.
+        //
+        // Only the NAME is knocked out through the thumb. The two numbers are
+        // PLACED clear of every thumb instead, which is the better answer where
+        // it is available — a number on flat track beats an inverted one on a
+        // grip — and `no_thumb_ever_stands_in_a_number_at_the_widths_the_column_
+        // opens_at` is the sweep that holds that placement honest. Knocking the
+        // numbers out too would give the placement somewhere soft to fail into
+        // and cost that check its teeth. The name has no such option: it is
+        // pinned to the left of the bar and a thumb comes to rest on it.
         //
         // A flat light thumb, no outline — a 1px dark stroke inside a 6px
         // rounded rect lands on fractional pixels and reads as a ragged edge,
         // and the thumb has plenty of contrast against both the filled span
         // and the empty track without one.
         for x in [lx, hx] {
-            let grip = egui::Rect::from_center_size(
-                egui::pos2(x, rect.center().y),
-                Vec2::new(handle_w, rect.height() - 3.0 * scale),
+            grip_over_text(
+                painter,
+                egui::Rect::from_center_size(
+                    egui::pos2(x, rect.center().y),
+                    Vec2::new(handle_w, rect.height() - 3.0 * scale),
+                ),
+                CornerRadius::same(theme::scaled_points(2, scale)),
+                &[(label_pos, label.clone())],
             );
-            let grip_radius = CornerRadius::same(theme::scaled_points(2, scale));
-            painter.rect_filled(grip, grip_radius, theme::text());
-            // A thumb standing in the NAME is drawn through it rather than over
-            // it: the same galley, at the same place, painted again in the
-            // panel colour and clipped to the grip, so the letters cross the
-            // thumb in reverse instead of vanishing into it. Same layout and
-            // same origin as the pass above, so the outlines register exactly
-            // and the clip edge is the thumb's own edge — one boundary, so no
-            // sliver of either colour is stranded on the wrong side of it.
-            //
-            // This is what lets the name stay PUT under a handle. Sliding it
-            // clear was built and dropped (see the type's docs): it has to snap
-            // back the moment the handle passes, and a name jumping its own
-            // width mid-drag reads worse than a covered letter — but a letter
-            // that inverts as the thumb crosses it costs neither.
-            //
-            // Both ends get the test, not just the low one: at the minimum span
-            // down at the floor of the axis, both thumbs stand in the name.
-            //
-            // The clip is square where the grip is rounded, so a glyph pixel in
-            // one of the 2pt corner notches lands on the track rather than on
-            // the thumb. Nothing is done about it because nothing shows: the
-            // knockout is the PANEL colour and the track is barely lighter, so
-            // a stray pixel there is dark on dark. It is the choice of colour
-            // that makes the square clip safe, not the geometry — the galley's
-            // box and the grip's are the same height to the point.
-            if grip.intersects(label_rect) {
-                painter
-                    .with_clip_rect(grip)
-                    .galley_with_override_text_color(label_pos, label.clone(), theme::panel());
-            }
         }
 
         // The cursor says which of the two gestures a press would start, so the
@@ -2292,6 +2330,14 @@ impl SpreadGrab {
 /// `the_bar_can_only_reach_pairs_sanitize_leaves_alone` is what keeps the two
 /// from drifting into disagreeing about which pairs are legal, and
 /// [`Spread::legal`] is how a write earns it.
+///
+/// **A thumb stands in that readout at rest**, which is the price of parking
+/// one run at the right rather than placing two the way a [`RangeBar`] does:
+/// both bars open with their high end past four fifths of the axis, which on a
+/// 300pt row puts the grip on the readout's leading digit. Neither run here can
+/// dodge — the name is pinned left and the readout is parked right — so both
+/// are knocked out through the thumbs by [`grip_over_text`], and a crossed
+/// digit inverts rather than disappearing.
 pub struct SpreadBar<'a> {
     gradient: &'a mut Gradient,
     spread: Spread,
@@ -2431,27 +2477,35 @@ impl<'a> SpreadBar<'a> {
         let label = painter.layout_job(job);
         let centered =
             |galley: &egui::Galley, x: f32| egui::pos2(x, rect.center().y - galley.size().y * 0.5);
-        painter.galley(centered(&label, rect.left() + text_pad), label, text_color);
-        painter.galley(
-            centered(&value, rect.right() - text_pad - value.size().x),
-            value,
-            theme::text(),
-        );
+        let label_pos = centered(&label, rect.left() + text_pad);
+        let value_pos = centered(&value, rect.right() - text_pad - value.size().x);
+        painter.galley(label_pos, label.clone(), text_color);
+        painter.galley(value_pos, value.clone(), theme::text());
 
         // The handles on top of the text, a RangeBar's bargain: they are the
         // part you operate, and a digit sliding under one beats a handle
         // disappearing behind a digit. At a flat ramp the two coincide, and one
         // thumb standing on an empty track is the right picture — there is one
         // place the whole range is.
+        //
+        // BOTH runs are knocked out through the thumbs here, where a RangeBar
+        // does it for its name alone, and the difference is that neither of
+        // these can move. A RangeBar picks a run of clear track for each of its
+        // numbers; this bar spells its two ends into ONE readout parked at the
+        // right, which buys the pair a single run to read but puts it exactly
+        // where a handle taken past about four fifths of the bar comes to rest
+        // — and that is where these two bars rest, not an edge case: brightness
+        // opens with its high end at white and chroma with its own at full.
         let handle_w = HANDLE_W * scale;
         for x in [lx, hx] {
-            painter.rect_filled(
+            grip_over_text(
+                painter,
                 egui::Rect::from_center_size(
                     egui::pos2(x, rect.center().y),
                     Vec2::new(handle_w, rect.height() - 3.0 * scale),
                 ),
                 CornerRadius::same(theme::scaled_points(2, scale)),
-                theme::text(),
+                &[(label_pos, label.clone()), (value_pos, value.clone())],
             );
         }
 
@@ -2820,13 +2874,45 @@ mod tests {
     }
 
     /// The text runs and the boxes they occupy, in paint order.
+    ///
+    /// One entry per RUN, which is not the same as one per pass: [`grip_over_text`]
+    /// repaints a run that a thumb stands in, at the same origin and with the
+    /// same string, to knock it out through the grip. That is a second pass over
+    /// a run already counted, so counting it here would say a bar draws two
+    /// names — and a test asking for "the last run" would get a fragment of one
+    /// clipped to 6pt. An override colour is what marks a knockout, and nothing
+    /// else in this module sets one.
     fn text_boxes(shapes: &[egui::Shape]) -> Vec<(egui::Rect, String)> {
         shapes
             .iter()
             .filter_map(|s| match s {
-                egui::Shape::Text(t) => Some((
+                egui::Shape::Text(t) if t.override_text_color.is_none() => Some((
                     egui::Rect::from_min_size(t.pos, t.galley.size()),
                     t.galley.text().to_owned(),
+                )),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The knockout passes [`grip_over_text`] adds, in paint order, as
+    /// `(clip rect, the box of the run being knocked out, its string, colour)`.
+    ///
+    /// Reads CLIPPED shapes, because the clip is the whole mechanism: a
+    /// knockout repeats its run's own galley at its own origin, so string, box
+    /// and position are all shared with the pass it doubles and only the clip
+    /// says it is confined to a thumb rather than painted over the whole run.
+    fn knockouts(
+        shapes: &[egui::epaint::ClippedShape],
+    ) -> Vec<(egui::Rect, egui::Rect, String, Option<egui::Color32>)> {
+        shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                egui::Shape::Text(t) if t.override_text_color.is_some() => Some((
+                    s.clip_rect,
+                    egui::Rect::from_min_size(t.pos, t.galley.size()),
+                    t.galley.text().to_owned(),
+                    t.override_text_color,
                 )),
                 _ => None,
             })
@@ -2890,24 +2976,6 @@ mod tests {
         }
     }
 
-    /// The name in the paint list, as `(clip rect, box, override colour)` per
-    /// pass, in paint order.
-    fn name_runs(
-        shapes: &[egui::epaint::ClippedShape],
-    ) -> Vec<(egui::Rect, egui::Rect, Option<egui::Color32>)> {
-        shapes
-            .iter()
-            .filter_map(|s| match &s.shape {
-                egui::Shape::Text(t) if t.galley.text() == NAME => Some((
-                    s.clip_rect,
-                    egui::Rect::from_min_size(t.pos, t.galley.size()),
-                    t.override_text_color,
-                )),
-                _ => None,
-            })
-            .collect()
-    }
-
     /// The name is drawn THROUGH a thumb standing in it rather than under one:
     /// the same galley, at the same origin, painted a second time in the panel
     /// colour and clipped to the grip, so its letters cross the thumb in
@@ -2916,10 +2984,10 @@ mod tests {
     /// a handle, where sliding it clear was built and dropped for snapping back
     /// mid-drag.
     ///
-    /// Read off the CLIPPED shapes, because the clip IS the mechanism: string,
-    /// origin and box are all shared with the pass it doubles, so the flat
-    /// shape list this module's other tests read cannot tell a knockout from
-    /// the name being painted twice over its whole length for nothing.
+    /// Only the NAME: this bar's two numbers are placed into runs of clear
+    /// track instead, and `no_thumb_ever_stands_in_a_number_at_the_widths_the_
+    /// column_opens_at` is what holds that placement honest. A [`SpreadBar`]
+    /// has no such placement and knocks out both of its runs.
     #[test]
     fn the_name_is_knocked_out_where_a_thumb_stands_in_it() {
         // Two minimum spans down at the bottom of the axis, chosen to reach
@@ -2934,24 +3002,23 @@ mod tests {
             let shapes = paint_range_bar_clipped(width, low, low + OCTAVE);
             let flat: Vec<_> = shapes.iter().map(|s| s.shape.clone()).collect();
             let grips = handles(&flat);
-            let runs = name_runs(&shapes);
-            let (base, knockouts) = runs.split_first().expect("the name is painted at all");
-            assert_eq!(base.2, None, "{width}pt: the name's own pass is in its own colour");
+            let name = text_boxes(&flat)[0].0;
+            let knocked = knockouts(&shapes);
 
             // Derived from the geometry rather than hard-coded, so the count
             // tracks the fixture instead of pinning a number a font change
             // could move — with a floor under it, or a fixture that stopped
             // standing a thumb in the name would pass by asserting nothing.
-            let crossing: Vec<_> =
-                grips.iter().copied().filter(|g| g.intersects(base.1)).collect();
+            let crossing: Vec<_> = grips.iter().copied().filter(|g| g.intersects(name)).collect();
             assert!(!crossing.is_empty(), "{width}pt: no thumb stands in the name any more");
             assert_eq!(
-                knockouts.len(),
+                knocked.len(),
                 crossing.len(),
-                "{width}pt: one knockout per thumb in the name, {runs:?} against {grips:?}",
+                "{width}pt: one knockout per thumb in the name, {knocked:?} vs {grips:?}",
             );
-            for ((clip, at, colour), grip) in knockouts.iter().zip(&crossing) {
-                assert_eq!(*at, base.1, "{width}pt: a knockout is the same galley, same place");
+            for ((clip, at, what, colour), grip) in knocked.iter().zip(&crossing) {
+                assert_eq!(what, NAME, "{width}pt: only the name is knocked out, not {what:?}");
+                assert_eq!(*at, name, "{width}pt: a knockout is the same galley, same place");
                 assert_eq!(
                     *colour,
                     Some(theme::panel()),
@@ -2974,9 +3041,11 @@ mod tests {
     fn the_name_is_painted_once_where_no_thumb_reaches_it() {
         for (low, high) in [(60.0, 72.0), (AXIS.0, AXIS.1)] {
             let shapes = paint_range_bar_clipped(300.0, low, high);
-            let runs = name_runs(&shapes);
-            assert_eq!(runs.len(), 1, "{low}..{high}: the name was painted {} times", runs.len());
-            assert_eq!(runs[0].2, None, "{low}..{high}: the one pass is the name's own");
+            let knocked = knockouts(&shapes);
+            assert!(
+                knocked.is_empty(),
+                "{low}..{high}: paid for a knockout it cannot see: {knocked:?}",
+            );
         }
     }
 
@@ -3099,14 +3168,7 @@ mod tests {
                     let shapes = paint_range_bar_wide(width, low, high);
                     let texts = text_boxes(&shapes);
                     for h in handles(&shapes) {
-                        // Every run that is not the name. By string rather than
-                        // by position: the name is painted twice when a thumb
-                        // stands in it, once as itself and once knocked out
-                        // over the grip, and the second one lands at the END of
-                        // paint order where an index-based skip would take it
-                        // for a number and fail on the very overlap it exists
-                        // to make readable.
-                        for (t, what) in texts.iter().filter(|(_, what)| what != NAME) {
+                        for (t, what) in texts.iter().skip(1) {
                             assert!(
                                 t.right() <= h.left() || t.left() >= h.right(),
                                 "{width}pt, {low}..{high}: a thumb stands in {what:?}",
@@ -5131,8 +5193,10 @@ mod tests {
         }
     }
 
-    /// Paint one bar across a 300pt row and return what it emitted.
-    fn paint_bar(spread: Spread, pair: (f32, f32)) -> Vec<egui::Shape> {
+    /// Paint one bar across a 300pt row and return what it emitted, each shape
+    /// still carrying the clip rect it was painted through — which is the only
+    /// thing that tells a knockout pass from the run it doubles.
+    fn paint_bar_clipped(spread: Spread, pair: (f32, f32)) -> Vec<egui::epaint::ClippedShape> {
         let ctx = egui::Context::default();
         crate::theme::apply_theme(&ctx);
         let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(300.0, 100.0));
@@ -5143,7 +5207,85 @@ mod tests {
                 spread_bar(spread, &mut g, ui);
             },
         );
-        out.shapes.into_iter().map(|s| s.shape).collect()
+        out.shapes
+    }
+
+    /// Paint one bar across a 300pt row and return what it emitted.
+    fn paint_bar(spread: Spread, pair: (f32, f32)) -> Vec<egui::Shape> {
+        paint_bar_clipped(spread, pair).into_iter().map(|s| s.shape).collect()
+    }
+
+    /// BOTH runs on a spread bar are knocked out through a thumb standing in
+    /// them, where a [`RangeBar`] does it for its name alone. Neither of these
+    /// can move out of the way: the name is pinned left, and the two ends are
+    /// spelled into ONE readout parked at the right, which buys the pair a
+    /// single run to read but stands it exactly where a handle taken up the
+    /// axis comes to rest.
+    ///
+    /// That resting place is the point, and it is not a corner you have to drag
+    /// the bar into. The first fixture is each bar AS IT OPENS, and on a 300pt
+    /// row both stand their high thumb on the readout's LEADING digit: the
+    /// brightness pair opens at `L*` 42 to 86, which puts the grip at x 252
+    /// against a readout starting at 250, so "42 → 86" shows its 4 swallowed by
+    /// a thumb the same near-white the digits are. Chroma opens the same way.
+    /// This is the picture the pane draws the first time it is looked at.
+    #[test]
+    fn a_spread_bar_knocks_out_both_its_runs_under_a_thumb() {
+        let mut hit = Vec::new();
+        for spread in [Spread::Brightness, Spread::Chroma] {
+            let (min, max) = spread.axis();
+            let of = |v: f32| min + v * (max - min);
+            let span = |v: f32| v * (max - min);
+            for (pair, what) in [
+                ((of(0.64), span(0.44)), "as the bar opens"),
+                ((of(0.9), span(0.18)), "a ramp up against the top of the axis"),
+                ((of(0.08), span(0.14)), "a ramp down at the bottom, under the name"),
+            ] {
+                let shapes = paint_bar_clipped(spread, pair);
+                let flat: Vec<_> = shapes.iter().map(|s| s.shape.clone()).collect();
+                let (grips, runs) = (handles(&flat), text_boxes(&flat));
+                let knocked = knockouts(&shapes);
+
+                // The order the painter walks: each grip in turn, and under it
+                // each run it stands in, name before readout. Derived from the
+                // geometry so the expectation tracks the fixture rather than
+                // pinning counts a font change could move.
+                let want: Vec<_> = grips
+                    .iter()
+                    .flat_map(|g| {
+                        runs.iter().filter(move |(r, _)| g.intersects(*r)).map(move |(r, s)| {
+                            (*g, *r, s.clone())
+                        })
+                    })
+                    .collect();
+                assert_eq!(
+                    knocked.len(),
+                    want.len(),
+                    "{spread:?} {what}: {} knockouts for {} crossings, {knocked:?} vs {grips:?}",
+                    knocked.len(),
+                    want.len(),
+                );
+                for ((clip, at, text, colour), (grip, run, run_text)) in knocked.iter().zip(&want) {
+                    assert_eq!(text, run_text, "{spread:?} {what}: knocked out the wrong run");
+                    assert_eq!(at, run, "{spread:?} {what}: a knockout moved off its run");
+                    assert_eq!(
+                        *colour,
+                        Some(theme::panel()),
+                        "{spread:?} {what}: a knockout is drawn in the panel colour",
+                    );
+                    assert_eq!(clip, grip, "{spread:?} {what}: a knockout escaped its thumb");
+                }
+                hit.extend(want.into_iter().map(|(_, _, s)| s));
+            }
+        }
+        // Both runs are reached across the fixtures, and the readout — the run
+        // that costs a DIGIT rather than a letter — by both bars.
+        let readouts = hit.iter().filter(|s| s.contains('\u{2192}')).count();
+        assert!(readouts >= 2, "the fixtures stopped standing a thumb in a readout: {hit:?}");
+        assert!(
+            hit.iter().any(|s| s == "Brightness" || s == "Chroma"),
+            "the fixtures stopped standing a thumb in a name: {hit:?}",
+        );
     }
 
     /// The bar draws the pair it holds: a handle at each end of the ramp, at its
