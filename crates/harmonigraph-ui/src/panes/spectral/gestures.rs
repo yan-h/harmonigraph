@@ -66,40 +66,66 @@ const DOCKED_SURFACE: usize = 0;
 /// finer stream lands proportionally.
 const ZOOM_PER_SCROLL_POINT: f32 = 0.008;
 
-/// How much one point of drag along the time axis zooms the Span, as an
-/// exponent. Sized so the whole 1..600 s range is a comfortable sweep and back:
-/// from the 12 s default, ~410 points of drag toward the past reaches 1 s and
-/// ~650 the other way reaches 600 s.
-const TIME_ZOOM_PER_DRAG_POINT: f32 = 0.006;
+/// How much one point of drag along the depth axis zooms, as an exponent.
+///
+/// ONE rate for both of the values a depth drag can zoom, because it is one
+/// gesture: a drag of a given length scales the picture under the hand by the
+/// same factor whether that picture is the roll's time window or the spectrum's
+/// dB window, and a hand that had to learn two gains for one movement would be
+/// learning the code's seam rather than the pane's.
+///
+/// Sized on the time axis, which is the wider range of the two: from the 12 s
+/// default, ~410 points of drag toward the past reaches 1 s and ~650 the other
+/// way reaches 600 s. The level range is shorter at the same gain — its whole
+/// 12..60 dB sweep against the default -60 dB floor is ~270 points — because a
+/// dB window has less room to travel, not because it is dialled differently.
+const DEPTH_ZOOM_PER_DRAG_POINT: f32 = 0.006;
 
-/// How far a drag must lean along the time axis before it is a Span zoom rather
+/// How far a drag must lean along the depth axis before it is a zoom rather
 /// than a pitch pan, in points. Panning is the default — the axes do NOT both
-/// move at once, because the Span is a value being dialled in (it shows on the
-/// Analyzer tab's bar), and a pitch pan with a few points of horizontal slop in
-/// it would leave the time axis quietly breathing. The margin is small enough
-/// that the pitch the picture slides by before a zoom takes over is a fraction
-/// of a semitone.
-const TIME_ZOOM_LEAN: f32 = 4.0;
+/// move at once, because what a depth drag zooms is a value being dialled in
+/// (it shows on the Analyzer tab's bars), and a pitch pan with a few points of
+/// depthwise slop in it would leave the Span or the Level quietly breathing.
+/// The margin is small enough that the pitch the picture slides by before a
+/// zoom takes over is a fraction of a semitone.
+pub(super) const DEPTH_ZOOM_LEAN: f32 = 4.0;
+
+/// Which of the two things the depth axis measures a drag has under it — the
+/// whole of what [`drag_zoom`] decides from where a press landed, held as one
+/// value so the choice is made once. Two booleans and an `else` say the same
+/// thing three times, and the `else` reads as a fallthrough rather than as the
+/// other half of a pair.
+enum DepthZoom {
+    /// The far region's time window: the roll's Span.
+    Span,
+    /// The spectrum's dB window: the Level.
+    Level,
+}
 
 /// Drag or scroll to navigate the picture instead of aiming the Analyzer tab's
 /// bars at it: across the pitch axis to pan the range, the wheel to zoom it,
-/// and along the time axis to zoom the Span. All three write
-/// [`SpectrumConfig`](crate::SpectrumConfig) — `low_midi`/`high_midi` and
-/// `roll_seconds` — so a navigated view persists and reads back out on those
-/// bars.
+/// and along the depth axis to zoom what that part of the depth axis measures —
+/// the Span over the roll and spectrogram, the Level over the spectrum. All
+/// four write [`SpectrumConfig`](crate::SpectrumConfig) —
+/// `low_midi`/`high_midi`, `roll_seconds` and `ceiling_db` — so a navigated
+/// view persists and reads back out on those bars.
 ///
 /// The two axes carry DIFFERENT gestures because they are not the same kind of
 /// axis. The pitch range is a window that can sit anywhere on the analyzer's
-/// axis, so it pans and zooms. The time axis is anchored: its near edge is
-/// always `now`, so there is nothing to pan to — which leaves a drag along it
-/// free to mean zoom, and means the zoom is always about the now-line rather
-/// than about the pointer the way the pitch wheel is. Dragging toward the past
-/// therefore spreads the picture away from the now-line, i.e. zooms in.
+/// axis, so it pans and zooms. The depth axis is anchored at both of the things
+/// it measures: time's near edge is always `now`, and the level's bottom is
+/// always the baseline the curve stands on — which is the SAME line where the
+/// two share a pane. So there is nothing to pan to, which leaves a drag along
+/// depth free to mean zoom, and means the zoom is about that line rather than
+/// about the pointer the way the pitch wheel is. Dragging away from it spreads
+/// the picture out, so what the picture spans shrinks: toward the past for
+/// fewer seconds, outward along the curve for fewer dB.
 ///
-/// A Span zoom is only taken from a drag that STARTED in the far region, where
-/// the time axis actually is. Over the spectrum's own share the depth axis is
-/// dB, not time, so a drag there would be moving something that isn't under the
-/// hand.
+/// WHICH of the two a drag zooms is decided by where it STARTED, because that
+/// is what the depth under the hand measures there: seconds in the far region,
+/// dB over the spectrum's own share. The one gesture moving two values is not a
+/// mode — a drag moves whatever it is on top of, and the two regions are drawn
+/// far enough apart to aim at.
 ///
 /// Docked pane only. The Video tab draws this same pane as its preview, and
 /// that tab's body is a vertical `ScrollArea` — a wheel spent zooming there is
@@ -120,8 +146,9 @@ pub(super) fn drag_zoom(
         return;
     }
     // Where the far region begins, and so which drags have a time axis under
-    // them. At 1.0 there is no far region at all (both layers off, or the
-    // divider dragged shut) and the Span has nothing on screen to zoom.
+    // them and which a dB one. At 1.0 there is no far region at all (both
+    // layers off, or the divider dragged shut) and the Span has nothing on
+    // screen to zoom; at 0.0 the spectrum is the one with nothing.
     let split = spectrum_share(&state.spectrum_config);
     let cfg = &mut state.spectrum_config;
     let mut low = cfg.low_midi;
@@ -161,24 +188,75 @@ pub(super) fn drag_zoom(
         // Which axis this drag is on, decided from the TOTAL travel since the
         // press: a per-frame decision would flip between the two on the jitter
         // of a slow drag, and this way an L-shaped drag simply hands over once
-        // its second leg is the longer one.
-        let along_time = split < 1.0
-            && ui
-                .ctx()
-                .input(|i| i.pointer.press_origin())
-                .zip(response.interact_pointer_pos())
-                .is_some_and(|(from, at)| {
-                    let total = at - from;
-                    axes.depth_at(from) >= split
-                        && total.dot(axes.dir_depth()).abs()
-                            > total.dot(axes.dir_pitch()).abs() + TIME_ZOOM_LEAN
-                });
-        if along_time {
-            // Dragging toward the past pulls the picture away from the now-line
-            // it is anchored on, spreading it — so the seconds it spans shrink.
+        // its second leg is the longer one. What comes back is the depth the
+        // press landed at, which then says which value the zoom writes.
+        let leaning = ui
+            .ctx()
+            .input(|i| i.pointer.press_origin())
+            .zip(response.interact_pointer_pos())
+            .filter(|&(from, at)| {
+                let total = at - from;
+                total.dot(axes.dir_depth()).abs()
+                    > total.dot(axes.dir_pitch()).abs() + DEPTH_ZOOM_LEAN
+            })
+            .map(|(from, _)| axes.depth_at(from));
+        // A region with no depth of its own has nothing to zoom, so the other
+        // one answers for the whole pane rather than leaving a strip of it
+        // dead: at a split of 1.0 the far EDGE is still the spectrum's, and at
+        // 0.0 the near edge is still the roll's. Only a pane with neither
+        // region falls through to the pan.
+        let zoom = leaning.and_then(|d| {
+            if split < 1.0 && d >= split {
+                Some(DepthZoom::Span)
+            } else if split > 0.0 {
+                Some(DepthZoom::Level)
+            } else {
+                None
+            }
+        });
+        if let Some(zoom) = zoom {
             let along = delta.dot(axes.dir_depth());
-            cfg.roll_seconds = (cfg.roll_seconds * (-along * TIME_ZOOM_PER_DRAG_POINT).exp())
-                .clamp(crate::ROLL_SECONDS_MIN, crate::ROLL_SECONDS_MAX);
+            match zoom {
+                DepthZoom::Span => {
+                    // Dragging toward the past pulls the picture away from the
+                    // now-line it is anchored on, spreading it — so the seconds it
+                    // spans shrink.
+                    let zoomed = cfg.roll_seconds * (-along * DEPTH_ZOOM_PER_DRAG_POINT).exp();
+                    cfg.roll_seconds =
+                        zoomed.clamp(crate::ROLL_SECONDS_MIN, crate::ROLL_SECONDS_MAX);
+                }
+                DepthZoom::Level => {
+                    // Same rule, along the direction the curve actually grows in:
+                    // away from the far region it joins, or — with that region off
+                    // — up from the outer edge instead. That is `spectral_pane`'s
+                    // `joined`, and it reads the same from here because the one
+                    // layout where the two part company — whole-song, where the
+                    // pane forces the split to 0 and draws no spectrum at all —
+                    // belongs to the offline renderer, which has no pointer.
+                    let outward = if split < 1.0 { -along } else { along };
+                    // Only the ceiling moves. The floor IS the baseline the curve
+                    // stands on, so it is the fixed end of this zoom the way `now`
+                    // is the fixed end of the Span's; sliding the window bodily is
+                    // the Level bar's gesture, and there is one depth axis to drag
+                    // along, not two.
+                    let window = (cfg.ceiling_db - cfg.floor_db).max(crate::LEVEL_RANGE_MIN_SPAN);
+                    let window = (window * (-outward * DEPTH_ZOOM_PER_DRAG_POINT).exp())
+                        .max(crate::LEVEL_RANGE_MIN_SPAN);
+                    // `min` then `max` rather than a clamp: a hand-edited floor can
+                    // sit within the minimum span of the domain's top, and clamp
+                    // panics on bounds that cross. The minimum span wins there,
+                    // which is the answer `loudness_raw` gives the same pair.
+                    cfg.ceiling_db = (cfg.floor_db + window)
+                        .min(crate::LEVEL_MAX_DB)
+                        .max(cfg.floor_db + crate::LEVEL_RANGE_MIN_SPAN);
+                    // Every frame of this drag restarts the spectrogram's ring:
+                    // the dB window is the heatmap's too, so `ColumnColor` sees
+                    // the change and every column is repainted. That is the
+                    // picture genuinely changing, not the waste `ColumnColor` was
+                    // spelled out field by field to end — and it is the cost the
+                    // pitch drag already pays each frame through `scale_min_bits`.
+                }
+            }
             ui.ctx().set_cursor_icon(if axes.time_vertical {
                 egui::CursorIcon::ResizeVertical
             } else {

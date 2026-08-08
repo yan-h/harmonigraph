@@ -108,8 +108,9 @@ pub(crate) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
          equal distances are equal musical intervals — so an octave is the \
          same width wherever it sits.\n\nOr set it on the display itself: drag \
          the Analyzer pane across the pitch axis to pan the range, scroll to \
-         zoom it around the pointer. (Dragging the other way, along time, zooms \
-         the roll's Span instead.)",
+         zoom it around the pointer. (Dragging the other way zooms what that \
+         part of the pane measures instead: the roll's Span over the roll, the \
+         Level over the spectrum.)",
     );
     // No choice of what the markings say. They are the analyzer-standard
     // 1-2-5 frequency series, and were switchable to one at every C with
@@ -165,7 +166,8 @@ pub(crate) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
              full-scale sine) lifts quiet material into the whole picture \
              instead of the bottom of it. Drag either end to move it, drag \
              between them to slide the window, double-click for the full \
-             scale.",
+             scale.\n\nOr set the high end on the display itself: drag the \
+             spectrum along the depth axis, away from its baseline to zoom in.",
         );
     ValueBar::new(&mut cfg.smoothing, 0.0..=0.9, "Smoothing")
         .show(ui)

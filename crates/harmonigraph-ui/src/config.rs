@@ -151,6 +151,12 @@ pub struct SpectrumConfig {
     ///
     /// The pair is one control, like the pitch range: the window on the
     /// spectrum's dynamics, movable at either end.
+    ///
+    /// This end has a second control, as the Span does: dragging the spectrum
+    /// along the depth axis zooms the window about the floor
+    /// (`panes::spectral::gestures::drag_zoom`). The floor has only the bar,
+    /// there being one depth axis to drag along and the floor being the end
+    /// pinned to the baseline.
     pub ceiling_db: f32,
     /// Display inertia: 0 = every refresh lands instantly, 0.9 = slow.
     pub smoothing: f32,
@@ -294,6 +300,19 @@ impl SpectrumConfig {
         // glyph wider than the texture atlas can hold.
         self.marking_scale = sane_scale(self.marking_scale);
         self.note_name_scale = sane_scale(self.note_name_scale);
+        // The level pair, against the same threat and for the same reason.
+        // `loudness_raw` already refuses a collapsed or inverted window, which
+        // is what a `max` can answer; a NaN end it cannot, because NaN loses
+        // every comparison and survives to divide the mapping into the NaN
+        // geometry egui panics on. Repairing it here rather than there keeps
+        // one number in the blob and one on the bar, and there are now two
+        // controls writing this pair — the bar and the drag across the
+        // spectrum — neither of which can produce either shape itself.
+        self.floor_db = if self.floor_db.is_finite() { self.floor_db } else { LEVEL_MIN_DB };
+        self.ceiling_db = if self.ceiling_db.is_finite() { self.ceiling_db } else { LEVEL_MAX_DB };
+        self.floor_db = self.floor_db.clamp(LEVEL_MIN_DB, LEVEL_MAX_DB - LEVEL_RANGE_MIN_SPAN);
+        self.ceiling_db =
+            self.ceiling_db.clamp(self.floor_db + LEVEL_RANGE_MIN_SPAN, LEVEL_MAX_DB);
     }
 }
 
@@ -360,6 +379,10 @@ pub(crate) const LEVEL_MAX_DB: f32 = 0.0;
 /// Closest the two ends of the level range may come. A window narrower than
 /// this is all edge and no picture — and, unclamped, a collapsed one divides
 /// by zero in `loudness` and paints the NaN geometry egui panics on.
+///
+/// Two controls hold to it, as with the Span: the Analyzer tab's Level bar and
+/// the drag across the spectrum. A gesture clamping to its own idea of how
+/// close the pair may come would push the bar past its own end.
 pub(crate) const LEVEL_RANGE_MIN_SPAN: f32 = 12.0;
 
 /// Where the curve's window ends, and it is NOT full scale, because nothing

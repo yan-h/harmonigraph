@@ -319,9 +319,7 @@ fn the_split_band_straddles_the_divider_and_stays_inside_the_pane() {
 /// layouts, where it points back toward the screen's origin.
 #[test]
 fn dragging_the_divider_moves_the_split_with_the_pointer() {
-    for (rect, orientation) in
-        EVERY_ORIENTATION.map(|o| (if o.is_time_vertical() { TALL } else { WIDE }, o))
-    {
+    for (rect, orientation) in EVERY_ORIENTATION.map(|o| (along_depth(o), o)) {
         let a = axes(rect, orientation);
         let before = 0.5;
         let after = drag_divider(rect, orientation, before, a.dir_depth() * 30.0);
@@ -338,9 +336,7 @@ fn dragging_the_divider_moves_the_split_with_the_pointer() {
 /// And back the other way, into the spectrum: the roll grows.
 #[test]
 fn dragging_the_divider_into_the_spectrum_grows_the_roll() {
-    for (rect, orientation) in
-        EVERY_ORIENTATION.map(|o| (if o.is_time_vertical() { TALL } else { WIDE }, o))
-    {
+    for (rect, orientation) in EVERY_ORIENTATION.map(|o| (along_depth(o), o)) {
         let drag = axes(rect, orientation).dir_depth() * -30.0;
         let after = drag_divider(rect, orientation, 0.5, drag);
         assert!(after > 0.55, "{orientation:?}: roll share should have grown, got {after}");
@@ -348,23 +344,44 @@ fn dragging_the_divider_into_the_spectrum_grows_the_roll() {
 }
 
 /// Press on the divider, drag by `delta`, and return the resulting
-/// `roll_fraction`. Three frames: egui needs the widget to exist before
-/// the press, and a drag only registers once the pointer has moved while
-/// held.
+/// `roll_fraction` — [`drag_pane`] aimed at the handle, which sits at the
+/// split by definition.
 fn drag_divider(
     rect: egui::Rect,
     orientation: SpectralOrientation,
     roll_fraction: f32,
     delta: egui::Vec2,
 ) -> f32 {
+    let cfg =
+        SpectrumConfig { orientation, roll_fraction, show_roll: true, ..Default::default() };
+    drag_pane(rect, cfg, 1.0 - roll_fraction, delta).roll_fraction
+}
+
+/// The pane whose depth axis is its LONG side, for the orientation given —
+/// which is the one a depth gesture has room to run along.
+fn along_depth(orientation: SpectralOrientation) -> egui::Rect {
+    if orientation.is_time_vertical() { TALL } else { WIDE }
+}
+
+/// Press at depth `grab` on the pane's own depth axis, drag by `delta`, and
+/// return the config that leaves behind.
+///
+/// Four frames: egui needs the widget to exist before the press, and a drag
+/// only registers once the pointer has moved while held. Which gesture runs
+/// is the caller's business, chosen by where `grab` puts the press — on the
+/// divider's band for the handle, clear of it for the pane behind.
+fn drag_pane(
+    rect: egui::Rect,
+    cfg: SpectrumConfig,
+    grab: f32,
+    delta: egui::Vec2,
+) -> SpectrumConfig {
     let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
-    state.spectrum_config.orientation = orientation;
-    state.spectrum_config.roll_fraction = roll_fraction;
-    state.spectrum_config.show_roll = true;
+    state.spectrum_config = cfg;
     let ctx = egui::Context::default();
     crate::theme::apply_theme(&ctx);
-    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(500.0, 500.0));
-    let grab = axes(rect, orientation).at(0.5, 1.0 - roll_fraction);
+    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(900.0, 900.0));
+    let at = Axes::new(rect, &cfg).at(0.5, grab);
     let frame = |events: Vec<egui::Event>, state: &mut SharedState| {
         let input = egui::RawInput { screen_rect: Some(screen), events, ..Default::default() };
         let _ = ctx.run_ui(input, |ui| {
@@ -378,11 +395,181 @@ fn drag_divider(
         pressed,
         modifiers: egui::Modifiers::default(),
     };
-    frame(vec![egui::Event::PointerMoved(grab)], &mut state);
-    frame(vec![egui::Event::PointerMoved(grab), press(grab, true)], &mut state);
-    frame(vec![egui::Event::PointerMoved(grab + delta)], &mut state);
-    frame(vec![press(grab + delta, false)], &mut state);
-    state.spectrum_config.roll_fraction
+    frame(vec![egui::Event::PointerMoved(at)], &mut state);
+    frame(vec![egui::Event::PointerMoved(at), press(at, true)], &mut state);
+    frame(vec![egui::Event::PointerMoved(at + delta)], &mut state);
+    frame(vec![press(at + delta, false)], &mut state);
+    state.spectrum_config
+}
+
+/// Where the curve grows from its baseline, as a screen direction: away
+/// from the far region it is joined to, or — with that region off — up from
+/// the outer edge, which is the direction the whole depth axis runs in.
+///
+/// The gesture's own sign, written the other way round: it reads the
+/// picture, and these tests read the layout, so a sign error in one does
+/// not cancel in the other.
+fn curve_grows(a: &Axes, joined: bool) -> egui::Vec2 {
+    if joined { -a.dir_depth() } else { a.dir_depth() }
+}
+
+/// Dragging the spectrum away from its baseline spreads the curve out, so
+/// the dB window it spans closes in — the Span's gesture on the axis the
+/// spectrum measures, anchored on the baseline the way the Span is on the
+/// now-line.
+///
+/// Every orientation, because "away from the baseline" is a different
+/// screen direction in each and a sign error is invisible in the one it was
+/// written against.
+#[test]
+fn dragging_the_spectrum_outward_closes_the_level_window() {
+    for orientation in EVERY_ORIENTATION {
+        let rect = along_depth(orientation);
+        let cfg = SpectrumConfig { orientation, ..Default::default() };
+        let out = curve_grows(&Axes::new(rect, &cfg), true) * 40.0;
+        let after = drag_pane(rect, cfg, 0.2, out);
+        assert!(
+            after.ceiling_db < cfg.ceiling_db - 3.0,
+            "{orientation:?}: ceiling {} -> {}, wanted it down",
+            cfg.ceiling_db,
+            after.ceiling_db,
+        );
+        // The floor IS the baseline this zoom is about, so it does not move:
+        // a window that slid bodily would be the Level bar's other gesture.
+        assert_eq!(after.floor_db, cfg.floor_db, "{orientation:?}: the floor moved");
+    }
+}
+
+/// And back toward the baseline, which flattens the curve by opening the
+/// window — the same drag, read the other way.
+#[test]
+fn dragging_the_spectrum_inward_opens_the_level_window() {
+    for orientation in EVERY_ORIENTATION {
+        let rect = along_depth(orientation);
+        let cfg = SpectrumConfig { orientation, ..Default::default() };
+        let inward = curve_grows(&Axes::new(rect, &cfg), true) * -40.0;
+        let after = drag_pane(rect, cfg, 0.2, inward);
+        assert!(
+            after.ceiling_db > cfg.ceiling_db + 3.0,
+            "{orientation:?}: ceiling {} -> {}, wanted it up",
+            cfg.ceiling_db,
+            after.ceiling_db,
+        );
+        assert_eq!(after.floor_db, cfg.floor_db, "{orientation:?}: the floor moved");
+    }
+}
+
+/// With the roll and the spectrogram both off, the spectrum stands up from
+/// the outer edge instead of hanging from the divider — so the direction it
+/// grows in is the other way down the depth axis, and the gesture turns
+/// with it. Held apart from the joined case because the two share a sign
+/// and a fix that turns one turns the other.
+#[test]
+fn the_level_zoom_turns_with_the_curve_when_the_spectrum_owns_the_pane() {
+    for orientation in EVERY_ORIENTATION {
+        let rect = along_depth(orientation);
+        let cfg = SpectrumConfig {
+            orientation,
+            show_roll: false,
+            show_spectrogram: false,
+            ..Default::default()
+        };
+        assert_eq!(spectrum_share(&cfg), 1.0, "the spectrum should own the whole pane here");
+        let out = curve_grows(&Axes::new(rect, &cfg), false) * 40.0;
+        // Both EDGES as well as the middle: the spectrum's region runs to the
+        // far edge INCLUSIVE here, and a region test written as "nearer than
+        // the split" leaves that last line of pixels panning while every other
+        // pixel of the same pane zooms.
+        for grab in [0.0, 0.5, 1.0] {
+            let after = drag_pane(rect, cfg, grab, out);
+            assert!(
+                after.ceiling_db < cfg.ceiling_db - 3.0,
+                "{orientation:?} @{grab}: ceiling {} -> {}, wanted it down",
+                cfg.ceiling_db,
+                after.ceiling_db,
+            );
+            assert_eq!(after.floor_db, cfg.floor_db, "{orientation:?} @{grab}: the floor moved");
+        }
+    }
+}
+
+/// One gesture, two values, and neither region touches the other's: a drag
+/// over the far end zooms the Span alone, one over the spectrum the Level
+/// alone. What decides is where the press landed, which is what makes it a
+/// drag on the picture rather than a mode.
+#[test]
+fn a_depth_drag_moves_only_the_value_its_region_measures() {
+    let (rect, cfg) = (WIDE, SpectrumConfig::default());
+    let a = Axes::new(rect, &cfg);
+    // Toward the past and outward along the curve are the same screen
+    // direction here (the curve grows back out of the divider), so the two
+    // drags below differ only in where they start.
+    let far = drag_pane(rect, cfg, 0.8, a.dir_depth() * 40.0);
+    assert!(far.roll_seconds < cfg.roll_seconds - 0.5, "far region: Span should have zoomed");
+    assert_eq!(far.ceiling_db, cfg.ceiling_db, "far region: the level moved too");
+
+    let near = drag_pane(rect, cfg, 0.2, -a.dir_depth() * 40.0);
+    assert!(near.ceiling_db < cfg.ceiling_db - 3.0, "spectrum: level should have zoomed");
+    assert_eq!(near.roll_seconds, cfg.roll_seconds, "spectrum: the Span moved too");
+}
+
+/// A drag ACROSS the spectrum still pans the pitch range. Panning is the
+/// default everywhere on the pane; the level zoom is what a drag has to
+/// lean into, exactly as the Span zoom is.
+#[test]
+fn a_drag_across_the_spectrum_still_pans_the_pitch_range() {
+    let rect = WIDE;
+    // Off both ends of the axis, so the pan has room to move rather than
+    // sitting against a clamp.
+    let cfg = SpectrumConfig { low_midi: 48.0, high_midi: 84.0, ..Default::default() };
+    let after = drag_pane(rect, cfg, 0.2, Axes::new(rect, &cfg).dir_pitch() * 30.0);
+    assert!(after.low_midi < cfg.low_midi - 1.0, "the range should have panned down");
+    assert_eq!(after.ceiling_db, cfg.ceiling_db, "a pan must not move the level");
+}
+
+/// Panning stays the default through the NEAR-TIE, which is the only place
+/// the lean margin is what decides. A drag leaning a couple of points more
+/// along depth than across pitch is a pan that wandered, not a zoom aimed at
+/// the Level — and with the margin dropped it would be read as the zoom.
+///
+/// The pitch-dominant case a page up is carried by the comparison alone and
+/// says nothing about the margin, which is why this one is written to the
+/// margin's own value.
+#[test]
+fn a_pan_that_leans_slightly_along_depth_is_still_a_pan() {
+    let rect = WIDE;
+    let cfg = SpectrumConfig { low_midi: 48.0, high_midi: 84.0, ..Default::default() };
+    let a = Axes::new(rect, &cfg);
+    // Depth ahead of pitch by three points — written out rather than derived
+    // from the margin, because a lean computed off `DEPTH_ZOOM_LEAN` shrinks
+    // with it and the test then passes at every value including zero. The
+    // premise is asserted instead, so a margin narrowed under three points
+    // fails here loudly rather than turning this into a test of nothing.
+    let (across, lean) = (30.0, 3.0);
+    assert!(lean < DEPTH_ZOOM_LEAN, "this drag has to sit INSIDE the margin to test it");
+    let wobble = a.dir_pitch() * across + curve_grows(&a, true) * (across + lean);
+    let after = drag_pane(rect, cfg, 0.2, wobble);
+    assert_eq!(after.ceiling_db, cfg.ceiling_db, "a lean inside the margin moved the level");
+    assert!(after.low_midi < cfg.low_midi - 0.5, "and the pan it was should still have run");
+}
+
+/// However far the drag runs, the window stops at the closest the pair may
+/// come — the same limit the Level bar holds to, both of them writing the
+/// same pair.
+#[test]
+fn the_level_zoom_stops_at_the_minimum_span() {
+    let (rect, cfg) = (WIDE, SpectrumConfig::default());
+    let out = curve_grows(&Axes::new(rect, &cfg), true) * 4_000.0;
+    let after = drag_pane(rect, cfg, 0.2, out);
+    assert!(
+        (after.ceiling_db - (after.floor_db + crate::LEVEL_RANGE_MIN_SPAN)).abs() < 1e-3,
+        "closed to {} dB, wanted {}",
+        after.ceiling_db - after.floor_db,
+        crate::LEVEL_RANGE_MIN_SPAN,
+    );
+    // And the other way, where what stops it is the top of the scale.
+    let after = drag_pane(rect, cfg, 0.2, -out);
+    assert_eq!(after.ceiling_db, crate::LEVEL_MAX_DB, "opened past full scale");
 }
 
 /// A marking label at the now edge of a wide (Left) pane sits just
