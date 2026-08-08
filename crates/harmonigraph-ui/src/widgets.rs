@@ -615,9 +615,14 @@ const TEXT_GAP: f32 = 5.0;
 /// the moment the handle passes, and text jumping its own width mid-drag reads
 /// worse than a letter that merely inverts.
 ///
-/// Contrast goes UP across the crossing rather than down — panel on near-white
-/// is about 14:1, against the 4.6:1 a dimmed name has on the track — so the
-/// crossed letters read a touch bolder than their run, never fainter.
+/// The knocked-out letters read about as strongly as the run they belong to,
+/// which is the bar this has to clear: panel on the near-white thumb is 14.1:1,
+/// against 8.9:1 for a dimmed name on the `well()` track and 15.2:1 for a run
+/// at full `text()` on it. So it is a shade stronger than a resting name and a
+/// shade weaker than a run being hovered or dragged — the [`SpreadBar`] readout
+/// is always the latter — and both ends of that are far enough above any
+/// legibility floor that the crossing costs nothing either way. The claim is
+/// parity, not improvement.
 ///
 /// **Overlapping thumbs come out right whatever order they are painted in**,
 /// and the reason is worth stating because the ordering here looks load-bearing
@@ -630,11 +635,15 @@ const TEXT_GAP: f32 = 5.0;
 /// corner.
 ///
 /// The clip is square where the grip is rounded, so a glyph pixel in one of the
-/// 2pt corner notches lands on the track rather than the thumb. Nothing is done
-/// about it because nothing shows: the knockout is the PANEL colour and the
-/// track is barely lighter, so a stray pixel there is dark on dark. It is the
-/// choice of colour that makes a square clip safe, not the geometry — a
-/// galley's box and a grip's are the same height to the point.
+/// 2pt corner notches lands beside the thumb rather than on it. What saves it
+/// is the geometry after all: the notch is the 2pt corner of a grip drawn 3pt
+/// shy of a 20pt row, and a Body galley's ink does not reach the top and bottom
+/// of its own box, let alone the corners of that one. Worth knowing what the
+/// fallback is NOT, though — outside the span the notch sits on `well()`, which
+/// is darker than the knockout rather than lighter, and on the inner side it
+/// sits on `accent_fill()`, where panel is only 2.7:1 and a stray pixel would
+/// show. A thumb rounded much harder wants a rounded clip rather than this
+/// argument.
 ///
 /// Guarded on a rect intersection, so a bar whose thumbs stand clear of its
 /// text pays nothing: epaint culls text per ROW and not per glyph, so an
