@@ -151,8 +151,10 @@ pub struct NodeInstance {
     /// disappearing.
     pub octaves: [f32; OCTAVE_SLOTS],
     pub hovered: bool,
-    /// On the home (center sevens) sheet. Home nodes keep a blank
-    /// placeholder ring while idle; off-sheet nodes draw nothing.
+    /// On the home (center sevens) sheet. An idle node draws nothing
+    /// wherever it sits; what marks a home position is the GRID, whose
+    /// lines stop short of it on every side, and off-sheet positions have
+    /// not even that (see [`derive_grid`](derive::derive_grid)).
     pub on_home: bool,
     /// Billboard size, as a factor of the scene's `node_radius` (see
     /// [`ViewConfig::sevens_size`]): 1 on the home sheet, smaller with every
