@@ -3450,6 +3450,21 @@ mod tests {
                 assert_eq!(drawn, lit, "column {i} is inside both arcs and must be one color");
             }
         }
+        // A span of nothing claims nothing, which is what the `claimed > 0.0`
+        // half of the guard is for and the only thing left holding it up: it
+        // stopped a divide by zero while the claimed stretch was the ramp
+        // squeezed into it, and now it stops `p <= claimed` from lighting the
+        // one column at `p == 0`. A lit column at the left edge of a track
+        // claiming nothing is a picture that says the gradient reaches the
+        // first hue, and Mono is one click away on the Analyzer tab.
+        let nothing = track_of(Gradient { hue_span: 0.0, ..arc });
+        let lit: Vec<usize> = nothing
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.a() != dim)
+            .map(|(i, _)| i)
+            .collect();
+        assert!(lit.is_empty(), "a span of nothing lit columns {lit:?} of {}", nothing.len());
     }
 
     /// Both bands are rounded by their own mesh, on the corner circle, and
