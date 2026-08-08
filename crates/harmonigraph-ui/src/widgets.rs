@@ -761,12 +761,19 @@ impl Grab {
 /// that is the trade this row makes rather than an oversight. A thumb roams the
 /// whole track, so no fixed text can dodge it; the name is the run that can
 /// afford it, because a word you already know survives losing a letter where a
-/// number does not survive losing a digit. It costs nothing where the four bars
-/// rest — the two that open at the full axis stand their low handle a point
-/// clear of the name, and the Level and Band bars open at 40% and 66% of theirs
-/// — and shows up only while the low end is dragged down into the name's own
-/// share of the bar: about a sixth of the axis at the width the settings column
-/// opens at, a tenth on a bar twice that wide.
+/// number does not survive losing a digit. The name's own share of the bar is
+/// about a sixth of the axis at the width the settings column opens at, a
+/// tenth on a bar twice that wide.
+///
+/// Most bars only reach it while the low end is DRAGGED there: the two that
+/// open at the full axis stand their low handle a point clear of the name, and
+/// the Level and Band bars open at 40% and 66% of theirs. The two
+/// [`fade_span`](RangeBar::fade_span) bars rest inside it, and the Gutter does
+/// so at a fresh install — its low end is where the gutter stops being solid,
+/// which on a nearly-fully-soft default is 1.4% of the axis, so the thumb
+/// stands on the "G". That is the trade taken knowingly: the alternative is a
+/// fresh look chosen to keep a handle off a letter, which is the picture
+/// paying for the panel.
 ///
 /// Letting the name slide out of the way instead was measured and dropped: it
 /// has to snap back the moment the handle passes it, and a name jumping the
