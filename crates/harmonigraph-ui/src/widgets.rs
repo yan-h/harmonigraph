@@ -1536,6 +1536,13 @@ const L_STAR_AXIS: (f32, f32) = (0.0, 100.0);
 /// rather than a fixed one that a wide ramp would leave stranded in the middle.
 const MIDDLE_REACH_SHARE: f32 = 0.5;
 
+/// The middle's mark: half a [`HANDLE_W`] wide and half a bar tall. Both halves
+/// are the point — it has to read as a different KIND of thing from the two
+/// handles either side of it, which are what open the ramp, while still being
+/// visibly the thing the middle of the fill is at.
+const MIDDLE_MARK_W: f32 = 3.0;
+const MIDDLE_MARK_HEIGHT: f32 = 0.5;
+
 /// The brightness pair a double-click on a [`BrightnessBar`] goes home to.
 ///
 /// Off [`ViewConfig::default`] for the reason [`reset_arc`] is, and it is the
@@ -1646,9 +1653,15 @@ impl SpreadGrab {
     }
 }
 
-/// The pair a bar actually writes: whole `L*` on both, which is what its
-/// readout says, and the ramp brought back inside what the rounded centre
-/// leaves room for.
+/// The pair a bar actually writes: a whole centre and an EVEN ramp, which
+/// together put both ends of the gradient on whole `L*` — and the ends are what
+/// the bar reads out, so they are what has to be whole. A readout is only worth
+/// anything while it is the number the picture actually draws, and a ramp of 45
+/// about a middle of 64 reaches 41.5 and 86.5, which no rounding of the readout
+/// can say without lying by half a point at both ends.
+///
+/// The step it costs the ramp is a step of ONE at each end, since a ramp opens
+/// half either side of the middle.
 ///
 /// Ordered — the centre first, then the ramp against it — because rounding the
 /// two independently can turn a legal pair illegal: a centre of 89.6 has room
@@ -1656,8 +1669,10 @@ impl SpreadGrab {
 /// for 20, would put the bright end off the axis.
 fn snapped((centre, spread): (f32, f32), (min, max): (f32, f32)) -> (f32, f32) {
     let centre = centre.round();
+    // Even by construction, since the centre is whole and the axis's own ends
+    // are: what the clamp allows is what the ends allow.
     let widest = 2.0 * (centre - min).min(max - centre);
-    (centre, spread.round().clamp(-widest, widest))
+    (centre, ((spread * 0.5).round() * 2.0).clamp(-widest, widest))
 }
 
 /// The pitch gradient's brightness: where the middle of the pitch range sits on
@@ -1676,12 +1691,15 @@ fn snapped((centre, spread): (f32, f32), (min, max): (f32, f32)) -> (f32, f32) {
 /// compose nor the room the axis has left for it, and cost the pane a row it
 /// does not have (see `spectrum_group`).
 ///
-/// **The sign is spelled, because the bar cannot show it.** A ramp and its
-/// negative put the two handles in exactly the same places, so the readout
-/// carries it, the way a [`SpectrumBar`]'s carries the direction of an arc for
-/// the same reason. What the sign MEANS is one row up: the strip under the
-/// spectrum bar draws the gradient in pitch order, so it is the thing that
-/// visibly reverses when the ramp goes negative.
+/// **The readout is the two ENDS, and it runs in pitch order.** They are what
+/// the picture concretely does — the `L*` the darkest and brightest notes are
+/// drawn at — and each of them names a handle standing under it, where a centre
+/// and a signed ramp named neither. Pitch order is also the only place the
+/// SIGN can live: a ramp and its negative put the two handles in exactly the
+/// same places, so the bar cannot draw the difference, and an inverted ramp
+/// reads out backwards instead, high to low. (What the sign means for the
+/// picture is one row up, on the strip under the spectrum bar, which draws the
+/// gradient in pitch order and so reverses with it.)
 ///
 /// **Both ends stay on the axis at every setting.** That is the bar's own
 /// geometry — a handle off the track is not a value it can express — and
@@ -1699,11 +1717,17 @@ impl<'a> BrightnessBar<'a> {
         BrightnessBar { gradient, label }
     }
 
-    /// The centre and the ramp, in that order, as the row reads them out. Both
-    /// whole, since that is what a gesture writes, and the ramp signed because
-    /// its sign is half of what it says.
+    /// The two ends the ramp reaches, in PITCH order: the bottom of the pitch
+    /// range first, whatever brightness it happens to carry.
+    ///
+    /// Concrete where a centre and a signed ramp were arithmetic — these are
+    /// the `L*` the darkest and brightest notes are actually drawn at, and they
+    /// name the two handles standing under them. It is also how the sign gets
+    /// said: an inverted ramp reads out backwards, high to low, where a signed
+    /// number left the reader to work out which end it meant.
     fn readout((centre, spread): (f32, f32)) -> String {
-        format!("{centre:.0}  {spread:+.0}")
+        let (low, high) = (centre - spread * 0.5, centre + spread * 0.5);
+        format!("{low:.0} \u{2192} {high:.0}")
     }
 
     pub fn show(self, ui: &mut Ui) -> Response {
@@ -1787,10 +1811,9 @@ impl<'a> BrightnessBar<'a> {
         // Name and readout exactly as a ValueBar lays them out — the row is one
         // — with the same reserve trick: the width kept clear for the numbers
         // is measured off a pair that never changes rather than off the one
-        // currently in the bar, so the name cannot re-elide mid-drag. A whole
-        // axis of ramp at a middle of white is not a pair any setting reaches,
-        // and does not need to be: the reserve wants an upper bound that holds
-        // still, and this is the widest string either number can spell.
+        // currently in the bar, so the name cannot re-elide mid-drag. A flat
+        // ramp at white is the widest the readout goes, both ends spelling
+        // three digits, and no end can carry a sign to add a fourth.
         let text_color = if response.hovered() || response.dragged() {
             theme::text()
         } else {
@@ -1799,10 +1822,8 @@ impl<'a> BrightnessBar<'a> {
         let mono = TextStyle::Monospace.resolve(ui.style());
         let value =
             painter.layout_no_wrap(Self::readout((centre, spread)), mono.clone(), theme::text());
-        let reserve = painter
-            .layout_no_wrap(Self::readout((max, max - min)), mono, theme::text())
-            .size()
-            .x;
+        let reserve =
+            painter.layout_no_wrap(Self::readout((max, 0.0)), mono, theme::text()).size().x;
         let body = TextStyle::Body.resolve(ui.style());
         let mut job = egui::text::LayoutJob::simple_singleline(
             self.label.to_owned(),
@@ -1824,11 +1845,27 @@ impl<'a> BrightnessBar<'a> {
             theme::text(),
         );
 
+        // The middle, marked. It is a place you take hold of — the whole pair
+        // slides from here — and at a wide ramp there is otherwise nothing
+        // between the two handles to say where the brightness the row is named
+        // for actually sits, which leaves the fill reading as a range with no
+        // centre in it. Narrower and shorter than a handle, because it is a
+        // mark on the axis rather than a grip: it never moves on its own, and
+        // two things drawn alike would say a drag on either does the same.
+        painter.rect_filled(
+            egui::Rect::from_center_size(
+                egui::pos2(x_of(centre), rect.center().y),
+                Vec2::new(MIDDLE_MARK_W * scale, rect.height() * MIDDLE_MARK_HEIGHT),
+            ),
+            CornerRadius::same(theme::scaled_points(1, scale)),
+            theme::text(),
+        );
+
         // The handles on top of the text, a RangeBar's bargain: they are the
         // part you operate, and a digit sliding under one beats a handle
-        // disappearing behind a digit. At a flat ramp the two coincide, and one
-        // thumb standing in the middle of an empty track is the right picture —
-        // there is one place the whole range is.
+        // disappearing behind a digit. At a flat ramp the two coincide over the
+        // middle's own mark, and one thumb standing on an empty track is the
+        // right picture — there is one place the whole range is.
         let handle_w = HANDLE_W * scale;
         for x in [lx, hx] {
             painter.rect_filled(
@@ -3613,18 +3650,30 @@ mod tests {
         assert!(matches!(SpreadGrab::at(71.0, wide, NEAR), SpreadGrab::High), "past the boundary");
     }
 
-    /// The pair the bar writes is whole on both numbers, which is what its
-    /// readout shows — and the ramp is rounded against the ROUNDED middle, or
-    /// the rounding itself would push an end off the axis.
+    /// Every pair the bar writes puts both ENDS on a whole `L*`, since the ends
+    /// are what it reads out and a readout is worth nothing once it is not the
+    /// number the picture draws. And the ramp is rounded against the ROUNDED
+    /// middle, or the rounding itself would push an end off the axis.
     #[test]
-    fn the_pair_a_bar_writes_is_whole_and_still_on_the_axis() {
+    fn the_pair_a_bar_writes_puts_both_ends_on_whole_l_star() {
         assert_eq!(snapped((63.6, 40.4), L_STAR_AXIS), (64.0, 40.0));
+        // An odd ramp is the case a whole PAIR would miss: 45 about 64 reaches
+        // 41.5 and 86.5, which the readout could only spell by lying.
+        assert_eq!(snapped((64.0, 45.0), L_STAR_AXIS), (64.0, 46.0));
         // A middle of 89.6 has room for 20.8 of ramp; rounded to 90 it has 20.
         assert_eq!(
             snapped((89.6, 20.8), L_STAR_AXIS),
             (90.0, 20.0),
             "rounding the two independently would keep 21 at a middle with room for 20",
         );
+        for centre in [0.0f32, 13.5, 49.0, 63.6, 89.6, 100.0] {
+            for spread in [0.0f32, 1.0, -7.0, 45.0, 99.9, -100.0] {
+                let (c, s) = snapped((centre, spread), L_STAR_AXIS);
+                for end in [c - s * 0.5, c + s * 0.5] {
+                    assert_eq!(end, end.round(), "{centre}/{spread} lands an end on {end}");
+                }
+            }
+        }
     }
 
     /// What the bar can reach is exactly what `sanitized` leaves alone. The two
@@ -3704,6 +3753,24 @@ mod tests {
         out.shapes.into_iter().map(|s| s.shape).collect()
     }
 
+    /// The two handles and the middle's mark, told apart by their widths — the
+    /// mark is half a handle wide, and the two are meant to read as different
+    /// kinds of thing.
+    fn brightness_marks(shapes: &[egui::Shape]) -> (Vec<egui::Rect>, Vec<egui::Rect>) {
+        let (mut hs, mut middle) = (Vec::new(), Vec::new());
+        for (r, fill) in filled_rects(shapes) {
+            if fill != theme::text() {
+                continue;
+            } else if (r.width() - HANDLE_W).abs() < 0.01 {
+                hs.push(r);
+            } else if (r.width() - MIDDLE_MARK_W).abs() < 0.01 {
+                middle.push(r);
+            }
+        }
+        hs.sort_by(|a, b| a.left().total_cmp(&b.left()));
+        (hs, middle)
+    }
+
     /// The bar draws the pair it holds: a handle at each end of the ramp, on an
     /// axis running black to white across the track. That is the whole claim
     /// the control makes, and handles standing anywhere else would be a picture
@@ -3711,13 +3778,13 @@ mod tests {
     ///
     /// The inverted case is here because it is the one the picture CANNOT tell
     /// apart: a ramp and its negative put the two handles in exactly the same
-    /// places, which is why the readout spells the sign out.
+    /// places, which is why the readout runs in pitch order instead.
     #[test]
     fn a_brightness_bar_stands_its_handles_where_its_numbers_say() {
         for spread in [44.0f32, -44.0] {
             let shapes = paint_brightness_bar((64.0, spread));
             let bar = filled_rects(&shapes)[0].0;
-            let hs = handles(&shapes);
+            let (hs, _) = brightness_marks(&shapes);
             assert_eq!(hs.len(), 2, "a ramp of {spread} did not paint two handles");
             // The track a handle travels: the bar less the inset at either end.
             let track = bar.shrink2(Vec2::new(HANDLE_INSET, 0.0));
@@ -3734,20 +3801,50 @@ mod tests {
         // A flat ramp is one handle's worth of picture in the middle of an
         // empty track: no brightness is spent on pitch, and there is exactly
         // one place the whole range is.
-        let hs = handles(&paint_brightness_bar((30.0, 0.0)));
+        let (hs, _) = brightness_marks(&paint_brightness_bar((30.0, 0.0)));
         assert_eq!(hs[0], hs[1], "a flat ramp drew its two handles apart");
     }
 
-    /// Both numbers, and the sign among them, since the bar cannot show which
-    /// end of the PITCH range is the bright one — the handles stand in the same
-    /// two places either way.
+    /// The middle is marked, and marked as its own kind of thing: it stands
+    /// between the handles rather than beside them, and it is the one place a
+    /// wide ramp otherwise says nothing about where the brightness the row is
+    /// named for actually sits. Smaller than a handle both ways, since a drag
+    /// on it does something else — it slides the pair rather than opening it.
     #[test]
-    fn a_brightness_bar_reads_out_the_pair_it_holds() {
-        let texts: Vec<String> =
-            text_boxes(&paint_brightness_bar((64.0, -44.0))).into_iter().map(|(_, s)| s).collect();
-        assert_eq!(texts.len(), 2, "a name and one readout, not {texts:?}");
-        assert_eq!(texts[0], "Brightness");
-        assert_eq!(texts[1], "64  -44");
+    fn the_middle_is_marked_between_the_two_handles() {
+        for pair in [(64.0f32, 44.0f32), (64.0, -44.0), (30.0, 0.0)] {
+            let shapes = paint_brightness_bar(pair);
+            let bar = filled_rects(&shapes)[0].0;
+            let (hs, middle) = brightness_marks(&shapes);
+            assert_eq!(middle.len(), 1, "{pair:?} drew {} middle marks", middle.len());
+            let (mark, handle) = (middle[0], hs[0]);
+            let track = bar.shrink2(Vec2::new(HANDLE_INSET, 0.0));
+            let at = track.left() + track.width() * (pair.0 / 100.0);
+            assert!((mark.center().x - at).abs() < 0.5, "{pair:?}: the mark is off the middle");
+            assert!(mark.width() < handle.width(), "{pair:?}: the mark is as wide as a handle");
+            assert!(mark.height() < handle.height(), "{pair:?}: and as tall");
+            assert!(mark.width() >= 2.0, "{pair:?}: a mark this thin is not a mark");
+        }
+    }
+
+    /// The two ends, in pitch order — the numbers the picture concretely draws,
+    /// each standing under its own handle. Their ORDER is the sign: the bar
+    /// cannot show which end of the pitch range is the bright one, since the
+    /// handles stand in the same two places either way.
+    #[test]
+    fn a_brightness_bar_reads_out_its_two_ends_in_pitch_order() {
+        let texts = |pair| -> Vec<String> {
+            text_boxes(&paint_brightness_bar(pair)).into_iter().map(|(_, s)| s).collect()
+        };
+        let up = texts((64.0, 44.0));
+        assert_eq!(up.len(), 2, "a name and one readout, not {up:?}");
+        assert_eq!(up[0], "Brightness");
+        assert_eq!(up[1], "42 \u{2192} 86", "the bottom of the pitch range reads first");
+        assert_eq!(
+            texts((64.0, -44.0))[1],
+            "86 \u{2192} 42",
+            "an inverted ramp draws the same two handles, so the readout is what says so",
+        );
     }
 
     /// Drag a brightness bar across a 300pt row, from `from` to `to` as
