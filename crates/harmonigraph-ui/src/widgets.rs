@@ -1149,26 +1149,54 @@ impl<'a> RangeBar<'a> {
             // left of `low` is anyway, so the ramp still starts and ends under
             // the two handles. The one thing it cannot say is a reach of zero,
             // which would still have the inset to paint — hence the test.
+            //
+            // **The two parts are drawn by different machinery, and the split
+            // is what puts the rounded corner in the right hands.** Everything
+            // left of `low` is one flat color, so it is a `rect_filled` like
+            // any other bar's fill — epaint curves and FEATHERS that corner.
+            // The ramp cannot be one: a rect is a single color, which is what
+            // makes a mesh the only way to carry a gradient at all. What the
+            // mesh gives up is the antialiasing — egui leaves a mesh edge hard,
+            // and the arc it fakes by pinching its columns (see CORNER_SAMPLES)
+            // undershoots the true circle by a pixel or so, which against the
+            // panel behind the bar reads as a stepped corner beside the smooth
+            // ones above it.
+            //
+            // So the mesh is handed the one stretch with no corner to draw. It
+            // meets the head at `low` in exactly the head's own color and the
+            // bare track at `high` in exactly the well's, so neither of its
+            // hard ends is a visible edge at all.
             if *self.high > min {
                 let mut fill = rect;
                 fill.max.x = hx;
-                // Where the ramp starts as a fraction of the FILL, which is
-                // what `gradient_strip` measures its samples in. A hard edge
-                // closes the span, which puts the whole fill solid and the ramp
-                // nowhere — and is the one value the divide below cannot take.
-                let solid = ((lx - fill.left()) / fill.width().max(1.0)).clamp(0.0, 1.0);
-                gradient_strip(painter, fill, FADE_SEGMENTS, f32::from(bar_radius(scale)), |p| {
-                    if p <= solid || solid >= 1.0 {
-                        fill_color
-                    } else {
-                        let t = (p - solid) / (1.0 - solid);
-                        egui::lerp(
-                            egui::Rgba::from(fill_color)..=egui::Rgba::from(theme::well()),
-                            t,
-                        )
-                        .into()
-                    }
-                });
+                // Where the solid head gives way to the ramp. Clamped into the
+                // fill because a pair that arrives crossed (`low` above `high`,
+                // which a host param or a blob can still say) would otherwise
+                // put the head past the fill's own end.
+                let split = lx.clamp(fill.left(), hx);
+                let r = bar_radius(scale);
+                let mut head = fill;
+                head.max.x = split;
+                // Square where the ramp continues it, round where the bar is:
+                // a rounded right end here would cut a notch out of a fill that
+                // does not stop there.
+                painter.rect_filled(
+                    head,
+                    CornerRadius { nw: r, sw: r, ne: 0, se: 0 },
+                    fill_color,
+                );
+                let mut ramp = fill;
+                ramp.min.x = split;
+                // A hard edge closes the span, which leaves the head the whole
+                // fill and the ramp nothing — an ordinary setting, and the one
+                // case that has no gradient to draw.
+                if ramp.width() > 0.0 {
+                    let from = egui::Rgba::from(fill_color);
+                    let to = egui::Rgba::from(theme::well());
+                    gradient_strip(painter, ramp, FADE_SEGMENTS, (0.0, f32::from(r)), |p| {
+                        egui::lerp(from..=to, p).into()
+                    });
+                }
             }
         } else {
             let mut span = rect;
@@ -2077,7 +2105,7 @@ impl<'a> SpectrumBar<'a> {
         // both sides of the handle, so the two meet flush at every setting and
         // what the handle marks is how far round the turn the gradient reaches
         // — which is the only thing this track is for.
-        gradient_strip(painter, track_rect, SPECTRUM_SEGMENTS, corner as f32, |p| {
+        gradient_strip(painter, track_rect, SPECTRUM_SEGMENTS, (corner as f32, corner as f32), |p| {
             let hue = g.hue_start + p * FULL_TURN * winding;
             let f = hue.rem_euclid(FULL_TURN) / FULL_TURN * HUE_CIRCLE_N as f32;
             let i0 = f.floor() as usize % HUE_CIRCLE_N;
@@ -2145,7 +2173,7 @@ impl<'a> SpectrumBar<'a> {
         // second definition of the color, wrong the first time either changed.
         let lut = pitch_ramp_lut(g);
         let strip_corner = corner as f32;
-        gradient_strip(painter, strip_rect, PITCH_LUT_N - 1, strip_corner, |p| {
+        gradient_strip(painter, strip_rect, PITCH_LUT_N - 1, (strip_corner, strip_corner), |p| {
             let f = p.clamp(0.0, 1.0) * (PITCH_LUT_N - 1) as f32;
             let i0 = f.floor() as usize;
             scene_color(lut[i0].lerp(lut[(i0 + 1).min(PITCH_LUT_N - 1)], f - f.floor()), 1.0)
@@ -2762,14 +2790,15 @@ impl<'a> SpreadBar<'a> {
 
 /// A band of `segments + 1` colored columns across `rect`, each column's color
 /// taken from `color` at its position along the band (0 at the left edge, 1 at
-/// the right) and interpolated between columns, with the band's ends rounded to
-/// `radius`.
+/// the right) and interpolated between columns, with the band's two ends rounded
+/// to `radii`.
 ///
 /// One builder for a [`SpectrumBar`]'s two bands — the track, which is the hue
 /// circle lit and then dimmed either side of the handle, and the pitch-order
-/// strip below it, which is the pitch ramp end to end. A quad strip written out
-/// twice is two places to get the vertex order or the first-column case wrong,
-/// and the second copy is the one that quietly keeps the older answer.
+/// strip below it, which is the pitch ramp end to end — and for the ramp half of
+/// a [`fade_span`](RangeBar::fade_span) fill. A quad strip written out twice is
+/// two places to get the vertex order or the first-column case wrong, and the
+/// second copy is the one that quietly keeps the older answer.
 ///
 /// **The rounding is in the MESH, and that is the whole reason this is not a
 /// square band inside a rounded well.** A well showing round an inset mesh is
@@ -2779,22 +2808,32 @@ impl<'a> SpreadBar<'a> {
 /// [`CONTROL_RADIUS`](theme::CONTROL_RADIUS) of 5 a one-point inset does not
 /// even cover the arc, so the band's square corners poke out through it.
 /// Pinching the columns to the corner circle instead lets the colors go edge to
-/// edge and round exactly like the fill of a [`ValueBar`] beside them.
+/// edge and round about like the fill of a [`ValueBar`] beside them.
+///
+/// **About, and not exactly, which is why the two radii are separate.** egui
+/// antialiases the rounded rect a `ValueBar` fills with and leaves a mesh edge
+/// hard, and the arc pinched here is a chord polygon inscribed in the circle at
+/// [`CORNER_SAMPLES`] samples, so it undershoots by around a pixel where the
+/// circle is steepest. Both are invisible on a band that ends in the color
+/// behind it — which is every end a `SpectrumBar` draws, and the far end of a
+/// fade — and neither is on one ending in full color against the panel. An end
+/// like that is given a radius of 0 here and a `rect_filled` of its own.
 fn gradient_strip(
     painter: &egui::Painter,
     rect: egui::Rect,
     segments: usize,
-    radius: f32,
+    radii: (f32, f32),
     color: impl Fn(f32) -> egui::Color32,
 ) {
-    let radius = radius.clamp(0.0, (rect.height() * 0.5).min(rect.width() * 0.5));
+    let cap = (rect.height() * 0.5).min(rect.width() * 0.5);
+    let (left_r, right_r) = (radii.0.clamp(0.0, cap), radii.1.clamp(0.0, cap));
     let mut xs: Vec<f32> = (0..=segments)
         .map(|i| rect.left() + rect.width() * i as f32 / segments as f32)
         .collect();
     for k in 1..CORNER_SAMPLES {
-        let t = radius * k as f32 / CORNER_SAMPLES as f32;
-        xs.push(rect.left() + t);
-        xs.push(rect.right() - t);
+        let t = k as f32 / CORNER_SAMPLES as f32;
+        xs.push(rect.left() + left_r * t);
+        xs.push(rect.right() - right_r * t);
     }
     xs.sort_by(f32::total_cmp);
 
@@ -2807,7 +2846,11 @@ fn gradient_strip(
             continue;
         }
         drawn = x;
-        let inset = corner_inset((x - rect.left()).min(rect.right() - x), radius);
+        // The nearer end's own profile: each is 0 beyond its own radius, so on
+        // a band rounded the same both ways this is the arc it was, and a
+        // squared end simply never pinches.
+        let inset = corner_inset(x - rect.left(), left_r)
+            .max(corner_inset(rect.right() - x, right_r));
         let p = ((x - rect.left()) / rect.width().max(1.0)).clamp(0.0, 1.0);
         let c = color(p);
         let v = mesh.vertices.len() as u32;
@@ -3039,6 +3082,15 @@ mod tests {
             },
         );
         out.shapes.into_iter().map(|s| s.shape).collect()
+    }
+
+    /// The SOLID head of a [`RangeBar::fade_span`] fill — the stretch left of
+    /// `low`, which is one flat color and so a rounded rect rather than part of
+    /// the ramp mesh. Picked out by its color: the well beneath it and the two
+    /// handles over it are the only other rects a bar fills, and neither wears
+    /// the accent.
+    fn fade_head(shapes: &[egui::Shape]) -> Option<(egui::Rect, egui::Color32)> {
+        filled_rects(shapes).into_iter().find(|(_, fill)| *fill == theme::accent_fill())
     }
 
     /// The gradient fill's columns, left to right: where each one is and what
@@ -3524,9 +3576,9 @@ mod tests {
         assert!(matches!(Grab::at(middle, narrow, AXIS, 1_000.0), Grab::Span { .. }));
     }
 
-    /// A `fade_span` bar paints the pair as the edge it describes: one fill
-    /// from the bar's left edge, solid as far as `low`, ramping out to the bare
-    /// track by `high`.
+    /// A `fade_span` bar paints the pair as the edge it describes: solid from
+    /// the bar's left edge as far as `low`, then ramping out to the bare track
+    /// by `high`.
     ///
     /// The default paint says the opposite of this — it fills exactly the part
     /// that is FADING and leaves the solid part bare — which on a pair that is
@@ -3535,7 +3587,14 @@ mod tests {
     ///
     /// The left edge is the BAR's, not the inset track's: a fill starting where
     /// the values do leaves a sliver of bare well no other bar in the pane has,
-    /// and it reads as a notch in the control. See the paint for the trade.
+    /// and it reads as a notch in the control.
+    ///
+    /// Two shapes, and the split is the point rather than an implementation
+    /// detail: the solid part is a rounded RECT, which is what leaves the bar's
+    /// own corner with the machinery that antialiases it, and the mesh takes
+    /// only the stretch that needs a gradient. So this reads them in turn and
+    /// pins the join — the ramp starts where the head stops, in the head's own
+    /// color, or the fill has a seam in the middle of itself.
     #[test]
     fn a_fade_span_fills_from_the_floor_and_ramps_out() {
         let (low, high) = (60.0, 100.0);
@@ -3546,16 +3605,31 @@ mod tests {
             let inner = bar.left() + inset;
             inner + (bar.width() - 2.0 * inset) * (v - AXIS.0) / (AXIS.1 - AXIS.0)
         };
+        let (head, head_color) = fade_head(&shapes).expect("a fade span painted no solid head");
+        assert!(
+            (head.left() - bar.left()).abs() < 0.01,
+            "the fill starts at {} rather than at the bar's left edge {}",
+            head.left(),
+            bar.left(),
+        );
+        assert!(
+            (head.right() - x_of(low)).abs() < 0.01,
+            "the solid head stops at {} rather than at `low` ({})",
+            head.right(),
+            x_of(low),
+        );
+
         let ramp = fill_ramp(&shapes);
-        assert!(!ramp.is_empty(), "a fade span painted no fill");
+        assert!(!ramp.is_empty(), "a fade span painted no ramp");
 
         let (first, last) = (ramp[0], ramp[ramp.len() - 1]);
         assert!(
-            (first.0 - bar.left()).abs() < 0.01,
-            "the fill starts at {} rather than at the bar's left edge {}",
+            (first.0 - x_of(low)).abs() < 0.01,
+            "the ramp starts at {} rather than where the head stops ({})",
             first.0,
-            bar.left(),
+            x_of(low),
         );
+        assert_eq!(first.1, head_color, "the ramp starts a different color from the head");
         assert!(
             (last.0 - x_of(high)).abs() < 0.01,
             "the fill ends at {} rather than at `high` ({})",
@@ -3564,17 +3638,16 @@ mod tests {
         );
         assert_eq!(last.1, theme::well(), "the fill does not reach the bare track by `high`");
 
-        // Solid to `low`, and never brightening after it. Read as distance
-        // from the well rather than as a color, so this asks the one thing
-        // that matters — how much fill is left — of whatever the skin's accent
-        // happens to be.
+        // Never brightening after `low`. Read as distance from the well rather
+        // than as a color, so this asks the one thing that matters — how much
+        // fill is left — of whatever the skin's accent happens to be.
         let well = egui::Rgba::from(theme::well());
         let from_well = |c: egui::Color32| {
             let c = egui::Rgba::from(c);
             ((c.r() - well.r()).powi(2) + (c.g() - well.g()).powi(2) + (c.b() - well.b()).powi(2))
                 .sqrt()
         };
-        let solid = from_well(ramp[0].1);
+        let solid = from_well(head_color);
         assert!(solid > 0.0, "the fill is the same color as the track it sits on");
         // Halfway along the ramp it is halfway out. This is what pins where
         // the fade STARTS, which is the one thing the paint exists to show and
@@ -3594,13 +3667,6 @@ mod tests {
         );
         let mut previous = f32::INFINITY;
         for (x, color) in ramp {
-            if x <= x_of(low) + 0.01 {
-                assert!(
-                    (from_well(color) - solid).abs() < 0.01,
-                    "the fill is already fading at {x}, before `low` ({})",
-                    x_of(low),
-                );
-            }
             assert!(
                 from_well(color) <= previous + 0.01,
                 "the fill brightens again at {x}",
@@ -3609,11 +3675,11 @@ mod tests {
         }
     }
 
-    /// An edge of no reach paints NOTHING, and it takes a check of its own to
-    /// say so. The fill runs from the bar's left edge, which is a handle's
-    /// half-width outside the axis floor (see HANDLE_INSET), so a reach of
-    /// zero has that inset left to paint and would show as a stub of fill
-    /// under a control that is switched off.
+    /// An edge of no reach paints NOTHING — neither part of the fill — and it
+    /// takes a check of its own to say so. The fill runs from the bar's left
+    /// edge, which is a handle's half-width outside the axis floor (see
+    /// HANDLE_INSET), so a reach of zero has that inset left to paint and would
+    /// show as a stub of fill under a control that is switched off.
     #[test]
     fn an_edge_of_no_reach_paints_no_fill() {
         let shapes = paint_fade_bar(AXIS.0, AXIS.0);
@@ -3621,27 +3687,39 @@ mod tests {
             (Some(first), Some(last)) => last.0 - first.0,
             _ => 0.0,
         };
-        assert!(width < 0.01, "an edge of no reach paints {width:.2}pt of fill");
+        assert!(width < 0.01, "an edge of no reach paints {width:.2}pt of ramp");
+        assert!(
+            fade_head(&shapes).is_none(),
+            "an edge of no reach paints a solid head of fill",
+        );
     }
 
     /// A hard edge closes the span, and the fill is then solid the whole way
     /// with no ramp at all — which is the picture of a hard edge, and the one
     /// setting where this bar and the plain fill it replaces look the same.
     ///
-    /// Not a NaN guard, though the shape invites reading it as one: a closed
-    /// span puts the solid fraction at exactly 1, `gradient_strip` samples no
-    /// further than 1, so the `p <= solid` arm takes every column and the
-    /// divide is never reached. The `solid >= 1.0` beside it is belt and
-    /// braces against float wobble, and deleting it leaves this passing.
+    /// Solid the whole way means the head takes ALL of it and the mesh is never
+    /// built, so this asks for the absence of a ramp rather than for a flat one.
+    /// The zero-width strip that would otherwise be handed to `gradient_strip`
+    /// is the case the guard beside it exists for.
     #[test]
     fn a_closed_fade_span_paints_a_solid_fill() {
         let shapes = paint_fade_bar(60.0, 60.0);
-        let ramp = fill_ramp(&shapes);
-        assert!(!ramp.is_empty(), "a closed fade span painted no fill");
-        let first = ramp[0].1;
-        for (x, color) in ramp {
-            assert_eq!(color, first, "the fill is not solid at {x}");
-        }
+        let (head, _) = fade_head(&shapes).expect("a closed fade span painted no fill");
+        let bar = filled_rects(&shapes)[0].0;
+        let x_of = |v: f32| {
+            let inner = bar.left() + HANDLE_INSET;
+            inner + (bar.width() - 2.0 * HANDLE_INSET) * (v - AXIS.0) / (AXIS.1 - AXIS.0)
+        };
+        assert!(
+            (head.left() - bar.left()).abs() < 0.01 && (head.right() - x_of(60.0)).abs() < 0.01,
+            "a closed span's solid fill runs {}..{} rather than {}..{}",
+            head.left(),
+            head.right(),
+            bar.left(),
+            x_of(60.0),
+        );
+        assert!(fill_ramp(&shapes).is_empty(), "a closed fade span painted a ramp");
     }
 
     /// A CLOSED span is operable from both sides: below it the low end opens
