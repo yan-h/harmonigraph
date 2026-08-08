@@ -765,15 +765,16 @@ impl SharedState {
     ///
     /// Named as a set because the Video pane's "Clear everything" clears it
     /// before a take, and a fourth accumulation would have to join it here or
-    /// that button quietly stops living up to its name. The three keep their
-    /// own buttons in the panes that own them; this is not a replacement for
-    /// them, it is the case where all three are wanted at one moment.
+    /// that button quietly stops living up to its name. Each pane still clears
+    /// what it draws — Scene the trail, the Analyzer its roll and spectrogram
+    /// together — so this is not a replacement for those buttons, it is the
+    /// case where all three are wanted at one moment.
     ///
     /// Held notes fare differently across the three and deliberately so: the
     /// lattice keeps what is still sounding while the roll drops it (see
     /// [`NoteRoll::clear`](harmonigraph_core::NoteRoll::clear)). Each clear
     /// answers that for itself; evening them up here would make this do
-    /// something neither of the single buttons does.
+    /// something the pane buttons do not.
     pub fn clear_accumulated(&mut self) {
         self.tracker.clear_history();
         self.tracker.clear_roll();
