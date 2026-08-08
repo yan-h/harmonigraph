@@ -1060,9 +1060,21 @@ impl<'a> RangeBar<'a> {
             Sense::click_and_drag(),
         );
         let (min, max) = (*self.range.start(), *self.range.end());
-        // Values live on an inset track, so both limits are positions a handle
-        // can sit AT rather than edges it merges into. See HANDLE_INSET.
-        let track = rect.shrink2(Vec2::new(HANDLE_INSET * scale, 0.0));
+        // A [`fade_span`](RangeBar::fade_span) bar's values run the whole bar,
+        // the way the octave strip's wheel does: its low end IS the bar's left
+        // end — a gutter of no softness at all, a note standing off nothing —
+        // and a handle stopping a point clear of it reads as a control that
+        // cannot reach its own floor. The handles are still drawn whole, by
+        // clamping where they are PLACED rather than where they mean, which is
+        // the same bargain the strip makes.
+        //
+        // Every other range bar keeps the inset. They open at the FULL axis,
+        // where flush handles at both ends sit under the corner rounding on a
+        // bare track and read as the bar's own border — the affordance
+        // HANDLE_INSET exists for, and which a bar opening on a fill does not
+        // need.
+        let inset = if self.fade_span { 0.0 } else { HANDLE_INSET * scale };
+        let track = rect.shrink2(Vec2::new(inset, 0.0));
         let x_of =
             |v: f32| track.left() + track.width() * ((v - min) / (max - min)).clamp(0.0, 1.0);
         let value_at = |x: f32| {
@@ -1175,6 +1187,20 @@ impl<'a> RangeBar<'a> {
                 // put the head past the fill's own end.
                 let split = lx.clamp(fill.left(), hx);
                 let r = bar_radius(scale);
+                let corner = f32::from(r);
+                // The ramp never begins INSIDE the corner, because the corner
+                // can only be drawn by a rounded rect and a rounded rect is one
+                // color. A fade dragged fully open puts `low` at the bar's own
+                // end, so without this the mesh would take the corner back —
+                // square-ended, poking a whole radius out through the well's
+                // arc, or stepped if it rounded itself.
+                //
+                // What it costs is the first few points of the fade painted
+                // solid: five points of a ramp a hundred long is a few percent
+                // of one, and a ramp short enough for it to be more than that
+                // is a reach of a few points, under two handles standing on
+                // each other.
+                let ramp_start = split.max(fill.left() + corner).min(hx);
                 // Held to the reach, so the head below can be widened past it
                 // without ever drawing reach the edge does not have. Only the
                 // far end is cut — the sides are pushed out of the way so the
@@ -1194,7 +1220,7 @@ impl<'a> RangeBar<'a> {
                 // Twice the radius is what leaves the corner alone, and it
                 // costs nothing to ask for: the ramp is drawn over the excess,
                 // and past the reach the clip takes it.
-                head.max.x = split.max(fill.left() + 2.0 * f32::from(r));
+                head.max.x = ramp_start.max(fill.left() + 2.0 * corner);
                 // Square where the ramp continues it, round where the bar is:
                 // a rounded right end here would cut a notch out of a fill that
                 // does not stop there.
@@ -1204,7 +1230,7 @@ impl<'a> RangeBar<'a> {
                     fill_color,
                 );
                 let mut ramp = fill;
-                ramp.min.x = split;
+                ramp.min.x = ramp_start;
                 // A hard edge closes the span, which leaves the head the whole
                 // fill and the ramp nothing — an ordinary setting, and the one
                 // case that has no gradient to draw.
@@ -1280,6 +1306,19 @@ impl<'a> RangeBar<'a> {
 
         let handle_w = HANDLE_W * scale;
         let half_handle = handle_w * 0.5;
+        // Where the thumbs are DRAWN, as against what they mean. A fade bar's
+        // axis runs to the bar's own ends, so a value at either limit puts a
+        // thumb's center on the edge with half its width out over the pane:
+        // held in by half a handle it stands flush instead, whole and inside,
+        // which is how the octave strip places its own. A no-op on a bar whose
+        // track is already inset, where no value reaches this far.
+        //
+        // The readouts step around these rather than around `lx`/`hx`, since
+        // what a number must not be crossed by is the thumb that is there.
+        let (lgx, hgx) = (
+            lx.clamp(rect.left() + half_handle, rect.right() - half_handle),
+            hx.clamp(rect.left() + half_handle, rect.right() - half_handle),
+        );
         let reach = half_handle + text_gap;
         let low = painter.layout_no_wrap((self.display)(*self.low), mono.clone(), theme::text());
         let high = painter.layout_no_wrap((self.display)(*self.high), mono, theme::text());
@@ -1294,9 +1333,9 @@ impl<'a> RangeBar<'a> {
             (start.max(region_left), end.min(region_right))
         };
         let gaps = [
-            clipped((region_left, lx - reach)),
-            clipped((lx + reach, hx - reach)),
-            clipped((hx + reach, region_right)),
+            clipped((region_left, lgx - reach)),
+            clipped((lgx + reach, hgx - reach)),
+            clipped((hgx + reach, region_right)),
         ];
         // First choice is each number beside its own handle, on the empty track
         // outside the span where it sits on flat black and reads cleanly —
@@ -1318,7 +1357,9 @@ impl<'a> RangeBar<'a> {
         let uncrossed = |left: f32, w: f32| {
             left >= region_left
                 && left + w <= region_right
-                && [lx, hx].iter().all(|&x| x + half_handle <= left || x - half_handle >= left + w)
+                && [lgx, hgx]
+                    .iter()
+                    .all(|&x| x + half_handle <= left || x - half_handle >= left + w)
         };
         let apart = low_left + low_w + text_gap <= high_left;
         let (low_left, high_left) =
@@ -1374,12 +1415,22 @@ impl<'a> RangeBar<'a> {
         // lands on fractional pixels and reads as a ragged edge, and the thumb
         // has plenty of contrast against both the filled span and the empty
         // track without one.
-        for x in [lx, hx] {
+        //
+        // A thumb that can stand in the bar's own corner is rounded like the
+        // bar rather than like a grip, so it follows the arc it is standing in
+        // as closely as six points of width can — epaint holds a corner to half
+        // that, which is near enough to keep the thumb inside the well. A bar
+        // whose track is inset never gets there, and keeps the grip's own.
+        let grip_radius = CornerRadius::same(if self.fade_span {
+            bar_radius(scale)
+        } else {
+            theme::scaled_points(2, scale)
+        });
+        for x in [lgx, hgx] {
             let grip = egui::Rect::from_center_size(
                 egui::pos2(x, rect.center().y),
                 Vec2::new(handle_w, rect.height() - 3.0 * scale),
             );
-            let grip_radius = CornerRadius::same(theme::scaled_points(2, scale));
             painter.rect_filled(grip, grip_radius, theme::text());
         }
 
@@ -3107,6 +3158,24 @@ mod tests {
         paint_fade_bar_clipped(low, high).into_iter().map(|s| s.shape).collect()
     }
 
+    /// Where a value stands on a [`RangeBar::fade_span`] bar's axis, which runs
+    /// the whole bar rather than the inset track every other range bar puts its
+    /// values on — so its floor is the bar's own left edge.
+    fn fade_x_of(bar: egui::Rect, v: f32) -> f32 {
+        bar.left() + bar.width() * (v - AXIS.0) / (AXIS.1 - AXIS.0)
+    }
+
+    /// The two thumbs of a bar, left to right.
+    fn thumbs(shapes: &[egui::Shape]) -> Vec<egui::Rect> {
+        let mut found: Vec<egui::Rect> = filled_rects(shapes)
+            .into_iter()
+            .filter(|(_, fill)| *fill == theme::text())
+            .map(|(rect, _)| rect)
+            .collect();
+        found.sort_by(|a, b| a.left().total_cmp(&b.left()));
+        found
+    }
+
     /// The SOLID head of a [`RangeBar::fade_span`] fill — the stretch left of
     /// `low`, which is one flat color and so a rounded rect rather than part of
     /// the ramp mesh. Picked out by its color: the well beneath it and the two
@@ -3623,11 +3692,7 @@ mod tests {
         let (low, high) = (60.0, 100.0);
         let shapes = paint_fade_bar(low, high);
         let bar = filled_rects(&shapes)[0].0;
-        let x_of = |v: f32| {
-            let inset = HANDLE_INSET;
-            let inner = bar.left() + inset;
-            inner + (bar.width() - 2.0 * inset) * (v - AXIS.0) / (AXIS.1 - AXIS.0)
-        };
+        let x_of = |v: f32| fade_x_of(bar, v);
         let (head, head_color) = fade_head(&shapes).expect("a fade span painted no solid head");
         assert!(
             (head.left() - bar.left()).abs() < 0.01,
@@ -3710,9 +3775,10 @@ mod tests {
     /// `rect_filled` is the same either way, and only the tessellator clamps
     /// it. So the width is what this asks about.
     ///
-    /// The ramp is what makes the widening free, and it has to still start at
-    /// the LOW end for that: cover the head from anywhere else and the
-    /// widening is fill the bar does not mean.
+    /// The ramp is what makes the widening free, and it must clear the CORNER
+    /// for that: a fade this open has its low end on the bar's own edge, so a
+    /// ramp starting where the value says would take the corner back from the
+    /// rect that can draw it.
     #[test]
     fn a_fully_soft_edge_keeps_the_fills_corner_round() {
         let shapes = paint_fade_bar(AXIS.0, 100.0);
@@ -3728,9 +3794,51 @@ mod tests {
         let ramp = fill_ramp(&shapes);
         let first = ramp.first().expect("a fully soft edge painted no ramp").0;
         assert!(
-            (first - (bar.left() + HANDLE_INSET)).abs() < 0.01,
-            "the ramp starts at {first} rather than at the low end ({})",
-            bar.left() + HANDLE_INSET,
+            (first - (bar.left() + radius)).abs() < 0.01,
+            "the ramp starts at {first}, not clear of the corner ({})",
+            bar.left() + radius,
+        );
+    }
+
+    /// A fade bar's thumb reaches the end of the bar. Its axis runs the whole
+    /// bar for that — a low end at the axis floor is a gutter of no softness at
+    /// all, an ordinary setting, and a thumb stopping a point clear of the edge
+    /// says the control cannot reach it.
+    ///
+    /// Flush, not hanging off: the value puts the thumb's CENTER on the edge,
+    /// and what is drawn is held in by half a handle, the same way the octave
+    /// strip holds its own boundary marks.
+    #[test]
+    fn a_fade_bars_thumb_reaches_the_end_of_the_bar() {
+        let shapes = paint_fade_bar(AXIS.0, 100.0);
+        let bar = filled_rects(&shapes)[0].0;
+        let thumb = *thumbs(&shapes).first().expect("a fade bar painted no thumb");
+        assert!(
+            (thumb.left() - bar.left()).abs() < 0.01,
+            "the thumb's edge is at {} rather than at the bar's own ({})",
+            thumb.left(),
+            bar.left(),
+        );
+        assert!(
+            thumb.width() >= HANDLE_W - 0.01,
+            "the thumb was cut down to {:.1}pt to fit",
+            thumb.width(),
+        );
+    }
+
+    /// The inset stays where a bar opens at the full axis: both handles flush
+    /// on a bare track is the state a plain range bar starts life in, and there
+    /// they read as the bar's own border rather than as something to grab.
+    #[test]
+    fn a_plain_range_bars_thumb_keeps_its_clearance() {
+        let shapes = paint_range_bar(AXIS.0, AXIS.1);
+        let bar = filled_rects(&shapes)[0].0;
+        let thumb = *thumbs(&shapes).first().expect("a range bar painted no thumb");
+        assert!(
+            thumb.left() > bar.left() + 0.5,
+            "the low thumb sits at {}, flush with the bar's edge ({})",
+            thumb.left(),
+            bar.left(),
         );
     }
 
@@ -3748,9 +3856,7 @@ mod tests {
         let high = AXIS.0 + (AXIS.1 - AXIS.0) * 0.01;
         let painted = paint_fade_bar_clipped(AXIS.0, high);
         let bar = filled_rects(&paint_fade_bar(AXIS.0, high))[0].0;
-        let hx = bar.left()
-            + HANDLE_INSET
-            + (bar.width() - 2.0 * HANDLE_INSET) * (high - AXIS.0) / (AXIS.1 - AXIS.0);
+        let hx = fade_x_of(bar, high);
         let (clip, head) = painted
             .iter()
             .find_map(|s| match &s.shape {
@@ -3804,10 +3910,7 @@ mod tests {
         let shapes = paint_fade_bar(60.0, 60.0);
         let (head, _) = fade_head(&shapes).expect("a closed fade span painted no fill");
         let bar = filled_rects(&shapes)[0].0;
-        let x_of = |v: f32| {
-            let inner = bar.left() + HANDLE_INSET;
-            inner + (bar.width() - 2.0 * HANDLE_INSET) * (v - AXIS.0) / (AXIS.1 - AXIS.0)
-        };
+        let x_of = |v: f32| fade_x_of(bar, v);
         assert!(
             (head.left() - bar.left()).abs() < 0.01 && (head.right() - x_of(60.0)).abs() < 0.01,
             "a closed span's solid fill runs {}..{} rather than {}..{}",
