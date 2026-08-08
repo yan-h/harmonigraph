@@ -1198,10 +1198,10 @@ impl<'a> RangeBar<'a> {
         // The cursor says which of the two gestures a press would start, so the
         // difference is visible BEFORE committing to a drag: an end resizes,
         // the middle picks the whole range up and slides it.
-        let aimed_at = response
+        let would_start = response
             .hover_pos()
             .map(|p| Grab::at(value_at(p.x), (*self.low, *self.high), (min, max), near));
-        match aimed_at {
+        match would_start {
             Some(Grab::Span { .. }) => response.on_hover_cursor(egui::CursorIcon::Grab),
             Some(_) => response.on_hover_cursor(egui::CursorIcon::ResizeHorizontal),
             None => response,
