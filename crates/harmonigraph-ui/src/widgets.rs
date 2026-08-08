@@ -1505,7 +1505,7 @@ fn default_home() -> Gradient {
 /// say where on the circle it is in absolute terms, which is a number nobody
 /// reads a color off anyway — the track is painted in the colors themselves.
 ///
-/// **It previews all five knobs, not just the one it sets.** The claimed
+/// **It previews all six knobs, not just the one it sets.** The claimed
 /// stretch is painted straight out of [`pitch_ramp_lut`], the same table the
 /// lattice draws from, so brightness and chroma show up in it too and the
 /// preview cannot drift from the picture. A swatch drawn from the widget's own
@@ -3716,7 +3716,7 @@ mod tests {
                 "{spread:?}: the bar already holds the pair it would reset to",
             );
             assert_eq!(
-                double_click_spread(spread, dialled, home),
+                double_click_spread(spread, dialled, Some(home)),
                 spread.of(home.sanitized()),
                 "{spread:?}: the reset ignored the home it was handed",
             );
@@ -4926,16 +4926,35 @@ mod tests {
     /// for the reason the wheel's reset does: the bar carries no text entry, so
     /// a reset that missed would leave the shipped look unreachable by gesture.
     ///
-    /// The bar a caller names no home for is the one under test, that being the
-    /// case a caller can get wrong by omission — a bar handed a home of its own
-    /// resets to what it was handed, and `a_bar_over_the_heatmap_resets_to_the_heatmap_s_own_look`
-    /// is where that half is held.
+    /// The bar a caller names NO home for is the one under test, that being the
+    /// case a caller gets wrong by omission — a bar handed a home of its own
+    /// resets to what it was handed, and
+    /// [`a_bar_over_another_gradient_resets_to_the_one_it_was_handed`] is where
+    /// that half is held.
+    ///
+    /// Through the gesture rather than by comparing `default_home()` to the
+    /// expression `default_home()` is defined as, which is a tautology that
+    /// passes however the widget behaves. What has to be true is that a
+    /// double-click on a bar built WITHOUT `.home(..)` lands on the fresh view's
+    /// pair — three separate things (the default, the builder, and the reset
+    /// branch reading it), only one of which a pure comparison touches.
     #[test]
     fn a_double_click_goes_home_to_the_pair_a_fresh_view_opens_with() {
+        let fresh = ViewConfig::default().pitch_gradient;
         for spread in [Spread::Brightness, Spread::Chroma] {
-            assert_eq!(spread.of(default_home()), spread.of(ViewConfig::default().pitch_gradient));
+            let dialled = holding(spread, spread.snapped((30.0 / spread.per_unit(), 0.0)));
             assert_ne!(
-                spread.of(default_home()),
+                spread.of(dialled),
+                spread.of(fresh.sanitized()),
+                "{spread:?}: the bar already holds the pair it would reset to",
+            );
+            assert_eq!(
+                double_click_spread(spread, dialled, None),
+                spread.of(fresh.sanitized()),
+                "{spread:?}: the reset landed on a pair no fresh view opens with",
+            );
+            assert_ne!(
+                spread.of(fresh),
                 spread.of(Gradient::default()),
                 "{spread:?}: the type's own default and the composed one agree today, so \
                  this reset cannot tell whether it is reading the one the plugin actually \
@@ -5145,10 +5164,18 @@ mod tests {
         assert_eq!(texts(Spread::Chroma, (0.64, -0.44))[1], "86% \u{2192} 42%");
     }
 
-    /// Double-click one spread bar that was handed `home`, and answer the pair
-    /// it wrote. Through a real context for the reason [`drag_bar`] is: the
-    /// reset is a branch on a `Response`, and nothing synthetic reaches it.
-    fn double_click_spread(spread: Spread, start: Gradient, home: Gradient) -> (f32, f32) {
+    /// Double-click one spread bar and answer the pair it wrote. `home` is what
+    /// the bar is told to reset to, or `None` to leave the builder alone — which
+    /// is a caller naming no home, and a different path from one naming the same
+    /// gradient the default already is.
+    ///
+    /// Through a real context for the reason [`drag_bar`] is: the reset is a
+    /// branch on a `Response`, and nothing synthetic reaches it.
+    fn double_click_spread(
+        spread: Spread,
+        start: Gradient,
+        home: Option<Gradient>,
+    ) -> (f32, f32) {
         let ctx = egui::Context::default();
         crate::theme::apply_theme(&ctx);
         let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(300.0, 100.0));
@@ -5169,7 +5196,11 @@ mod tests {
                         Spread::Brightness => SpreadBar::brightness(g),
                         Spread::Chroma => SpreadBar::chroma(g),
                     };
-                    bar.set(b.home(home).show(ui).rect)
+                    let b = match home {
+                        Some(home) => b.home(home),
+                        None => b,
+                    };
+                    bar.set(b.show(ui).rect)
                 },
             );
         };

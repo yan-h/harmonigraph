@@ -370,11 +370,37 @@ struct ColumnColor {
 impl ColumnColor {
     fn new(cfg: &SpectrumConfig) -> ColumnColor {
         ColumnColor {
-            ramp: cfg.spectrogram_gradient.sanitized(),
+            ramp: toneless_hues_folded(cfg.spectrogram_gradient.sanitized()),
             floor_bits: cfg.floor_db.to_bits(),
             ceiling_bits: cfg.ceiling_db.to_bits(),
             tilt_bits: cfg.tilt.to_bits(),
         }
+    }
+}
+
+/// A gradient with its hue pair flattened when the gradient carries no chroma
+/// anywhere — the one case where two different keys name one picture.
+///
+/// At `chroma` and `chroma_ramp` both 0, `chroma_at` is 0 at every level, so the
+/// absolute chroma is 0 whatever the gamut holds, and Oklab's `a` and `b` are
+/// `c * cos(h)` and `c * sin(h)` — identically 0. Every texel is the same grey
+/// at every angle. That is the Mono preset, and the spectrum bar's track is a
+/// DRAG, so without this a gesture that changes not one byte re-blanks the whole
+/// ring on every frame of itself. `the_key_is_sensitive_to_every_input` holds
+/// both directions.
+///
+/// **Here and not in [`Gradient::sanitized`]**, which is the tempting place and
+/// the wrong one. Sanitize's answer is what the BARS read back and write, so
+/// folding there would snap the hue home under a pointer dragging it — and a hue
+/// dialled at no chroma is a real setting, the one a picture opens on when the
+/// chroma bar is next raised off 0. `SpectrogramPreset::Mono` writes one
+/// deliberately. The key's question is not "is this legal" but "does this decide
+/// a texel", and only the key may answer it.
+fn toneless_hues_folded(g: Gradient) -> Gradient {
+    if g.chroma == 0.0 && g.chroma_ramp == 0.0 {
+        Gradient { hue_start: 0.0, hue_span: 0.0, ..g }
+    } else {
+        g
     }
 }
 
@@ -1729,9 +1755,10 @@ fn fill_pixels(cfg: &SpectrumConfig, w: usize, bins: &[Bin], power: &[BucketDb])
 pub(super) fn cell_color(gradient: Gradient, level: f32) -> Color32 {
     let c = harmonigraph_scene::gradient_color(level, gradient);
     // The table is linear-interpolated between entries and the encode is
-    // already done, so this is a straight quantization. Rounding rather than
-    // truncating, for the reason the stop-list ramp this replaces gave: `as u8`
-    // floors, which drops up to a whole level of every interpolated colour.
+    // already done, so this is a straight quantization. ROUND and not truncate:
+    // `as u8` floors, which drops up to a whole level of every interpolated
+    // colour — a systematic darkening, on a ramp whose whole job is to read as
+    // smooth.
     let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
     Color32::from_rgb(byte(c.x), byte(c.y), byte(c.z))
 }
@@ -1974,14 +2001,77 @@ mod tests {
         }
     }
 
-    /// The heatmap's ramp reaches the two ends its bars read out, which is the
-    /// whole of what the pane promises about a gradient it did not author: a
-    /// preset states a pair of `L*` ends, and a cell at level 0 or 1 has to be
-    /// drawn at them.
+    /// A preset's six numbers ARE the two ends each of its bars reads out.
+    ///
+    /// [`SpectrogramPreset::gradient`] states each stretch as the pair a reader
+    /// can name — the `L*` and the chroma share that silence and a full bucket
+    /// are drawn at — and composes the middle-and-signed-ramp the gradient
+    /// stores. That composition is arithmetic with no picture of its own, so
+    /// nothing downstream can catch it being wrong: a `chroma` written as
+    /// `c_lo` rather than as the midpoint draws every colored preset visibly
+    /// duller and leaves every other assertion in the crate standing.
+    ///
+    /// Asserted against the pair the ARM names rather than against a constant
+    /// restated here — a second copy of the numbers would agree with itself
+    /// and the arm at once, and stop discriminating the moment either moved.
+    #[test]
+    fn a_preset_composes_the_pair_its_arm_names() {
+        // The pairs, spelled once, beside the arm that has to produce them.
+        let ends = |p: crate::SpectrogramPreset| -> ((f32, f32), (f32, f32)) {
+            use crate::SpectrogramPreset::*;
+            match p {
+                Mono => ((0.0, 100.0), (0.0, 0.0)),
+                Ice => ((0.0, 92.0), (0.55, 0.90)),
+                Aurora => ((0.0, 88.0), (0.40, 0.85)),
+                Magma => ((0.0, 90.0), (0.70, 0.85)),
+            }
+        };
+        // A middle and a signed ramp do not recompose to their own ends bit for
+        // bit — `Spread::legal` says why, a hundredth being no binary fraction —
+        // so the ends are compared to within an ulp or two rather than exactly.
+        // Six orders under the smallest difference any real slip makes: writing
+        // `c_lo` for the midpoint moves Aurora's low end by 0.11.
+        let close = |got: f32, want: f32| (got - want).abs() < 1e-5;
+        for preset in crate::SpectrogramPreset::ALL {
+            let g = preset.gradient();
+            let ((l_lo, l_hi), (c_lo, c_hi)) = ends(preset);
+            let half = g.lightness_ramp * 0.5;
+            assert!(
+                close(g.lightness - half, l_lo) && close(g.lightness + half, l_hi),
+                "{preset:?}: the brightness bar would read out \
+                 {} -> {}, not {l_lo} -> {l_hi}",
+                g.lightness - half,
+                g.lightness + half,
+            );
+            // Off the curve rather than off the fields, so this measures what a
+            // cell is actually drawn with: `chroma_at` is what resolves the pair
+            // at a level, and the bars read out its ends.
+            let (got_lo, got_hi) = (g.chroma_at(0.0) as f32, g.chroma_at(1.0) as f32);
+            assert!(
+                close(got_lo, c_lo) && close(got_hi, c_hi),
+                "{preset:?}: the chroma bar would read out \
+                 {got_lo} -> {got_hi}, not {c_lo} -> {c_hi}",
+            );
+            // And the gradient accepts all six untouched. Sanitize bounds a ramp
+            // by what its middle leaves on the axis, so a preset that overran
+            // would be silently pulled in and the pane would draw a picture the
+            // preset did not ask for — passing every test above, which read the
+            // clamped numbers back.
+            assert_eq!(g.sanitized(), g, "{preset:?}: sanitize moved a preset");
+        }
+    }
+
+    /// The heatmap's ramp reaches the two `L*` ends its brightness bar reads
+    /// out, which is the whole of what the pane promises about a gradient it did
+    /// not author: a cell at level 0 or 1 has to be drawn at them.
     ///
     /// Through [`cell_color`] rather than through the curve, so what is measured
     /// is the table the texels come off — including its quantization to a byte,
-    /// which is what the tolerance is for.
+    /// which is what the tolerance is for. The numbers it is held to are
+    /// `sanitized`'s, which is honest only because
+    /// `a_preset_composes_the_pair_its_arm_names` proves sanitize moves none of
+    /// them; without that, this would be measuring the clamped picture against
+    /// the clamped numbers and agreeing with itself.
     #[test]
     fn a_gradient_draws_its_own_ends() {
         for preset in crate::SpectrogramPreset::ALL {
@@ -2802,7 +2892,7 @@ mod tests {
         recoloured(|c| c.floor_db -= 6.0);
         recoloured(|c| c.ceiling_db -= 6.0);
         recoloured(|c| c.tilt += 1.0);
-        // The palette, which is now SIX numbers rather than one name. Each is
+        // The palette, which is six numbers rather than one name. Each is
         // swept on its own: they compare structurally, so this cannot catch a
         // field left off a hand-kept list the way the block above can — what it
         // catches is a knob whose value the key normalizes away, which
@@ -2832,6 +2922,40 @@ mod tests {
         };
         carried(|c| c.roll_seconds *= 1.01); // Span: the drag along time
         carried(|c| c.roll_fraction += 0.01); // the roll/heatmap divider
+        // And the hue pair at NO CHROMA, which is the Mono preset and the one
+        // place a gradient knob decides nothing. `chroma_at` is 0 at every
+        // level, so the absolute chroma is 0 whatever the hue, and Oklab's `a`
+        // and `b` are `c * cos(h)` and `c * sin(h)` — identically 0. Every texel
+        // is the same grey at every angle.
+        //
+        // Which makes the spectrum bar's track a control that redraws the whole
+        // heatmap per frame while changing not one byte of it, and the track is
+        // a DRAG. That is the shape [`ColumnStyle`] names as the cost that went
+        // unnoticed, reached here through the one gradient that has no hue.
+        let mono = crate::SpectrogramPreset::Mono.gradient();
+        let toneless = SpectrumConfig { spectrogram_gradient: mono, ..cfg };
+        for turned in [30.0f32, 180.0, 359.0] {
+            let mut c = toneless;
+            c.spectrogram_gradient.hue_start = (mono.hue_start + turned).rem_euclid(360.0);
+            c.spectrogram_gradient.hue_span = turned;
+            assert_eq!(
+                style(100, 0.1, 40.0, 48.0, &c),
+                style(100, 0.1, 40.0, 48.0, &toneless),
+                "a hue turned {turned} degrees at no chroma re-blanks a texture that \
+                 was still good",
+            );
+        }
+        // The converse, so the normalisation cannot be a blanket "ignore the
+        // hues": a picture WITH chroma still watches them.
+        let mut coloured = toneless;
+        coloured.spectrogram_gradient.chroma = 0.5;
+        let mut turned = coloured;
+        turned.spectrogram_gradient.hue_start += 40.0;
+        assert_ne!(
+            style(100, 0.1, 40.0, 48.0, &turned),
+            style(100, 0.1, 40.0, 48.0, &coloured),
+            "the ring would carry a stale texture forward",
+        );
 
         // And every field that says WHICH columns were drawn. These move as the
         // window scrolls, which the ring is built to survive — so they must move

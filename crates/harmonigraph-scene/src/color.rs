@@ -431,24 +431,36 @@ pub(crate) fn designed_pitch_ramp(t: f64, gradient: Gradient) -> Vec4 {
     ramp_color(t, gradient.sanitized())
 }
 
-/// Tables the memo below holds at once, and it is a count of the gradients ON
-/// SCREEN rather than a cache size dialled by measurement.
+/// Tables the memo below holds at once, and it is a count of the gradients LIVE
+/// IN A FRAME rather than a cache size dialled by measurement.
 ///
-/// There are two of them, and they are both live every frame: the lattice's
-/// pitch gradient, which the scene derive walks per node, and the Spectral
-/// pane's level gradient, which the spectrum curve walks per slab — up to 4096
-/// of them. One slot served the lattice alone perfectly, hitting on essentially
-/// every call because the knobs hold still except while a control is being
-/// dragged. It cannot serve two: the two gradients differ, so each pane's first
-/// ask would evict the other's table, and a frame drawing both would pay two
-/// full rebuilds — [`PITCH_LUT_N`] gamut bisections each, 165us apiece measured
-/// — every frame rather than only while a knob moves.
+/// Two of them are pictures: the lattice's pitch gradient, which the scene
+/// derive walks per node, and the Spectral pane's level gradient, which the
+/// spectrum curve walks per slab — up to 4096 of them. One slot served the
+/// lattice alone perfectly, hitting on essentially every call because the knobs
+/// hold still except while a control is being dragged. It cannot serve two: the
+/// two gradients differ, so each pane's first ask evicts the other's table, and
+/// a frame drawing both pays two full rebuilds — [`PITCH_LUT_N`] gamut
+/// bisections each, 165us apiece measured — every frame rather than only while
+/// a knob moves.
 ///
-/// A third gradient would want a third slot, which is why this is written as a
-/// length rather than as a pair of fields. It is NOT a general cache: the scan
-/// below is linear and the eviction is "the other one", both of which stop
-/// paying somewhere above a handful.
-const LUT_SLOTS: usize = 2;
+/// **The third is the one a bar is part-way through writing**, and it is why
+/// this is 3 and not 2. A settings pane draws AFTER the display panes, so
+/// everything above the bar in a frame reads the value the bar wrote LAST
+/// frame, and then the bar writes a new one and paints THAT — it re-reads
+/// deliberately, so the handle does not trail the pointer by a frame. A drag
+/// therefore walks three keys per frame where only the newest is a fair
+/// rebuild. At two slots the newest evicts the lattice's, the next frame's
+/// lattice ask evicts it back, and a held drag settles at very nearly two
+/// rebuilds a frame instead of one:
+/// `a_frame_of_a_drag_rebuilds_only_what_the_drag_changed` measures 19 over ten
+/// frames at two slots against the 10 that are the floor.
+///
+/// So the count is (pictures + 1), and a third gradient in the picture would
+/// make it 4 — which is why it is a length rather than a pair of fields. It is
+/// NOT a general cache: the scan below is linear and the eviction is
+/// most-recently-used, both of which stop paying somewhere above a handful.
+pub(crate) const LUT_SLOTS: usize = 3;
 
 // Tables [`with_lut`] has built on this thread — the one thing a caller cannot
 // otherwise see, the cache being invisible in what it returns.
@@ -529,7 +541,7 @@ fn with_lut<R>(gradient: Gradient, read: impl FnOnce(&[Vec4; PITCH_LUT_N]) -> R)
 ///
 /// Each side maps a pitch to a `t` FIRST and indexes with that, so the
 /// gradient's endpoints never reach the table and it stays range-independent.
-/// The five knobs are the only thing it varies with — which is why the memo is
+/// The six knobs are the only thing it varies with — which is why the memo is
 /// keyed on those and NOT on the range. A change that folded
 /// `darkest_pitch`/`brightest_pitch` into the entries would make that cache
 /// wrong, not just stale.
@@ -548,7 +560,7 @@ pub fn pitch_ramp_lut(gradient: Gradient) -> [Vec4; PITCH_LUT_N] {
 /// of the ring at the size the pane draws it.
 pub const HUE_CIRCLE_N: usize = 96;
 
-/// The whole hue circle at one lightness and chroma — what a gradient's five
+/// The whole hue circle at one lightness and chroma — what a gradient's six
 /// knobs would give at every hue, not just the arc it takes. The pair handed in
 /// is the MIDDLE of each ramp, which is the one point of the curve a circle
 /// standing for every hue at once can be drawn at.
@@ -672,12 +684,19 @@ pub fn pitch_lut_color(
 /// [`pitch_lut_color`] says: a caller wanting the DESIGNED color of one point
 /// is asking a question no drawn shape asks.
 pub fn gradient_color(t: f32, gradient: Gradient) -> Vec4 {
-    // A non-finite `t` takes the bottom of the range, which is [`ramp_t`]'s own
-    // answer for a non-finite RANGE and wanted here for the same reason: `clamp`
-    // hands NaN straight back, `as usize` then saturates the index to 0, and the
-    // lerp weight stays NaN — so the color rides out as a NaN nobody sees rather
+    // A NaN takes the bottom of the range, which is [`ramp_t`]'s own answer for
+    // a non-finite RANGE and wanted here for the same reason: `clamp` hands NaN
+    // straight back, `as usize` then saturates the index to 0, and the lerp
+    // weight stays NaN — so the color would ride out as a NaN nobody sees rather
     // than as the ramp's dark end.
-    let t = if t.is_finite() { t.clamp(0.0, 1.0) } else { 0.0 };
+    //
+    // NaN alone, and not every non-finite value: the INFINITIES clamp correctly
+    // and mean something, `+inf` being as far past the top of the range as a
+    // level can get. Sending them to the bottom with the NaN would draw silence
+    // where a caller asked for the loudest thing there is —
+    // `a_level_off_the_range_lands_on_the_nearest_end` is where both ends are
+    // held.
+    let t = if t.is_nan() { 0.0 } else { t.clamp(0.0, 1.0) };
     let f = t * (PITCH_LUT_N - 1) as f32;
     // The clamp above lands the floor inside the table, so the last entry pairs
     // with itself at a lerp weight of 0.

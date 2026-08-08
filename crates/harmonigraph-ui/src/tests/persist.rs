@@ -337,15 +337,14 @@ fn corrupt_persist_is_ignored() {
 ///
 /// The variant case is the one worth a test of its own, because it is the one
 /// this build can still meet in the wild: no code reads an older spelling any
-/// more, so a blob naming an orientation, sweep mode or node style that has since
-/// been dropped fails the parse — and it fails BEFORE the version is read, so
-/// the floor cannot catch it however high it is set.
+/// more, so a blob naming an orientation or sweep mode that has since been
+/// dropped fails the parse — and it fails BEFORE the version is read, so the
+/// floor cannot catch it however high it is set.
 #[test]
 fn a_refused_blob_says_why() {
     // A dropped enum variant, spliced where a live one sat. The orientation,
-    // the palette this used to splice having stopped being an enum at all —
-    // the heatmap's look is six numbers now, and a number out of range is
-    // repaired rather than refused.
+    // the heatmap's look being six numbers rather than an enum — and a number
+    // out of range is repaired rather than refused, which is the other test.
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
     state.spectrum_config.orientation = crate::SpectralOrientation::Left;
     let saved = state.save_persist();
@@ -889,6 +888,53 @@ fn a_blob_with_a_nonsense_pitch_range_loads_at_the_design_range() {
         } else {
             assert_eq!(low, 40.5, "the good end still loads");
         }
+    }
+}
+
+/// The heatmap's gradient comes back drawable, the third field on this door
+/// after the pitch range and the UI scale — and the one whose repair is easiest
+/// to leave out, `Gradient` having a `sanitized` of its own that the DRAW path
+/// calls anyway.
+///
+/// That is exactly why it needs a test rather than an argument. The picture is
+/// right either way, because `with_lut` sanitizes at the table and the bars
+/// sanitize before they paint; what is wrong without the repair is that the
+/// FILE keeps a pair the picture is not at, indefinitely, and nothing rewrites
+/// it until someone drags that bar. CLAUDE.md is the line this is held to: "The
+/// value on screen must still be the value the file holds."
+///
+/// Two shapes, because they fail differently. A ramp wider than its middle
+/// leaves is a legal pair of floats that names an illegal picture — sanitize
+/// pulls it in. A NaN is not a number at all, and it is the one that would ride
+/// into a color conversion and out into the instance buffer unannounced.
+#[test]
+fn a_blob_with_a_nonsense_heatmap_gradient_loads_at_a_drawable_one() {
+    for (key, broken) in [("lightness", "5.0"), ("chroma", "NaN")] {
+        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        // A gradient off the defaults, and one sanitize leaves alone, so the
+        // splice has something to name and the untouched knobs prove they
+        // survived rather than matching a fresh install by luck.
+        state.spectrum_config.spectrogram_gradient = harmonigraph_scene::Gradient {
+            hue_start: 137.5,
+            hue_span: -85.25,
+            lightness: 44.0,
+            lightness_ramp: 71.5,
+            chroma: 0.375,
+            chroma_ramp: -0.25,
+        };
+        let saved = state.save_persist();
+        let was = if key == "lightness" { "44.0" } else { "0.375" };
+        let spliced = saved.replacen(&format!("{key}:{was}"), &format!("{key}:{broken}"), 1);
+        assert_ne!(spliced, saved, "the {key} splice must land for this to test anything");
+
+        let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+        restored.load_persist(&spliced);
+        let g = restored.spectrum_config.spectrogram_gradient;
+        assert_eq!(g.sanitized(), g, "{key}:{broken} left the file holding {g:?}");
+        // And the knobs the splice did not touch keep what the blob said, so
+        // the repair cannot pass by resetting the whole gradient.
+        assert_eq!(g.hue_start, 137.5, "{key}:{broken}: an untouched knob was reset");
+        assert_eq!(g.hue_span, -85.25, "{key}:{broken}: an untouched knob was reset");
     }
 }
 

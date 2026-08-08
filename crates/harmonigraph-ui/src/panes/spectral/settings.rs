@@ -316,8 +316,10 @@ pub(crate) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
             "How far a dark surround stands off a note, in points. It wraps \
              every side, so a note is a bounded object over the spectrogram \
              rather than a ribbon dissolving into it — and dark, because every \
-             heatmap gradient starts at black and climbs, so black is what its \
-             cells are furthest from. 0 draws none.\n\nIn points rather \
+             heatmap PRESET starts at black and climbs, so black is what its \
+             cells are furthest from. (Take the Brightness bar's low end up and \
+             that stops being true; the ribbon still carries its own color.) \
+             0 draws none.\n\nIn points rather \
              than semitones, so it is the same edge at every zoom; at a wide \
              zoom the ribbons are thinner than this and neighbours' outlines \
              reach over each other.",

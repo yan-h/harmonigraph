@@ -126,7 +126,7 @@ pub struct ViewConfig {
     // Rings, Tiles, Pinwheel). Serde ignores unknown keys, so such a blob
     // loads intact and drops the key on the next save. This is the only
     // surviving record of that set, which is why it names it in full.
-    /// The curve the low-to-high pitch gradient follows, as its five knobs
+    /// The curve the low-to-high pitch gradient follows, as its six knobs
     /// (see [`Gradient`]). Every pitch-colored shape in the scene reads
     /// it through one table, so this is the only place the gradient is set.
     pub pitch_gradient: Gradient,
@@ -715,7 +715,7 @@ impl ViewConfig {
             fresh.label_scale
         };
 
-        // The pitch gradient's five knobs, for the same reason as the label
+        // The pitch gradient's six knobs, for the same reason as the label
         // scale above and one more: they are the memo key of the color table
         // every pitch-colored shape reads, so a non-finite one would miss the
         // cache on every lookup as well as drawing a NaN.

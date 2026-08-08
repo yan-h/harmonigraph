@@ -211,7 +211,7 @@ impl Gradient {
     /// arc there is. Past it the gradient would revisit hues it already used.
     pub const MAX_HUE_SPAN: f32 = 360.0;
 
-    /// Fit the five to what their controls can produce. A bar cannot make a
+    /// Fit the six to what their controls can produce. A bar cannot make a
     /// nonsense value but a hand-edited RON can, and these feed a color
     /// conversion whose output goes straight into the instance buffer: a
     /// non-finite `L*` would ride out as a NaN color rather than announce

@@ -109,27 +109,30 @@ impl SpectralOrientation {
     }
 }
 
-/// A look the spectrogram's gradient can be set to in one press: the four
-/// named ramps the heatmap used to choose between, each read back as the
-/// [`Gradient`] that draws it.
+/// A look the heatmap's gradient can be set to in one press: four named ramps,
+/// each stated as the [`Gradient`] that draws it.
 ///
-/// A starting point and NOT a mode. Nothing stores which one was last pressed,
+/// A starting point and NOT a mode. Nothing stores which one was pressed,
 /// because a press writes six numbers a bar can then move, and a name that went
-/// on claiming the picture after a drag would be naming a look that is no longer
-/// on screen. What each is worth is therefore what it opens on, which is why
-/// they are stated as gradients here rather than as the stop lists they were:
-/// the stop lists interpolated in sRGB BYTES, which is not a perceptual space —
-/// their grey ramp put mid-grey at `L*` 54 rather than 50, and their color ramps
-/// wandered off the straight line between their ends by as much as a tenth of
-/// the black-to-white distance in Oklab. What is kept is each one's CHARACTER —
-/// where its arc starts and how far it runs, how bright it closes, how much
-/// color it carries — and what is dropped is the wandering.
+/// on claiming the picture after a drag would be naming a look that is not on
+/// screen. What a preset is worth is therefore what it opens on, and each is
+/// six numbers rather than a list of color stops for a reason worth stating,
+/// since a stop list is the obvious way to write a palette and the one this
+/// declines.
 ///
-/// So a preset is a reading of the old ramp, not a reproduction of it, and the
-/// difference is visible side by side. It is also, on the argument above, the
-/// better half: an even ramp is what reads a heatmap's quiet detail honestly,
-/// and that is exactly what a straight line in `L*` is and a straight line in
-/// bytes is not.
+/// **A stop list interpolates in sRGB BYTES, which is not a perceptual space.**
+/// Its grey ramp puts mid-grey at `L*` 54 where an even one puts 50, and its
+/// colored ramps wander off the straight line between their own ends by as much
+/// as a tenth of the black-to-white distance in Oklab — measured against these
+/// four. A heatmap is read for its quiet detail, and an even ramp is what reads
+/// that detail honestly, so evenness is the property worth having and a line
+/// straight in `L*` is what has it.
+///
+/// What a preset therefore carries is a ramp's CHARACTER — where its arc
+/// starts, how far round it runs, how bright it closes, how much color it holds
+/// — and not a curve through hand-picked stops. Anything a stop list could say
+/// that six knobs cannot is a wander, and the wander is the part not worth
+/// keeping.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SpectrogramPreset {
     /// Black to white with no color at all — the classic, and the most neutral
@@ -446,9 +449,18 @@ impl SpectrumConfig {
             self.ceiling_db.clamp(self.floor_db + LEVEL_RANGE_MIN_SPAN, LEVEL_MAX_DB);
         // And the heatmap's gradient, which `ViewConfig::sanitize` does for the
         // lattice's one door over. Asked of the type rather than restated, so
-        // the pane and the file agree about which gradients are legal — the
-        // draw path sanitizes again at the table, but a blob left unrepaired
-        // here would draw one picture and read out another on the bars.
+        // the pane and the file agree about which gradients are legal.
+        //
+        // What this buys is NOT the picture, and the distinction is the whole
+        // reason the line is easy to delete: both bars paint `sanitized()` and
+        // read out what they paint, and `with_lut` sanitizes again at the table,
+        // so an unrepaired blob already draws and reads out the repaired
+        // gradient. What it buys is that the FILE stops holding a pair the
+        // picture is not at — otherwise the two disagree indefinitely, since
+        // nothing rewrites the field until someone drags that bar. CLAUDE.md is
+        // the line: "The value on screen must still be the value the file
+        // holds." `a_blob_with_a_nonsense_heatmap_gradient_loads_at_a_drawable_one`
+        // is what fails without it.
         self.spectrogram_gradient = self.spectrogram_gradient.sanitized();
     }
 }
