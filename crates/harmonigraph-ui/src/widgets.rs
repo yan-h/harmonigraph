@@ -3243,6 +3243,22 @@ mod tests {
         };
         let solid = from_well(ramp[0].1);
         assert!(solid > 0.0, "the fill is the same color as the track it sits on");
+        // Halfway along the ramp it is halfway out. This is what pins where
+        // the fade STARTS, which is the one thing the paint exists to show and
+        // the one thing every assertion around it leaves free: a ramp squeezed
+        // into the last quarter is still solid before `low`, still monotone,
+        // and still lands on the well at `high`.
+        let middle = (x_of(low) + x_of(high)) * 0.5;
+        let at_middle = ramp
+            .iter()
+            .min_by(|a, b| (a.0 - middle).abs().total_cmp(&(b.0 - middle).abs()))
+            .expect("the ramp has columns")
+            .1;
+        assert!(
+            (from_well(at_middle) - solid * 0.5).abs() < solid * 0.15,
+            "halfway along the fade the fill is {:.0}% of solid, not about half",
+            100.0 * from_well(at_middle) / solid,
+        );
         let mut previous = f32::INFINITY;
         for (x, color) in ramp {
             if x <= x_of(low) + 0.01 {
