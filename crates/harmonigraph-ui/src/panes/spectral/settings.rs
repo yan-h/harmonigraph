@@ -46,14 +46,15 @@ pub(super) fn span_readout(seconds: f32) -> String {
     }
 }
 
-/// The heatmap's level->color gradient on the same three bars the Nodes tab
-/// dials the lattice's pitch gradient with, over a row of presets.
+/// The heatmap's level->color gradient on the same preview and three bars the
+/// Nodes tab dials the lattice's pitch gradient with, over a row of presets.
 ///
-/// Three bars and not four: the group is the arc on the spectrum bar, the
-/// brightness pair on one of its own and the chroma pair on another, each a
-/// picture of what its numbers COMPOSE — see `panes::nodes::spectrum_group`,
-/// which is the same set over the same type and says why a six-number gradient
-/// costs three rows rather than six.
+/// Three bars and not six: the group is the gradient itself across the top, and
+/// under it the arc on the spectrum bar, the brightness pair on one of its own
+/// and the chroma pair on another, each a picture of what its numbers COMPOSE —
+/// see `panes::nodes::spectrum_group`, which is the same set over the same type
+/// and says why a six-number gradient costs three rows and a preview rather
+/// than six rows.
 ///
 /// **What differs is the axis, and only the readouts show it.** There the
 /// range is pitch, so a bar's two ends are the lowest and highest notes; here
@@ -63,13 +64,14 @@ pub(super) fn span_readout(seconds: f32) -> String {
 /// which is the tooltip, and the tooltips below are written for level rather
 /// than shared with the Nodes tab's.
 ///
-/// **The presets come first**, which is the opposite of the group in the Nodes
-/// tab and deliberate: a heatmap palette is a thing people pick by name before
-/// they dial it, and the four names are what this pane offered before it
+/// **The presets come first**, ahead of the preview the Nodes tab opens its
+/// group with, and deliberate: a heatmap palette is a thing people pick by name
+/// before they dial it, and the four names are what this pane offered before it
 /// offered any knobs at all. They write the bars below and are not a mode — see
-/// [`crate::SpectrogramPreset`].
+/// [`crate::SpectrogramPreset`]. The preview then sits between the names and
+/// the bars, which is where both of them are read against it.
 fn spectrogram_gradient_group(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig) {
-    use crate::widgets::{SpectrumBar, SpreadBar};
+    use crate::widgets::{GradientPreview, SpectrumBar, SpreadBar};
     use crate::SpectrogramPreset;
 
     // The gradient a double-click on any of the three goes home to. The fresh
@@ -95,18 +97,18 @@ fn spectrogram_gradient_group(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig
             }
         }
     });
+    // The row first, the colors last — see [`GradientPreview`].
+    let preview = GradientPreview::reserve(ui);
     SpectrumBar::new(&mut cfg.spectrogram_gradient).home(home).show(ui).on_hover_text(
         "The level->color spectrum: how far round the color circle the level \
          range walks, out of the whole turn the bar stands for. The hues it \
          takes fill from the left, silence first; the ones it does not are \
          dimmed. The track is hue alone — the brightness and chroma bars below \
-         move the strip, not the circle, which is what leaves the hues showing \
-         at Mono, where the arc itself has no width. Drag the handle to widen \
-         or narrow it, drag the track to turn the circle under it, \
-         double-click to reset. The strip beneath is the \
-         gradient itself at full width, quiet to loud, all six numbers \
-         together; the button at the left runs it the other way round the \
-         circle.",
+         move the picture above, not the circle, which is what leaves the hues \
+         showing at Mono, where the arc itself has no width. Drag the handle \
+         to widen or narrow it, drag the track to turn the circle under it, \
+         double-click to reset. The button past the right end runs the whole \
+         thing the other way round the circle.",
     );
     SpreadBar::brightness(&mut cfg.spectrogram_gradient).home(home).show(ui).on_hover_text(
         "The stretch of brightness the level range spends, in CIELab L*: the \
@@ -127,6 +129,12 @@ fn spectrogram_gradient_group(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig
          Mono. Near the top the ramp rides the gamut's own boundary, whose \
          corners between the screen's primaries show up as steps in an \
          otherwise smooth sweep.",
+    );
+    preview.show(ui, &cfg.spectrogram_gradient).on_hover_text(
+        "The gradient itself, silence on the left and a full bucket on the \
+         right: every one of the six numbers the bars below carry, composed \
+         into the colors the heatmap draws with. A picture rather than a \
+         control — the three bars under it are what move it.",
     );
 }
 
