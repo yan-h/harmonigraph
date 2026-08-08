@@ -286,8 +286,8 @@ fn parity_scene() -> Scene {
         sevens_soft: 0.24,
         node_radius: 0.34,
         mark_thickness: 0.09,
-        // Off, on the same grounds as trail_mark below: a single-instant
-        // parity image can't depend on which moment of a cycle it lands on.
+        // Off: a single-instant parity image can't depend on which moment
+        // of a cycle it lands on.
         pulse_marks: Default::default(),
         // The sweep's own settings, at this suite's measurable values rather
         // than the fresh view's (see `PARITY_SHIMMER_WIDTH`). Inert while the
@@ -2516,7 +2516,7 @@ fn a_lone_notes_octave_fades_in_a_straight_line() {
     let lit = probe.mean(&full, mid, wedge);
 
     // Proportional, channel by channel: the wedge is nothing but this glyph
-    // (no core, no rings, and the idle marker does not reach the band), so a
+    // (no core and no rings, and an idle node paints nothing at all), so a
     // straight-line fade is the reading at `e` being `e` of the reading at
     // full. The tolerance is the 8-bit packing of the level plus the target's
     // own rounding, well under the 5-to-9 the bulge would add here.
@@ -3540,8 +3540,8 @@ fn a_label_takes_its_own_nodes_place_in_the_order() {
 ///
 /// The state is the plugin's resting one, which is what makes it worth a
 /// test of its own: stock view, nothing played, hover any node. An idle node
-/// draws no disc under `IdleMarker::None` with the trail lifting rather than
-/// ringing, and a hovered node is named whether or not it draws.
+/// draws nothing at all, and a hovered node is named whether or not it
+/// draws.
 #[test]
 fn a_culled_home_nodes_name_draws_over_the_grid_it_shares_a_seam_with() {
     let mut scene = parity_scene();

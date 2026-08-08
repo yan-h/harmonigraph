@@ -485,9 +485,10 @@ pub fn derive_scene(
         node_pcs.push(node_pc);
     }
 
-    // Marks only the idle layer (see `trail`), so nothing downstream that
-    // reads "is sounding" — the grid's sevens chains above all — can pick a
-    // memory up by mistake, whatever order these run in.
+    // Writes `trail` and nothing else (see `trail`), so nothing downstream
+    // that reads "is sounding" — the grid's sevens chains above all — can
+    // pick a memory up by mistake, whatever order these run in. The label
+    // layer is the only reader, and it draws no shape.
     if let Some(field) = TrailField::build(tracker.history(), view, now) {
         field.apply(&mut nodes, &node_pcs, tuning);
     }

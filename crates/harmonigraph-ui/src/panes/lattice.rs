@@ -1677,7 +1677,7 @@ mod tests {
     /// The band `0 < activation < TRAIL_LABEL_STRENGTH` was reachable only on
     /// the way out when the reserve was written, because a note's core simply
     /// appeared at full. It is now climbed on every note-on, and at the fresh
-    /// view — trail marks and their names both on — that is every lit node.
+    /// view — the trail's kept names on — that is every lit node.
     #[test]
     fn a_name_arriving_is_no_brighter_than_the_note_it_names() {
         let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);

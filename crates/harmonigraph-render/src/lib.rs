@@ -1875,9 +1875,9 @@ impl CallbackTrait for LatticeCallback {
         let screen_size = px_size(1.0);
         // Nothing to draw (matches paint()'s early-out): skip the offscreen
         // target and pass entirely. The EDGES count as much as the nodes —
-        // `from_scene` drops nodes that can paint nothing, so a still lattice
-        // with the idle marker off is exactly a frame of grid and no
-        // instances, and keying this on the instances alone would take the
+        // `from_scene` drops nodes that can paint nothing, and an idle node
+        // paints nothing, so a still lattice is exactly a frame of grid and
+        // no instances — and keying this on the instances alone would take the
         // grid down with them. So do the LABELS, for the same reason from the
         // other end: a hovered idle node paints nothing and is named, so a
         // lattice can be a frame of one label and nothing else.
