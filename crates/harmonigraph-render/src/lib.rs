@@ -107,6 +107,19 @@ pub use egui_wgpu::wgpu;
 const SHADER_SRC: &str = include_str!("shaders/lattice.wgsl");
 const BLIT_SRC: &str = include_str!("shaders/blit.wgsl");
 
+/// What the bloom multiplies its blurred quarter by, out of whatever the bar
+/// or a saved blob hands over: below zero is off, and above the ceiling is
+/// the ceiling.
+///
+/// One function rather than a bound at each place a strength is read, because
+/// the lattice and the piano roll take the SAME number and the whole claim
+/// [`BloomChain`] rests on is that it means one halo in both pictures. A bound
+/// applied to one of them alone is a light a node has that its ribbon does
+/// not, which is a difference between the two that says nothing.
+pub fn bloom_strength(raw: f32) -> f32 {
+    raw.clamp(0.0, 4.0)
+}
+
 /// Depth format of the offscreen pass. Written for future depth-reading
 /// effects; the scene pipelines test `Always` so it never affects output.
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
@@ -483,7 +496,7 @@ struct LatticeCallback {
 }
 
 /// One pass of the bloom chain: the pipeline to run, its bind group, and the
-/// texture it renders into. See [`LatticeCallback::run_bloom_chain`].
+/// texture it renders into. See [`BloomChain::run`].
 type BloomStep<'a> = (&'a wgpu::RenderPipeline, &'a wgpu::BindGroup, &'a wgpu::TextureView);
 
 /// One label's glyphs, and where they are drawn: `at` is how many node
@@ -750,7 +763,7 @@ impl LatticeCallback {
                     scene.darkest_pitch,
                     scene.brightest_pitch,
                     render_scale,
-                    scene.bloom_strength.clamp(0.0, 4.0),
+                    bloom_strength(scene.bloom_strength),
                 ],
                 misc3: [scene.core_radius, scene.outer_inner, scene.outer_outer, 0.0],
                 pitch_lut: std::array::from_fn(|k| scene.pitch_lut[k].to_array()),
@@ -818,50 +831,14 @@ impl LatticeCallback {
         self.stats.is_some()
     }
 
-    /// The bloom post-process, as four full-screen passes in a fixed order:
-    /// bright-pass into half res, downsample to quarter, then a separable
-    /// blur ping-ponging quarter A -> B (horizontal) -> A (vertical). The
-    /// composite in [`CallbackTrait::paint`] samples quarter A, so the
-    /// vertical blur MUST be the step that lands there.
-    ///
-    /// This is the only place that ordering is written down; the pipelines
-    /// themselves are created independently in [`LatticeResources::new`].
-    fn run_bloom_chain(
-        &self,
-        encoder: &mut wgpu::CommandEncoder,
-        resources: &LatticeResources,
-        offscreen: &Offscreen,
-    ) {
-        let steps: [BloomStep; 4] = [
-            (&resources.bright_pipeline, &offscreen.bright_bind_group, &offscreen.half_view),
-            (
-                &resources.downsample_pipeline,
-                &offscreen.downsample_bind_group,
-                &offscreen.quarter_a_view,
-            ),
-            (&resources.blur_h_pipeline, &offscreen.blur_h_bind_group, &offscreen.quarter_b_view),
-            (&resources.blur_v_pipeline, &offscreen.blur_v_bind_group, &offscreen.quarter_a_view),
-        ];
-        for (pipeline, bind_group, target) in steps {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("lattice_bloom_pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: target,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_pipeline(pipeline);
-            pass.set_bind_group(0, bind_group, &[]);
-            pass.draw(0..4, 0..1);
+    /// The lattice's own pipelines, in the order [`BloomChain::run`] steps
+    /// through them.
+    fn bloom_pipelines(resources: &LatticeResources) -> BloomPipelines<'_> {
+        BloomPipelines {
+            bright: &resources.bright_pipeline,
+            downsample: &resources.downsample_pipeline,
+            blur_h: &resources.blur_h_pipeline,
+            blur_v: &resources.blur_v_pipeline,
         }
     }
 }
@@ -1162,18 +1139,8 @@ struct Offscreen {
     /// halo where the name sits — which is the artifact this removes.
     nodes_view: wgpu::TextureView,
     depth_view: wgpu::TextureView,
-    /// Bloom chain targets: half res (bright pass) and two quarter-res
-    /// ping-pong textures for the separable blur.
-    half_view: wgpu::TextureView,
-    quarter_a_view: wgpu::TextureView,
-    quarter_b_view: wgpu::TextureView,
-    /// Bind groups, named by the pass that USES them (source texture +
-    /// shared sampler): bright samples the scene WITHOUT its labels,
-    /// downsample the half, blur_h quarter A, blur_v quarter B.
-    bright_bind_group: wgpu::BindGroup,
-    downsample_bind_group: wgpu::BindGroup,
-    blur_h_bind_group: wgpu::BindGroup,
-    blur_v_bind_group: wgpu::BindGroup,
+    /// The halo, grown from the scene WITHOUT its labels.
+    bloom: BloomChain,
     /// Composite: scene color + blurred bloom (quarter A) + uniforms.
     composite_bind_group: wgpu::BindGroup,
     size: [u32; 2],
@@ -1186,6 +1153,159 @@ struct OffscreenShared<'a> {
     composite_layout: &'a wgpu::BindGroupLayout,
     filter_layout: &'a wgpu::BindGroupLayout,
     sampler: &'a wgpu::Sampler,
+}
+
+/// The bloom post-process's targets and bind groups: a soft-knee threshold
+/// into half the picture's SCREEN size, a plain downsample to a quarter, then
+/// a separable blur ping-ponging between two quarter-res textures.
+///
+/// One chain, both pictures. The lattice feeds it the scene without its
+/// labels; the piano roll feeds it the notes rendered again offscreen
+/// (`crate::roll`). That they are the same four steps in the same order over
+/// the same fractions is the whole of what makes one bloom strength mean one
+/// halo, and it is a claim a second copy cannot keep: the step that matters
+/// most is WHERE the threshold sits, and a chain that thresholds after the
+/// downsample instead of before it measures a thin shape that has already been
+/// averaged twice, so a ribbon gets a fraction of the halo the node it lit up
+/// gets from the identical color.
+///
+/// The blurs run at a quarter, which is what makes the halo wide and cheap;
+/// the threshold runs at a half, which is what makes it measure the picture
+/// rather than a smear of it.
+struct BloomChain {
+    /// The thresholded picture at half the screen size.
+    half_view: wgpu::TextureView,
+    /// The blur's ping-pong pair, and A is where the chain ENDS — whatever
+    /// composites the halo samples A, so the vertical blur must land there.
+    quarter_a_view: wgpu::TextureView,
+    quarter_b_view: wgpu::TextureView,
+    /// Bind groups, named by the pass that USES them (source texture + the
+    /// shared sampler): bright samples the caller's picture, downsample the
+    /// half, blur_h quarter A, blur_v quarter B.
+    bright_bind_group: wgpu::BindGroup,
+    downsample_bind_group: wgpu::BindGroup,
+    blur_h_bind_group: wgpu::BindGroup,
+    blur_v_bind_group: wgpu::BindGroup,
+}
+
+/// The four pipelines [`BloomChain::run`] steps through, in that order.
+///
+/// Passed in rather than held: they are built per target format, and the two
+/// callers have their own (the lattice writes an offscreen texture, the roll
+/// the surface egui handed it).
+struct BloomPipelines<'a> {
+    bright: &'a wgpu::RenderPipeline,
+    downsample: &'a wgpu::RenderPipeline,
+    blur_h: &'a wgpu::RenderPipeline,
+    blur_v: &'a wgpu::RenderPipeline,
+}
+
+impl BloomChain {
+    /// Build the chain over `source`, at fractions of `screen_size` device
+    /// pixels.
+    ///
+    /// `screen_size` is the picture's size ON SCREEN and not the size of
+    /// `source`: the lattice's scene texture is render-scaled and the roll's
+    /// note texture is already halved, and in both cases what the halo's width
+    /// must be a constant share of is the screen.
+    fn new(
+        device: &wgpu::Device,
+        label: &str,
+        format: wgpu::TextureFormat,
+        filter_layout: &wgpu::BindGroupLayout,
+        sampler: &wgpu::Sampler,
+        source: &wgpu::TextureView,
+        screen_size: [u32; 2],
+    ) -> Self {
+        let tex = |label: String, w: u32, h: u32| {
+            device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some(&label),
+                    size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                        | wgpu::TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
+                })
+                .create_view(&Default::default())
+        };
+        let (hw, hh) = (screen_size[0].div_ceil(2).max(1), screen_size[1].div_ceil(2).max(1));
+        let (qw, qh) = (screen_size[0].div_ceil(4).max(1), screen_size[1].div_ceil(4).max(1));
+        let half_view = tex(format!("{label}_bloom_half"), hw, hh);
+        let quarter_a_view = tex(format!("{label}_bloom_quarter_a"), qw, qh);
+        let quarter_b_view = tex(format!("{label}_bloom_quarter_b"), qw, qh);
+        let filter_bg = |label: String, source: &wgpu::TextureView| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(&label),
+                layout: filter_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(source),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(sampler),
+                    },
+                ],
+            })
+        };
+        BloomChain {
+            bright_bind_group: filter_bg(format!("{label}_bright_bind_group"), source),
+            downsample_bind_group: filter_bg(format!("{label}_downsample_bind_group"), &half_view),
+            blur_h_bind_group: filter_bg(format!("{label}_blur_h_bind_group"), &quarter_a_view),
+            blur_v_bind_group: filter_bg(format!("{label}_blur_v_bind_group"), &quarter_b_view),
+            half_view,
+            quarter_a_view,
+            quarter_b_view,
+        }
+    }
+
+    /// The four full-screen passes, in the one order they may run in:
+    /// bright-pass into half res, downsample to quarter, then a separable blur
+    /// ping-ponging quarter A -> B (horizontal) -> A (vertical). Whatever
+    /// composites the halo samples quarter A, so the vertical blur MUST be the
+    /// step that lands there.
+    ///
+    /// This is the only place that ordering is written down; the pipelines
+    /// themselves are built by each caller.
+    fn run(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        pipelines: BloomPipelines<'_>,
+        label: &str,
+    ) {
+        let steps: [BloomStep; 4] = [
+            (pipelines.bright, &self.bright_bind_group, &self.half_view),
+            (pipelines.downsample, &self.downsample_bind_group, &self.quarter_a_view),
+            (pipelines.blur_h, &self.blur_h_bind_group, &self.quarter_b_view),
+            (pipelines.blur_v, &self.blur_v_bind_group, &self.quarter_a_view),
+        ];
+        for (pipeline, bind_group, target) in steps {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some(&format!("{label}_bloom_pass")),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: target,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, bind_group, &[]);
+            pass.draw(0..4, 0..1);
+        }
+    }
 }
 
 impl Offscreen {
@@ -1221,34 +1341,19 @@ impl Offscreen {
             DEPTH_FORMAT,
             wgpu::TextureUsages::RENDER_ATTACHMENT,
         );
-        let (hw, hh) = (screen_size[0].div_ceil(2).max(1), screen_size[1].div_ceil(2).max(1));
-        let (qw, qh) = (screen_size[0].div_ceil(4).max(1), screen_size[1].div_ceil(4).max(1));
-        let half = tex("lattice_bloom_half", hw, hh, format, attach_and_sample);
-        let quarter_a = tex("lattice_bloom_quarter_a", qw, qh, format, attach_and_sample);
-        let quarter_b = tex("lattice_bloom_quarter_b", qw, qh, format, attach_and_sample);
-
         let color_view = color.create_view(&Default::default());
         let nodes_view = nodes.create_view(&Default::default());
-        let half_view = half.create_view(&Default::default());
-        let quarter_a_view = quarter_a.create_view(&Default::default());
-        let quarter_b_view = quarter_b.create_view(&Default::default());
-
-        let filter_bg = |label, source: &wgpu::TextureView| {
-            device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some(label),
-                layout: filter_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(source),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::Sampler(sampler),
-                    },
-                ],
-            })
-        };
+        // The nodes-only copy, not the picture: the labels are drawn into the
+        // picture and must not reach the bloom.
+        let bloom = BloomChain::new(
+            device,
+            "lattice",
+            format,
+            filter_layout,
+            sampler,
+            &nodes_view,
+            screen_size,
+        );
 
         let composite_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("lattice_composite_bind_group"),
@@ -1264,7 +1369,7 @@ impl Offscreen {
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: wgpu::BindingResource::TextureView(&quarter_a_view),
+                    resource: wgpu::BindingResource::TextureView(&bloom.quarter_a_view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
@@ -1274,19 +1379,11 @@ impl Offscreen {
         });
 
         Offscreen {
-            // The nodes-only copy, not the picture: the labels are drawn into
-            // the picture and must not reach the bloom.
-            bright_bind_group: filter_bg("lattice_bright_bind_group", &nodes_view),
-            downsample_bind_group: filter_bg("lattice_downsample_bind_group", &half_view),
-            blur_h_bind_group: filter_bg("lattice_blur_h_bind_group", &quarter_a_view),
-            blur_v_bind_group: filter_bg("lattice_blur_v_bind_group", &quarter_b_view),
+            bloom,
             composite_bind_group,
             color_view,
             nodes_view,
             depth_view: depth.create_view(&Default::default()),
-            half_view,
-            quarter_a_view,
-            quarter_b_view,
             size,
             screen_size,
         }
@@ -1424,12 +1521,15 @@ fn create_post_pipeline(
     bind_group_layout: &wgpu::BindGroupLayout,
     blend: Option<wgpu::BlendState>,
 ) -> wgpu::RenderPipeline {
+    // Not named for the lattice: the roll builds its own post pipelines out of
+    // the same source, so a validation error carrying the lattice's name would
+    // send a reader to the wrong picture.
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("lattice_blit_shader"),
+        label: Some("blit_shader"),
         source: wgpu::ShaderSource::Wgsl(BLIT_SRC.into()),
     });
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("lattice_post_pipeline_layout"),
+        label: Some("post_pipeline_layout"),
         bind_group_layouts: &[Some(bind_group_layout)],
         ..Default::default()
     });
@@ -2042,7 +2142,7 @@ impl CallbackTrait for LatticeCallback {
             // never-written quarter texture by 0, and fresh wgpu textures
             // read as zero anyway.
             if self.uniforms.misc2[3] > 0.0 {
-                self.run_bloom_chain(egui_encoder, resources, offscreen);
+                offscreen.bloom.run(egui_encoder, Self::bloom_pipelines(resources), "lattice");
             }
 
             if timing {

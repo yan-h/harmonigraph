@@ -47,9 +47,15 @@ fn baked_blit_shader_validates() {
     )
     .validate(&module)
     .expect("blit.wgsl must validate");
-    for required in
-        ["vs_blit", "fs_blit", "fs_bright", "fs_blur_h", "fs_blur_v", "fs_composite"]
-    {
+    for required in [
+        "vs_blit",
+        "fs_blit",
+        "fs_bright",
+        "fs_blur_h",
+        "fs_blur_v",
+        "fs_composite",
+        "fs_bloom_add",
+    ] {
         assert!(
             module.entry_points.iter().any(|ep| ep.name == required),
             "missing entry point `{required}`"

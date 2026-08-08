@@ -1,15 +1,33 @@
 // The piano roll's notes: one instanced quad per note segment — a solid
-// rectangle in the note's own color, with two rim bands along its long edges,
-// all falling out of a signed distance field.
+// rectangle in the note's own color, wrapped on every side by an outline that
+// fades out, both falling out of a signed distance field.
 //
-// The rim's two bands are `inner` and `outer`, named for where they sit and
-// nothing else: which one is dark and which is light is the pane's choice, and
-// naming them for it here would put half of that decision in this file.
+// TWO LAYERS, drawn as two passes over the same instances rather than
+// composited per note: every note's outline (`fs_outline_*`), then every
+// note's body (`fs_core_*`). One quad's worth of geometry drawn twice.
+//
+// The order is the whole point. The outline is opaque where it meets its own
+// note — it has to be, or it takes its color from the spectrogram cell behind
+// it and washes out over the bright end of a palette — so an outline
+// composited with its own note lands on the NEIGHBOURING notes it reaches
+// into, and along time those neighbours are the next note: repeats of one key
+// butt together there, and the later one blanked the tail of the earlier.
+// Under every body instead, an outline can only ever darken the picture, never
+// another note.
+//
+// What that costs is the seam between two notes that TOUCH: same key, no gap,
+// and the bodies now meet directly in one color where the outline used to
+// stand between them. A gap of a point or more still reads as two notes, since
+// the outline fills it.
+//
+// The outline is a color the pane hands over, not a decision made here: this
+// shader is told how far it reaches, how gradually it goes, and what color it
+// is, and invents none of the three.
 //
 // Nothing here is tessellated. A note is four vertices whatever its shape,
-// and the bands the egui path drew as separate stroked rounded rects are read
-// off the distance instead, which costs a compare rather than a second and
-// third shape.
+// and the outline the egui path drew as a separate stroked rounded rect is
+// read off the distance instead, which costs a compare rather than a second
+// shape.
 //
 // Coordinates arrive in egui POINTS, exactly as egui's own vertex shader
 // takes them, and `vs_note` does the same screen->clip mapping. The pane's
@@ -17,9 +35,15 @@
 // never names a screen side either.
 
 struct Locals {
-    /// egui's screen size in points (the whole surface, not the pane).
-    screen_points: vec2<f32>,
-    /// Width of the antialiasing ramp in points — one physical pixel.
+    /// Where the viewport being drawn into starts, in egui points, and how big
+    /// it is. The draw into the egui pass takes the whole surface (origin 0);
+    /// the bloom's own pass takes the roll's rect alone, so the same
+    /// instances — which are in surface points either way — land in a texture
+    /// that covers only the roll.
+    origin_points: vec2<f32>,
+    viewport_points: vec2<f32>,
+    /// Width of the antialiasing ramp in points — one pixel of whatever is
+    /// being drawn into, which is not the display's pixel in the bloom's pass.
     feather: f32,
     _pad: f32,
     /// Unit screen vectors of the pane's two axes. Pitch runs across the
@@ -39,15 +63,15 @@ struct VertexOut {
     /// The center line's pitch drift per point of depth: 0 for a held note,
     /// non-zero for a glide, which shears the box into a parallelogram.
     @location(2) @interpolate(flat) shear: f32,
-    /// Width of EACH rim band in points — the two are the same thickness — and
-    /// zero when Edge turns the rim off. Both ride the note's long edges only
-    /// — see [`rail_mask`].
-    @location(3) @interpolate(flat) keyline: f32,
+    /// How far the outline reaches past the note's edge, in points, and 0 when
+    /// the outline is off. It wraps every side — see [`outline_coverage`].
+    @location(3) @interpolate(flat) outline_reach: f32,
+    /// How much of that reach the outline spends fading out, in points.
+    @location(4) @interpolate(flat) outline_fade: f32,
     /// Premultiplied, gamma-space, exactly as egui carries `Color32`.
-    @location(4) @interpolate(flat) core: vec4<f32>,
-    /// The band against the note's edge, and the one beyond it.
-    @location(5) @interpolate(flat) inner: vec4<f32>,
-    @location(6) @interpolate(flat) outer: vec4<f32>,
+    @location(5) @interpolate(flat) core: vec4<f32>,
+    /// The outline's color at full coverage; the fade takes it from there.
+    @location(6) @interpolate(flat) outline: vec4<f32>,
 };
 
 @vertex
@@ -56,10 +80,10 @@ fn vs_note(
     @location(0) center: vec2<f32>,
     @location(1) half_extent: vec2<f32>,
     @location(2) shear: f32,
-    @location(3) keyline: f32,
-    @location(4) core: vec4<f32>,
-    @location(5) inner: vec4<f32>,
-    @location(6) outer: vec4<f32>,
+    @location(3) outline_reach: f32,
+    @location(4) outline_fade: f32,
+    @location(5) core: vec4<f32>,
+    @location(6) outline: vec4<f32>,
 ) -> VertexOut {
     // Triangle-strip corners: (-1,-1) (1,-1) (-1,1) (1,1).
     let corner = vec2<f32>(
@@ -71,93 +95,91 @@ fn vs_note(
     // How far outside its own box a note can paint, per axis. The quad is its
     // bounding box grown by that, and a shortfall here CLIPS ink rather than
     // costing a little fill rate, so each term is the exact one `note_color`
-    // and `rail_mask` can reach to.
+    // can reach to.
     //
-    // Across pitch: the two rim bands and the antialiasing ramp, all measured
-    // PERPENDICULAR to the note's long edges — which on a sheared note is not
-    // the pitch axis. `note_color` divides by `skew` to get that perpendicular
-    // distance, so a band `w` thick stands `skew * w` out along pitch, and the
-    // rim of a steep glide reaches a multiple of its own thickness. The
-    // `slope` term is the drift of the center line between the note's ends,
-    // and it carries the rail mask's ramp with it.
+    // The outline wraps the note, so it is owed room on BOTH axes: ink runs out
+    // wherever the box distance passes `outline_reach`, which is `reach` past
+    // every edge and every corner.
     //
-    // Along depth: the ramp alone. Both bands are cut at the note's ends
-    // (`rail_mask`), so the rim spends none of its width on this axis, and
-    // nothing paints past the box plus half a ramp either side.
+    // Across pitch that reach is measured PERPENDICULAR to the note's long
+    // edges — which on a sheared note is not the pitch axis. `note_color`
+    // divides by `skew` to get that perpendicular distance, so an outline
+    // reaching `w` stands `skew * w` out along pitch, and a steep glide's
+    // outline reaches a multiple of its own reach. The `slope` term is the
+    // drift of the center line over the quad's own half-length, ends included.
     let skew = sqrt(1.0 + slope * slope);
-    let rim = 2.0 * keyline + 0.5 * locals.feather;
+    let reach = outline_reach + 0.5 * locals.feather;
+    let half_depth = half_extent.y + reach + 0.5 * locals.feather;
     let extent = vec2<f32>(
-        half_extent.x + abs(slope) * (half_extent.y + 0.5 * locals.feather) + skew * rim,
-        half_extent.y + locals.feather,
+        half_extent.x + abs(slope) * half_depth + skew * reach,
+        half_depth,
     );
 
     let local = corner * extent;
     let pos = center + locals.pitch_dir * local.x + locals.depth_dir * local.y;
 
+    let in_viewport = pos - locals.origin_points;
     var out: VertexOut;
     out.position = vec4<f32>(
-        2.0 * pos.x / locals.screen_points.x - 1.0,
-        1.0 - 2.0 * pos.y / locals.screen_points.y,
+        2.0 * in_viewport.x / locals.viewport_points.x - 1.0,
+        1.0 - 2.0 * in_viewport.y / locals.viewport_points.y,
         0.0,
         1.0,
     );
     out.local = local;
     out.half_extent = half_extent;
     out.shear = shear;
-    out.keyline = keyline;
+    out.outline_reach = outline_reach;
+    out.outline_fade = outline_fade;
     out.core = core;
-    out.inner = inner;
-    out.outer = outer;
+    out.outline = outline;
     return out;
 }
 
-/// Coverage of the band `inner..outer` (distances from the note's outline)
-/// at signed distance `d`: how much of a one-pixel-wide window centered on
-/// `d` lands inside the band.
+/// Coverage of everything on the near side of `edge`: how much of a
+/// one-pixel-wide window centered on the signed distance `d` lands inside it.
 ///
 /// A box filter along the distance gradient, which is exact for a straight
-/// edge and is what makes a band thinner than a pixel come out FAINTER
-/// rather than snapping to a full pixel — the same bargain epaint's
-/// feathering makes, so a hairline keyline reads the way it did when the
-/// roll went through the tessellator.
-fn band(d: f32, inner: f32, outer: f32) -> f32 {
-    let f = max(locals.feather, 1e-6);
-    let lo = max(inner, d - 0.5 * f);
-    let hi = min(outer, d + 0.5 * f);
-    return clamp((hi - lo) / f, 0.0, 1.0);
-}
-
-/// [`band`] with no inner bound: coverage of everything on the near side of
-/// `edge`. The note's interior fill, and the cut the rail mask makes.
+/// edge and is what makes a shape thinner than a pixel come out FAINTER rather
+/// than snapping to a full pixel — the same bargain epaint's feathering makes,
+/// so a hairline ribbon reads the way it does through the tessellator.
 fn inside(d: f32, edge: f32) -> f32 {
     let f = max(locals.feather, 1e-6);
     return clamp((edge - d) / f + 0.5, 0.0, 1.0);
 }
 
-/// How much of the rim survives at this fragment: both bands ride the note's
-/// two LONG edges and are cut at its ends, leaving rails that stop where the
-/// note does.
+/// How much of the outline survives at distance `d` outside the note: solid
+/// against the note's edge, fading over the last `outline_fade` points of its
+/// reach, gone by `outline_reach`.
 ///
-/// Not a choice. The rim stands OUTSIDE the note, so along whichever axis it
-/// is allowed to grow it reaches into the note's surroundings — and along
-/// time those surroundings are the next note. Repeats of one key butt together
-/// there, so a rim that wrapped the ends paints each note's halo over its
-/// neighbour, and the ends are also where a note is shortest, so a cap there
-/// is an edge the length of the note itself. That holds for both bands
-/// whatever colors they carry: capped, they would draw a seam across a run of
-/// one key that was played as a run.
+/// The same pair of dials the lattice's knockout gutter takes, and for the same
+/// reason they are two rather than one: a fade tied to the reach makes a wider
+/// outline always a blurrier one, so how far it stands out and how softly it
+/// ends are set apart. A fade at or past the reach fades the whole of it, from
+/// the note's edge outward; a fade of 0 is a hard edge.
 ///
-/// The cut is at the note's box, which is exactly where its ink ends now that
-/// a note is a plain solid rectangle — so a rail runs the full length of the
-/// note it edges, corner to corner, rather than tapering off short of it. (It
-/// used to be cut at the box plus the half outline, and the band's own corner
-/// rounding then took its outer edge off half an outline early.)
-fn rail_mask(in: VertexOut) -> f32 {
-    return inside(abs(in.local.y), in.half_extent.y);
+/// `d` is clamped at the note's edge rather than run on inward, which is what
+/// makes an outline of no reach paint NOTHING: run inward, its ramp would still
+/// be at full coverage across the note's own antialiased boundary, and every
+/// note would wear a dark fringe with the outline turned off.
+///
+/// The ramp is never narrower than one pixel, so a hard-edged outline is still
+/// an antialiased one. Under a pixel of reach the whole outline comes out
+/// FAINTER instead of snapping to a pixel of full black — [`inside`]'s bargain,
+/// taken here as well so the two edges of a hairline agree.
+///
+/// And never wider than the reach either, so a fade set past it eats outward
+/// rather than into the coverage against the note: whatever the two are set to,
+/// the outline is solid where it meets the note's edge.
+fn outline_coverage(in: VertexOut, d: f32) -> f32 {
+    let w = max(min(in.outline_fade, in.outline_reach), max(locals.feather, 1e-6));
+    return clamp((in.outline_reach - max(d, 0.0)) / w, 0.0, 1.0);
 }
 
-/// Premultiplied gamma-space color of one fragment of a note.
-fn note_color(in: VertexOut) -> vec4<f32> {
+/// Signed distance from this fragment to the note's own box, in points:
+/// negative inside it, positive outside, and measured PERPENDICULAR to the
+/// note's long edges rather than along the pitch axis.
+fn box_distance(in: VertexOut) -> f32 {
     let slope = in.shear;
     // A bent note is a sheared box: its long edges run at `slope`, its ends
     // stay square across the depth axis. Shearing the sample point back
@@ -172,29 +194,44 @@ fn note_color(in: VertexOut) -> vec4<f32> {
     // pane's two axes, and rounding one was a setting until it turned out to
     // be doing nothing a piano roll wants — on the notes short enough for it
     // to show (a tapped key), the radius clamps to the note's own half-length
-    // and turns it into a bead.
+    // and turns it into a bead. The outline's own corners are round, being a
+    // constant distance from a square one, and that is the shape a note wants
+    // wrapped around it.
     let q = vec2<f32>(abs(across) - half_across, abs(in.local.y) - in.half_extent.y);
-    let d = min(max(q.x, q.y), 0.0) + length(max(q, vec2<f32>(0.0)));
+    return min(max(q.x, q.y), 0.0) + length(max(q, vec2<f32>(0.0)));
+}
 
-    // Reading outward: the note, solid in its own color right to its edge, the
-    // inner band standing against that edge, then the outer band standing
-    // against it — one keyline width each.
-    //
-    // Every band is a window on the same box filter as the fill, so they tile
-    // the distance without ever overlapping — which is what keeps them OUTSIDE
-    // the note however thin the ribbon is. A centered stroke would grow inward
-    // exactly as much as outward, and at the ribbon widths this pane is used at
-    // the two long edges would meet in the middle and flood the note with the
-    // rim's own color.
-    //
-    // Summed rather than composited in order, which is exact here and only
-    // here: the bands are disjoint windows on one distance, so each fragment's
-    // coverages add to at most one and premultiplied colors add with them.
-    let rail = rail_mask(in);
-    var out = in.core * inside(d, 0.0);
-    out += in.inner * band(d, 0.0, in.keyline) * rail;
-    out += in.outer * band(d, in.keyline, 2.0 * in.keyline) * rail;
-    return out;
+/// Premultiplied gamma-space color of the OUTLINE layer: the dark surround
+/// standing against every one of the note's edges and fading out.
+///
+/// The outline stands entirely OUTSIDE the note, which is why it is read off
+/// the distance rather than stroked along the note's path: a centered stroke
+/// grows inward exactly as much as outward, and at the ribbon widths this pane
+/// is used at the two long edges would meet in the middle and flood the note
+/// with the outline's own color.
+///
+/// Masked by the note's OWN fill, which is the one thing this layer still
+/// knows about its body. `outline_coverage` clamps the distance at the note's
+/// edge, so without the mask the outline runs solid across the interior and a
+/// note drawn in anything less than an opaque color has a black slab under it.
+/// The mask is that note's fill and no other's, so it takes nothing back off
+/// the fix: over a NEIGHBOUR the outline still paints in full, and the
+/// neighbour's body — drawn in the pass after this one — covers it.
+///
+/// The ramp is what pairs with it. Coverage here is `1 - fill` where the body
+/// is `fill`, so the two sum to one across the note's antialiased boundary and
+/// the seam between them never shows what is behind the note — the same
+/// arithmetic the two had when they were composited in one fragment, split
+/// across two passes.
+fn outline_color(in: VertexOut) -> vec4<f32> {
+    let d = box_distance(in);
+    return in.outline * outline_coverage(in, d) * (1.0 - inside(d, 0.0));
+}
+
+/// Premultiplied gamma-space color of the BODY layer: the note, solid in its
+/// own color right to its edge.
+fn core_color(in: VertexOut) -> vec4<f32> {
+    return in.core * inside(box_distance(in), 0.0);
 }
 
 // 0-1 linear from 0-1 sRGB gamma. Lifted from egui's own shader, and used
@@ -209,12 +246,23 @@ fn linear_from_gamma_rgb(srgb: vec3<f32>) -> vec3<f32> {
 }
 
 @fragment
-fn fs_note_gamma(in: VertexOut) -> @location(0) vec4<f32> {
-    return note_color(in);
+fn fs_outline_gamma(in: VertexOut) -> @location(0) vec4<f32> {
+    return outline_color(in);
 }
 
 @fragment
-fn fs_note_linear(in: VertexOut) -> @location(0) vec4<f32> {
-    let gamma = note_color(in);
+fn fs_outline_linear(in: VertexOut) -> @location(0) vec4<f32> {
+    let gamma = outline_color(in);
+    return vec4<f32>(linear_from_gamma_rgb(gamma.rgb), gamma.a);
+}
+
+@fragment
+fn fs_core_gamma(in: VertexOut) -> @location(0) vec4<f32> {
+    return core_color(in);
+}
+
+@fragment
+fn fs_core_linear(in: VertexOut) -> @location(0) vec4<f32> {
+    let gamma = core_color(in);
     return vec4<f32>(linear_from_gamma_rgb(gamma.rgb), gamma.a);
 }

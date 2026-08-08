@@ -8,10 +8,15 @@
 //   fs_blit       plain copy (half -> quarter downsample)
 //   fs_blur_h/v   separable 9-tap Gaussian over the quarter-res texture
 //   fs_composite  scene + bloom * strength, premultiplied over the pane
+//   fs_bloom_add  bloom * strength alone, over a picture already in the pass
 //
 // The bloom chain runs at fractions of the pane's SCREEN size, not the
 // (possibly supersampled) scene size, so the halo's screen width does not
 // change with the render-scale setting.
+//
+// The lattice takes all of it; the piano roll (`crate::roll`) takes the
+// threshold, the blurs and `fs_bloom_add` over notes it renders itself, so one
+// bloom strength means the same halo in both pictures.
 
 @group(0) @binding(0) var scene_tex: texture_2d<f32>;
 @group(0) @binding(1) var scene_samp: sampler;
@@ -28,6 +33,18 @@ struct BlitUniforms {
     misc2: vec4<f32>,
 };
 @group(0) @binding(3) var<uniform> bu: BlitUniforms;
+// The strength on its own, for a caller with no scene uniforms to take the
+// head of — the roll, which draws its notes straight into the egui pass and
+// wants only the halo laid over them. Its own binding rather than a second
+// view of 3: the two buffers have nothing else in common, and a layout that
+// fits both would be a coincidence to maintain.
+//
+// The strength is x. A uniform block is 16 bytes wide whatever it declares,
+// so the vector is what is there rather than what is used.
+struct AddUniforms {
+    strength: vec4<f32>,
+};
+@group(0) @binding(4) var<uniform> add: AddUniforms;
 
 struct BlitOut {
     @builtin(position) pos: vec4<f32>,
@@ -103,4 +120,15 @@ fn fs_composite(in: BlitOut) -> @location(0) vec4<f32> {
     let scene = textureSample(scene_tex, scene_samp, in.uv);
     let bloom = textureSample(bloom_tex, scene_samp, in.uv);
     return scene + vec4<f32>(bloom.rgb * bu.misc2.w, 0.0);
+}
+
+// The halo alone, over a picture the caller has already drawn into this pass.
+// Same light, same zero alpha, and `scene_tex` is the blurred quarter here —
+// there is no second texture to composite because the sharp layer is already
+// in the target. Drawn AFTER it, so a note's own body is brightened by its
+// halo exactly as the lattice's nodes are by theirs.
+@fragment
+fn fs_bloom_add(in: BlitOut) -> @location(0) vec4<f32> {
+    let bloom = textureSample(scene_tex, scene_samp, in.uv);
+    return vec4<f32>(bloom.rgb * add.strength.x, 0.0);
 }

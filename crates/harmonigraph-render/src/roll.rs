@@ -13,10 +13,11 @@
 //!
 //! **What this does instead.** One quad per note segment, with a box signed
 //! distance field in the fragment shader (`shaders/roll.wgsl`). The note's
-//! solid body and the two rim bands beside it are bands of that distance, so a
-//! rim band costs a compare rather than a second and third shape. Four vertices
-//! per note against several hundred: the upload stops mattering rather than
-//! getting cheaper.
+//! solid body and the outline wrapping it are both read off that distance, so
+//! the outline costs a compare rather than a second shape — and its fade, which
+//! no stroke can draw at all, costs nothing on top. Four vertices per note
+//! against several hundred: the upload stops mattering rather than getting
+//! cheaper.
 //!
 //! **Why the buffer is still rewritten every frame.** The obvious next step
 //! is an append-and-evict ring — settled notes never change, so they could
@@ -39,15 +40,24 @@ use crate::{create_vertex_buffer, wgpu};
 
 const ROLL_SRC: &str = include_str!("shaders/roll.wgsl");
 
-/// Entry points the roll shader must provide.
+/// Entry points the roll shader must provide: the vertex stage, and each of
+/// the two layers in each of the two shadings [`create_roll_pipeline`] picks
+/// between. Its entry point is assembled from those two words, so a rename in
+/// the WGSL is a panic at pipeline creation and nothing sooner.
 #[cfg(test)]
-pub(crate) const ROLL_ENTRY_POINTS: &[&str] = &["vs_note", "fs_note_gamma", "fs_note_linear"];
+pub(crate) const ROLL_ENTRY_POINTS: &[&str] = &[
+    "vs_note",
+    "fs_outline_gamma",
+    "fs_outline_linear",
+    "fs_core_gamma",
+    "fs_core_linear",
+];
 
 /// One note segment: a solid box in the pane's (pitch, depth) plane, its
-/// color, and the two rim bands standing outside its long edges.
+/// color, and the outline standing outside every one of its sides.
 ///
-/// Reading outward: [`core`](Self::core), [`inner`](Self::inner),
-/// [`outer`](Self::outer).
+/// Reading outward: [`core`](Self::core), then [`outline`](Self::outline)
+/// fading out over [`outline_reach`](Self::outline_reach).
 ///
 /// Screen geometry, in egui POINTS, already resolved through the pane's
 /// `Axes` — this crate never learns which way the pane is turned. Lengths
@@ -69,28 +79,29 @@ pub struct RollInstance {
     /// non-zero for a glide, which makes the box a parallelogram rather than
     /// needing a second shape.
     pub shear: f32,
-    /// Width of EACH rim band in points, and 0 when the rim is turned off.
-    /// One width for both: [`inner`](Self::inner) runs from the note's edge out
-    /// to it, [`outer`](Self::outer) from there out to twice it.
+    /// How far the outline reaches past the note's edge, in points, and 0 when
+    /// it is turned off. It wraps the note: every side and, rounded, every
+    /// corner.
     ///
-    /// The rim rides the note's two LONG edges only, and never its ends — see
-    /// `rail_mask` in the shader for why that is the shape rather than a
-    /// choice.
+    /// A flat reach, not a distance the shader scales: on a sheared note it is
+    /// measured perpendicular to the edge it stands against, so this is its
+    /// true thickness at any angle, and it is `vs_note`'s job to grow the quad
+    /// by however far along pitch that reaches.
+    pub outline_reach: f32,
+    /// How much of that reach the outline spends fading out, in points — 0 for
+    /// a hard edge, the whole reach to fade from the note's edge outward.
     ///
-    /// A flat width, not a distance the shader scales: on a sheared note the
-    /// bands are measured perpendicular to the long edges they ride, so this is
-    /// their true thickness at any angle, and it is `vs_note`'s job to grow the
-    /// quad by however far along pitch that reaches.
-    pub keyline: f32,
+    /// Separate from the reach rather than a fraction of it, exactly as the
+    /// lattice's gutter and gutter fade are separate: tying the two makes a
+    /// wider outline always a blurrier one.
+    pub outline_fade: f32,
     /// Premultiplied sRGB bytes, straight out of [`egui::Color32`].
     pub core: [u8; 4],
-    /// The rim's two bands: `inner` against the note's edge, `outer` beyond it.
+    /// The outline's color where it is solid; the fade takes it out from there.
     ///
-    /// Named for where they sit rather than for what they look like. Which is
-    /// dark and which is light is the pane's decision, and it belongs there
-    /// whole — this crate draws the instance it is handed and invents nothing.
-    pub inner: [u8; 4],
-    pub outer: [u8; 4],
+    /// What color that is stays the pane's decision — this crate draws the
+    /// instance it is handed and invents nothing.
+    pub outline: [u8; 4],
 }
 
 impl RollInstance {
@@ -101,10 +112,10 @@ impl RollInstance {
             0 => Float32x2, // center
             1 => Float32x2, // half_extent
             2 => Float32,   // shear
-            3 => Float32,   // keyline
-            4 => Unorm8x4,  // core
-            5 => Unorm8x4,  // inner
-            6 => Unorm8x4,  // outer
+            3 => Float32,   // outline_reach
+            4 => Float32,   // outline_fade
+            5 => Unorm8x4,  // core
+            6 => Unorm8x4,  // outline
         ],
     };
 }
@@ -124,23 +135,36 @@ pub struct RollAxes {
 /// Draw `instances` into `rect`. `pane_id` must be unique per roll shown in
 /// the same frame (each gets its own instance buffer; the pipeline is
 /// shared).
+///
+/// `rect` is the roll's own region rather than the pane's — it is what the
+/// bloom's offscreen chain covers, so a rect any larger would spend the halo's
+/// resolution on somewhere the roll cannot draw.
+///
+/// `bloom` is the lattice's own bloom strength, applied to these notes through
+/// the lattice's own chain (see [`RollBloom`]). 0 skips it whole.
 pub fn roll_paint_callback(
     rect: egui::Rect,
     instances: Vec<RollInstance>,
     axes: RollAxes,
+    bloom: f32,
     target_format: wgpu::TextureFormat,
     pane_id: u64,
 ) -> egui::PaintCallback {
     egui_wgpu::Callback::new_paint_callback(
         rect,
-        RollCallback { instances, axes, target_format, pane_id },
+        RollCallback { rect, instances, axes, bloom, target_format, pane_id },
     )
 }
 
 /// Per-frame, per-pane draw data, built on the UI thread.
 struct RollCallback {
+    /// The roll's region in points. `paint` is handed this as the callback's
+    /// viewport; `prepare` is handed nothing, and needs it to size the bloom
+    /// chain, so it rides here too.
+    rect: egui::Rect,
     instances: Vec<RollInstance>,
     axes: RollAxes,
+    bloom: f32,
     target_format: wgpu::TextureFormat,
     pane_id: u64,
 }
@@ -148,20 +172,66 @@ struct RollCallback {
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct RollUniforms {
-    screen_points: [f32; 2],
+    origin_points: [f32; 2],
+    viewport_points: [f32; 2],
     feather: f32,
     _pad: f32,
     pitch_dir: [f32; 2],
     depth_dir: [f32; 2],
 }
 
+/// The bloom's strength, alone in its own buffer (`AddUniforms` in blit.wgsl).
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct BloomUniforms {
+    /// Strength in x; the rest is the 16 bytes a uniform block takes.
+    strength: [f32; 4],
+}
+
 /// GPU objects cached across frames in egui-wgpu's `CallbackResources`.
 struct RollResources {
-    pipeline: wgpu::RenderPipeline,
+    /// The note pipelines, in the order they are drawn: every outline, then
+    /// every body over them. Two passes over one instance buffer — see the
+    /// head of roll.wgsl for why the order is the whole point, and what the
+    /// second draw costs.
+    outline_pipeline: wgpu::RenderPipeline,
+    core_pipeline: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
+    /// The bloom chain's four post passes and the one that lays the result
+    /// over the notes. The four are the lattice's, out of the same blit.wgsl
+    /// and stepped through by the same [`crate::BloomChain::run`], so the
+    /// halo the roll grows is the halo the lattice grows: same threshold at
+    /// the same resolution, same knee, same kernel, same fractions of the
+    /// pane's screen size. Only the target FORMAT is the roll's own, which is
+    /// why the pipelines are its own and the chain is not.
+    bright_pipeline: wgpu::RenderPipeline,
+    downsample_pipeline: wgpu::RenderPipeline,
+    blur_h_pipeline: wgpu::RenderPipeline,
+    blur_v_pipeline: wgpu::RenderPipeline,
+    bloom_pipeline: wgpu::RenderPipeline,
+    /// One sampled texture + the shared sampler (the three chain passes).
+    filter_layout: wgpu::BindGroupLayout,
+    /// The same, plus the strength (the pass into the egui pass).
+    bloom_layout: wgpu::BindGroupLayout,
+    sampler: wgpu::Sampler,
     target_format: wgpu::TextureFormat,
     panes: HashMap<u64, RollPane>,
+    /// Counts `prepare` calls, which is what [`RollPane::last_seen`] is
+    /// stamped with — a clock the callback already has, where a frame count
+    /// would need one to be plumbed in.
+    prepares: u64,
 }
+
+/// How many `prepare` calls a pane may go unseen before its buffers and its
+/// bloom chain are dropped.
+///
+/// A pane is prepared once per frame while it is on screen, so with the two
+/// rolls that can be live at once this is about a second at 60 fps. Long
+/// enough that a pane hidden for a frame keeps everything, short enough that
+/// a closed one is not still holding a bloom chain a minute later: three
+/// textures the size of the pane it was shown at, which is the reason there is
+/// a sweep here at all rather than a map that only ever grows.
+const PANE_TTL_PREPARES: u64 = 120;
 
 struct RollPane {
     uniform_buffer: wgpu::Buffer,
@@ -169,6 +239,52 @@ struct RollPane {
     instance_buffer: wgpu::Buffer,
     capacity: usize,
     count: u32,
+    /// The bloom's targets, sized to the roll's rect. `None` until a frame
+    /// asks for bloom, and rebuilt when the rect resizes — a roll with the
+    /// strength at 0 pays for none of it.
+    bloom: Option<RollBloom>,
+    /// The value of [`RollResources::prepares`] when this pane was last drawn.
+    last_seen: u64,
+}
+
+/// The roll's picture to bloom, and the lattice's own [`crate::BloomChain`] over it:
+/// the notes rendered again offscreen, thresholded, blurred separably, and
+/// added back over the sharp notes as light.
+///
+/// The notes are RE-RENDERED rather than read back out of the egui pass, and
+/// that is the whole reason this is cheap enough to do at all: the sharp layer
+/// stays exactly where it was, drawn straight into the egui pass at full
+/// resolution with no resampling between the distance field and the screen.
+/// A pass that read the finished picture back would have to reproduce that
+/// alignment to the pixel, on a picture that scrolls sub-pixel; a pass that
+/// only feeds a blur does not care where its texels landed to half a pixel.
+struct RollBloom {
+    /// The notes again, at HALF the roll's screen size — the picture the
+    /// chain's threshold reads, standing where the lattice's own scene
+    /// texture stands.
+    ///
+    /// Half rather than the roll's full size is the one place the two
+    /// pictures are not the same thing, so it is worth saying what the
+    /// difference is. `fs_bright` only ever SAMPLES at half, so drawing there
+    /// skips a resample the lattice pays for; what it costs is that a ribbon
+    /// narrower than one of these pixels is measured by the note shader's own
+    /// box filter rather than by a bilinear tap over a sharper raster, and on
+    /// a shape that lands between two of these pixels the two readings of its
+    /// peak differ by up to a factor of two. At the width the spectral pane
+    /// floors a ribbon to — 1.5 points, which is 3 device pixels and so one
+    /// and a half of these — they are close, and the alternative is a
+    /// full-resolution copy of the roll, four times this, for a picture
+    /// nothing downstream reads at full resolution.
+    notes_view: wgpu::TextureView,
+    /// Notes mapped into that texture rather than onto the surface.
+    notes_uniform: wgpu::Buffer,
+    notes_bind_group: wgpu::BindGroup,
+    bloom: crate::BloomChain,
+    /// Quarter A (where the vertical blur lands) plus the strength.
+    add_bind_group: wgpu::BindGroup,
+    strength_buffer: wgpu::Buffer,
+    /// The roll's size in device pixels this was built for.
+    size: [u32; 2],
 }
 
 /// Starting size of a pane's instance buffer; it grows by
@@ -178,26 +294,127 @@ const INITIAL_NOTE_CAPACITY: usize = 512;
 
 impl RollResources {
     fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Self {
+        let uniform_entry = |binding| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        };
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("roll_bind_group_layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
+            entries: &[uniform_entry(0)],
         });
-        let pipeline = create_roll_pipeline(device, target_format, &layout);
-        RollResources { pipeline, layout, target_format, panes: HashMap::new() }
+        let texture_entry = |binding| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                view_dimension: wgpu::TextureViewDimension::D2,
+                multisampled: false,
+            },
+            count: None,
+        };
+        let sampler_entry = |binding| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+            count: None,
+        };
+        let filter_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("roll_filter_bind_group_layout"),
+            entries: &[texture_entry(0), sampler_entry(1)],
+        });
+        // Binding 4 for the strength, matching `AddUniforms` in blit.wgsl —
+        // the lattice's own composite holds 3.
+        let bloom_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("roll_bloom_bind_group_layout"),
+            entries: &[
+                texture_entry(0),
+                sampler_entry(1),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let note_pipeline =
+            |layer| create_roll_pipeline(device, target_format, &layout, layer);
+        // The chain overwrites its whole target, so those three take no blend;
+        // the one that lands in the egui pass blends the way every other thing
+        // the roll draws does.
+        let filter = |entry| {
+            crate::create_post_pipeline(device, entry, target_format, &filter_layout, None)
+        };
+        RollResources {
+            outline_pipeline: note_pipeline("outline"),
+            core_pipeline: note_pipeline("core"),
+            layout,
+            bright_pipeline: filter("fs_bright"),
+            downsample_pipeline: filter("fs_blit"),
+            blur_h_pipeline: filter("fs_blur_h"),
+            blur_v_pipeline: filter("fs_blur_v"),
+            bloom_pipeline: crate::create_post_pipeline(
+                device,
+                "fs_bloom_add",
+                target_format,
+                &bloom_layout,
+                Some(EGUI_BLEND),
+            ),
+            filter_layout,
+            bloom_layout,
+            // Linear, and the reason is the halo rather than the notes: the
+            // chain reads each target at half the size of the one before it,
+            // so every hop is a resample.
+            sampler: device.create_sampler(&wgpu::SamplerDescriptor {
+                label: Some("roll_bloom_sampler"),
+                address_mode_u: wgpu::AddressMode::ClampToEdge,
+                address_mode_v: wgpu::AddressMode::ClampToEdge,
+                mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Linear,
+                ..Default::default()
+            }),
+            target_format,
+            panes: HashMap::new(),
+            prepares: 0,
+        }
     }
 
-    fn pane(&mut self, device: &wgpu::Device, pane_id: u64) -> &mut RollPane {
-        let layout = &self.layout;
-        self.panes.entry(pane_id).or_insert_with(|| {
+}
+
+/// What a [`RollBloom`] needs from [`RollResources`], as a borrow narrow
+/// enough to hold while the pane it belongs to is borrowed mutably — which is
+/// why `prepare` takes the struct apart field by field rather than asking it
+/// for this.
+struct RollBloomShared<'a> {
+    notes_layout: &'a wgpu::BindGroupLayout,
+    filter_layout: &'a wgpu::BindGroupLayout,
+    bloom_layout: &'a wgpu::BindGroupLayout,
+    sampler: &'a wgpu::Sampler,
+    format: wgpu::TextureFormat,
+}
+
+impl RollPane {
+    /// This pane's buffers, made on first sight of its id and stamped with
+    /// `prepares` so [`RollPane::evict_unseen`] can tell a live pane from one
+    /// whose tab was closed.
+    fn get<'a>(
+        panes: &'a mut HashMap<u64, RollPane>,
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        pane_id: u64,
+        prepares: u64,
+    ) -> &'a mut RollPane {
+        let pane = panes.entry(pane_id).or_insert_with(|| {
             let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("roll_uniforms"),
                 size: std::mem::size_of::<RollUniforms>() as u64,
@@ -222,18 +439,132 @@ impl RollResources {
                 ),
                 capacity: INITIAL_NOTE_CAPACITY,
                 count: 0,
+                bloom: None,
+                last_seen: prepares,
             }
-        })
+        });
+        pane.last_seen = prepares;
+        pane
+    }
+
+    /// Drop every pane that has not been drawn for [`PANE_TTL_PREPARES`].
+    ///
+    /// A roll's id is its surface (the docked pane, the Render preview), and a
+    /// closed tab simply stops calling back — there is no teardown to hang
+    /// this on, so the panes still being prepared are the only evidence of
+    /// which ones exist. Run from whichever pane IS preparing, so a lone
+    /// survivor still clears the others.
+    fn evict_unseen(panes: &mut HashMap<u64, RollPane>, prepares: u64) {
+        panes.retain(|_, pane| prepares.saturating_sub(pane.last_seen) < PANE_TTL_PREPARES);
     }
 }
 
-/// The one pipeline: instanced quads, blended exactly the way egui blends
+impl RollBloom {
+    /// Build the chain for a roll `size` device pixels across. Half and
+    /// quarter of THAT, so the halo is a constant share of the roll's own
+    /// screen size — the same rule the lattice's chain follows, which is what
+    /// makes one bloom strength mean the same thing in both pictures.
+    fn new(device: &wgpu::Device, shared: &RollBloomShared<'_>, size: [u32; 2]) -> Self {
+        let (hw, hh) = (size[0].div_ceil(2).max(1), size[1].div_ceil(2).max(1));
+        let notes_view = device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("roll_bloom_notes"),
+                size: wgpu::Extent3d { width: hw, height: hh, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: shared.format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+            .create_view(&Default::default());
+        let bloom = crate::BloomChain::new(
+            device,
+            "roll",
+            shared.format,
+            shared.filter_layout,
+            shared.sampler,
+            &notes_view,
+            size,
+        );
+
+        let notes_uniform = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("roll_bloom_notes_uniforms"),
+            size: std::mem::size_of::<RollUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let strength_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("roll_bloom_strength"),
+            size: std::mem::size_of::<BloomUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        RollBloom {
+            notes_bind_group: device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("roll_bloom_notes_bind_group"),
+                layout: shared.notes_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: notes_uniform.as_entire_binding(),
+                }],
+            }),
+            add_bind_group: device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("roll_bloom_add_bind_group"),
+                layout: shared.bloom_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&bloom.quarter_a_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(shared.sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: strength_buffer.as_entire_binding(),
+                    },
+                ],
+            }),
+            notes_view,
+            bloom,
+            notes_uniform,
+            strength_buffer,
+            size,
+        }
+    }
+}
+
+/// egui's own blend state, verbatim (see egui-wgpu's renderer): premultiplied
+/// color, and alpha accumulated so the pass composites the same way over a
+/// transparent framebuffer.
+///
+/// Everything the roll draws takes it, the notes and the bloom alike. On the
+/// bloom that is what makes a halo pure LIGHT: it carries zero alpha, so the
+/// color term adds and the alpha term leaves the destination's own alone.
+const EGUI_BLEND: wgpu::BlendState = wgpu::BlendState {
+    color: wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::One,
+        dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+        operation: wgpu::BlendOperation::Add,
+    },
+    alpha: wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::OneMinusDstAlpha,
+        dst_factor: wgpu::BlendFactor::One,
+        operation: wgpu::BlendOperation::Add,
+    },
+};
+
+/// The note pipeline: instanced quads, blended exactly the way egui blends
 /// its own shapes so a note composites over the spectrogram identically to
 /// the tessellated version it replaces.
 fn create_roll_pipeline(
     device: &wgpu::Device,
     target_format: wgpu::TextureFormat,
     layout: &wgpu::BindGroupLayout,
+    layer: &str,
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("roll_shader"),
@@ -244,8 +575,12 @@ fn create_roll_pipeline(
         bind_group_layouts: &[Some(layout)],
         ..Default::default()
     });
+    // Same fork egui makes, for the same reason: an sRGB-aware target wants
+    // linear values and encodes them itself.
+    let shade = if target_format.is_srgb() { "linear" } else { "gamma" };
+    let entry_point = format!("fs_{layer}_{shade}");
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("roll_notes"),
+        label: Some(&format!("roll_{layer}")),
         layout: Some(&pipeline_layout),
         vertex: wgpu::VertexState {
             module: &shader,
@@ -255,32 +590,11 @@ fn create_roll_pipeline(
         },
         fragment: Some(wgpu::FragmentState {
             module: &shader,
-            entry_point: Some(if target_format.is_srgb() {
-                // Same fork egui makes, for the same reason: an sRGB-aware
-                // target wants linear values and encodes them itself.
-                "fs_note_linear"
-            } else {
-                "fs_note_gamma"
-            }),
+            entry_point: Some(&entry_point),
             compilation_options: Default::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format: target_format,
-                // egui's own blend state, verbatim (see egui-wgpu's
-                // renderer): premultiplied color, and alpha accumulated so
-                // the pass composites the same way over a transparent
-                // framebuffer.
-                blend: Some(wgpu::BlendState {
-                    color: wgpu::BlendComponent {
-                        src_factor: wgpu::BlendFactor::One,
-                        dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                        operation: wgpu::BlendOperation::Add,
-                    },
-                    alpha: wgpu::BlendComponent {
-                        src_factor: wgpu::BlendFactor::OneMinusDstAlpha,
-                        dst_factor: wgpu::BlendFactor::One,
-                        operation: wgpu::BlendOperation::Add,
-                    },
-                }),
+                blend: Some(EGUI_BLEND),
                 write_mask: wgpu::ColorWrites::ALL,
             })],
         }),
@@ -301,7 +615,7 @@ impl CallbackTrait for RollCallback {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         screen_descriptor: &ScreenDescriptor,
-        _egui_encoder: &mut wgpu::CommandEncoder,
+        egui_encoder: &mut wgpu::CommandEncoder,
         callback_resources: &mut CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
         let recreate = callback_resources
@@ -312,10 +626,14 @@ impl CallbackTrait for RollCallback {
         }
         let resources: &mut RollResources =
             callback_resources.get_mut().expect("inserted above when missing");
+        resources.prepares = resources.prepares.wrapping_add(1);
+        let prepares = resources.prepares;
 
         let ppp = screen_descriptor.pixels_per_point.max(f32::EPSILON);
         let uniforms = RollUniforms {
-            screen_points: [
+            // The whole surface, which is the viewport `paint` draws into.
+            origin_points: [0.0, 0.0],
+            viewport_points: [
                 screen_descriptor.size_in_pixels[0] as f32 / ppp,
                 screen_descriptor.size_in_pixels[1] as f32 / ppp,
             ],
@@ -330,7 +648,69 @@ impl CallbackTrait for RollCallback {
             depth_dir: self.axes.depth_dir,
         };
 
-        let pane = resources.pane(device, self.pane_id);
+        // The roll's own rect in device pixels, which is what the bloom chain
+        // is sized against. Through epaint's own conversion rather than a
+        // rounded `width * ppp`, because that conversion is what `paint`
+        // stretches the finished halo across: it rounds each EDGE and
+        // subtracts, then clamps to the screen, so a rect whose edges round
+        // in opposite directions measures a pixel less than its width does,
+        // and a rect hanging off the screen measures less again. Sized either
+        // way but stretched this way, the halo comes out scaled against the
+        // notes it grew from, and slid by whatever the clamp took.
+        //
+        // A roll thinner than a pixel in either direction has no picture to
+        // bloom.
+        let viewport = egui::epaint::ViewportInPixels::from_points(
+            &self.rect,
+            ppp,
+            screen_descriptor.size_in_pixels,
+        );
+        let bloom_size = [viewport.width_px.max(0) as u32, viewport.height_px.max(0) as u32];
+        let wants_bloom =
+            self.bloom > 0.0 && !self.instances.is_empty() && bloom_size.iter().all(|&d| d > 0);
+
+        let bloom_pass = wants_bloom.then(|| {
+            // Half the roll's size for the notes, so this is what one pixel of
+            // THAT target measures in points — twice the display's, and the
+            // ramp has to follow it or a hairline ribbon comes out at the wrong
+            // weight in the halo.
+            let half_ppp = ppp * 0.5;
+            // The viewport's own edges, back in points: the texture covers
+            // exactly the pixels `paint` will lay it over, so the notes in it
+            // stand where the notes under it do.
+            RollUniforms {
+                origin_points: [viewport.left_px as f32 / ppp, viewport.top_px as f32 / ppp],
+                viewport_points: [bloom_size[0] as f32 / ppp, bloom_size[1] as f32 / ppp],
+                feather: 1.0 / half_ppp,
+                ..uniforms
+            }
+        });
+
+        // Split apart so the pane can be borrowed mutably while the pipelines
+        // and layouts beside it are still readable.
+        let RollResources {
+            core_pipeline,
+            layout,
+            bright_pipeline,
+            downsample_pipeline,
+            blur_h_pipeline,
+            blur_v_pipeline,
+            filter_layout,
+            bloom_layout,
+            sampler,
+            target_format,
+            panes,
+            ..
+        } = resources;
+        let shared = RollBloomShared {
+            notes_layout: layout,
+            filter_layout,
+            bloom_layout,
+            sampler,
+            format: *target_format,
+        };
+        RollPane::evict_unseen(panes, prepares);
+        let pane = RollPane::get(panes, device, layout, self.pane_id, prepares);
         if self.instances.len() > pane.capacity {
             pane.capacity = self.instances.len().next_power_of_two();
             pane.instance_buffer =
@@ -341,6 +721,65 @@ impl CallbackTrait for RollCallback {
             queue.write_buffer(&pane.instance_buffer, 0, bytemuck::cast_slice(&self.instances));
         }
         queue.write_buffer(&pane.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
+
+        // Held whether or not it is wanted this frame, since a strength dialled
+        // to 0 and back is one drag: what is skipped is the work, not the
+        // textures. They go when the roll's size changes, which is the one
+        // thing that invalidates them.
+        if pane.bloom.as_ref().is_some_and(|b| b.size != bloom_size) {
+            pane.bloom = None;
+        }
+        let Some(notes_uniforms) = bloom_pass else {
+            return Vec::new();
+        };
+        let bloom = pane
+            .bloom
+            .get_or_insert_with(|| RollBloom::new(device, &shared, bloom_size));
+        queue.write_buffer(&bloom.notes_uniform, 0, bytemuck::bytes_of(&notes_uniforms));
+        queue.write_buffer(
+            &bloom.strength_buffer,
+            0,
+            bytemuck::bytes_of(&BloomUniforms { strength: [self.bloom, 0.0, 0.0, 0.0] }),
+        );
+
+        // The notes again at half size, and then the lattice's own chain over
+        // them, step for step (see [`BloomChain::run`]).
+        {
+            let mut pass = egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("roll_bloom_notes"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &bloom.notes_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            // The BODIES alone. The outline is black, and black is the one
+            // thing that cannot bloom — painting it here would only overwrite
+            // the color of whatever note it reaches across, taking light out
+            // of a halo the picture does grow.
+            pass.set_pipeline(core_pipeline);
+            pass.set_bind_group(0, &bloom.notes_bind_group, &[]);
+            pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
+            pass.draw(0..4, 0..pane.count);
+        }
+        bloom.bloom.run(
+            egui_encoder,
+            crate::BloomPipelines {
+                bright: bright_pipeline,
+                downsample: downsample_pipeline,
+                blur_h: blur_h_pipeline,
+                blur_v: blur_v_pipeline,
+            },
+            "roll",
+        );
 
         Vec::new()
     }
@@ -375,10 +814,39 @@ impl CallbackTrait for RollCallback {
             0.0,
             1.0,
         );
-        render_pass.set_pipeline(&resources.pipeline);
+        // Every outline, then every body over them — one instance buffer, two
+        // draws. An outline reaches into its note's surroundings, and those
+        // surroundings are other notes; under all of them it can darken the
+        // picture and nothing else. See the head of roll.wgsl.
         render_pass.set_bind_group(0, &pane.bind_group, &[]);
         render_pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
-        render_pass.draw(0..4, 0..pane.count);
+        for pipeline in [&resources.outline_pipeline, &resources.core_pipeline] {
+            render_pass.set_pipeline(pipeline);
+            render_pass.draw(0..4, 0..pane.count);
+        }
+
+        // The halo over them, from the chain `prepare` ran — light only, and
+        // last, so a note's own body is brightened by it the way a lattice
+        // node's is. Over the roll's rect rather than the surface: quarter A
+        // covers exactly that, and stretching it anywhere else would smear the
+        // halo across the pane.
+        if self.bloom > 0.0 {
+            let Some(bloom) = &pane.bloom else {
+                return;
+            };
+            let vp = info.viewport_in_pixels();
+            render_pass.set_viewport(
+                vp.left_px as f32,
+                vp.top_px as f32,
+                vp.width_px as f32,
+                vp.height_px as f32,
+                0.0,
+                1.0,
+            );
+            render_pass.set_pipeline(&resources.bloom_pipeline);
+            render_pass.set_bind_group(0, &bloom.add_bind_group, &[]);
+            render_pass.draw(0..4, 0..1);
+        }
     }
 }
 
@@ -420,7 +888,8 @@ mod tests {
     }
 
     /// Run the callback for real — `prepare` then `paint` — over `clear`,
-    /// and read the frame back as RGBA8.
+    /// and read the frame back as RGBA8. No bloom: the notes alone, which is
+    /// what every test but [`the_bloom_adds_light_around_a_note`] is about.
     fn draw(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -438,9 +907,43 @@ mod tests {
         axes: RollAxes,
         clear: wgpu::Color,
     ) -> Vec<u8> {
+        draw_bloomed(device, queue, instances, axes, 0.0, clear)
+    }
+
+    /// As [`draw_turned`], with the bloom at `bloom` — the whole callback, so
+    /// the chain `prepare` encodes and the halo `paint` lays over the notes are
+    /// both in the frame that comes back.
+    fn draw_bloomed(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        instances: Vec<RollInstance>,
+        axes: RollAxes,
+        bloom: f32,
+        clear: wgpu::Color,
+    ) -> Vec<u8> {
+        draw_bloomed_resourced(device, queue, instances, axes, bloom, clear).0
+    }
+
+    /// As [`draw_bloomed`], handing back the callback's resources as well —
+    /// which is where "no bloom ran" is visible, the frame being the one place
+    /// it is not.
+    fn draw_bloomed_resourced(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        instances: Vec<RollInstance>,
+        axes: RollAxes,
+        bloom: f32,
+        clear: wgpu::Color,
+    ) -> (Vec<u8>, CallbackResources) {
+        // The roll's rect is the whole test surface, so a point is a pixel
+        // here as it is everywhere else in these tests.
+        let rect =
+            egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(SIZE[0] as f32, SIZE[1] as f32));
         let cb = RollCallback {
+            rect,
             instances,
             axes,
+            bloom,
             target_format: FORMAT,
             pane_id: 0,
         };
@@ -450,8 +953,6 @@ mod tests {
         let bufs = cb.prepare(device, queue, &screen, &mut encoder, &mut resources);
         queue.submit(bufs.into_iter().chain([encoder.finish()]));
 
-        let rect =
-            egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(SIZE[0] as f32, SIZE[1] as f32));
         let texture = render_to_texture(device, queue, SIZE, FORMAT, clear, |pass| {
             cb.paint(
                 egui::PaintCallbackInfo {
@@ -464,7 +965,7 @@ mod tests {
                 &resources,
             );
         });
-        readback(device, queue, &texture, SIZE)
+        (readback(device, queue, &texture, SIZE), resources)
     }
 
     fn pixel(frame: &[u8], x: u32, y: u32) -> [u8; 4] {
@@ -477,19 +978,20 @@ mod tests {
         got.iter().zip(want).all(|(&a, b)| a.abs_diff(b) <= 3)
     }
 
-    /// A straight note centered in the frame: 24 points thick, 120 long, with
-    /// the pane's own rim — a 2-point black band standing against its long
-    /// edges and a 2-point white one outside that. Wide bands so a sample lands
-    /// well inside each.
+    /// A straight note centered in the frame: 24 points thick, 120 long, in a
+    /// 4-point black outline with no fade. Wide enough that a sample lands well
+    /// inside the outline, and hard-edged so where it ends is a place rather
+    /// than a slope — the fade has [`a_fade_takes_the_outline_out_gradually`]
+    /// to itself.
     fn centered_note() -> RollInstance {
         RollInstance {
             center: [128.0, 128.0],
             half_extent: [12.0, 60.0],
             shear: 0.0,
-            keyline: 2.0,
+            outline_reach: 4.0,
+            outline_fade: 0.0,
             core: [255, 0, 0, 255],
-            inner: [0, 0, 0, 255],
-            outer: [255, 255, 255, 255],
+            outline: [0, 0, 0, 255],
         }
     }
 
@@ -524,114 +1026,181 @@ mod tests {
         let _resources = RollResources::new(&device, FORMAT);
     }
 
-    /// A note is a SOLID rectangle of its own color with both rim bands
-    /// standing outside it, in the order the instance gives them: reading
-    /// outward from the middle — the note's color right to its edge, `inner`,
-    /// `outer`, nothing.
+    /// A note is a SOLID rectangle of its own color, with the outline standing
+    /// entirely outside it: reading outward from the middle — the note's color
+    /// right to its edge, the outline, nothing.
     ///
-    /// The rim standing outside is the flood invariant, and the reason the
-    /// bands are read off a distance rather than drawn as a stroke of the
-    /// note's path: a centered stroke grows inward exactly as much as outward,
-    /// and on a ribbon a few points thick the two long edges met in the middle
-    /// and painted the interior over. A band at distance 0..2 cannot reach
+    /// The outline standing outside is the flood invariant, and the reason it
+    /// is read off a distance rather than drawn as a stroke of the note's path:
+    /// a centered stroke grows inward exactly as much as outward, and on a
+    /// ribbon a few points thick the two long edges meet in the middle and
+    /// paint the interior over. Coverage taken at distance 0..4 cannot reach
     /// inside a box whose interior is at negative distance.
-    ///
-    /// The colors here are the pane's (black against the note, white outside),
-    /// so this reads as the picture as well as the contract — but what the
-    /// shader owes is the ORDER, not the choice.
     #[test]
-    fn a_note_is_solid_and_its_rim_bands_stand_outside_it() {
+    fn a_note_is_solid_and_its_outline_stands_outside_it() {
         let Some((device, queue)) = headless_device() else {
             return;
         };
         let frame = draw(&device, &queue, vec![centered_note()], bg_color());
-        // Distances outward from the note's edge (x = 140): `inner` 0..2,
-        // `outer` 2..4.
+        // The note's edge is at x = 140 and the outline runs to 144.
         let at = |x: u32| pixel(&frame, x, 128);
         const RED: [u8; 4] = [255, 0, 0, 255];
         assert!(near(at(128), RED), "the note's middle is not painted: {:?}", at(128));
         assert!(near(at(138), RED), "the fill stops short of the note's edge: {:?}", at(138));
         assert!(
             near(at(141), [0, 0, 0, 255]),
-            "no black band standing against the note's edge: {:?}",
+            "no outline standing against the note's edge: {:?}",
             at(141),
         );
-        assert!(
-            near(at(143), [255, 255, 255, 255]),
-            "no white band standing outside the black one: {:?}",
-            at(143),
-        );
-        assert!(near(at(145), BG), "the rim reaches further than it should: {:?}", at(145));
+        // Solid nearly all the way out — the last half pixel of the reach is
+        // the antialiasing ramp a hard edge still gets — and gone past it.
+        assert!(near(at(142), [0, 0, 0, 255]), "the outline is short of its reach: {:?}", at(142));
+        assert!(near(at(145), BG), "the outline reaches further than it should: {:?}", at(145));
     }
 
-    /// BOTH rim bands ride the note's two long edges and are cut at its ends.
-    /// The note's own body is untouched either way — it is the shape, not the
-    /// rim.
+    /// The outline wraps EVERY side of the note — its ends as much as its
+    /// flanks — and turns the corner between them on the radius the box
+    /// distance gives it. The note's own body is untouched either way: it is
+    /// the shape, and the outline is what is drawn around it.
     ///
-    /// This is what stops repeats of one key painting their halos over each
-    /// other: the rim stands outside the note, and along the time axis a
-    /// note's outside is the next note. Either band capped at the ends draws a
-    /// seam across a run of one key that was played as a run.
+    /// The corner is the half of this that a per-edge implementation would
+    /// miss. A note is a rectangle, so its outline is the set of points within
+    /// the reach of one — which is a rounded rectangle, not four bands butted
+    /// together. Sampled on the diagonal past the corner's radius, where four
+    /// bands would still be painting.
     #[test]
-    fn both_rim_bands_ride_the_long_edges_and_stop_at_the_ends() {
+    fn the_outline_wraps_every_side_of_a_note() {
         let Some((device, queue)) = headless_device() else {
             return;
         };
-        // Reading out from the center: the note spans +-12 across pitch (x)
-        // and +-60 along time (y), `inner` the 2 beyond each and `outer` the 2
-        // beyond that.
+        // The note spans +-12 across pitch (x) and +-60 along time (y), so its
+        // corner is at (140, 188) and the outline reaches 4 past it.
         let frame = draw(&device, &queue, vec![centered_note()], bg_color());
-        // (the note's body, `inner`, `outer`) on a side, then on an end.
-        let side = [pixel(&frame, 138, 128), pixel(&frame, 141, 128), pixel(&frame, 143, 128)];
-        let end = [pixel(&frame, 128, 186), pixel(&frame, 128, 189), pixel(&frame, 128, 191)];
+        let at = |x: u32, y: u32| pixel(&frame, x, y);
         const RED: [u8; 4] = [255, 0, 0, 255];
-        const WHITE: [u8; 4] = [255, 255, 255, 255];
         const BLACK: [u8; 4] = [0, 0, 0, 255];
-        assert!(near(side[0], RED), "the note's body went missing: {:?}", side[0]);
-        assert!(near(side[1], BLACK), "the inner rail is missing: {:?}", side[1]);
-        assert!(near(side[2], WHITE), "the outer rail is missing: {:?}", side[2]);
-        assert!(near(end[0], RED), "the note's body was cut at its end: {:?}", end[0]);
-        assert!(near(end[1], BG), "the inner band wrapped the end: {:?}", end[1]);
-        assert!(near(end[2], BG), "the outer band wrapped the end: {:?}", end[2]);
+        assert!(near(at(138, 128), RED), "the note's body went missing: {:?}", at(138, 128));
+        assert!(near(at(142, 128), BLACK), "no outline along the flank: {:?}", at(142, 128));
+        assert!(near(at(128, 186), RED), "the note's body was cut at its end: {:?}", at(128, 186));
+        assert!(near(at(128, 190), BLACK), "no outline across the end: {:?}", at(128, 190));
+        assert!(near(at(128, 193), BG), "the outline runs past its reach: {:?}", at(128, 193));
+        // Diagonally off the corner: 2.8 points out is inside the radius, 5.0
+        // is outside it, and four bands butted together would paint both.
+        assert!(near(at(141, 189), BLACK), "the corner is missing: {:?}", at(141, 189));
+        assert!(
+            near(at(143, 191), BG),
+            "the corner is square ({:?}) — the outline is being drawn as bands rather \
+             than as a distance",
+            at(143, 191),
+        );
     }
 
-    /// A rail runs the FULL length of the note it edges — corner to corner,
-    /// at its OUTER edge as much as its inner one.
+    /// The outline runs the FULL length of the note it wraps, corner to corner,
+    /// at its outer edge as much as against the note.
     ///
-    /// The keyline is a band of the box distance, so past the note's end it
-    /// curves with the field and pulls away; where that band is cut is what
-    /// decides how much rail survives. It used to sit at distance
-    /// `half_outline .. half_outline + keyline`, and the corner rounding at
-    /// the outer radius then took the rail's outer edge off half an outline
-    /// early — the rails read as visibly shorter than the note between them.
-    /// With the outline gone the band starts at the note's own edge, and both
-    /// of its corners land exactly where the note's ink stops.
+    /// It is coverage of the box distance, so past the note's end it curves
+    /// with the field: the flank's outer edge holds its distance right up to
+    /// where the note's own ink stops and only then turns. An outline that
+    /// pulled away early would read as the note tapering off before it ends.
     #[test]
-    fn a_rail_runs_the_whole_length_of_its_note() {
+    fn the_outline_runs_the_whole_length_of_its_note() {
         let Some((device, queue)) = headless_device() else {
             return;
         };
         let frame = draw(&device, &queue, vec![centered_note()], bg_color());
-        // The note's box ends at half_extent 60, so row 187 is its last full
-        // one along time and 190 is clear of it.
-        let lit = |x: u32, y: u32| pixel(&frame, x, y)[1] > (BG[1] + 40);
         let dark = |x: u32, y: u32| pixel(&frame, x, y)[1] < (BG[1] - 40);
-        // Both edges of the 2-point `inner` band, which starts at the note's
-        // own edge (x = 140): column 140 is its inner half, 141 its OUTER half —
-        // the half the band's corner rounding used to take off early.
-        for x in [140, 141] {
-            assert!(dark(x, 128), "the rail is missing at the note's middle (x = {x})");
-            assert!(dark(x, 187), "the rail stops short of the note's end (x = {x})");
-            assert!(!dark(x, 190), "the rail runs past the note's end (x = {x})");
+        // Every column of the flank's outline, from the note's own edge
+        // (x = 140) out to its reach — the outer ones being where a distance
+        // field's corner rounding bites first.
+        for x in [140, 141, 142, 143] {
+            assert!(dark(x, 128), "the outline is missing at the note's middle (x = {x})");
+            // Row 187 is the note's last full row along time; the outline is
+            // still at its full stand-off there.
+            assert!(dark(x, 187), "the outline pulls away before the note ends (x = {x})");
         }
-        // And the `outer` band beyond it (x = 142, 143), which is cut by the
-        // same mask and so runs exactly as far: an outer rail one band short of
-        // the note's end would read as the note tapering.
-        for x in [142, 143] {
-            assert!(lit(x, 128), "the outer rail is missing at the note's middle (x = {x})");
-            assert!(lit(x, 187), "the outer rail stops short of the note's end (x = {x})");
-            assert!(!lit(x, 190), "the outer rail runs past the note's end (x = {x})");
+        // And it keeps going past the end, around the corner, rather than being
+        // cut there: the flank and the cap are one shape.
+        assert!(dark(140, 190), "the outline is cut at the note's end");
+    }
+
+    /// The fade takes the outline out gradually over the last of its reach,
+    /// rather than ending it: solid where it meets the note, gone at the reach,
+    /// and monotone between.
+    ///
+    /// The pair is the lattice's knockout gutter's, and two settings rather
+    /// than one for the same reason — a fade tied to the reach makes a wider
+    /// outline always a blurrier one. So this measures the fade against a
+    /// hard-edged outline of the SAME reach: both must end in the same place,
+    /// and only one of them may be soft on the way there.
+    #[test]
+    fn a_fade_takes_the_outline_out_gradually() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        // Black on white: every painted byte is one minus the outline's
+        // coverage, read straight off the frame.
+        let note = RollInstance { core: [255, 255, 255, 255], ..centered_note() };
+        let cov = |fade: f32, x: u32| {
+            let frame = draw(
+                &device,
+                &queue,
+                vec![RollInstance { outline_fade: fade, ..note }],
+                wgpu::Color::WHITE,
+            );
+            1.0 - f32::from(pixel(&frame, x, 128)[0]) / 255.0
+        };
+
+        // A fade over the whole 4-point reach: coverage falls off linearly from
+        // the note's edge at 140 to nothing at 144.
+        for (x, want) in [(140u32, 0.875f32), (141, 0.625), (142, 0.375), (143, 0.125)] {
+            let got = cov(4.0, x);
+            assert!(
+                (got - want).abs() < 0.06,
+                "the faded outline covers {got:.3} at x = {x}, not {want:.3}",
+            );
         }
+        // Hard-edged, the same outline is solid across the whole of its reach
+        // but the last pixel, which is the antialiasing ramp a hard edge still
+        // gets — and it ends in the same place the faded one does.
+        for x in [140, 141, 142] {
+            assert!(cov(0.0, x) > 0.97, "a fade of 0 is not a hard edge (x = {x})");
+        }
+        assert!(
+            cov(0.0, 143) > cov(4.0, 143) + 0.2,
+            "the hard and faded outlines cover the same at the end of the reach ({:.3} vs {:.3})",
+            cov(0.0, 143),
+            cov(4.0, 143),
+        );
+        assert!(cov(0.0, 145) < 0.02, "the hard outline reaches past 4 points");
+        assert!(cov(4.0, 145) < 0.02, "the faded outline reaches past 4 points");
+    }
+
+    /// A fade set past the outline's own reach eats OUTWARD — it fades the
+    /// whole reach, from full coverage at the note's edge — rather than dimming
+    /// the outline everywhere.
+    ///
+    /// The same bound the lattice's gutter puts on its fade, and the same
+    /// reason: the coverage against the note is the one part that always has to
+    /// be there, since that boundary is the whole point of the outline. Without
+    /// the bound a fade dialled past the reach makes the note's edge translucent
+    /// and the ribbon starts dissolving into the picture behind it.
+    #[test]
+    fn a_fade_past_the_reach_still_meets_the_note_solid() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        // A 2-point outline asked to fade over 20.
+        let note = RollInstance {
+            outline_reach: 2.0,
+            outline_fade: 20.0,
+            core: [255, 255, 255, 255],
+            ..centered_note()
+        };
+        let frame = draw(&device, &queue, vec![note], wgpu::Color::WHITE);
+        let cov = |x: u32| 1.0 - f32::from(pixel(&frame, x, 128)[0]) / 255.0;
+        assert!(cov(140) > 0.6, "the outline meets the note at {:.3} coverage", cov(140));
+        assert!(cov(140) > cov(141), "the outline does not fade outward at all");
+        assert!(cov(143) < 0.05, "the outline reaches past the 2 points it was given");
     }
 
     /// A note is a rectangle: its corners are square, right out to them.
@@ -647,10 +1216,10 @@ mod tests {
             return;
         };
         // 40 points across pitch, 6 along time — the shape of a tapped key on
-        // a thick ribbon. No keyline, so the sample reads the shape alone.
+        // a thick ribbon. No outline, so the sample reads the shape alone.
         let tap = RollInstance {
             half_extent: [20.0, 3.0],
-            keyline: 0.0,
+            outline_reach: 0.0,
             ..centered_note()
         };
         let frame = draw(&device, &queue, vec![tap], bg_color());
@@ -664,35 +1233,34 @@ mod tests {
         );
     }
 
-    /// The rim must still stand OUTSIDE a note floored to its minimum
-    /// thickness: the note's own color at the middle, the black band beyond it,
-    /// the white band beyond that. This is the same invariant at the width
-    /// where it actually bit — a hairline is all edge, so a band that grew
-    /// inward would simply paint over the note.
+    /// The outline must still stand OUTSIDE a note floored to its minimum
+    /// thickness: the note's own color at the middle, the outline beyond it.
+    /// This is the same invariant at the width where it actually bites — a
+    /// hairline is all edge, so an outline that grew inward would simply paint
+    /// over the note.
     ///
-    /// The dark band being the inner one is what makes it the sharp test: a
-    /// black band that leaked inward does not merely tint a hairline, it erases
-    /// the one thing the ribbon is there to say, which is its color.
+    /// A DARK outline is what makes it the sharp test: black leaking inward
+    /// does not merely tint a hairline, it erases the one thing the ribbon is
+    /// there to say, which is its color.
     #[test]
-    fn the_rim_does_not_paint_over_a_hairline_note() {
+    fn the_outline_does_not_paint_over_a_hairline_note() {
         let Some((device, queue)) = headless_device() else {
             return;
         };
         // 1.5 points across pitch: what `panes::spectral::roll` floors a ribbon too thin
         // to see to (MIN_RIBBON_PX). Narrower than a pixel is wide, so no
         // sample here is purely one thing — what matters is that the middle
-        // still reads as the NOTE rather than as a band having flooded it. Its
-        // own coverage there is 0.75, so a red channel anywhere near that is
-        // the note; near 0 is the black band standing where the note should be.
+        // still reads as the NOTE rather than as the outline having flooded it.
+        // Its own coverage there is 0.75, so a red channel anywhere near that
+        // is the note; near 0 is the outline standing where the note should be.
         let note = RollInstance { half_extent: [0.75, 60.0], ..centered_note() };
         let frame = draw(&device, &queue, vec![note], bg_color());
         let at = |x: u32| pixel(&frame, x, 128);
         let middle = at(128);
-        assert!(middle[0] > 150, "the rim flooded the note's own color: {middle:?}");
+        assert!(middle[0] > 150, "the outline flooded the note's own color: {middle:?}");
         assert!(middle[1] < 32, "something light flooded the note's middle: {middle:?}");
-        assert!(near(at(129), [0, 0, 0, 255]), "no black band beside it: {:?}", at(129));
-        assert!(near(at(131), [255, 255, 255, 255]), "no white band outside it: {:?}", at(131));
-        assert!(near(at(134), BG), "the rim reaches further than it should: {:?}", at(134));
+        assert!(near(at(130), [0, 0, 0, 255]), "no outline beside it: {:?}", at(130));
+        assert!(near(at(134), BG), "the outline reaches further than it should: {:?}", at(134));
     }
 
     /// A note two pixels along the depth axis holds its brightness as it
@@ -715,12 +1283,11 @@ mod tests {
         let Some((device, queue)) = headless_device() else {
             return;
         };
-        // White, no rim: every painted byte is the fill's own coverage.
+        // White, no outline: every painted byte is the fill's own coverage.
         let bare = RollInstance {
-            keyline: 0.0,
+            outline_reach: 0.0,
             core: [255, 255, 255, 255],
-            inner: [0, 0, 0, 0],
-            outer: [0, 0, 0, 0],
+            outline: [0, 0, 0, 0],
             ..centered_note()
         };
         // The brightest pixel anywhere, over a sweep of sub-pixel scroll
@@ -761,6 +1328,243 @@ mod tests {
             hairline > 0.3,
             "a one-pixel note only pulsed by {:.0}%, so the floor above is guarding nothing",
             hairline * 100.0,
+        );
+    }
+
+    /// The bloom adds light around a note and to the note itself, and adds it
+    /// as LIGHT: nothing it touches is occluded, and a strength of 0 leaves the
+    /// frame byte for byte the frame with no bloom in it at all.
+    ///
+    /// The halo is the lattice's, off the same chain — `fs_bright`'s threshold
+    /// and knee, the same 9-tap kernel at a quarter of the picture's size — so
+    /// what this owes is that the roll runs it, not what a Gaussian does. Both
+    /// halves are the point: light that did not reach past the note would be a
+    /// tint, and light that did not brighten the note's own body would be a
+    /// halo drawn around it rather than the note glowing.
+    #[test]
+    fn the_bloom_adds_light_around_a_note() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        // Bright enough to clear the threshold, dim enough that brightening it
+        // has somewhere to go. No outline: black is the one thing that cannot
+        // bloom, and its coverage would only dilute what does.
+        let note = RollInstance {
+            outline_reach: 0.0,
+            core: [200, 120, 60, 255],
+            outline: [0, 0, 0, 0],
+            ..centered_note()
+        };
+        let at = |frame: &[u8], x: u32, y: u32| f32::from(pixel(frame, x, y)[0]);
+        let plain = draw_bloomed(&device, &queue, vec![note], TOP, 0.0, wgpu::Color::BLACK);
+        let lit = draw_bloomed(&device, &queue, vec![note], TOP, 1.5, wgpu::Color::BLACK);
+
+        // The note's edge is at x = 140; 10 points past it is inside the
+        // halo's reach and well outside the note.
+        assert_eq!(at(&plain, 150, 128), 0.0, "the unbloomed frame is not black beside the note");
+        assert!(
+            at(&lit, 150, 128) > 8.0,
+            "no light beside the note: {}",
+            at(&lit, 150, 128),
+        );
+        assert!(
+            at(&lit, 128, 128) > at(&plain, 128, 128) + 8.0,
+            "the note's own body was not brightened: {} against {}",
+            at(&lit, 128, 128),
+            at(&plain, 128, 128),
+        );
+        // Light, not a shape: the halo may never take alpha away from what is
+        // under it, and over an opaque frame that means the alpha channel is
+        // untouched everywhere.
+        for (x, y) in [(128u32, 128u32), (150, 128), (200, 40)] {
+            assert_eq!(
+                pixel(&lit, x, y)[3],
+                255,
+                "the halo punched a hole in the alpha at ({x}, {y})",
+            );
+        }
+
+        // And at 0 it is not merely faint: no chain is built and no pass runs.
+        //
+        // Asked of the RESOURCES rather than of the frame. Two frames drawn at
+        // strength 0 are the same bytes however much work went into them, so a
+        // `paint` that started laying an all-black halo over every note, or a
+        // `prepare` that started running the chain and multiplying by zero,
+        // would leave the picture untouched and cost the whole thing — which
+        // is what "0 skips it whole" is a claim about.
+        let black = wgpu::Color::BLACK;
+        let bloom_of = |strength: f32| {
+            let (_, resources) =
+                draw_bloomed_resourced(&device, &queue, vec![note], TOP, strength, black);
+            let roll: &RollResources = resources.get().expect("the callback inserts its resources");
+            roll.panes[&0].bloom.is_some()
+        };
+        assert!(!bloom_of(0.0), "a strength of 0 built the bloom chain anyway");
+        assert!(bloom_of(1.5), "no chain was built at a strength that asks for one");
+    }
+
+    /// One `prepare` of `cb` against `resources`, submitted — the unit both
+    /// tests below count in, since a pane's age is measured in these.
+    fn prepare_once(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        resources: &mut CallbackResources,
+        ppp: f32,
+        cb: &RollCallback,
+    ) {
+        let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: ppp };
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let bufs = cb.prepare(device, queue, &screen, &mut encoder, resources);
+        queue.submit(bufs.into_iter().chain([encoder.finish()]));
+    }
+
+    /// A roll callback over `rect`, drawing one note with the bloom on.
+    fn bloomed_callback(rect: egui::Rect, pane_id: u64) -> RollCallback {
+        RollCallback {
+            rect,
+            instances: vec![centered_note()],
+            axes: TOP,
+            bloom: 1.5,
+            target_format: FORMAT,
+            pane_id,
+        }
+    }
+
+    /// The bloom chain covers exactly the pixels the halo is stretched across.
+    ///
+    /// `paint` lays quarter A over `viewport_in_pixels()`, which rounds each
+    /// EDGE of the roll's rect and subtracts, then clamps to the screen — not
+    /// the width, rounded. On a rect whose two edges round in opposite
+    /// directions those differ by a pixel, and a texture sized one way and
+    /// stretched the other puts the halo at a slightly different scale from
+    /// the notes it grew out of, which on a picture that scrolls sub-pixel is
+    /// a halo sliding against its own note.
+    #[test]
+    fn the_bloom_covers_the_pixels_the_halo_is_stretched_across() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let ppp = 2.0;
+        // 5.25 -> 10.5 -> 11 (up) and 15.2 -> 30.4 -> 30 (down), so the
+        // viewport is 19 px across where the rounded width is 20.
+        let rect = egui::Rect::from_min_max(egui::pos2(5.25, 4.0), egui::pos2(15.2, 60.0));
+        let cb = bloomed_callback(rect, 0);
+        let mut resources = CallbackResources::default();
+        prepare_once(&device, &queue, &mut resources, ppp, &cb);
+
+        let vp = egui::epaint::ViewportInPixels::from_points(&rect, ppp, SIZE);
+        let roll: &RollResources = resources.get().expect("prepare inserts its resources");
+        let bloom = roll.panes[&0].bloom.as_ref().expect("a strength of 1.5 asks for a chain");
+        assert_eq!(
+            bloom.size,
+            [vp.width_px as u32, vp.height_px as u32],
+            "the chain covers {:?} where paint stretches it across {}x{}",
+            bloom.size,
+            vp.width_px,
+            vp.height_px,
+        );
+        // And the two roundings genuinely disagree on this rect, or the
+        // assertion above holds for a reason that is not the one it is about.
+        assert_ne!(
+            (rect.width() * ppp).round() as i32,
+            vp.width_px,
+            "this rect no longer tells the two roundings apart; the test is vacuous",
+        );
+    }
+
+    /// A pane that stops being drawn gives its buffers and its bloom chain
+    /// back, rather than holding three textures the size of the pane it was
+    /// last shown at for as long as the plugin is loaded.
+    ///
+    /// There is no teardown to hang this on — a closed tab simply stops
+    /// calling back — so the only evidence is the panes that ARE still
+    /// preparing, and the sweep runs from whichever one that is.
+    #[test]
+    fn a_pane_that_stops_drawing_gives_its_chain_back() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let rect =
+            egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(SIZE[0] as f32, SIZE[1] as f32));
+        let (docked, preview) = (bloomed_callback(rect, 0), bloomed_callback(rect, 1));
+        let mut resources = CallbackResources::default();
+        prepare_once(&device, &queue, &mut resources, 1.0, &docked);
+        prepare_once(&device, &queue, &mut resources, 1.0, &preview);
+        let live = |resources: &CallbackResources| {
+            let roll: &RollResources = resources.get().expect("prepare inserts its resources");
+            let mut ids: Vec<u64> = roll.panes.keys().copied().collect();
+            ids.sort_unstable();
+            ids
+        };
+        assert_eq!(live(&resources), vec![0, 1], "both rolls should be holding buffers");
+
+        // The preview's tab closes: the docked roll goes on drawing alone.
+        for _ in 0..PANE_TTL_PREPARES {
+            prepare_once(&device, &queue, &mut resources, 1.0, &docked);
+        }
+        assert_eq!(live(&resources), vec![0], "the closed pane is still holding its chain");
+    }
+
+    /// A thin ribbon glows in proportion to the ink it has, not a fraction of
+    /// it — which is a claim about WHERE the threshold sits in the chain.
+    ///
+    /// `fs_bright` is a soft knee, so what reaches it decides everything. The
+    /// chain thresholds the half-res picture and downsamples afterwards; a
+    /// chain that thresholds after the downsample instead measures a color
+    /// already box-averaged a second time, and on a ribbon near the width of
+    /// the pixel doing the averaging that is a fraction of the color it is
+    /// actually painted in. The knee then gates it hard, so a note goes dark
+    /// in the halo while the lattice node it lit up — same color, same
+    /// setting, but several pixels across — glows normally.
+    ///
+    /// Measured as the total light the halo adds, against a ribbon eight times
+    /// wider. The blur conserves light, so the ratio is the THRESHOLD's answer
+    /// and nothing else: 13x with the threshold above the downsample, 79x with
+    /// it below, against 8x of ink. The wide ribbon is the control and comes
+    /// out at the same 431588 either way — a shape comfortably wider than the
+    /// pixel cannot tell the two chains apart, which is why this needs a thin
+    /// one to say anything at all.
+    #[test]
+    fn a_thin_ribbon_glows_in_proportion_to_the_ink_it_has() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        // Mid grey: luminance ~0.47, which the knee (0.35 +/- 0.25) is still
+        // climbing through, so the halo is sensitive to what the threshold is
+        // handed rather than saturated whatever it is.
+        //
+        // Three points across, which is what the spectral pane's own width
+        // floor (`MIN_RIBBON_PX`, 1.5 points) comes to on the 2x display this
+        // is looked at on — the notes are rendered at half the roll's device
+        // size, so what decides this is the ribbon's width in DEVICE pixels.
+        let thin = RollInstance {
+            half_extent: [1.5, 60.0],
+            outline_reach: 0.0,
+            core: [120, 120, 120, 255],
+            outline: [0, 0, 0, 0],
+            ..centered_note()
+        };
+        let wide = RollInstance { half_extent: [12.0, 60.0], ..thin };
+        // All the light the halo adds, over the whole frame: the blur moves
+        // light around and conserves it, so this is what the THRESHOLD let
+        // through and nothing else. Red channel only — the note is grey.
+        let light = |note: RollInstance| {
+            let plain = draw_bloomed(&device, &queue, vec![note], TOP, 0.0, wgpu::Color::BLACK);
+            let lit = draw_bloomed(&device, &queue, vec![note], TOP, 1.5, wgpu::Color::BLACK);
+            lit.iter()
+                .zip(&plain)
+                .step_by(4)
+                .map(|(a, b)| f32::from(*a) - f32::from(*b))
+                .sum::<f32>()
+        };
+        let (thin_light, wide_light) = (light(thin), light(wide));
+        assert!(thin_light > 0.0, "a thin ribbon grew no halo at all");
+        let ratio = wide_light / thin_light;
+        assert!(
+            ratio < 25.0,
+            "the wide ribbon out-glows the thin one {ratio:.0}x on 8x the ink — the \
+             threshold is reading a picture that has been downsampled past it \
+             ({thin_light} against {wide_light})",
         );
     }
 
@@ -840,33 +1644,89 @@ mod tests {
         }
     }
 
-    /// A glide's rim keeps its thickness instead of thinning with the angle.
+    /// An outline never covers another note's BODY.
     ///
-    /// The shear that turns the box into the parallelogram a bent note
-    /// follows also stretches distances along the pitch axis, so the band has
-    /// to be measured perpendicular to the edge it rides — that is the
-    /// division by the shear's length. Without it a 45-degree glide's keyline
-    /// comes out 1/sqrt(2) as thick as the same note held.
+    /// The outline is opaque where it meets its own note — it has to be, or it
+    /// takes its color from the spectrogram cell behind it and washes out
+    /// against the bright end of a palette. Composited with its own note it
+    /// therefore lands, at full strength, on whatever it reaches into; and
+    /// along time what it reaches into is the next note, since repeats of one
+    /// key butt together there. The later note blanked the tail of the earlier.
     ///
-    /// Measured as total ink across one scanline, which for a slanted band is
-    /// `sqrt(1 + slope^2)` times its true thickness: 5.66 points for the two
-    /// 2-point flanks at 45 degrees, against 4.0 held. An unnormalized
-    /// distance would read 4.0 for both.
-    ///
-    /// Both bands are in the measurement, since both are cut from the same
-    /// distance and `outer` is the one that would have to stretch furthest.
+    /// Every outline is drawn before every body, so an outline can darken the
+    /// picture and never another note. Two notes butted exactly, in colors
+    /// that can be told apart, and read on both sides of the join: whichever
+    /// note is drawn first, the other's outline is behind it.
     #[test]
-    fn a_glides_rim_keeps_its_thickness_instead_of_thinning_with_the_angle() {
+    fn an_outline_never_covers_another_notes_body() {
         let Some((device, queue)) = headless_device() else {
             return;
         };
-        // Only the rim paints, and in black: over a white background its
+        // Depth runs down y under `TOP`. The two boxes meet exactly at y=128,
+        // and a 4-point outline reaches 4 points into each other's.
+        let butted = |center, core| RollInstance {
+            center: [128.0, center],
+            half_extent: [12.0, 30.0],
+            outline_reach: 4.0,
+            outline_fade: 0.0,
+            core,
+            outline: [0, 0, 0, 255],
+            ..centered_note()
+        };
+        const RED: [u8; 4] = [255, 0, 0, 255];
+        const GREEN: [u8; 4] = [0, 255, 0, 255];
+        let early = butted(98.0, RED); // y 68..128
+        let late = butted(158.0, GREEN); // y 128..188
+        let frame = draw(&device, &queue, vec![early, late], bg_color());
+
+        // Two points inside the earlier note's tail, which is two points inside
+        // the later note's outline. This is the pixel that went black.
+        assert!(
+            near(pixel(&frame, 128, 126), RED),
+            "the later note's outline blanked the earlier note's tail: {:?}",
+            pixel(&frame, 128, 126),
+        );
+        // And the same join from the other side: paint order is not what is
+        // deciding it.
+        assert!(
+            near(pixel(&frame, 128, 130), GREEN),
+            "the earlier note's outline blanked the later note's head: {:?}",
+            pixel(&frame, 128, 130),
+        );
+        // The outline is still drawn — over the pane, where no note is.
+        let outside = pixel(&frame, 128, 66);
+        assert!(
+            near(outside, [0, 0, 0, 255]),
+            "the outline stopped painting at all outside the notes: {outside:?}",
+        );
+    }
+
+    /// A glide's outline keeps its thickness instead of thinning with the
+    /// angle.
+    ///
+    /// The shear that turns the box into the parallelogram a bent note
+    /// follows also stretches distances along the pitch axis, so the outline
+    /// has to be measured perpendicular to the edge it stands against — that is
+    /// the division by the shear's length. Without it a 45-degree glide's
+    /// outline comes out 1/sqrt(2) as thick as the same note held.
+    ///
+    /// Measured as total ink across one scanline, which for a slanted band is
+    /// `sqrt(1 + slope^2)` times its true thickness. A hard-edged 3-point
+    /// outline lays down 2.5 points of ink per flank — the reach less the half
+    /// pixel its antialiasing ramp spends ending — so 5.0 points held and 7.07
+    /// at 45 degrees. An unnormalized distance would read 5.0 for both.
+    #[test]
+    fn a_glides_outline_keeps_its_thickness_instead_of_thinning_with_the_angle() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        // Only the outline paints, and in black: over a white background its
         // coverage is then exactly `1 - r/255` in every pixel it touched.
         let bare = RollInstance {
-            keyline: 1.0,
+            outline_reach: 3.0,
+            outline_fade: 0.0,
             core: [0, 0, 0, 0],
-            inner: [0, 0, 0, 255],
-            outer: [0, 0, 0, 255],
+            outline: [0, 0, 0, 255],
             ..centered_note()
         };
         let white = wgpu::Color::WHITE;
@@ -878,40 +1738,39 @@ mod tests {
         };
 
         let held = ink(bare);
-        assert!((held - 4.0).abs() < 0.3, "a held note's two 2-point flanks measured {held}");
+        assert!((held - 5.0).abs() < 0.3, "a held note's two 3-point flanks measured {held}");
 
         let glide = ink(RollInstance { shear: 1.0, ..bare });
-        let expected = 4.0 * f32::sqrt(2.0);
+        let expected = 5.0 * f32::sqrt(2.0);
         assert!(
             (glide - expected).abs() < 0.5,
-            "a 45-degree glide's rim measured {glide} across the scanline, not {expected} — \
-             the band thins with the angle instead of keeping its thickness",
+            "a 45-degree glide's outline measured {glide} across the scanline, not \
+             {expected} — it thins with the angle instead of keeping its thickness",
         );
     }
 
-    /// A glide's quad has to hold the whole rim at the note's ENDS, where a
-    /// sheared note's ink reaches furthest along pitch.
+    /// A steep glide's outline stands its full width off the note at the note's
+    /// ENDS, where a sheared note's ink reaches furthest along pitch.
     ///
-    /// The two are one statement: the bands are measured perpendicular to the
-    /// long edges (the test above), so along pitch they stand `sqrt(1+slope^2)`
-    /// times their own thickness out — and the quad the vertex stage grows has
-    /// to cover exactly that, or the fragment stage never runs where the ink
-    /// was owed and the rim is cut off along a straight line at nothing in
-    /// particular. A quad grown by the rim's flat thickness is right at slope 0
-    /// and short by `(skew - 1)` rim widths everywhere else, so a held note
-    /// cannot show it and a steep bend loses points of white.
+    /// Two things have to be right for the ink to be there, and either alone
+    /// would leave it black at the flank and short of where it belongs. The
+    /// outline is measured perpendicular to the edge it stands against (the
+    /// test above), so along PITCH it covers `sqrt(1+slope^2)` times its own
+    /// reach; and the quad the vertex stage grows has to hold all of that, or
+    /// the fragment stage never runs where the ink was owed and the outline is
+    /// cut off along a straight line at nothing in particular.
     ///
-    /// Sampled at the note's own last row, since the shortfall grows with
-    /// `|local.y|` and is zero at its middle — which is where a scanline
+    /// Sampled at the note's own last row, since both shortfalls grow with
+    /// `|local.y|` and are zero at its middle — which is where a scanline
     /// measurement like the one above would look.
     #[test]
-    fn a_steep_glides_quad_still_covers_its_rim_at_the_notes_ends() {
+    fn a_steep_glides_outline_still_stands_off_at_the_notes_ends() {
         let Some((device, queue)) = headless_device() else {
             return;
         };
         // 8 points across pitch, 40 along time, bending 3 points of pitch per
-        // point of depth: steep enough that `skew` is 3.16, so the rim stands
-        // 12.6 points out along pitch rather than 4.
+        // point of depth: steep enough that `skew` is 3.16, so the outline
+        // stands 12.6 points out along pitch rather than 4.
         let steep = RollInstance {
             half_extent: [4.0, 20.0],
             shear: 3.0,
@@ -919,21 +1778,22 @@ mod tests {
         };
         let frame = draw(&device, &queue, vec![steep], bg_color());
         // Row 147 samples `local.y = 19.5` — inside the note's box, half a
-        // point short of its end, and still under the full rail. There the
-        // note's center line has drifted 58.5 points, so the far flank runs
-        // 190.5..196.8 black and 196.8..203.2 white.
+        // point short of its end. There the note's center line has drifted 58.5
+        // points, so the far flank's ribbon ends at 190.5 and its outline runs
+        // out to 203.2 — where an outline that kept its width along pitch
+        // rather than perpendicular to the edge would stop at 194.5.
         let at = |x: u32| pixel(&frame, x, 147);
         assert!(
             near(at(193), [0, 0, 0, 255]),
-            "the inner band is missing at the note's end: {:?}",
+            "the outline is missing at the note's end: {:?}",
             at(193),
         );
         assert!(
-            near(at(200), [255, 255, 255, 255]),
-            "the outer band is cut off at the note's end ({:?}) — the quad was grown \
-             by the rim's flat thickness rather than its sheared reach",
-            at(200),
+            near(at(199), [0, 0, 0, 255]),
+            "the outline is cut off at the note's end ({:?}) — it thins with the angle, \
+             or the quad was grown by its flat reach rather than its sheared one",
+            at(199),
         );
-        assert!(near(at(206), BG), "the rim reaches further than it should: {:?}", at(206));
+        assert!(near(at(206), BG), "the outline reaches further than it should: {:?}", at(206));
     }
 }
