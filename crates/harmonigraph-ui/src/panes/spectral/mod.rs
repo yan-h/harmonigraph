@@ -25,8 +25,8 @@ pub(super) use settings::spectrum_settings_pane;
 use crate::{theme, SharedState};
 use crate::panes::nearest_visible_node;
 use axes::{
-    loudness, spectrum_share, text_scales, Axes, PitchScale, TimeAxis,
-    MARKING_PT, PLOT_HEIGHT_FRACTION,
+    loudness, plot_budget, spectrum_share, text_scales, Axes, PitchScale, TimeAxis,
+    MARKING_PT, PROFILE_PT,
 };
 use gestures::{drag_split, drag_zoom};
 use egui::Sense;
@@ -110,12 +110,13 @@ pub(crate) fn spectral_pane(
     // Everything this pane sets text at, decided once from the range it just
     // settled on: the markings hold their size, the names follow the zoom.
     let text = text_scales(&cfg, &axes, scale.span, painter.ctx().pixels_per_point());
-    // dB depth mapping: 0 dB (a full-scale sine) tops out at 85% of the
-    // spectrum's share; the Analyzer tab's floor sets the bottom. Tilt is
-    // the conventional reference slope (negative), so the display
+    // dB depth mapping: the Analyzer tab's ceiling tops out where the profile
+    // line lands ON the pane's edge (see `plot_budget`) and its floor sets the
+    // bottom. Tilt is the conventional reference slope (negative), so the display
     // SUBTRACTS it per octave above the 1 kHz pivot: -4.5 lifts treble
     // 4.5 dB/oct.
-    let d_of = |power: f32, midi: f32| loudness(&cfg, power, midi) * split * PLOT_HEIGHT_FRACTION;
+    let budget = plot_budget(split, axes.depth_len());
+    let d_of = |power: f32, midi: f32| loudness(&cfg, power, midi) * budget;
     // The spectrum joins the spectrogram: its region mirrors so the baseline
     // sits on the now-line (against the spectrogram's newest column) and the
     // peaks point outward. With no roll/spectrogram (split == 1) there's
@@ -245,7 +246,7 @@ pub(crate) fn spectral_pane(
                     .iter()
                     .map(|&(midi, t, level)| axes.at(t, sd(d_of(level, midi))))
                     .collect();
-                painter.add(egui::Shape::line(top, egui::Stroke::new(1.0, edge)));
+                painter.add(egui::Shape::line(top, egui::Stroke::new(PROFILE_PT, edge)));
             }
         }
     }

@@ -10,11 +10,42 @@
 
 use crate::SharedState;
 
-/// Depth budget for the spectrum curve, as a fraction of the *spectrum's
-/// share* of the depth axis: a full-scale (0 dB) sine tops out here, leaving
-/// the last stretch as headroom so a loud partial doesn't run into the pane's
-/// edge.
-pub(super) const PLOT_HEIGHT_FRACTION: f32 = 0.85;
+/// The profile line along the spectrum curve's top, in points — the light edge
+/// that gives the fill a boundary to be seen by (see
+/// [`keyline`](super::roll::keyline) for what colors it).
+pub(super) const PROFILE_PT: f32 = 1.0;
+
+/// What the spectrum curve stops short of the pane's outer edge by, in POINTS:
+/// half the profile line, which is centred on the curve's top and would
+/// otherwise be half-clipped by the edge.
+///
+/// That is the WHOLE clearance, and deliberately so — at the ceiling the ink
+/// reaches the pane edge and the pane carries no empty band at all. Where the
+/// analyzer ends is already drawn, by the dock separator between it and the
+/// pane beside it; a second boundary inside the picture is one border too
+/// many.
+///
+/// In points rather than as a fraction of the spectrum's share. A fraction is
+/// an empty margin that grows with the pane, so the same picture carries a
+/// thicker border the larger it is drawn, and on a tall analyzer that band is
+/// the loudest empty thing on it. What the room is for is one line, and a line
+/// is the same width at every pane size.
+pub(super) const PLOT_HEADROOM_PT: f32 = PROFILE_PT * 0.5;
+
+/// How far into the depth axis the spectrum curve may reach: the spectrum's
+/// whole share of it, less [`PLOT_HEADROOM_PT`] expressed in that axis' own
+/// fraction — which is what `depth_len`, the axis in points, is for.
+///
+/// Floors at zero, and that floor is the whole guard. A pane too short to hold
+/// even the headroom draws a flat curve rather than one that reaches back
+/// through the now-line and paints the spectrum into the roll's half, and a
+/// zero-length axis divides to an infinity that the same floor takes to zero —
+/// so nothing here can hand egui's tessellator a NaN. Holding `depth_len` into
+/// range instead would defeat both: a sub-point axis would come back with a
+/// budget worth half of itself.
+pub(super) fn plot_budget(split: f32, depth_len: f32) -> f32 {
+    (split - PLOT_HEADROOM_PT / depth_len).max(0.0)
+}
 
 /// The 1 kHz pivot of the tilt slope, as a MIDI pitch.
 pub(super) const TILT_PIVOT_MIDI: f32 = 83.213_1;
@@ -223,12 +254,18 @@ impl Axes {
         }
     }
 
-    /// Pixels spanned by the full pitch axis (the short side).
+    /// Points spanned by the full pitch axis (the short side).
     pub fn pitch_len(&self) -> f32 {
         if self.time_vertical { self.rect.width() } else { self.rect.height() }
     }
 
-    /// Pixels spanned by the full depth/time axis (the long side).
+    /// Points spanned by the full depth/time axis (the long side).
+    ///
+    /// Points rather than device pixels, and the distinction is load-bearing:
+    /// this is the divisor that turns a size in points ([`PLOT_HEADROOM_PT`])
+    /// into a fraction of the axis, so reading it as physical pixels halves
+    /// that size on a 2x display. [`roll`](super::roll)'s `MIN_LENGTH_DEVICE_PX`
+    /// is what a floor in the other unit looks like, and says so in its name.
     pub fn depth_len(&self) -> f32 {
         if self.time_vertical { self.rect.height() } else { self.rect.width() }
     }

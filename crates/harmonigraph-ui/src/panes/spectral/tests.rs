@@ -611,6 +611,109 @@ fn the_roll_only_takes_depth_when_it_is_shown() {
     assert_eq!(spectrum_share(&cfg), 0.0, "the roll may take the whole pane");
 }
 
+/// What the curve leaves between itself and the pane's outer edge is a
+/// constant number of points, not a share of the pane.
+///
+/// A share is an empty band that grows with the pane, so the picture reads
+/// emptier the more room it is given — and the band is a border the analyzer
+/// draws inside itself, next to the one the dock separator already draws
+/// around it. Half a point is what the profile line needs to land inside the
+/// edge rather than half over it, and it is all the gap there is.
+///
+/// Both halves are the claim: the budget is what the drawn curve is scaled by,
+/// and the paint is where a slab could still land somewhere else.
+#[test]
+fn the_curve_clears_the_pane_edge_by_the_same_points_at_any_size() {
+    for depth_len in [40.0f32, 300.0, 1200.0] {
+        let gap = (0.6 - plot_budget(0.6, depth_len)) * depth_len;
+        assert!(
+            (gap - PLOT_HEADROOM_PT).abs() < 1e-3,
+            "a {depth_len}-point axis left {gap} points of clearance, not {PLOT_HEADROOM_PT}",
+        );
+    }
+    // A pane with no room even for that draws a flat curve, rather than one
+    // reaching back through the now-line into the roll's half. Held at the
+    // degenerate end too, where a divisor guarded into range would quietly
+    // hand back a curve worth half the axis instead.
+    assert_eq!(plot_budget(0.001, 10.0), 0.0);
+    assert_eq!(plot_budget(1.0, 0.4), 0.0, "a sub-point axis is not a pane to draw on");
+    assert_eq!(plot_budget(1.0, 0.0), 0.0, "and a zero-length one divides to a floor, not a NaN");
+
+    // Painted: a tone well over the ceiling clamps, so the curve is drawn at
+    // the full budget and the slab end nearest `edge` IS the clearance. `edge`
+    // is the depth the curve grows toward, which is the only thing the two
+    // layouts below disagree about.
+    let reach = |rect: egui::Rect, cfg: SpectrumConfig, edge: f32| {
+        let axes = Axes::new(rect, &cfg);
+        let mut nearest = f32::INFINITY;
+        for shape in paint_tone(rect, cfg) {
+            // The spectrum's slabs, and nothing else on the pane: they are the
+            // only shapes drawn in a palette color at this opacity.
+            if let egui::Shape::LineSegment { points, stroke } = shape {
+                if stroke.color.a() != 210 {
+                    continue;
+                }
+                for point in points {
+                    let depth = (axes.depth_at(point) - edge).abs();
+                    nearest = nearest.min(depth * axes.depth_len());
+                }
+            }
+        }
+        assert!(nearest.is_finite(), "{rect:?} drew no spectrum at all");
+        nearest
+    };
+    // Both layouts the pane has, because they place the curve against
+    // different edges and reach the clearance down different branches of `sd`:
+    // joined to the spectrogram it grows from the now-line toward depth 0, and
+    // with the roll and spectrogram both off it owns the axis and grows from
+    // depth 0 toward 1. A headroom applied to the wrong end shows up in one and
+    // not the other.
+    let alone = SpectrumConfig {
+        show_roll: false,
+        show_spectrogram: false,
+        ..SpectrumConfig::default()
+    };
+    for (cfg, edge, layout) in
+        [(SpectrumConfig::default(), 0.0, "joined"), (alone, 1.0, "whole-axis")]
+    {
+        for size in [egui::vec2(300.0, 100.0), egui::vec2(1200.0, 400.0)] {
+            let rect = egui::Rect::from_min_size(egui::pos2(10.0, 20.0), size);
+            let gap = reach(rect, cfg, edge);
+            assert!(
+                (gap - PLOT_HEADROOM_PT).abs() < 0.1,
+                "a {layout} {size:?} pane left {gap} points at its edge, \
+                 not {PLOT_HEADROOM_PT}",
+            );
+        }
+    }
+}
+
+/// The pane under `cfg`, painted with a 1 kHz tone loud enough to clamp
+/// against the default ceiling, so the spectrum curve is drawn at its full
+/// depth budget. 1 kHz because it is the tilt's own pivot, where the slope
+/// takes nothing off and the level is the tone's alone.
+fn paint_tone(rect: egui::Rect, cfg: SpectrumConfig) -> Vec<egui::Shape> {
+    let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
+    state.spectrum_config = cfg;
+    let sr = 48_000.0;
+    let samples: Vec<f32> = (0..48_000)
+        .map(|i| (std::f32::consts::TAU * 1_000.0 * i as f32 / sr).sin())
+        .collect();
+    state.spectrum.push_samples(&samples, 1, sr, 1.0, &cfg);
+
+    let ctx = egui::Context::default();
+    crate::theme::apply_theme(&ctx);
+    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(2000.0, 2000.0));
+    let output = ctx.run_ui(
+        egui::RawInput { screen_rect: Some(screen), ..Default::default() },
+        |ui| {
+            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+            spectral_pane(&mut child, &mut state, 1.0, 0);
+        },
+    );
+    output.shapes.into_iter().map(|s| s.shape).collect()
+}
+
 /// The whole pane, painted in every orientation with a roll that has
 /// held notes, bent notes, notes off the pitch range and notes older
 /// than the window. Geometry this fiddly is easy to make degenerate
