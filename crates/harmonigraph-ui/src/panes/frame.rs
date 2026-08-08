@@ -135,11 +135,10 @@ pub(super) fn frame_controls(ui: &mut egui::Ui, state: &mut SharedState) {
             }
         });
         button_row(ui, |ui| {
-            ui.add(
-                egui::TextEdit::singleline(&mut state.preset_name)
-                    .hint_text("preset name")
-                    .desired_width(PRESET_NAME_WIDTH * crate::theme::ui_scale(ui.ctx())),
-            );
+            let field = crate::widgets::row_field(ui, &mut state.preset_name)
+                .hint_text("preset name")
+                .desired_width(PRESET_NAME_WIDTH * crate::theme::ui_scale(ui.ctx()));
+            ui.add(field);
             if ui.button("Save angle").clicked() {
                 let trimmed = state.preset_name.trim();
                 let name = if trimmed.is_empty() {
