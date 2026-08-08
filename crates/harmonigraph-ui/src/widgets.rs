@@ -705,8 +705,16 @@ impl Grab {
 /// four fifths of the bar, which is where the Level bar's ceiling and the Band
 /// bar's outer radius both sit at rest, and the thumb and the digits are the
 /// same near-white — so whichever of the two paints last, the other cannot be
-/// read. A number placed beside a handle keeps a handle's reach of clear bar
-/// between itself and the thumb by construction, at every setting.
+/// read. A number goes in a run of CLEAR bar instead, which is what keeps a
+/// thumb's own width between it and every thumb; swept with the pitch range's
+/// `hz_readout`, the widest readout any pane asks for, no thumb stands in a
+/// number at 300pt or above, and the settings column opens around 423.
+///
+/// Under about 240pt that stops being reachable — a span narrower than the two
+/// numbers it carries has no run of clear bar left that holds them — and what
+/// the placement spends the remaining room on is reading ORDER, low then high
+/// and both still on the bar. Order is what makes them a range rather than two
+/// numbers.
 ///
 /// **The NAME is crossed by the low handle** where the numbers are not, and
 /// that is the trade this row makes rather than an oversight. A thumb roams the
@@ -715,8 +723,9 @@ impl Grab {
 /// number does not survive losing a digit. It costs nothing where the four bars
 /// rest — the two that open at the full axis stand their low handle a point
 /// clear of the name, and the Level and Band bars open at 40% and 66% of theirs
-/// — and shows up only while the low end is dragged down into roughly the
-/// bottom tenth of the axis, which is the width of the name.
+/// — and shows up only while the low end is dragged down into the name's own
+/// share of the bar: about a sixth of the axis at the width the settings column
+/// opens at, a tenth on a bar twice that wide.
 ///
 /// Letting the name slide out of the way instead was measured and dropped: it
 /// has to snap back the moment the handle passes it, and a name jumping the
@@ -1606,12 +1615,12 @@ impl<'a> SpectrumBar<'a> {
 
         // How far round the circle the arc reaches, read out beside the handle
         // — on the dimmed side, where it sits on flat color, and on the claimed
-        // side when the arc has grown too wide to leave room there. It can
-        // travel with the handle where a [`RangeBar`]'s numbers park at the
-        // right instead, because there is one of it and one handle to name: the
-        // arrangement a range cannot reach is a name plus TWO roaming numbers.
-        // The sign is the direction, and it is spelled out because the track
-        // cannot show it: an arc and its flip claim exactly the same colors.
+        // side when the arc has grown too wide to leave room there, which is
+        // the same bargain a [`RangeBar`]'s ends make. One number and one
+        // handle, so it needs none of the arithmetic that keeps a range's TWO
+        // roaming numbers out of each other and off the name. The sign is the
+        // direction, and it is spelled out because the track cannot show it:
+        // an arc and its flip claim exactly the same colors.
         let font = TextStyle::Monospace.resolve(ui.style());
         let text_color = if response.hovered() || response.dragged() {
             theme::text()
@@ -2394,8 +2403,9 @@ mod tests {
 
     /// The bar names itself on its own row: three text runs in a 20pt row,
     /// the name where a ValueBar puts one and each number beside the handle it
-    /// belongs to. What this is worth is the row it saves — a range used to
-    /// cost a label row above a nameless control.
+    /// belongs to. What this is worth is the row it saves: a control with no
+    /// name of its own costs a label row above it, which is what a range with
+    /// two of these bars a section would spend twice.
     #[test]
     fn a_range_bar_names_itself_on_the_bar() {
         // Mid-axis, so there is empty track either side of the span to sit in.
@@ -2447,7 +2457,8 @@ mod tests {
     #[test]
     fn the_name_holds_its_place_however_the_handles_move() {
         for width in [300.0f32, 120.0] {
-            let name_of = |low, high| text_boxes(&paint_range_bar_wide(width, low, high))[0].clone();
+            let name_of =
+                |low, high| text_boxes(&paint_range_bar_wide(width, low, high))[0].clone();
             let name = name_of(AXIS.0, AXIS.1);
             // Spans of every width, at both ends of the axis and across the
             // middle, and a different number of digits in the numbers beside

@@ -306,7 +306,7 @@ pub(super) fn param_bar(
 
 /// A two-handle [`RangeBar`] over a PAIR of parameters — one control for a
 /// range whose ends are both automatable params (the Nodes pane's color
-/// range). `display` formats each end of its readout.
+/// range). `label` names the bar and `display` formats each end's readout.
 ///
 /// Both params are bracketed for the whole drag and written every changed
 /// frame, so a drag on either handle records as one gesture on each. A
