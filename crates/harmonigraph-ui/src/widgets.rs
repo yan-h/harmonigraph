@@ -4737,6 +4737,41 @@ mod tests {
         }
     }
 
+    /// A caller whose function leaves 0..=1 is drawn inside the bar anyway.
+    ///
+    /// The guard exists because the function handed to [`ValueBar::curve`] is
+    /// the REAL one — it answers for the thing being previewed and owes the
+    /// widget nothing — so the widget cannot assume a level it can draw. The
+    /// one caller in the tree is bounded by construction, which is exactly why
+    /// this needs a fixture rather than a reader: without one the clamp can be
+    /// deleted and the whole suite stays green.
+    ///
+    /// A bar is one row in a column of them, so the cost of getting this wrong
+    /// is not a clipped line but ink over the neighbours' tracks.
+    #[test]
+    fn a_curve_preview_stays_inside_the_bar_when_its_caller_does_not() {
+        // Runs -0.5 to 1.5: half a plot-height below the bar and half above.
+        let shapes = paint_value_bar(240.0, 0.5, Some(|_, p| p * 2.0 - 0.5));
+        let track = shapes
+            .iter()
+            .find_map(|shape| match shape {
+                egui::Shape::Rect(rect) if rect.fill == theme::well() => Some(rect.rect),
+                _ => None,
+            })
+            .expect("the bar painted no track");
+        let points = curve_points(&shapes);
+        assert!(!points.is_empty(), "the bar painted no preview");
+        for point in &points {
+            assert!(
+                point.y >= track.top() && point.y <= track.bottom(),
+                "a preview point at y {} left a track of {}..{}",
+                point.y,
+                track.top(),
+                track.bottom(),
+            );
+        }
+    }
+
     /// The preview is opt-in, and every other bar in the tree is the bar it
     /// always was: no line, and no extra shape for the paint tests around it to
     /// trip over.
