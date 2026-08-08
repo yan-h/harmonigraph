@@ -255,7 +255,7 @@ fn melody_bass_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
 
 /// The patterns the mark rings' sheet can be laid in, for the row above.
 ///
-/// A table beside the row rather than six arms written into it: a pattern is a
+/// A table beside the row rather than four arms written into it: a pattern is a
 /// shape the light takes, and each one's description is a sentence about that
 /// shape rather than about the marks, so it belongs next to the others it is
 /// told apart from.
@@ -279,18 +279,6 @@ const SHIMMER_PATTERNS: &[(Pulse, &str, &str)] = &[
         "Three gratings sixty degrees apart: a honeycomb of bright cells. \
          Tessellates with the lattice where a checkerboard fights it — the \
          rows here run three ways, not two",
-    ),
-    (
-        Pulse::Weave,
-        "Weave",
-        "The same crossed gratings as Checker with the brighter taken: a \
-         lattice of light LINES rather than cells, brightest where two cross",
-    ),
-    (
-        Pulse::Rings,
-        "Rings",
-        "Concentric rings travelling outward from the lattice's origin — the \
-         one pattern with a center, so the light has somewhere it comes from",
     ),
 ];
 
