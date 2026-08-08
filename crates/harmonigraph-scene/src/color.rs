@@ -354,13 +354,20 @@ fn max_chroma(l_star: f64, h: f64) -> f64 {
 /// is exact to about 1e-5 over the whole middle of the axis, and only the bends
 /// against black and white cost anything.
 ///
-/// **Every entry sits at or below the true floor, and that is load-bearing
-/// rather than incidental**: a value above it is a color sRGB cannot show, and
-/// nothing downstream re-checks. The table is built by lowering any entry whose
-/// CHORD rides above the floor anywhere in its cell, then dropping the lot by
-/// 1e-4 — two orders above the gamut bisection's own resolution and well under
-/// the 1/255 the answer is quantized to. `the_hue_floor_is_never_above_the_gamut`
-/// re-derives the floor from scratch and holds this to it.
+/// **Every entry sits at or below the true floor**, and it is worth being exact
+/// about what that buys, because the obvious answer is wrong: it is NOT gamut
+/// safety. [`chroma_of`] ends on this hue's own ceiling and is in gamut for any
+/// floor whatever, over-high entries included — see the proof there. What an
+/// entry above the true floor costs is UNIFORMITY at that lightness: the hues
+/// too narrow to hold it get their share of a number they cannot reach, so the
+/// one thing this table exists to deliver quietly stops holding.
+///
+/// That is still worth a construction rather than a hope, which is why the table
+/// is built by lowering any entry whose CHORD rides above the floor anywhere in
+/// its cell and then dropping the lot by 1e-4 — two orders above the gamut
+/// bisection's own resolution and well under the 1/255 the answer is quantized
+/// to. `the_hue_floor_is_never_above_the_gamut` re-derives the floor from
+/// scratch and holds this to it.
 const HUE_FLOOR: [f32; 101] = [
     0.000000, 0.017159, 0.021645, 0.024792, 0.027297, 0.029412,
     0.031262, 0.032915, 0.034418, 0.035856, 0.037294, 0.038733,
@@ -410,9 +417,13 @@ fn hue_floor(l_star: f64) -> f64 {
 /// makes one setting read as three different colorfulnesses around the circle;
 /// denominating in `m` alone fixes that and costs the top of the knob its
 /// reach, since the vivid hues could hold 2.4x what the narrowest one can and
-/// would never be asked for it. This is neither: near 0 it is `m*f`, flat
-/// across hue to within 17% at a quarter of the knob and 41% at half, and at
-/// `f` = 1 it is exactly `M`, the gamut boundary, with nothing given up.
+/// would never be asked for it. This is neither: near 0 it is `m*f`, flat across
+/// hue to within 17-25% at a quarter of the knob and 41-65% at half — the wide
+/// end of each pair is `L*` 86, the narrow end 64 — and at `f` = 1 it is exactly
+/// `M`, the gamut boundary, with nothing given up. The spread grows with `f` by
+/// construction, so a figure quoted here is worth nothing without the fraction
+/// and the lightness it was measured at; `one_chroma_setting_is_one_colorfulness_across_hue`
+/// carries the bounds.
 ///
 /// Ottosson's Okhsl reaches for the same compromise against the same problem —
 /// he anchors three chromas per hue and interpolates, to "keep the unevenness
@@ -666,9 +677,11 @@ pub const HUE_CIRCLE_N: usize = 96;
 /// claims and the remainder beyond the handle: one circle at two strengths, so
 /// the two halves cannot disagree about what a hue looks like. `chroma` is
 /// resolved by [`chroma_of`] exactly as [`Gradient::chroma`] is, so the circle
-/// is in gamut at every hue for the same reason the ramp is — and reads as one
-/// colorfulness the whole way round, which a track drawn straight off
-/// [`max_chroma`] emphatically does not.
+/// is in gamut at every hue for the same reason the ramp is — and turns far more
+/// evenly than one drawn straight off [`max_chroma`], though not perfectly:
+/// `TRACK_CHROMA` is high enough that colorfulness still spans 2.26x around the
+/// circle, against 2.90x off the ceiling. Evenness is what the bottom of the
+/// knob buys, and a track has to sit near the top of it to show hues at all.
 ///
 /// **Memoized in one slot, because every caller asks for the same pair.** The
 /// key is the two knobs the circle depends on rather than a whole gradient, and
@@ -809,6 +822,7 @@ pub(crate) fn hue_floor_for_docs(l_star: f64) -> f64 {
 pub(crate) fn chroma_of_for_docs(fraction: f64, l_star: f64, h: f64) -> f64 {
     chroma_of(fraction, l_star, h)
 }
+
 
 /// The luminance an `L*` names, for the tests that hold a DRAWN color to the
 /// curve's own promise rather than to another drawn color. The promise is the
