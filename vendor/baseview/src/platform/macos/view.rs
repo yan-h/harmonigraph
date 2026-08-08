@@ -330,6 +330,16 @@ impl BaseviewView {
     /// gestures are untouched: through a real drag, however far it wanders, the
     /// button reads down and nothing is synthesised.
     fn settle_stuck_buttons(this: ViewRef<Self>) {
+        // Nothing owed and nothing pending is nothing to settle, which is the
+        // state all but a handful of settles are in. Read locally first, the
+        // way `settle_pointer_exit` reads `exit_withheld` before it asks AppKit
+        // anything — a matched shape rather than a measured cost. Both masks,
+        // because a bit left in `buttons_seen_up` by a press that has since
+        // been released properly still has to be cleared below.
+        if (this.buttons_reported_down.get() | this.buttons_seen_up.get()) == 0 {
+            return;
+        }
+
         let owed =
             buttons_owed_release(this.buttons_reported_down.get(), NSEvent::pressedMouseButtons());
         // Stuck at this settle AND the one before it. A single one is not
