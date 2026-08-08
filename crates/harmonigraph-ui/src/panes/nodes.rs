@@ -532,6 +532,10 @@ fn every_layer_section(
         (&mut view.sevens_gutter, &mut view.sevens_gutter_soft),
         0.5,
         "Gutter",
+        {
+            let fresh = ViewConfig::default();
+            (fresh.sevens_gutter, fresh.sevens_gutter_soft)
+        },
         |v| format!("{v:.2}"),
     )
     .on_hover_text(

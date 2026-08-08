@@ -363,11 +363,20 @@ pub(super) fn param_range_bar(
 ///
 /// Both numbers are distances from the same place, so the axis floors at 0 and
 /// the caller passes only its far end.
+///
+/// `fresh` is where a double-click lands. A range bar's own reset opens to the
+/// whole axis, which is the useful place to land for a window onto something
+/// and the worst one here: both ends of this axis together are the widest edge
+/// there is at the softest it goes, so the gesture would trade a dialled edge
+/// for the most extreme one. The fresh pair is the neutral answer, and it is
+/// what a double-click reaches for on a bar whose number is captured out of a
+/// project rather than dragged to.
 pub(super) fn edge_bar(
     ui: &mut egui::Ui,
     (reach, fade): (&mut f32, &mut f32),
     max: f32,
     label: &str,
+    fresh: (f32, f32),
     display: fn(f32) -> String,
 ) -> egui::Response {
     // Clamped rather than trusted: a fade wider than its reach draws the same
@@ -379,7 +388,9 @@ pub(super) fn edge_bar(
     let (mut low, mut high) = ((*reach - *fade).max(0.0), *reach);
     let response =
         RangeBar::new(&mut low, &mut high, 0.0..=max, label).fade_span().display(display).show(ui);
-    if response.changed() {
+    if response.double_clicked() {
+        (*reach, *fade) = fresh;
+    } else if response.changed() {
         (*reach, *fade) = (high, high - low);
     }
     response

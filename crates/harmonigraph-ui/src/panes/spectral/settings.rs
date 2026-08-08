@@ -234,6 +234,10 @@ pub(crate) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
         (&mut cfg.roll_outline, &mut cfg.roll_outline_fade),
         crate::ROLL_OUTLINE_MAX,
         "Outline",
+        {
+            let fresh = crate::SpectrumConfig::default();
+            (fresh.roll_outline, fresh.roll_outline_fade)
+        },
         |v| format!("{v:.1}"),
     )
     .on_hover_text(
