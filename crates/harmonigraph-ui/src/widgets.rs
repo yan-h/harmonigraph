@@ -654,7 +654,10 @@ impl Grab {
         // against `hi` and cannot move — a hard edge the bar can neither widen
         // nor soften.
         //
-        // No other bar reaches here: a `min_span` keeps every one of them open.
+        // A bar that declares a `min_span` reaches this too, and its slide is
+        // what repairs the pair rather than what breaks it: `min_span` bounds
+        // what a bar PRODUCES, so a closed or inverted pair still arrives from
+        // a host param or a blob. `apply` floors the slid width there.
         if hi <= lo {
             return if v < lo {
                 Grab::Low
@@ -693,6 +696,14 @@ impl Grab {
             // reads only the gesture's own offset and width, never the
             // squished pair it produced.
             Grab::Span { offset, width } => {
+                // A width the gesture froze can be under the minimum, because
+                // `min_span` bounds what this bar PRODUCES and not what it was
+                // handed: a closed or inverted pair reaches it from a host
+                // param or a blob, and closed is the one shape the slide is
+                // the repair for. Floored here rather than at the grab, which
+                // measures the pair it found; the walls below already open to
+                // the minimum, so this is the interior agreeing with them.
+                let width = width.max(min_span);
                 let (want_lo, want_hi) = (v - offset, v - offset + width);
                 if want_lo < min {
                     (min, want_hi.clamp(min + min_span, max))
@@ -3277,6 +3288,33 @@ mod tests {
         let grab = Grab::at(40.0, closed, AXIS, 8.0);
         assert!(matches!(grab, Grab::Low), "a press below a closed span took {grab:?}");
         assert_eq!(grab.apply(40.0, closed, AXIS, 0.0), (40.0, 60.0));
+    }
+
+    /// A span that arrives ALREADY closed — or inverted — opens to the
+    /// minimum on the first drag rather than sliding along shut.
+    ///
+    /// `min_span` bounds what the bar PRODUCES, not what it is handed, so
+    /// every bar that declares one can still be given a pair that breaks it:
+    /// the Nodes tab's colour range is two host params with nothing between
+    /// them, and the Band bar's pair reaches `ViewConfig` from a blob
+    /// unsanitized. The slide is what a closed span needs and it carries its
+    /// width forward, so without the floor below it carries a zero — and the
+    /// bar, whose whole job is to repair such a pair by being dragged, would
+    /// hold it shut instead. `Grab::apply` promises the opposite in as many
+    /// words: the span never closes past `min_span`.
+    #[test]
+    fn a_span_handed_in_closed_opens_to_the_minimum() {
+        let cases: [((f32, f32), &str); 2] =
+            [((60.0, 60.0), "a closed pair"), ((100.0, 40.0), "an inverted pair")];
+        for (pair, hint) in cases {
+            let press = pair.0.max(pair.1) + 5.0;
+            let (lo, hi) = Grab::at(press, pair, AXIS, 8.0).apply(press + 10.0, pair, AXIS, OCTAVE);
+            assert!(
+                hi - lo >= OCTAVE - 1e-3,
+                "{hint}: dragging it left a span of {} ({lo}..{hi})",
+                hi - lo,
+            );
+        }
     }
 
     /// And a closed span at the axis FLOOR — a soft edge switched off
