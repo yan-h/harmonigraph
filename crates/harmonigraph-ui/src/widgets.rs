@@ -4106,22 +4106,6 @@ mod tests {
         }
     }
 
-    /// The readout names the `L*` the curve actually draws at both ends of the
-    /// pitch range, at every pair the bar can be handed — not only at the ones
-    /// a drag leaves behind.
-    ///
-    /// A drag snaps both ends to whole `L*`, so a bar that has been touched
-    /// reads out exactly whatever it does. Everything else arrives unsnapped:
-    /// the pair a fresh view opens on, the one a double-click goes home to, and
-    /// anything a saved blob or a hand-edited file carries. `ViewConfig`'s own
-    /// gradient is 53 over a ramp of 31, whose ends are 37.5 and 68.5 — the
-    /// case `snapped` is written to keep a DRAG off, arriving by the one road
-    /// that does not pass it.
-    ///
-    /// A tenth of a point, because that is well under anything a viewer could
-    /// see and well over the half-point a whole-number readout costs at these
-    /// ends: the failure is a bar reading `38 → 68`, a span of 30, over a
-    /// gradient spending 31.
     /// The numbers one bar reads out, each parsed off the end of the readout
     /// with whatever unit follows it stripped.
     fn readout_ends(spread: Spread, pair: (f32, f32)) -> (String, Vec<f32>) {
@@ -4142,6 +4126,22 @@ mod tests {
         (shown, said)
     }
 
+    /// The readout names the `L*` the curve actually draws at both ends of the
+    /// pitch range, at every pair the bar can be handed — not only at the ones
+    /// a drag leaves behind.
+    ///
+    /// A drag snaps both ends to whole `L*`, so a bar that has been touched
+    /// reads out exactly whatever it does. Everything else arrives unsnapped:
+    /// the pair a fresh view opens on, the one a double-click goes home to, and
+    /// anything a saved blob or a hand-edited file carries. `ViewConfig`'s own
+    /// gradient is 53 over a ramp of 31, whose ends are 37.5 and 68.5 — the
+    /// case `snapped` is written to keep a DRAG off, arriving by the one road
+    /// that does not pass it.
+    ///
+    /// A tenth of a point, because that is well under anything a viewer could
+    /// see and well over the half-point a whole-number readout costs at these
+    /// ends: the failure is a bar reading `38 → 68`, a span of 30, over a
+    /// gradient spending 31.
     #[test]
     fn a_brightness_readout_names_the_ends_the_curve_draws() {
         let fresh = ViewConfig::default().pitch_gradient;
