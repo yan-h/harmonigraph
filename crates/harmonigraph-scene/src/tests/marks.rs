@@ -671,7 +671,7 @@ fn lone_mark(note: u8, count: u32, center: f32) -> (NodeInstance, FrameParams) {
 /// two call sites agree.
 ///
 /// The gradient comes off the view the helpers above build with, NOT from
-/// `PitchGradient::default()` — that one is the gradient type's own default
+/// `Gradient::default()` — that one is the gradient type's own default
 /// and is free to differ from what a fresh view opens on. Reading it here
 /// would pin the two together and fail the moment either moves.
 fn sector_color(node: &NodeInstance, slot: u32, frame: &FrameParams) -> Vec4 {

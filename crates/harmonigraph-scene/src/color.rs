@@ -19,7 +19,7 @@
 //! `tests/hue_space.rs`, which measures both and prices them.
 
 use crate::view::ViewConfig;
-use crate::style::PitchGradient;
+use crate::style::Gradient;
 use crate::PITCH_LUT_N;
 use glam::Vec4;
 
@@ -38,7 +38,7 @@ use glam::Vec4;
 ///
 /// Non-finite ends yield the darkest color rather than a NaN that would ride
 /// into the instance buffer unnoticed.
-fn pitch_ramp_t(pitch: f32, darkest_pitch: f32, brightest_pitch: f32) -> f64 {
+fn ramp_t(pitch: f32, darkest_pitch: f32, brightest_pitch: f32) -> f64 {
     if !darkest_pitch.is_finite() || !brightest_pitch.is_finite() {
         return 0.0;
     }
@@ -340,7 +340,7 @@ fn max_chroma(l_star: f64, h: f64) -> f64 {
 }
 
 /// One color of the ramp: `L*` for lightness, an Oklab hue, and an ABSOLUTE
-/// Oklab chroma (the fraction is resolved by [`pitch_ramp_coords`]).
+/// Oklab chroma (the fraction is resolved by [`ramp_coords`]).
 ///
 /// The clamp is a safety net over a path that should not need it — every
 /// chroma reaching here is under what [`max_chroma`] granted, and the search
@@ -362,18 +362,18 @@ fn oklab_srgb(l_star: f64, h: f64, c: f64) -> Vec4 {
 /// the curve can never drift into two different answers for one pitch.
 ///
 /// The chroma pair is the one part of the gradient not simply read off
-/// [`PitchGradient`]: it arrives as a FRACTION of what the gamut holds here,
+/// [`Gradient`]: it arrives as a FRACTION of what the gamut holds here,
 /// so the curve stays inside sRGB at every setting of the other knobs and
 /// `L*` — hence the luminance — is exactly what was asked for. See
-/// [`PitchGradient::chroma`] for why an absolute chroma cannot be, and
+/// [`Gradient::chroma`] for why an absolute chroma cannot be, and
 /// `the_gradient_is_in_gamut_and_flat_when_its_ramp_is` for what holds this to
 /// it.
-fn pitch_ramp_color(t: f64, gradient: PitchGradient) -> Vec4 {
-    let (l, h, c) = pitch_ramp_coords(t, gradient);
+fn ramp_color(t: f64, gradient: Gradient) -> Vec4 {
+    let (l, h, c) = ramp_coords(t, gradient);
     oklab_srgb(l, h, c)
 }
 
-/// The three coordinates [`pitch_ramp_color`] converts, before the conversion:
+/// The three coordinates [`ramp_color`] converts, before the conversion:
 /// `L*`, an Oklab hue, and an absolute Oklab chroma.
 ///
 /// Split out for `ramp_sample_in_gamut`, which has to ask about the color
@@ -385,10 +385,10 @@ fn pitch_ramp_color(t: f64, gradient: PitchGradient) -> Vec4 {
 /// has boundaries rather than a scattering of owners — [`with_lut`] applies it
 /// once for a whole table (and keys the memo on the result),
 /// `designed_pitch_ramp` does it for the test path, and
-/// [`PitchGradient::lightness_and_hue`] holds up its own public end. Only
-/// [`PitchGradient::chroma_at`] is read raw, which is what lets the gamut test
+/// [`Gradient::lightness_and_hue`] holds up its own public end. Only
+/// [`Gradient::chroma_at`] is read raw, which is what lets the gamut test
 /// hand in the out-of-range fraction a control cannot produce.
-fn pitch_ramp_coords(t: f64, gradient: PitchGradient) -> (f64, f64, f64) {
+fn ramp_coords(t: f64, gradient: Gradient) -> (f64, f64, f64) {
     let (l, h) = gradient.lightness_and_hue(t);
     (l, h, gradient.chroma_at(t) * max_chroma(l, h))
 }
@@ -418,8 +418,8 @@ fn pitch_ramp_coords(t: f64, gradient: PitchGradient) -> (f64, f64, f64) {
 /// wants none: it separates a solve that converged from one that did not, which
 /// is not a question of a hair either way.
 #[cfg(test)]
-pub(crate) fn ramp_sample_in_gamut(t: f64, gradient: PitchGradient) -> bool {
-    let (l, h, c) = pitch_ramp_coords(t, gradient);
+pub(crate) fn ramp_sample_in_gamut(t: f64, gradient: Gradient) -> bool {
+    let (l, h, c) = ramp_coords(t, gradient);
     in_gamut_within(l, h, c, 0.5)
 }
 
@@ -427,28 +427,74 @@ pub(crate) fn ramp_sample_in_gamut(t: f64, gradient: PitchGradient) -> bool {
 /// tracks it. Nothing in the draw path may call this — going off the curve
 /// direct is precisely the mismatch the shared table exists to prevent.
 #[cfg(test)]
-pub(crate) fn designed_pitch_ramp(t: f64, gradient: PitchGradient) -> Vec4 {
-    pitch_ramp_color(t, gradient.sanitized())
+pub(crate) fn designed_pitch_ramp(t: f64, gradient: Gradient) -> Vec4 {
+    ramp_color(t, gradient.sanitized())
+}
+
+/// Tables the memo below holds at once, and it is a count of the gradients LIVE
+/// IN A FRAME rather than a cache size dialled by measurement.
+///
+/// Two of them are pictures: the lattice's pitch gradient, which the scene
+/// derive walks per node, and the Spectral pane's level gradient, which the
+/// spectrum curve walks per slab — up to 4096 of them. One slot served the
+/// lattice alone perfectly, hitting on essentially every call because the knobs
+/// hold still except while a control is being dragged. It cannot serve two: the
+/// two gradients differ, so each pane's first ask evicts the other's table, and
+/// a frame drawing both pays two full rebuilds — [`PITCH_LUT_N`] gamut
+/// bisections each, 165us apiece measured — every frame rather than only while
+/// a knob moves.
+///
+/// **The third is the one a bar is part-way through writing**, and it is why
+/// this is 3 and not 2. A settings pane draws AFTER the display panes, so
+/// everything above the bar in a frame reads the value the bar wrote LAST
+/// frame, and then the bar writes a new one and paints THAT — it re-reads
+/// deliberately, so the handle does not trail the pointer by a frame. A drag
+/// therefore walks three keys per frame where only the newest is a fair
+/// rebuild. At two slots the newest evicts the lattice's, the next frame's
+/// lattice ask evicts it back, and a held drag settles at very nearly two
+/// rebuilds a frame instead of one:
+/// `a_frame_of_a_drag_rebuilds_only_what_the_drag_changed` measures 19 over ten
+/// frames at two slots against the 10 that are the floor.
+///
+/// So the count is (pictures + 1), and a third gradient in the picture would
+/// make it 4 — which is why it is a length rather than a pair of fields. It is
+/// NOT a general cache: the scan below is linear and the eviction is
+/// most-recently-used, both of which stop paying somewhere above a handful.
+pub(crate) const LUT_SLOTS: usize = 3;
+
+// Tables [`with_lut`] has built on this thread — the one thing a caller cannot
+// otherwise see, the cache being invisible in what it returns.
+//
+// A counter rather than a stopwatch, because what wants pinning is exact: two
+// gradients asked for in turn cost two rebuilds and no more. Timed instead, the
+// same claim is a ratio against a machine.
+//
+// A `//` comment and not a doc one: rustdoc documents no item here, a
+// `thread_local!` being a macro invocation, and `unused_doc_comments` is denied.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static REBUILDS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
 /// Run `read` over one gradient's table, without copying it.
 ///
-/// The table is memoized on the gradient that built it, in ONE slot: the five
-/// knobs hold still except while a control is being dragged, so a single slot
-/// hits on essentially every call, and a map keyed on six floats would spend
-/// more on hashing than the hit saves. A miss rebuilds — [`PITCH_LUT_N`]
-/// entries, each a gamut bisection and an Oklab->sRGB conversion — which is why
-/// this is worth caching at all: the per-node draw path asks for a color
-/// hundreds of times a frame.
+/// The table is memoized on the gradient that built it, in [`LUT_SLOTS`] slots
+/// scanned linearly — a map keyed on six floats would spend more on hashing
+/// than the hit saves. A miss rebuilds [`PITCH_LUT_N`] entries, each a gamut
+/// bisection and an Oklab->sRGB conversion, which is why this is worth caching
+/// at all: the per-node draw path asks for a color hundreds of times a frame
+/// and the spectrum curve thousands.
 ///
 /// Thread-local rather than a lock, since the CPU color walk and the scene
 /// derive are not the only callers (the offline renderer has its own thread),
 /// and a table is small enough that a second thread rebuilding its own copy
 /// costs less than either would pay contending for one.
-fn with_lut<R>(gradient: PitchGradient, read: impl FnOnce(&[Vec4; PITCH_LUT_N]) -> R) -> R {
+fn with_lut<R>(gradient: Gradient, read: impl FnOnce(&[Vec4; PITCH_LUT_N]) -> R) -> R {
+    /// The slots, most recently used first — which is the whole of the
+    /// eviction policy, the last one falling off the end.
+    type Memo = Vec<(Gradient, [Vec4; PITCH_LUT_N])>;
     thread_local! {
-        static MEMO: std::cell::RefCell<Option<(PitchGradient, [Vec4; PITCH_LUT_N])>> =
-            const { std::cell::RefCell::new(None) };
+        static MEMO: std::cell::RefCell<Memo> = const { std::cell::RefCell::new(Vec::new()) };
     }
     // Sanitized FIRST, so the key is finite and two gradients that draw the
     // same picture are one cache entry rather than two.
@@ -457,22 +503,35 @@ fn with_lut<R>(gradient: PitchGradient, read: impl FnOnce(&[Vec4; PITCH_LUT_N]) 
         // The rebuild takes its mutable borrow and gives it back BEFORE `read`
         // runs, which then holds a shared one. `read` is a caller's closure
         // over a table this hands it, so the natural next one asks for another
-        // pitch color partway through — and a mutable borrow still standing
-        // there turns that into a BorrowMutError on the draw path rather than
-        // into a second read of the same table.
+        // color partway through — and a mutable borrow still standing there
+        // turns that into a BorrowMutError on the draw path rather than into a
+        // second read of the same table.
         {
             let mut memo = memo.borrow_mut();
-            if memo.as_ref().is_none_or(|(key, _)| *key != gradient) {
-                let lut = std::array::from_fn(|k| {
-                    pitch_ramp_color(k as f64 / (PITCH_LUT_N - 1) as f64, gradient)
-                });
-                *memo = Some((gradient, lut));
+            match memo.iter().position(|(key, _)| *key == gradient) {
+                // To the front, so that two gradients alternating WITHIN a
+                // frame — the lattice's and the heatmap's — both stay resident
+                // however many times each is asked for.
+                Some(0) => {}
+                Some(i) => {
+                    let hit = memo.remove(i);
+                    memo.insert(0, hit);
+                }
+                None => {
+                    #[cfg(test)]
+                    REBUILDS.with(|n| n.set(n.get() + 1));
+                    let lut = std::array::from_fn(|k| {
+                        ramp_color(k as f64 / (PITCH_LUT_N - 1) as f64, gradient)
+                    });
+                    memo.truncate(LUT_SLOTS - 1);
+                    memo.insert(0, (gradient, lut));
+                }
             }
         }
-        // The block above fills the slot whenever the key misses, so it is
-        // filled here whatever happened.
+        // The block above puts the asked-for table at the front whatever
+        // happened, so slot 0 is this gradient's.
         let memo = memo.borrow();
-        read(&memo.as_ref().expect("memo filled above").1)
+        read(&memo.first().expect("filled above").1)
     })
 }
 
@@ -482,7 +541,7 @@ fn with_lut<R>(gradient: PitchGradient, read: impl FnOnce(&[Vec4; PITCH_LUT_N]) 
 ///
 /// Each side maps a pitch to a `t` FIRST and indexes with that, so the
 /// gradient's endpoints never reach the table and it stays range-independent.
-/// The five knobs are the only thing it varies with — which is why the memo is
+/// The six knobs are the only thing it varies with — which is why the memo is
 /// keyed on those and NOT on the range. A change that folded
 /// `darkest_pitch`/`brightest_pitch` into the entries would make that cache
 /// wrong, not just stale.
@@ -490,7 +549,7 @@ fn with_lut<R>(gradient: PitchGradient, read: impl FnOnce(&[Vec4; PITCH_LUT_N]) 
 /// Hands back a copy, for the renderer, which needs the table as a value to
 /// upload. The per-node draw path wants two entries rather than a kilobyte and
 /// goes through [`with_lut`] instead.
-pub fn pitch_ramp_lut(gradient: PitchGradient) -> [Vec4; PITCH_LUT_N] {
+pub fn pitch_ramp_lut(gradient: Gradient) -> [Vec4; PITCH_LUT_N] {
     with_lut(gradient, |lut| *lut)
 }
 
@@ -501,7 +560,7 @@ pub fn pitch_ramp_lut(gradient: PitchGradient) -> [Vec4; PITCH_LUT_N] {
 /// of the ring at the size the pane draws it.
 pub const HUE_CIRCLE_N: usize = 96;
 
-/// The whole hue circle at one lightness and chroma — what a gradient's five
+/// The whole hue circle at one lightness and chroma — what a gradient's six
 /// knobs would give at every hue, not just the arc it takes. The pair handed in
 /// is the MIDDLE of each ramp, which is the one point of the curve a circle
 /// standing for every hue at once can be drawn at.
@@ -509,13 +568,19 @@ pub const HUE_CIRCLE_N: usize = 96;
 /// This is what lets the pane draw the spectrum a gradient has NOT claimed
 /// beside the part it has, from the same curve, so the two cannot disagree
 /// about what a hue looks like. `chroma` is a fraction of the gamut's maximum
-/// exactly as [`PitchGradient::chroma`] is, so the circle is in gamut at every
+/// exactly as [`Gradient::chroma`] is, so the circle is in gamut at every
 /// hue for the same reason the ramp is.
 ///
 /// Keyed on the two knobs it actually depends on rather than on a whole
 /// gradient: the hue arc is the one being dragged while this is on screen, and
 /// keying on the gradient would rebuild the circle every frame of a drag that
 /// cannot change it.
+///
+/// In [`LUT_SLOTS`] slots for the reason the color table is, and it is the same
+/// two gradients: a dock can hold the Nodes tab and the Analyzer tab open side
+/// by side, each drawing a spectrum bar, and one slot between them would rebuild
+/// both circles every frame rather than neither. Two panes at two lightnesses is
+/// also why the key cannot be reduced further.
 ///
 /// What the key does NOT buy is a free Brightness or Chroma drag. Those move
 /// the circle, so every frame of one is a real miss here and another in the
@@ -531,10 +596,11 @@ pub const HUE_CIRCLE_N: usize = 96;
 /// to, or caching `max_chroma` against a quantized lightness — a second table
 /// with its own staleness to keep honest, for a cost nothing but a drag pays.
 pub fn hue_circle(lightness: f32, chroma: f32) -> [Vec4; HUE_CIRCLE_N] {
-    /// The circle and the lightness/chroma pair it was built for.
-    type Memo = Option<((f32, f32), [Vec4; HUE_CIRCLE_N])>;
+    /// The circles and the lightness/chroma pairs they were built for, most
+    /// recently used first — [`with_lut`]'s policy, one table over.
+    type Memo = Vec<((f32, f32), [Vec4; HUE_CIRCLE_N])>;
     thread_local! {
-        static MEMO: std::cell::RefCell<Memo> = const { std::cell::RefCell::new(None) };
+        static MEMO: std::cell::RefCell<Memo> = const { std::cell::RefCell::new(Vec::new()) };
     }
     let key = (
         if lightness.is_finite() { lightness.clamp(0.0, 100.0) } else { 0.0 },
@@ -542,15 +608,23 @@ pub fn hue_circle(lightness: f32, chroma: f32) -> [Vec4; HUE_CIRCLE_N] {
     );
     MEMO.with(|memo| {
         let mut memo = memo.borrow_mut();
-        if memo.as_ref().is_none_or(|(k, _)| *k != key) {
-            let (l, c) = (f64::from(key.0), f64::from(key.1));
-            let circle = std::array::from_fn(|k| {
-                let h = k as f64 * 360.0 / HUE_CIRCLE_N as f64;
-                oklab_srgb(l, h, c * max_chroma(l, h))
-            });
-            *memo = Some((key, circle));
+        match memo.iter().position(|(k, _)| *k == key) {
+            Some(0) => {}
+            Some(i) => {
+                let hit = memo.remove(i);
+                memo.insert(0, hit);
+            }
+            None => {
+                let (l, c) = (f64::from(key.0), f64::from(key.1));
+                let circle = std::array::from_fn(|k| {
+                    let h = k as f64 * 360.0 / HUE_CIRCLE_N as f64;
+                    oklab_srgb(l, h, c * max_chroma(l, h))
+                });
+                memo.truncate(LUT_SLOTS - 1);
+                memo.insert(0, (key, circle));
+            }
         }
-        memo.as_ref().expect("memo filled above").1
+        memo.first().expect("filled above").1
     })
 }
 
@@ -585,24 +659,54 @@ pub fn hue_circle(lightness: f32, chroma: f32) -> [Vec4; HUE_CIRCLE_N] {
 /// color match there is, and structural agreement passes it at any table size.
 ///
 /// What the table's size buys is therefore fidelity to the DESIGNED curve
-/// ([`pitch_ramp_color`]), never agreement between shapes — see [`PITCH_LUT_N`]
+/// ([`ramp_color`]), never agreement between shapes — see [`PITCH_LUT_N`]
 /// for why that fidelity is worth far less per entry than it looks.
 pub fn pitch_lut_color(
     pitch: f32,
     darkest_pitch: f32,
     brightest_pitch: f32,
-    gradient: PitchGradient,
+    gradient: Gradient,
 ) -> Vec4 {
-    let f = pitch_ramp_t(pitch, darkest_pitch, brightest_pitch) as f32 * (PITCH_LUT_N - 1) as f32;
-    // `pitch_ramp_t` clamps into 0..1, so the floor lands inside the table and
-    // the last entry pairs with itself at a lerp weight of 0.
+    gradient_color(ramp_t(pitch, darkest_pitch, brightest_pitch) as f32, gradient)
+}
+
+/// One gradient, evaluated at normalized height `t` (0 at the bottom of its
+/// range, 1 at the top): [`pitch_ramp_lut`] sampled there and interpolated
+/// between entries exactly as `pitch_lut_color` in `lattice.wgsl` does.
+///
+/// The axis-free form of [`pitch_lut_color`], and what a caller whose range is
+/// NOT pitch reaches the ramp through — the Spectral pane's heatmap and
+/// spectrum curve, whose gradient spans the analyzer's Level. The pitch one is
+/// the same walk with a pitch mapped onto `t` first, so the two cannot draw one
+/// gradient two ways.
+///
+/// Off the table rather than off the curve, for everything
+/// [`pitch_lut_color`] says: a caller wanting the DESIGNED color of one point
+/// is asking a question no drawn shape asks.
+pub fn gradient_color(t: f32, gradient: Gradient) -> Vec4 {
+    // A NaN takes the bottom of the range, which is [`ramp_t`]'s own answer for
+    // a non-finite RANGE and wanted here for the same reason: `clamp` hands NaN
+    // straight back, `as usize` then saturates the index to 0, and the lerp
+    // weight stays NaN — so the color would ride out as a NaN nobody sees rather
+    // than as the ramp's dark end.
+    //
+    // NaN alone, and not every non-finite value: the INFINITIES clamp correctly
+    // and mean something, `+inf` being as far past the top of the range as a
+    // level can get. Sending them to the bottom with the NaN would draw silence
+    // where a caller asked for the loudest thing there is —
+    // `a_level_off_the_range_lands_on_the_nearest_end` is where both ends are
+    // held.
+    let t = if t.is_nan() { 0.0 } else { t.clamp(0.0, 1.0) };
+    let f = t * (PITCH_LUT_N - 1) as f32;
+    // The clamp above lands the floor inside the table, so the last entry pairs
+    // with itself at a lerp weight of 0.
     let i0 = f.floor() as usize;
     with_lut(gradient, |lut| {
         lut[i0].lerp(lut[(i0 + 1).min(PITCH_LUT_N - 1)], f - f.floor())
     })
 }
 
-/// [`max_chroma`], for the test that keeps [`PitchGradient`]'s quoted figures
+/// [`max_chroma`], for the test that keeps [`Gradient`]'s quoted figures
 /// honest. Nothing outside a test may reach the gamut search direct.
 #[cfg(test)]
 pub(crate) fn max_chroma_for_docs(l_star: f64, h: f64) -> f64 {
