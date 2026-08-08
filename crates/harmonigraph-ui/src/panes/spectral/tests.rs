@@ -1268,48 +1268,159 @@ fn the_axis_labels_are_rimmed() {
 /// the full depth they would cross the roll's ribbons and outrun the
 /// spectrogram's heatmap, which only grows out from the now-line as history
 /// accumulates — leaving the far part of every line sitting bare on the bed.
+/// Checked in every orientation, because which screen side the spectrum is on
+/// is exactly what the pane's four turns change: a ruling drawn along a
+/// hardcoded screen axis is right in one of them and crosses the picture in
+/// the other three.
 #[test]
 fn the_rulings_go_under_the_spectrum_and_stop_at_the_now_line() {
-    let cfg = SpectrumConfig::default();
-    let rect = reference_pane();
-    let axes = Axes::new(rect, &cfg);
-    let split = spectrum_share(&cfg);
-    assert!(split > 0.0 && split < 1.0, "this needs a pane the spectrum shares");
+    for orientation in EVERY_ORIENTATION {
+        let cfg = SpectrumConfig { orientation, ..Default::default() };
+        let rect = reference_pane();
+        let axes = Axes::new(rect, &cfg);
+        let split = spectrum_share(&cfg);
+        assert!(split > 0.0 && split < 1.0, "this needs a pane the spectrum shares");
 
-    let faded = |fade: f32| theme::hairline().gamma_multiply(fade);
-    let mut rulings = Vec::new();
-    let mut slabs = Vec::new();
+        let (rulings, slabs) = painted_rulings(rect, cfg);
+        assert!(rulings.len() > 4, "{orientation:?} ruled {} frequencies", rulings.len());
+        assert!(!slabs.is_empty(), "{orientation:?}: the tone drew no spectrum to be behind");
+        assert!(
+            rulings.last().unwrap().index < slabs[0],
+            "{orientation:?}: a ruling is painted over the spectrum's fill",
+        );
+
+        // Every ruling spans the spectrum's share end to end — depth 0 to the
+        // now-line — and none of it reaches past into the heatmap's half.
+        for ruling in &rulings {
+            let ends: Vec<f32> = ruling.points.iter().map(|p| axes.depth_at(*p)).collect();
+            for d in &ends {
+                assert!(
+                    (-1e-3..=split + 1e-3).contains(d),
+                    "{orientation:?}: a ruling reaches depth {d}, past the now-line at {split}",
+                );
+            }
+            assert!(
+                ends.iter().any(|d| d.abs() < 1e-3)
+                    && ends.iter().any(|d| (d - split).abs() < 1e-3),
+                "{orientation:?}: a ruling covers {ends:?} rather than 0..{split}",
+            );
+        }
+    }
+}
+
+/// The stronger ink goes on the decade boundaries and nowhere else.
+///
+/// Pinned as a MAPPING — which pitches got which weight — rather than as two
+/// counts. Two weights and the right totals is what swapping the arms also
+/// produces, and the picture it makes is the ladder highlighted everywhere
+/// except where the step size actually changes.
+#[test]
+fn only_the_decade_boundaries_take_the_stronger_ink() {
+    for orientation in EVERY_ORIENTATION {
+        let cfg = SpectrumConfig { orientation, ..Default::default() };
+        let rect = reference_pane();
+        let axes = Axes::new(rect, &cfg);
+        let scale = PitchScale {
+            min_midi: cfg.low_midi,
+            max_midi: cfg.high_midi,
+            span: cfg.high_midi - cfg.low_midi,
+        };
+        let grid = frequency_grid(&scale, axes.pitch_len());
+        let want: Vec<f32> = grid.iter().filter(|r| r.decade).map(|r| r.t).collect();
+        assert_eq!(want.len(), 3, "the default range holds 100 Hz, 1 kHz and 10 kHz");
+
+        // Back from the painted segment to the pitch it was drawn at, so this
+        // reads the placement rather than re-deriving it.
+        let (rulings, _) = painted_rulings(rect, cfg);
+        assert_eq!(rulings.len(), grid.len(), "{orientation:?} drew a different ladder");
+        let strong: Vec<f32> = rulings
+            .iter()
+            .filter(|ruling| ruling.strong)
+            .map(|ruling| axes.pitch_at(ruling.points[0]))
+            .collect();
+        let inked = strong.len();
+        assert_eq!(inked, want.len(), "{orientation:?} inked {inked} lines strongly");
+        for (got, want) in strong.iter().zip(&want) {
+            assert!(
+                (got - want).abs() < 1e-4,
+                "{orientation:?}: the stronger ink landed at pitch {got}, not {want}",
+            );
+        }
+    }
+}
+
+/// Whole-song playhead mode rules nothing.
+///
+/// It hands the WHOLE depth axis to the roll and the spectrogram (`split` is
+/// 0), so there is no spectrum region for a ruling to measure — and a ruling
+/// drawn anyway would be a zero-length segment per frequency baked into every
+/// frame of a `--playhead` video export.
+#[test]
+fn whole_song_mode_rules_no_frequencies() {
+    let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
+    state.spectrum_config.orientation = SpectralOrientation::Left;
+    state.tracker.handle_event(NoteEvent {
+        time: 0.0,
+        channel: 0,
+        note: 69,
+        kind: NoteEventKind::On { velocity: 1.0 },
+    });
+    state.whole_song = Some(crate::WholeSong {
+        start: 0.0,
+        span: 2.0,
+        columns: Vec::new(),
+        roll: state.tracker.roll().clone(),
+    });
+    let ctx = egui::Context::default();
+    crate::theme::apply_theme(&ctx);
+    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(500.0, 500.0));
+    let out = ctx.run_ui(
+        egui::RawInput { screen_rect: Some(screen), ..Default::default() },
+        |ui| {
+            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(WIDE));
+            spectral_pane(&mut child, &mut state, 1.0, 0);
+        },
+    );
+    let ruled = out.shapes.iter().any(|s| {
+        matches!(&s.shape, egui::Shape::LineSegment { stroke, .. } if is_ruling(stroke.color))
+    });
+    assert!(!ruled, "a whole-song frame ruled a frequency across a pane with no spectrum on it");
+}
+
+/// Whether a stroke color is one of the two a frequency ruling is drawn in.
+fn is_ruling(color: egui::Color32) -> bool {
+    color == theme::hairline().gamma_multiply(RULING_FADE.0)
+        || color == theme::hairline().gamma_multiply(RULING_FADE.1)
+}
+
+/// One frequency ruling as it came off the painter: where in the shape list
+/// it landed, the two screen points it was drawn between, and whether it took
+/// the stronger of the two inks.
+struct PaintedRuling {
+    index: usize,
+    points: [egui::Pos2; 2],
+    strong: bool,
+}
+
+/// One frame of the pane with a tone in it, split into the frequency rulings
+/// and the shape indices of the spectrum's own slabs.
+fn painted_rulings(
+    rect: egui::Rect,
+    cfg: SpectrumConfig,
+) -> (Vec<PaintedRuling>, Vec<usize>) {
+    let strong = theme::hairline().gamma_multiply(RULING_FADE.0);
+    let (mut rulings, mut slabs) = (Vec::new(), Vec::new());
     for (i, shape) in paint_tone(rect, cfg).into_iter().enumerate() {
         let egui::Shape::LineSegment { points, stroke } = shape else { continue };
-        if stroke.color == faded(RULING_FADE.0) || stroke.color == faded(RULING_FADE.1) {
-            rulings.push((i, points));
+        if is_ruling(stroke.color) {
+            rulings.push(PaintedRuling { index: i, points, strong: stroke.color == strong });
         } else if stroke.color.a() == 210 {
             // The spectrum's own slabs — the one thing on the pane drawn in a
             // gradient color at that opacity.
             slabs.push(i);
         }
     }
-    assert!(rulings.len() > 4, "the pane ruled {} frequencies", rulings.len());
-    assert!(!slabs.is_empty(), "the tone drew no spectrum to be behind");
-    assert!(
-        rulings.last().unwrap().0 < slabs[0],
-        "a ruling is painted over the spectrum's fill",
-    );
-
-    for (_, points) in &rulings {
-        for point in points {
-            let d = axes.depth_at(*point);
-            assert!(
-                (-1e-3..=split + 1e-3).contains(&d),
-                "a ruling reaches depth {d}, past the now-line at {split}",
-            );
-        }
-    }
-    // ...and it is the WHOLE of the spectrum's share that gets ruled, not a
-    // stub of it: the two ends of a line are the two ends of that region.
-    let ends: Vec<f32> =
-        rulings[0].1.iter().map(|p| axes.depth_at(*p)).collect();
-    assert!(ends.iter().any(|d| d.abs() < 1e-3) && ends.iter().any(|d| (d - split).abs() < 1e-3));
+    (rulings, slabs)
 }
 
 /// The readout names its own unit, and switches to kHz where an analyzer
