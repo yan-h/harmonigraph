@@ -177,13 +177,14 @@ fn frame_controls(ui: &mut egui::Ui, state: &mut SharedState) {
 /// Empty the three things that accumulate, in one press, next to the button
 /// that starts a take.
 ///
-/// Each already has a button in the pane that owns it — Scene's "Clear trail",
-/// the Analyzer's "Clear roll" and "Clear spectrogram" — and those stay, since
-/// clearing one is a real thing to want while dialing that one in. This is for
-/// the other moment, when the three are wanted together and there is only one
-/// reason: a take about to be recorded should start on an empty picture,
-/// because whatever is left over is baked into the video's opening seconds.
-/// Three panes to visit for one intention is what makes it a button here.
+/// Each pane that owns an accumulation already clears its own — Scene's "Clear
+/// trail", the Analyzer's "Clear roll and spectrogram" — and those stay, since
+/// clearing what one pane draws is a real thing to want while dialing that pane
+/// in. This is for the other moment, when all three are wanted together and
+/// there is only one reason: a take about to be recorded should start on an
+/// empty picture, because whatever is left over is baked into the video's
+/// opening seconds. Two panes to visit for one intention is what makes it a
+/// button here.
 ///
 /// It clears display state only — nothing about the take, the render, or the
 /// tuning — so there is nothing to undo and no confirmation to sit through.

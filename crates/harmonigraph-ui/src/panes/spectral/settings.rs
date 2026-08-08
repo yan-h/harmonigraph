@@ -361,15 +361,6 @@ pub(crate) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
                  that size is",
             );
     });
-    button_row(ui, |ui| {
-        if ui
-            .button("Clear roll")
-            .on_hover_text("Forget the played-note timeline (held notes included)")
-            .clicked()
-        {
-            state.tracker.clear_roll();
-        }
-    });
 
     // ---- Spectrogram ----------------------------------------------------
     section(ui, "Spectrogram");
@@ -385,12 +376,31 @@ pub(crate) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
     // see
     // [`spectrogram_gradient`](crate::SpectrumConfig::spectrogram_gradient) for
     // why the neutral setting is the only one worth having.
+
+    // One button for the pane's two accumulations rather than one under each
+    // section, because they are one picture: the ribbons and the heatmap are
+    // drawn in the same region on the same time axis, and what makes either
+    // worth clearing is stale history in that region — which is both of them
+    // at once, whatever put it there. A button per section clears one layer
+    // and leaves the other's leftovers in the same rectangle.
+    //
+    // At the pane's foot rather than in Piano roll or Spectrogram, since it
+    // belongs to neither: under a section heading a button reads as that
+    // section's, and this one names what it takes so it can stand after both.
+    // The lattice trail is a different pane's and stays there; the Video
+    // pane's "Clear everything" is what takes all three at once.
     button_row(ui, |ui| {
         if ui
-            .button("Clear spectrogram")
-            .on_hover_text("Forget the accumulated spectral history")
+            .button("Clear roll and spectrogram")
+            .on_hover_text(
+                "Forget the played-note timeline and the accumulated spectral \
+                 history, emptying the pane of everything it has drawn over \
+                 time. A note held across this is gone from the roll until it \
+                 is played again.",
+            )
             .clicked()
         {
+            state.tracker.clear_roll();
             state.spectrum.clear_history();
         }
     });
