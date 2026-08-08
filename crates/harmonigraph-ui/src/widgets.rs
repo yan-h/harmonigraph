@@ -699,7 +699,7 @@ impl Grab {
 /// zone is taken OUT of the room the numbers roam in — see [`Self::show`] for
 /// the arithmetic that makes that provable rather than lucky.
 ///
-/// The pair does NOT park together at the right, the way [`BrightnessBar`]
+/// The pair does NOT park together at the right, the way [`SpreadBar`]
 /// spells its two ends into one readout, and the reason is the thumb rather
 /// than the room: a parked run is crossed by any handle dragged past about
 /// four fifths of the bar, which is where the Level bar's ceiling and the Band
@@ -2651,21 +2651,13 @@ mod tests {
         }
     }
 
-    /// A number is never crossed by a handle at the settings the panes rest
-    /// at, which is the whole reason the two ends are not spelled into one run
-    /// parked at the right the way [`BrightnessBar`]'s are. Parked, the run is
-    /// crossed by any handle past about four fifths of the bar — the Level
-    /// bar's ceiling and the Band bar's outer radius both sit there — and the
-    /// thumb is drawn in the same near-white as the digits, so the crossing
-    /// swallows a character whichever of the two paints last. "-60 dB" reading
-    /// "-60 B" is the concrete thing this holds off.
-    ///
     /// A thumb never stands in a number, at any span. That is the whole reason
     /// the two ends are not spelled into one run parked at the right the way
-    /// [`BrightnessBar`]'s are: the thumb is drawn in the same near-white as
-    /// the digits, so a crossing swallows a character whichever of the two
-    /// paints last, and "-60 dB" reading "-60 B" is the concrete thing this
-    /// holds off.
+    /// [`SpreadBar`]'s are: the thumb is drawn in the same near-white as the
+    /// digits, so a crossing swallows a character whichever of the two paints
+    /// last, and "-60 dB" reading "-60 B" is the concrete thing this holds
+    /// off. The Level bar's ceiling and the Band bar's outer radius both rest
+    /// past four fifths of their axes, which is where a parked run is crossed.
     ///
     /// SWEPT, not sampled at the resting spans, and that is the point of it:
     /// sampled at the three placements the panes open at, this passed while a
