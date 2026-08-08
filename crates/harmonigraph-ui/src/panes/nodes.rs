@@ -391,11 +391,13 @@ fn pitch_readout(midi: f32) -> String {
 /// so a wheel would add 140pt on top of a list that has started to scroll,
 /// and every knob under it would be that much further down. Setting the wheel
 /// BESIDE these three knobs recovers the height, and breaks the other rule
-/// instead — the one still pinned by a test: every bar in a
-/// settings pane is the width of its column, so that dragging the column
-/// narrower narrows all of them together
-/// (`every_bar_in_a_settings_pane_is_the_width_of_the_pane`), and knobs beside
-/// a wheel are 284pt of a 400pt column.
+/// instead — the one still pinned by a test: a bar in a settings pane is the
+/// width of its column, so that dragging the column narrower narrows all of
+/// them together (`every_bar_in_a_settings_pane_is_the_width_of_the_pane`).
+/// The spectrum bar is the one exception the test allows, and the size of the
+/// exception is the point: it gives up 20pt of a 400pt column to the flip
+/// button and narrows with the column for the rest, where knobs beside a wheel
+/// would be 284pt of 400 and would not.
 ///
 /// A bar costs one row and says the same thing — see [`SpectrumBar`] for how a
 /// circle fits on one, and for why the flip and the arc share that row rather
