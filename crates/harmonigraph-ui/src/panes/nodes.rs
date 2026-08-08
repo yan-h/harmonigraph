@@ -145,8 +145,7 @@ fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // Inner and outer radius are one control: the band is the ring between
     // them. Drag either edge, or drag between to slide the ring at a fixed
     // width; the min span keeps it from collapsing.
-    ui.label("Band");
-    RangeBar::new(&mut view.outer_inner, &mut view.outer_outer, 0.0..=1.0)
+    RangeBar::new(&mut view.outer_inner, &mut view.outer_outer, 0.0..=1.0, "Band")
         .min_span(0.05)
         .show(ui)
         .on_hover_text(
@@ -480,14 +479,13 @@ fn every_layer_section(
     // change here repaints the discs, the octave glyphs, the trail and the
     // piano roll together.
     spectrum_group(ui, view);
-    ui.label("Color range");
     super::param_range_bar(
         ui,
         params,
-        ParamKey::DarkestPitch,
-        ParamKey::BrightestPitch,
+        (ParamKey::DarkestPitch, ParamKey::BrightestPitch),
         0.0..=120.0,
         crate::COLOR_RANGE_MIN_SPAN,
+        "Color range",
         pitch_readout,
     )
     .on_hover_text(

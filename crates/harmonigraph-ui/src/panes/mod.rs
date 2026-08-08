@@ -306,7 +306,7 @@ pub(super) fn param_bar(
 
 /// A two-handle [`RangeBar`] over a PAIR of parameters — one control for a
 /// range whose ends are both automatable params (the Nodes pane's color
-/// range). `display` formats each end's readout.
+/// range). `display` formats each end of its readout.
 ///
 /// Both params are bracketed for the whole drag and written every changed
 /// frame, so a drag on either handle records as one gesture on each. A
@@ -315,14 +315,14 @@ pub(super) fn param_bar(
 pub(super) fn param_range_bar(
     ui: &mut egui::Ui,
     params: &dyn ParamBackend,
-    low_key: ParamKey,
-    high_key: ParamKey,
+    (low_key, high_key): (ParamKey, ParamKey),
     range: std::ops::RangeInclusive<f32>,
     min_span: f32,
+    label: &str,
     display: fn(f32) -> String,
 ) -> egui::Response {
     let (mut low, mut high) = (params.get(low_key), params.get(high_key));
-    let response = RangeBar::new(&mut low, &mut high, range)
+    let response = RangeBar::new(&mut low, &mut high, range, label)
         .min_span(min_span)
         .display(display)
         .show(ui);
