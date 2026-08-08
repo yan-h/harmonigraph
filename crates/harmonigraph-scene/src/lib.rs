@@ -260,10 +260,15 @@ impl NodeInstance {
     /// home sheet would then be uninspectable, and it is the thing most worth
     /// inspecting. Off-sheet idle positions have no lines around them and are
     /// correspondingly not hoverable — a pitch revealed there would be
-    /// information from nowhere. A visited off-sheet node counts all the
-    /// same: it carries a kept note name where an unvisited one carries
-    /// nothing, and the music having gone there is exactly what makes its
-    /// pitch worth revealing.
+    /// information from nowhere.
+    ///
+    /// The `trail` term decides nothing today and is a guard rather than a
+    /// case: [`trail::TrailField::apply`] writes the field only where
+    /// `on_home` holds, so a trailed node is a home node and the middle term
+    /// has already answered. It stands because the restriction is the trail's
+    /// and not this predicate's — the day a memory is shown where it was
+    /// actually played, the node carrying it is one to reveal the pitch of,
+    /// and that is the reasoning here rather than in the caller.
     pub fn is_visible(&self) -> bool {
         self.activation > 0.0 || self.on_home || self.trail > 0.0
     }
