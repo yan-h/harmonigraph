@@ -645,10 +645,14 @@ const TEXT_GAP: f32 = 5.0;
 /// show. A thumb rounded much harder wants a rounded clip rather than this
 /// argument.
 ///
-/// Guarded on a rect intersection, so a bar whose thumbs stand clear of its
-/// text pays nothing: epaint culls text per ROW and not per glyph, so an
-/// unguarded clipped pass would tessellate a whole galley only to scissor it
-/// away again.
+/// Guarded on a rect intersection, and the guard is cheaper than it looks
+/// rather than the reverse: epaint sets its clip per shape and culls text per
+/// ROW against it, so an unguarded pass over a thumb that misses the run would
+/// be dropped before a vertex was written. What the guard actually saves is an
+/// `Arc` clone, a shape push and a clip-rect split — small, and kept because a
+/// paint list free of invisible shapes is what lets a test assert a knockout
+/// exists by counting. It buys no tessellation back, and the CROSSED case still
+/// tessellates a whole row to show 6pt of it, which no guard here addresses.
 fn grip_over_text(
     painter: &egui::Painter,
     grip: egui::Rect,
@@ -3058,10 +3062,12 @@ mod tests {
         assert_eq!(seen, vec![1, 2], "the pair stopped covering one thumb and then two");
     }
 
-    /// And costs nothing where no thumb reaches the name, which is where the
-    /// bars actually rest: one pass, no clip, no second tessellation of a
-    /// galley that would be discarded whole. The guard that buys this is a rect
-    /// intersection, and this is what holds it in place.
+    /// And emits nothing where no thumb reaches the name, which is where the
+    /// bars rest: one pass and no clipped second one. The saving is a shape
+    /// rather than a tessellation (epaint would cull the row anyway — see
+    /// [`grip_over_text`]); what it really buys is a paint list in which a
+    /// knockout shape means a knockout happened, which is what lets the test
+    /// above count them. This holds the guard that keeps it true.
     #[test]
     fn the_name_is_painted_once_where_no_thumb_reaches_it() {
         for (low, high) in [(60.0, 72.0), (AXIS.0, AXIS.1)] {
