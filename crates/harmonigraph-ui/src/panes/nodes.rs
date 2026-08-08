@@ -525,7 +525,10 @@ fn every_layer_section(
             // preview is only worth drawing if it cannot disagree with the
             // notes, and nothing on screen would show the disagreement. A
             // one-second arrival read `p` seconds in IS the shape at that
-            // fraction of any duration, the curve being in the fraction alone.
+            // fraction of any duration the Fade actually RUNS, the curve
+            // being in the fraction alone — at a Fade of 0 there is no
+            // transition for it to be a fraction of, and the line goes on
+            // describing a curve the notes are not taking.
             harmonigraph_core::Envelope { attack_time: 1.0, shape, ..Default::default() }
                 .attack(p as f64, 0.0)
         })
