@@ -409,7 +409,9 @@ fn spectrum_group(ui: &mut egui::Ui, view: &mut ViewConfig) {
          range walks, out of the whole turn the bar stands for. The colors it \
          takes fill from the left, low note first; the ones it does not are \
          dimmed. Drag the handle to widen or narrow it, drag the track to turn \
-         the circle under it, double-click to reset.",
+         the circle under it, double-click to reset. The strip beneath is the \
+         same gradient at full width, in pitch order; the button at the left \
+         runs it the other way round the circle.",
     );
     ValueBar::new(&mut view.pitch_gradient.lightness, 0.0..=100.0, "Brightness")
         .integer()

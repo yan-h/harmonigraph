@@ -200,12 +200,21 @@ fn the_video_pane_does_not_start_with_a_rule() {
     }
 }
 
+/// The heights a bar's well is drawn at, so the sweep below can pick bars out
+/// of a pane's shapes without a list of which panes hold which. Two, because
+/// the spectrum bar stands two rows tall — and it is named rather than
+/// measured because a bar the sniff stops recognizing is a bar the sweep
+/// silently stops checking.
 fn bar_track_widths(shapes: &[egui::epaint::ClippedShape]) -> Vec<f32> {
     let well = crate::theme::well();
+    let heights = [20.0, crate::widgets::spectrum_bar_height(1.0)];
     shapes
         .iter()
         .filter_map(|cs| match &cs.shape {
-            egui::Shape::Rect(r) if r.fill == well && (r.rect.height() - 20.0).abs() < 0.6 => {
+            egui::Shape::Rect(r)
+                if r.fill == well
+                    && heights.iter().any(|h| (r.rect.height() - h).abs() < 0.6) =>
+            {
                 Some(r.rect.width())
             }
             _ => None,
