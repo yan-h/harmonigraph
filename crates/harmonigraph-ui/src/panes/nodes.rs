@@ -421,12 +421,14 @@ fn pitch_readout(midi: f32) -> String {
 fn spectrum_group(ui: &mut egui::Ui, view: &mut ViewConfig) {
     SpectrumBar::new(&mut view.pitch_gradient).show(ui).on_hover_text(
         "The pitch->color spectrum: how far round the color circle the pitch \
-         range walks, out of the whole turn the bar stands for. The colors it \
+         range walks, out of the whole turn the bar stands for. The hues it \
          takes fill from the left, low note first; the ones it does not are \
-         dimmed. Drag the handle to widen or narrow it, drag the track to turn \
-         the circle under it, double-click to reset. The strip beneath is the \
-         same gradient at full width, in pitch order; the button at the left \
-         runs it the other way round the circle.",
+         dimmed. The track is hue alone — the brightness and chroma bars below \
+         move the strip, not the arc. Drag the handle to widen or narrow it, \
+         drag the track to turn the circle under it, double-click to reset. \
+         The strip beneath is the gradient itself at full width, in pitch \
+         order, all six numbers together; the button at the left runs it the \
+         other way round the circle.",
     );
     SpreadBar::brightness(&mut view.pitch_gradient).show(ui).on_hover_text(
         "The stretch of brightness the pitch range spends, in CIELab L*: the \

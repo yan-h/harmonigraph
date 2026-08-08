@@ -560,47 +560,38 @@ pub fn pitch_ramp_lut(gradient: Gradient) -> [Vec4; PITCH_LUT_N] {
 /// of the ring at the size the pane draws it.
 pub const HUE_CIRCLE_N: usize = 96;
 
-/// The whole hue circle at one lightness and chroma — what a gradient's six
-/// knobs would give at every hue, not just the arc it takes. The pair handed in
-/// is the MIDDLE of each ramp, which is the one point of the curve a circle
-/// standing for every hue at once can be drawn at.
+/// The whole hue circle at one lightness and chroma — every hue there is, drawn
+/// at one point of the curve rather than along a gradient's own arc.
 ///
-/// This is what lets the pane draw the spectrum a gradient has NOT claimed
-/// beside the part it has, from the same curve, so the two cannot disagree
-/// about what a hue looks like. `chroma` is a fraction of the gamut's maximum
-/// exactly as [`Gradient::chroma`] is, so the circle is in gamut at every
-/// hue for the same reason the ramp is.
+/// This is what a spectrum bar's track is made of, both the stretch its arc
+/// claims and the remainder beyond the handle: one circle at two strengths, so
+/// the two halves cannot disagree about what a hue looks like. `chroma` is a
+/// fraction of the gamut's maximum exactly as [`Gradient::chroma`] is, so the
+/// circle is in gamut at every hue for the same reason the ramp is.
 ///
-/// Keyed on the two knobs it actually depends on rather than on a whole
-/// gradient: the hue arc is the one being dragged while this is on screen, and
-/// keying on the gradient would rebuild the circle every frame of a drag that
-/// cannot change it.
-///
-/// In [`LUT_SLOTS`] slots for the reason the color table is, and it is the same
-/// two gradients: a dock can hold the Nodes tab and the Analyzer tab open side
-/// by side, each drawing a spectrum bar, and one slot between them would rebuild
-/// both circles every frame rather than neither. Two panes at two lightnesses is
-/// also why the key cannot be reduced further.
-///
-/// What the key does NOT buy is a free Brightness or Chroma drag. Those move
-/// the circle, so every frame of one is a real miss here and another in the
-/// pitch table beside it — the two together are (`HUE_CIRCLE_N` +
-/// [`PITCH_LUT_N`]) x [`GAMUT_BISECTIONS`] gamut probes, each a Newton solve
-/// and an Oklab->sRGB conversion, measuring 412us on the UI thread per frame of
-/// such a drag.
+/// **Memoized in one slot, because every caller asks for the same pair.** The
+/// key is the two knobs the circle depends on rather than a whole gradient, and
+/// a bar's track hands it a FIXED reference pair (`TRACK_LIGHTNESS`, in
+/// `harmonigraph-ui`'s `widgets`) rather than the gradient's own: two bars open
+/// side by side — the Nodes tab and the Analyzer tab — therefore share the one
+/// entry, and no drag of any knob moves this table at all. A second caller
+/// wanting a pair of its own is what would make this want [`LUT_SLOTS`]-style
+/// slots, and it would be worth giving them rather than rebuilding on every
+/// alternation: a rebuild is `HUE_CIRCLE_N` x [`GAMUT_BISECTIONS`] gamut
+/// probes, each a Newton solve and an Oklab->sRGB conversion, and a frame that
+/// misses in this table and the pitch table both measures 412us on the UI
+/// thread.
 ///
 /// That is the standing price of a chroma that follows the gamut instead of a
-/// figure worked out in advance (see [`max_chroma`]), and it is paid only while
-/// one of those two knobs is actually moving. Cutting it means either
+/// figure worked out in advance (see [`max_chroma`]). Cutting it means either
 /// coarsening the bisection, which MOVES THE COLORS every pixel test is pinned
 /// to, or caching `max_chroma` against a quantized lightness — a second table
 /// with its own staleness to keep honest, for a cost nothing but a drag pays.
 pub fn hue_circle(lightness: f32, chroma: f32) -> [Vec4; HUE_CIRCLE_N] {
-    /// The circles and the lightness/chroma pairs they were built for, most
-    /// recently used first — [`with_lut`]'s policy, one table over.
-    type Memo = Vec<((f32, f32), [Vec4; HUE_CIRCLE_N])>;
+    /// The circle last built, and the lightness/chroma pair it was built for.
+    type Memo = Option<((f32, f32), [Vec4; HUE_CIRCLE_N])>;
     thread_local! {
-        static MEMO: std::cell::RefCell<Memo> = const { std::cell::RefCell::new(Vec::new()) };
+        static MEMO: std::cell::RefCell<Memo> = const { std::cell::RefCell::new(None) };
     }
     let key = (
         if lightness.is_finite() { lightness.clamp(0.0, 100.0) } else { 0.0 },
@@ -608,23 +599,15 @@ pub fn hue_circle(lightness: f32, chroma: f32) -> [Vec4; HUE_CIRCLE_N] {
     );
     MEMO.with(|memo| {
         let mut memo = memo.borrow_mut();
-        match memo.iter().position(|(k, _)| *k == key) {
-            Some(0) => {}
-            Some(i) => {
-                let hit = memo.remove(i);
-                memo.insert(0, hit);
-            }
-            None => {
-                let (l, c) = (f64::from(key.0), f64::from(key.1));
-                let circle = std::array::from_fn(|k| {
-                    let h = k as f64 * 360.0 / HUE_CIRCLE_N as f64;
-                    oklab_srgb(l, h, c * max_chroma(l, h))
-                });
-                memo.truncate(LUT_SLOTS - 1);
-                memo.insert(0, (key, circle));
-            }
+        if !matches!(&*memo, Some((held, _)) if *held == key) {
+            let (l, c) = (f64::from(key.0), f64::from(key.1));
+            let circle = std::array::from_fn(|k| {
+                let h = k as f64 * 360.0 / HUE_CIRCLE_N as f64;
+                oklab_srgb(l, h, c * max_chroma(l, h))
+            });
+            *memo = Some((key, circle));
         }
-        memo.first().expect("filled above").1
+        memo.as_ref().expect("filled above").1
     })
 }
 

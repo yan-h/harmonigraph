@@ -97,12 +97,15 @@ fn spectrogram_gradient_group(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig
     });
     SpectrumBar::new(&mut cfg.spectrogram_gradient).home(home).show(ui).on_hover_text(
         "The level->color spectrum: how far round the color circle the level \
-         range walks, out of the whole turn the bar stands for. The colors it \
+         range walks, out of the whole turn the bar stands for. The hues it \
          takes fill from the left, silence first; the ones it does not are \
-         dimmed. Drag the handle to widen or narrow it, drag the track to turn \
+         dimmed. The track is hue alone — the brightness and chroma bars below \
+         move the strip, not the arc, which is what leaves the arc readable at \
+         Mono. Drag the handle to widen or narrow it, drag the track to turn \
          the circle under it, double-click to reset. The strip beneath is the \
-         same gradient at full width, quiet to loud; the button at the left \
-         runs it the other way round the circle.",
+         gradient itself at full width, quiet to loud, all six numbers \
+         together; the button at the left runs it the other way round the \
+         circle.",
     );
     SpreadBar::brightness(&mut cfg.spectrogram_gradient).home(home).show(ui).on_hover_text(
         "The stretch of brightness the level range spends, in CIELab L*: the \
