@@ -3,7 +3,7 @@
 
 use crate::widgets::{button_row, choice_row, option_label, RangeBar, ValueBar};
 use crate::SharedState;
-use crate::panes::section;
+use crate::panes::{edge_bar, section};
 
 /// A MIDI note as the frequency an analyzer would label it: whole hertz down
 /// low, kHz to one decimal above 1000, each carrying its unit so the number
@@ -309,32 +309,33 @@ pub(crate) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
              musical meaning as the pitch range is zoomed, and a note is as \
              wide as the interval it would cover",
         );
-    ValueBar::new(&mut cfg.roll_outline, 0.0..=crate::ROLL_OUTLINE_MAX, "Outline")
-        .decimals(1)
-        .show(ui)
-        .on_hover_text(
-            "How far a dark surround stands off a note, in points. It wraps \
-             every side, so a note is a bounded object over the spectrogram \
-             rather than a ribbon dissolving into it — and dark, because every \
-             heatmap PRESET starts at black and climbs, so black is what its \
-             cells are furthest from. (Take the Brightness bar's low end up and \
-             that stops being true; the ribbon still carries its own color.) \
-             0 draws none.\n\nIn points rather \
-             than semitones, so it is the same edge at every zoom; at a wide \
-             zoom the ribbons are thinner than this and neighbours' outlines \
-             reach over each other.",
-        );
-    ValueBar::new(&mut cfg.roll_outline_fade, 0.0..=crate::ROLL_OUTLINE_MAX, "Outline fade")
-        .decimals(1)
-        .show(ui)
-        .on_hover_text(
-            "How much of the outline's reach it spends fading out, in points. \
-             0 is a hard edge; at the outline's own width it fades over the \
-             whole of it, from the note's edge outward. Past that it does \
-             nothing more.\n\nThe same pair as the lattice's gutter and gutter \
-             fade, and two settings for the same reason: tied together, a \
-             wider outline would always be a blurrier one.",
-        );
+    edge_bar(
+        ui,
+        (&mut cfg.roll_outline, &mut cfg.roll_outline_fade),
+        crate::ROLL_OUTLINE_MAX,
+        "Outline",
+        {
+            let fresh = crate::SpectrumConfig::default();
+            (fresh.roll_outline, fresh.roll_outline_fade)
+        },
+        |v| format!("{v:.1}"),
+    )
+    .on_hover_text(
+        "How far a dark surround stands off a note, in points, and how much of \
+         that it spends fading out. It wraps every side, so a note is a bounded \
+         object over the spectrogram rather than a ribbon dissolving into it — \
+         and dark, because every heatmap PRESET starts at black and climbs, so \
+         black is what its cells are furthest from. (Take the Brightness bar's \
+         low end up and that stops being true; the ribbon still carries its own \
+         color.) 0 draws none.\n\nIn points rather than semitones, so it is the \
+         same edge at every zoom; at a wide zoom the ribbons are thinner than \
+         this and neighbours' outlines reach over each other.\n\nThe bar is the \
+         outline itself, read outward from the note: solid to the first handle, \
+         then fading, and gone by the second. Drag between them to stand the \
+         note further off without blurring its edge, the inner handle to soften \
+         it (together they close for a hard edge), the outer one to reach \
+         further out from where it already starts to soften.",
+    );
     ui.checkbox(&mut cfg.note_names, "Note names").on_hover_text(
         "Write each note's name on its own ribbon, at the leading edge — so a \
          held note's name waits at the now-line and travels off with the note \

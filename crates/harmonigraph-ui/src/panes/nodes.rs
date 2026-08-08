@@ -4,7 +4,7 @@
 //! is the *played note*; the surrounding structure and overlays live in
 //! [`super::scene`].
 
-use super::{param_bar, section};
+use super::{edge_bar, param_bar, section};
 use crate::params::{seconds, ParamBackend, ParamKey};
 use crate::widgets::{
     button_row, choice_row, OctaveStrip, RangeBar, SpectrumBar, SpreadBar, ValueBar,
@@ -527,21 +527,27 @@ fn every_layer_section(
     // every sheet, the home one included and at any sevenths extent, so it
     // belongs to the node and not to the depth axis. The `sevens_` field names
     // stay — they are what saved projects spell.
-    ValueBar::new(&mut view.sevens_gutter, 0.0..=0.5, "Gutter")
-        .show(ui)
-        .on_hover_text(
-            "The dark gap a sounding node clears around itself, so it reads \
-             over whatever it crosses rather than needing room of its own: \
-             the grid lines under it, and the sheets behind it once the \
-             lattice has depth. Measured past the node's own edge, and the \
-             same width on screen whatever size the node draws at. 0 draws \
-             none",
-        );
-    ValueBar::new(&mut view.sevens_gutter_soft, 0.0..=0.5, "Gutter fade")
-        .show(ui)
-        .on_hover_text(
-            "How gradually the gap ends, independent of how wide it is. \
-             0 is a hard edge; past the gutter's own width it softens \
-             outward rather than eating into the node",
-        );
+    edge_bar(
+        ui,
+        (&mut view.sevens_gutter, &mut view.sevens_gutter_soft),
+        0.5,
+        "Gutter",
+        {
+            let fresh = ViewConfig::default();
+            (fresh.sevens_gutter, fresh.sevens_gutter_soft)
+        },
+        |v| format!("{v:.2}"),
+    )
+    .on_hover_text(
+        "The dark gap a sounding node clears around itself, so it reads over \
+         whatever it crosses rather than needing room of its own: the grid \
+         lines under it, and the sheets behind it once the lattice has depth. \
+         Measured past the node's own edge, and the same width on screen \
+         whatever size the node draws at. 0 draws none.\n\nThe bar is the gap \
+         itself, read outward from the node: solid to the first handle, then \
+         fading, and gone by the second. Drag between them to widen the gap \
+         without softening it, the inner handle to soften it (together they \
+         close for a hard edge), the outer one to reach further out from where \
+         it already starts to soften",
+    );
 }

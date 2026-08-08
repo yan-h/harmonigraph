@@ -599,12 +599,19 @@ const HANDLE_INSET: f32 = HANDLE_W * 0.5 + 1.0;
 /// the bar's edge.
 const TEXT_GAP: f32 = 5.0;
 
+/// Segments a [`fade_span`](RangeBar::fade_span) fill is drawn in. The ramp
+/// covers only part of that fill and the bar is a couple of hundred points
+/// wide at most, so this is already finer than the pixels it lands on — and it
+/// is a whole-fill count rather than a per-point one because the strip is
+/// sampled over its own width, which the span does not fix.
+const FADE_SEGMENTS: usize = 64;
+
 /// Which part of a [`RangeBar`] a drag took hold of. Decided once, at
 /// drag-start, and remembered for the gesture — otherwise dragging one end
 /// past the other would hand the drag to whichever handle is nearest now.
 /// (`Default` is derived only to satisfy egui's `remove_temp` bound; the
 /// value is always written by drag-start before anything reads it.)
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 enum Grab {
     #[default]
     Low,
@@ -632,6 +639,32 @@ impl Grab {
     /// first meets it. When there's no room to pan, a middle drag takes the
     /// nearer end instead.
     fn at(v: f32, (lo, hi): (f32, f32), _range: (f32, f32), near: f32) -> Grab {
+        // A CLOSED span has no middle to take hold of and no side to either
+        // handle: both ends stand on one point, so which gesture a press
+        // starts is a rule rather than a measurement. Below it the LOW end,
+        // which is the only end that can open a closed span and opens it
+        // downward; at or above it the span SLIDES, keeping its width.
+        //
+        // Both halves are load-bearing for a [`fade_span`](RangeBar::fade_span)
+        // bar, where the pair is a reach and the fade that ends it: closed
+        // means a HARD EDGE, which is an ordinary setting rather than a
+        // degenerate one, and the two gestures it needs are widening the reach
+        // without softening it (slide) and softening it (the low end). Without
+        // this the tie below hands every press to `Low`, which is pinned
+        // against `hi` and cannot move — a hard edge the bar can neither widen
+        // nor soften.
+        //
+        // A bar that declares a `min_span` reaches this too, and its slide is
+        // what repairs the pair rather than what breaks it: `min_span` bounds
+        // what a bar PRODUCES, so a closed or inverted pair still arrives from
+        // a host param or a blob. `apply` floors the slid width there.
+        if hi <= lo {
+            return if v < lo {
+                Grab::Low
+            } else {
+                Grab::Span { offset: v - lo, width: 0.0 }
+            };
+        }
         // A handle's reach cannot eat the whole span, or a narrow range would
         // have no middle left to grab and could never be slid along the axis.
         let near = near.min((hi - lo) * HANDLE_REACH_SHARE);
@@ -663,6 +696,14 @@ impl Grab {
             // reads only the gesture's own offset and width, never the
             // squished pair it produced.
             Grab::Span { offset, width } => {
+                // A width the gesture froze can be under the minimum, because
+                // `min_span` bounds what this bar PRODUCES and not what it was
+                // handed: a closed or inverted pair reaches it from a host
+                // param or a blob, and closed is the one shape the slide is
+                // the repair for. Floored here rather than at the grab, which
+                // measures the pair it found; the walls below already open to
+                // the minimum, so this is the interior agreeing with them.
+                let width = width.max(min_span);
                 let (want_lo, want_hi) = (v - offset, v - offset + width);
                 if want_lo < min {
                     (min, want_hi.clamp(min + min_span, max))
@@ -720,12 +761,19 @@ impl Grab {
 /// that is the trade this row makes rather than an oversight. A thumb roams the
 /// whole track, so no fixed text can dodge it; the name is the run that can
 /// afford it, because a word you already know survives losing a letter where a
-/// number does not survive losing a digit. It costs nothing where the four bars
-/// rest — the two that open at the full axis stand their low handle a point
-/// clear of the name, and the Level and Band bars open at 40% and 66% of theirs
-/// — and shows up only while the low end is dragged down into the name's own
-/// share of the bar: about a sixth of the axis at the width the settings column
-/// opens at, a tenth on a bar twice that wide.
+/// number does not survive losing a digit. The name's own share of the bar is
+/// about a sixth of the axis at the width the settings column opens at, a
+/// tenth on a bar twice that wide.
+///
+/// Most bars only reach it while the low end is DRAGGED there: the two that
+/// open at the full axis stand their low handle a point clear of the name, and
+/// the Level and Band bars open at 40% and 66% of theirs. The two
+/// [`fade_span`](RangeBar::fade_span) bars rest inside it, and the Gutter does
+/// so at a fresh install — its low end is where the gutter stops being solid,
+/// which on a nearly-fully-soft default is 1.4% of the axis, so the thumb
+/// stands on the "G". That is the trade taken knowingly: the alternative is a
+/// fresh look chosen to keep a handle off a letter, which is the picture
+/// paying for the panel.
 ///
 /// Letting the name slide out of the way instead was measured and dropped: it
 /// has to snap back the moment the handle passes it, and a name jumping the
@@ -740,6 +788,9 @@ pub struct RangeBar<'a> {
     min_span: f32,
     /// Whether a drag lands on whole values only (see [`RangeBar::integer`]).
     integer: bool,
+    /// Whether the span is painted as a fade off the end of a fill (see
+    /// [`RangeBar::fade_span`]) rather than as a filled slice of the track.
+    fade_span: bool,
     display: fn(f32) -> String,
 }
 
@@ -757,12 +808,39 @@ impl<'a> RangeBar<'a> {
             label,
             min_span: 0.0,
             integer: false,
+            fade_span: false,
             display: |v| format!("{v:.2}"),
         }
     }
 
     pub fn min_span(mut self, span: f32) -> Self {
         self.min_span = span;
+        self
+    }
+
+    /// Paint the pair as a REACH and the fade that ends it: the fill starts at
+    /// the axis floor rather than at `low`, runs solid to `low`, and ramps out
+    /// to nothing by `high`.
+    ///
+    /// For the pairs that describe a soft edge — the lattice's knockout gutter
+    /// and the piano roll's note outline. Both are two distances from the same
+    /// place (the node's rim, the note's edge), so they are already two points
+    /// on one axis, and the ordinary two-handle reading of them is the true
+    /// one: solid out to `low`, gone by `high`. What the fill adds is that the
+    /// bar then LOOKS like the edge it sets — the ramp on the track is the ramp
+    /// on screen — which the default paint, a bright slice floating over bare
+    /// track, says the opposite of: it fills exactly the part that is fading
+    /// and leaves the solid part bare.
+    ///
+    /// Only the paint. The gestures are a range's own, and they are everything
+    /// a bar apiece would give: sliding the span is the reach at a fixed
+    /// fade, and the low end is the fade at a fixed reach. Which is the whole
+    /// reason this is one CONTROL and not one NUMBER — a fade tied to its
+    /// reach as a fraction would make a wider edge always a blurrier one, and
+    /// there would be no way to ask for a wide crisp gutter or a narrow soft
+    /// one.
+    pub fn fade_span(mut self) -> Self {
+        self.fade_span = true;
         self
     }
 
@@ -863,10 +941,43 @@ impl<'a> RangeBar<'a> {
             theme::accent_fill()
         };
         let (lx, hx) = (x_of(*self.low), x_of(*self.high));
-        let mut span = rect;
-        span.min.x = lx;
-        span.max.x = hx;
-        painter.rect_filled(span, radius, fill_color);
+        if self.fade_span {
+            // One fill from the axis floor out to `high`, solid as far as
+            // `low` and ramping to the well over the rest — the picture of the
+            // edge this pair sets. Mixed toward the WELL rather than painted
+            // with alpha, so the ramp ends on exactly the color the bare track
+            // beyond it already is and the fill has no seam at its own end.
+            //
+            // It stands on the TRACK rather than on the bar's rect, so that
+            // its extent is the reach and nothing else: the rect starts a
+            // handle's half-width earlier (see HANDLE_INSET), which would
+            // leave a stub of fill under an edge switched off entirely and
+            // overstate every reach above it by the same amount. What that
+            // costs is a sliver of bare track at the far left, which is the
+            // same sliver every handle needs to sit clear in.
+            let mut fill = rect;
+            fill.min.x = track.left();
+            fill.max.x = hx.max(track.left());
+            // Where the ramp starts as a fraction of the FILL, which is what
+            // `gradient_strip` measures its samples in. A hard edge closes the
+            // span, which puts the whole fill solid and the ramp nowhere — and
+            // is the one value the divide below cannot take.
+            let solid = ((lx - fill.left()) / fill.width().max(1.0)).clamp(0.0, 1.0);
+            gradient_strip(painter, fill, FADE_SEGMENTS, f32::from(bar_radius(scale)), |p| {
+                if p <= solid || solid >= 1.0 {
+                    fill_color
+                } else {
+                    let t = (p - solid) / (1.0 - solid);
+                    egui::lerp(egui::Rgba::from(fill_color)..=egui::Rgba::from(theme::well()), t)
+                        .into()
+                }
+            });
+        } else {
+            let mut span = rect;
+            span.min.x = lx;
+            span.max.x = hx;
+            painter.rect_filled(span, radius, fill_color);
+        }
 
         // The name first, in the same place and the same faces a ValueBar puts
         // its own. Values in monospace: digits align and don't wiggle as they
@@ -2664,6 +2775,38 @@ mod tests {
         paint_range_bar_wide(300.0, low, high)
     }
 
+    /// Paint one [`RangeBar::fade_span`] bar across a 300pt row. No `min_span`,
+    /// as the bars that ask for this paint have none: their span closes for a
+    /// hard edge.
+    fn paint_fade_bar(low: f32, high: f32) -> Vec<egui::Shape> {
+        let ctx = egui::Context::default();
+        crate::theme::apply_theme(&ctx);
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(300.0, 100.0));
+        let (mut lo, mut hi) = (low, high);
+        let out = ctx.run_ui(
+            egui::RawInput { screen_rect: Some(screen), ..Default::default() },
+            |ui| {
+                RangeBar::new(&mut lo, &mut hi, AXIS.0..=AXIS.1, NAME).fade_span().show(ui);
+            },
+        );
+        out.shapes.into_iter().map(|s| s.shape).collect()
+    }
+
+    /// The gradient fill's columns, left to right: where each one is and what
+    /// color it carries. A column's two vertices share a color, so reading the
+    /// first of each pair is the whole of it.
+    fn fill_ramp(shapes: &[egui::Shape]) -> Vec<(f32, egui::Color32)> {
+        let mut columns = Vec::new();
+        for shape in shapes {
+            if let egui::Shape::Mesh(mesh) = shape {
+                for pair in mesh.vertices.chunks(2) {
+                    columns.push((pair[0].pos.x, pair[0].color));
+                }
+            }
+        }
+        columns
+    }
+
     /// Drag a range bar from `from` to `to` (fractions of its width) and
     /// answer where its two ends ended up. A real gesture through a real
     /// context: press, then move with the button still down, which is the only
@@ -3069,6 +3212,188 @@ mod tests {
         let narrow = (60.0, 60.0 + OCTAVE);
         let middle = 60.0 + OCTAVE / 2.0;
         assert!(matches!(Grab::at(middle, narrow, AXIS, 1_000.0), Grab::Span { .. }));
+    }
+
+    /// A `fade_span` bar paints the pair as the edge it describes: one fill
+    /// from the axis floor, solid as far as `low`, ramping out to the bare
+    /// track by `high`.
+    ///
+    /// The default paint says the opposite of this — it fills exactly the part
+    /// that is FADING and leaves the solid part bare — which on a pair that is
+    /// a reach and its fade reads as a bright band floating off the node it is
+    /// measured from.
+    #[test]
+    fn a_fade_span_fills_from_the_floor_and_ramps_out() {
+        let (low, high) = (60.0, 100.0);
+        let shapes = paint_fade_bar(low, high);
+        let track = filled_rects(&shapes)[0].0;
+        let x_of = |v: f32| {
+            let inset = HANDLE_INSET;
+            let inner = track.left() + inset;
+            inner + (track.width() - 2.0 * inset) * (v - AXIS.0) / (AXIS.1 - AXIS.0)
+        };
+        let ramp = fill_ramp(&shapes);
+        assert!(!ramp.is_empty(), "a fade span painted no fill");
+
+        let (first, last) = (ramp[0], ramp[ramp.len() - 1]);
+        assert!(
+            (first.0 - x_of(AXIS.0)).abs() < 0.01,
+            "the fill starts at {} rather than at the axis floor {}",
+            first.0,
+            x_of(AXIS.0),
+        );
+        assert!(
+            (last.0 - x_of(high)).abs() < 0.01,
+            "the fill ends at {} rather than at `high` ({})",
+            last.0,
+            x_of(high),
+        );
+        assert_eq!(last.1, theme::well(), "the fill does not reach the bare track by `high`");
+
+        // Solid to `low`, and never brightening after it. Read as distance
+        // from the well rather than as a color, so this asks the one thing
+        // that matters — how much fill is left — of whatever the skin's accent
+        // happens to be.
+        let well = egui::Rgba::from(theme::well());
+        let from_well = |c: egui::Color32| {
+            let c = egui::Rgba::from(c);
+            ((c.r() - well.r()).powi(2) + (c.g() - well.g()).powi(2) + (c.b() - well.b()).powi(2))
+                .sqrt()
+        };
+        let solid = from_well(ramp[0].1);
+        assert!(solid > 0.0, "the fill is the same color as the track it sits on");
+        // Halfway along the ramp it is halfway out. This is what pins where
+        // the fade STARTS, which is the one thing the paint exists to show and
+        // the one thing every assertion around it leaves free: a ramp squeezed
+        // into the last quarter is still solid before `low`, still monotone,
+        // and still lands on the well at `high`.
+        let middle = (x_of(low) + x_of(high)) * 0.5;
+        let at_middle = ramp
+            .iter()
+            .min_by(|a, b| (a.0 - middle).abs().total_cmp(&(b.0 - middle).abs()))
+            .expect("the ramp has columns")
+            .1;
+        assert!(
+            (from_well(at_middle) - solid * 0.5).abs() < solid * 0.15,
+            "halfway along the fade the fill is {:.0}% of solid, not about half",
+            100.0 * from_well(at_middle) / solid,
+        );
+        let mut previous = f32::INFINITY;
+        for (x, color) in ramp {
+            if x <= x_of(low) + 0.01 {
+                assert!(
+                    (from_well(color) - solid).abs() < 0.01,
+                    "the fill is already fading at {x}, before `low` ({})",
+                    x_of(low),
+                );
+            }
+            assert!(
+                from_well(color) <= previous + 0.01,
+                "the fill brightens again at {x}",
+            );
+            previous = from_well(color);
+        }
+    }
+
+    /// An edge of no reach paints NOTHING. The fill stands on the value axis,
+    /// which is the inset track the handles are placed on — not the bar's own
+    /// rect, which starts a handle's half-width earlier and would leave a stub
+    /// of fill under a control that is switched off, and overstate every reach
+    /// above it by the same amount.
+    #[test]
+    fn an_edge_of_no_reach_paints_no_fill() {
+        let shapes = paint_fade_bar(AXIS.0, AXIS.0);
+        let width = match (fill_ramp(&shapes).first(), fill_ramp(&shapes).last()) {
+            (Some(first), Some(last)) => last.0 - first.0,
+            _ => 0.0,
+        };
+        assert!(width < 0.01, "an edge of no reach paints {width:.2}pt of fill");
+    }
+
+    /// A hard edge closes the span, and the fill is then solid the whole way
+    /// with no ramp at all — which is the picture of a hard edge, and the one
+    /// setting where this bar and the plain fill it replaces look the same.
+    ///
+    /// Not a NaN guard, though the shape invites reading it as one: a closed
+    /// span puts the solid fraction at exactly 1, `gradient_strip` samples no
+    /// further than 1, so the `p <= solid` arm takes every column and the
+    /// divide is never reached. The `solid >= 1.0` beside it is belt and
+    /// braces against float wobble, and deleting it leaves this passing.
+    #[test]
+    fn a_closed_fade_span_paints_a_solid_fill() {
+        let shapes = paint_fade_bar(60.0, 60.0);
+        let ramp = fill_ramp(&shapes);
+        assert!(!ramp.is_empty(), "a closed fade span painted no fill");
+        let first = ramp[0].1;
+        for (x, color) in ramp {
+            assert_eq!(color, first, "the fill is not solid at {x}");
+        }
+    }
+
+    /// A CLOSED span is operable from both sides: below it the low end opens
+    /// it, at or above it the whole span slides, keeping its width.
+    ///
+    /// The state is a hard edge on a [`RangeBar::fade_span`] bar — the reach
+    /// and the fade that ends it, with no fade — which is an ordinary setting
+    /// rather than a degenerate one, and the two gestures are the two a bar
+    /// apiece would give: widen without softening (slide), and soften
+    /// (the low end). Every measurement is a tie when the ends coincide, so
+    /// without the rule the tie-break hands every press to `Low`, which is
+    /// pinned against `hi` and moves nothing at all.
+    #[test]
+    fn a_closed_span_slides_from_above_and_opens_from_below() {
+        let closed = (60.0, 60.0);
+        // Above it: the span slides, so the edge widens at the same (zero)
+        // fade rather than softening.
+        let grab = Grab::at(80.0, closed, AXIS, 8.0);
+        assert!(matches!(grab, Grab::Span { .. }), "a press above a closed span took {grab:?}");
+        assert_eq!(grab.apply(90.0, closed, AXIS, 0.0), (70.0, 70.0));
+        // Below it: the low end, which is the only one that can open it.
+        let grab = Grab::at(40.0, closed, AXIS, 8.0);
+        assert!(matches!(grab, Grab::Low), "a press below a closed span took {grab:?}");
+        assert_eq!(grab.apply(40.0, closed, AXIS, 0.0), (40.0, 60.0));
+    }
+
+    /// A span that arrives ALREADY closed — or inverted — opens to the
+    /// minimum on the first drag rather than sliding along shut.
+    ///
+    /// `min_span` bounds what the bar PRODUCES, not what it is handed, so
+    /// every bar that declares one can still be given a pair that breaks it:
+    /// the Nodes tab's colour range is two host params with nothing between
+    /// them, and the Band bar's pair reaches `ViewConfig` from a blob
+    /// unsanitized. The slide is what a closed span needs and it carries its
+    /// width forward, so without the floor below it carries a zero — and the
+    /// bar, whose whole job is to repair such a pair by being dragged, would
+    /// hold it shut instead. `Grab::apply` promises the opposite in as many
+    /// words: the span never closes past `min_span`.
+    #[test]
+    fn a_span_handed_in_closed_opens_to_the_minimum() {
+        let cases: [((f32, f32), &str); 2] =
+            [((60.0, 60.0), "a closed pair"), ((100.0, 40.0), "an inverted pair")];
+        for (pair, hint) in cases {
+            let press = pair.0.max(pair.1) + 5.0;
+            let (lo, hi) = Grab::at(press, pair, AXIS, 8.0).apply(press + 10.0, pair, AXIS, OCTAVE);
+            assert!(
+                hi - lo >= OCTAVE - 1e-3,
+                "{hint}: dragging it left a span of {} ({lo}..{hi})",
+                hi - lo,
+            );
+        }
+    }
+
+    /// And a closed span at the axis FLOOR — a soft edge switched off
+    /// altogether — can still be dragged back out. There is no room below it
+    /// for the low end, so the slide is the whole of what the bar has left,
+    /// and it is what turns the edge back on hard rather than fully faded.
+    #[test]
+    fn a_closed_span_at_the_floor_still_opens() {
+        let off = (AXIS.0, AXIS.0);
+        for v in [AXIS.0, 30.0, 60.0, 120.0] {
+            let grab = Grab::at(v, off, AXIS, 8.0);
+            let moved = grab.apply(v + 10.0, off, AXIS, 0.0);
+            assert!(moved != off, "a press at {v} left the bar dead");
+            assert_eq!(moved.1 - moved.0, 0.0, "a press at {v} softened the edge as it widened");
+        }
     }
 
     /// Dragging an end past its partner stops at the minimum span instead of

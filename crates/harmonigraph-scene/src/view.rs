@@ -90,6 +90,10 @@ pub struct ViewConfig {
     /// pinned to twice the reach) means widening the gap also blurs it,
     /// with no way to ask for a wide crisp one or a narrow soft one.
     ///
+    /// One CONTROL is a different question from one number, and the Nodes
+    /// tab's Gutter bar is one: both are distances from the node's rim, so
+    /// they are two points on one axis and the bar carries a handle at each.
+    ///
     /// The clearing is solid out to `reach - fade` past the node's rim and
     /// gone by `reach`, so the reach is exactly where it ends whatever the
     /// fade does. Floored at the node's own rim: a fade wider than the
@@ -775,6 +779,17 @@ impl ViewConfig {
         // duration beside it is the Fade param rather than a blob field, and
         // has no door here to need.
         self.fade_shape = finite_or(self.fade_shape, 0.0);
+
+        // The gutter and its fade, which are ONE control (the Nodes tab's
+        // Gutter bar) over two numbers: the fade is a distance measured back
+        // from the reach, so a fade wider than the reach is a low end off the
+        // bottom of the axis. It draws as a fade over the whole reach either
+        // way — the shader floors it at the node's rim, which is the one part
+        // that must stay cleared — so holding it there costs the picture
+        // nothing and keeps the bar reading out the number the blob holds.
+        self.sevens_gutter = finite_or(self.sevens_gutter, fresh.sevens_gutter).clamp(0.0, 0.5);
+        self.sevens_gutter_soft = finite_or(self.sevens_gutter_soft, fresh.sevens_gutter_soft)
+            .clamp(0.0, self.sevens_gutter);
 
         self.shimmer_speed = finite_or(self.shimmer_speed, fresh.shimmer_speed);
         self.shimmer_width = finite_or(self.shimmer_width, fresh.shimmer_width);

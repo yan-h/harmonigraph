@@ -212,6 +212,177 @@ fn a_blob_naming_an_undrawable_level_range_opens_on_a_drawable_one() {
     }
 }
 
+/// A double-click on a soft edge's bar puts it back to the FRESH pair, not to
+/// the ends of its axis.
+///
+/// A range bar's own reset means "show the whole axis", which is the useful
+/// thing to land on for a window onto something — the pitch range, the level.
+/// It is the worst thing to land on here: the axis ends are the widest reach
+/// there is at the softest it goes, so the gesture would replace a dialled
+/// edge with the most extreme one instead of a neutral one. `edge_bar` takes
+/// the fresh pair for exactly this.
+///
+/// It is also the gesture most likely to be aimed here by habit: both controls
+/// take a six-digit number that gets captured out of a project rather than
+/// dragged, and on a `ValueBar` a double-click opens the box to type one.
+///
+/// Driven through the real widget rather than asserted on the mapping, since
+/// what is being pinned is which of two resets the gesture reaches.
+#[test]
+fn a_double_click_on_a_soft_edge_restores_the_fresh_pair() {
+    let ctx = egui::Context::default();
+    crate::theme::apply_theme(&ctx);
+    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(300.0, 100.0));
+    let fresh = harmonigraph_scene::ViewConfig::default();
+    // Dialled somewhere else first, so landing on the fresh pair is a move.
+    let (mut reach, mut fade) = (0.42f32, 0.1f32);
+    let mut time = 0.0;
+    let mut click = |reach: &mut f32, fade: &mut f32, events: Vec<egui::Event>| {
+        time += 1.0 / 60.0;
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(screen),
+                time: Some(time),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                crate::panes::edge_bar(
+                    ui,
+                    (reach, fade),
+                    0.5,
+                    "Gutter",
+                    (fresh.sevens_gutter, fresh.sevens_gutter_soft),
+                    |v| format!("{v:.2}"),
+                );
+            },
+        );
+    };
+    let at = egui::pos2(150.0, 10.0);
+    let press = |pressed: bool| egui::Event::PointerButton {
+        pos: at,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: Default::default(),
+    };
+    click(&mut reach, &mut fade, vec![]);
+    for _ in 0..2 {
+        let events = vec![egui::Event::PointerMoved(at), press(true), press(false)];
+        click(&mut reach, &mut fade, events);
+    }
+    assert_eq!(
+        (reach, fade),
+        (fresh.sevens_gutter, fresh.sevens_gutter_soft),
+        "a double-click landed on ({reach}, {fade}) rather than the fresh pair",
+    );
+}
+
+/// Both soft edges — the lattice's knockout gutter and the roll's note
+/// outline — open on a pair their own bar can reach: a fade no wider than the
+/// reach it is measured back from.
+///
+/// The picture does not care. Both shaders floor the fade at the edge it
+/// surrounds, so a fade dialled past its reach DRAWS as a fade over the whole
+/// of it — which is exactly why the repair is safe to make, and why it has to
+/// be made here rather than left to the draw path: the two are one bar reading
+/// out two points on one axis, and an unclamped fade puts its low end off the
+/// bottom of that axis, where the bar would report a number the blob does not
+/// hold.
+#[test]
+fn a_blob_naming_a_fade_wider_than_its_edge_opens_on_one_that_fits() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    state.camera.yaw = 1.23;
+    let saved = state.save_persist();
+    let edited = saved
+        .replace(
+            &format!("sevens_gutter_soft:{:?},", state.view.sevens_gutter_soft),
+            "sevens_gutter_soft:0.5,",
+        )
+        .replace(
+            &format!("sevens_gutter:{:?},", state.view.sevens_gutter),
+            "sevens_gutter:0.1,",
+        )
+        .replace(
+            &format!("roll_outline_fade:{:?},", state.spectrum_config.roll_outline_fade),
+            "roll_outline_fade:9.0,",
+        )
+        .replace(
+            &format!("roll_outline:{:?},", state.spectrum_config.roll_outline),
+            "roll_outline:1.0,",
+        );
+    assert_ne!(edited, saved, "the edge keys are not in the blob to edit");
+
+    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+    restored.load_persist(&edited);
+    assert_eq!(
+        (restored.view.sevens_gutter, restored.view.sevens_gutter_soft),
+        (0.1, 0.1),
+        "the gutter's fade opened wider than the gutter",
+    );
+    assert_eq!(
+        (restored.spectrum_config.roll_outline, restored.spectrum_config.roll_outline_fade),
+        (1.0, 1.0),
+        "the outline's fade opened wider than the outline",
+    );
+    assert_eq!(restored.camera.yaw, 1.23, "the rest of the blob still restores");
+}
+
+/// And a non-finite REACH opens on a drawable pair rather than taking the
+/// editor down with it.
+///
+/// This is the one that has to be repaired rather than clamped, and the clamp
+/// beside it is why: the reach is the fade's own upper bound, so a NaN reach
+/// reaches `f32::clamp` as its `max`, and `clamp` asserts `min <= max` — which
+/// NaN fails, panicking inside the host as the project opens. A NaN fade is
+/// the milder half of the same input and survives its own clamp untouched,
+/// leaving the bar to place a handle at a position that is not a number.
+///
+/// Both bars can produce neither shape, so a hand-edited or corrupted blob is
+/// the only way in — the same standing this pair's neighbours have, and the
+/// reason `a_blob_naming_an_undrawable_level_range_opens_on_a_drawable_one`
+/// exists a few tests up.
+#[test]
+fn a_blob_naming_a_nonsense_soft_edge_opens_on_a_drawable_one() {
+    let cases: [(&str, &str, &str); 4] = [
+        ("sevens_gutter", "NaN", "a NaN gutter"),
+        ("sevens_gutter_soft", "NaN", "a NaN gutter fade"),
+        ("roll_outline", "inf", "an infinite outline"),
+        ("roll_outline_fade", "NaN", "a NaN outline fade"),
+    ];
+    for (key, value, hint) in cases {
+        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        state.camera.yaw = 1.23;
+        let saved = state.save_persist();
+        let was = match key {
+            "sevens_gutter" => state.view.sevens_gutter,
+            "sevens_gutter_soft" => state.view.sevens_gutter_soft,
+            "roll_outline" => state.spectrum_config.roll_outline,
+            _ => state.spectrum_config.roll_outline_fade,
+        };
+        let edited = saved.replace(&format!("{key}:{was:?},"), &format!("{key}:{value},"));
+        assert_ne!(edited, saved, "{hint}: `{key}` is not in the blob to edit");
+
+        let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+        restored.load_persist(&edited);
+        let view = &restored.view;
+        let cfg = &restored.spectrum_config;
+        for (name, v) in [
+            ("sevens_gutter", view.sevens_gutter),
+            ("sevens_gutter_soft", view.sevens_gutter_soft),
+            ("roll_outline", cfg.roll_outline),
+            ("roll_outline_fade", cfg.roll_outline_fade),
+        ] {
+            assert!(v.is_finite(), "{hint}: `{name}` opened at {v}");
+        }
+        assert!(
+            view.sevens_gutter_soft <= view.sevens_gutter
+                && cfg.roll_outline_fade <= cfg.roll_outline,
+            "{hint}: opened on a fade wider than its reach",
+        );
+        assert_eq!(restored.camera.yaw, 1.23, "{hint}: the rest of the blob still restores");
+    }
+}
+
 /// The wheel's two-bar TAPER is gone, and a blob carrying the pair of keys
 /// nothing reads now keeps everything else it says. An unknown field being
 /// ignored rather than refused is the whole of why that works, and it is a

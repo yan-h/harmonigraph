@@ -330,11 +330,13 @@ pub struct SpectrumConfig {
     /// How much of that reach the outline spends fading out, in points: 0 is a
     /// hard edge, and at or past the reach it fades over the whole of it.
     ///
-    /// Two settings rather than one, exactly as the lattice's gutter and gutter
+    /// Two numbers rather than one, exactly as the lattice's gutter and gutter
     /// fade are two ([`harmonigraph_scene::ViewConfig::sevens_gutter_soft`]):
     /// tying the fade to the reach makes a wider outline always a blurrier one,
     /// and how far a note stands off its background is a different question
-    /// from how sharply it does.
+    /// from how sharply it does. They share one CONTROL — the Analyzer tab's
+    /// Outline bar, a handle at each — because both are distances from the
+    /// note's edge, which makes them two points on one axis.
     pub roll_outline_fade: f32,
     /// Write each note's name over its ribbon, at the moment it was struck —
     /// see [`panes::spectral::names`](crate::panes::spectral::names).
@@ -434,6 +436,29 @@ impl SpectrumConfig {
         // glyph wider than the texture atlas can hold.
         self.marking_scale = sane_scale(self.marking_scale);
         self.note_name_scale = sane_scale(self.note_name_scale);
+        // The outline and its fade, which are ONE control (the Analyzer tab's
+        // Outline bar) over two numbers, and held to the same bound for the
+        // same reason as the lattice's gutter pair
+        // ([`ViewConfig::sanitize`](harmonigraph_scene::ViewConfig::sanitize)):
+        // the fade is measured back from the reach, so a fade wider than its
+        // reach has no place on the axis to draw a handle. It draws as a fade
+        // over the whole reach either way — `roll.wgsl` floors it at the
+        // note's own edge — so the clamp costs the picture nothing.
+        //
+        // The finite check is not redundant with the clamp beside it: a NaN
+        // reach becomes the MAX of the fade's clamp, and `f32::clamp` asserts
+        // `min <= max`, which a NaN fails — taking the editor down as the
+        // project opens. The same trap the level pair below names.
+        let fresh = SpectrumConfig::default();
+        self.roll_outline =
+            if self.roll_outline.is_finite() { self.roll_outline } else { fresh.roll_outline }
+                .clamp(0.0, ROLL_OUTLINE_MAX);
+        self.roll_outline_fade = if self.roll_outline_fade.is_finite() {
+            self.roll_outline_fade
+        } else {
+            fresh.roll_outline_fade
+        }
+        .clamp(0.0, self.roll_outline);
         // The level pair, against the same threat and for the same reason.
         // `loudness_raw` already refuses a collapsed or inverted window, which
         // is what a `max` can answer; a NaN end it cannot, because NaN loses

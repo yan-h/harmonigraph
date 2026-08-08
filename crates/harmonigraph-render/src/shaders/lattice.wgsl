@@ -1171,8 +1171,8 @@ fn mark_ring(
 // How much of the destination a node's knockout clears at radius `d`.
 //
 // `reach` is where the clearing ENDS, measured past the node's own rim, and
-// `soft` is how gradual that ending is — two settings rather than one,
-// because tying the fade to the reach meant a wider gap was always a
+// `soft` is how gradual that ending is — two numbers rather than one,
+// because tying the fade to the reach means a wider gap is always a
 // blurrier one. Solid from the rim out to `reach - soft`, gone by `reach`.
 // The inner bound is floored at the rim so a fade wider than the reach eats
 // outward instead of into the node's own footprint, which is the one part
