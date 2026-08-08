@@ -300,6 +300,19 @@ impl SpectrumConfig {
         // glyph wider than the texture atlas can hold.
         self.marking_scale = sane_scale(self.marking_scale);
         self.note_name_scale = sane_scale(self.note_name_scale);
+        // The level pair, against the same threat and for the same reason.
+        // `loudness_raw` already refuses a collapsed or inverted window, which
+        // is what a `max` can answer; a NaN end it cannot, because NaN loses
+        // every comparison and survives to divide the mapping into the NaN
+        // geometry egui panics on. Repairing it here rather than there keeps
+        // one number in the blob and one on the bar, and there are now two
+        // controls writing this pair — the bar and the drag across the
+        // spectrum — neither of which can produce either shape itself.
+        self.floor_db = if self.floor_db.is_finite() { self.floor_db } else { LEVEL_MIN_DB };
+        self.ceiling_db = if self.ceiling_db.is_finite() { self.ceiling_db } else { LEVEL_MAX_DB };
+        self.floor_db = self.floor_db.clamp(LEVEL_MIN_DB, LEVEL_MAX_DB - LEVEL_RANGE_MIN_SPAN);
+        self.ceiling_db =
+            self.ceiling_db.clamp(self.floor_db + LEVEL_RANGE_MIN_SPAN, LEVEL_MAX_DB);
     }
 }
 

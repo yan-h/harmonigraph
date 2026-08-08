@@ -62,8 +62,8 @@ pub(crate) fn spectral_pane(
     use harmonigraph_core::spectrum::{hz_to_midi, BINS_PER_SEMITONE, SPECTRUM_MIN_MIDI};
 
     let cfg = state.spectrum_config;
-    // Drag-sensing, so the pitch range can be panned and the time Span zoomed
-    // by grabbing the picture (see `drag_zoom`). Registered BEFORE the
+    // Drag-sensing, so the pitch range can be panned and the Span or the Level
+    // zoomed by grabbing the picture (see `drag_zoom`). Registered BEFORE the
     // divider's own band, which
     // is what leaves the divider on top where the two overlap: egui hands a
     // drag to the last widget registered over the pointer.
@@ -88,9 +88,11 @@ pub(crate) fn spectral_pane(
     let divider = (!whole_song && (cfg.show_roll || cfg.show_spectrogram))
         .then(|| drag_split(ui, &axes, state, surface));
     drag_zoom(ui, &axes, &response, state, surface);
-    // Re-snapshot: the two drags above just wrote `roll_fraction` and the pitch
-    // range, and everything below has to be this frame's values, not the ones
-    // from before the drag.
+    // Re-snapshot: the two drags above just wrote `roll_fraction`, the pitch
+    // range, the Span or the level ceiling, and everything below has to be this
+    // frame's values, not the ones from before the drag. The ceiling is the
+    // sharpest case — it is what `loudness` maps through, so a stale copy would
+    // draw the curve and the heatmap a frame behind the hand dragging them.
     let cfg = state.spectrum_config;
     let split = if whole_song { 0.0 } else { spectrum_share(&cfg) };
 

@@ -148,6 +148,70 @@ fn a_blob_naming_more_wheel_than_fits_opens_on_what_fits() {
     assert_eq!(restored.camera.yaw, 1.23, "the rest of the blob still restores");
 }
 
+/// A hand-edited level range comes back drawable, which the pitch pair has
+/// always been made to and this pair was not.
+///
+/// A NaN end is the one that has to be repaired rather than clamped: it loses
+/// every comparison, so it survives a `max` and reaches `loudness` as the
+/// divisor of a mapping that then paints the NaN geometry egui panics on —
+/// inside the host, as a project opens. `loudness_raw`'s own guard answers an
+/// inverted or collapsed pair and cannot answer this one.
+///
+/// Two controls write the pair now — the Level bar and the drag across the
+/// spectrum — and neither can produce either shape, which is what makes the
+/// blob the only way in.
+#[test]
+fn a_blob_naming_an_undrawable_level_range_opens_on_a_drawable_one() {
+    for (floor, ceiling, hint) in [
+        ("NaN", "-20.0", "a NaN floor"),
+        ("-60.0", "NaN", "a NaN ceiling"),
+        ("-20.0", "-80.0", "an inverted pair"),
+        ("-30.0", "-30.0", "a collapsed pair"),
+        ("40.0", "60.0", "a pair right off the top of the scale"),
+    ] {
+        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        state.camera.yaw = 1.23;
+        let saved = state.save_persist();
+        let edited = saved
+            .replace(
+                &format!("floor_db:{:?},", state.spectrum_config.floor_db),
+                &format!("floor_db:{floor},"),
+            )
+            .replace(
+                &format!("ceiling_db:{:?},", state.spectrum_config.ceiling_db),
+                &format!("ceiling_db:{ceiling},"),
+            );
+        assert_ne!(edited, saved, "{hint}: the level keys are not in the blob to edit");
+
+        let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+        restored.load_persist(&edited);
+        let cfg = restored.spectrum_config;
+        assert!(
+            cfg.floor_db.is_finite() && cfg.ceiling_db.is_finite(),
+            "{hint}: opened at {} .. {}",
+            cfg.floor_db,
+            cfg.ceiling_db,
+        );
+        assert!(
+            cfg.ceiling_db - cfg.floor_db >= crate::LEVEL_RANGE_MIN_SPAN - 1e-3,
+            "{hint}: opened on a {} dB window",
+            cfg.ceiling_db - cfg.floor_db,
+        );
+        assert!(
+            cfg.floor_db >= crate::LEVEL_MIN_DB && cfg.ceiling_db <= crate::LEVEL_MAX_DB,
+            "{hint}: opened off the scale, at {} .. {}",
+            cfg.floor_db,
+            cfg.ceiling_db,
+        );
+        // And what reads out is what is drawn: the pane maps through this
+        // same pair, so a repair that left the bar and the curve disagreeing
+        // would be the silent break the loud one is preferred to.
+        let level = crate::panes::spectral::axes::loudness_db(&cfg, cfg.ceiling_db, 0.0);
+        assert!(level.is_finite(), "{hint}: the repaired pair still maps to {level}");
+        assert_eq!(restored.camera.yaw, 1.23, "{hint}: the rest of the blob still restores");
+    }
+}
+
 /// The wheel's two-bar TAPER is gone, and a blob carrying the pair of keys
 /// nothing reads now keeps everything else it says. An unknown field being
 /// ignored rather than refused is the whole of why that works, and it is a

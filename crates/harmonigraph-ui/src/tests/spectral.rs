@@ -283,4 +283,9 @@ fn the_divider_still_wins_the_drag_over_the_pane_behind_it() {
         after.roll_seconds, before.roll_seconds,
         "nor zoom the Span — the drag leans along time, which is the Span's gesture",
     );
+    // And not the Level either. The grab is the band's CENTRE, which sits on
+    // the split to within a float divide — so which of the two depth zooms a
+    // stolen drag would run is decided by a last bit, and asserting on one of
+    // them leaves the other as a way through.
+    assert_eq!(after.ceiling_db, before.ceiling_db, "nor zoom the Level, on the other side");
 }

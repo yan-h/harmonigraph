@@ -88,7 +88,19 @@ const DEPTH_ZOOM_PER_DRAG_POINT: f32 = 0.006;
 /// depthwise slop in it would leave the Span or the Level quietly breathing.
 /// The margin is small enough that the pitch the picture slides by before a
 /// zoom takes over is a fraction of a semitone.
-const DEPTH_ZOOM_LEAN: f32 = 4.0;
+pub(super) const DEPTH_ZOOM_LEAN: f32 = 4.0;
+
+/// Which of the two things the depth axis measures a drag has under it — the
+/// whole of what [`drag_zoom`] decides from where a press landed, held as one
+/// value so the choice is made once. Two booleans and an `else` say the same
+/// thing three times, and the `else` reads as a fallthrough rather than as the
+/// other half of a pair.
+enum DepthZoom {
+    /// The far region's time window: the roll's Span.
+    Span,
+    /// The spectrum's dB window: the Level.
+    Level,
+}
 
 /// Drag or scroll to navigate the picture instead of aiming the Analyzer tab's
 /// bars at it: across the pitch axis to pan the range, the wheel to zoom it,
@@ -188,39 +200,62 @@ pub(super) fn drag_zoom(
                     > total.dot(axes.dir_pitch()).abs() + DEPTH_ZOOM_LEAN
             })
             .map(|(from, _)| axes.depth_at(from));
-        // A region with no depth of its own has nothing to zoom, so a drag over
-        // where it would be is left to pan.
-        let zoom_time = split < 1.0 && leaning.is_some_and(|d| d >= split);
-        let zoom_level = split > 0.0 && leaning.is_some_and(|d| d < split);
-        if zoom_time || zoom_level {
-            let along = delta.dot(axes.dir_depth());
-            if zoom_time {
-                // Dragging toward the past pulls the picture away from the
-                // now-line it is anchored on, spreading it — so the seconds it
-                // spans shrink.
-                cfg.roll_seconds = (cfg.roll_seconds * (-along * DEPTH_ZOOM_PER_DRAG_POINT).exp())
-                    .clamp(crate::ROLL_SECONDS_MIN, crate::ROLL_SECONDS_MAX);
+        // A region with no depth of its own has nothing to zoom, so the other
+        // one answers for the whole pane rather than leaving a strip of it
+        // dead: at a split of 1.0 the far EDGE is still the spectrum's, and at
+        // 0.0 the near edge is still the roll's. Only a pane with neither
+        // region falls through to the pan.
+        let zoom = leaning.and_then(|d| {
+            if split < 1.0 && d >= split {
+                Some(DepthZoom::Span)
+            } else if split > 0.0 {
+                Some(DepthZoom::Level)
             } else {
-                // Same rule, along the direction the curve actually grows in:
-                // away from the far region it joins, or — with that region off
-                // — up from the outer edge instead, which is `spectral_pane`'s
-                // `joined` seen from here.
-                let outward = if split < 1.0 { -along } else { along };
-                // Only the ceiling moves. The floor IS the baseline the curve
-                // stands on, so it is the fixed end of this zoom the way `now`
-                // is the fixed end of the Span's; sliding the window bodily is
-                // the Level bar's gesture, and there is one depth axis to drag
-                // along, not two.
-                let window = (cfg.ceiling_db - cfg.floor_db).max(crate::LEVEL_RANGE_MIN_SPAN);
-                let window = (window * (-outward * DEPTH_ZOOM_PER_DRAG_POINT).exp())
-                    .max(crate::LEVEL_RANGE_MIN_SPAN);
-                // `min` then `max` rather than a clamp: a hand-edited floor can
-                // sit within the minimum span of the domain's top, and clamp
-                // panics on bounds that cross. The minimum span wins there,
-                // which is the answer `loudness_raw` gives the same pair.
-                cfg.ceiling_db = (cfg.floor_db + window)
-                    .min(crate::LEVEL_MAX_DB)
-                    .max(cfg.floor_db + crate::LEVEL_RANGE_MIN_SPAN);
+                None
+            }
+        });
+        if let Some(zoom) = zoom {
+            let along = delta.dot(axes.dir_depth());
+            match zoom {
+                DepthZoom::Span => {
+                    // Dragging toward the past pulls the picture away from the
+                    // now-line it is anchored on, spreading it — so the seconds it
+                    // spans shrink.
+                    let zoomed = cfg.roll_seconds * (-along * DEPTH_ZOOM_PER_DRAG_POINT).exp();
+                    cfg.roll_seconds =
+                        zoomed.clamp(crate::ROLL_SECONDS_MIN, crate::ROLL_SECONDS_MAX);
+                }
+                DepthZoom::Level => {
+                    // Same rule, along the direction the curve actually grows in:
+                    // away from the far region it joins, or — with that region off
+                    // — up from the outer edge instead. That is `spectral_pane`'s
+                    // `joined`, and it reads the same from here because the one
+                    // layout where the two part company — whole-song, where the
+                    // pane forces the split to 0 and draws no spectrum at all —
+                    // belongs to the offline renderer, which has no pointer.
+                    let outward = if split < 1.0 { -along } else { along };
+                    // Only the ceiling moves. The floor IS the baseline the curve
+                    // stands on, so it is the fixed end of this zoom the way `now`
+                    // is the fixed end of the Span's; sliding the window bodily is
+                    // the Level bar's gesture, and there is one depth axis to drag
+                    // along, not two.
+                    let window = (cfg.ceiling_db - cfg.floor_db).max(crate::LEVEL_RANGE_MIN_SPAN);
+                    let window = (window * (-outward * DEPTH_ZOOM_PER_DRAG_POINT).exp())
+                        .max(crate::LEVEL_RANGE_MIN_SPAN);
+                    // `min` then `max` rather than a clamp: a hand-edited floor can
+                    // sit within the minimum span of the domain's top, and clamp
+                    // panics on bounds that cross. The minimum span wins there,
+                    // which is the answer `loudness_raw` gives the same pair.
+                    cfg.ceiling_db = (cfg.floor_db + window)
+                        .min(crate::LEVEL_MAX_DB)
+                        .max(cfg.floor_db + crate::LEVEL_RANGE_MIN_SPAN);
+                    // Every frame of this drag restarts the spectrogram's ring:
+                    // the dB window is the heatmap's too, so `ColumnColor` sees
+                    // the change and every column is repainted. That is the
+                    // picture genuinely changing, not the waste `ColumnColor` was
+                    // spelled out field by field to end — and it is the cost the
+                    // pitch drag already pays each frame through `scale_min_bits`.
+                }
             }
             ui.ctx().set_cursor_icon(if axes.time_vertical {
                 egui::CursorIcon::ResizeVertical
