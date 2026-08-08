@@ -179,8 +179,14 @@ pub(crate) fn spectral_pane(
     // They stop at the now-line because that is where the spectrum stops. Run
     // the full depth they would outrun the spectrogram's heatmap — which only
     // grows out from the now-line as history accumulates — and sit bare on the
-    // bed ahead of it. Whole-song mode has no spectrum region at all (`split`
-    // is 0), and a zero-length segment has no normal for egui to compute.
+    // bed ahead of it.
+    //
+    // The guard is that same rule at its limit rather than a crash guard: a
+    // `split` of 0 is a pane with no spectrum on it at all (whole-song mode,
+    // and a roll dragged shut over the curve), so there is nothing to rule.
+    // egui tessellates a zero-length segment to an invisible degenerate quad,
+    // so what this saves is a shape per ruling in every frame of a `--playhead`
+    // export, not a NaN.
     if split > 0.0 {
         for ruling in &grid {
             let fade = if ruling.decade { RULING_FADE.0 } else { RULING_FADE.1 };
