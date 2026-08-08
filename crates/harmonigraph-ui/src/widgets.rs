@@ -1409,7 +1409,7 @@ impl<'a> SpectrumBar<'a> {
         // straight to the rotate branch, and asking the widget where the press
         // LANDED is no answer either — egui calls a press a drag only once it
         // has moved, by which time the pointer can be over the track.
-        let gap = PIECE_GAP * scale;
+        let piece_gap = PIECE_GAP * scale;
         let (id, rect) = ui.allocate_space(Vec2::new(width, spectrum_bar_height(scale)));
         // The track's width is what the two bands and the settings sweep all
         // measure, so the row is laid out from it rather than from the button:
@@ -1421,7 +1421,7 @@ impl<'a> SpectrumBar<'a> {
         // what both of them draw.
         let flip_rect = egui::Rect::from_min_max(
             rect.min,
-            egui::pos2((split - gap).max(rect.left()), rect.bottom()),
+            egui::pos2((split - piece_gap).max(rect.left()), rect.bottom()),
         );
         let track_rect = egui::Rect::from_min_max(
             egui::pos2(split, rect.top()),
@@ -1431,7 +1431,7 @@ impl<'a> SpectrumBar<'a> {
         // stops short of the strip rather than keeping presses off it. What
         // does that is `on_track` below; see [`SpectrumGrab::Outside`].
         let strip_rect = egui::Rect::from_min_max(
-            egui::pos2(track_rect.left(), track_rect.bottom() + gap),
+            egui::pos2(track_rect.left(), track_rect.bottom() + piece_gap),
             rect.max,
         );
         let mut response = ui.interact(track_rect, id.with("track"), Sense::click_and_drag());
