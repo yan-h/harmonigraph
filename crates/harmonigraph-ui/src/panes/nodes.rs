@@ -6,7 +6,9 @@
 
 use super::{param_bar, section};
 use crate::params::{seconds, ParamBackend, ParamKey};
-use crate::widgets::{button_row, choice_row, OctaveStrip, RangeBar, SpectrumBar, ValueBar};
+use crate::widgets::{
+    button_row, choice_row, OctaveStrip, RangeBar, SpectrumBar, SpreadBar, ValueBar,
+};
 use crate::SharedState;
 use harmonigraph_scene::{
     Pulse, ViewConfig, MARK_DELAY_MAX, MIN_EXTRA_SIZE, PITCH_CEIL, PITCH_FLOOR,
@@ -143,8 +145,7 @@ fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // Inner and outer radius are one control: the band is the ring between
     // them. Drag either edge, or drag between to slide the ring at a fixed
     // width; the min span keeps it from collapsing.
-    ui.label("Band");
-    RangeBar::new(&mut view.outer_inner, &mut view.outer_outer, 0.0..=1.0)
+    RangeBar::new(&mut view.outer_inner, &mut view.outer_outer, 0.0..=1.0, "Band")
         .min_span(0.05)
         .show(ui)
         .on_hover_text(
@@ -380,8 +381,12 @@ fn pitch_readout(midi: f32) -> String {
     format!("{name}{}", harmonigraph_core::notes::display_octave_of(n))
 }
 
-/// The pitch gradient: the spectrum bar, and the three knobs that shape what
-/// it draws. One column of full-width bars, like every other settings group —
+/// The pitch gradient on three bars, one per stretch: the arc on the spectrum
+/// bar, the brightness pair on one of its own, and the chroma pair on another.
+/// Each bar is a picture of what its numbers COMPOSE rather than a row per
+/// number, which is what keeps a six-number gradient down to three rows.
+///
+/// One column of full-width bars, like every other settings group —
 /// which here is a budget as much as a habit, and the reason the spectrum is a
 /// bar rather than the hue WHEEL a circular value naturally asks for.
 ///
@@ -390,7 +395,7 @@ fn pitch_readout(midi: f32) -> String {
 /// runs past the column at the window this UI was dialled against (1512x886),
 /// so a wheel would add 140pt on top of a list that has started to scroll,
 /// and every knob under it would be that much further down. Setting the wheel
-/// BESIDE these three knobs recovers the height, and breaks the other rule
+/// BESIDE the bars below recovers the height, and breaks the other rule
 /// instead — the one still pinned by a test: a bar in a settings pane is the
 /// width of its column, so that dragging the column narrower narrows all of
 /// them together (`every_bar_in_a_settings_pane_is_the_width_of_the_pane`).
@@ -401,10 +406,18 @@ fn pitch_readout(midi: f32) -> String {
 ///
 /// A bar costs one row and says the same thing — see [`SpectrumBar`] for how a
 /// circle fits on one, and for why the flip and the arc share that row rather
-/// than taking two. The same budget is why the bar carries no name of its own:
-/// the section heading above it names the group, the three knobs below it are
-/// the rest of the gradient, and the only rainbow in the pane needs no caption
-/// to be found. What a name would say the tooltip says at more length.
+/// than taking two. The same budget is why the bar carries no name of its own,
+/// and it is the one bar in the dock that does not carry one: the section
+/// heading above it names the group, the spread bars below it are the rest of
+/// the gradient, and the only rainbow in the pane needs no caption to be found.
+/// What a name would say the tooltip says at more length.
+///
+/// It is the odd one out on purpose rather than by omission. Every other bar
+/// here writes its name along its own track, over a well or an accent fill
+/// that a word can be read on; this one's track is saturated color end to end
+/// at every setting, so a name laid on it is legible at some gradients and not
+/// at others. A label on a row of its own is what that would cost, and the row
+/// is the thing this control does not have.
 fn spectrum_group(ui: &mut egui::Ui, view: &mut ViewConfig) {
     SpectrumBar::new(&mut view.pitch_gradient).show(ui).on_hover_text(
         "The pitch->color spectrum: how far round the color circle the pitch \
@@ -415,31 +428,27 @@ fn spectrum_group(ui: &mut egui::Ui, view: &mut ViewConfig) {
          same gradient at full width, in pitch order; the button at the left \
          runs it the other way round the circle.",
     );
-    ValueBar::new(&mut view.pitch_gradient.lightness, 0.0..=100.0, "Brightness")
-        .integer()
-        .show(ui)
-        .on_hover_text(
-            "Brightness at the MIDDLE of the pitch range, in CIELab L*. The \
-             ramp opens either side of it, so this stays the picture's overall \
-             brightness at any ramp",
-        );
-    ValueBar::new(&mut view.pitch_gradient.lightness_ramp, -100.0..=100.0, "Brightness ramp")
-        .integer()
-        .show(ui)
-        .on_hover_text(
-            "How much brightness separates the bottom of the pitch range from \
-             the top. 0 makes every note exactly as bright as every other and \
-             leaves hue to carry the pitch alone; negative puts the bright end \
-             at the bottom",
-        );
-    ValueBar::new(&mut view.pitch_gradient.chroma, 0.0..=1.0, "Chroma")
-        .display(|v| format!("{:.0}%", v * 100.0))
-        .show(ui)
-        .on_hover_text(
-            "How much color, as a share of the most this brightness and hue \
-             can hold. 100% is as vivid as the screen goes without distorting \
-             the color; 0 is grey",
-        );
+    SpreadBar::brightness(&mut view.pitch_gradient).show(ui).on_hover_text(
+        "The stretch of brightness the pitch range spends, in CIELab L*: the \
+         two numbers are the bottom of the pitch range and the top, in that \
+         order, so a picture with its bright end at the bottom reads out \
+         backwards. Drag either end to move it, drag between them to slide the \
+         whole stretch brighter or darker, drag one end past the other to swap \
+         which end is bright, double-click to reset. Closing the two together \
+         makes every note exactly as bright as every other and leaves hue to \
+         carry the pitch alone.",
+    );
+    SpreadBar::chroma(&mut view.pitch_gradient).show(ui).on_hover_text(
+        "The stretch of color the pitch range spends, each end as a share of \
+         the most that note's own brightness and hue can hold — 100% is as \
+         vivid as the screen goes without distorting the color, 0 is grey. The \
+         two numbers are the bottom of the pitch range and the top, in that \
+         order, so a picture with its vivid end at the bottom reads out \
+         backwards. Drag either end to move it, drag between them to slide the \
+         whole stretch, drag one end past the other to swap which end is \
+         vivid, double-click to reset. Closing the two together gives every \
+         note the same share of the color available to it.",
+    );
 }
 
 /// What every layer of the node shares: the pitch->color gradient it is
@@ -464,14 +473,13 @@ fn every_layer_section(
     // change here repaints the discs, the octave glyphs, the trail and the
     // piano roll together.
     spectrum_group(ui, view);
-    ui.label("Color range");
     super::param_range_bar(
         ui,
         params,
-        ParamKey::DarkestPitch,
-        ParamKey::BrightestPitch,
+        (ParamKey::DarkestPitch, ParamKey::BrightestPitch),
         0.0..=120.0,
         crate::COLOR_RANGE_MIN_SPAN,
+        "Color range",
         pitch_readout,
     )
     .on_hover_text(

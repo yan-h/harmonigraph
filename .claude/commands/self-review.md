@@ -73,13 +73,28 @@ hands back, so you can tell which reading produced which finding.
    Favour large over small, and drop anything that smells like a false
    positive rather than reporting it hedged.
 
-3. **State and invalidation.** For every cache, memo, dirty flag, or
+3. **Cache keys and numeric edges.** For every cache, memo, dirty flag, or
    derived value this diff adds or touches: write down what it is keyed on,
-   then ask what *else* feeds the value and is missing from the key. This is
-   the standing prior for this project — it is the bug that has actually
-   shipped here, twice. In the same pass, check the numeric edges: unsigned
-   subtraction that can underflow, an index built from a length, a
-   saturating cast that silently clamps.
+   then ask it in **both** directions. What *else* feeds the value and is
+   missing from the key serves a stale value. What the key carries that
+   decides nothing about the value is never stale and never still — it
+   churns at the rate of whatever it should not be watching. That second
+   direction is the standing prior for this project, and it is the one that
+   has actually shipped here, twice: a spectrogram column keyed on a whole
+   `SpectrumConfig` re-uploaded the heatmap on every frame of a drag
+   (`4a4ae66`), and a mark's key minted fresh per pass held that cache at
+   its eviction limit until a texture was freed mid-pass (`51d337e`).
+
+   A too-wide key is also not merely slow. It restarts the thing it guards
+   often enough to hide what the carry-forward path gets wrong, so narrowing
+   one is a change of behaviour rather than of speed: `a2e6e01` is a
+   correctness bug that was there all along and only became reachable once
+   the key stopped wiping the evidence every frame. A diff that narrows a
+   key owes an answer for what is newly reachable.
+
+   In the same pass, check the numeric edges: unsigned subtraction that can
+   underflow, an index built from a length, a saturating cast that silently
+   clamps.
 
 4. **Test reach.** For each new or changed code path, find the test that
    executes it and confirm the fixture is actually big enough to get there.

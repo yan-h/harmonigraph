@@ -33,8 +33,29 @@ fn luminance(c: glam::Vec4) -> f32 {
 /// A spread of gradients wide enough to cover what the controls can reach:
 /// each knob at both limits and somewhere in between, including the
 /// degenerate settings — no hue arc at all, a full turn, no color, all the
-/// color there is, and a ramp steeper than the `L*` axis so it flattens
-/// against black and white.
+/// color there is, and a ramp steeper than the middle it opens about leaves
+/// room for.
+///
+/// That last one is written RAW and pulled in by `sanitized`, which every
+/// consumer of a gradient applies, so the sweep covers the clamp itself as well
+/// as the settings either side of it. It is written for both ramps: the chroma
+/// pairs below run one middle at each end of its axis, one in the middle, and
+/// three ramps — flat, the widest the middle holds, and one steeper than that.
+///
+/// The chroma pair is a LIST rather than a fifth and sixth nested loop, because
+/// the two are not independent: the ramp is bounded by its middle, so a full
+/// cross-product spends most of its entries on ramps the clamp flattens to the
+/// same handful of pictures. Six written pairs cover the clamp from both sides
+/// at a third the gradients.
+///
+/// Which is also what the brightness cross-product is worth reading carefully:
+/// the clamp makes the two collapse into each other at the ends of the `L*`
+/// axis, where a middle at 0 or 100 leaves room for no ramp at all and all four
+/// come out flat, and at 10 and 92, where 44 and 100 both clamp to the same
+/// number. Twenty-four written pairs are sixteen distinct gradients drawn. The
+/// stride check in `one_pitch_gives_the_disc_and_the_glyph_one_color` reads the
+/// RAW fields, so it still proves the net reaches every value written here — it
+/// just no longer means twenty-four different pictures.
 ///
 /// `L*` 0 and 100 are in the list rather than only reachable through a steep
 /// ramp, and the difference is what a FLAT ramp there can be asked: the two
@@ -48,13 +69,16 @@ fn gradient_sweep() -> Vec<PitchGradient> {
         for hue_span in [0.0, 45.0, 190.0, 360.0, -190.0, -360.0] {
             for lightness in [0.0, 10.0, 50.0, 64.0, 92.0, 100.0] {
                 for lightness_ramp in [0.0, 44.0, 100.0, -70.0] {
-                    for chroma in [0.0, 0.45, 1.0] {
+                    for (chroma, chroma_ramp) in
+                        [(0.0, 0.0), (0.45, 0.0), (1.0, 0.0), (0.45, 0.9), (0.5, -1.0), (0.2, 1.0)]
+                    {
                         out.push(PitchGradient {
                             hue_start,
                             hue_span,
                             lightness,
                             lightness_ramp,
                             chroma,
+                            chroma_ramp,
                         });
                     }
                 }
@@ -64,7 +88,136 @@ fn gradient_sweep() -> Vec<PitchGradient> {
     out
 }
 
-/// The promise that lets all four knobs be free: whatever they are set to,
+/// Both ends of the curve are `L*` the axis actually holds, at every setting a
+/// control or a hand-edited file can name — and they are the pair's OWN ends,
+/// half the ramp either side of the middle, rather than a clamp's idea of them.
+///
+/// The failure this is against is a plateau. A ramp steeper than its middle
+/// leaves room for runs off the axis and flattens there, which draws part of
+/// the pitch range at one brightness while the pair goes on reading as a
+/// straight ramp — a picture and a pair of numbers saying different things.
+/// It is also what the Brightness bar cannot express: it stands its two handles
+/// at exactly these ends, and an end off the axis is an end off the bar.
+#[test]
+fn neither_end_of_the_curve_leaves_the_l_star_axis() {
+    for lightness in [-50.0, 0.0, 1.0, 42.0, 64.0, 99.0, 100.0, 150.0, f32::NAN] {
+        for lightness_ramp in [0.0, 12.0, -12.0, 44.0, 100.0, -100.0, 400.0, -400.0, f32::NAN] {
+            let raw = PitchGradient { lightness, lightness_ramp, ..PitchGradient::default() };
+            let sane = raw.sanitized();
+            assert_eq!(sane.sanitized(), sane, "{raw:?} sanitizes to a pair sanitize rejects");
+            for t in [0.0, 1.0] {
+                let end = sane.lightness_and_hue(t).0;
+                assert!(
+                    (0.0..=100.0).contains(&end),
+                    "{raw:?} puts the end at t {t} on L* {end}, off the axis",
+                );
+                // The clamp inside `lightness_and_hue` is a guard against the
+                // arithmetic's own rounding and nothing else, so what it
+                // returns has to be the straight ramp to well inside a point
+                // of `L*` — a plateau would be points out, not fractions.
+                let want = f64::from(sane.lightness) + (t - 0.5) * f64::from(sane.lightness_ramp);
+                assert!(
+                    (end - want).abs() < 1e-4,
+                    "{raw:?} draws L* {end} at t {t} where its pair names {want}: the ramp \
+                     flattens against the axis instead of ending on it",
+                );
+            }
+        }
+    }
+}
+
+/// Both ends of the chroma curve are fractions the 0..1 axis actually holds,
+/// which is [`neither_end_of_the_curve_leaves_the_l_star_axis`] one axis over
+/// and against the same two failures — a plateau where a steep ramp flattens,
+/// and a control that cannot express an end it has no room to draw.
+///
+/// It also carries the whole of what keeps [`PitchGradient::chroma_at`] from
+/// needing a clamp. A fraction past 1 asks for a color outside the gamut, which
+/// the in-gamut check would then catch — but a fraction under 0 would not be
+/// caught by anything: a negative chroma is in gamut, at the hue on the OPPOSITE
+/// side of the circle from the one the arc names, so the picture would simply
+/// draw the wrong colors at the washed-out end of the range.
+#[test]
+fn neither_end_of_the_curve_leaves_the_chroma_axis() {
+    for chroma in [-0.5, 0.0, 0.01, 0.42, 0.5, 0.99, 1.0, 1.5, f32::NAN] {
+        for chroma_ramp in [0.0, 0.12, -0.12, 1.0, -1.0, 4.0, -4.0, f32::NAN] {
+            let raw = PitchGradient { chroma, chroma_ramp, ..PitchGradient::default() };
+            let sane = raw.sanitized();
+            assert_eq!(sane.sanitized(), sane, "{raw:?} sanitizes to a pair sanitize rejects");
+            for t in [0.0, 1.0] {
+                let end = sane.chroma_at(t);
+                assert!(
+                    (0.0..=1.0).contains(&end),
+                    "{raw:?} asks for the fraction {end} at t {t}, off the axis",
+                );
+                // Exactly the straight ramp, not something a clamp caught on
+                // the way: `chroma_at` has no clamp to catch it with, so a
+                // plateau here would be drawn rather than repaired.
+                let want = f64::from(sane.chroma) + (t - 0.5) * f64::from(sane.chroma_ramp);
+                assert_eq!(end, want, "{raw:?} draws {end} at t {t} where its pair names {want}");
+            }
+        }
+    }
+}
+
+/// A chroma ramp spends COLOR on pitch, the way a brightness ramp spends
+/// brightness: the vivid end of it is the one its sign names, and at 0 every
+/// note carries the same share of what the gamut holds for it.
+///
+/// Read off an isoluminant gradient of one hue, which is what leaves the
+/// measurement with one thing in it. Both other knobs move the color too — the
+/// gamut's own maximum changes with `L*` and with hue — so a ramp measured over
+/// a picture that also ramps brightness would be reading their sum.
+#[test]
+fn a_chroma_ramp_spends_color_on_pitch() {
+    // The distance from grey of one LUT entry: chroma made visible, in the
+    // units a pixel actually has (`more_chroma_is_more_color_at_every_setting`
+    // reads the same thing).
+    let colorfulness = |lut: &[glam::Vec4; PITCH_LUT_N], k: usize| {
+        let e = lut[k].truncate();
+        e.max_element() - e.min_element()
+    };
+    let flat = PitchGradient {
+        hue_span: 0.0,
+        lightness: 55.0,
+        lightness_ramp: 0.0,
+        chroma: 0.5,
+        chroma_ramp: 0.0,
+        ..PitchGradient::default()
+    };
+    let (bottom, top) = (0, PITCH_LUT_N - 1);
+    let level = pitch_ramp_lut(flat);
+    assert!(
+        (colorfulness(&level, bottom) - colorfulness(&level, top)).abs() < 1.5 / 255.0,
+        "a flat chroma ramp drew the two ends of the range differently",
+    );
+    // The widest ramp a middle of 0.5 holds, which reaches both ends of the
+    // axis: all the color there is at the top of the pitch range, and none at
+    // all at the bottom — the picture a single Chroma knob has no way to draw.
+    let up = pitch_ramp_lut(PitchGradient { chroma_ramp: 1.0, ..flat });
+    assert!(
+        colorfulness(&up, top) > colorfulness(&up, bottom) + 0.1,
+        "a positive chroma ramp did not put the color at the top of the pitch range",
+    );
+    assert!(
+        colorfulness(&up, bottom) < 1.5 / 255.0,
+        "the washed-out end of a full chroma ramp kept {} of color, where grey has none",
+        colorfulness(&up, bottom),
+    );
+    // And the sign is which END, exactly as a brightness ramp's is: the same
+    // picture, read backwards. To a byte, since the two are the same curve
+    // sampled from opposite directions rather than the same arithmetic.
+    let down = pitch_ramp_lut(PitchGradient { chroma_ramp: -1.0, ..flat });
+    for k in 0..PITCH_LUT_N {
+        let (a, b) = (colorfulness(&down, k), colorfulness(&up, PITCH_LUT_N - 1 - k));
+        assert!(
+            (a - b).abs() < 1.5 / 255.0,
+            "at entry {k} an inverted ramp has {a} of color where the mirror of it has {b}",
+        );
+    }
+}
+
+/// The promise that lets all five knobs be free: whatever they are set to,
 /// the curve stays inside sRGB, and its `L*` — hence its luminance — is
 /// exactly what was asked for at every point.
 ///
@@ -193,24 +346,24 @@ fn one_pitch_gives_the_disc_and_the_glyph_one_color() {
     // Five, and the arithmetic is the point. A stride over a flattened nested
     // loop walks each dimension by stride/(product of the ones inside it), so a
     // stride sharing a factor with that product lands on a SUBGROUP of the
-    // dimension and never leaves it. Four is exactly that trap here: three
-    // chroma values sit inside four brightness ramps, so a stride of 4 advances
-    // the ramp index by 4/3 and reaches only three of its four values —
-    // the inverted ramp, -70, would never be selected at all. Three is no
-    // better, taking every gradient at chroma 0. A stride coprime with the
-    // sweep's whole length walks all of it, which 5 is; the check below is what
-    // notices if a knob is ever added or a stride retuned into a subgroup.
+    // dimension and never leaves it. Six is exactly that trap here: six chroma
+    // pairs are the innermost dimension, so a stride of 6 takes the first pair
+    // every time and the other five are never selected at all. Two and three
+    // are the same trap halfway. A stride coprime with the sweep's whole length
+    // walks all of it, which 5 is against 3456 = 2^7 * 3^3; the check below is
+    // what notices if a knob is ever added or a stride retuned into a subgroup.
     let (dark, bright) = (24.0f32, 108.0f32);
     let full = gradient_sweep();
     let cast: Vec<PitchGradient> = full.iter().copied().step_by(5).collect();
     /// One knob of the sweep: its name, and the way to read it off a gradient.
     type Knob = (&'static str, fn(&PitchGradient) -> f32);
-    let knobs: [Knob; 5] = [
+    let knobs: [Knob; 6] = [
         ("hue_start", |g| g.hue_start),
         ("hue_span", |g| g.hue_span),
         ("lightness", |g| g.lightness),
         ("lightness_ramp", |g| g.lightness_ramp),
         ("chroma", |g| g.chroma),
+        ("chroma_ramp", |g| g.chroma_ramp),
     ];
     for (knob, of) in knobs {
         for wanted in full.iter().map(of) {
@@ -252,7 +405,7 @@ fn the_table_tracks_the_curve_it_samples() {
     // 4.2/255 against the 3.4 the constant currently measures on the default
     // gradient. The slack is there because the worst case is governed by where
     // a sample lands relative to a corner in the gamut's own boundary, so a
-    // change to the default's four knobs moves those corners and swings the
+    // change to the default's five knobs moves those corners and swings the
     // number without anything being wrong — but it is drawn tight enough to
     // fail every cut a person would actually make: 48 measures 5.6/255, 32
     // measures 7.5, 24 measures 7.0, and 16 measures 8.0.
