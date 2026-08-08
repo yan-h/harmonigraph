@@ -25,12 +25,11 @@ pub(super) const PROFILE_PT: f32 = 1.0;
 /// pane beside it; a second boundary inside the picture is one border too
 /// many.
 ///
-/// In points rather than as a fraction of the spectrum's share, which is what
-/// it was — the last 15% of it. A fraction is an empty margin that grows with
-/// the pane, so the same picture carries a thicker border the larger it is
-/// drawn, and on a tall analyzer that band was the loudest empty thing on it.
-/// What the room is for is one line, and a line is the same width at every
-/// pane size.
+/// In points rather than as a fraction of the spectrum's share. A fraction is
+/// an empty margin that grows with the pane, so the same picture carries a
+/// thicker border the larger it is drawn, and on a tall analyzer that band is
+/// the loudest empty thing on it. What the room is for is one line, and a line
+/// is the same width at every pane size.
 pub(super) const PLOT_HEADROOM_PT: f32 = PROFILE_PT * 0.5;
 
 /// How far into the depth axis the spectrum curve may reach: the spectrum's
