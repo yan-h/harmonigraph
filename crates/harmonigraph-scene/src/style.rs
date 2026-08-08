@@ -235,10 +235,14 @@ impl PitchGradient {
         let t = t.clamp(0.0, 1.0);
         let l = f64::from(g.lightness) + (t - 0.5) * f64::from(g.lightness_ramp);
         let h = (f64::from(g.hue_start) + t * f64::from(g.hue_span)).rem_euclid(360.0);
-        // `sanitized` already keeps both ends on the axis, so the clamp catches
-        // only what the arithmetic itself can add: the widest ramp is computed
-        // in f32 and spent here in f64, and a rounding in that step is enough
-        // to put an end a hundred-thousandth past white.
+        // The clamp cannot fire for a sanitized gradient, and it is worth
+        // knowing why rather than assuming it might: the widest ramp is
+        // `2 * min(l, 100 - l)`, whose every step is exact in f32 — `100 - l`
+        // by Sterbenz for the half that needs it, the doubling and the halving
+        // by their exponents — so an end lands exactly ON 0 or 100 and the
+        // widening to f64 adds nothing. What the clamp keeps is the guarantee
+        // itself, for a caller assembling a gradient in code and reaching this
+        // through some later path that does not sanitize.
         (l.clamp(0.0, 100.0), h)
     }
 }

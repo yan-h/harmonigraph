@@ -1697,9 +1697,9 @@ fn snapped((centre, spread): (f32, f32), (min, max): (f32, f32)) -> (f32, f32) {
 /// ramp rather than the pair it draws, because that is what a gradient holds:
 /// an `L*` at the centre of the pitch range and a signed difference between its
 /// ends, so the ends are `lightness ± ramp/2` and the two shapes carry exactly
-/// the same information. What that buys the pane is a row: two bars named the
-/// same two numbers and drew neither the stretch they compose nor the room the
-/// axis has left for it (see `spectrum_group`).
+/// the same information. What that buys the pane is a row: a bar per number
+/// names the same two numbers and draws neither the stretch they compose nor
+/// the room the axis has left for it (see `spectrum_group`).
 ///
 /// **Nothing marks the middle**, though it is the number the gradient stores.
 /// It is not a thing a gesture takes hold of — the slide takes the whole ramp —
@@ -1710,7 +1710,7 @@ fn snapped((centre, spread): (f32, f32), (min, max): (f32, f32)) -> (f32, f32) {
 /// **The readout is the two ENDS, and it runs in pitch order.** They are what
 /// the picture concretely does — the `L*` the darkest and brightest notes are
 /// drawn at — and each of them names a handle standing under it, where a centre
-/// and a signed ramp named neither. Pitch order is also the only place the
+/// and a signed ramp name neither. Pitch order is also the only place the
 /// SIGN can live: a ramp and its negative put the two handles in exactly the
 /// same places, so the bar cannot draw the difference, and an inverted ramp
 /// reads out backwards instead, high to low. (What the sign means for the
@@ -3757,9 +3757,11 @@ mod tests {
         for centre in [0.0f32, 1.0, 12.5, 50.0, 63.6, 89.6, 99.0, 100.0] {
             for spread in [0.0f32, 7.0, -33.0, 100.0, -100.0] {
                 // Every grab the bar can settle on, against pointer positions
-                // running the whole axis and a good way off both ends of it —
-                // a real drag leaves the bar, and `value_at` clamps rather than
-                // refusing, so those are positions the arithmetic really sees.
+                // running the whole axis and a good way off both ends of it.
+                // `value_at` clamps, so the widget itself never hands `apply` a
+                // value off the axis; the extra range is aimed at `apply`'s OWN
+                // clamps, which are what a pointer dragged past the bar's end
+                // meets once that stops being true.
                 let grabs = [
                     SpreadGrab::Low,
                     SpreadGrab::High,

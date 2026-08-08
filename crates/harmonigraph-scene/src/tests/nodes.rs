@@ -40,6 +40,15 @@ fn luminance(c: glam::Vec4) -> f32 {
 /// consumer of a gradient applies, so the sweep covers the clamp itself as well
 /// as the settings either side of it.
 ///
+/// Which is also what the brightness cross-product is worth reading carefully:
+/// the clamp makes the two collapse into each other at the ends of the `L*`
+/// axis, where a middle at 0 or 100 leaves room for no ramp at all and all four
+/// come out flat, and at 10 and 92, where 44 and 100 both clamp to the same
+/// number. Twenty-four written pairs are sixteen distinct gradients drawn. The
+/// stride check in `one_pitch_gives_the_disc_and_the_glyph_one_color` reads the
+/// RAW fields, so it still proves the net reaches every value written here — it
+/// just no longer means twenty-four different pictures.
+///
 /// `L*` 0 and 100 are in the list rather than only reachable through a steep
 /// ramp, and the difference is what a FLAT ramp there can be asked: the two
 /// ends of the axis are where the gamut collapses to a point, where the Newton
