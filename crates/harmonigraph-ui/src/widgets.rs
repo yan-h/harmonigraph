@@ -619,10 +619,15 @@ const TEXT_GAP: f32 = 5.0;
 /// is about 14:1, against the 4.6:1 a dimmed name has on the track — so the
 /// crossed letters read a touch bolder than their run, never fainter.
 ///
-/// The knockout is painted per grip and immediately after that grip's own fill,
-/// which is what keeps overlapping thumbs right: at a flat ramp a
-/// [`SpreadBar`]'s two coincide exactly, and the second fill covering the first
-/// knockout is repaired by the second knockout over the same ground.
+/// **Overlapping thumbs come out right whatever order they are painted in**,
+/// and the reason is worth stating because the ordering here looks load-bearing
+/// and is not. A later fill can only cover an earlier knockout inside
+/// `A ∩ B ∩ run`; that region lies in `run`, so `B` intersects `run` too and
+/// emits its own knockout over the same ground. Painting every fill and then
+/// every knockout is equally correct. A flat ramp puts a [`SpreadBar`]'s two
+/// grips at exactly the same x — the state the nodes pane's chroma bar opens
+/// in, since `chroma_ramp` defaults to 0 — so this is a case that ships, not a
+/// corner.
 ///
 /// The clip is square where the grip is rounded, so a glyph pixel in one of the
 /// 2pt corner notches lands on the track rather than the thumb. Nothing is done
@@ -5240,11 +5245,24 @@ mod tests {
                 ((of(0.64), span(0.44)), "as the bar opens"),
                 ((of(0.9), span(0.18)), "a ramp up against the top of the axis"),
                 ((of(0.08), span(0.14)), "a ramp down at the bottom, under the name"),
+                // A FLAT ramp under the readout, which puts the two grips at
+                // exactly the same x. That is the case `grip_over_text` names
+                // as the reason it knocks out per grip and straight after that
+                // grip's own fill: the second fill covers the first knockout,
+                // and only a second knockout over the same ground repairs it.
+                // Not a contrived pair — `chroma_ramp` is 0.0 in both
+                // `Gradient::default()` and `ViewConfig::default()`, so the
+                // nodes pane opens its chroma bar with coincident thumbs.
+                ((of(0.9), 0.0), "a flat ramp parked under the readout"),
             ] {
                 let shapes = paint_bar_clipped(spread, pair);
                 let flat: Vec<_> = shapes.iter().map(|s| s.shape.clone()).collect();
                 let (grips, runs) = (handles(&flat), text_boxes(&flat));
                 let knocked = knockouts(&shapes);
+                if pair.1 == 0.0 {
+                    assert_eq!(grips[0], grips[1], "{spread:?} {what}: grips are not coincident");
+                }
+
 
                 // The order the painter walks: each grip in turn, and under it
                 // each run it stands in, name before readout. Derived from the
