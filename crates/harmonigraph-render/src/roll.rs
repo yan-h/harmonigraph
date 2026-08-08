@@ -40,9 +40,18 @@ use crate::{create_vertex_buffer, wgpu};
 
 const ROLL_SRC: &str = include_str!("shaders/roll.wgsl");
 
-/// Entry points the roll shader must provide.
+/// Entry points the roll shader must provide: the vertex stage, and each of
+/// the two layers in each of the two shadings [`create_roll_pipeline`] picks
+/// between. Its entry point is assembled from those two words, so a rename in
+/// the WGSL is a panic at pipeline creation and nothing sooner.
 #[cfg(test)]
-pub(crate) const ROLL_ENTRY_POINTS: &[&str] = &["vs_note", "fs_note_gamma", "fs_note_linear"];
+pub(crate) const ROLL_ENTRY_POINTS: &[&str] = &[
+    "vs_note",
+    "fs_outline_gamma",
+    "fs_outline_linear",
+    "fs_core_gamma",
+    "fs_core_linear",
+];
 
 /// One note segment: a solid box in the pane's (pitch, depth) plane, its
 /// color, and the outline standing outside every one of its sides.
@@ -181,7 +190,12 @@ struct BloomUniforms {
 
 /// GPU objects cached across frames in egui-wgpu's `CallbackResources`.
 struct RollResources {
-    pipeline: wgpu::RenderPipeline,
+    /// The note pipelines, in the order they are drawn: every outline, then
+    /// every body over them. Two passes over one instance buffer — see the
+    /// head of roll.wgsl for why the order is the whole point, and what the
+    /// second draw costs.
+    outline_pipeline: wgpu::RenderPipeline,
+    core_pipeline: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
     /// The bloom chain's four post passes and the one that lays the result
     /// over the notes. The four are the lattice's, out of the same blit.wgsl
@@ -333,7 +347,8 @@ impl RollResources {
                 },
             ],
         });
-        let pipeline = create_roll_pipeline(device, target_format, &layout);
+        let note_pipeline =
+            |layer| create_roll_pipeline(device, target_format, &layout, layer);
         // The chain overwrites its whole target, so those three take no blend;
         // the one that lands in the egui pass blends the way every other thing
         // the roll draws does.
@@ -341,7 +356,8 @@ impl RollResources {
             crate::create_post_pipeline(device, entry, target_format, &filter_layout, None)
         };
         RollResources {
-            pipeline,
+            outline_pipeline: note_pipeline("outline"),
+            core_pipeline: note_pipeline("core"),
             layout,
             bright_pipeline: filter("fs_bright"),
             downsample_pipeline: filter("fs_blit"),
@@ -548,6 +564,7 @@ fn create_roll_pipeline(
     device: &wgpu::Device,
     target_format: wgpu::TextureFormat,
     layout: &wgpu::BindGroupLayout,
+    layer: &str,
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("roll_shader"),
@@ -558,8 +575,12 @@ fn create_roll_pipeline(
         bind_group_layouts: &[Some(layout)],
         ..Default::default()
     });
+    // Same fork egui makes, for the same reason: an sRGB-aware target wants
+    // linear values and encodes them itself.
+    let shade = if target_format.is_srgb() { "linear" } else { "gamma" };
+    let entry_point = format!("fs_{layer}_{shade}");
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("roll_notes"),
+        label: Some(&format!("roll_{layer}")),
         layout: Some(&pipeline_layout),
         vertex: wgpu::VertexState {
             module: &shader,
@@ -569,13 +590,7 @@ fn create_roll_pipeline(
         },
         fragment: Some(wgpu::FragmentState {
             module: &shader,
-            entry_point: Some(if target_format.is_srgb() {
-                // Same fork egui makes, for the same reason: an sRGB-aware
-                // target wants linear values and encodes them itself.
-                "fs_note_linear"
-            } else {
-                "fs_note_gamma"
-            }),
+            entry_point: Some(&entry_point),
             compilation_options: Default::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format: target_format,
@@ -674,7 +689,7 @@ impl CallbackTrait for RollCallback {
         // Split apart so the pane can be borrowed mutably while the pipelines
         // and layouts beside it are still readable.
         let RollResources {
-            pipeline,
+            core_pipeline,
             layout,
             bright_pipeline,
             downsample_pipeline,
@@ -746,7 +761,11 @@ impl CallbackTrait for RollCallback {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_pipeline(pipeline);
+            // The BODIES alone. The outline is black, and black is the one
+            // thing that cannot bloom — painting it here would only overwrite
+            // the color of whatever note it reaches across, taking light out
+            // of a halo the picture does grow.
+            pass.set_pipeline(core_pipeline);
             pass.set_bind_group(0, &bloom.notes_bind_group, &[]);
             pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
             pass.draw(0..4, 0..pane.count);
@@ -795,10 +814,16 @@ impl CallbackTrait for RollCallback {
             0.0,
             1.0,
         );
-        render_pass.set_pipeline(&resources.pipeline);
+        // Every outline, then every body over them — one instance buffer, two
+        // draws. An outline reaches into its note's surroundings, and those
+        // surroundings are other notes; under all of them it can darken the
+        // picture and nothing else. See the head of roll.wgsl.
         render_pass.set_bind_group(0, &pane.bind_group, &[]);
         render_pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
-        render_pass.draw(0..4, 0..pane.count);
+        for pipeline in [&resources.outline_pipeline, &resources.core_pipeline] {
+            render_pass.set_pipeline(pipeline);
+            render_pass.draw(0..4, 0..pane.count);
+        }
 
         // The halo over them, from the chain `prepare` ran — light only, and
         // last, so a note's own body is brightened by it the way a lattice
@@ -1617,6 +1642,63 @@ mod tests {
                 assert!(near(a, b), "the mirrored upright pane differs at ({x}, {y})");
             }
         }
+    }
+
+    /// An outline never covers another note's BODY.
+    ///
+    /// The outline is opaque where it meets its own note — it has to be, or it
+    /// takes its color from the spectrogram cell behind it and washes out
+    /// against the bright end of a palette. Composited with its own note it
+    /// therefore lands, at full strength, on whatever it reaches into; and
+    /// along time what it reaches into is the next note, since repeats of one
+    /// key butt together there. The later note blanked the tail of the earlier.
+    ///
+    /// Every outline is drawn before every body, so an outline can darken the
+    /// picture and never another note. Two notes butted exactly, in colors
+    /// that can be told apart, and read on both sides of the join: whichever
+    /// note is drawn first, the other's outline is behind it.
+    #[test]
+    fn an_outline_never_covers_another_notes_body() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        // Depth runs down y under `TOP`. The two boxes meet exactly at y=128,
+        // and a 4-point outline reaches 4 points into each other's.
+        let butted = |center, core| RollInstance {
+            center: [128.0, center],
+            half_extent: [12.0, 30.0],
+            outline_reach: 4.0,
+            outline_fade: 0.0,
+            core,
+            outline: [0, 0, 0, 255],
+            ..centered_note()
+        };
+        const RED: [u8; 4] = [255, 0, 0, 255];
+        const GREEN: [u8; 4] = [0, 255, 0, 255];
+        let early = butted(98.0, RED); // y 68..128
+        let late = butted(158.0, GREEN); // y 128..188
+        let frame = draw(&device, &queue, vec![early, late], bg_color());
+
+        // Two points inside the earlier note's tail, which is two points inside
+        // the later note's outline. This is the pixel that went black.
+        assert!(
+            near(pixel(&frame, 128, 126), RED),
+            "the later note's outline blanked the earlier note's tail: {:?}",
+            pixel(&frame, 128, 126),
+        );
+        // And the same join from the other side: paint order is not what is
+        // deciding it.
+        assert!(
+            near(pixel(&frame, 128, 130), GREEN),
+            "the earlier note's outline blanked the later note's head: {:?}",
+            pixel(&frame, 128, 130),
+        );
+        // The outline is still drawn — over the pane, where no note is.
+        let outside = pixel(&frame, 128, 66);
+        assert!(
+            near(outside, [0, 0, 0, 255]),
+            "the outline stopped painting at all outside the notes: {outside:?}",
+        );
     }
 
     /// A glide's outline keeps its thickness instead of thinning with the

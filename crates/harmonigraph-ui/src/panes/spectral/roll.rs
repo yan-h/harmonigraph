@@ -402,27 +402,31 @@ pub(super) fn note_instances(
             // coverage taken at a positive distance cannot reach back inside it
             // whatever the ribbon's thickness.
             //
-            // Wrapping the ENDS is what makes a repeated key readable, and it
-            // is not free. The outline reaches into a note's surroundings, and
-            // along time those surroundings are the next note — repeats of one
-            // key butt together there, so the outline of the later one lands
-            // on the tail of the earlier and is the seam between them, which
-            // is the boundary a repeat most needs.
+            // Wrapping the ENDS costs the notes around it nothing, and that is
+            // a fact about the ORDER they are drawn in rather than about the
+            // outline: `harmonigraph_render::roll` lays every outline down and
+            // then every body over them, so an outline can darken the picture
+            // and never another note.
             //
-            // The fade does not make that free, and it is worth being exact
-            // about, since it looks as though it should: coverage is OPAQUE
-            // where the outline meets its own note whatever the fade is set to
-            // (`outline_coverage`, and the reason is in [`outline`] — a
-            // surround that is translucent against the note takes its color
-            // from the cell behind it). So the earlier note loses its last
-            // `reach - fade` points outright and the `fade` before those to a
-            // ramp. What the fade buys is how quickly the seam lets go.
+            // It has to be that way round rather than something gentler at the
+            // seam. Coverage is OPAQUE where the outline meets its own note
+            // whatever the fade is set to (`outline_coverage`, and the reason
+            // is in [`outline`]: a surround that is translucent against the
+            // note takes its color from the cell behind it and washes out over
+            // a bright one). Composited with its own note, that opacity landed
+            // on the neighbour it reached into — repeats of one key butt
+            // together along time, and the later one blanked the tail of the
+            // earlier.
             //
-            // Which makes the reach the setting to be careful with, at the
-            // wide end and on the shortest notes: a tapped key floored to a
-            // point or two of length wears an outline of the full reach at
-            // both ends, so at the top of the bar it is a dot inside its own
-            // surround. See
+            // What it does cost is the seam between two notes that TOUCH:
+            // same key, no gap, and the two bodies now meet directly in one
+            // color. A gap of a point or more still reads as two notes, the
+            // outline filling it.
+            //
+            // The reach is still the setting to be careful with at the wide
+            // end, and on the shortest notes: a tapped key floored to a point
+            // or two of length wears the full reach at both ends, so at the
+            // top of the bar it is a dot inside its own surround. See
             // [`SpectrumConfig::roll_outline`](crate::SpectrumConfig).
             //
             // Nothing else rides the outline — in particular, no band
