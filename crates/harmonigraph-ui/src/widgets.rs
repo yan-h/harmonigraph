@@ -1530,13 +1530,6 @@ impl<'a> SpectrumBar<'a> {
 /// ramp there has nowhere to open.
 const L_STAR_AXIS: (f32, f32) = (0.0, 100.0);
 
-/// The middle's mark: half a [`HANDLE_W`] wide and half a bar tall. Both halves
-/// are the point — it has to read as a different KIND of thing from the two
-/// handles either side of it, which are what you move, while still being
-/// visibly the thing the middle of the fill is at.
-const MIDDLE_MARK_W: f32 = 3.0;
-const MIDDLE_MARK_HEIGHT: f32 = 0.5;
-
 /// The brightness pair a double-click on a [`BrightnessBar`] goes home to.
 ///
 /// Off [`ViewConfig::default`] for the reason [`reset_arc`] is, and it is the
@@ -1698,10 +1691,11 @@ fn snapped((centre, spread): (f32, f32), (min, max): (f32, f32)) -> (f32, f32) {
 /// same two numbers and drew neither the stretch they compose nor the room the
 /// axis has left for it (see `spectrum_group`).
 ///
-/// **The middle is marked but not itself grabbed.** It is the number the
-/// gradient stores and the picture's overall brightness, and at a wide ramp
-/// nothing else on the bar says where it sits; the gesture that moves it is the
-/// slide, which takes the whole ramp.
+/// **Nothing marks the middle**, though it is the number the gradient stores.
+/// It is not a thing a gesture takes hold of — the slide takes the whole ramp —
+/// and a mark on a two-ended bar reads as a third handle whatever it is drawn
+/// like. The two ends are what the picture is made of and what the readout
+/// says; the middle is where they happen to average.
 ///
 /// **The readout is the two ENDS, and it runs in pitch order.** They are what
 /// the picture concretely does — the `L*` the darkest and brightest notes are
@@ -1854,21 +1848,6 @@ impl<'a> BrightnessBar<'a> {
         painter.galley(
             centered(&value, rect.right() - text_pad - value.size().x),
             value,
-            theme::text(),
-        );
-
-        // The middle, marked. It is the number the gradient stores and the
-        // picture's overall brightness, and at a wide ramp there is otherwise
-        // nothing between the two handles to say where it sits — the fill reads
-        // as a stretch with no centre in it. Narrower and shorter than a
-        // handle, because it is a mark and not a grip: the two ends are what a
-        // drag moves, and two things drawn alike would say otherwise.
-        painter.rect_filled(
-            egui::Rect::from_center_size(
-                egui::pos2(x_of(centre), rect.center().y),
-                Vec2::new(MIDDLE_MARK_W * scale, rect.height() * MIDDLE_MARK_HEIGHT),
-            ),
-            CornerRadius::same(theme::scaled_points(1, scale)),
             theme::text(),
         );
 
@@ -3790,24 +3769,6 @@ mod tests {
         out.shapes.into_iter().map(|s| s.shape).collect()
     }
 
-    /// The two handles and the middle's mark, told apart by their widths — the
-    /// mark is half a handle wide, and the two are meant to read as different
-    /// kinds of thing.
-    fn brightness_marks(shapes: &[egui::Shape]) -> (Vec<egui::Rect>, Vec<egui::Rect>) {
-        let (mut hs, mut middle) = (Vec::new(), Vec::new());
-        for (r, fill) in filled_rects(shapes) {
-            if fill != theme::text() {
-                continue;
-            } else if (r.width() - HANDLE_W).abs() < 0.01 {
-                hs.push(r);
-            } else if (r.width() - MIDDLE_MARK_W).abs() < 0.01 {
-                middle.push(r);
-            }
-        }
-        hs.sort_by(|a, b| a.left().total_cmp(&b.left()));
-        (hs, middle)
-    }
-
     /// The bar draws the pair it holds: a handle at each end of the ramp, on an
     /// axis running black to white across the track. That is the whole claim
     /// the control makes, and handles standing anywhere else would be a picture
@@ -3821,7 +3782,7 @@ mod tests {
         for spread in [44.0f32, -44.0] {
             let shapes = paint_brightness_bar((64.0, spread));
             let bar = filled_rects(&shapes)[0].0;
-            let (hs, _) = brightness_marks(&shapes);
+            let hs = handles(&shapes);
             assert_eq!(hs.len(), 2, "a ramp of {spread} did not paint two handles");
             // The track a handle travels: the bar less the inset at either end.
             let track = bar.shrink2(Vec2::new(HANDLE_INSET, 0.0));
@@ -3838,29 +3799,19 @@ mod tests {
         // A flat ramp is one handle's worth of picture in the middle of an
         // empty track: no brightness is spent on pitch, and there is exactly
         // one place the whole range is.
-        let (hs, _) = brightness_marks(&paint_brightness_bar((30.0, 0.0)));
+        let hs = handles(&paint_brightness_bar((30.0, 0.0)));
         assert_eq!(hs[0], hs[1], "a flat ramp drew its two handles apart");
     }
 
-    /// The middle is marked, and marked as its own kind of thing: it stands
-    /// between the handles rather than beside them, and it is the one place a
-    /// wide ramp otherwise says nothing about where the brightness the row is
-    /// named for actually sits. Smaller than a handle both ways, since a drag
-    /// on it does something else — it slides the pair rather than opening it.
+    /// Two handles and nothing else standing on the track. A third mark on a
+    /// two-ended bar reads as a third handle whatever it is drawn like, and the
+    /// middle — the one thing that might have earned one — is not something a
+    /// gesture takes hold of.
     #[test]
-    fn the_middle_is_marked_between_the_two_handles() {
+    fn a_brightness_bar_stands_nothing_on_the_track_but_its_two_ends() {
         for pair in [(64.0f32, 44.0f32), (64.0, -44.0), (30.0, 0.0)] {
-            let shapes = paint_brightness_bar(pair);
-            let bar = filled_rects(&shapes)[0].0;
-            let (hs, middle) = brightness_marks(&shapes);
-            assert_eq!(middle.len(), 1, "{pair:?} drew {} middle marks", middle.len());
-            let (mark, handle) = (middle[0], hs[0]);
-            let track = bar.shrink2(Vec2::new(HANDLE_INSET, 0.0));
-            let at = track.left() + track.width() * (pair.0 / 100.0);
-            assert!((mark.center().x - at).abs() < 0.5, "{pair:?}: the mark is off the middle");
-            assert!(mark.width() < handle.width(), "{pair:?}: the mark is as wide as a handle");
-            assert!(mark.height() < handle.height(), "{pair:?}: and as tall");
-            assert!(mark.width() >= 2.0, "{pair:?}: a mark this thin is not a mark");
+            let hs = handles(&paint_brightness_bar(pair));
+            assert_eq!(hs.len(), 2, "{pair:?} put {} marks on the track", hs.len());
         }
     }
 

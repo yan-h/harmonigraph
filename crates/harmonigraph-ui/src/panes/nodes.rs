@@ -444,10 +444,9 @@ fn spectrum_group(ui: &mut egui::Ui, view: &mut ViewConfig) {
          order, so a picture with its bright end at the bottom reads out \
          backwards. Drag either end to move it, drag between them to slide the \
          whole stretch brighter or darker, drag one end past the other to swap \
-         which end is bright, double-click to reset. The mark between them is \
-         the middle of the range. Closing the two together makes every note \
-         exactly as bright as every other and leaves hue to carry the pitch \
-         alone.",
+         which end is bright, double-click to reset. Closing the two together \
+         makes every note exactly as bright as every other and leaves hue to \
+         carry the pitch alone.",
     );
     ValueBar::new(&mut view.pitch_gradient.chroma, 0.0..=1.0, "Chroma")
         .display(|v| format!("{:.0}%", v * 100.0))
