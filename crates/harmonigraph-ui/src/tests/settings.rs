@@ -159,11 +159,17 @@ fn the_shape_bars_preview_is_the_curve_the_notes_run_on() {
     let (floor, ceiling) = (points[0].y, points[points.len() - 1].y);
     assert!(right > left, "the line runs backwards, {left} to {right}");
     assert!(floor > ceiling, "the line runs downward: it is an arrival, and rises");
+    // A fifth of a point, which sounds arbitrary and is not: the widget and the
+    // line below compute the same expression, so the residual is f32 rounding
+    // and nothing else, and the tolerance is only there to name that. What it
+    // must NOT be is a fraction of the picture — the plot is 13 points tall, so
+    // the half-point that reads as "close enough on screen" is 0.04 in level,
+    // and a preview quietly softened to `shape * 0.9` sits inside it.
     for point in &points {
         let p = (point.x - left) / (right - left);
         let want = floor - (floor - ceiling) * envelope.attack(p as f64, 0.0);
         assert!(
-            (point.y - want).abs() < 0.5,
+            (point.y - want).abs() < 0.02,
             "at {p} through the transition the line is at {} and the envelope at {want}",
             point.y,
         );
