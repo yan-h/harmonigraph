@@ -2848,10 +2848,13 @@ fn sheets_draw_back_to_front_along_the_sevens_axis() {
 /// the edge pass. So every test below expects these nodes to be culled, and
 /// the fixture exists to make "nothing to draw" easy to ask for.
 ///
-/// `on_home` and `trail` are still set, on different cycles, because the
-/// CPU still reads both — the trail feeds the labels, and the home flag the
-/// grid — and a fixture where the two sets coincide could not tell a
-/// predicate that reads one from a predicate that reads the other.
+/// `on_home` and `trail` are still set, on different cycles, and neither is
+/// read by anything in THIS crate: no `GpuInstance` carries them, and the
+/// grid and the labels both arrive already built. They stay because a
+/// fixture whose two sets coincide cannot tell a predicate that reads one
+/// from a predicate that reads the other, and the cull is where such a
+/// predicate would go — but nothing here separates them today, so treat the
+/// cycles as room left rather than as coverage.
 fn idle_scene() -> Scene {
     let mut scene = parity_scene();
     for (i, node) in scene.nodes.iter_mut().enumerate() {
