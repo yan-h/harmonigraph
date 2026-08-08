@@ -11,11 +11,17 @@
 
 # A workspace of its own, so `cargo test --manifest-path` reaches the unit
 # tests this vendored copy carries (ci.sh runs them; `cargo test --workspace`
-# cannot, because the crate is `exclude`d from the workspace above it and so
-# is never a member whose tests run). Without this, cargo walks up to the
-# nearest ancestor manifest and refuses — and from a nested worktree that
-# ancestor is the MAIN checkout, whose `exclude` names a path that is not this
-# one.
+# cannot, because the crate is `exclude`d from the workspace above it and so is
+# never a member whose tests run).
+#
+# What this earns is the WORKTREE case, and only that one. Cargo does not stop
+# at the nearest ancestor workspace: a root whose `exclude` names this path is
+# skipped and the walk goes on. From the main checkout the walk therefore ends
+# there, at a root that excludes this crate, and the crate is accepted as its
+# own — no table needed. From a worktree under `.claude/worktrees/` the walk
+# skips the worktree's own root the same way and reaches the MAIN checkout's,
+# whose `exclude` names `vendor/baseview` under a different prefix, so nothing
+# excludes this path and cargo refuses outright. Which is where ci.sh runs.
 [workspace]
 
 [package]

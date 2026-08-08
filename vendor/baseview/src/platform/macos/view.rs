@@ -54,10 +54,18 @@ pub(crate) struct BaseviewView {
     /// would buy a truer number that nothing reads.
     buttons_reported_down: Cell<u8>,
 
-    /// Of those, the ones the OS already showed up at the PREVIOUS frame tick
-    /// — a release is only synthesised for a button stuck across two ticks.
-    /// A `mouseUp:` sitting in the queue while the hardware is already up is
-    /// an ordinary fast click, and it deserves the tick it takes to arrive.
+    /// Of those, the ones the OS already showed up at the previous SETTLE — a
+    /// release is synthesised only for a button stuck across two of them. A
+    /// `mouseUp:` sitting in the queue while the hardware is already up is an
+    /// ordinary fast click, and it deserves the gap it takes to arrive.
+    ///
+    /// A settle rather than a frame interval, because a settle is what this
+    /// counts: `trigger_frame` runs it, and the frame timer is not
+    /// `trigger_frame`'s only caller — `handle_occlusion_notification` paints
+    /// from inside a notification. Two settles can land microseconds apart
+    /// there, leaving a queued release almost no gap at all. What that costs is
+    /// a release sent early, carrying `last_mods()` rather than the event's
+    /// modifiers, on a window coming back from occlusion.
     buttons_seen_up: Cell<u8>,
 
     frame_timer: Cell<Option<TimerHandle>>,
@@ -265,8 +273,11 @@ impl BaseviewView {
     fn trigger_frame(this: ViewRef<Self>) {
         // Before the frame, so a pointer that has quietly stopped being ours is
         // gone by the time anything is drawn from where it was. The button
-        // first: an exit is only owed once nothing is held, so a release
-        // settled after it would leave the exit a tick behind its own cause.
+        // first only to order the two within the settle: a release belongs
+        // ahead of the exit it precedes, the same way `report_release` sends
+        // one before paying a withheld exit. Neither reads the other's work —
+        // `settle_pointer_exit` asks the OS, not `buttons_reported_down` — so
+        // the other order would cost no time, just deliver `CursorLeft` first.
         Self::settle_stuck_buttons(this);
         Self::settle_pointer_exit(this);
 
@@ -321,10 +332,10 @@ impl BaseviewView {
     fn settle_stuck_buttons(this: ViewRef<Self>) {
         let owed =
             buttons_owed_release(this.buttons_reported_down.get(), NSEvent::pressedMouseButtons());
-        // Stuck at this tick AND the one before it. A single tick is not
+        // Stuck at this settle AND the one before it. A single one is not
         // evidence: the hardware goes up before the `mouseUp:` queued behind it
         // is dispatched, so a fast enough click reads exactly like a stuck
-        // button for one frame.
+        // button once.
         let confirmed = owed & this.buttons_seen_up.replace(owed);
         if confirmed == 0 {
             return;
