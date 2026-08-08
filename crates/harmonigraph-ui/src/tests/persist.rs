@@ -19,8 +19,6 @@ fn persist_round_trips_camera_and_view() {
     state.view.core_solidity = 0.4;
     state.view.outer_inner = 0.1;
     state.view.outer_outer = 0.7;
-    state.view.idle_marker = harmonigraph_scene::IdleMarker::Dot;
-    state.view.idle_radius = 0.31;
     // Melody alone: both marks on is the default, and this test's whole
     // point is that the fields prove they round-trip rather than
     // matching the defaults by luck.
@@ -39,10 +37,11 @@ fn persist_round_trips_camera_and_view() {
     state.view.octave_extras = 2;
     state.view.octave_extra_size = 0.4;
     state.view.octave_extra_blend = 0.5;
-    state.view.grid_color = [0.9, 0.1, 0.4, 0.25];
     state.view.grid_thickness = 2.5;
     state.view.grid_inset = 0.0;
-    state.view.grid_dashed = true;
+    // The trail's on/off, and on by default -- so off is the value a project
+    // has to keep, and the one a fresh view would overwrite if it did not.
+    state.view.trail_labels = false;
     state.view.meantone = true;
     // Off is the non-default here, and the one a project has to keep: the
     // detect would otherwise re-engage the mode the user switched it off for.
@@ -68,18 +67,15 @@ fn persist_round_trips_camera_and_view() {
     assert_eq!(restored.view.core_solidity, 0.4);
     assert_eq!(restored.view.outer_inner, 0.1);
     assert_eq!(restored.view.outer_outer, 0.7);
-    assert_eq!(restored.view.idle_marker, harmonigraph_scene::IdleMarker::Dot);
-    assert_eq!(restored.view.idle_radius, 0.31);
     assert!(restored.view.mark_melody);
     assert!(!restored.view.mark_bass, "bass off round-trips");
     assert_eq!((restored.view.octave_count, restored.view.octave_center), (7, 64.5));
     assert_eq!(restored.view.octave_extras, 2, "the fringe round-trips");
     assert_eq!(restored.view.octave_extra_size, 0.4);
     assert_eq!(restored.view.octave_extra_blend, 0.5);
-    assert_eq!(restored.view.grid_color, [0.9, 0.1, 0.4, 0.25]);
     assert_eq!(restored.view.grid_thickness, 2.5);
     assert_eq!(restored.view.grid_inset, 0.0, "0 (lines to the center) round-trips");
-    assert!(restored.view.grid_dashed);
+    assert!(!restored.view.trail_labels, "a switched-off trail round-trips");
     assert!(restored.view.meantone);
     assert!(!restored.view.meantone_auto, "a switched-off auto-detect round-trips");
     assert!(!restored.view.marvel, "each comma keeps its own mode");
@@ -1268,7 +1264,7 @@ fn a_view_missing_any_one_key_reloads_at_the_fresh_value() {
 }
 
 /// Split a serialized struct into its top-level `key:value` pairs, as
-/// `(key, whole pair)`. Depth-aware, so `grid_color:(r,g,b,a)` stays one pair
+/// `(key, whole pair)`. Depth-aware, so `pitch_gradient:(...)` stays one pair
 /// rather than splitting on the commas inside it — which is equally what lets
 /// a whole persist section (`render:(...)`, `dock:(...)`) be dropped or
 /// counted as one.

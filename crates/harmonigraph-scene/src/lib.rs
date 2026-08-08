@@ -40,8 +40,7 @@ pub use octaves::{
     DEFAULT_EXTRA_BLEND, DEFAULT_EXTRA_SIZE, MAX_EXTRAS, MAX_SPAN, MIDDLE_C_SLOT, MIN_COUNT,
     MIN_EXTRA_SIZE, MIN_SPAN, OCTAVE_SLOTS, PITCH_CEIL, PITCH_FLOOR,
 };
-pub use style::{Gradient, IdleMarker, Pulse, SevensLabel};
-pub use trail::TrailMark;
+pub use style::{Gradient, Pulse, SevensLabel};
 pub use view::{FrameParams, ViewConfig};
 
 use glam::{Vec3, Vec4};
@@ -152,8 +151,10 @@ pub struct NodeInstance {
     /// disappearing.
     pub octaves: [f32; OCTAVE_SLOTS],
     pub hovered: bool,
-    /// On the home (center sevens) sheet. Home nodes keep a blank
-    /// placeholder ring while idle; off-sheet nodes draw nothing.
+    /// On the home (center sevens) sheet. An idle node draws nothing
+    /// wherever it sits; what marks a home position is the GRID, whose
+    /// lines stop short of it on every side, and off-sheet positions have
+    /// not even that (see [`derive_grid`](derive::derive_grid)).
     pub on_home: bool,
     /// Billboard size, as a factor of the scene's `node_radius` (see
     /// [`ViewConfig::sevens_size`]): 1 on the home sheet, smaller with every
@@ -240,29 +241,36 @@ pub struct NodeInstance {
     pub melody_color: Vec4,
     pub bass_color: Vec4,
     /// How strongly the music is remembered here (see [`trail`]): 0 where
-    /// it has never been, up to 1 where it has. Drives ONLY the idle
-    /// marker, so a memory can never be mistaken for a sounding note; the
-    /// label layer reads it too, to caption a visited node.
+    /// it has never been, up to 1 where it has.
     ///
-    /// While the mark is [`TrailMark::Tint`] this node's `color` carries
-    /// the remembered note's color instead of the idle grey — but only when
-    /// nothing sounds here, since a sounding note owns that field.
+    /// Read by the LABEL layer alone, which is what makes a memory
+    /// unmistakable for a sounding note — the two are not the same kind of
+    /// thing on screen. No drawn layer looks at it, and this node's other
+    /// fields are untouched by the trail: a remembered node's `color` and
+    /// `activation` are the ones it would carry having never been played.
     pub trail: f32,
 }
 
 impl NodeInstance {
-    /// Whether this node puts anything on screen, and so can carry pitch
-    /// info (hover label, tuning readout). Sounding nodes always draw;
-    /// idle ones only on the home sheet, where they keep a placeholder
-    /// marker. Off-sheet idle nodes draw literally nothing, so revealing
-    /// their pitch on mouse-over would be information from nowhere.
+    /// Whether this node is somewhere the picture accounts for, and so can
+    /// carry pitch info (hover label, tuning readout). Sounding nodes always
+    /// draw; an idle one draws nothing at all, but a home-sheet position is
+    /// still a place the grid lines say is there — they stop short of it on
+    /// every side, which is exactly the gap a pointer goes looking in.
     ///
-    /// Deliberately ignores [`Scene::idle_marker`] being `None`: that
-    /// setting hides the idle markers but shouldn't make the home sheet
-    /// unhoverable, which would leave an empty lattice uninspectable.
-    /// A visited off-sheet node counts: it draws a trail marker where an
-    /// unvisited one draws nothing, and the music having gone there is
-    /// exactly what makes its pitch worth revealing.
+    /// So this is deliberately NOT "does this node paint a pixel": an empty
+    /// home sheet would then be uninspectable, and it is the thing most worth
+    /// inspecting. Off-sheet idle positions have no lines around them and are
+    /// correspondingly not hoverable — a pitch revealed there would be
+    /// information from nowhere.
+    ///
+    /// The `trail` term decides nothing today and is a guard rather than a
+    /// case: [`trail::TrailField::apply`] writes the field only where
+    /// `on_home` holds, so a trailed node is a home node and the middle term
+    /// has already answered. It stands because the restriction is the trail's
+    /// and not this predicate's — the day a memory is shown where it was
+    /// actually played, the node carrying it is one to reveal the pitch of,
+    /// and that is the reasoning here rather than in the caller.
     pub fn is_visible(&self) -> bool {
         self.activation > 0.0 || self.on_home || self.trail > 0.0
     }
@@ -321,11 +329,6 @@ pub struct Scene {
     /// its own octaves fall against the center pitch, which is what makes an
     /// indicator's ANGLE mean an absolute pitch.
     pub octave_layout: OctaveLayout,
-    /// The idle (unlit home-sheet node) marker, independent of the active
-    /// appearance and of the playing state; drawn in the idle grey and
-    /// composited under any active note. See [`ViewConfig::idle_marker`].
-    pub idle_marker: IdleMarker,
-    pub idle_radius: f32,
     /// The faint background grid (see [`derive_grid`](derive::derive_grid)): one segment per
     /// adjacent pair of visible positions, inset so every node position
     /// keeps a circular gap where its disc draws while sounding. Reuses
@@ -334,12 +337,6 @@ pub struct Scene {
     /// Grid line thickness as a multiple of the shader's built-in grid
     /// width (see [`ViewConfig::grid_thickness`]), already clamped.
     pub grid_thickness: f32,
-    /// How a node the music has already visited is marked (see
-    /// [`TrailMark`]), and how strongly, 0..1. The renderer hands both to
-    /// the shader's idle-marker branch; which NODES are marked rides on
-    /// each node's own `trail`.
-    pub trail_mark: TrailMark,
-    pub trail_strength: f32,
     /// How wide the sevens knockout's fade is, in the uv of a full-size
     /// node (see [`ViewConfig::sevens_gutter_soft`]). View-wide, unlike the
     /// per-node reach, which the envelope and the node's own rim both bear
@@ -358,10 +355,6 @@ pub struct Scene {
     /// is invisible over empty lattice and only shows as a clearing where it
     /// actually crosses something.
     pub background: Vec4,
-    /// Color of the idle node markers (see [`ViewConfig::grid_color`]):
-    /// the grid color's RGB at full alpha, so the idle structure reads as
-    /// one layer. The renderer hands this to the shader.
-    pub node_idle: Vec4,
     /// Melody/bass ring thickness in quad UV units, 0 = off (see
     /// [`ViewConfig::mark_thickness`]). Already clamped.
     pub mark_thickness: f32,

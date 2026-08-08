@@ -41,7 +41,17 @@ pub fn toggle_switch(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
     let scale = theme::ui_scale(ui.ctx());
     let switch = SWITCH_SIZE * scale;
     let gap = 6.0 * scale;
-    let desired = Vec2::new(switch.x + gap + galley.size().x, switch.y.max(galley.size().y));
+    // A row's height, though the pill itself is shorter than one. Asked for
+    // here rather than inherited, because `allocate_exact_size` means exactly:
+    // the `interact_size` floor that brings egui's own controls up to the row
+    // never applies to a widget that names its own size, so a switch that asked
+    // only for its pill would be the short row in every pane it appears in —
+    // and in the Commas table, which is a `Grid` taking each row's height from
+    // the cells in it, a short row all the way down.
+    let desired = Vec2::new(
+        switch.x + gap + galley.size().x,
+        theme::row_height(scale).max(switch.y).max(galley.size().y),
+    );
     let (rect, mut response) = ui.allocate_exact_size(desired, Sense::click());
     if response.clicked() {
         *on = !*on;
@@ -111,9 +121,18 @@ pub fn record_button(ui: &mut Ui, on: &mut bool, rolling: bool, label: &str) -> 
     let scale = theme::ui_scale(ui.ctx());
     let dot_r = 5.0 * scale;
     let gap = 8.0 * scale;
-    let pad = Vec2::new(10.0, 5.0) * scale;
+    let pad_x = 10.0 * scale;
     let inner = Vec2::new(dot_r * 2.0 + gap + galley.size().x, galley.size().y.max(dot_r * 2.0));
-    let (rect, mut response) = ui.allocate_exact_size(inner + pad * 2.0, Sense::click());
+    // A row's height, asked for the same way and for the same reason as
+    // [`toggle_switch`]'s: naming an exact size opts out of the floor that
+    // brings every other button to the row. A padding of its own would make
+    // this the one control in the Video pane standing taller than the bars
+    // under it, which reads as the pane being out of alignment rather than as
+    // the button being important — and what makes it important is its panel,
+    // its dot and its pulse, none of which cost height.
+    let height = theme::row_height(scale).max(inner.y);
+    let (rect, mut response) =
+        ui.allocate_exact_size(Vec2::new(inner.x + 2.0 * pad_x, height), Sense::click());
     if response.clicked() {
         *on = !*on;
         response.mark_changed();
@@ -143,7 +162,7 @@ pub fn record_button(ui: &mut Ui, on: &mut bool, rolling: bool, label: &str) -> 
                 egui::StrokeKind::Inside,
             );
         }
-        let dot = egui::pos2(rect.left() + pad.x + dot_r, rect.center().y);
+        let dot = egui::pos2(rect.left() + pad_x + dot_r, rect.center().y);
         if *on {
             painter.circle_filled(dot, dot_r, theme::armed().gamma_multiply(alpha));
         } else {
@@ -154,7 +173,7 @@ pub fn record_button(ui: &mut Ui, on: &mut bool, rolling: bool, label: &str) -> 
             );
         }
         painter.galley(
-            egui::pos2(rect.left() + pad.x + dot_r * 2.0 + gap, rect.center().y - galley.size().y / 2.0),
+            egui::pos2(rect.left() + pad_x + dot_r * 2.0 + gap, rect.center().y - galley.size().y / 2.0),
             galley,
             theme::text(),
         );
@@ -166,9 +185,13 @@ pub fn record_button(ui: &mut Ui, on: &mut bool, rolling: bool, label: &str) -> 
 // multiplied by `theme::ui_scale` where it is drawn, so a bar shrinks with the
 // type inside it rather than keeping a 20-point row around 9-point text.
 
-/// Row height of a ValueBar (taller than the theme's interact_size: these
-/// are the primary controls and carry two text runs).
-const BAR_HEIGHT: f32 = 20.0;
+// A bar's own HEIGHT is not among them: it is `theme::row_height`, which every
+// control in a settings row is drawn at. A number here instead would be free to
+// drift from that one, and a bar standing a few points off the buttons beside
+// it is the whole thing the shared height exists to prevent — a bar being the
+// tallest thing a row has to hold, two text runs inside a track, makes it what
+// the row height is FOR rather than something measured against it.
+
 /// Corner rounding of the bar track — the shared control radius, so a bar and
 /// a button beside it round the same.
 fn bar_radius(scale: f32) -> u8 {
@@ -364,8 +387,10 @@ impl<'a> ValueBar<'a> {
     pub fn show(self, ui: &mut Ui) -> Response {
         let scale = theme::ui_scale(ui.ctx());
         let width = bar_width(ui);
-        let (rect, mut response) =
-            ui.allocate_exact_size(Vec2::new(width, BAR_HEIGHT * scale), Sense::click_and_drag());
+        let (rect, mut response) = ui.allocate_exact_size(
+            Vec2::new(width, theme::row_height(scale)),
+            Sense::click_and_drag(),
+        );
 
         let edit_id = response.id.with("edit");
         let focus_id = edit_id.with("focus_pending");
@@ -528,7 +553,7 @@ pub fn progress_bar(ui: &mut Ui, fraction: Option<f32>, label: &str, value: &str
     let scale = theme::ui_scale(ui.ctx());
     let width = bar_width(ui);
     let (rect, response) =
-        ui.allocate_exact_size(Vec2::new(width, BAR_HEIGHT * scale), Sense::hover());
+        ui.allocate_exact_size(Vec2::new(width, theme::row_height(scale)), Sense::hover());
 
     let radius = CornerRadius::same(bar_radius(scale));
     let painter = ui.painter();
@@ -924,8 +949,10 @@ impl<'a> RangeBar<'a> {
     pub fn show(self, ui: &mut Ui) -> Response {
         let scale = theme::ui_scale(ui.ctx());
         let width = bar_width(ui);
-        let (rect, mut response) =
-            ui.allocate_exact_size(Vec2::new(width, BAR_HEIGHT * scale), Sense::click_and_drag());
+        let (rect, mut response) = ui.allocate_exact_size(
+            Vec2::new(width, theme::row_height(scale)),
+            Sense::click_and_drag(),
+        );
         let (min, max) = (*self.range.start(), *self.range.end());
         // Values live on an inset track, so both limits are positions a handle
         // can sit AT rather than edges it merges into. See HANDLE_INSET.
@@ -1355,8 +1382,10 @@ impl<'a> OctaveStrip<'a> {
     pub fn show(self, ui: &mut Ui) -> Response {
         let scale = theme::ui_scale(ui.ctx());
         let width = bar_width(ui);
-        let (rect, mut response) =
-            ui.allocate_exact_size(Vec2::new(width, BAR_HEIGHT * scale), Sense::click_and_drag());
+        let (rect, mut response) = ui.allocate_exact_size(
+            Vec2::new(width, theme::row_height(scale)),
+            Sense::click_and_drag(),
+        );
         let slot = (rect.width() / MAX_SPAN as f32).max(1.0);
         let middle = rect.center().x;
         // How far from the middle of the wheel a point is, in slots — the one
@@ -1573,7 +1602,7 @@ const PIECE_GAP: f32 = 2.0;
 /// A [`SpectrumBar`] stands two rows tall: the track, the strip under it, and
 /// the gap between.
 fn spectrum_bar_height(scale: f32) -> f32 {
-    (BAR_HEIGHT + PIECE_GAP + STRIP_H) * scale
+    theme::row_height(scale) + (PIECE_GAP + STRIP_H) * scale
 }
 
 /// What a [`SpectrumBar`]'s track and strip measure in a column `column` points
@@ -1786,7 +1815,7 @@ impl<'a> SpectrumBar<'a> {
         );
         let track_rect = egui::Rect::from_min_max(
             egui::pos2(split, rect.top()),
-            egui::pos2(rect.right(), rect.top() + BAR_HEIGHT * scale),
+            egui::pos2(rect.right(), rect.top() + theme::row_height(scale)),
         );
         // Only the track is sensed, and the strip is a picture — but sensing
         // stops short of the strip rather than keeping presses off it. What
@@ -2469,8 +2498,10 @@ impl<'a> SpreadBar<'a> {
     pub fn show(self, ui: &mut Ui) -> Response {
         let scale = theme::ui_scale(ui.ctx());
         let width = bar_width(ui);
-        let (rect, mut response) =
-            ui.allocate_exact_size(Vec2::new(width, BAR_HEIGHT * scale), Sense::click_and_drag());
+        let (rect, mut response) = ui.allocate_exact_size(
+            Vec2::new(width, theme::row_height(scale)),
+            Sense::click_and_drag(),
+        );
         let axis = self.spread.axis();
         let (min, max) = axis;
         // Values live on an inset track, so both limits are places a handle can
@@ -2686,15 +2717,51 @@ fn corner_inset(from_end: f32, radius: f32) -> f32 {
     radius - (radius * radius - across * across).max(0.0).sqrt()
 }
 
-/// A horizontal row of controls in a settings column, sized up front to
-/// framed-button height and wrapping onto further lines when the column is too
-/// narrow to hold it.
+/// A single-line text field a row high, for the one settings row that holds one
+/// (the camera preset's name).
 ///
-/// Plain `ui.horizontal*` starts its row at `interact_size.y`, which is
-/// shorter than a padded button: egui centers early widgets in that short
-/// row, then grows the row downward under the first button it meets, so a
-/// bare label (or checkbox) next to buttons sits a few pixels above their
-/// text. Starting the row at button height centers everything on one line.
+/// A text field is the only control here that egui sizes from neither
+/// `interact_size` nor a size handed to it: a `TextEdit` is its font's row plus
+/// its own margin and nothing else, so the `interact_size` floor that brings
+/// every other control to [`theme::ROW_HEIGHT`] does not reach it, and neither
+/// does `add_sized`. Its default margin is a whole-point constant besides —
+/// 2 points top and bottom at every [chrome scale](theme::ui_scale) — which is
+/// a tenth of a row at the design size and a seventh of one at 0.7. Left alone
+/// it is the one row in the dock that is not a row high.
+///
+/// The margin is therefore the lever, and it takes the largest whole number of
+/// points that still FITS rather than the one nearest the row. egui stores a
+/// margin as whole points, so a field can only land on its text plus an even
+/// number and 20 is not one of them; rounding up puts the field back over the
+/// row and takes the row up with it, which is the whole defect. Rounding down
+/// leaves it a point inside a row that the button beside it holds open, where
+/// it reads as an inset field rather than as a row out of line.
+/// Takes the `Ui` it will be added to, because the margin is measured against
+/// the type that `Ui` is carrying; everything else about the field — its hint,
+/// its width — is the caller's, so this hands back the builder rather than
+/// adding it.
+pub fn row_field<'t>(ui: &Ui, text: &'t mut String) -> TextEdit<'t> {
+    let scale = theme::ui_scale(ui.ctx());
+    let room = theme::row_height(scale) - ui.text_style_height(&TextStyle::Body);
+    TextEdit::singleline(text).margin(egui::Margin::symmetric(
+        // The side margin is egui's own, scaled: a field's WIDTH is nobody's
+        // alignment problem, unlike its height.
+        i8::try_from(theme::scaled_points(4, scale)).unwrap_or(i8::MAX),
+        (room * 0.5).floor().max(0.0) as i8,
+    ))
+}
+
+/// A horizontal row of controls in a settings column, wrapping onto further
+/// lines when the column is too narrow to hold it.
+///
+/// Height is not its business: a row starts at `interact_size.y` and grows
+/// under the first widget taller than that, and nothing in a settings pane is
+/// taller than that — the theme's `interact_size` is [`theme::ROW_HEIGHT`] and
+/// every control here is sized by it or, where egui's floor does not reach
+/// ([`row_field`], [`toggle_switch`], [`record_button`]), asks for it. So the
+/// row is a row high because the things in it are, and a bare label centers on
+/// the button beside it without help. A control that overshot would take the
+/// row with it and leave everything shorter in it sitting above the line.
 ///
 /// The single row helper, deliberately: a settings pane is a column whose width
 /// the dock hands it, and a row that cannot wrap runs its last buttons out past
@@ -2711,15 +2778,7 @@ fn corner_inset(from_end: f32, radius: f32) -> f32 {
 /// under it along, since egui's `Region::expand_to_include_rect` unions
 /// `max_rect` as well as `min_rect`.
 pub fn button_row<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
-    let height =
-        ui.text_style_height(&TextStyle::Button) + 2.0 * ui.spacing().button_padding.y;
-    ui.scope(|ui| {
-        // The row ui reads this as its initial height; buttons already
-        // size to at least it, so only the shorter widgets move.
-        ui.style_mut().spacing.interact_size.y = height;
-        ui.horizontal_wrapped(add).inner
-    })
-    .inner
+    ui.horizontal_wrapped(add).inner
 }
 
 /// A selectable option's label, set in MONOSPACE when the label is a bare
@@ -4586,16 +4645,15 @@ mod tests {
     /// and button. Aliased so clippy doesn't flag the nested `dyn FnMut`.
     type RowFn = fn(&mut Ui, &mut dyn FnMut(&mut Ui));
 
-    /// Label center minus button center in a row built by `row`, under the
-    /// theme's geometry (short interact_size, padded buttons). Not
-    /// `__run_test_ui`: that empties the fonts, text measures zero-height,
-    /// and the too-short row this guards against never happens.
+    /// Label center minus button center in a row built by `row`, under the real
+    /// theme — which is the whole question here, the theme being what sizes both
+    /// of them. Not `__run_test_ui`: that empties the fonts, text measures
+    /// zero-height, and the misalignment this guards against never happens.
     fn row_offset(row: RowFn) -> f32 {
         let mut offset = 0.0;
         let ctx = egui::Context::default();
+        crate::theme::apply_theme(&ctx);
         let _ = ctx.run_ui(Default::default(), |ui| {
-            ui.style_mut().spacing.interact_size.y = 17.0;
-            ui.style_mut().spacing.button_padding = Vec2::new(9.0, 4.0);
             row(ui, &mut |ui| {
                 let label = ui.label("Node style").rect.center().y;
                 let button = ui.button("Steady").rect.center().y;
@@ -4605,21 +4663,26 @@ mod tests {
         offset
     }
 
-    /// A bare label centers on the button text in a `button_row`. The
-    /// companion assert shows plain `horizontal` still misaligns them —
-    /// when an egui upgrade fixes row sizing upstream, that assert fails
-    /// and this whole workaround becomes deletable.
+    /// A bare label sits on the same line as the button beside it, in a
+    /// `button_row` and in a plain `horizontal` alike.
+    ///
+    /// Both, deliberately, because a row is centered by the two being the same
+    /// HEIGHT rather than by anything a row helper does — `theme::ROW_HEIGHT`
+    /// through `interact_size`, and `every_settings_row_is_one_row_high` is
+    /// what holds it. A `button_row` that centered a label its container did
+    /// not would mean the height had gone out from under one of them and the
+    /// wrapping helper was papering over it.
     #[test]
-    fn button_row_centers_label_with_button_text() {
+    fn a_label_sits_on_the_line_of_the_button_beside_it() {
         let plain = row_offset(|ui, add| {
             ui.horizontal(|ui| add(ui));
         });
-        assert!(plain < -1.0, "egui centers rows itself now ({plain}); drop button_row?");
+        assert!(plain.abs() < 0.5, "a plain row's label is off by {plain}px");
 
-        let fixed = row_offset(|ui, add| {
+        let wrapped = row_offset(|ui, add| {
             button_row(ui, |ui| add(ui));
         });
-        assert!(fixed.abs() < 0.5, "button_row label off by {fixed}px");
+        assert!(wrapped.abs() < 0.5, "button_row's label is off by {wrapped}px");
     }
 
     /// A bar's two text runs keep out of each other's way and stay inside the
@@ -4843,10 +4906,10 @@ mod tests {
             "three wide buttons stayed on one line: {rects:?}"
         );
         // The second half, made self-evident rather than incidental: a button
-        // taller than one padded text row is one whose label wrapped.
-        let row = 25.0;
+        // taller than a row is one whose label took a second line, a row being
+        // exactly what a one-line button stands at (`every_settings_row_is_one_row_high`).
         assert!(
-            rects.iter().any(|r| r.height() > row + 5.0),
+            rects.iter().any(|r| r.height() > theme::ROW_HEIGHT + 5.0),
             "no label wrapped, so only the row-wrap half is under test: {rects:?}"
         );
     }

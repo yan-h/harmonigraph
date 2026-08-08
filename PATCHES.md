@@ -82,10 +82,37 @@ in the workspace `Cargo.toml`. Keep this file current when bumping either.
   presses this view has seen, which a release delivered elsewhere would leave
   wrong forever. `mouseEntered:` clears it and stays silent, so enter and exit
   remain paired. macOS only; the other backends have no drag-time exit.
+- **Patch 6** (`src/platform/macos/view.rs`, `Cargo.toml`): report the release
+  of a button the OS says is no longer held. A press this view reports is owed
+  a release, and AppKit does not always pay — a `mouseUp:` handed to a host
+  popup, a modal opening under the finger, a gesture the host takes over — so
+  the consumer is left believing the button is down forever. That costs far
+  more than it sounds like, because drag state is global: egui gates EVERY
+  `ScrollArea` on `dragged_id().is_none()`, so one unreleased press stops the
+  wheel in every scrollable pane at once, with the window focused and the
+  pointer over the pane that will not move. Patch 5 does not reach it (it
+  waits on an exit that never comes if the pointer never leaves) and neither
+  does a consumer-side guard on lost focus; both watch the POINTER, and this
+  is the BUTTON. So the frame tick now compares the buttons the view has
+  reported pressed against `NSEvent::pressedMouseButtons` — the same authority
+  Patch 5 already trusts — and synthesises the missing `ButtonReleased`. A
+  stuck button must read stuck across two ticks (the hardware goes up before a
+  queued `mouseUp:` is dispatched, so one tick cannot tell a fast click from a
+  lost release), a late real `mouseUp:` is then swallowed so a bit yields one
+  release however it is paid, and every button above the first two shares a bit
+  because `otherMouseDown:` reports them all as `Middle` — so two of THOSE held
+  at once are one bit between them, the second release is dropped as a
+  duplicate, and a stuck one behind an already-released sibling is not
+  repaired. Neither reaches the consumer, whose button is a bool that the first
+  release has already put up. Real drags are untouched: through one the button
+  reads down. `Cargo.toml` gains an empty
+  `[workspace]` table so `cargo test --manifest-path` reaches the unit tests
+  over the mask arithmetic; ci.sh runs them. macOS only.
 - **Upgrade**: download the new crates.io tarball into `vendor/baseview`,
   re-apply the `kCFRunLoop*` lines, the cursor-rect ownership patch, the
-  occlusion-event patch, the configurable frame timer, and the withheld
-  pointer exit.
+  occlusion-event patch, the configurable frame timer, the withheld pointer
+  exit, the synthesised release for a stuck button, and the `[workspace]`
+  table that lets the tests run.
 - **Upstreaming**: good candidate; uncontroversial fix, helps every
   baseview-based plugin. baseview and nice-plug are both RustAudio projects,
   so the fix would land in exactly the stack this plugin uses.

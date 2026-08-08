@@ -5,7 +5,7 @@ use super::{display_note_name, learn_pulse};
 use crate::{theme, SharedState};
 use egui::Sense;
 use harmonigraph_render::lattice_paint_callback;
-use harmonigraph_scene::{derive_scene, Camera, Projection, SevensLabel, TrailMark};
+use harmonigraph_scene::{derive_scene, Camera, Projection, SevensLabel};
 
 /// The 3D lattice view: orbit camera on drag, zoom on scroll, pick on hover.
 pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
@@ -276,11 +276,11 @@ pub(crate) fn draw_node_labels(
     let want = rect.height() / REFERENCE_HEIGHT * view.label_scale * scene.camera.screen_scale();
     let ppp = ui.painter().ctx().pixels_per_point();
     let projector = scene.projector(glam::Vec2::new(rect.width(), rect.height()));
-    // "Keep note names" retains a name only while the trail marks that
-    // populate `node.trail` are on; with the marks Off the field never fills,
-    // so a fading name has nothing to settle onto and should ease all the way
-    // out (the pre-existing behavior).
-    let keeps_names = view.trail_labels && view.trail_mark != TrailMark::Off;
+    // "Keep note names" IS the trail: it is what populates `node.trail` (see
+    // `TrailField::build`) as well as what draws off it. With it clear the
+    // field never fills, so a fading name has nothing to settle onto and
+    // eases all the way out.
+    let keeps_names = view.trail_labels;
     for (index, node) in scene.nodes.iter().enumerate() {
         let trailed = view.trail_labels && node.trail > 0.0;
         // `is_visible` re-checks what `Scene::pick` already enforces, and
@@ -1677,7 +1677,7 @@ mod tests {
     /// The band `0 < activation < TRAIL_LABEL_STRENGTH` was reachable only on
     /// the way out when the reserve was written, because a note's core simply
     /// appeared at full. It is now climbed on every note-on, and at the fresh
-    /// view — trail marks and their names both on — that is every lit node.
+    /// view — the trail's kept names on — that is every lit node.
     #[test]
     fn a_name_arriving_is_no_brighter_than_the_note_it_names() {
         let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
@@ -1699,7 +1699,7 @@ mod tests {
             None,
             0.05,
         );
-        let keeps_names = state.view.trail_labels && state.view.trail_mark != TrailMark::Off;
+        let keeps_names = state.view.trail_labels;
         assert!(keeps_names, "the fresh view keeps names; without that this proves nothing");
         let node = scene.nodes.iter().find(|n| n.activation > 0.0).expect("the note lit a node");
         assert!(node.on_home, "the lit node is off the home sheet, where nothing is reserved");

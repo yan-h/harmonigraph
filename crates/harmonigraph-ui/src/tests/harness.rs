@@ -215,10 +215,6 @@ pub(super) fn projections_for(tab: panes::Tab) -> &'static [harmonigraph_scene::
     if tab == panes::Tab::Tuning { &PROJECTIONS } else { &PROJECTIONS[..1] }
 }
 
-/// The bar tracks a pane drew, by width. A `ValueBar`/`RangeBar` track is the
-/// one thing in a settings pane painted as a `BAR_HEIGHT`-tall rect in
-/// `well()`: the accent fill over it is the same height in a different color,
-/// and the record button's own `well()` panel is taller.
 /// The render the pane fixtures have in flight, so the Video pane's progress
 /// bar is drawn in every sweep over the settings panes rather than only in the
 /// test below — it takes the column's width like every other bar, and that is

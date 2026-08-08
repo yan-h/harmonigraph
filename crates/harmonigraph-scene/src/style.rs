@@ -344,31 +344,6 @@ impl Gradient {
     }
 }
 
-/// The idle-node marker: a minimal grey mark shown at each home-sheet node
-/// at all times, independent of the active appearance and of whether a note
-/// is playing. Sized by [`ViewConfig::idle_radius`](crate::ViewConfig::idle_radius).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
-pub enum IdleMarker {
-    /// Nothing.
-    None,
-    /// A filled grey dot.
-    Dot,
-    /// A thin grey outline circle (the classic placeholder look).
-    #[default]
-    Circle,
-}
-
-impl IdleMarker {
-    /// Index the shader reads (uniform `misc4.w`): 0 none, 1 dot, 2 circle.
-    pub fn shader_index(self) -> u32 {
-        match self {
-            IdleMarker::None => 0,
-            IdleMarker::Dot => 1,
-            IdleMarker::Circle => 2,
-        }
-    }
-}
-
 /// Which shimmer the melody/bass rings run: one sheet of soft light laid over
 /// the lattice, in the pattern this names, or [`Off`](Pulse::Off) for the
 /// steady picture.
