@@ -756,11 +756,11 @@ fn aimed_at(ui: &Ui, live: egui::Pos2) -> egui::Pos2 {
     ui.input(|i| i.pointer.press_origin()).unwrap_or(live)
 }
 
-/// Segments a [`fade_span`](RangeBar::fade_span) fill is drawn in. The ramp
-/// covers only part of that fill and the bar is a couple of hundred points
-/// wide at most, so this is already finer than the pixels it lands on — and it
-/// is a whole-fill count rather than a per-point one because the strip is
-/// sampled over its own width, which the span does not fix.
+/// Segments the ramp half of a [`fade_span`](RangeBar::fade_span) fill is drawn
+/// in. The ramp is a part of a bar that is a couple of hundred points wide at
+/// most, so this is already finer than the pixels it lands on — and it is a
+/// whole-strip count rather than a per-point one because the strip is sampled
+/// over its own width, which the span does not fix.
 const FADE_SEGMENTS: usize = 64;
 
 /// Which part of a [`RangeBar`] a drag took hold of. Decided once, at
@@ -1130,7 +1130,9 @@ impl<'a> RangeBar<'a> {
         }
 
         // ---- Paint ----------------------------------------------------------
-        let radius = CornerRadius::same(bar_radius(scale));
+        let r = bar_radius(scale);
+        let corner = f32::from(r);
+        let radius = CornerRadius::same(r);
         let painter = ui.painter();
         painter.rect_filled(rect, radius, theme::well());
 
@@ -1149,18 +1151,20 @@ impl<'a> RangeBar<'a> {
             // with alpha, so the ramp ends on exactly the color the bare track
             // beyond it already is and the fill has no seam at its own end.
             //
-            // It starts on the bar's RECT and not on the inset track it is
-            // measured along, so that it is the same fill as the ValueBars it
-            // sits among. Standing it on the track instead leaves a sliver of
-            // bare well at the far left — HANDLE_INSET of it, the room a handle
-            // parked at the floor needs — and that sliver reads as a notch cut
-            // out of the control rather than as reach the edge has not got to,
-            // because no other bar in the pane has one.
+            // Its floor is the bar's own left edge, which is where this bar's
+            // axis floors too, so it is the same fill as the ValueBars it sits
+            // among. An inset axis — what every other range bar puts its values
+            // on — leaves a sliver of bare well at the far left, HANDLE_INSET
+            // of it, and that sliver reads as a notch cut out of the control
+            // rather than as reach the edge has not got to, because no other
+            // bar in the pane has one.
             //
-            // What it adds is a head of SOLID fill, which is what everything
-            // left of `low` is anyway, so the ramp still starts and ends under
-            // the two handles. The one thing it cannot say is a reach of zero,
-            // which would still have the inset to paint — hence the test.
+            // A reach of zero is then the one thing the fill cannot say for
+            // itself, and the guard below is what says it: the solid head is
+            // widened past its own end so that its corner survives (see below)
+            // and the clip is what takes it back, so at a reach of zero there
+            // is nothing left to cut it back TO and a control switched off
+            // keeps a hair of its own feathered edge.
             //
             // **The two parts are drawn by different machinery, and the split
             // is what puts the rounded corner in the right hands.** Everything
@@ -1181,26 +1185,24 @@ impl<'a> RangeBar<'a> {
             if *self.high > min {
                 let mut fill = rect;
                 fill.max.x = hx;
-                // Where the solid head gives way to the ramp. Clamped into the
-                // fill because a pair that arrives crossed (`low` above `high`,
-                // which a host param or a blob can still say) would otherwise
-                // put the head past the fill's own end.
-                let split = lx.clamp(fill.left(), hx);
-                let r = bar_radius(scale);
-                let corner = f32::from(r);
-                // The ramp never begins INSIDE the corner, because the corner
-                // can only be drawn by a rounded rect and a rounded rect is one
-                // color. A fade dragged fully open puts `low` at the bar's own
-                // end, so without this the mesh would take the corner back —
-                // square-ended, poking a whole radius out through the well's
-                // arc, or stepped if it rounded itself.
+                // Where the solid head gives way to the ramp — at `low`, held
+                // off both ends of the fill.
                 //
-                // What it costs is the first few points of the fade painted
-                // solid: five points of a ramp a hundred long is a few percent
-                // of one, and a ramp short enough for it to be more than that
-                // is a reach of a few points, under two handles standing on
-                // each other.
-                let ramp_start = split.max(fill.left() + corner).min(hx);
+                // It never begins INSIDE the corner, because the corner can
+                // only be drawn by a rounded rect and a rounded rect is one
+                // color. A fade dragged fully open puts `low` at the bar's own
+                // end, so without that the mesh would take the corner back —
+                // square-ended, poking a whole radius out through the well's
+                // arc, or stepped if it rounded itself. What it costs is the
+                // first few points of the fade painted solid: five points of a
+                // ramp a hundred long is a few percent of one, and a ramp short
+                // enough for it to be more than that is a reach of a few
+                // points, under two handles standing on each other.
+                //
+                // And it never begins past the fill's own end, which is what a
+                // pair arriving crossed (`low` above `high`, which a host param
+                // or a blob can still say) would otherwise ask for.
+                let ramp_start = lx.max(fill.left() + corner).min(hx);
                 // Held to the reach, so the head below can be widened past it
                 // without ever drawing reach the edge does not have. Only the
                 // far end is cut — the sides are pushed out of the way so the
@@ -1211,10 +1213,10 @@ impl<'a> RangeBar<'a> {
                 let mut head = fill;
                 // Never narrow enough for its own corner to be clamped. epaint
                 // holds a corner radius to half the rect's shortest side, so a
-                // head cut to fit — the handle inset, four points, is where a
-                // fade dragged fully open leaves it — would round at two points
-                // where the well rounds at five, and poke out through the
-                // well's arc. That is the bar changing shape as a handle
+                // head cut to fit — one radius, five points, is where a fade
+                // dragged fully open leaves it — would round at two and a half
+                // points where the well rounds at five, and poke out through
+                // the well's arc. That is the bar changing shape as a handle
                 // reaches the end of its travel.
                 //
                 // Twice the radius is what leaves the corner alone, and it
@@ -1237,7 +1239,7 @@ impl<'a> RangeBar<'a> {
                 if ramp.width() > 0.0 {
                     let from = egui::Rgba::from(fill_color);
                     let to = egui::Rgba::from(theme::well());
-                    gradient_strip(&painter, ramp, FADE_SEGMENTS, (0.0, f32::from(r)), |p| {
+                    gradient_strip(&painter, ramp, FADE_SEGMENTS, (0.0, corner), |p| {
                         egui::lerp(from..=to, p).into()
                     });
                 }
@@ -1315,10 +1317,17 @@ impl<'a> RangeBar<'a> {
         //
         // The readouts step around these rather than around `lx`/`hx`, since
         // what a number must not be crossed by is the thumb that is there.
-        let (lgx, hgx) = (
-            lx.clamp(rect.left() + half_handle, rect.right() - half_handle),
-            hx.clamp(rect.left() + half_handle, rect.right() - half_handle),
-        );
+        //
+        // `max`/`min` rather than `clamp`, for the reason `contain` below names:
+        // a row with less width than one handle inverts the pair, and `clamp`
+        // asserts `min <= max` and takes the editor down with it. `bar_width`
+        // floors at zero, so a column squeezed past its own controls reaches
+        // that.
+        let held = |x: f32| {
+            let floor = rect.left() + half_handle;
+            x.max(floor).min((rect.right() - half_handle).max(floor))
+        };
+        let (lgx, hgx) = (held(lx), held(hx));
         let reach = half_handle + text_gap;
         let low = painter.layout_no_wrap((self.display)(*self.low), mono.clone(), theme::text());
         let high = painter.layout_no_wrap((self.display)(*self.high), mono, theme::text());
@@ -1421,11 +1430,8 @@ impl<'a> RangeBar<'a> {
         // as closely as six points of width can — epaint holds a corner to half
         // that, which is near enough to keep the thumb inside the well. A bar
         // whose track is inset never gets there, and keeps the grip's own.
-        let grip_radius = CornerRadius::same(if self.fade_span {
-            bar_radius(scale)
-        } else {
-            theme::scaled_points(2, scale)
-        });
+        let grip_radius =
+            CornerRadius::same(if self.fade_span { r } else { theme::scaled_points(2, scale) });
         for x in [lgx, hgx] {
             let grip = egui::Rect::from_center_size(
                 egui::pos2(x, rect.center().y),
@@ -2899,10 +2905,16 @@ fn gradient_strip(
     let mut xs: Vec<f32> = (0..=segments)
         .map(|i| rect.left() + rect.width() * i as f32 / segments as f32)
         .collect();
+    // A squared end has no arc to sample, and asking for one puts a whole run
+    // of samples on the end itself for the loop below to throw away again.
     for k in 1..CORNER_SAMPLES {
         let t = k as f32 / CORNER_SAMPLES as f32;
-        xs.push(rect.left() + left_r * t);
-        xs.push(rect.right() - right_r * t);
+        if left_r > 0.0 {
+            xs.push(rect.left() + left_r * t);
+        }
+        if right_r > 0.0 {
+            xs.push(rect.right() - right_r * t);
+        }
     }
     xs.sort_by(f32::total_cmp);
 
@@ -2915,9 +2927,9 @@ fn gradient_strip(
             continue;
         }
         drawn = x;
-        // The nearer end's own profile: each is 0 beyond its own radius, so on
-        // a band rounded the same both ways this is the arc it was, and a
-        // squared end simply never pinches.
+        // The nearer end's own profile: each is 0 beyond its own radius, so a
+        // band rounded the same both ways gets the one arc it would from a
+        // single radius, and a squared end simply never pinches.
         let inset = corner_inset(x - rect.left(), left_r)
             .max(corner_inset(rect.right() - x, right_r));
         let p = ((x - rect.left()) / rect.width().max(1.0)).clamp(0.0, 1.0);
@@ -3163,17 +3175,6 @@ mod tests {
     /// values on — so its floor is the bar's own left edge.
     fn fade_x_of(bar: egui::Rect, v: f32) -> f32 {
         bar.left() + bar.width() * (v - AXIS.0) / (AXIS.1 - AXIS.0)
-    }
-
-    /// The two thumbs of a bar, left to right.
-    fn thumbs(shapes: &[egui::Shape]) -> Vec<egui::Rect> {
-        let mut found: Vec<egui::Rect> = filled_rects(shapes)
-            .into_iter()
-            .filter(|(_, fill)| *fill == theme::text())
-            .map(|(rect, _)| rect)
-            .collect();
-        found.sort_by(|a, b| a.left().total_cmp(&b.left()));
-        found
     }
 
     /// The SOLID head of a [`RangeBar::fade_span`] fill — the stretch left of
@@ -3539,6 +3540,36 @@ mod tests {
         }
     }
 
+    /// A row with no width at all still PAINTS. Nothing about it is legible,
+    /// which is fine — what is not fine is a panic, and a bar is one `clamp`
+    /// away from one at every step that holds a thumb or a number inside the
+    /// bar's own ends: below one handle's width those bounds cross, `clamp`
+    /// asserts `min <= max`, and the panic takes the whole editor down with it.
+    ///
+    /// Zero rather than merely narrow, because [`bar_width`] floors there: a
+    /// column squeezed past its own controls hands the bar a negative width and
+    /// gets the floor, so this is the row the dock can really produce and not a
+    /// hypothetical one. Both paints, since the fade bar is the one whose
+    /// values reach the ends this arithmetic is about.
+    #[test]
+    fn a_row_of_no_width_paints_rather_than_panicking() {
+        let ctx = egui::Context::default();
+        crate::theme::apply_theme(&ctx);
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(0.0, 100.0));
+        for fade in [false, true] {
+            let (mut lo, mut hi) = (AXIS.0, AXIS.1);
+            let out = ctx.run_ui(
+                egui::RawInput { screen_rect: Some(screen), ..Default::default() },
+                |ui| {
+                    let bar = RangeBar::new(&mut lo, &mut hi, AXIS.0..=AXIS.1, NAME);
+                    if fade { bar.fade_span().show(ui) } else { bar.show(ui) };
+                },
+            );
+            let shapes: Vec<egui::Shape> = out.shapes.into_iter().map(|s| s.shape).collect();
+            assert!(!filled_rects(&shapes).is_empty(), "fade={fade}: the well was not painted");
+        }
+    }
+
     /// Too narrow a row elides the NAME and leaves the numbers whole: the
     /// numbers are what the bar is for, and a name that ran over one, or off
     /// the pane, would cost the reading the control exists to give.
@@ -3766,9 +3797,9 @@ mod tests {
     /// A fade dragged fully OPEN keeps the bar's corner, which takes widening
     /// the solid head past where it is painted.
     ///
-    /// The low end at the axis floor puts the head at the handle inset, four
-    /// points, and epaint holds a corner radius to half the rect's shortest
-    /// side — so the head would round at two points where the well rounds at
+    /// The low end at the axis floor puts the head at one radius, five points,
+    /// and epaint holds a corner radius to half the rect's shortest side — so
+    /// the head would round at two and a half points where the well rounds at
     /// five and poke out through the well's own arc. The bar changing shape as
     /// a handle reaches the end of its travel is the thing to keep out, and it
     /// is invisible in the shapes themselves: the radius handed to
@@ -3812,7 +3843,7 @@ mod tests {
     fn a_fade_bars_thumb_reaches_the_end_of_the_bar() {
         let shapes = paint_fade_bar(AXIS.0, 100.0);
         let bar = filled_rects(&shapes)[0].0;
-        let thumb = *thumbs(&shapes).first().expect("a fade bar painted no thumb");
+        let thumb = *handles(&shapes).first().expect("a fade bar painted no thumb");
         assert!(
             (thumb.left() - bar.left()).abs() < 0.01,
             "the thumb's edge is at {} rather than at the bar's own ({})",
@@ -3833,7 +3864,7 @@ mod tests {
     fn a_plain_range_bars_thumb_keeps_its_clearance() {
         let shapes = paint_range_bar(AXIS.0, AXIS.1);
         let bar = filled_rects(&shapes)[0].0;
-        let thumb = *thumbs(&shapes).first().expect("a range bar painted no thumb");
+        let thumb = *handles(&shapes).first().expect("a range bar painted no thumb");
         assert!(
             thumb.left() > bar.left() + 0.5,
             "the low thumb sits at {}, flush with the bar's edge ({})",
@@ -3855,7 +3886,8 @@ mod tests {
         // A hundredth of the axis: a couple of points of reach on this row.
         let high = AXIS.0 + (AXIS.1 - AXIS.0) * 0.01;
         let painted = paint_fade_bar_clipped(AXIS.0, high);
-        let bar = filled_rects(&paint_fade_bar(AXIS.0, high))[0].0;
+        let shapes: Vec<egui::Shape> = painted.iter().map(|s| s.shape.clone()).collect();
+        let bar = filled_rects(&shapes)[0].0;
         let hx = fade_x_of(bar, high);
         let (clip, head) = painted
             .iter()
@@ -3879,10 +3911,11 @@ mod tests {
     }
 
     /// An edge of no reach paints NOTHING — neither part of the fill — and it
-    /// takes a check of its own to say so. The fill runs from the bar's left
-    /// edge, which is a handle's half-width outside the axis floor (see
-    /// HANDLE_INSET), so a reach of zero has that inset left to paint and would
-    /// show as a stub of fill under a control that is switched off.
+    /// takes a check of its own to say so. The solid head is widened past its
+    /// own end so that its corner is never clamped, and the CLIP is what takes
+    /// it back at the reach; with the reach at the floor there is nothing left
+    /// to cut it back to, and a control switched off keeps a hair of the head's
+    /// own feathered edge.
     #[test]
     fn an_edge_of_no_reach_paints_no_fill() {
         let shapes = paint_fade_bar(AXIS.0, AXIS.0);
