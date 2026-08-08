@@ -111,8 +111,8 @@ fn spectrogram_gradient_group(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig
          move the picture above, not the circle, which is what leaves the hues \
          showing at Mono, where the arc itself has no width. Drag the handle \
          to widen or narrow it, drag the track to turn the circle under it, \
-         double-click to reset. The button at the left runs the whole thing \
-         the other way round the circle.",
+         double-click to reset. The button past the right end runs the whole \
+         thing the other way round the circle.",
     );
     SpreadBar::brightness(&mut cfg.spectrogram_gradient).home(home).show(ui).on_hover_text(
         "The stretch of brightness the level range spends, in CIELab L*: the \

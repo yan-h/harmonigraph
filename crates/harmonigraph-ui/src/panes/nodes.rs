@@ -431,8 +431,8 @@ fn spectrum_group(ui: &mut egui::Ui, view: &mut ViewConfig) {
          dimmed. The track is hue alone — the brightness and chroma bars below \
          move the picture above, not the arc. Drag the handle to widen or \
          narrow it, drag the track to turn the circle under it, double-click \
-         to reset. The button at the left runs the whole thing the other way \
-         round the circle.",
+         to reset. The button past the right end runs the whole thing the \
+         other way round the circle.",
     );
     SpreadBar::brightness(&mut view.pitch_gradient).show(ui).on_hover_text(
         "The stretch of brightness the pitch range spends, in CIELab L*: the \

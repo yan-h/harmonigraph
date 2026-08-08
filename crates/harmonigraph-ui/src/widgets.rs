@@ -1604,7 +1604,7 @@ pub(crate) fn preview_height(scale: f32) -> f32 {
 const FLIP_GAP: f32 = 2.0;
 
 /// What a [`SpectrumBar`]'s track measures in a column `column` points wide:
-/// the column, less the flip button at the left end and the gap beside it.
+/// the column, less the flip button at the right end and the gap beside it.
 ///
 /// Shared with the settings tests, whose sweep pins every bar in a pane to the
 /// width of its column. This is the one bar that is narrower, and the sweep has

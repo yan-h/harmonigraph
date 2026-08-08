@@ -260,7 +260,7 @@ fn every_bar_in_a_settings_pane_is_the_width_of_the_pane() {
             for &projection in projections_for(tab) {
                 let widths = bar_track_widths(&settings_pane_at_width(tab, width, projection));
                 // One bar per gradient is deliberately shorter: the spectrum
-                // track, which gives the left end of its row to the flip
+                // track, which gives the right end of its row to the flip
                 // button. It still narrows with the column, which is what this
                 // is about, so it is allowed its own length rather than excused
                 // from the sweep.
