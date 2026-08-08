@@ -632,8 +632,12 @@ fn the_curve_clears_the_pane_edge_by_the_same_points_at_any_size() {
         );
     }
     // A pane with no room even for that draws a flat curve, rather than one
-    // reaching back through the now-line into the roll's half.
+    // reaching back through the now-line into the roll's half. Held at the
+    // degenerate end too, where a divisor guarded into range would quietly
+    // hand back a curve worth half the axis instead.
     assert_eq!(plot_budget(0.001, 10.0), 0.0);
+    assert_eq!(plot_budget(1.0, 0.4), 0.0, "a sub-point axis is not a pane to draw on");
+    assert_eq!(plot_budget(1.0, 0.0), 0.0, "and a zero-length one divides to a floor, not a NaN");
 
     // Painted, at two sizes four times apart on the depth axis: a tone well
     // over the ceiling clamps, so the curve is drawn at the full budget and

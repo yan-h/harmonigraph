@@ -36,11 +36,15 @@ pub(super) const PLOT_HEADROOM_PT: f32 = PROFILE_PT * 0.5;
 /// whole share of it, less [`PLOT_HEADROOM_PT`] expressed in that axis' own
 /// fraction — which is what `depth_len`, the axis in points, is for.
 ///
-/// Floors at zero. A pane too short to hold even the headroom draws a flat
-/// curve rather than one that reaches back through the now-line and paints the
-/// spectrum into the roll's half.
+/// Floors at zero, and that floor is the whole guard. A pane too short to hold
+/// even the headroom draws a flat curve rather than one that reaches back
+/// through the now-line and paints the spectrum into the roll's half, and a
+/// zero-length axis divides to an infinity that the same floor takes to zero —
+/// so nothing here can hand egui's tessellator a NaN. Holding `depth_len` into
+/// range instead would defeat both: a sub-point axis would come back with a
+/// budget worth half of itself.
 pub(super) fn plot_budget(split: f32, depth_len: f32) -> f32 {
-    (split - PLOT_HEADROOM_PT / depth_len.max(1.0)).max(0.0)
+    (split - PLOT_HEADROOM_PT / depth_len).max(0.0)
 }
 
 /// The 1 kHz pivot of the tilt slope, as a MIDI pitch.
