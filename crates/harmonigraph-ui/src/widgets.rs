@@ -664,6 +664,29 @@ impl Grab {
     /// that only panned from the middle would be dead exactly where everyone
     /// first meets it. When there's no room to pan, a middle drag takes the
     /// nearer end instead.
+    ///
+    /// **The mirror of that has no fallback, and the cost is a band that is
+    /// inert one way.** An end held against `min_span` cannot move inward, so a
+    /// press inside its reach dragged that way writes nothing — the whole
+    /// `near` band, either side of both handles, on a pair already at its
+    /// minimum. The pitch range parks exactly there, since that is where
+    /// zooming the analyzer all the way in leaves it, and `HANDLE_REACH_SHARE`
+    /// is what keeps the middle grabbable beside it (at the 24-semitone minimum
+    /// on a 423pt bar: 14 points claimed at each end out of 83).
+    ///
+    /// No fallback because the reach is claimed before the DIRECTION is known,
+    /// and the end is only pinned one way: the same press dragged outward opens
+    /// the span, which is the gesture nothing else offers. Handing the band to
+    /// the span instead would cost that to buy the other, and reading `v`'s
+    /// direction here is reading a position, not a travel. What is left is a
+    /// handle that answers in one direction and holds in the other, which is
+    /// what a handle against a wall should do — and what the cursor says it is,
+    /// since the band draws `ResizeHorizontal`.
+    ///
+    /// The alternative is [`apply`](Self::apply) letting a pinned end carry its
+    /// partner, the way the span branch squishes against a wall. That is a
+    /// change to what `Low` and `High` MEAN rather than to this rule, and it is
+    /// not made here.
     fn at(v: f32, (lo, hi): (f32, f32), _range: (f32, f32), near: f32) -> Grab {
         // A CLOSED span has no middle to take hold of and no side to either
         // handle: both ends stand on one point, so which gesture a press
@@ -3283,6 +3306,33 @@ mod tests {
                 assert_ne!(lo, held.0, "{aimed}: the low end did not move");
             }
         }
+    }
+
+    /// A pair already at `min_span` answers a press in an end's reach one way
+    /// and holds the other — the inert band [`Grab::at`]'s doc names, pinned
+    /// here so it cannot drift back into being an accident.
+    ///
+    /// Both halves matter. Inward the end is against `min_span` and writes
+    /// nothing, which is a handle against a wall; outward the SAME press opens
+    /// the span, which is the gesture the band exists for and the reason it is
+    /// not handed to the slide. A change to `Grab::apply` that let a pinned end
+    /// carry its partner would fail the first half, and should — that is a
+    /// decision about what `Low` means, not a tidy-up.
+    #[test]
+    fn an_end_against_the_minimum_span_holds_inward_and_opens_outward() {
+        // Exactly at OCTAVE, the min_span these bars declare.
+        let held = (60.0f32, 72.0f32);
+        let bar = filled_rects(&paint_range_bar(held.0, held.1))[0].0;
+        let track = bar.shrink2(Vec2::new(HANDLE_INSET, 0.0));
+        let x_of = |v: f32| track.left() + track.width() * (v - AXIS.0) / (AXIS.1 - AXIS.0);
+        let frac = |x: f32| (x - bar.left()) / bar.width();
+        // Inside the reach, which a 12-unit span caps at 0.35 of itself.
+        let from = x_of(held.0) + 8.0;
+        let inward = drag_range_bar(held, (frac(from), frac(from + 40.0)), false);
+        assert_eq!(inward, held, "the low end moved into a span already at its minimum");
+        let outward = drag_range_bar(held, (frac(from), frac(from - 40.0)), false);
+        assert!(outward.0 < held.0, "the same press outward did not open the span");
+        assert_eq!(outward.1, held.1, "opening the span carried the high end with it");
     }
 
     /// The reach still cannot swallow a narrow span whole, or a zoomed-in
