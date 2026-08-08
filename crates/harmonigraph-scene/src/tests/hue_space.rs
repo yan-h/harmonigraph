@@ -437,8 +437,7 @@ fn retired_arc(lab_start: f64, lab_span: f64, g: Gradient) -> (f32, f32) {
     let end_lightness = |t: f64| {
         (f64::from(g.lightness) + (t - 0.5) * f64::from(g.lightness_ramp)).clamp(0.0, 100.0)
     };
-    let start =
-        oklab_hue_of_retired_lab_hue(end_lightness(0.0), lab_start, RETIRED_ARC_CHROMA);
+    let start = oklab_hue_of_retired_lab_hue(end_lightness(0.0), lab_start, RETIRED_ARC_CHROMA);
     let end = oklab_hue_of_retired_lab_hue(
         end_lightness(1.0),
         (lab_start + lab_span) % 360.0,
@@ -570,18 +569,37 @@ fn measured_hue_floor(l_star: f64) -> f64 {
 #[test]
 fn the_hue_floor_is_never_above_the_gamut() {
     let (mut worst, mut worst_at) = (f64::NEG_INFINITY, 0.0);
+    let (mut slackest, mut slackest_at) = (0.0f64, 0.0);
     for k in 0..=200 {
         let l = f64::from(k) * 0.5;
-        let over = crate::color::hue_floor_for_docs(l) - measured_hue_floor(l);
-        if over > worst {
-            worst = over;
+        let (table, measured) = (crate::color::hue_floor_for_docs(l), measured_hue_floor(l));
+        if table - measured > worst {
+            worst = table - measured;
             worst_at = l;
+        }
+        // The other direction, which the <= above cannot see. An entry far
+        // BELOW the floor is in gamut and silently pale, and the only other
+        // thing pinning magnitude walks the default arc's L* 42..86 — while all
+        // four heatmap presets open at L* 0 and run to 88..92, so they live
+        // precisely on the entries nothing else holds down.
+        if measured > 0.0 && 1.0 - table / measured > slackest {
+            slackest = 1.0 - table / measured;
+            slackest_at = l;
         }
     }
     assert!(
         worst <= 0.0,
         "HUE_FLOOR rides {worst:.2e} above the gamut at L*={worst_at:.1}; \
          every entry must sit at or below what every hue can hold",
+    );
+    // Two percent, which the 1e-4 safety drop reaches only where the floor
+    // itself has closed to nearly nothing against black and white.
+    assert!(
+        slackest < 0.02 || crate::color::hue_floor_for_docs(slackest_at) < 0.01,
+        "HUE_FLOOR gives up {:.1}% of the gamut at L*={slackest_at:.1}, where the \
+         floor is {:.4}; the table has drifted low and the picture is pale for it",
+        slackest * 100.0,
+        crate::color::hue_floor_for_docs(slackest_at),
     );
 }
 
@@ -601,7 +619,15 @@ fn one_chroma_setting_is_one_colorfulness_across_hue() {
         cs.iter().cloned().fold(0.0f64, f64::max) / cs.iter().cloned().fold(f64::INFINITY, f64::min)
     };
     for l in [42.0f64, 64.0, 86.0] {
-        for (fraction, bound) in [(0.25f64, 1.30f64), (0.5, 1.70)] {
+        // The last row is the fraction the type default OPENS on, which is
+        // above both of the others and is where the headline claim is actually
+        // made. Without it the suite would not notice the default drifting up
+        // to a setting where the fix buys almost nothing.
+        for (fraction, bound) in [
+            (0.25f64, 1.30f64),
+            (0.5, 1.70),
+            (f64::from(Gradient::default().chroma), 2.15),
+        ] {
             let got = spread(&|h| crate::color::chroma_of_for_docs(fraction, l, h));
             let ceiling = spread(&|h| fraction * crate::color::max_chroma_for_docs(l, h));
             assert!(
@@ -628,23 +654,42 @@ fn one_chroma_setting_is_one_colorfulness_across_hue() {
 /// the alternative reading of this change — that it simply washed the picture
 /// out — is one a number can settle, and because the figure moves whenever the
 /// arc does.
+///
+/// **Both gradients, because retuning one does not reach the other.** The type's
+/// default and `ViewConfig`'s composed one are independent numbers by design
+/// (see `view.rs`, which says so), and the one a fresh install actually DRAWS is
+/// the composed one — so a retune that reached only `default_chroma` would leave
+/// the lattice 37% duller with every test still green. The retired fraction is
+/// each gradient's OWN, since each was dialled against the per-hue ceiling.
 #[test]
 fn the_default_opens_at_the_colorfulness_it_used_to() {
-    let g = Gradient::default().sanitized();
-    let mean = |f: &dyn Fn(f64, f64) -> f64| {
-        (0..=200)
-            .map(|k| {
-                let (l, h) = g.lightness_and_hue(f64::from(k) / 200.0);
-                f(l, h)
-            })
-            .sum::<f64>()
-            / 201.0
-    };
-    let now = mean(&|l, h| crate::color::chroma_of_for_docs(f64::from(g.chroma), l, h));
-    let retired = mean(&|l, h| 0.5 * crate::color::max_chroma_for_docs(l, h));
-    assert!(
-        (now - retired).abs() / retired < 0.02,
-        "the default arc's mean chroma is {now:.4} where the retired denominator at 0.5 put \
-         it at {retired:.4}; default_chroma no longer holds it there",
-    );
+    for (name, g, retired_fraction) in [
+        ("Gradient::default", Gradient::default().sanitized(), 0.5),
+        (
+            "ViewConfig's lattice",
+            crate::ViewConfig::default().pitch_gradient.sanitized(),
+            0.601_670_8,
+        ),
+    ] {
+        let mean = |f: &dyn Fn(f64, f64, f64) -> f64| {
+            (0..=200)
+                .map(|k| {
+                    let t = f64::from(k) / 200.0;
+                    let (l, h) = g.lightness_and_hue(t);
+                    f(l, h, g.chroma_at(t))
+                })
+                .sum::<f64>()
+                / 201.0
+        };
+        let now = mean(&|l, h, fraction| crate::color::chroma_of_for_docs(fraction, l, h));
+        // The ramp is flat on both of these, so the retired fraction is one
+        // number rather than a curve; `chroma_at` is read above anyway so a
+        // ramped gradient added here would still be measured honestly.
+        let retired = mean(&|l, h, _| retired_fraction * crate::color::max_chroma_for_docs(l, h));
+        assert!(
+            (now - retired).abs() / retired < 0.02,
+            "{name}'s mean chroma is {now:.4} where the retired denominator at \
+             {retired_fraction} put it at {retired:.4}; its chroma no longer holds it there",
+        );
+    }
 }
