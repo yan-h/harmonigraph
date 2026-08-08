@@ -415,8 +415,8 @@ fn pitch_readout(midi: f32) -> String {
 ///
 /// A bar costs one row and says the same thing — see [`SpectrumBar`] for how a
 /// circle fits on one, for why the flip and the arc share that row rather than
-/// taking two, and for why the bar's own name stands in a gutter of the track
-/// rather than along the circle.
+/// taking two, and for why the bar's own name is the one text run in the dock
+/// drawn dark.
 fn spectrum_group(ui: &mut egui::Ui, view: &mut ViewConfig) {
     gradient_preview(ui, &view.pitch_gradient).on_hover_text(
         "The gradient itself, low note on the left: every one of the six \

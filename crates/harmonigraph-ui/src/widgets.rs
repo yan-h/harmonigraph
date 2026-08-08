@@ -1638,7 +1638,6 @@ const FLIP_W: f32 = 18.0;
 /// the next pane does not.
 const SPAN_LABEL: &str = "Color span";
 
-/// How far a rimmed word's ground is drawn out around it, at the design scale.
 /// The color a [`SpectrumBar`] writes its own name in: the ground the bar sits
 /// on, which is the one text run in the dock not drawn in the theme's text.
 ///
@@ -2063,8 +2062,8 @@ impl<'a> SpectrumBar<'a> {
         let radius = CornerRadius::same(corner);
         // A well under the whole track, because the dimmed hues are drawn with
         // alpha and need a recessed ground to sit on — the same ground the
-        // unfilled end of a ValueBar shows, and the same one both text runs are
-        // rimmed in.
+        // unfilled end of a ValueBar shows, and the color the name is written
+        // in ([`span_name_color`]).
         painter.rect_filled(track_rect, radius, theme::well());
         // ONE circle across the whole track, at full strength over the stretch
         // the arc claims and held back to ground beyond it. The same hue on
