@@ -10,11 +10,39 @@
 
 use crate::SharedState;
 
-/// Depth budget for the spectrum curve, as a fraction of the *spectrum's
-/// share* of the depth axis: a full-scale (0 dB) sine tops out here, leaving
-/// the last stretch as headroom so a loud partial doesn't run into the pane's
-/// edge.
-pub(super) const PLOT_HEIGHT_FRACTION: f32 = 0.85;
+/// The profile line along the spectrum curve's top, in points — the light edge
+/// that gives the fill a boundary to be seen by (see
+/// [`keyline`](super::roll::keyline) for what colors it).
+pub(super) const PROFILE_PT: f32 = 1.0;
+
+/// What the spectrum curve stops short of the pane's outer edge by, in POINTS:
+/// half the profile line, which is centred on the curve's top and would
+/// otherwise be half-clipped by the edge.
+///
+/// That is the WHOLE clearance, and deliberately so — at the ceiling the ink
+/// reaches the pane edge and the pane carries no empty band at all. Where the
+/// analyzer ends is already drawn, by the dock separator between it and the
+/// pane beside it; a second boundary inside the picture is one border too
+/// many.
+///
+/// In points rather than as a fraction of the spectrum's share, which is what
+/// it was — the last 15% of it. A fraction is an empty margin that grows with
+/// the pane, so the same picture carries a thicker border the larger it is
+/// drawn, and on a tall analyzer that band was the loudest empty thing on it.
+/// What the room is for is one line, and a line is the same width at every
+/// pane size.
+pub(super) const PLOT_HEADROOM_PT: f32 = PROFILE_PT * 0.5;
+
+/// How far into the depth axis the spectrum curve may reach: the spectrum's
+/// whole share of it, less [`PLOT_HEADROOM_PT`] expressed in that axis' own
+/// fraction — which is what `depth_len`, the axis in points, is for.
+///
+/// Floors at zero. A pane too short to hold even the headroom draws a flat
+/// curve rather than one that reaches back through the now-line and paints the
+/// spectrum into the roll's half.
+pub(super) fn plot_budget(split: f32, depth_len: f32) -> f32 {
+    (split - PLOT_HEADROOM_PT / depth_len.max(1.0)).max(0.0)
+}
 
 /// The 1 kHz pivot of the tilt slope, as a MIDI pitch.
 pub(super) const TILT_PIVOT_MIDI: f32 = 83.213_1;
