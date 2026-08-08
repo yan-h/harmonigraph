@@ -624,6 +624,32 @@ const HANDLE_INSET: f32 = HANDLE_W * 0.5 + 1.0;
 /// the bar's edge.
 const TEXT_GAP: f32 = 5.0;
 
+/// Where a gesture was AIMED, as against where it has since got to: the point
+/// the press landed on, falling back to the live position when there is no
+/// press on record.
+///
+/// **Every bar here decides WHICH of its handles a drag has hold of from this,
+/// and where that handle then goes from the live position.** The two questions
+/// want different positions because egui calls a press a drag only once the
+/// pointer has left a six-point click threshold: the first frame a bar sees is
+/// already that far along, in the direction of travel, and a real frame of a
+/// brisk drag carries a good deal more. So a press that landed squarely inside
+/// a handle's reach arrives with the pointer clear of it, pointing at whatever
+/// the hand was aiming PAST — and the bar hands over the span instead of the
+/// end it was aimed at, or the turn instead of the handle.
+///
+/// A reach is also what the CURSOR promises, and it promises it under a pointer
+/// at rest, which is where a press lands. Deciding from anywhere else is the
+/// control disagreeing with the arrow the hand aimed with.
+///
+/// [`GRAB_PX`]'s fourteen points are no protection: that is barely twice the
+/// threshold, so it is the outer half of every reach that misbehaves — which is
+/// what makes the failure intermittent rather than total, and so what let it
+/// stand.
+fn aimed_at(ui: &Ui, live: egui::Pos2) -> egui::Pos2 {
+    ui.input(|i| i.pointer.press_origin()).unwrap_or(live)
+}
+
 /// Segments a [`fade_span`](RangeBar::fade_span) fill is drawn in. The ramp
 /// covers only part of that fill and the bar is a couple of hundred points
 /// wide at most, so this is already finer than the pixels it lands on — and it
@@ -663,6 +689,29 @@ impl Grab {
     /// that only panned from the middle would be dead exactly where everyone
     /// first meets it. When there's no room to pan, a middle drag takes the
     /// nearer end instead.
+    ///
+    /// **The mirror of that has no fallback, and the cost is a band that is
+    /// inert one way.** An end held against `min_span` cannot move inward, so a
+    /// press inside its reach dragged that way writes nothing — the whole
+    /// `near` band, either side of both handles, on a pair already at its
+    /// minimum. The pitch range parks exactly there, since that is where
+    /// zooming the analyzer all the way in leaves it, and `HANDLE_REACH_SHARE`
+    /// is what keeps the middle grabbable beside it (at the 24-semitone minimum
+    /// on a 423pt bar: 14 points claimed at each end out of 83).
+    ///
+    /// No fallback because the reach is claimed before the DIRECTION is known,
+    /// and the end is only pinned one way: the same press dragged outward opens
+    /// the span, which is the gesture nothing else offers. Handing the band to
+    /// the span instead would cost that to buy the other, and reading `v`'s
+    /// direction here is reading a position, not a travel. What is left is a
+    /// handle that answers in one direction and holds in the other, which is
+    /// what a handle against a wall should do — and what the cursor says it is,
+    /// since the band draws `ResizeHorizontal`.
+    ///
+    /// The alternative is [`apply`](Self::apply) letting a pinned end carry its
+    /// partner, the way the span branch squishes against a wall. That is a
+    /// change to what `Low` and `High` MEAN rather than to this rule, and it is
+    /// not made here.
     fn at(v: f32, (lo, hi): (f32, f32), _range: (f32, f32), near: f32) -> Grab {
         // A CLOSED span has no middle to take hold of and no side to either
         // handle: both ends stand on one point, so which gesture a press
@@ -939,7 +988,14 @@ impl<'a> RangeBar<'a> {
                 let grab = match stored {
                     Some(grab) => grab,
                     None => {
-                        let grab = Grab::at(v, (*self.low, *self.high), (min, max), near);
+                        // From where the press LANDED (see `aimed_at`), snapped
+                        // the same way the live value is: the span grab reads
+                        // its own offset off this, so an unsnapped one would
+                        // leave a fraction of a value inside a gesture whose
+                        // whole point is whole ones.
+                        let aim = value_at(aimed_at(ui, p).x);
+                        let aim = if self.integer { aim.round() } else { aim };
+                        let grab = Grab::at(aim, (*self.low, *self.high), (min, max), near);
                         ui.data_mut(|d| d.insert_temp(grab_id, grab));
                         grab
                     }
@@ -1169,10 +1225,10 @@ impl<'a> RangeBar<'a> {
         // The cursor says which of the two gestures a press would start, so the
         // difference is visible BEFORE committing to a drag: an end resizes,
         // the middle picks the whole range up and slides it.
-        let aimed_at = response
+        let would_start = response
             .hover_pos()
             .map(|p| Grab::at(value_at(p.x), (*self.low, *self.high), (min, max), near));
-        match aimed_at {
+        match would_start {
             Some(Grab::Span { .. }) => response.on_hover_cursor(egui::CursorIcon::Grab),
             Some(_) => response.on_hover_cursor(egui::CursorIcon::ResizeHorizontal),
             None => response,
@@ -1354,21 +1410,15 @@ impl<'a> OctaveStrip<'a> {
                 let grab = match stored {
                     Some(grab) => grab,
                     None => {
-                        // From where the press LANDED, which is not where the
-                        // pointer is on the frame this first runs: egui calls
-                        // a gesture a drag only once it has left a six-point
-                        // click threshold, so by here it is already that far
-                        // along, in the direction of travel. A `RangeBar`
-                        // survives reading the live position because its
-                        // handles carry fourteen points of reach; this control
-                        // splits its two gestures on a hard line, and half of
-                        // the drawn handle sits inside the six — so the live
-                        // position hands "grab the handle, pull it outward",
-                        // which is the count, to the fringe.
-                        let start = ui
-                            .ctx()
-                            .input(|i| i.pointer.press_origin())
-                            .map_or(reach, |p| out(p.x));
+                        // From where the press LANDED (see `aimed_at`), which
+                        // this control needs more than the bars with handles do
+                        // and not differently: it splits its two gestures on a
+                        // hard line rather than on a reach, and half of the
+                        // drawn handle sits inside the six points egui spends
+                        // deciding a press is a drag — so the live position
+                        // hands "grab the handle, pull it outward", which is the
+                        // count, to the fringe.
+                        let start = out(aimed_at(ui, p).x);
                         let grab = StripGrab::at(start, *self.count, *self.extras);
                         ui.data_mut(|d| d.insert_temp(grab_id, grab));
                         grab
@@ -1738,11 +1788,17 @@ impl<'a> SpectrumBar<'a> {
         let width = bar_width(ui);
         // Space first, senses after: the row holds two controls side by side,
         // and each is interacted with over its OWN rectangle. That is what
-        // keeps a press on the flip button out of the track. One rectangle
-        // sensed for both would hand a sideways drag begun on the button
-        // straight to the rotate branch, and asking the widget where the press
-        // LANDED is no answer either — egui calls a press a drag only once it
-        // has moved, by which time the pointer can be over the track.
+        // keeps a press on the flip button out of the track — a button that
+        // senses clicks and not drags produces no drag hit at all, so there is
+        // nothing for the track to inherit at any distance.
+        //
+        // One rectangle sensed for both would put that on a position check
+        // instead: the widget would take the drag and have to decline it by
+        // asking [`aimed_at`] where the press landed, exactly as the strip
+        // below IS declined. Two rectangles rather than one check because a
+        // check can only be reached once egui calls the press a drag, and the
+        // frames before that are ones the button spends looking pressed while
+        // the track quietly holds the gesture.
         let piece_gap = PIECE_GAP * scale;
         let (id, rect) = ui.allocate_space(Vec2::new(width, spectrum_bar_height(scale)));
         // The track's width is what the two bands and the settings sweep all
@@ -1836,22 +1892,24 @@ impl<'a> SpectrumBar<'a> {
                 let grab = match stored {
                     Some(grab) => grab,
                     None => {
-                        // Whether the gesture is ours is asked of where the
-                        // press LANDED, and which grab it is of where the
-                        // pointer has reached. Two positions on purpose: egui
-                        // only calls a press a drag once it has moved past a
-                        // threshold, so by this frame a press that began on the
-                        // strip may already be over the track — while the
-                        // handle-or-track question is settled on the first live
-                        // frame exactly as [`Grab`]'s is, so the two bars answer
-                        // a mid-gesture jump the same way.
-                        let origin = ui.input(|i| i.pointer.press_origin()).unwrap_or(p);
+                        // All three of these are asked of where the press
+                        // LANDED — see [`aimed_at`] — and none of them of where
+                        // the pointer has since got to. Whether the gesture is
+                        // ours, because a press that began on the strip is
+                        // already over the track by the first live frame;
+                        // handle or track, because a press inside the handle's
+                        // reach is already clear of it; and the hue a turn
+                        // holds, because the gesture begins where the hand put
+                        // it down and turning the circle by less than the
+                        // pointer has travelled is a gesture that starts behind
+                        // and stays there.
+                        let origin = aimed_at(ui, p);
                         let grab = if !on_track(&origin) {
                             SpectrumGrab::Outside
-                        } else if (p.x - handle_x).abs() <= GRAB_PX * scale {
+                        } else if (origin.x - handle_x).abs() <= GRAB_PX * scale {
                             SpectrumGrab::Span
                         } else {
-                            SpectrumGrab::Rotate { held: aimed.hue_start + offset_at(p.x) }
+                            SpectrumGrab::Rotate { held: aimed.hue_start + offset_at(origin.x) }
                         };
                         ui.data_mut(|d| d.insert_temp(grab_id, grab));
                         grab
@@ -2475,7 +2533,8 @@ impl<'a> SpreadBar<'a> {
                 let grab = match stored {
                     Some(grab) => grab,
                     None => {
-                        let grab = SpreadGrab::at(v, aimed, near);
+                        // From where the press LANDED; see [`aimed_at`].
+                        let grab = SpreadGrab::at(value_at(aimed_at(ui, p).x), aimed, near);
                         ui.data_mut(|d| d.insert_temp(grab_id, grab));
                         grab
                     }
@@ -2932,9 +2991,12 @@ mod tests {
             },
         ]);
         // A step clear of egui's drag threshold first, then the rest of the
-        // way. The grab is decided on the first frame the drag is LIVE, so a
-        // gesture that jumps straight to its target decides it there — which
-        // can be a different grab from the one the press was aimed at.
+        // way, because that is what a real hand delivers: egui calls the press
+        // a drag only once the pointer has left the threshold, so the first
+        // frame the bar sees is never at `from`. A harness that jumped straight
+        // to its target would hand the bar a first frame at the destination and
+        // never put a gap between where the press landed and where the gesture
+        // is read — which is the gap [`aimed_at`] exists for.
         let step = 12.0 / bar.width() * (to - from).signum();
         frame(&mut lo, &mut hi, vec![egui::Event::PointerMoved(at(from + step))]);
         frame(&mut lo, &mut hi, vec![egui::Event::PointerMoved(at(to))]);
@@ -3280,6 +3342,64 @@ mod tests {
         assert!(matches!(Grab::at(31.0, (24.0, 60.0), AXIS, 8.0), Grab::Low));
     }
 
+    /// And through a real pointer: a press within an end's reach takes THAT
+    /// end, whichever way the drag then runs.
+    ///
+    /// [`Grab::at`] is asked on the first frame egui calls the press a drag,
+    /// which is already six points along — see [`aimed_at`]. Asked at the live
+    /// position, a press in the outer half of the reach that then runs INWARD
+    /// is past the reach by the time the question reaches this bar, so it reads
+    /// as a middle grab and slides both ends. That is exactly the mistake
+    /// [`GRAB_PX`] is generous to prevent, made by the bar itself, and the
+    /// `Grab::at` cases above cannot see it: they hand the function the value
+    /// the gesture never had.
+    #[test]
+    fn a_press_within_an_ends_reach_takes_that_end_whichever_way_it_runs() {
+        let held = (48.0f32, 96.0f32);
+        let bar = filled_rects(&paint_range_bar(held.0, held.1))[0].0;
+        let track = bar.shrink2(Vec2::new(HANDLE_INSET, 0.0));
+        let x_of = |v: f32| track.left() + track.width() * (v - AXIS.0) / (AXIS.1 - AXIS.0);
+        let frac = |x: f32| (x - bar.left()) / bar.width();
+        // Inside the reach on either side of the handle, which the cursor
+        // spells out as a `ResizeHorizontal` before the press.
+        for reach in [-GRAB_PX * 0.8, GRAB_PX * 0.8] {
+            for run in [-50.0f32, 50.0] {
+                let from = x_of(held.0) + reach;
+                let (lo, hi) = drag_range_bar(held, (frac(from), frac(from + run)), false);
+                let aimed = format!("pressed {reach} from the low end and dragged {run}");
+                assert_eq!(hi, held.1, "{aimed}: the high end came along");
+                assert_ne!(lo, held.0, "{aimed}: the low end did not move");
+            }
+        }
+    }
+
+    /// A pair already at `min_span` answers a press in an end's reach one way
+    /// and holds the other — the inert band [`Grab::at`]'s doc names, pinned
+    /// here so it cannot drift back into being an accident.
+    ///
+    /// Both halves matter. Inward the end is against `min_span` and writes
+    /// nothing, which is a handle against a wall; outward the SAME press opens
+    /// the span, which is the gesture the band exists for and the reason it is
+    /// not handed to the slide. A change to `Grab::apply` that let a pinned end
+    /// carry its partner would fail the first half, and should — that is a
+    /// decision about what `Low` means, not a tidy-up.
+    #[test]
+    fn an_end_against_the_minimum_span_holds_inward_and_opens_outward() {
+        // Exactly at OCTAVE, the min_span these bars declare.
+        let held = (60.0f32, 72.0f32);
+        let bar = filled_rects(&paint_range_bar(held.0, held.1))[0].0;
+        let track = bar.shrink2(Vec2::new(HANDLE_INSET, 0.0));
+        let x_of = |v: f32| track.left() + track.width() * (v - AXIS.0) / (AXIS.1 - AXIS.0);
+        let frac = |x: f32| (x - bar.left()) / bar.width();
+        // Inside the reach, which a 12-unit span caps at 0.35 of itself.
+        let from = x_of(held.0) + 8.0;
+        let inward = drag_range_bar(held, (frac(from), frac(from + 40.0)), false);
+        assert_eq!(inward, held, "the low end moved into a span already at its minimum");
+        let outward = drag_range_bar(held, (frac(from), frac(from - 40.0)), false);
+        assert!(outward.0 < held.0, "the same press outward did not open the span");
+        assert_eq!(outward.1, held.1, "opening the span carried the high end with it");
+    }
+
     /// The reach still cannot swallow a narrow span whole, or a zoomed-in
     /// range would have no middle left to slide along the axis.
     #[test]
@@ -3559,10 +3679,6 @@ mod tests {
         ctx: egui::Context,
         screen: egui::Rect,
         rect: egui::Rect,
-        /// Where the pointer was on the frame egui first called the press a
-        /// drag — the frame the widget settles what it has hold of, and so the
-        /// position a gesture's own arithmetic is anchored to.
-        live_at: egui::Pos2,
         t: f64,
         /// What the bar is told to reset to, or `None` to leave the builder
         /// alone — which is a caller naming no home, and a different code path
@@ -3581,7 +3697,6 @@ mod tests {
                 ctx,
                 screen: egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(300.0, 100.0)),
                 rect: egui::Rect::NOTHING,
-                live_at: egui::Pos2::ZERO,
                 t: 0.0,
                 home: None,
             };
@@ -3668,8 +3783,14 @@ mod tests {
         }
 
         /// Press at `from` and drag to `to`, answering what the arriving frame
-        /// painted. A step clear of egui's drag threshold comes first, since
-        /// a gesture that jumps straight to its target settles its grab there.
+        /// painted.
+        ///
+        /// A step clear of egui's drag threshold comes first, and it is the
+        /// part of this that models a real hand: egui calls the press a drag
+        /// only once the pointer has left that threshold, so the first frame
+        /// the widget sees is ALWAYS some way along the drag and never at
+        /// `from`. A harness that jumped straight to `to` would hand the widget
+        /// a first frame at its destination and never exercise the gap.
         fn drag(
             &mut self,
             g: &mut Gradient,
@@ -3678,8 +3799,8 @@ mod tests {
         ) -> Vec<egui::Shape> {
             self.frame(g, vec![egui::Event::PointerMoved(from)]);
             self.frame(g, vec![egui::Event::PointerMoved(from), press(from, true)]);
-            self.live_at = from + (to - from).normalized() * 12.0;
-            self.frame(g, vec![egui::Event::PointerMoved(self.live_at)]);
+            let live_at = from + (to - from).normalized() * 12.0;
+            self.frame(g, vec![egui::Event::PointerMoved(live_at)]);
             self.frame(g, vec![egui::Event::PointerMoved(to)])
         }
 
@@ -4118,9 +4239,10 @@ mod tests {
     /// with over its OWN rectangle — which works HERE, where the strip below
     /// needs a position check as well, because the button senses clicks and not
     /// drags: a press on it produces no drag hit for the track to inherit, at
-    /// any distance. Sensed together, a press that began on the button reaches
-    /// the track's rotate branch the moment egui calls it a drag, and the
-    /// circle spins under a pointer that pressed a button.
+    /// any distance. Sensed together, the track takes that press and the only
+    /// thing left standing between it and the rotate branch is the same
+    /// [`aimed_at`] check the strip is declined by — a position test doing the
+    /// work a rectangle does for free, and doing it a few frames late.
     #[test]
     fn a_drag_begun_on_the_flip_button_turns_nothing() {
         let before =
@@ -4266,6 +4388,12 @@ mod tests {
 
     /// A turn slides the circle under a fixed left edge, and the hue the
     /// gesture took hold of stays under the pointer for the length of it.
+    ///
+    /// The hue it took hold of is the one under the PRESS, so the turn is the
+    /// pointer's whole travel rather than what is left of it after egui has
+    /// spent six points deciding the press was a drag. Anchoring on the first
+    /// live frame instead leaves the circle behind the hand by that much for
+    /// the rest of the gesture, and nothing on screen ever catches it up.
     #[test]
     fn turning_the_spectrum_keeps_the_grabbed_hue_under_the_pointer() {
         let mut g = Gradient { hue_start: 0.0, hue_span: 90.0, ..Gradient::default() };
@@ -4275,7 +4403,7 @@ mod tests {
         let (from, to) = (h.at_span(300.0), h.at_span(200.0));
         h.drag(&mut g, from, to);
         let track = h.track();
-        let held = hue_under(before, track, h.live_at);
+        let held = hue_under(before, track, from);
         let now = hue_under(g, track, to);
         // Within a degree either side, the far side being the seam: two hues a
         // whisker apart across 0 are 359 apart by subtraction.
@@ -4286,6 +4414,55 @@ mod tests {
         );
         assert_ne!(g.hue_start, before.hue_start, "the turn moved nothing");
         assert_eq!(g.hue_span, before.hue_span, "a turn changed how wide the arc is");
+    }
+
+    /// A press within the handle's reach drags the HANDLE, whichever way the
+    /// drag then runs.
+    ///
+    /// The reach is what the cursor promises — a `ResizeHorizontal` under the
+    /// pointer says a press here resizes the arc — and the promise is made at
+    /// the moment of the press. egui calls a press a drag only once it has left
+    /// a six-point threshold, so a gesture that runs OUTWARD from a press near
+    /// the edge of the reach is already clear of it by the first live frame,
+    /// and settling the question there turns the circle under a hand that aimed
+    /// at the handle. Swept across the reach and both ways, because the middle
+    /// of it survives either rule.
+    #[test]
+    fn a_press_within_the_handles_reach_drags_the_handle_whichever_way_it_runs() {
+        let before = Gradient { hue_start: 40.0, hue_span: 180.0, ..Gradient::default() };
+        for offset in [-GRAB_PX, -GRAB_PX * 0.5, 0.0, GRAB_PX * 0.5, GRAB_PX] {
+            for run in [-40.0f32, 40.0] {
+                let mut g = before;
+                let mut h = Spectrum::settled(&mut g);
+                let from = h.at_span(before.hue_span) + Vec2::new(offset, 0.0);
+                h.drag(&mut g, from, from + Vec2::new(run, 0.0));
+                let aimed = format!("pressed {offset} from the handle and dragged {run}");
+                assert_eq!(
+                    g.hue_start, before.hue_start,
+                    "{aimed}: the circle turned under a press on the handle",
+                );
+                assert_ne!(g.hue_span, before.hue_span, "{aimed}: the arc did not move");
+            }
+        }
+    }
+
+    /// And a press CLEAR of that reach turns the circle, however the drag then
+    /// runs — the other half of the same rule, which without this is satisfied
+    /// by a bar whose handle has swallowed the whole track.
+    #[test]
+    fn a_press_clear_of_the_handle_turns_the_circle_whichever_way_it_runs() {
+        let before = Gradient { hue_start: 40.0, hue_span: 180.0, ..Gradient::default() };
+        for offset in [-GRAB_PX * 3.0, GRAB_PX * 3.0] {
+            for run in [-20.0f32, 20.0] {
+                let mut g = before;
+                let mut h = Spectrum::settled(&mut g);
+                let from = h.at_span(before.hue_span) + Vec2::new(offset, 0.0);
+                h.drag(&mut g, from, from + Vec2::new(run, 0.0));
+                let aimed = format!("pressed {offset} from the handle and dragged {run}");
+                assert_ne!(g.hue_start, before.hue_start, "{aimed}: the circle did not turn");
+                assert_eq!(g.hue_span, before.hue_span, "{aimed}: a turn resized the arc");
+            }
+        }
     }
 
     /// A flip lands on the same arc read backwards — the promise the Flip
@@ -5793,8 +5970,9 @@ mod tests {
         frame(&mut g, vec![egui::Event::PointerMoved(at(from))]);
         frame(&mut g, vec![egui::Event::PointerMoved(at(from)), press(at(from), true)]);
         // A step clear of egui's drag threshold first, then the rest of the
-        // way: the grab is settled on the first LIVE frame, which a gesture
-        // that jumps straight to its target would settle at the target.
+        // way, for the reason the range bar's harness takes one: it is the gap
+        // between where a press lands and where the gesture is first read, and
+        // a jump straight to the target has no gap in it.
         let step = 12.0 / rect.width() * (to - from).signum();
         frame(&mut g, vec![egui::Event::PointerMoved(at(from + step))]);
         frame(&mut g, vec![egui::Event::PointerMoved(at(to))]);
@@ -5826,6 +6004,60 @@ mod tests {
         assert_eq!(pair.1, 40.0, "the slide restyled the ramp to {}", pair.1);
         let (low, high) = ends(pair);
         assert_eq!((low, high), (low.round(), high.round()), "{low}..{high} is not whole");
+    }
+
+    /// A press within an end's reach takes THAT end here too, whichever way the
+    /// drag then runs — the [`aimed_at`] rule on the third of the bars that
+    /// splits a handle from a middle.
+    ///
+    /// Both bars, because the two work in axes two orders of magnitude apart
+    /// and the reach is converted into each: a conversion that dropped the
+    /// press position on one of them would leave the other passing.
+    ///
+    /// The pairs above nearly reach this and stop short — a press ON a handle
+    /// dragged OUTWARD is still just inside the reach twelve points later,
+    /// which is what the live position leaves. Inward is where it runs out.
+    ///
+    /// Asserted on the two ENDS rather than on the stored pair, which is the
+    /// only form of the claim that holds in both bars. "A slide leaves the ramp
+    /// alone" is false on the chroma bar: `snapped` recomposes the pair through
+    /// a hundredth-wide grid and `legal` runs it through `sanitize`, both in
+    /// f32, so a middle slide shifts `chroma_ramp` by an ulp at some runs and
+    /// not others — and a test that reads the ramp then passes against the live
+    /// position for exactly the runs where it does not. The ends say which
+    /// gesture ran: an end grab moves one and leaves the other standing, a
+    /// slide carries both. Held to a share of each bar's own axis so the one
+    /// assertion spans two units, and loose enough at the far end that an ulp
+    /// of recomposition is not a moved handle.
+    #[test]
+    fn a_press_within_a_spread_ends_reach_takes_that_end_whichever_way_it_runs() {
+        let bars = [(Spread::Brightness, (64.0f32, 44.0f32)), (Spread::Chroma, (0.64, 0.44))];
+        for (spread, pair) in bars {
+            let (min, max) = spread.axis();
+            let bar = filled_rects(&paint_bar(spread, pair))[0].0;
+            let track = bar.shrink2(Vec2::new(HANDLE_INSET, 0.0));
+            let was = ends(pair);
+            let handle = track.left() + track.width() * (was.0 - min) / (max - min);
+            let frac = |x: f32| (x - bar.left()) / bar.width();
+            for reach in [-GRAB_PX * 0.8, GRAB_PX * 0.8] {
+                for run in [-40.0f32, 40.0] {
+                    let from = handle + reach;
+                    let moved = ends(drag_bar(spread, pair, (frac(from), frac(from + run))));
+                    let aimed = format!("{spread:?}: pressed {reach} from the low end, ran {run}");
+                    let share = |a: f32, b: f32| (a - b).abs() / (max - min);
+                    assert!(
+                        share(moved.1, was.1) < 1e-4,
+                        "{aimed}: the high end came along, by {} of the axis",
+                        share(moved.1, was.1),
+                    );
+                    assert!(
+                        share(moved.0, was.0) > 0.02,
+                        "{aimed}: the low end moved {} of the axis, which is nothing",
+                        share(moved.0, was.0),
+                    );
+                }
+            }
+        }
     }
 
     /// The same wiring on the chroma bar, which is where the units the widget
