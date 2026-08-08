@@ -2383,6 +2383,97 @@ mod tests {
         texts.into_iter().next().expect("checked just above")
     }
 
+    /// The colored bands a spectrum bar paints — the track, then the
+    /// pitch-order strip. Everything else it draws is a rect, a line or a
+    /// convex polygon, so a mesh is a band and nothing else is.
+    fn bands(shapes: &[egui::Shape]) -> Vec<egui::Mesh> {
+        shapes
+            .iter()
+            .filter_map(|s| match s {
+                egui::Shape::Mesh(m) => Some((**m).clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Both bands are rounded by their own mesh, on the corner circle, and
+    /// sampled through the arc rather than chamfered across it.
+    ///
+    /// Nothing else in the suite looks at a mesh, so without this the entire
+    /// rounding mechanism — [`corner_inset`], [`CORNER_SAMPLES`], the radius
+    /// handed to [`gradient_strip`] — could be deleted and every test would
+    /// stay green. What it holds is the reason the bands are drawn edge to edge
+    /// at all: a square mesh inside a rounded well needs a ring of well showing
+    /// round it to look rounded, and that ring is a border no other bar in a
+    /// settings pane wears.
+    ///
+    /// Three claims, because they fail apart. Pinning the corner vertices to
+    /// the arc catches a chamfer and an inset that has stopped following the
+    /// circle, but not a corner drawn from its two endpoints alone — the
+    /// endpoints are ON the arc. The sample count catches that. And the
+    /// straight run catches a radius that has grown to swallow the band.
+    #[test]
+    fn both_colour_bands_are_rounded_by_their_own_mesh() {
+        let mut g = ViewConfig::default().pitch_gradient;
+        let mut h = Spectrum::settled(&mut g);
+        let shapes = h.frame(&mut g, vec![]);
+        let bands = bands(&shapes);
+        assert_eq!(bands.len(), 2, "a spectrum bar paints two bands, not {}", bands.len());
+        let radius = f32::from(bar_radius(1.0));
+        for (which, mesh) in ["track", "strip"].into_iter().zip(&bands) {
+            // The strip is 11pt against a radius of 5, so its ends are all but
+            // semicircular and its straight run is a point tall. That is a
+            // shape, not a limit — what the radius may not do is eat the band's
+            // LENGTH, which the straight-run count below is what catches.
+            let box_ = mesh.calc_bounds();
+            let (mut near, mut far, mut full_height) = (0, 0, 0);
+            // Two vertices per column, top then bottom, left to right.
+            for column in mesh.vertices.chunks(2) {
+                let (top, bottom) = (column[0].pos, column[1].pos);
+                assert!((top.x - bottom.x).abs() < 1e-3, "{which}: a column is not vertical");
+                let from_end = (top.x - box_.left()).min(box_.right() - top.x);
+                if from_end >= radius - 1e-3 {
+                    full_height += 1;
+                    assert!(
+                        (top.y - box_.top()).abs() < 1e-3
+                            && (bottom.y - box_.bottom()).abs() < 1e-3,
+                        "{which}: a column {from_end} from the end, past the corner, is pinched",
+                    );
+                    continue;
+                }
+                let cx = if top.x - box_.left() < radius {
+                    near += 1;
+                    box_.left() + radius
+                } else {
+                    far += 1;
+                    box_.right() - radius
+                };
+                for (y, cy) in
+                    [(top.y, box_.top() + radius), (bottom.y, box_.bottom() - radius)]
+                {
+                    let reach = ((top.x - cx).powi(2) + (y - cy).powi(2)).sqrt();
+                    assert!(
+                        (reach - radius).abs() < 0.05,
+                        "{which}: a corner vertex sits {reach} from the arc's centre, not {radius}",
+                    );
+                }
+            }
+            // Each corner counted on its own, against a flat four rather than
+            // against anything derived from [`CORNER_SAMPLES`]. A floor read
+            // off the constant it is meant to pin goes to zero with it and
+            // passes on a chamfer; four is the claim itself — fewer than four
+            // columns through a quarter turn reads as steps at any radius this
+            // control uses.
+            for (end, count) in [("near", near), ("far", far)] {
+                assert!(
+                    count >= 4,
+                    "{which}: {count} columns through the {end} corner — a chamfer, not an arc",
+                );
+            }
+            assert!(full_height > 0, "{which}: the radius swallowed the whole band");
+        }
+    }
+
     /// Where the bar drew its handle.
     fn spectrum_handle_x(shapes: &[egui::Shape]) -> f32 {
         let hs = handles(shapes);
