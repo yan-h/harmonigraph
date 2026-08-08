@@ -195,8 +195,11 @@ pub(super) fn draw_roll(
         // The LATTICE's bloom, on the roll's notes. One setting for both
         // pictures rather than a second bar here: the two are showing the same
         // notes in the same colors, and a light a node has that its ribbon does
-        // not is a difference between them that says nothing.
-        state.view.bloom_strength.max(0.0),
+        // not is a difference between them that says nothing. Through the
+        // renderer's own bound for the same reason — a strength the lattice
+        // clamps and the roll does not is that difference in the other
+        // direction.
+        harmonigraph_render::bloom_strength(state.view.bloom_strength),
         state.target_format,
         surface as u64,
     ));
@@ -266,26 +269,27 @@ pub(super) fn note_instances(
     // thousands of notes while only a handful are on screen, and sorting the
     // survivors alone (rather than every remembered note) keeps the same
     // deterministic paint order for far less work.
-    //   - Entirely past the window's far end, or
-    //   - entirely off the octave zoom (both endpoints outside and on the
-    //     same side, so a note that merely crosses an edge still draws its
-    //     visible part).
+    //
+    // On TIME, and only on time — the pitch test is per segment, below, for a
+    // reason the margin here cannot fix.
+    //
     // A note paints past its own box, and the box is what the window is tested
     // against — so without an overhang a note vanishes while that ink is still
     // owed, popping out of existence short of the edge instead of sliding under
-    // it. How far past differs by axis, and each margin below is its own axis'
-    // answer rather than one figure used twice.
-    // In time that is the span divided by the roll's own length, so it grows
-    // with the Span: ~200 ms across 10 s, over a second across a minute.
+    // it. In time that overhang is a screen-space length divided by the roll's
+    // own length, so it grows with the Span: ~200 ms across 10 s, over a second
+    // across a minute.
     //
     // The far edge moves out by exactly that, for the cull AND for the clamp
     // below, so the box overhangs and the pane's scissor takes the ink off as
     // it leaves. Bounded on purpose — an unclamped overhang is what makes a
     // ten-minute note a ten-minute quad.
     //
-    // Not in whole-song mode: there the region's far end is the take's start,
-    // and overhanging it would paint into the spectrum curve above, which no
-    // scissor cuts.
+    // Not in whole-song mode. That layout is static: nothing scrolls, so no
+    // note ever crosses an edge and there is no pop to prevent. What an
+    // overhang would buy there is a note held from before the render started
+    // beginning a few points outside the region rather than square on its
+    // edge, and the render starts where it starts.
     //
     // `min_half_depth` is in the overhang because the length floor grows a
     // leaving note's box back toward the region as its true length is truncated
@@ -303,26 +307,25 @@ pub(super) fn note_instances(
     let per_point = f64::from(1.0 / (axes.depth_len() * (1.0 - split)).max(1.0)) * time.window();
     let ink_seconds = if time.whole_song() { 0.0 } else { f64::from(ink_px) * per_point };
     let edge = oldest - ink_seconds;
-    // Across pitch the same argument in that axis' own units, and here the
-    // outline is the whole of it: it stands past a note's long edges, which are
-    // the edges that face the pitch range's ends. Measured off the DRAWN ribbon
-    // rather than `roll_thickness`, since the width floor is what a note
-    // actually occupies at a wide zoom, and converted through the scale — so
-    // the margin shrinks as the zoom tightens instead of staying a fixed number
-    // of semitones.
-    let reach_px = half_pitch + outline_px + 0.5 * feather_px;
-    let pitch_margin = reach_px / axes.pitch_len().max(1.0) * scale.span;
-    let mut notes: Vec<&RollNote> = roll
-        .notes()
-        .filter(|note| {
-            if note.stop(now) < edge {
-                return false;
-            }
-            let (a, b) = (note.start_pitch(), note.end_pitch());
-            let (lo, hi) = (a.min(b), a.max(b));
-            hi >= scale.min_midi - pitch_margin && lo <= scale.max_midi + pitch_margin
-        })
-        .collect();
+    // Across pitch there is no margin to be had at the NOTE's level, and that
+    // is the whole reason the test moved down into the loop.
+    //
+    // How far a segment's outline stands out along pitch is `skew * reach`,
+    // where `skew` is a reading of that ONE segment's slope (see the reach in
+    // [`note_instances`]'s loop, and `vs_note`) — so a note's pitch endpoints,
+    // which are all a filter here can see, do not bound it. A segment can be
+    // steeper than the note it belongs to, and its drawn length has no floor of
+    // its own: the floor is the note's, so a note long enough to draw honestly
+    // can still carry a segment a hundredth of a point long across a semitone,
+    // which per-note tuning produces routinely. A flat margin of the outline's
+    // own reach, as this was, drops such a glide while `(skew - 1)` times that
+    // reach of its outline is still owed inside the range.
+    //
+    // What that costs is sorting the notes that are inside the WINDOW but off
+    // the octave zoom — a comparison each. What it buys is a cull that is
+    // exact instead of one that is wrong by however steep the picture is.
+    let mut notes: Vec<&RollNote> =
+        roll.notes().filter(|note| note.stop(now) >= edge).collect();
     notes.sort_unstable_by(|a, b| {
         a.start
             .total_cmp(&b.start)
@@ -399,14 +402,28 @@ pub(super) fn note_instances(
             // coverage taken at a positive distance cannot reach back inside it
             // whatever the ribbon's thickness.
             //
-            // Wrapping the ENDS is what the fade earns. The outline reaches
-            // into a note's surroundings, and along time those surroundings are
-            // the next note — repeats of one key butt together there, so the
-            // outline of the later one darkens the tail of the earlier. That is
-            // a seam between two notes rather than a halo painted over one:
-            // fading, it costs the earlier note's color nothing at the moment
-            // the two meet and reads as the boundary it is, where an opaque cap
-            // would blank the note's last points outright.
+            // Wrapping the ENDS is what makes a repeated key readable, and it
+            // is not free. The outline reaches into a note's surroundings, and
+            // along time those surroundings are the next note — repeats of one
+            // key butt together there, so the outline of the later one lands
+            // on the tail of the earlier and is the seam between them, which
+            // is the boundary a repeat most needs.
+            //
+            // The fade does not make that free, and it is worth being exact
+            // about, since it looks as though it should: coverage is OPAQUE
+            // where the outline meets its own note whatever the fade is set to
+            // (`outline_coverage`, and the reason is in [`outline`] — a
+            // surround that is translucent against the note takes its color
+            // from the cell behind it). So the earlier note loses its last
+            // `reach - fade` points outright and the `fade` before those to a
+            // ramp. What the fade buys is how quickly the seam lets go.
+            //
+            // Which makes the reach the setting to be careful with, at the
+            // wide end and on the shortest notes: a tapped key floored to a
+            // point or two of length wears an outline of the full reach at
+            // both ends, so at the top of the bar it is a dot inside its own
+            // surround. See
+            // [`SpectrumConfig::roll_outline`](crate::SpectrumConfig).
             //
             // Nothing else rides the outline — in particular, no band
             // approximating the bloom. The bloom the notes carry is the
@@ -459,6 +476,27 @@ pub(super) fn note_instances(
             } else {
                 0.0
             };
+            // Off the octave zoom entirely, tested against the ink this
+            // segment actually reaches rather than the note's endpoints — the
+            // cull the filter above deliberately leaves undone.
+            //
+            // Term for term what `vs_note` grows the quad by along pitch: the
+            // drawn ribbon's own half width, the center line's drift over the
+            // quad's half length (ends included), and the outline's reach
+            // turned into a distance ALONG pitch, which on a sheared note is
+            // `skew` times what it is across the note's long edges. Measured
+            // from the segment's own center, which is where the shader
+            // measures it from.
+            let outline_reach_px = outline_px + 0.5 * feather_px;
+            let skew = (1.0 + slope * slope).sqrt();
+            let ink_pitch_px = half_pitch
+                + slope.abs() * (half_depth + outline_reach_px + 0.5 * feather_px)
+                + skew * outline_reach_px;
+            let ink_pitch = ink_pitch_px / axes.pitch_len().max(1e-3);
+            let center_pitch = (a0 + a1) * 0.5;
+            if center_pitch + ink_pitch < 0.0 || center_pitch - ink_pitch > 1.0 {
+                continue;
+            }
             instances.push(RollInstance {
                 center: [center.x, center.y],
                 half_extent: [half_pitch, half_depth],
@@ -993,6 +1031,66 @@ mod tests {
     /// recognise a floored extent.
     fn min_half_depth_for(ppp: f32) -> f32 {
         0.5 * MIN_LENGTH_DEVICE_PX / ppp
+    }
+
+    /// A note off the octave zoom is dropped when its INK is off it, and how
+    /// far its ink reaches along pitch is a reading of its own slope.
+    ///
+    /// `vs_note` grows the quad by `skew * reach` along pitch, where `skew` is
+    /// `sqrt(1 + slope^2)` — so the outline of a steep glide stands a multiple
+    /// of its own reach out along that axis, and a cull that used the plain
+    /// reach dropped such a note while ink was still owed inside the range.
+    /// Two notes with the SAME pitch endpoints settle it: the cull cannot be
+    /// reading only those, or the two come out alike.
+    #[test]
+    fn a_steep_glide_is_kept_for_the_outline_it_still_owes_the_range() {
+        // The bend applied `after` seconds into a note held from 2 s to 5 s.
+        // Immediately (one block, what per-note tuning actually does) it is a
+        // segment a fraction of a point long carrying the whole semitone;
+        // spread over two seconds it is a shallow ramp. Same endpoints either
+        // way, and both sit above the zoom.
+        let glide = |after: f64| {
+            let mut state =
+                SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
+            state.spectrum_config.orientation = SpectralOrientation::Left;
+            state.spectrum_config.roll_seconds = 10.0;
+            // The narrowest zoom there is (`PITCH_RANGE_MIN_SPAN`); anything
+            // narrower is widened back out under the test's feet.
+            state.spectrum_config.low_midi = 36.0;
+            state.spectrum_config.high_midi = 60.0;
+            state.spectrum_config.roll_outline = crate::ROLL_OUTLINE_MAX;
+            state.tracker.handle_event(NoteEvent {
+                time: 2.0,
+                channel: 0,
+                note: 62,
+                kind: NoteEventKind::On { velocity: 1.0 },
+            });
+            state.tracker.handle_event(NoteEvent {
+                time: 2.0 + after,
+                channel: 0,
+                note: 62,
+                kind: NoteEventKind::Tuning { semitones: 1.0 },
+            });
+            instances(&state, 5.0)
+        };
+
+        // Shallow: two semitones clear of the zoom is further than an outline
+        // of any width reaches, so nothing is owed and nothing is drawn.
+        assert!(
+            glide(2.0).is_empty(),
+            "a note two semitones off the zoom drew anyway; the cull is doing nothing",
+        );
+        // Steep: the same note, bent in one block instead of over two seconds
+        // — the same two endpoints, and an outline that does reach in.
+        let steep = glide(0.011);
+        assert!(
+            !steep.is_empty(),
+            "a steep glide was culled while its outline still stood inside the range",
+        );
+        assert!(
+            steep.iter().any(|n| n.shear.abs() > 1.0),
+            "no segment is steep enough for the skew to matter; the case is vacuous",
+        );
     }
 
     /// A glide is the same instance sheared, not a second kind of shape: the

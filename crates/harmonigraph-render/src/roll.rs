@@ -183,12 +183,15 @@ struct BloomUniforms {
 struct RollResources {
     pipeline: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
-    /// The bloom chain's three post passes and the one that lays the result
-    /// over the notes. `fs_bright`, `fs_blur_h` and `fs_blur_v` are the
-    /// lattice's, out of the same blit.wgsl, so the halo the roll grows is the
-    /// halo the lattice grows: same threshold, same knee, same kernel, same
-    /// fractions of the pane's screen size.
+    /// The bloom chain's four post passes and the one that lays the result
+    /// over the notes. The four are the lattice's, out of the same blit.wgsl
+    /// and stepped through by the same [`crate::BloomChain::run`], so the
+    /// halo the roll grows is the halo the lattice grows: same threshold at
+    /// the same resolution, same knee, same kernel, same fractions of the
+    /// pane's screen size. Only the target FORMAT is the roll's own, which is
+    /// why the pipelines are its own and the chain is not.
     bright_pipeline: wgpu::RenderPipeline,
+    downsample_pipeline: wgpu::RenderPipeline,
     blur_h_pipeline: wgpu::RenderPipeline,
     blur_v_pipeline: wgpu::RenderPipeline,
     bloom_pipeline: wgpu::RenderPipeline,
@@ -199,7 +202,22 @@ struct RollResources {
     sampler: wgpu::Sampler,
     target_format: wgpu::TextureFormat,
     panes: HashMap<u64, RollPane>,
+    /// Counts `prepare` calls, which is what [`RollPane::last_seen`] is
+    /// stamped with — a clock the callback already has, where a frame count
+    /// would need one to be plumbed in.
+    prepares: u64,
 }
+
+/// How many `prepare` calls a pane may go unseen before its buffers and its
+/// bloom chain are dropped.
+///
+/// A pane is prepared once per frame while it is on screen, so with the two
+/// rolls that can be live at once this is about a second at 60 fps. Long
+/// enough that a pane hidden for a frame keeps everything, short enough that
+/// a closed one is not still holding a bloom chain a minute later: three
+/// textures the size of the pane it was shown at, which is the reason there is
+/// a sweep here at all rather than a map that only ever grows.
+const PANE_TTL_PREPARES: u64 = 120;
 
 struct RollPane {
     uniform_buffer: wgpu::Buffer,
@@ -211,10 +229,12 @@ struct RollPane {
     /// asks for bloom, and rebuilt when the rect resizes — a roll with the
     /// strength at 0 pays for none of it.
     bloom: Option<RollBloom>,
+    /// The value of [`RollResources::prepares`] when this pane was last drawn.
+    last_seen: u64,
 }
 
-/// The roll's copy of the lattice's bloom chain: the notes rendered again at
-/// half the roll's size, thresholded down to a quarter, blurred separably, and
+/// The roll's picture to bloom, and the lattice's own [`crate::BloomChain`] over it:
+/// the notes rendered again offscreen, thresholded, blurred separably, and
 /// added back over the sharp notes as light.
 ///
 /// The notes are RE-RENDERED rather than read back out of the egui pass, and
@@ -225,17 +245,27 @@ struct RollPane {
 /// alignment to the pixel, on a picture that scrolls sub-pixel; a pass that
 /// only feeds a blur does not care where its texels landed to half a pixel.
 struct RollBloom {
-    /// The notes again, at half the roll's screen size — the resolution the
-    /// lattice's own bright pass writes, so the chain below it is identical.
-    half_view: wgpu::TextureView,
-    quarter_a_view: wgpu::TextureView,
-    quarter_b_view: wgpu::TextureView,
-    /// Notes-at-half mapped into this texture rather than onto the surface.
+    /// The notes again, at HALF the roll's screen size — the picture the
+    /// chain's threshold reads, standing where the lattice's own scene
+    /// texture stands.
+    ///
+    /// Half rather than the roll's full size is the one place the two
+    /// pictures are not the same thing, so it is worth saying what the
+    /// difference is. `fs_bright` only ever SAMPLES at half, so drawing there
+    /// skips a resample the lattice pays for; what it costs is that a ribbon
+    /// narrower than one of these pixels is measured by the note shader's own
+    /// box filter rather than by a bilinear tap over a sharper raster, and on
+    /// a shape that lands between two of these pixels the two readings of its
+    /// peak differ by up to a factor of two. At the width the spectral pane
+    /// floors a ribbon to — 1.5 points, which is 3 device pixels and so one
+    /// and a half of these — they are close, and the alternative is a
+    /// full-resolution copy of the roll, four times this, for a picture
+    /// nothing downstream reads at full resolution.
+    notes_view: wgpu::TextureView,
+    /// Notes mapped into that texture rather than onto the surface.
     notes_uniform: wgpu::Buffer,
     notes_bind_group: wgpu::BindGroup,
-    bright_bind_group: wgpu::BindGroup,
-    blur_h_bind_group: wgpu::BindGroup,
-    blur_v_bind_group: wgpu::BindGroup,
+    bloom: crate::BloomChain,
     /// Quarter A (where the vertical blur lands) plus the strength.
     add_bind_group: wgpu::BindGroup,
     strength_buffer: wgpu::Buffer,
@@ -314,6 +344,7 @@ impl RollResources {
             pipeline,
             layout,
             bright_pipeline: filter("fs_bright"),
+            downsample_pipeline: filter("fs_blit"),
             blur_h_pipeline: filter("fs_blur_h"),
             blur_v_pipeline: filter("fs_blur_v"),
             bloom_pipeline: crate::create_post_pipeline(
@@ -338,6 +369,7 @@ impl RollResources {
             }),
             target_format,
             panes: HashMap::new(),
+            prepares: 0,
         }
     }
 
@@ -356,14 +388,17 @@ struct RollBloomShared<'a> {
 }
 
 impl RollPane {
-    /// This pane's buffers, made on first sight of its id.
+    /// This pane's buffers, made on first sight of its id and stamped with
+    /// `prepares` so [`RollPane::evict_unseen`] can tell a live pane from one
+    /// whose tab was closed.
     fn get<'a>(
         panes: &'a mut HashMap<u64, RollPane>,
         device: &wgpu::Device,
         layout: &wgpu::BindGroupLayout,
         pane_id: u64,
+        prepares: u64,
     ) -> &'a mut RollPane {
-        panes.entry(pane_id).or_insert_with(|| {
+        let pane = panes.entry(pane_id).or_insert_with(|| {
             let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("roll_uniforms"),
                 size: std::mem::size_of::<RollUniforms>() as u64,
@@ -389,8 +424,22 @@ impl RollPane {
                 capacity: INITIAL_NOTE_CAPACITY,
                 count: 0,
                 bloom: None,
+                last_seen: prepares,
             }
-        })
+        });
+        pane.last_seen = prepares;
+        pane
+    }
+
+    /// Drop every pane that has not been drawn for [`PANE_TTL_PREPARES`].
+    ///
+    /// A roll's id is its surface (the docked pane, the Render preview), and a
+    /// closed tab simply stops calling back — there is no teardown to hang
+    /// this on, so the panes still being prepared are the only evidence of
+    /// which ones exist. Run from whichever pane IS preparing, so a lone
+    /// survivor still clears the others.
+    fn evict_unseen(panes: &mut HashMap<u64, RollPane>, prepares: u64) {
+        panes.retain(|_, pane| prepares.saturating_sub(pane.last_seen) < PANE_TTL_PREPARES);
     }
 }
 
@@ -400,43 +449,30 @@ impl RollBloom {
     /// screen size — the same rule the lattice's chain follows, which is what
     /// makes one bloom strength mean the same thing in both pictures.
     fn new(device: &wgpu::Device, shared: &RollBloomShared<'_>, size: [u32; 2]) -> Self {
-        let tex = |label: &str, w: u32, h: u32| {
-            device
-                .create_texture(&wgpu::TextureDescriptor {
-                    label: Some(label),
-                    size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format: shared.format,
-                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                        | wgpu::TextureUsages::TEXTURE_BINDING,
-                    view_formats: &[],
-                })
-                .create_view(&Default::default())
-        };
         let (hw, hh) = (size[0].div_ceil(2).max(1), size[1].div_ceil(2).max(1));
-        let (qw, qh) = (size[0].div_ceil(4).max(1), size[1].div_ceil(4).max(1));
-        let half_view = tex("roll_bloom_half", hw, hh);
-        let quarter_a_view = tex("roll_bloom_quarter_a", qw, qh);
-        let quarter_b_view = tex("roll_bloom_quarter_b", qw, qh);
-
-        let filter_bg = |label: &str, source: &wgpu::TextureView| {
-            device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some(label),
-                layout: shared.filter_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(source),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::Sampler(shared.sampler),
-                    },
-                ],
+        let notes_view = device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("roll_bloom_notes"),
+                size: wgpu::Extent3d { width: hw, height: hh, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: shared.format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
             })
-        };
+            .create_view(&Default::default());
+        let bloom = crate::BloomChain::new(
+            device,
+            "roll",
+            shared.format,
+            shared.filter_layout,
+            shared.sampler,
+            &notes_view,
+            size,
+        );
+
         let notes_uniform = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("roll_bloom_notes_uniforms"),
             size: std::mem::size_of::<RollUniforms>() as u64,
@@ -458,16 +494,13 @@ impl RollBloom {
                     resource: notes_uniform.as_entire_binding(),
                 }],
             }),
-            bright_bind_group: filter_bg("roll_bloom_bright_bind_group", &half_view),
-            blur_h_bind_group: filter_bg("roll_bloom_blur_h_bind_group", &quarter_a_view),
-            blur_v_bind_group: filter_bg("roll_bloom_blur_v_bind_group", &quarter_b_view),
             add_bind_group: device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("roll_bloom_add_bind_group"),
                 layout: shared.bloom_layout,
                 entries: &[
                     wgpu::BindGroupEntry {
                         binding: 0,
-                        resource: wgpu::BindingResource::TextureView(&quarter_a_view),
+                        resource: wgpu::BindingResource::TextureView(&bloom.quarter_a_view),
                     },
                     wgpu::BindGroupEntry {
                         binding: 1,
@@ -479,9 +512,8 @@ impl RollBloom {
                     },
                 ],
             }),
-            half_view,
-            quarter_a_view,
-            quarter_b_view,
+            notes_view,
+            bloom,
             notes_uniform,
             strength_buffer,
             size,
@@ -579,6 +611,8 @@ impl CallbackTrait for RollCallback {
         }
         let resources: &mut RollResources =
             callback_resources.get_mut().expect("inserted above when missing");
+        resources.prepares = resources.prepares.wrapping_add(1);
+        let prepares = resources.prepares;
 
         let ppp = screen_descriptor.pixels_per_point.max(f32::EPSILON);
         let uniforms = RollUniforms {
@@ -600,12 +634,23 @@ impl CallbackTrait for RollCallback {
         };
 
         // The roll's own rect in device pixels, which is what the bloom chain
-        // is sized against. A roll thinner than a pixel in either direction has
-        // no picture to bloom.
-        let bloom_size = [
-            (self.rect.width() * ppp).round().max(0.0) as u32,
-            (self.rect.height() * ppp).round().max(0.0) as u32,
-        ];
+        // is sized against. Through epaint's own conversion rather than a
+        // rounded `width * ppp`, because that conversion is what `paint`
+        // stretches the finished halo across: it rounds each EDGE and
+        // subtracts, then clamps to the screen, so a rect whose edges round
+        // in opposite directions measures a pixel less than its width does,
+        // and a rect hanging off the screen measures less again. Sized either
+        // way but stretched this way, the halo comes out scaled against the
+        // notes it grew from, and slid by whatever the clamp took.
+        //
+        // A roll thinner than a pixel in either direction has no picture to
+        // bloom.
+        let viewport = egui::epaint::ViewportInPixels::from_points(
+            &self.rect,
+            ppp,
+            screen_descriptor.size_in_pixels,
+        );
+        let bloom_size = [viewport.width_px.max(0) as u32, viewport.height_px.max(0) as u32];
         let wants_bloom =
             self.bloom > 0.0 && !self.instances.is_empty() && bloom_size.iter().all(|&d| d > 0);
 
@@ -615,9 +660,12 @@ impl CallbackTrait for RollCallback {
             // ramp has to follow it or a hairline ribbon comes out at the wrong
             // weight in the halo.
             let half_ppp = ppp * 0.5;
+            // The viewport's own edges, back in points: the texture covers
+            // exactly the pixels `paint` will lay it over, so the notes in it
+            // stand where the notes under it do.
             RollUniforms {
-                origin_points: [self.rect.min.x, self.rect.min.y],
-                viewport_points: [self.rect.width(), self.rect.height()],
+                origin_points: [viewport.left_px as f32 / ppp, viewport.top_px as f32 / ppp],
+                viewport_points: [bloom_size[0] as f32 / ppp, bloom_size[1] as f32 / ppp],
                 feather: 1.0 / half_ppp,
                 ..uniforms
             }
@@ -629,6 +677,7 @@ impl CallbackTrait for RollCallback {
             pipeline,
             layout,
             bright_pipeline,
+            downsample_pipeline,
             blur_h_pipeline,
             blur_v_pipeline,
             filter_layout,
@@ -645,7 +694,8 @@ impl CallbackTrait for RollCallback {
             sampler,
             format: *target_format,
         };
-        let pane = RollPane::get(panes, device, layout, self.pane_id);
+        RollPane::evict_unseen(panes, prepares);
+        let pane = RollPane::get(panes, device, layout, self.pane_id, prepares);
         if self.instances.len() > pane.capacity {
             pane.capacity = self.instances.len().next_power_of_two();
             pane.instance_buffer =
@@ -677,15 +727,13 @@ impl CallbackTrait for RollCallback {
             bytemuck::bytes_of(&BloomUniforms { strength: [self.bloom, 0.0, 0.0, 0.0] }),
         );
 
-        // The notes again at half size, then the lattice's own chain over
-        // them: threshold down to a quarter, blur horizontally into B, blur
-        // vertically back into A. `paint` samples A, so the vertical blur MUST
-        // be the step that lands there.
+        // The notes again at half size, and then the lattice's own chain over
+        // them, step for step (see [`BloomChain::run`]).
         {
             let mut pass = egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("roll_bloom_notes"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &bloom.half_view,
+                    view: &bloom.notes_view,
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
@@ -703,32 +751,16 @@ impl CallbackTrait for RollCallback {
             pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
             pass.draw(0..4, 0..pane.count);
         }
-        let steps: [(&wgpu::RenderPipeline, &wgpu::BindGroup, &wgpu::TextureView); 3] = [
-            (&*bright_pipeline, &bloom.bright_bind_group, &bloom.quarter_a_view),
-            (&*blur_h_pipeline, &bloom.blur_h_bind_group, &bloom.quarter_b_view),
-            (&*blur_v_pipeline, &bloom.blur_v_bind_group, &bloom.quarter_a_view),
-        ];
-        for (pipeline, bind_group, target) in steps {
-            let mut pass = egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("roll_bloom_pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: target,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_pipeline(pipeline);
-            pass.set_bind_group(0, bind_group, &[]);
-            pass.draw(0..4, 0..1);
-        }
+        bloom.bloom.run(
+            egui_encoder,
+            crate::BloomPipelines {
+                bright: bright_pipeline,
+                downsample: downsample_pipeline,
+                blur_h: blur_h_pipeline,
+                blur_v: blur_v_pipeline,
+            },
+            "roll",
+        );
 
         Vec::new()
     }
@@ -864,6 +896,20 @@ mod tests {
         bloom: f32,
         clear: wgpu::Color,
     ) -> Vec<u8> {
+        draw_bloomed_resourced(device, queue, instances, axes, bloom, clear).0
+    }
+
+    /// As [`draw_bloomed`], handing back the callback's resources as well —
+    /// which is where "no bloom ran" is visible, the frame being the one place
+    /// it is not.
+    fn draw_bloomed_resourced(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        instances: Vec<RollInstance>,
+        axes: RollAxes,
+        bloom: f32,
+        clear: wgpu::Color,
+    ) -> (Vec<u8>, CallbackResources) {
         // The roll's rect is the whole test surface, so a point is a pixel
         // here as it is everywhere else in these tests.
         let rect =
@@ -894,7 +940,7 @@ mod tests {
                 &resources,
             );
         });
-        readback(device, queue, &texture, SIZE)
+        (readback(device, queue, &texture, SIZE), resources)
     }
 
     fn pixel(frame: &[u8], x: u32, y: u32) -> [u8; 4] {
@@ -1313,10 +1359,188 @@ mod tests {
             );
         }
 
-        // And at 0 it is not merely faint — no pass runs, and the bytes are the
-        // ones a roll that never heard of bloom would write.
-        let off = draw_bloomed(&device, &queue, vec![note], TOP, 0.0, wgpu::Color::BLACK);
-        assert!(off == plain, "a strength of 0 changed the frame");
+        // And at 0 it is not merely faint: no chain is built and no pass runs.
+        //
+        // Asked of the RESOURCES rather than of the frame. Two frames drawn at
+        // strength 0 are the same bytes however much work went into them, so a
+        // `paint` that started laying an all-black halo over every note, or a
+        // `prepare` that started running the chain and multiplying by zero,
+        // would leave the picture untouched and cost the whole thing — which
+        // is what "0 skips it whole" is a claim about.
+        let black = wgpu::Color::BLACK;
+        let bloom_of = |strength: f32| {
+            let (_, resources) =
+                draw_bloomed_resourced(&device, &queue, vec![note], TOP, strength, black);
+            let roll: &RollResources = resources.get().expect("the callback inserts its resources");
+            roll.panes[&0].bloom.is_some()
+        };
+        assert!(!bloom_of(0.0), "a strength of 0 built the bloom chain anyway");
+        assert!(bloom_of(1.5), "no chain was built at a strength that asks for one");
+    }
+
+    /// One `prepare` of `cb` against `resources`, submitted — the unit both
+    /// tests below count in, since a pane's age is measured in these.
+    fn prepare_once(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        resources: &mut CallbackResources,
+        ppp: f32,
+        cb: &RollCallback,
+    ) {
+        let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: ppp };
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let bufs = cb.prepare(device, queue, &screen, &mut encoder, resources);
+        queue.submit(bufs.into_iter().chain([encoder.finish()]));
+    }
+
+    /// A roll callback over `rect`, drawing one note with the bloom on.
+    fn bloomed_callback(rect: egui::Rect, pane_id: u64) -> RollCallback {
+        RollCallback {
+            rect,
+            instances: vec![centered_note()],
+            axes: TOP,
+            bloom: 1.5,
+            target_format: FORMAT,
+            pane_id,
+        }
+    }
+
+    /// The bloom chain covers exactly the pixels the halo is stretched across.
+    ///
+    /// `paint` lays quarter A over `viewport_in_pixels()`, which rounds each
+    /// EDGE of the roll's rect and subtracts, then clamps to the screen — not
+    /// the width, rounded. On a rect whose two edges round in opposite
+    /// directions those differ by a pixel, and a texture sized one way and
+    /// stretched the other puts the halo at a slightly different scale from
+    /// the notes it grew out of, which on a picture that scrolls sub-pixel is
+    /// a halo sliding against its own note.
+    #[test]
+    fn the_bloom_covers_the_pixels_the_halo_is_stretched_across() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let ppp = 2.0;
+        // 5.25 -> 10.5 -> 11 (up) and 15.2 -> 30.4 -> 30 (down), so the
+        // viewport is 19 px across where the rounded width is 20.
+        let rect = egui::Rect::from_min_max(egui::pos2(5.25, 4.0), egui::pos2(15.2, 60.0));
+        let cb = bloomed_callback(rect, 0);
+        let mut resources = CallbackResources::default();
+        prepare_once(&device, &queue, &mut resources, ppp, &cb);
+
+        let vp = egui::epaint::ViewportInPixels::from_points(&rect, ppp, SIZE);
+        let roll: &RollResources = resources.get().expect("prepare inserts its resources");
+        let bloom = roll.panes[&0].bloom.as_ref().expect("a strength of 1.5 asks for a chain");
+        assert_eq!(
+            bloom.size,
+            [vp.width_px as u32, vp.height_px as u32],
+            "the chain covers {:?} where paint stretches it across {}x{}",
+            bloom.size,
+            vp.width_px,
+            vp.height_px,
+        );
+        // And the two roundings genuinely disagree on this rect, or the
+        // assertion above holds for a reason that is not the one it is about.
+        assert_ne!(
+            (rect.width() * ppp).round() as i32,
+            vp.width_px,
+            "this rect no longer tells the two roundings apart; the test is vacuous",
+        );
+    }
+
+    /// A pane that stops being drawn gives its buffers and its bloom chain
+    /// back, rather than holding three textures the size of the pane it was
+    /// last shown at for as long as the plugin is loaded.
+    ///
+    /// There is no teardown to hang this on — a closed tab simply stops
+    /// calling back — so the only evidence is the panes that ARE still
+    /// preparing, and the sweep runs from whichever one that is.
+    #[test]
+    fn a_pane_that_stops_drawing_gives_its_chain_back() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let rect =
+            egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(SIZE[0] as f32, SIZE[1] as f32));
+        let (docked, preview) = (bloomed_callback(rect, 0), bloomed_callback(rect, 1));
+        let mut resources = CallbackResources::default();
+        prepare_once(&device, &queue, &mut resources, 1.0, &docked);
+        prepare_once(&device, &queue, &mut resources, 1.0, &preview);
+        let live = |resources: &CallbackResources| {
+            let roll: &RollResources = resources.get().expect("prepare inserts its resources");
+            let mut ids: Vec<u64> = roll.panes.keys().copied().collect();
+            ids.sort_unstable();
+            ids
+        };
+        assert_eq!(live(&resources), vec![0, 1], "both rolls should be holding buffers");
+
+        // The preview's tab closes: the docked roll goes on drawing alone.
+        for _ in 0..PANE_TTL_PREPARES {
+            prepare_once(&device, &queue, &mut resources, 1.0, &docked);
+        }
+        assert_eq!(live(&resources), vec![0], "the closed pane is still holding its chain");
+    }
+
+    /// A thin ribbon glows in proportion to the ink it has, not a fraction of
+    /// it — which is a claim about WHERE the threshold sits in the chain.
+    ///
+    /// `fs_bright` is a soft knee, so what reaches it decides everything. The
+    /// chain thresholds the half-res picture and downsamples afterwards; a
+    /// chain that thresholds after the downsample instead measures a color
+    /// already box-averaged a second time, and on a ribbon near the width of
+    /// the pixel doing the averaging that is a fraction of the color it is
+    /// actually painted in. The knee then gates it hard, so a note goes dark
+    /// in the halo while the lattice node it lit up — same color, same
+    /// setting, but several pixels across — glows normally.
+    ///
+    /// Measured as the total light the halo adds, against a ribbon eight times
+    /// wider. The blur conserves light, so the ratio is the THRESHOLD's answer
+    /// and nothing else: 13x with the threshold above the downsample, 79x with
+    /// it below, against 8x of ink. The wide ribbon is the control and comes
+    /// out at the same 431588 either way — a shape comfortably wider than the
+    /// pixel cannot tell the two chains apart, which is why this needs a thin
+    /// one to say anything at all.
+    #[test]
+    fn a_thin_ribbon_glows_in_proportion_to_the_ink_it_has() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        // Mid grey: luminance ~0.47, which the knee (0.35 +/- 0.25) is still
+        // climbing through, so the halo is sensitive to what the threshold is
+        // handed rather than saturated whatever it is.
+        //
+        // Three points across, which is what the spectral pane's own width
+        // floor (`MIN_RIBBON_PX`, 1.5 points) comes to on the 2x display this
+        // is looked at on — the notes are rendered at half the roll's device
+        // size, so what decides this is the ribbon's width in DEVICE pixels.
+        let thin = RollInstance {
+            half_extent: [1.5, 60.0],
+            outline_reach: 0.0,
+            core: [120, 120, 120, 255],
+            outline: [0, 0, 0, 0],
+            ..centered_note()
+        };
+        let wide = RollInstance { half_extent: [12.0, 60.0], ..thin };
+        // All the light the halo adds, over the whole frame: the blur moves
+        // light around and conserves it, so this is what the THRESHOLD let
+        // through and nothing else. Red channel only — the note is grey.
+        let light = |note: RollInstance| {
+            let plain = draw_bloomed(&device, &queue, vec![note], TOP, 0.0, wgpu::Color::BLACK);
+            let lit = draw_bloomed(&device, &queue, vec![note], TOP, 1.5, wgpu::Color::BLACK);
+            lit.iter()
+                .zip(&plain)
+                .step_by(4)
+                .map(|(a, b)| f32::from(*a) - f32::from(*b))
+                .sum::<f32>()
+        };
+        let (thin_light, wide_light) = (light(thin), light(wide));
+        assert!(thin_light > 0.0, "a thin ribbon grew no halo at all");
+        let ratio = wide_light / thin_light;
+        assert!(
+            ratio < 25.0,
+            "the wide ribbon out-glows the thin one {ratio:.0}x on 8x the ink — the \
+             threshold is reading a picture that has been downsampled past it \
+             ({thin_light} against {wide_light})",
+        );
     }
 
     /// The pane's orientation lives entirely in the uniform: turning the axes
