@@ -1639,46 +1639,28 @@ const FLIP_W: f32 = 18.0;
 const SPAN_LABEL: &str = "Color span";
 
 /// How far a rimmed word's ground is drawn out around it, at the design scale.
-/// One point: enough to separate a glyph from the color behind it, and short of
-/// the weight that reads as an outlined typeface rather than a word on a busy
-/// ground.
-const TEXT_RIM: f32 = 1.0;
-
-/// Paints `galley` with a rim of the bar's own ground around it, for the two
-/// text runs that stand ON the hue circle.
+/// The color a [`SpectrumBar`] writes its own name in: the ground the bar sits
+/// on, which is the one text run in the dock not drawn in the theme's text.
 ///
 /// **The circle is drawn at ONE lightness ([`TRACK_LIGHTNESS`]), so a word on it
 /// has exactly two possible grounds** whatever the six knobs say: the circle at
 /// `L*` 60 where the arc claims it, and that same circle held back to the well
-/// beyond the handle. No color reads on both — the theme's own text is about
-/// 6:1 against the held-back half and about 2.5:1 against the claimed one, and
-/// a dark word swaps those round. That is the whole reason this track carried
-/// no name until now, and a name is worth more than the alternative costs: four
-/// offset copies of the same galley in the ground color, so the reader's color
-/// meets the well rather than the hue whichever half of the track it stands on.
+/// beyond the handle. Nothing reads well on both — the theme's text is about
+/// 2.5:1 against the claimed half and 6:1 against the held-back one, and the
+/// well is those two the other way round — so the name takes the color that
+/// reads where the name actually stands. It is pinned to the track's LEFT end,
+/// which is the CLAIMED end at every arc wide enough to reach past it, about 60
+/// degrees on the column this pane opens at.
 ///
-/// The galley is laid out ONCE, in [`Color32::PLACEHOLDER`], and each copy names
-/// the color it is painted in — laying it out twice would be two galleys to
-/// keep at one size.
-fn rimmed_galley(
-    painter: &egui::Painter,
-    pos: egui::Pos2,
-    galley: std::sync::Arc<egui::Galley>,
-    color: Color32,
-    scale: f32,
-) {
-    // At least a whole point, so the rim survives a UI scaled below 1.0 — under
-    // it the copies land on the same pixel as the word and draw nothing.
-    let reach = (TEXT_RIM * scale).max(1.0);
-    for offset in [
-        Vec2::new(-reach, 0.0),
-        Vec2::new(reach, 0.0),
-        Vec2::new(0.0, -reach),
-        Vec2::new(0.0, reach),
-    ] {
-        painter.galley(pos + offset, galley.clone(), theme::well());
-    }
-    painter.galley(pos, galley, color);
+/// What that costs is Mono and the arcs narrower than the name is wide: there
+/// the word stands on held-back color and goes quiet. That is the right way for
+/// it to fail — those are the settings where the bar has least to say, and the
+/// alternative is the whole rest of the range spent at 2.5:1.
+///
+/// The theme's own well rather than a black named here, so a re-skin moves the
+/// name with the ground it is drawn to match.
+fn span_name_color() -> Color32 {
+    theme::well()
 }
 
 /// Which part of a [`SpectrumBar`]'s track a drag took hold of. Decided once,
@@ -1821,11 +1803,11 @@ pub fn gradient_preview(ui: &mut Ui, gradient: &Gradient) -> Response {
 /// stops is a change of strength and nothing else.
 ///
 /// **The name stands ON the circle, in the place every other bar puts its own,
-/// and carries its own ground with it.** A word laid on a turn of color is the
-/// one thing this track cannot render legibly by choosing a color — see
-/// [`rimmed_galley`], which is where the two grounds are counted and the rim
-/// paid for. The circle then runs the whole track rather than starting past a
-/// gutter, which is what keeps the arc reading from the bar's own left edge.
+/// and is the one text run in the dock drawn dark rather than light** — see
+/// [`span_name_color`], where the two grounds a word on this track can have are
+/// counted and the choice between them made. The circle runs the whole track
+/// rather than starting past a gutter, which is what keeps the arc reading from
+/// the bar's own left edge.
 ///
 /// The readout is held to the stretch RIGHT of the name, exactly as a
 /// [`RangeBar`]'s numbers are, so the two text runs cannot meet however wide
@@ -1919,9 +1901,13 @@ impl<'a> SpectrumBar<'a> {
         // for why the rectangle is not enough.
         let on_track = |p: &egui::Pos2| track_rect.contains(*p);
         // Lit by a pointer ON the track, not merely by one egui has decided the
-        // track is nearest to, which reaches a row's spacing either side. Text
-        // that brightens while the pointer is over the preview says the picture
-        // is the control.
+        // track is nearest to, which reaches a row's spacing either side. A
+        // readout that brightens while the pointer is over the preview says the
+        // picture is the control.
+        //
+        // The READOUT alone answers the pointer. The name is one color at every
+        // state ([`span_name_color`]) because it is drawn to be read against the
+        // hue behind it, and dimming it means nothing but losing it.
         let pointing = response.hover_pos().filter(on_track);
         let text_color = if pointing.is_some() || response.dragged() {
             theme::text()
@@ -1940,13 +1926,10 @@ impl<'a> SpectrumBar<'a> {
             .layout_no_wrap(format!("{:+.0}°", -FULL_TURN), mono.clone(), theme::text())
             .size()
             .x;
-        // In [`Color32::PLACEHOLDER`], which is what lets the same galley be
-        // painted in the ground color for its rim and in the reader's color on
-        // top — see [`rimmed_galley`].
         let mut job = egui::text::LayoutJob::simple_singleline(
             SPAN_LABEL.to_owned(),
             TextStyle::Body.resolve(ui.style()),
-            Color32::PLACEHOLDER,
+            span_name_color(),
         );
         let text_pad = BAR_TEXT_PAD * scale;
         job.wrap.max_width =
@@ -2098,13 +2081,7 @@ impl<'a> SpectrumBar<'a> {
         let centered = |galley: &egui::Galley, x: f32| {
             egui::pos2(x, track_rect.center().y - galley.size().y * 0.5)
         };
-        rimmed_galley(
-            painter,
-            centered(&label, track_rect.left() + text_pad),
-            label,
-            text_color,
-            scale,
-        );
+        painter.galley(centered(&label, track_rect.left() + text_pad), label, span_name_color());
 
         // How far round the circle the arc reaches, read out beside the handle
         // — on the dimmed side, where it sits on flat color, and on the claimed
@@ -2118,8 +2095,7 @@ impl<'a> SpectrumBar<'a> {
         // Held clear of the NAME at its left, which is the one text run it
         // cannot slide under: the name is a word and the two would read as one
         // string. Its room came out of the name's own width above.
-        let galley =
-            painter.layout_no_wrap(format!("{:+.0}°", g.hue_span), mono, Color32::PLACEHOLDER);
+        let galley = painter.layout_no_wrap(format!("{:+.0}°", g.hue_span), mono, text_color);
         let reach = HANDLE_W * 0.5 * scale + text_gap;
         let outside = handle_x + reach;
         let left = if outside + galley.size().x <= track_rect.right() - text_gap {
@@ -2132,7 +2108,7 @@ impl<'a> SpectrumBar<'a> {
             (track_rect.right() - text_gap - galley.size().x).max(readable_left),
         );
         let at = centered(&galley, left);
-        rimmed_galley(painter, at, galley, text_color, scale);
+        painter.galley(at, galley, text_color);
 
         // The handle on top of everything, readout included: it is the part
         // you operate, and a digit sliding under it beats it disappearing
@@ -3939,18 +3915,18 @@ mod tests {
         }
     }
 
-    /// The two text runs a spectrum bar draws, rim copies dropped: a rimmed run
-    /// is one galley painted five times, four of them in the ground color to
-    /// separate it from the circle, and only the last carries the color a
-    /// reader sees. Told apart by that color, rather than by counting or by
-    /// position, so a rim that grows a copy is still one run here.
-    fn spectrum_texts(shapes: &[egui::Shape]) -> Vec<(egui::Rect, String)> {
+    /// The text runs a spectrum bar draws, each with the box it fills and the
+    /// color it was painted in — the color being a claim of its own here, since
+    /// the name and the readout stand on different halves of the track and are
+    /// drawn from opposite ends of the palette for it.
+    fn spectrum_texts(shapes: &[egui::Shape]) -> Vec<(egui::Rect, String, Color32)> {
         shapes
             .iter()
             .filter_map(|s| match s {
-                egui::Shape::Text(t) if t.fallback_color != theme::well() => Some((
+                egui::Shape::Text(t) => Some((
                     egui::Rect::from_min_size(t.pos, t.galley.size()),
                     t.galley.text().to_owned(),
+                    t.galley.job.sections.first().map_or(t.fallback_color, |s| s.format.color),
                 )),
                 _ => None,
             })
@@ -3961,7 +3937,7 @@ mod tests {
     /// left. Both are asserted, so a name that has stopped being drawn is a
     /// failure rather than a readout read off the wrong run.
     fn spectrum_readout(shapes: &[egui::Shape]) -> String {
-        let texts: Vec<String> = spectrum_texts(shapes).into_iter().map(|(_, s)| s).collect();
+        let texts: Vec<String> = spectrum_texts(shapes).into_iter().map(|(_, s, _)| s).collect();
         assert_eq!(
             texts.len(),
             2,
@@ -4349,17 +4325,18 @@ mod tests {
         assert!(handles(&shapes)[0].right() <= h.rect.right(), "a whole turn hangs the handle off");
     }
 
-    /// The name rides the circle — which runs the track end to end — carrying
-    /// its own ground, and the readout never reaches it.
+    /// The name rides the circle — which runs the track end to end — drawn in
+    /// the ground color rather than the theme's text, and the readout never
+    /// reaches it.
     ///
     /// Three claims that fail apart. The circle runs the WHOLE track, so the
     /// arc still reads from the bar's own left edge and nothing has quietly
-    /// taken a gutter back. The name is rimmed, which is the only thing
-    /// standing between a word and a turn of saturated color: without it the
-    /// name is legible over part of its own length and lost over the rest,
-    /// which no test of position can see. And the readout keeps off the name at
-    /// every span — swept to a whole turn, where it crosses to the near side of
-    /// the handle, which is the one arrangement that aims it at the name.
+    /// taken a gutter back. The name is DARK, which is what makes it legible
+    /// where it stands — see [`span_name_color`]; a name drawn in the color the
+    /// readout uses sits at about 2.5:1 on the claimed circle, and no test of
+    /// position can see that. And the readout keeps off the name at every span
+    /// — swept to a whole turn, where it crosses to the near side of the
+    /// handle, which is the one arrangement that aims it at the name.
     #[test]
     fn the_name_rides_the_circle_and_the_number_keeps_off_it() {
         for span in [0.0f32, 45.0, 190.0, 330.0, 360.0, -360.0] {
@@ -4372,8 +4349,8 @@ mod tests {
                 2,
                 "a span of {span} drew {texts:?} rather than a name and a readout",
             );
-            let (name, written) = texts[0].clone();
-            let readout = texts[1].0;
+            let (name, written, name_color) = texts[0].clone();
+            let (readout, _, readout_color) = texts[1].clone();
             // The name in full, which is what catches one elided into a track
             // too narrow for it.
             assert_eq!(written, SPAN_LABEL, "the bar wrote {written:?} as its name");
@@ -4389,20 +4366,20 @@ mod tests {
                 name.left() < circle.right() && name.right() > circle.left(),
                 "the name at {name:?} is not on the circle {circle:?} at all",
             );
-            // Every copy of the name is one galley in one place, four of them
-            // in the ground color: what makes it legible on either half of the
-            // circle. Counted rather than looked at, `spectrum_texts` having
-            // just dropped exactly these.
-            let rim = shapes
-                .iter()
-                .filter(|s| match s {
-                    egui::Shape::Text(t) => {
-                        t.fallback_color == theme::well() && t.galley.text() == SPAN_LABEL
-                    }
-                    _ => false,
-                })
-                .count();
-            assert_eq!(rim, 4, "the name was rimmed by {rim} copies of itself, not 4");
+            // Dark, and darker than the number beside it: the two stand on
+            // different halves of the track and take opposite ends of the
+            // palette for it. Asked as a comparison rather than against one
+            // named color, so a re-skin moves both together.
+            assert_eq!(
+                name_color,
+                span_name_color(),
+                "the name is drawn in {name_color:?}, not the ground color it is meant to be",
+            );
+            let luma = |c: Color32| f32::from(c.r()) + f32::from(c.g()) + f32::from(c.b());
+            assert!(
+                luma(name_color) < luma(readout_color),
+                "the name {name_color:?} is no darker than the readout {readout_color:?}",
+            );
             assert!(
                 readout.left() >= name.right(),
                 "a span of {span} put the readout at {readout:?}, back into the name {name:?}",
