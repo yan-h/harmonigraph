@@ -251,12 +251,18 @@ impl Axes {
         }
     }
 
-    /// Pixels spanned by the full pitch axis (the short side).
+    /// Points spanned by the full pitch axis (the short side).
     pub fn pitch_len(&self) -> f32 {
         if self.time_vertical { self.rect.width() } else { self.rect.height() }
     }
 
-    /// Pixels spanned by the full depth/time axis (the long side).
+    /// Points spanned by the full depth/time axis (the long side).
+    ///
+    /// Points rather than device pixels, and the distinction is load-bearing:
+    /// this is the divisor that turns a size in points ([`PLOT_HEADROOM_PT`])
+    /// into a fraction of the axis, so reading it as physical pixels halves
+    /// that size on a 2x display. [`roll`](super::roll)'s `MIN_LENGTH_DEVICE_PX`
+    /// is what a floor in the other unit looks like, and says so in its name.
     pub fn depth_len(&self) -> f32 {
         if self.time_vertical { self.rect.height() } else { self.rect.width() }
     }
