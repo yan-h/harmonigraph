@@ -40,9 +40,18 @@ pub(crate) struct BaseviewView {
 
     /// Buttons this view has reported pressed and not yet reported released,
     /// in `NSEvent::pressedMouseButtons`' bit order (see
-    /// `buttons_owed_release`). What makes the stream balanced: exactly one
-    /// `ButtonReleased` reaches the handler per `ButtonPressed`, whether the
-    /// release comes from AppKit or from `settle_stuck_buttons`.
+    /// `buttons_owed_release`). One bit is one release owed, and whoever pays
+    /// it — AppKit's `mouseUp:`, or `settle_stuck_buttons` — the other does not
+    /// pay it again.
+    ///
+    /// A bit, which is not the same as a press: every button past the first two
+    /// shares bit 2, so two of them held at once are one bit between them. The
+    /// second release is swallowed as a duplicate, and a button still held
+    /// after the first has been released is no longer recorded to be repaired.
+    /// Neither reaches the consumer, because a button is a bool at that end too
+    /// (egui's `down[Middle]`): the first release already puts it up, so nothing
+    /// is left held and no scroll area stays shut. Counting presses per bit
+    /// would buy a truer number that nothing reads.
     buttons_reported_down: Cell<u8>,
 
     /// Of those, the ones the OS already showed up at the PREVIOUS frame tick
@@ -349,12 +358,11 @@ impl BaseviewView {
 
     /// Report a release, unless the debt is already paid.
     ///
-    /// A `mouseUp:` that arrives after `settle_stuck_buttons` gave up on it is
-    /// dropped rather than passed on, which is what keeps the stream balanced
-    /// in the one case where AppKit and the view disagree about whether the
-    /// gesture is over. Sending it twice would end the NEXT gesture as well —
-    /// a second release against a fresh press is how a click lands on whatever
-    /// the pointer moved to since.
+    /// A `mouseUp:` for a bit that is no longer set is dropped rather than
+    /// passed on — the release `settle_stuck_buttons` gave up on and sent
+    /// itself, or the second of two buttons sharing bit 2. Sending it twice
+    /// would end the NEXT gesture as well: a second release against a fresh
+    /// press is how a click lands on whatever the pointer moved to since.
     fn report_release(this: ViewRef<Self>, button: MouseButton, event: &NSEvent) {
         let owed = this.buttons_reported_down.get();
         if owed & button_bit(button) != 0 {

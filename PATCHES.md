@@ -98,10 +98,14 @@ in the workspace `Cargo.toml`. Keep this file current when bumping either.
   Patch 5 already trusts — and synthesises the missing `ButtonReleased`. A
   stuck button must read stuck across two ticks (the hardware goes up before a
   queued `mouseUp:` is dispatched, so one tick cannot tell a fast click from a
-  lost release), a late real `mouseUp:` is then swallowed so the stream stays
-  balanced one-release-per-press, and every button above the first two shares
-  a bit because `otherMouseDown:` reports them all as `Middle`. Real drags are
-  untouched: through one the button reads down. `Cargo.toml` gains an empty
+  lost release), a late real `mouseUp:` is then swallowed so a bit yields one
+  release however it is paid, and every button above the first two shares a bit
+  because `otherMouseDown:` reports them all as `Middle` — so two of THOSE held
+  at once are one bit between them, the second release is dropped as a
+  duplicate, and a stuck one behind an already-released sibling is not
+  repaired. Neither reaches the consumer, whose button is a bool that the first
+  release has already put up. Real drags are untouched: through one the button
+  reads down. `Cargo.toml` gains an empty
   `[workspace]` table so `cargo test --manifest-path` reaches the unit tests
   over the mask arithmetic; ci.sh runs them. macOS only.
 - **Upgrade**: download the new crates.io tarball into `vendor/baseview`,
