@@ -23,16 +23,18 @@ family and is model-invocable — so this is a boundary to work within, not
 an oversight to work around.
 
 Run **`/self-review`** instead. It is the project-local command that goes
-where `/code-review` cannot: it fans `diff-reviewer` subagents across
-`git diff main...HEAD`, one per lens — conventions, bugs, invalidation and
-test reach as standing lenses, plus history when the diff takes something
-away — then spawns a refuter per CODE finding and keeps only what survives.
-Which lenses run and which findings earn a refuter are both gated on the
-diff, so read the command rather than assuming the full fan-out. A session has full context on what it just wrote, which
-makes this cheap; it is also biased toward its own work, which is what
-the subagents correct for, since they did not write it. This half catches
-the bugs that live entirely inside one branch — a stale invalidation key,
-an underflow, a test whose fixture never reaches the new path.
+where `/code-review` cannot: it spawns a single `diff-reviewer` subagent on
+`git diff main...HEAD`, which works four readings in one pass — conventions,
+bugs, invalidation and test reach. A session has full context on what it just
+wrote, which makes this cheap; it is also biased toward its own work, which
+is what the subagent corrects for, since it did not write it. This half
+catches the bugs that live entirely inside one branch — a stale invalidation
+key, an underflow, a test whose fixture never reaches the new path.
+
+The findings come back **unverified** — there is no refuter pass — so the
+calling session is the only thing between a first reading and a commit. The
+command says how to settle each kind: prose by reading the code it describes,
+behaviour by naming the input and watching it fail.
 
 **Yan: run `/audit-merges` after a batch of merges lands.** Parallel
 sessions produce branches that are each correct against the `main` they
@@ -92,7 +94,7 @@ the last thirty.
 ## The agents in `.claude/agents/`
 
 `merge-auditor` does the reading for `/audit-merges`; `diff-reviewer` does it
-for `/self-review`, one instance per lens. Both hand back candidate findings
+for `/self-review`, one instance per review. Both hand back candidate findings
 and the fix is written in the calling session. That split is the point:
 neither goes from "this looks wrong" to a commit without the failing test in
 between.
@@ -112,7 +114,7 @@ Two is the whole list, and the rule that keeps it short is worth stating:
 Both describe a method, and a method does not go stale when a type is
 renamed. `diff-reviewer` earns its file on the constraint half — it is the
 read-only half of a review whose repair half happens in the calling session,
-and the lens it works is passed in per call rather than baked into it.
+and the readings it works are passed in per call rather than baked into it.
 
 A `spectral` agent carrying the spectrogram's retention and aggregation
 invariants was written and then deleted before it ever ran, which is the
