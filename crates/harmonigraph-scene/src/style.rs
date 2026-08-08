@@ -36,11 +36,11 @@
 /// screen brightness, and the bottom of the range then reads as bright as the
 /// top with hue carrying the difference by itself. Wind the ramp up and
 /// brightness takes over; wind it negative and the picture inverts. At
-/// [`chroma_ramp`](Self::chroma_ramp) 0 everything carries the same share of
-/// the color available to it, which is the picture a single Chroma knob could
-/// draw and the only one it could; wind that ramp up and the top of the range
-/// goes vivid against a washed-out bottom, and negative puts the color at the
-/// bottom.
+/// [`chroma_ramp`](Self::chroma_ramp) 0 everything carries the same color as
+/// everything else, hue and lightness aside, which is the picture a single
+/// Chroma knob could draw and the only one it could; wind that ramp up and the
+/// top of the range goes vivid against a washed-out bottom, and negative puts
+/// the color at the bottom.
 ///
 /// Nothing here can leave the sRGB gamut, whatever the six are set to, which
 /// is what makes them safe to expose as free knobs — see
@@ -96,8 +96,10 @@ pub struct Gradient {
     /// `L*` the axis actually holds. See [`sanitized`](Self::sanitized).
     pub lightness_ramp: f32,
     /// How much color the CENTRE of the range carries, as a fraction
-    /// 0..1 of the most the sRGB gamut holds at that point of the curve — NOT
-    /// an absolute chroma. The middle rather than either end, so that
+    /// 0..1 of what the sRGB gamut holds for EVERY hue at that lightness — NOT
+    /// an absolute chroma, and not a share of what this particular hue could
+    /// hold, which is a different number at every hue. The middle rather than
+    /// either end, so that
     /// [`chroma_ramp`](Self::chroma_ramp) opens symmetrically about it and this
     /// knob keeps meaning "how colorful is the picture" at every ramp.
     ///
@@ -111,13 +113,28 @@ pub struct Gradient {
     /// quietly stop being true — and the top of the control would be dead over
     /// whatever part of the arc had already run out. Denominated in what is
     /// actually available, every setting is reachable, monotone, and in gamut
-    /// by construction; the cost is that absolute chroma varies along the arc,
-    /// since the hues that can hold more are given more.
+    /// by construction.
+    ///
+    /// **What it is a fraction OF is the whole question**, and a fraction of
+    /// the per-HUE ceiling is the wrong answer: it draws one setting at 2.4x
+    /// the chroma in magenta that it draws in the teal-blues, 3.5x at `L*` 42
+    /// and 4.8x at 86, because the sRGB solid is far wider at some hues than
+    /// others. That is not a subtlety — it is the picture reading as though the
+    /// magentas and oranges had been turned up, and Ottosson names the same
+    /// defect in HSLuv, which is built exactly that way.
+    /// `chroma_of`, in [`color`](crate::color), resolves it instead against a
+    /// floor every hue can hold, opening flat across hue
+    /// and reaching each hue's own ceiling only at 1.0. See there for the shape
+    /// and what each end of it costs.
+    ///
+    /// What no denominator can design away is the LIGHTNESS term:
+    /// the gamut genuinely closes toward black and white, so a gradient
+    /// spending `L*` on its range is less colorful at the bright end whatever
+    /// this knob says. On the default arc that is most of the variation left.
     pub chroma: f32,
     /// Signed difference in that fraction from the bottom of the range to the
-    /// top: how much of the gradient's separation is spent on COLOR. 0 gives
-    /// every sample the same share of what the gamut holds for it, negative
-    /// puts the vivid end at the bottom.
+    /// top: how much of the gradient's separation is spent on COLOR. 0 asks the
+    /// same fraction of every sample, negative puts the vivid end at the bottom.
     ///
     /// Bounded by what [`chroma`](Self::chroma) leaves on the 0..1 axis rather
     /// than by a constant of its own — the whole of it at the middle, closing
@@ -173,15 +190,24 @@ fn default_lightness_ramp() -> f32 {
     44.0
 }
 
-/// Half the available chroma. Enough that the hues read as colors, and well
-/// short of the gamut boundary, where the maximum's own kinks between the sRGB
-/// primaries start to show up as bumps in the sweep — which is what the top of
-/// the knob is for, not what it should open on.
+/// Two thirds of the way up a knob whose bottom is flat across hue and whose
+/// top is each hue's own ceiling. Enough that the hues read as colors, and
+/// short of the boundary, where the ceiling's own kinks between the sRGB
+/// primaries come back as bumps in the sweep — which is what the top of the
+/// knob is for, not what it should open on.
+///
+/// The figure holding the default arc's MEAN colorfulness where a fraction of
+/// the per-hue ceiling at 0.5 holds it, so the picture opens about as colored as
+/// that alternative draws it and spends the color evenly rather than banking it
+/// in the magentas. `the_default_opens_at_the_colorfulness_it_used_to` measures
+/// it, and measures `ViewConfig`'s own chroma beside it — the two are
+/// independent numbers and a retune of this one does not reach that one.
 fn default_chroma() -> f32 {
-    0.5
+    0.669
 }
 
-/// Flat: every note gets the same share of the color available to it.
+/// Flat: every note asks for the same fraction, so what separates two notes is
+/// their hue and their brightness rather than how colored they are.
 ///
 /// Where [`default_lightness_ramp`] opens wide, and the difference is what the
 /// two cues are worth. Brightness is the strongest separation there is, so the
@@ -312,8 +338,8 @@ impl Gradient {
         (l.clamp(0.0, 100.0), h)
     }
 
-    /// The chroma FRACTION at normalized height `t` — the share of what the
-    /// gamut holds there that the curve asks for, which is what
+    /// The chroma FRACTION at normalized height `t` — what the curve asks for
+    /// before `chroma_of` resolves it against the gamut, which is what
     /// [`chroma`](Self::chroma) says at the middle of the range and
     /// [`chroma_ramp`](Self::chroma_ramp) spreads over the rest of it.
     ///

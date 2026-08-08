@@ -199,11 +199,18 @@ impl SpectrogramPreset {
     /// shows.
     ///
     /// The chroma pair is where a fraction of the gamut earns its keep. It does
-    /// not fall to 0 at the quiet end and does not need to: the gamut's own
-    /// maximum collapses toward 0 as `L*` approaches either end of its axis, so
-    /// a constant share already draws black at the bottom, saturated in the
-    /// middle and pale at the top — the shape all three colored ramps were
-    /// hand-picked to have. See [`Gradient::chroma`].
+    /// not fall to 0 at the quiet end and does not need to: what the fraction is
+    /// OF collapses toward 0 as `L*` approaches either end of its axis, so a
+    /// constant share already draws black at the bottom, saturated in the middle
+    /// and pale at the top — the shape all three colored ramps were hand-picked
+    /// to have. See [`Gradient::chroma`].
+    ///
+    /// The shares are denominated in the floor every hue can hold rather than in
+    /// each hue's own ceiling, which is a tighter axis and sits them high: each
+    /// pair is the one holding ITS preset's mean colorfulness where the ceiling
+    /// held it at the pair these were hand-dialled as (Ice 0.55..0.90, Aurora
+    /// 0.40..0.85, Magma 0.70..0.85). A preset is its look, not its numbers, so
+    /// the numbers move when the denominator does.
     pub fn gradient(self) -> Gradient {
         let of = |(l_lo, l_hi): (f32, f32), hue: (f32, f32), (c_lo, c_hi): (f32, f32)| Gradient {
             hue_start: hue.0,
@@ -219,9 +226,9 @@ impl SpectrogramPreset {
             // dragged off 0 opens on a color rather than on whatever angle 0
             // happened to be spelled with.
             SpectrogramPreset::Mono => of((0.0, 100.0), (269.0, 0.0), (0.0, 0.0)),
-            SpectrogramPreset::Ice => of((0.0, 92.0), (269.0, -70.0), (0.55, 0.90)),
-            SpectrogramPreset::Aurora => of((0.0, 88.0), (302.0, -193.0), (0.40, 0.85)),
-            SpectrogramPreset::Magma => of((0.0, 90.0), (295.0, 136.0), (0.70, 0.85)),
+            SpectrogramPreset::Ice => of((0.0, 92.0), (269.0, -70.0), (0.635, 0.985)),
+            SpectrogramPreset::Aurora => of((0.0, 88.0), (302.0, -193.0), (0.518, 0.968)),
+            SpectrogramPreset::Magma => of((0.0, 90.0), (295.0, 136.0), (0.819, 0.969)),
         }
     }
 }

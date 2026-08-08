@@ -838,13 +838,21 @@ impl Default for ViewConfig {
             // holds it to, and what a gradient assembled in code opens on.
             // The composed look is free to differ, and does: a shorter arc,
             // a dimmer middle over a shallower brightness ramp, and a little
-            // more chroma.
+            // less chroma.
             pitch_gradient: Gradient {
                 hue_start: 257.842_65,
                 hue_span: 190.0,
                 lightness: 53.0,
                 lightness_ramp: 31.0,
-                chroma: 0.601_670_8,
+                // Denominated in the floor every hue can hold (see
+                // `chroma_of`), which is a tighter axis than the per-hue
+                // ceiling: this is the fraction holding the mean colorfulness
+                // of THIS arc where 0.601_670_8 of the ceiling held it, so the
+                // lattice a fresh install draws is as colored as it was and
+                // only spends that color evenly. Retuning the type's own
+                // `default_chroma` does not reach here — the two are
+                // independent numbers, which is the point of writing this out.
+                chroma: 0.793_2,
                 // Flat, where the brightness ramp is not: the hue arc is
                 // already spending color on pitch, and a chroma ramp over it
                 // would say the same thing twice at the price of one end of

@@ -1667,7 +1667,7 @@ const FULL_TURN: f32 = 360.0;
 /// whatever the pane is instead of ringing itself in a slightly wrong color.
 const UNCLAIMED_ALPHA: f32 = 74.0 / 255.0;
 
-/// The `L*` and the share of the gamut the track's hue circle is drawn at —
+/// The `L*` and the chroma fraction the track's hue circle is drawn at —
 /// FIXED, and not the gradient's own pair.
 ///
 /// The track is the HUE control, and the two knobs it does not set have bars of
@@ -1686,7 +1686,9 @@ const UNCLAIMED_ALPHA: f32 = 74.0 / 255.0;
 /// between the sRGB primaries show up as bumps in a sweep whose whole job is to
 /// read as an even turn.
 const TRACK_LIGHTNESS: f32 = 60.0;
-/// The gamut fraction that goes with [`TRACK_LIGHTNESS`].
+/// The chroma fraction that goes with [`TRACK_LIGHTNESS`]. High, because the
+/// fraction is of the floor every hue can hold rather than of each hue's own
+/// ceiling, and a track drawn low on that axis reads as washed out.
 const TRACK_CHROMA: f32 = 0.85;
 
 /// Height of a [`GradientPreview`]. Shorter than a row, because it is a
