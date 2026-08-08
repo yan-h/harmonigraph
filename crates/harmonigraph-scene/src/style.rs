@@ -11,10 +11,13 @@
 /// is in [`color`](crate::color), which authors it in two spaces at once and
 /// says why.
 ///
-/// The four are independent on purpose, and that is the point of shaping the
-/// setting this way rather than as a list of named palettes: brightness is a
-/// far stronger cue than hue, so how much of it a gradient SPENDS on pitch is
-/// the decision worth having a knob for. At
+/// The four say four independent things on purpose, and that is the point of
+/// shaping the setting this way rather than as a list of named palettes:
+/// brightness is a far stronger cue than hue, so how much of it a gradient
+/// SPENDS on pitch is the decision worth having a knob for. The one place two
+/// of them meet is a limit rather than a meaning — the ramp opens either side
+/// of the middle, so what the middle leaves on the `L*` axis is all the ramp
+/// there is room for, and a middle pinned at black or white leaves none. At
 /// [`lightness_ramp`](Self::lightness_ramp) 0 the gradient is exactly
 /// isoluminant — `L*` is a function of luminance alone, so one `L*` is one
 /// screen brightness, and a bass note then reads as loud as a treble
@@ -68,6 +71,11 @@ pub struct PitchGradient {
     /// Signed `L*` difference from the bottom of the range to the top: how
     /// much of the gradient's separation is spent on brightness. 0 is exactly
     /// isoluminant, negative puts the bright end at the bottom.
+    ///
+    /// Bounded by what [`lightness`](Self::lightness) leaves on the axis rather
+    /// than by a constant of its own — the whole 100 points at the middle,
+    /// closing to nothing at either end — so that both ends of the gradient are
+    /// `L*` the axis actually holds. See [`sanitized`](Self::sanitized).
     pub lightness_ramp: f32,
     /// How much color, as a fraction 0..1 of the most the sRGB gamut holds at
     /// each point of the curve — NOT an absolute chroma.
@@ -163,6 +171,11 @@ impl PitchGradient {
         let finite = |v: f32, fallback: f32| if v.is_finite() { v } else { fallback };
         let hue_span = finite(self.hue_span, default_hue_span())
             .clamp(-Self::MAX_HUE_SPAN, Self::MAX_HUE_SPAN);
+        let lightness = finite(self.lightness, default_lightness()).clamp(0.0, 100.0);
+        // The widest ramp that keeps BOTH ends of the gradient on the axis,
+        // the ends being `lightness ± ramp/2`: the whole axis at its middle,
+        // and nothing at all at either end.
+        let widest_ramp = 2.0 * lightness.min(100.0 - lightness);
         PitchGradient {
             // Wrapped rather than clamped: it names a point on a circle.
             hue_start: finite(self.hue_start, default_hue_start()).rem_euclid(360.0),
@@ -173,12 +186,17 @@ impl PitchGradient {
             // one direction and behaves as the other. Flipping a zero span and
             // dragging a flipped one down to nothing both produce it.
             hue_span: if hue_span == 0.0 { 0.0 } else { hue_span },
-            lightness: finite(self.lightness, default_lightness()).clamp(0.0, 100.0),
-            // The ends of the ramp are clamped into 0..100 where they are
-            // computed, so a ramp steeper than the `L*` axis is a legal
-            // setting that simply flattens against black or white.
+            lightness,
+            // Against what the CENTRE leaves rather than against the axis, so
+            // the gradient's ends are `L*` and not a pair of numbers the axis
+            // has to catch. A steeper ramp runs off the end and flattens there,
+            // which draws a PLATEAU over part of the pitch range while the pair
+            // still reads as a straight ramp — the picture and the numbers
+            // saying different things — and the control that sets the pair, a
+            // middle with a handle either side of it, has nowhere to put a
+            // handle that has left the bar.
             lightness_ramp: finite(self.lightness_ramp, default_lightness_ramp())
-                .clamp(-100.0, 100.0),
+                .clamp(-widest_ramp, widest_ramp),
             chroma: finite(self.chroma, default_chroma()).clamp(0.0, 1.0),
         }
     }
@@ -217,6 +235,14 @@ impl PitchGradient {
         let t = t.clamp(0.0, 1.0);
         let l = f64::from(g.lightness) + (t - 0.5) * f64::from(g.lightness_ramp);
         let h = (f64::from(g.hue_start) + t * f64::from(g.hue_span)).rem_euclid(360.0);
+        // The clamp cannot fire for a sanitized gradient, and it is worth
+        // knowing why rather than assuming it might: the widest ramp is
+        // `2 * min(l, 100 - l)`, whose every step is exact in f32 — `100 - l`
+        // by Sterbenz for the half that needs it, the doubling and the halving
+        // by their exponents — so an end lands exactly ON 0 or 100 and the
+        // widening to f64 adds nothing. What the clamp keeps is the guarantee
+        // itself, for a caller assembling a gradient in code and reaching this
+        // through some later path that does not sanitize.
         (l.clamp(0.0, 100.0), h)
     }
 }

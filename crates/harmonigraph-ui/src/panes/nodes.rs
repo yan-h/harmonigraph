@@ -6,7 +6,9 @@
 
 use super::{param_bar, section};
 use crate::params::{seconds, ParamBackend, ParamKey};
-use crate::widgets::{button_row, choice_row, OctaveStrip, RangeBar, SpectrumBar, ValueBar};
+use crate::widgets::{
+    button_row, choice_row, BrightnessBar, OctaveStrip, RangeBar, SpectrumBar, ValueBar,
+};
 use crate::SharedState;
 use harmonigraph_scene::{
     Pulse, ViewConfig, MARK_DELAY_MAX, MIN_EXTRA_SIZE, PITCH_CEIL, PITCH_FLOOR,
@@ -380,8 +382,12 @@ fn pitch_readout(midi: f32) -> String {
     format!("{name}{}", harmonigraph_core::notes::display_octave_of(n))
 }
 
-/// The pitch gradient: the spectrum bar, and the three knobs that shape what
-/// it draws. One column of full-width bars, like every other settings group —
+/// The pitch gradient's five knobs on three bars: the arc on the spectrum bar,
+/// the brightness pair on one bar of its own, and chroma. Each bar is a picture
+/// of what its knobs COMPOSE rather than a row per number, which is what keeps
+/// a five-knob gradient down to three rows.
+///
+/// One column of full-width bars, like every other settings group —
 /// which here is a budget as much as a habit, and the reason the spectrum is a
 /// bar rather than the hue WHEEL a circular value naturally asks for.
 ///
@@ -432,23 +438,16 @@ fn spectrum_group(ui: &mut egui::Ui, view: &mut ViewConfig) {
          to reset. The strip beneath is the same gradient in pitch order, low \
          note on the left.",
     );
-    ValueBar::new(&mut view.pitch_gradient.lightness, 0.0..=100.0, "Brightness")
-        .integer()
-        .show(ui)
-        .on_hover_text(
-            "Brightness at the MIDDLE of the pitch range, in CIELab L*. The \
-             ramp opens either side of it, so this stays the picture's overall \
-             brightness at any ramp",
-        );
-    ValueBar::new(&mut view.pitch_gradient.lightness_ramp, -100.0..=100.0, "Brightness ramp")
-        .integer()
-        .show(ui)
-        .on_hover_text(
-            "How much brightness separates the bottom of the pitch range from \
-             the top. 0 makes every note exactly as bright as every other and \
-             leaves hue to carry the pitch alone; negative puts the bright end \
-             at the bottom",
-        );
+    BrightnessBar::new(&mut view.pitch_gradient, "Brightness").show(ui).on_hover_text(
+        "The stretch of brightness the pitch range spends, in CIELab L*: the \
+         two numbers are the bottom of the pitch range and the top, in that \
+         order, so a picture with its bright end at the bottom reads out \
+         backwards. Drag either end to move it, drag between them to slide the \
+         whole stretch brighter or darker, drag one end past the other to swap \
+         which end is bright, double-click to reset. Closing the two together \
+         makes every note exactly as bright as every other and leaves hue to \
+         carry the pitch alone.",
+    );
     ValueBar::new(&mut view.pitch_gradient.chroma, 0.0..=1.0, "Chroma")
         .display(|v| format!("{:.0}%", v * 100.0))
         .show(ui)
