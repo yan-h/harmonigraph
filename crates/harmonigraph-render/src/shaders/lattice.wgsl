@@ -1176,8 +1176,10 @@ fn core_layer(in: VsOut, d: f32, aa: f32, oct: OctRing) -> vec4<f32> {
     // way would need the halo held out of it, which is a mix weighted by the
     // share of the coverage that is glow-beyond-disc.)
     //
-    // Premultiplied: the idle marker is composited UNDER this, so a sounding
-    // note draws over its own marker and reveals it again as it fades.
+    // Premultiplied, like every layer here: the knockout gutter composites
+    // the GROUND under this at the end of fs_main, and the pass itself blends
+    // premultiplied onto the pane. Coverage and color travel together or the
+    // glow's soft edge darkens against whatever is behind it.
     let core_alpha = clamp(disc + glow, 0.0, 1.0);
     return vec4<f32>(octave_mix * core_alpha, core_alpha);
 }
