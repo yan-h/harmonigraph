@@ -405,7 +405,7 @@ fn the_table_tracks_the_curve_it_samples() {
     // 4.2/255 against the 3.4 the constant currently measures on the default
     // gradient. The slack is there because the worst case is governed by where
     // a sample lands relative to a corner in the gamut's own boundary, so a
-    // change to the default's four knobs moves those corners and swings the
+    // change to the default's five knobs moves those corners and swings the
     // number without anything being wrong — but it is drawn tight enough to
     // fail every cut a person would actually make: 48 measures 5.6/255, 32
     // measures 7.5, 24 measures 7.0, and 16 measures 8.0.
