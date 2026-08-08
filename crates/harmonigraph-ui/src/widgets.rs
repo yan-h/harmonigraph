@@ -1272,12 +1272,12 @@ enum SpectrumGrab {
 /// preview cannot drift from the picture. A swatch drawn from the widget's own
 /// idea of the gradient would be a second definition of the color, wrong the
 /// first time either changed. The dimmed remainder comes from [`hue_circle`]
-/// at the gradient's BASE lightness and chroma — the middle of its brightness
-/// ramp — so it reads as the same gradient continued rather than as decoration.
+/// at the gradient's BASE lightness and chroma — the middle of each of its two
+/// ramps — so it reads as the same gradient continued rather than as decoration.
 ///
-/// Which means it meets the claimed arc flush only when the ramp is FLAT: the
-/// arc ends at the top of the ramp, and the remainder carries on from the
-/// middle of it, so a steep ramp puts a step at the handle. Continuing the ramp
+/// Which means it meets the claimed arc flush only when both ramps are FLAT:
+/// the arc ends at the top of them, and the remainder carries on from the
+/// middle, so a steep ramp puts a step at the handle. Continuing the ramp
 /// instead would close that step and pay for it at the top of the knob, where
 /// an arc reaching `L*` 100 would dim out into a white band saying nothing
 /// about which hues are left — and the remainder's whole job is to say that.
@@ -1530,18 +1530,185 @@ impl<'a> SpectrumBar<'a> {
 /// ramp there has nowhere to open.
 const L_STAR_AXIS: (f32, f32) = (0.0, 100.0);
 
-/// The brightness pair a double-click on a [`BrightnessBar`] goes home to.
+/// The axis a chroma pair stands on: the FRACTION of the color the gamut holds
+/// at that point of the curve, 0 grey and 1 as vivid as the screen goes there.
+/// Both ends are settings and a pair on either is flat, exactly as a brightness
+/// pair parked on black is — see [`PitchGradient::chroma`] for why the axis is
+/// a fraction of what is available rather than a chroma.
+const CHROMA_AXIS: (f32, f32) = (0.0, 1.0);
+
+/// Which of the gradient's two stretches a [`SpreadBar`] is a bar of.
 ///
-/// Off [`ViewConfig::default`] for the reason [`reset_arc`] is, and it is the
-/// same drift being guarded: the composed default is a dimmer middle over a
-/// shallower ramp than `PitchGradient::default()`, and the bar carries no text
-/// entry to dial a lost pair back with.
-fn reset_brightness() -> (f32, f32) {
-    let fresh = ViewConfig::default().pitch_gradient;
-    (fresh.lightness, fresh.lightness_ramp)
+/// They are one control with two settings rather than two controls that
+/// resemble each other, and the gradient is what makes them so: each is a
+/// middle and a SIGNED ramp about it, bounded by what that middle leaves on its
+/// own axis, with the two ends at `middle ± ramp/2`. What differs is the axis
+/// itself and how a number on it is spelled — everything below is those two
+/// answers, and nothing else varies between the bars.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Spread {
+    /// `L*`, black to white.
+    Brightness,
+    /// The share of the color the gamut holds, grey to as vivid as it goes.
+    Chroma,
 }
 
-/// Which part of a [`BrightnessBar`] a drag took hold of. The same three a
+impl Spread {
+    /// The name the row carries. On the [`Spread`] rather than handed in: a bar
+    /// can only be one of two things, and a label passed separately is a way for
+    /// a row to name the other one.
+    fn label(self) -> &'static str {
+        match self {
+            Spread::Brightness => "Brightness",
+            Spread::Chroma => "Chroma",
+        }
+    }
+
+    /// Both ends of the axis, in the units the gradient stores.
+    fn axis(self) -> (f32, f32) {
+        match self {
+            Spread::Brightness => L_STAR_AXIS,
+            Spread::Chroma => CHROMA_AXIS,
+        }
+    }
+
+    /// Readout units per stored unit: an `L*` reads out as itself, a chroma
+    /// fraction as a percentage of the color available where it is drawn.
+    ///
+    /// Also the SNAP grid, one readout unit of it, so that a drag lands both
+    /// ends on numbers the readout can say exactly — see [`Self::snapped`].
+    fn per_unit(self) -> f32 {
+        match self {
+            Spread::Brightness => 1.0,
+            Spread::Chroma => 100.0,
+        }
+    }
+
+    /// What follows each number in the readout: the sign a percentage is
+    /// spelled with, and nothing for an `L*`, which is a bare coordinate on an
+    /// axis with no unit to name.
+    fn suffix(self) -> &'static str {
+        match self {
+            Spread::Brightness => "",
+            Spread::Chroma => "%",
+        }
+    }
+
+    /// The pair as the gradient holds it: a middle and a signed ramp.
+    fn of(self, g: PitchGradient) -> (f32, f32) {
+        match self {
+            Spread::Brightness => (g.lightness, g.lightness_ramp),
+            Spread::Chroma => (g.chroma, g.chroma_ramp),
+        }
+    }
+
+    fn set(self, g: &mut PitchGradient, pair: (f32, f32)) {
+        match self {
+            Spread::Brightness => (g.lightness, g.lightness_ramp) = pair,
+            Spread::Chroma => (g.chroma, g.chroma_ramp) = pair,
+        }
+    }
+
+    /// The pair a double-click goes home to: the one a fresh view opens with.
+    ///
+    /// Off [`ViewConfig::default`] for the reason [`reset_arc`] is, and it is
+    /// the same drift being guarded: the composed default is a dimmer middle
+    /// over a shallower brightness ramp than `PitchGradient::default()`, and a
+    /// bar carries no text entry to dial a lost pair back with.
+    fn reset(self) -> (f32, f32) {
+        self.of(ViewConfig::default().pitch_gradient)
+    }
+
+    /// The pair a bar actually writes, snapped at the ENDS rather than at the
+    /// pair itself: both ends on a whole readout unit and inside the axis,
+    /// which is what the readout says of them, and a readout is worth nothing
+    /// once it is not the number the picture draws. The middle then lands on a
+    /// whole or a half — 41 and 86 are a perfectly good pair of ends, and their
+    /// middle is 63.5.
+    ///
+    /// Snapping the pair instead is the version that cannot be honest: a whole
+    /// middle and a whole ramp of 45 reaches 41.5 and 86.5, which no rounding of
+    /// the readout can say without lying half a point at both ends.
+    ///
+    /// Clamping the ends is also all the axis needs: a `PitchGradient` accepts a
+    /// ramp as wide as its middle leaves it, and both ends inside the axis is
+    /// the same statement made about the same two numbers — in exact arithmetic,
+    /// which is what [`Self::legal`] is for.
+    fn snapped(self, (centre, spread): (f32, f32)) -> (f32, f32) {
+        let (min, max) = self.axis();
+        let unit = self.per_unit();
+        let end = |v: f32| ((v * unit).round() / unit).clamp(min, max);
+        let (low, high) = (end(centre - spread * 0.5), end(centre + spread * 0.5));
+        ((low + high) * 0.5, high - low)
+    }
+
+    /// The pair as [`PitchGradient::sanitized`] leaves it — asked of the
+    /// gradient rather than restated here, which is the whole of how a bar and
+    /// the type it writes to are kept from disagreeing about which pairs are
+    /// legal.
+    ///
+    /// The last step of a write, and not a formality. [`Self::snapped`] puts
+    /// both ENDS on the axis where the gradient bounds the RAMP by what its
+    /// middle leaves: the same statement in exact arithmetic, and not quite the
+    /// same one in f32 once the axis is a fraction. Whole `L*` recomposes
+    /// exactly, so this moves nothing a brightness bar writes — none of the
+    /// 10201 whole-point end pairs. A hundredth is no binary fraction, so 42 of
+    /// the same 10201 chroma pairs recompose to a ramp one ulp past what their
+    /// own middle holds, `7%..100%` being the widest of them at 6e-8 over — and
+    /// a bar writing one would leave the gradient drawing a picture off the pair
+    /// the bar reads out.
+    fn legal(self, pair: (f32, f32)) -> (f32, f32) {
+        let mut g = PitchGradient::default();
+        self.set(&mut g, pair);
+        self.of(g.sanitized())
+    }
+
+    /// The two ends the ramp reaches, in PITCH order: the bottom of the pitch
+    /// range first, whatever it happens to carry.
+    ///
+    /// Concrete where a middle and a signed ramp are arithmetic — these are the
+    /// numbers the lowest and highest notes are actually drawn at, and they name
+    /// the two handles standing under them. It is also how the sign gets said:
+    /// an inverted ramp reads out backwards, high to low, where a signed number
+    /// leaves the reader to work out which end it means.
+    ///
+    /// A tenth of a readout unit where an end is not whole, and no decimal where
+    /// it is. Whole is what a drag leaves, since [`Self::snapped`] puts both ends
+    /// there — but a fresh view, a double-click and a saved blob all arrive
+    /// without passing it, and `ViewConfig`'s own gradient is one of them: 53
+    /// over a ramp of 31 stands its ends on 37.5 and 68.5. Spelled to the whole
+    /// point those read `38 → 68`, a span of 30 over a gradient that spends 31 —
+    /// the readout claiming a picture the bar is not drawing, which is the one
+    /// thing it cannot do and stay worth reading.
+    ///
+    /// Rounded to that tenth BEFORE being asked whether it is whole, which is
+    /// what keeps a snapped chroma end from reading `42.0%`: a hundredth is no
+    /// binary fraction, so an end snapped to 0.42 is 41.999998 percent of the way
+    /// up its axis, and 42 is both what it means and what a tenth of a unit can
+    /// say.
+    fn readout(self, (centre, spread): (f32, f32)) -> String {
+        let end = |v: f32| {
+            let v = (v * self.per_unit() * 10.0).round() / 10.0;
+            let n = if v == v.round() { format!("{v:.0}") } else { format!("{v:.1}") };
+            format!("{n}{}", self.suffix())
+        };
+        format!("{} \u{2192} {}", end(centre - spread * 0.5), end(centre + spread * 0.5))
+    }
+
+    /// The widest the readout goes, for the reserve the name is elided against.
+    /// Only its LENGTH matters, the numbers being monospace: three digits and a
+    /// tenth at each end, plus whatever follows them. No end can carry a sign,
+    /// both of them living on an axis that starts at 0.
+    ///
+    /// Built from the axis rather than written out, so a bar cannot be added
+    /// with a reserve measured for another one's numbers.
+    fn widest_readout(self) -> String {
+        let (end, suffix) = (self.axis().1 * self.per_unit(), self.suffix());
+        format!("{end:.1}{suffix} \u{2192} {end:.1}{suffix}")
+    }
+}
+
+/// Which part of a [`SpreadBar`] a drag took hold of. The same three a
 /// [`Grab`] names, decided on the first frame of the gesture and remembered for
 /// the rest of it for the same reason — and the memory earns more here, because
 /// these two ends may CROSS: an end dragged past its partner swaps which side
@@ -1664,39 +1831,22 @@ impl SpreadGrab {
     }
 }
 
-/// The pair a bar actually writes, snapped at the ENDS rather than at the pair
-/// itself: both ends on whole `L*` and inside the axis, which is what the
-/// readout says of them, and a readout is worth nothing once it is not the
-/// number the picture draws. The middle then lands on a whole or a half — 41
-/// and 86 are a perfectly good pair of ends, and their middle is 63.5.
+/// The stretch of an axis the pitch range spends: a two-ended bar whose ends
+/// ARE the gradient's ends, the bottom of the pitch range and the top.
 ///
-/// Snapping the pair instead is the version that cannot be honest: a whole
-/// middle and a whole ramp of 45 reaches 41.5 and 86.5, which no rounding of
-/// the readout can say without lying half a point at both ends.
-///
-/// Clamping the ends is also all the axis needs: a `PitchGradient` accepts a
-/// ramp as wide as the middle leaves it, and both ends inside `min..max` is the
-/// same statement made about the same two numbers.
-fn snapped((centre, spread): (f32, f32), (min, max): (f32, f32)) -> (f32, f32) {
-    let end = |v: f32| v.round().clamp(min, max);
-    let (low, high) = (end(centre - spread * 0.5), end(centre + spread * 0.5));
-    ((low + high) * 0.5, high - low)
-}
-
-/// The stretch of the `L*` axis the pitch range spends: a two-ended bar whose
-/// ends ARE the gradient's ends, the bottom of the pitch range and the top.
-///
-/// Drag either end to move it, drag between them to slide the ramp at a fixed
-/// width, drag one end past the other to swap which end of the pitch range is
-/// the bright one, and double-click to reset.
+/// One bar for the gradient's two stretches, brightness and chroma, because
+/// they are one thing set twice (see [`Spread`]). Drag either end to move it,
+/// drag between them to slide the ramp at a fixed width, drag one end past the
+/// other to swap which end of the pitch range carries the most, and
+/// double-click to reset.
 ///
 /// **A [`RangeBar`] in behaviour, and two things apart from it.** The ends may
 /// cross, because crossed is a real setting here and not a broken one — it is
 /// the inverted picture — where a range bar's ends bound a pitch axis that
 /// inverted maps every pitch backwards. And it writes a MIDDLE and a signed
 /// ramp rather than the pair it draws, because that is what a gradient holds:
-/// an `L*` at the centre of the pitch range and a signed difference between its
-/// ends, so the ends are `lightness ± ramp/2` and the two shapes carry exactly
+/// a value at the centre of the pitch range and a signed difference between its
+/// ends, so the ends are `middle ± ramp/2` and the two shapes carry exactly
 /// the same information. What that buys the pane is a row: a bar per number
 /// names the same two numbers and draws neither the stretch they compose nor
 /// the room the axis has left for it (see `spectrum_group`).
@@ -1709,50 +1859,37 @@ fn snapped((centre, spread): (f32, f32), (min, max): (f32, f32)) -> (f32, f32) {
 ///
 /// **The readout is the two ENDS, and it runs in pitch order.** They are what
 /// the picture concretely does — the `L*` the darkest and brightest notes are
-/// drawn at — and each of them names a handle standing under it, where a centre
-/// and a signed ramp name neither. Pitch order is also the only place the
-/// SIGN can live: a ramp and its negative put the two handles in exactly the
-/// same places, so the bar cannot draw the difference, and an inverted ramp
-/// reads out backwards instead, high to low. (What the sign means for the
-/// picture is one row up, on the strip under the spectrum bar, which draws the
-/// gradient in pitch order and so reverses with it.)
+/// drawn at, the color the palest and most vivid ones carry — and each of them
+/// names a handle standing under it, where a centre and a signed ramp name
+/// neither. Pitch order is also the only place the SIGN can live: a ramp and
+/// its negative put the two handles in exactly the same places, so the bar
+/// cannot draw the difference, and an inverted ramp reads out backwards
+/// instead, high to low. (What the sign means for the picture is one row up, on
+/// the strip under the spectrum bar, which draws the gradient in pitch order
+/// and so reverses with it.)
 ///
 /// **Both ends stay on the axis at every setting.** That is the bar's own
 /// geometry — a handle off the track is not a value it can express — and
 /// [`PitchGradient::sanitized`] holds the same line for a pair that arrives
 /// from a hand-edited file instead of through a gesture.
 /// `the_bar_can_only_reach_pairs_sanitize_leaves_alone` is what keeps the two
-/// from drifting into disagreeing about which pairs are legal.
-pub struct BrightnessBar<'a> {
+/// from drifting into disagreeing about which pairs are legal, and
+/// [`Spread::legal`] is how a write earns it.
+pub struct SpreadBar<'a> {
     gradient: &'a mut PitchGradient,
-    label: &'a str,
+    spread: Spread,
 }
 
-impl<'a> BrightnessBar<'a> {
-    pub fn new(gradient: &'a mut PitchGradient, label: &'a str) -> Self {
-        BrightnessBar { gradient, label }
+impl<'a> SpreadBar<'a> {
+    /// The `L*` the lowest and highest notes are drawn at.
+    pub fn brightness(gradient: &'a mut PitchGradient) -> Self {
+        SpreadBar { gradient, spread: Spread::Brightness }
     }
 
-    /// The two ends the ramp reaches, in PITCH order: the bottom of the pitch
-    /// range first, whatever brightness it happens to carry.
-    ///
-    /// Concrete where a centre and a signed ramp are arithmetic — these are the
-    /// `L*` the darkest and brightest notes are actually drawn at, and they
-    /// name the two handles standing under them. It is also how the sign gets
-    /// said: an inverted ramp reads out backwards, high to low, where a signed
-    /// number leaves the reader to work out which end it means.
-    ///
-    /// A tenth of a point where an end is not whole, and no decimal where it
-    /// is. Whole is what a drag leaves, since [`snapped`] puts both ends there
-    /// — but a fresh view, a double-click and a saved blob all arrive without
-    /// passing it, and `ViewConfig`'s own gradient is one of them: 53 over a
-    /// ramp of 31 stands its ends on 37.5 and 68.5. Spelled to the whole point
-    /// those read `38 → 68`, a span of 30 over a gradient that spends 31 — the
-    /// readout claiming a picture the bar is not drawing, which is the one
-    /// thing it cannot do and stay worth reading.
-    fn readout((centre, spread): (f32, f32)) -> String {
-        let end = |v: f32| if v == v.round() { format!("{v:.0}") } else { format!("{v:.1}") };
-        format!("{} \u{2192} {}", end(centre - spread * 0.5), end(centre + spread * 0.5))
+    /// How much of the color available to them the lowest and highest notes
+    /// carry.
+    pub fn chroma(gradient: &'a mut PitchGradient) -> Self {
+        SpreadBar { gradient, spread: Spread::Chroma }
     }
 
     pub fn show(self, ui: &mut Ui) -> Response {
@@ -1760,7 +1897,8 @@ impl<'a> BrightnessBar<'a> {
         let width = bar_width(ui);
         let (rect, mut response) =
             ui.allocate_exact_size(Vec2::new(width, BAR_HEIGHT * scale), Sense::click_and_drag());
-        let (min, max) = L_STAR_AXIS;
+        let axis = self.spread.axis();
+        let (min, max) = axis;
         // Values live on an inset track, so both limits are places a handle can
         // stand rather than edges it merges into. See HANDLE_INSET.
         let track = rect.shrink2(Vec2::new(HANDLE_INSET * scale, 0.0));
@@ -1769,7 +1907,7 @@ impl<'a> BrightnessBar<'a> {
         let value_at = |x: f32| {
             min + ((x - track.left()) / track.width().max(1.0)).clamp(0.0, 1.0) * (max - min)
         };
-        let pair = |g: PitchGradient| (g.lightness, g.lightness_ramp);
+        let pair = |g: PitchGradient| self.spread.of(g);
 
         // ---- Interaction ----------------------------------------------------
         let grab_id = response.id.with("spread_grab");
@@ -1777,7 +1915,7 @@ impl<'a> BrightnessBar<'a> {
         // Reset rather than text entry, the bargain a [`RangeBar`] makes: a bar
         // holding two numbers has no single value to type into it.
         if response.double_clicked() {
-            (self.gradient.lightness, self.gradient.lightness_ramp) = reset_brightness();
+            self.spread.set(self.gradient, self.spread.reset());
             response.mark_changed();
         }
         if response.dragged() {
@@ -1795,9 +1933,9 @@ impl<'a> BrightnessBar<'a> {
                         grab
                     }
                 };
-                let next = snapped(grab.apply(v, aimed, L_STAR_AXIS), L_STAR_AXIS);
+                let next = self.spread.legal(self.spread.snapped(grab.apply(v, aimed, axis)));
                 if next != pair(*self.gradient) {
-                    (self.gradient.lightness, self.gradient.lightness_ramp) = next;
+                    self.spread.set(self.gradient, next);
                     response.mark_changed();
                 }
             }
@@ -1825,8 +1963,8 @@ impl<'a> BrightnessBar<'a> {
             theme::accent_fill()
         };
         // The stretch of the axis the picture spends, which is what the pair
-        // MEANS: a flat ramp fills nothing, and that is the honest drawing of
-        // brightness spent on pitch.
+        // MEANS: a flat ramp fills nothing, and that is the honest drawing of a
+        // gradient that spends none of this axis on pitch.
         let (lx, hx) = (x_of(lo), x_of(hi));
         let mut span = rect;
         span.min.x = lx;
@@ -1836,24 +1974,26 @@ impl<'a> BrightnessBar<'a> {
         // Name and readout exactly as a ValueBar lays them out — the row is one
         // — with the same reserve trick: the width kept clear for the numbers
         // is measured off a string that never changes rather than off the pair
-        // currently in the bar, so the name cannot re-elide mid-drag. Three
-        // digits and a tenth at each end is as wide as [`Self::readout`] goes,
-        // and only its LENGTH matters, the numbers being monospace. No end can
-        // carry a sign, both of them living on the 0..100 axis.
-        const WIDEST_READOUT: &str = "100.0 \u{2192} 100.0";
+        // currently in the bar, so the name cannot re-elide mid-drag. See
+        // [`Spread::widest_readout`] for what that string is.
         let text_color = if response.hovered() || response.dragged() {
             theme::text()
         } else {
             theme::text_dim()
         };
         let mono = TextStyle::Monospace.resolve(ui.style());
-        let value =
-            painter.layout_no_wrap(Self::readout((centre, spread)), mono.clone(), theme::text());
-        let reserve =
-            painter.layout_no_wrap(WIDEST_READOUT.to_owned(), mono, theme::text()).size().x;
+        let value = painter.layout_no_wrap(
+            self.spread.readout((centre, spread)),
+            mono.clone(),
+            theme::text(),
+        );
+        let reserve = painter
+            .layout_no_wrap(self.spread.widest_readout(), mono, theme::text())
+            .size()
+            .x;
         let body = TextStyle::Body.resolve(ui.style());
         let mut job = egui::text::LayoutJob::simple_singleline(
-            self.label.to_owned(),
+            self.spread.label().to_owned(),
             body,
             text_color,
         );
@@ -1874,9 +2014,9 @@ impl<'a> BrightnessBar<'a> {
 
         // The handles on top of the text, a RangeBar's bargain: they are the
         // part you operate, and a digit sliding under one beats a handle
-        // disappearing behind a digit. At a flat ramp the two coincide over the
-        // middle's own mark, and one thumb standing on an empty track is the
-        // right picture — there is one place the whole range is.
+        // disappearing behind a digit. At a flat ramp the two coincide, and one
+        // thumb standing on an empty track is the right picture — there is one
+        // place the whole range is.
         let handle_w = HANDLE_W * scale;
         for x in [lx, hx] {
             painter.rect_filled(
@@ -3719,29 +3859,85 @@ mod tests {
         assert!(matches!(SpreadGrab::at(10.0, flipped, NEAR), SpreadGrab::High));
     }
 
-    /// Every pair the bar writes puts both ENDS on a whole `L*` inside the
-    /// axis, since the ends are what it reads out and a readout is worth
+    /// Every pair the bar writes puts both ENDS on a whole readout unit inside
+    /// the axis, since the ends are what it reads out and a readout is worth
     /// nothing once it is not the number the picture draws.
     #[test]
-    fn the_pair_a_bar_writes_puts_both_ends_on_whole_l_star() {
+    fn the_pair_a_bar_writes_puts_both_ends_on_whole_readout_units() {
+        let brightness = Spread::Brightness;
         // 43.4..83.8 rounds to 43..84, whose middle is a half.
-        assert_eq!(snapped((63.6, 40.4), L_STAR_AXIS), (63.5, 41.0));
+        assert_eq!(brightness.snapped((63.6, 40.4)), (63.5, 41.0));
         // An odd ramp is exactly what snapping the PAIR could not keep honest:
         // 45 about 64 reaches 41.5 and 86.5, which round to 42 and 87 — the
         // ramp survives at 45 and the middle takes the half instead, which is
         // the right way round, since the middle is not what anyone reads.
-        assert_eq!(snapped((64.0, 45.0), L_STAR_AXIS), (64.5, 45.0));
+        assert_eq!(brightness.snapped((64.0, 45.0)), (64.5, 45.0));
         // Past white, the bright end pins there and the ramp is what is left.
-        assert_eq!(snapped((90.0, 40.0), L_STAR_AXIS), (85.0, 30.0));
-        for centre in [0.0f32, 13.5, 49.0, 63.6, 89.6, 100.0] {
-            for spread in [0.0f32, 1.0, -7.0, 45.0, 99.9, -100.0, 400.0] {
-                let (c, s) = snapped((centre, spread), L_STAR_AXIS);
-                for end in [c - s * 0.5, c + s * 0.5] {
-                    assert_eq!(end, end.round(), "{centre}/{spread} lands an end on {end}");
-                    assert!((0.0..=100.0).contains(&end), "{centre}/{spread} puts an end off");
+        assert_eq!(brightness.snapped((90.0, 40.0)), (85.0, 30.0));
+        // A whole readout unit on the chroma axis is a hundredth of it, which
+        // is the same statement about the same picture: the ends are read out
+        // as percentages, so those are what land whole. To a tenth of a unit,
+        // the resolution the readout itself claims — a hundredth is no binary
+        // fraction, and `the_bar_can_only_reach_pairs_sanitize_leaves_alone`
+        // covers what that costs the pair.
+        for spread in [Spread::Brightness, Spread::Chroma] {
+            let unit = spread.per_unit();
+            let (min, max) = spread.axis();
+            for centre in [0.0f32, 0.135, 0.49, 0.636, 0.896, 1.0].map(|v| min + v * (max - min)) {
+                for spread_v in [0.0f32, 0.01, -0.07, 0.45, 0.999, -1.0, 4.0]
+                    .map(|v| v * (max - min))
+                {
+                    let (c, s) = spread.snapped((centre, spread_v));
+                    for end in [c - s * 0.5, c + s * 0.5] {
+                        let units = end * unit;
+                        assert!(
+                            (units - units.round()).abs() < 0.1,
+                            "{spread:?}: {centre}/{spread_v} lands an end on {units} units",
+                        );
+                        assert!(
+                            (min..=max).contains(&end),
+                            "{spread:?}: {centre}/{spread_v} puts an end off the axis at {end}",
+                        );
+                    }
                 }
             }
         }
+    }
+
+    /// Every pair a gesture can settle on, put through the write path the bar
+    /// uses and then to `sanitized`.
+    ///
+    /// The sweep runs in FRACTIONS of the axis so one set of positions means the
+    /// same thing on both, since the two axes are two orders of magnitude apart.
+    fn pairs_a_bar_can_write(spread: Spread, mut check: impl FnMut((f32, f32))) -> usize {
+        let (min, max) = spread.axis();
+        let of = |v: f32| min + v * (max - min);
+        let mut checked = 0;
+        for centre in [0.0f32, 0.01, 0.125, 0.5, 0.636, 0.896, 0.99, 1.0].map(of) {
+            for width in [0.0f32, 0.07, -0.33, 1.0, -1.0].map(|v| v * (max - min)) {
+                // Every grab the bar can settle on, against pointer positions
+                // running the whole axis and a good way off both ends of it.
+                // `value_at` clamps, so the widget itself never hands `apply` a
+                // value off the axis; the extra range is aimed at `apply`'s OWN
+                // clamps, which are what a pointer dragged past the bar's end
+                // meets once that stops being true.
+                let held = 0.135 * (max - min);
+                let grabs = [
+                    SpreadGrab::Low,
+                    SpreadGrab::High,
+                    SpreadGrab::Middle { offset: 0.0, spread: width },
+                    SpreadGrab::Middle { offset: held, spread: width },
+                    SpreadGrab::Middle { offset: -held, spread: width },
+                ];
+                for grab in grabs {
+                    for step in -20..=120 {
+                        check(grab.apply(of(step as f32 / 100.0), (centre, width), (min, max)));
+                        checked += 1;
+                    }
+                }
+            }
+        }
+        checked
     }
 
     /// What the bar can reach is exactly what `sanitized` leaves alone. The two
@@ -3753,109 +3949,144 @@ mod tests {
     /// hold another.
     #[test]
     fn the_bar_can_only_reach_pairs_sanitize_leaves_alone() {
-        let mut checked = 0;
-        for centre in [0.0f32, 1.0, 12.5, 50.0, 63.6, 89.6, 99.0, 100.0] {
-            for spread in [0.0f32, 7.0, -33.0, 100.0, -100.0] {
-                // Every grab the bar can settle on, against pointer positions
-                // running the whole axis and a good way off both ends of it.
-                // `value_at` clamps, so the widget itself never hands `apply` a
-                // value off the axis; the extra range is aimed at `apply`'s OWN
-                // clamps, which are what a pointer dragged past the bar's end
-                // meets once that stops being true.
-                let grabs = [
-                    SpreadGrab::Low,
-                    SpreadGrab::High,
-                    SpreadGrab::Middle { offset: 0.0, spread },
-                    SpreadGrab::Middle { offset: 13.5, spread },
-                    SpreadGrab::Middle { offset: -13.5, spread },
-                ];
-                for grab in grabs {
-                    for step in -20..=120 {
-                        let v = step as f32;
-                        let (l, r) =
-                            snapped(grab.apply(v, (centre, spread), L_STAR_AXIS), L_STAR_AXIS);
-                        let written =
-                            PitchGradient { lightness: l, lightness_ramp: r, ..Default::default() };
-                        assert_eq!(
-                            written.sanitized(),
-                            written,
-                            "the bar wrote a middle of {l} and a ramp of {r}, which sanitize \
-                             does not accept as it stands",
-                        );
-                        checked += 1;
-                    }
-                }
-            }
+        for spread in [Spread::Brightness, Spread::Chroma] {
+            let checked = pairs_a_bar_can_write(spread, |aimed| {
+                let (c, s) = spread.legal(spread.snapped(aimed));
+                let mut written = PitchGradient::default();
+                spread.set(&mut written, (c, s));
+                assert_eq!(
+                    written.sanitized(),
+                    written,
+                    "{spread:?}: the bar wrote a middle of {c} and a ramp of {s}, which \
+                     sanitize does not accept as it stands",
+                );
+            });
+            assert!(checked > 10_000, "only {checked} pairs — the sweep stopped covering it");
         }
-        assert!(checked > 10_000, "only {checked} pairs — the sweep stopped covering the bar");
+    }
+
+    /// And [`Spread::legal`] is load-bearing on the chroma axis rather than
+    /// belt-and-braces: snapping alone reaches pairs sanitize pulls in.
+    ///
+    /// Both steps say both ends are on the axis — snapping by clamping the ends
+    /// it rounds, the gradient by bounding the ramp against what its middle
+    /// leaves — and the two are the same statement only in exact arithmetic. A
+    /// hundredth is no binary fraction, so a chroma pair recomposed from whole
+    /// percentages can land a ramp one ulp past the bound while whole `L*`
+    /// never does. Nothing about the picture turns on 6e-8 of chroma; what turns
+    /// on it is whether the number the bar reads out is the number the gradient
+    /// holds.
+    #[test]
+    fn snapping_alone_would_leave_a_chroma_pair_sanitize_pulls_in() {
+        let over = |spread: Spread| {
+            let mut over = 0;
+            pairs_a_bar_can_write(spread, |aimed| {
+                let (c, s) = spread.snapped(aimed);
+                if spread.legal((c, s)) != (c, s) {
+                    over += 1;
+                }
+            });
+            over
+        };
+        assert_eq!(over(Spread::Brightness), 0, "whole L* recomposes exactly, so this is a no-op");
+        assert!(
+            over(Spread::Chroma) > 0,
+            "no snapped chroma pair needs pulling in, so `legal` is now untested here \
+             and the sweep has stopped reaching the ends of the axis",
+        );
     }
 
     /// Where a double-click lands has to BE the pair a fresh view opens with,
     /// for the reason the wheel's reset does: the bar carries no text entry, so
     /// a reset that missed would leave the shipped look unreachable by gesture.
     #[test]
-    fn a_brightness_double_click_goes_home_to_the_pair_a_fresh_view_opens_with() {
-        let fresh = ViewConfig::default().pitch_gradient;
-        assert_eq!(reset_brightness(), (fresh.lightness, fresh.lightness_ramp));
-        assert_ne!(
-            reset_brightness(),
-            (PitchGradient::default().lightness, PitchGradient::default().lightness_ramp),
-            "the type's own default and the composed one agree today, so this reset \
-             cannot tell whether it is reading the one the plugin actually opens on",
-        );
+    fn a_double_click_goes_home_to_the_pair_a_fresh_view_opens_with() {
+        for spread in [Spread::Brightness, Spread::Chroma] {
+            assert_eq!(spread.reset(), spread.of(ViewConfig::default().pitch_gradient));
+            assert_ne!(
+                spread.reset(),
+                spread.of(PitchGradient::default()),
+                "{spread:?}: the type's own default and the composed one agree today, so \
+                 this reset cannot tell whether it is reading the one the plugin actually \
+                 opens on",
+            );
+        }
     }
 
-    /// Paint one brightness bar across a 300pt row and return what it emitted.
-    fn paint_brightness_bar((centre, spread): (f32, f32)) -> Vec<egui::Shape> {
+    /// One gradient carrying this pair on this spread and its own defaults
+    /// everywhere else.
+    fn holding(spread: Spread, pair: (f32, f32)) -> PitchGradient {
+        let mut g = PitchGradient::default();
+        spread.set(&mut g, pair);
+        g
+    }
+
+    /// One bar of `spread`, built through the constructor that names it — which
+    /// is the only place the two differ to a caller.
+    fn spread_bar(spread: Spread, g: &mut PitchGradient, ui: &mut Ui) -> Response {
+        match spread {
+            Spread::Brightness => SpreadBar::brightness(g).show(ui),
+            Spread::Chroma => SpreadBar::chroma(g).show(ui),
+        }
+    }
+
+    /// Paint one bar across a 300pt row and return what it emitted.
+    fn paint_bar(spread: Spread, pair: (f32, f32)) -> Vec<egui::Shape> {
         let ctx = egui::Context::default();
         crate::theme::apply_theme(&ctx);
         let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(300.0, 100.0));
-        let mut g = PitchGradient {
-            lightness: centre,
-            lightness_ramp: spread,
-            ..PitchGradient::default()
-        };
+        let mut g = holding(spread, pair);
         let out = ctx.run_ui(
             egui::RawInput { screen_rect: Some(screen), ..Default::default() },
             |ui| {
-                BrightnessBar::new(&mut g, "Brightness").show(ui);
+                spread_bar(spread, &mut g, ui);
             },
         );
         out.shapes.into_iter().map(|s| s.shape).collect()
     }
 
-    /// The bar draws the pair it holds: a handle at each end of the ramp, on an
-    /// axis running black to white across the track. That is the whole claim
-    /// the control makes, and handles standing anywhere else would be a picture
-    /// of some other pair.
+    /// The bar draws the pair it holds: a handle at each end of the ramp, at its
+    /// own place along the whole axis. That is the whole claim the control
+    /// makes, and handles standing anywhere else would be a picture of some
+    /// other pair.
+    ///
+    /// In FRACTIONS of the axis, which is what makes it one test of two bars:
+    /// the geometry is the same picture whether the ends are `L*` 42 and 86 or
+    /// 42% and 86% of the color available.
     ///
     /// The inverted case is here because it is the one the picture CANNOT tell
     /// apart: a ramp and its negative put the two handles in exactly the same
     /// places, which is why the readout runs in pitch order instead.
     #[test]
-    fn a_brightness_bar_stands_its_handles_where_its_numbers_say() {
-        for spread in [44.0f32, -44.0] {
-            let shapes = paint_brightness_bar((64.0, spread));
-            let bar = filled_rects(&shapes)[0].0;
-            let hs = handles(&shapes);
-            assert_eq!(hs.len(), 2, "a ramp of {spread} did not paint two handles");
-            // The track a handle travels: the bar less the inset at either end.
-            let track = bar.shrink2(Vec2::new(HANDLE_INSET, 0.0));
-            for (want, h) in [(64.0 - 22.0, hs[0]), (64.0 + 22.0, hs[1])] {
-                let at = track.left() + track.width() * (want / 100.0);
-                assert!(
-                    (h.center().x - at).abs() < 0.5,
-                    "a ramp of {spread} puts an end at L* {want}, which is {at} across, \
-                     and the handle stands at {}",
-                    h.center().x,
-                );
+    fn a_bar_stands_its_handles_where_its_numbers_say() {
+        for spread in [Spread::Brightness, Spread::Chroma] {
+            let (min, max) = spread.axis();
+            let of = |v: f32| min + v * (max - min);
+            for sign in [1.0f32, -1.0] {
+                let ramp = sign * 0.44 * (max - min);
+                let shapes = paint_bar(spread, (of(0.64), ramp));
+                let bar = filled_rects(&shapes)[0].0;
+                let hs = handles(&shapes);
+                assert_eq!(hs.len(), 2, "{spread:?} at a ramp of {ramp} drew {} handles", hs.len());
+                // The track a handle travels: the bar less the inset at either
+                // end.
+                let track = bar.shrink2(Vec2::new(HANDLE_INSET, 0.0));
+                for (want, h) in [(0.64 - 0.22, hs[0]), (0.64 + 0.22, hs[1])] {
+                    let at = track.left() + track.width() * want;
+                    assert!(
+                        (h.center().x - at).abs() < 0.5,
+                        "{spread:?} at a ramp of {ramp} puts an end {want} of the way up the \
+                         axis, which is {at} across, and the handle stands at {}",
+                        h.center().x,
+                    );
+                }
             }
+            // A flat ramp is one handle's worth of picture in the middle of an
+            // empty track: none of the axis is spent on pitch, and there is
+            // exactly one place the whole range is.
+            let hs = handles(&paint_bar(spread, (of(0.3), 0.0)));
+            assert_eq!(hs[0], hs[1], "{spread:?} drew a flat ramp's two handles apart");
         }
-        // A flat ramp is one handle's worth of picture in the middle of an
-        // empty track: no brightness is spent on pitch, and there is exactly
-        // one place the whole range is.
-        let hs = handles(&paint_brightness_bar((30.0, 0.0)));
-        assert_eq!(hs[0], hs[1], "a flat ramp drew its two handles apart");
     }
 
     /// Two handles and nothing else standing on the track. A third mark on a
@@ -3863,10 +4094,15 @@ mod tests {
     /// middle — the one thing that might have earned one — is not something a
     /// gesture takes hold of.
     #[test]
-    fn a_brightness_bar_stands_nothing_on_the_track_but_its_two_ends() {
-        for pair in [(64.0f32, 44.0f32), (64.0, -44.0), (30.0, 0.0)] {
-            let hs = handles(&paint_brightness_bar(pair));
-            assert_eq!(hs.len(), 2, "{pair:?} put {} marks on the track", hs.len());
+    fn a_bar_stands_nothing_on_the_track_but_its_two_ends() {
+        for spread in [Spread::Brightness, Spread::Chroma] {
+            let (min, max) = spread.axis();
+            let of = |v: f32| min + v * (max - min);
+            let width = 0.44 * (max - min);
+            for pair in [(of(0.64), width), (of(0.64), -width), (of(0.3), 0.0)] {
+                let hs = handles(&paint_bar(spread, pair));
+                assert_eq!(hs.len(), 2, "{spread:?} {pair:?} put {} marks on the track", hs.len());
+            }
         }
     }
 
@@ -3886,28 +4122,37 @@ mod tests {
     /// see and well over the half-point a whole-number readout costs at these
     /// ends: the failure is a bar reading `38 → 68`, a span of 30, over a
     /// gradient spending 31.
+    /// The numbers one bar reads out, each parsed off the end of the readout
+    /// with whatever unit follows it stripped.
+    fn readout_ends(spread: Spread, pair: (f32, f32)) -> (String, Vec<f32>) {
+        let shown = text_boxes(&paint_bar(spread, pair))
+            .into_iter()
+            .map(|(_, s)| s)
+            .next_back()
+            .expect("the bar draws a readout");
+        let said = shown
+            .split('\u{2192}')
+            .map(|s| {
+                s.trim()
+                    .trim_end_matches(spread.suffix())
+                    .parse()
+                    .expect("a readout is two numbers")
+            })
+            .collect();
+        (shown, said)
+    }
+
     #[test]
     fn a_brightness_readout_names_the_ends_the_curve_draws() {
+        let fresh = ViewConfig::default().pitch_gradient;
         for pair in [
-            (ViewConfig::default().pitch_gradient.lightness, ViewConfig::default().pitch_gradient.lightness_ramp),
+            (fresh.lightness, fresh.lightness_ramp),
             (64.0, 44.0),
             (64.0, -45.0),
             (20.0, 7.0),
         ] {
-            let g = PitchGradient {
-                lightness: pair.0,
-                lightness_ramp: pair.1,
-                ..PitchGradient::default()
-            };
-            let shown = text_boxes(&paint_brightness_bar(pair))
-                .into_iter()
-                .map(|(_, s)| s)
-                .next_back()
-                .expect("the bar draws a readout");
-            let said: Vec<f32> = shown
-                .split('\u{2192}')
-                .map(|s| s.trim().parse().expect("a readout is two numbers"))
-                .collect();
+            let g = holding(Spread::Brightness, pair);
+            let (shown, said) = readout_ends(Spread::Brightness, pair);
             // In PITCH order, which is what the readout claims to be in: the
             // curve at t 0 and t 1, not the darker end and the brighter one.
             for (t, said) in [0.0, 1.0].into_iter().zip(said) {
@@ -3920,41 +4165,66 @@ mod tests {
         }
     }
 
-    /// The two ends, in pitch order — the numbers the picture concretely draws,
-    /// each standing under its own handle. Their ORDER is the sign: the bar
-    /// cannot show which end of the pitch range is the bright one, since the
-    /// handles stand in the same two places either way.
+    /// The same claim on the chroma axis, where the readout is a PERCENTAGE of
+    /// the curve's own fraction, so the two are a hundred apart and the
+    /// arithmetic between them is the thing that can be wrong.
+    ///
+    /// A tenth of a percent, which is the resolution the readout claims — the
+    /// pairs below include the one a fresh view opens with, which arrives
+    /// without passing `snapped` and is not whole in percent either.
     #[test]
-    fn a_brightness_bar_reads_out_its_two_ends_in_pitch_order() {
-        let texts = |pair| -> Vec<String> {
-            text_boxes(&paint_brightness_bar(pair)).into_iter().map(|(_, s)| s).collect()
+    fn a_chroma_readout_names_the_ends_the_curve_draws() {
+        let fresh = ViewConfig::default().pitch_gradient;
+        for pair in [(fresh.chroma, fresh.chroma_ramp), (0.5, 0.6), (0.5, -0.6), (0.2, 0.35)] {
+            let g = holding(Spread::Chroma, pair);
+            let (shown, said) = readout_ends(Spread::Chroma, pair);
+            for (t, said) in [0.0, 1.0].into_iter().zip(said) {
+                let drawn = g.chroma_at(t) as f32 * 100.0;
+                assert!(
+                    (said - drawn).abs() < 0.1,
+                    "{pair:?} reads out {shown:?}, saying {said}% where the curve asks for \
+                     {drawn}%",
+                );
+            }
+        }
+    }
+
+    /// The two ends, in pitch order — the numbers the picture concretely draws,
+    /// each standing under its own handle, and each carrying the unit its own
+    /// axis is read in. Their ORDER is the sign: neither bar can show which end
+    /// of the pitch range carries the most, since the handles stand in the same
+    /// two places either way.
+    #[test]
+    fn a_bar_reads_out_its_two_ends_in_pitch_order() {
+        let texts = |spread, pair| -> Vec<String> {
+            text_boxes(&paint_bar(spread, pair)).into_iter().map(|(_, s)| s).collect()
         };
-        let up = texts((64.0, 44.0));
+        let up = texts(Spread::Brightness, (64.0, 44.0));
         assert_eq!(up.len(), 2, "a name and one readout, not {up:?}");
         assert_eq!(up[0], "Brightness");
         assert_eq!(up[1], "42 \u{2192} 86", "the bottom of the pitch range reads first");
         assert_eq!(
-            texts((64.0, -44.0))[1],
+            texts(Spread::Brightness, (64.0, -44.0))[1],
             "86 \u{2192} 42",
             "an inverted ramp draws the same two handles, so the readout is what says so",
         );
+        let color = texts(Spread::Chroma, (0.64, 0.44));
+        assert_eq!(color[0], "Chroma");
+        assert_eq!(color[1], "42% \u{2192} 86%", "a share of the color reads out as one");
+        assert_eq!(texts(Spread::Chroma, (0.64, -0.44))[1], "86% \u{2192} 42%");
     }
 
-    /// Drag a brightness bar across a 300pt row, from `from` to `to` as
-    /// fractions of its width, and answer the pair it wrote. A real gesture
-    /// through a real context, for the reason the range bar's is: what a
-    /// gesture has hold of is decided on the first frame egui calls the press a
-    /// drag and then remembered in context data, so a synthetic call exercises
-    /// neither the decision nor the memory.
-    fn drag_brightness_bar(pair: (f32, f32), (from, to): (f32, f32)) -> (f32, f32) {
+    /// Drag one bar across a 300pt row, from `from` to `to` as fractions of its
+    /// width, and answer the pair it wrote. A real gesture through a real
+    /// context, for the reason the range bar's is: what a gesture has hold of is
+    /// decided on the first frame egui calls the press a drag and then
+    /// remembered in context data, so a synthetic call exercises neither the
+    /// decision nor the memory.
+    fn drag_bar(spread: Spread, pair: (f32, f32), (from, to): (f32, f32)) -> (f32, f32) {
         let ctx = egui::Context::default();
         crate::theme::apply_theme(&ctx);
         let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(300.0, 100.0));
-        let mut g = PitchGradient {
-            lightness: pair.0,
-            lightness_ramp: pair.1,
-            ..PitchGradient::default()
-        };
+        let mut g = holding(spread, pair);
         let bar = std::cell::Cell::new(egui::Rect::NOTHING);
         let mut t = 0.0;
         let mut frame = |g: &mut PitchGradient, events: Vec<egui::Event>| {
@@ -3966,7 +4236,7 @@ mod tests {
                     events,
                     ..Default::default()
                 },
-                |ui| bar.set(BrightnessBar::new(g, "Brightness").show(ui).rect),
+                |ui| bar.set(spread_bar(spread, g, ui).rect),
             );
         };
         // A frame with no input first: egui resolves the pointer against the
@@ -3983,7 +4253,7 @@ mod tests {
         let step = 12.0 / rect.width() * (to - from).signum();
         frame(&mut g, vec![egui::Event::PointerMoved(at(from + step))]);
         frame(&mut g, vec![egui::Event::PointerMoved(at(to))]);
-        (g.lightness, g.lightness_ramp)
+        spread.of(g)
     }
 
     /// The two ends a pair draws, which is what the bar is really about and
@@ -4001,15 +4271,41 @@ mod tests {
         // The default pair sits at 64 with a 44-point ramp, so its handles are
         // at L* 42 and 86 — a press at 0.86 of the way across is the bright
         // one, dragged out to the top of the axis.
-        let dragged = ends(drag_brightness_bar((64.0, 44.0), (0.86, 1.0)));
+        let dragged = ends(drag_bar(Spread::Brightness, (64.0, 44.0), (0.86, 1.0)));
         assert_eq!(dragged, (42.0, 100.0), "the low end moved, or the high one stopped short");
 
         // And a slide, from between the handles at 30 and 70: brighter by a
         // quarter of the axis, carrying its ramp.
-        let pair = drag_brightness_bar((50.0, 40.0), (0.5, 0.75));
+        let pair = drag_bar(Spread::Brightness, (50.0, 40.0), (0.5, 0.75));
         assert!(pair.0 > 60.0, "the slide barely moved, landing at {}", pair.0);
         assert_eq!(pair.1, 40.0, "the slide restyled the ramp to {}", pair.1);
         let (low, high) = ends(pair);
         assert_eq!((low, high), (low.round(), high.round()), "{low}..{high} is not whole");
+    }
+
+    /// The same wiring on the chroma bar, which is where the units the widget
+    /// works in are actually at stake: the gesture arrives in pixels, the axis
+    /// is a fraction two orders smaller than the `L*` one, and the readout is a
+    /// percentage of it. A drag has to land on a whole PERCENT and leave a pair
+    /// the gradient accepts unchanged, which is what dragging an end all the way
+    /// out to the vivid end of the axis asks for.
+    #[test]
+    fn a_real_drag_on_a_chroma_bar_lands_on_whole_percentages() {
+        // A 44% ramp about 64% stands its ends at 42% and 86%: the same picture
+        // as the brightness case above, one axis over.
+        let (low, high) = ends(drag_bar(Spread::Chroma, (0.64, 0.44), (0.86, 1.0)));
+        for (end, want) in [(low, 42.0f32), (high, 100.0)] {
+            assert!(
+                (end * 100.0 - want).abs() < 0.05,
+                "an end landed on {}% where {want}% is what the bar can say",
+                end * 100.0,
+            );
+        }
+        // And what the gradient makes of it: the pair is one it holds as it
+        // stands, ends and all — the whole point of `Spread::legal` sitting on
+        // the write path.
+        let pair = drag_bar(Spread::Chroma, (0.64, 0.44), (0.86, 1.0));
+        let written = holding(Spread::Chroma, pair);
+        assert_eq!(written.sanitized(), written, "the drag wrote a pair sanitize pulls in");
     }
 }

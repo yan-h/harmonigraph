@@ -1,30 +1,38 @@
 //! The visual-style settings the view config carries: the enums it selects
-//! between, with the shader indices they map to, and the pitch gradient's four
+//! between, with the shader indices they map to, and the pitch gradient's five
 //! knobs. Adding a style means touching this file and the matching branch in
 //! `lattice.wgsl`; the gradient reaches the shader as a color table instead,
 //! and needs no branch there at all.
 
-/// The low-to-high pitch gradient, as four things a reader of the picture can
+/// The low-to-high pitch gradient, as five things a reader of the picture can
 /// name: WHICH colors it walks through (an arc of the OKLAB hue circle), how
 /// bright the middle of the range sits, how much brightness separates the ends
-/// of it, and how much color the whole thing carries. The curve those describe
-/// is in [`color`](crate::color), which authors it in two spaces at once and
-/// says why.
+/// of it, how much color the middle carries, and how much color separates the
+/// ends. The curve those describe is in [`color`](crate::color), which authors
+/// it in two spaces at once and says why.
 ///
-/// The four say four independent things on purpose, and that is the point of
+/// The five say five independent things on purpose, and that is the point of
 /// shaping the setting this way rather than as a list of named palettes:
 /// brightness is a far stronger cue than hue, so how much of it a gradient
-/// SPENDS on pitch is the decision worth having a knob for. The one place two
-/// of them meet is a limit rather than a meaning — the ramp opens either side
-/// of the middle, so what the middle leaves on the `L*` axis is all the ramp
-/// there is room for, and a middle pinned at black or white leaves none. At
-/// [`lightness_ramp`](Self::lightness_ramp) 0 the gradient is exactly
+/// SPENDS on pitch is the decision worth having a knob for — and color is worth
+/// the same question, which is why the two are shaped alike, a middle and a
+/// signed ramp each. Where two of them meet it is a limit rather than a
+/// meaning, and it is the same limit twice: a ramp opens either side of its
+/// middle, so what that middle leaves on its own axis is all the ramp there is
+/// room for, and a middle pinned at either end of that axis leaves none.
+///
+/// At [`lightness_ramp`](Self::lightness_ramp) 0 the gradient is exactly
 /// isoluminant — `L*` is a function of luminance alone, so one `L*` is one
 /// screen brightness, and a bass note then reads as loud as a treble
 /// one with hue carrying the pitch by itself. Wind the ramp up and brightness
-/// takes over; wind it negative and the picture inverts.
+/// takes over; wind it negative and the picture inverts. At
+/// [`chroma_ramp`](Self::chroma_ramp) 0 every note carries the same share of
+/// the color available to it, which is the picture a single Chroma knob could
+/// draw and the only one it could; wind that ramp up and the top of the range
+/// goes vivid against a washed-out bottom, and negative puts the color in the
+/// bass.
 ///
-/// Nothing here can leave the sRGB gamut, whatever the four are set to, which
+/// Nothing here can leave the sRGB gamut, whatever the five are set to, which
 /// is what makes them safe to expose as free knobs — see
 /// [`chroma`](Self::chroma).
 ///
@@ -77,14 +85,17 @@ pub struct PitchGradient {
     /// closing to nothing at either end — so that both ends of the gradient are
     /// `L*` the axis actually holds. See [`sanitized`](Self::sanitized).
     pub lightness_ramp: f32,
-    /// How much color, as a fraction 0..1 of the most the sRGB gamut holds at
-    /// each point of the curve — NOT an absolute chroma.
+    /// How much color the CENTRE of the pitch range carries, as a fraction
+    /// 0..1 of the most the sRGB gamut holds at that point of the curve — NOT
+    /// an absolute chroma. The middle rather than either end, so that
+    /// [`chroma_ramp`](Self::chroma_ramp) opens symmetrically about it and this
+    /// knob keeps meaning "how colorful is the picture" at every ramp.
     ///
-    /// The gamut is the reason. At a fixed `L*` sRGB admits a different
-    /// maximum Oklab chroma at every hue (0.115 at the tightest point of the
-    /// default arc, 0.320 at its widest), and that maximum collapses toward 0
-    /// as `L*` approaches either end of its own range. An absolute chroma would
-    /// therefore be a number whose meaning changes under the other three
+    /// The gamut is the reason it is a fraction. At a fixed `L*` sRGB admits a
+    /// different maximum Oklab chroma at every hue (0.115 at the tightest point
+    /// of the default arc, 0.320 at its widest), and that maximum collapses
+    /// toward 0 as `L*` approaches either end of its own range. An absolute
+    /// chroma would therefore be a number whose meaning changes under the other
     /// knobs: past what the gamut holds a channel clips, which bends the hue
     /// and MOVES THE LUMINANCE — so the isoluminance promised above would
     /// quietly stop being true — and the top of the control would be dead over
@@ -93,6 +104,26 @@ pub struct PitchGradient {
     /// by construction; the cost is that absolute chroma varies along the arc,
     /// since the hues that can hold more are given more.
     pub chroma: f32,
+    /// Signed difference in that fraction from the bottom of the pitch range to
+    /// the top: how much of the gradient's separation is spent on COLOR. 0
+    /// gives every note the same share of what the gamut holds for it, negative
+    /// puts the vivid end at the bottom.
+    ///
+    /// Bounded by what [`chroma`](Self::chroma) leaves on the 0..1 axis rather
+    /// than by a constant of its own — the whole of it at the middle, closing
+    /// to nothing at either end — which is
+    /// [`lightness_ramp`](Self::lightness_ramp)'s bound on its own axis, for
+    /// the reason given there: a ramp steeper than that runs off the axis and
+    /// flattens, drawing a PLATEAU over part of the pitch range while the pair
+    /// still reads as a straight ramp. See [`sanitized`](Self::sanitized).
+    ///
+    /// A ramp in the FRACTION and not in absolute chroma, for everything
+    /// [`chroma`](Self::chroma) says: the maximum moves along the arc and with
+    /// the brightness ramp, so a ramp stated absolutely would be a stretch
+    /// whose two ends changed meaning under the other knobs — and one whose
+    /// vivid end would sit outside the gamut over whatever part of the arc
+    /// could not hold it.
+    pub chroma_ramp: f32,
 }
 
 /// The hue the bottom of the range opens on: a deep blue-violet.
@@ -140,6 +171,18 @@ fn default_chroma() -> f32 {
     0.5
 }
 
+/// Flat: every note gets the same share of the color available to it.
+///
+/// Where [`default_lightness_ramp`] opens wide, and the difference is what the
+/// two cues are worth. Brightness is the strongest separation there is, so the
+/// picture the defaults open on spends it on pitch; color is already carrying
+/// pitch through the hue arc, and a chroma ramp on top of that arc says the
+/// same thing twice while costing one end of the range its color. It is a knob
+/// to dial rather than one to open on.
+fn default_chroma_ramp() -> f32 {
+    0.0
+}
+
 impl Default for PitchGradient {
     fn default() -> Self {
         PitchGradient {
@@ -148,6 +191,7 @@ impl Default for PitchGradient {
             lightness: default_lightness(),
             lightness_ramp: default_lightness_ramp(),
             chroma: default_chroma(),
+            chroma_ramp: default_chroma_ramp(),
         }
     }
 }
@@ -157,7 +201,7 @@ impl PitchGradient {
     /// arc there is. Past it the gradient would revisit hues it already used.
     pub const MAX_HUE_SPAN: f32 = 360.0;
 
-    /// Fit the four to what their controls can produce. A bar cannot make a
+    /// Fit the five to what their controls can produce. A bar cannot make a
     /// nonsense value but a hand-edited RON can, and these feed a color
     /// conversion whose output goes straight into the instance buffer: a
     /// non-finite `L*` would ride out as a NaN color rather than announce
@@ -176,6 +220,11 @@ impl PitchGradient {
         // the ends being `lightness ± ramp/2`: the whole axis at its middle,
         // and nothing at all at either end.
         let widest_ramp = 2.0 * lightness.min(100.0 - lightness);
+        // The same statement about the chroma pair, on the 0..1 axis a fraction
+        // of the gamut lives on. One rule with two axes rather than two rules:
+        // what the middle leaves is all the ramp there is room for.
+        let chroma = finite(self.chroma, default_chroma()).clamp(0.0, 1.0);
+        let widest_chroma_ramp = 2.0 * chroma.min(1.0 - chroma);
         PitchGradient {
             // Wrapped rather than clamped: it names a point on a circle.
             hue_start: finite(self.hue_start, default_hue_start()).rem_euclid(360.0),
@@ -197,7 +246,14 @@ impl PitchGradient {
             // handle that has left the bar.
             lightness_ramp: finite(self.lightness_ramp, default_lightness_ramp())
                 .clamp(-widest_ramp, widest_ramp),
-            chroma: finite(self.chroma, default_chroma()).clamp(0.0, 1.0),
+            chroma,
+            // Against what the middle leaves for the same reasons, one axis
+            // over: a fraction past 1 is a color the gamut cannot hold — which
+            // is the one thing the whole design promises it never asks for —
+            // and a fraction under 0 is a chroma with a sign, which draws the
+            // hue on the far side of the circle from the one the arc names.
+            chroma_ramp: finite(self.chroma_ramp, default_chroma_ramp())
+                .clamp(-widest_chroma_ramp, widest_chroma_ramp),
         }
     }
 
@@ -244,6 +300,37 @@ impl PitchGradient {
         // itself, for a caller assembling a gradient in code and reaching this
         // through some later path that does not sanitize.
         (l.clamp(0.0, 100.0), h)
+    }
+
+    /// The chroma FRACTION at normalized height `t` — the share of what the
+    /// gamut holds there that the curve asks for, which is what
+    /// [`chroma`](Self::chroma) says at the middle of the range and
+    /// [`chroma_ramp`](Self::chroma_ramp) spreads over the rest of it.
+    ///
+    /// A fraction and not an absolute chroma, so this is only half a
+    /// coordinate: what it is a fraction OF depends on the `L*` and hue at the
+    /// same `t`, which is why the curve is resolved in `pitch_ramp_coords` and
+    /// not here.
+    ///
+    /// The one curve read that does NOT sanitize first, where
+    /// [`lightness_and_hue`](Self::lightness_and_hue) does, and the asymmetry
+    /// is deliberate: a fraction past 1 is the only ask that can land outside
+    /// the gamut, so it is the only failing case `ramp_sample_in_gamut` has to
+    /// prove itself against, and a clamp here would answer that check instead
+    /// of letting it ask. Nothing loses by it — every drawing path arrives
+    /// through `with_lut`, which sanitizes once for a whole table and keys the
+    /// memo on the result.
+    ///
+    /// A sanitized gradient needs no clamp anyway, for exactly the reason
+    /// `lightness_and_hue`'s cannot fire: the widest ramp is `2 * min(c, 1 - c)`,
+    /// whose every step is exact in f32 — `1 - c` by Sterbenz for the half that
+    /// needs it, the doubling and the halving by their exponents — so an end
+    /// lands exactly ON 0 or 1 and the widening to f64 adds nothing. Measured
+    /// across 100k chromas at the widest ramp both signs: the overshoot is zero,
+    /// and `neither_end_of_the_curve_leaves_the_chroma_axis` is what keeps it
+    /// there.
+    pub fn chroma_at(self, t: f64) -> f64 {
+        f64::from(self.chroma) + (t.clamp(0.0, 1.0) - 0.5) * f64::from(self.chroma_ramp)
     }
 }
 

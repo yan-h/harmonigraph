@@ -72,6 +72,7 @@ fn at(l_star: f64, hue: f64, chroma_fraction: f64) -> Vec4 {
             lightness: l_star as f32,
             lightness_ramp: 0.0,
             chroma: chroma_fraction as f32,
+            chroma_ramp: 0.0,
         },
     )
 }
@@ -420,17 +421,19 @@ fn oklab_hue_of_retired_lab_hue(l_star: f64, lab_hue: f64, chroma_fraction: f64)
 }
 
 /// The `L*` and Oklab hue the retired CIELAB arc drew at the two ends of the
-/// pitch range, for the gradient's other three knobs.
+/// pitch range, for the gradient's other knobs.
 fn retired_arc(lab_start: f64, lab_span: f64, g: PitchGradient) -> (f32, f32) {
     let end_lightness = |t: f64| {
         (f64::from(g.lightness) + (t - 0.5) * f64::from(g.lightness_ramp)).clamp(0.0, 100.0)
     };
-    let chroma = f64::from(g.chroma);
-    let start = oklab_hue_of_retired_lab_hue(end_lightness(0.0), lab_start, chroma);
-    let end =
-        oklab_hue_of_retired_lab_hue(end_lightness(1.0), (lab_start + lab_span) % 360.0, chroma);
+    let start = oklab_hue_of_retired_lab_hue(end_lightness(0.0), lab_start, g.chroma_at(0.0));
+    let end = oklab_hue_of_retired_lab_hue(
+        end_lightness(1.0),
+        (lab_start + lab_span) % 360.0,
+        g.chroma_at(1.0),
+    );
     // The ENDS are what convert: a hue angle's color moves with lightness and
-    // chroma, so each end converts at its own end of the ramp, and what lies
+    // chroma, so each end converts at its own end of BOTH ramps, and what lies
     // between them becomes a straight Oklab sweep — a different path through
     // the same two colors, and an evener one.
     let short = (end - start).rem_euclid(360.0);

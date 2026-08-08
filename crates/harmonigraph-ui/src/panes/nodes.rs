@@ -7,7 +7,7 @@
 use super::{param_bar, section};
 use crate::params::{seconds, ParamBackend, ParamKey};
 use crate::widgets::{
-    button_row, choice_row, BrightnessBar, OctaveStrip, RangeBar, SpectrumBar, ValueBar,
+    button_row, choice_row, OctaveStrip, RangeBar, SpectrumBar, SpreadBar, ValueBar,
 };
 use crate::SharedState;
 use harmonigraph_scene::{
@@ -382,10 +382,10 @@ fn pitch_readout(midi: f32) -> String {
     format!("{name}{}", harmonigraph_core::notes::display_octave_of(n))
 }
 
-/// The pitch gradient's five knobs on three bars: the arc on the spectrum bar,
-/// the brightness pair on one bar of its own, and chroma. Each bar is a picture
-/// of what its knobs COMPOSE rather than a row per number, which is what keeps
-/// a five-knob gradient down to three rows.
+/// The pitch gradient on three bars, one per stretch: the arc on the spectrum
+/// bar, the brightness pair on one of its own, and the chroma pair on another.
+/// Each bar is a picture of what its numbers COMPOSE rather than a row per
+/// number, which is what keeps a six-number gradient down to three rows.
 ///
 /// One column of full-width bars, like every other settings group —
 /// which here is a budget as much as a habit, and the reason the spectrum is a
@@ -438,7 +438,7 @@ fn spectrum_group(ui: &mut egui::Ui, view: &mut ViewConfig) {
          to reset. The strip beneath is the same gradient in pitch order, low \
          note on the left.",
     );
-    BrightnessBar::new(&mut view.pitch_gradient, "Brightness").show(ui).on_hover_text(
+    SpreadBar::brightness(&mut view.pitch_gradient).show(ui).on_hover_text(
         "The stretch of brightness the pitch range spends, in CIELab L*: the \
          two numbers are the bottom of the pitch range and the top, in that \
          order, so a picture with its bright end at the bottom reads out \
@@ -448,14 +448,17 @@ fn spectrum_group(ui: &mut egui::Ui, view: &mut ViewConfig) {
          makes every note exactly as bright as every other and leaves hue to \
          carry the pitch alone.",
     );
-    ValueBar::new(&mut view.pitch_gradient.chroma, 0.0..=1.0, "Chroma")
-        .display(|v| format!("{:.0}%", v * 100.0))
-        .show(ui)
-        .on_hover_text(
-            "How much color, as a share of the most this brightness and hue \
-             can hold. 100% is as vivid as the screen goes without distorting \
-             the color; 0 is grey",
-        );
+    SpreadBar::chroma(&mut view.pitch_gradient).show(ui).on_hover_text(
+        "The stretch of color the pitch range spends, each end as a share of \
+         the most that note's own brightness and hue can hold — 100% is as \
+         vivid as the screen goes without distorting the color, 0 is grey. The \
+         two numbers are the bottom of the pitch range and the top, in that \
+         order, so a picture with its vivid end at the bottom reads out \
+         backwards. Drag either end to move it, drag between them to slide the \
+         whole stretch, drag one end past the other to swap which end is \
+         vivid, double-click to reset. Closing the two together gives every \
+         note the same share of the color available to it.",
+    );
 }
 
 /// What every layer of the node shares: the pitch->color gradient it is
