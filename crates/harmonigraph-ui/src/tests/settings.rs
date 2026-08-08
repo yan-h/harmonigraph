@@ -324,18 +324,44 @@ fn every_gradient_group_previews_itself_above_its_bars() {
         // A preview is the one full-column band of color in a settings pane: a
         // spectrum's circle is the track's width and a fade ramp is a row high,
         // so the pair of measurements tells all three apart.
-        let previews: Vec<egui::Rect> = shapes
+        let drawn: Vec<&egui::Mesh> = shapes
             .iter()
             .filter_map(|cs| match &cs.shape {
-                egui::Shape::Mesh(m) => Some(m.calc_bounds()),
+                egui::Shape::Mesh(m) => Some(&**m),
                 _ => None,
             })
-            .filter(|b| {
+            .filter(|m| {
+                let b = m.calc_bounds();
                 (b.width() - WIDTH).abs() < 1.0
                     && (b.height() - crate::widgets::preview_height(1.0)).abs() < 0.6
             })
             .collect();
-        assert_eq!(previews.len(), 1, "{tab:?} drew {previews:?} as gradient previews, not one");
+        assert_eq!(drawn.len(), 1, "{tab:?} drew {} gradient previews, not one", drawn.len());
+        let previews: Vec<egui::Rect> = drawn.iter().map(|m| m.calc_bounds()).collect();
+
+        // And it is THIS pane's gradient. The two panes dial different
+        // gradients through the same widgets, so a group handed the other one
+        // draws a picture that is wrong about everything and wrong in no
+        // position — every other assertion here passes on it. Read at the ends,
+        // where the ramp is the table's own first and last entry and no
+        // interpolation stands between the mesh and the value.
+        let gradient = match tab {
+            panes::Tab::Nodes => harmonigraph_scene::ViewConfig::default().pitch_gradient,
+            _ => SpectrumConfig::default().spectrogram_gradient,
+        };
+        let lut = harmonigraph_scene::color::pitch_ramp_lut(gradient.sanitized());
+        let columns: Vec<egui::Color32> =
+            drawn[0].vertices.chunks(2).map(|column| column[0].color).collect();
+        for (end, drew, want) in [
+            ("quiet", columns[0], lut[0]),
+            ("loud", columns[columns.len() - 1], lut[lut.len() - 1]),
+        ] {
+            let want = crate::panes::scene_color(want, 1.0);
+            assert_eq!(
+                drew, want,
+                "{tab:?} drew its preview's {end} end in {drew:?}, not the {want:?} its                  own gradient reaches — is the group previewing the other pane's?",
+            );
+        }
         let track = crate::widgets::spectrum_track_width(WIDTH, 1.0);
         let tracks: Vec<egui::Rect> = shapes
             .iter()
