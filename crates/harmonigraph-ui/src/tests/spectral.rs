@@ -155,25 +155,28 @@ fn dragging_the_spectral_picture_along_time_zooms_the_span() {
     );
 }
 
-/// Only a drag that starts in the far region — where the time axis actually is
-/// — zooms the Span. Over the spectrum's own share the depth axis is dB, and a
-/// drag along it would be moving something that isn't under the hand.
+/// The same drag begun over the SPECTRUM zooms the level range instead, and
+/// leaves the Span alone: the depth axis is dB there rather than time, and a
+/// drag moves what is under the hand. Dragging out along the curve, away from
+/// the baseline it stands on, spreads it — so the dB window closes in, exactly
+/// as pulling away from the now-line shortens the Span.
 #[test]
-fn a_drag_over_the_spectrum_leaves_the_span_alone() {
+fn a_drag_over_the_spectrum_zooms_the_level_and_not_the_span() {
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
-    // Zoomed in, so the pan the drag DOES do has room to show — otherwise this
-    // would pass just as well on a drag that never reached the pane.
+    // Zoomed in, so a stray pan would show up rather than sitting against the
+    // clamp at the ends of the axis.
     state.spectrum_config.low_midi = 48.0;
     state.spectrum_config.high_midi = 84.0;
     let mut h = DockHarness::new();
     h.settle(&mut state);
 
-    // The spectrum owns 0..0.45 of the depth axis by default.
+    // The spectrum owns 0..0.45 of the depth axis by default. Left runs depth
+    // rightward with the baseline at the divider, so the curve grows LEFTWARD
+    // and that is the way out of it.
     let grab = h.spectral_grab_at(&state, 0.2);
     let before = state.spectrum_config;
     h.frame(&mut state, vec![egui::Event::PointerMoved(grab), press(grab, true)]);
-    // Leaning along time, which in the far region would be a Span zoom.
-    let target = grab + egui::vec2(120.0, -20.0);
+    let target = grab + egui::vec2(-80.0, -20.0);
     h.frame(&mut state, vec![egui::Event::PointerMoved(target)]);
     h.frame(&mut state, vec![press(target, false)]);
 
@@ -183,10 +186,18 @@ fn a_drag_over_the_spectrum_leaves_the_span_alone() {
         "a drag begun over the spectrum has no time axis under it",
     );
     assert!(
-        after.low_midi < before.low_midi - 0.1,
-        "and is still a pitch pan, so the drag did reach the pane ({} -> {})",
-        before.low_midi,
-        after.low_midi,
+        after.ceiling_db < before.ceiling_db - 3.0,
+        "the level window should have closed, so the drag did reach the pane ({} -> {})",
+        before.ceiling_db,
+        after.ceiling_db,
+    );
+    // The floor is the baseline the zoom is about, and the pitch range is the
+    // other axis' business: one drag moves one thing.
+    assert_eq!(after.floor_db, before.floor_db, "the floor is this zoom's anchor");
+    assert_eq!(
+        (after.low_midi, after.high_midi),
+        (before.low_midi, before.high_midi),
+        "the Level's drag is not the pitch range's",
     );
 }
 
