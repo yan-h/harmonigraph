@@ -1759,11 +1759,17 @@ impl<'a> SpectrumBar<'a> {
         let width = bar_width(ui);
         // Space first, senses after: the row holds two controls side by side,
         // and each is interacted with over its OWN rectangle. That is what
-        // keeps a press on the flip button out of the track. One rectangle
-        // sensed for both would hand a sideways drag begun on the button
-        // straight to the rotate branch, and asking the widget where the press
-        // LANDED is no answer either — egui calls a press a drag only once it
-        // has moved, by which time the pointer can be over the track.
+        // keeps a press on the flip button out of the track — a button that
+        // senses clicks and not drags produces no drag hit at all, so there is
+        // nothing for the track to inherit at any distance.
+        //
+        // One rectangle sensed for both would put that on a position check
+        // instead: the widget would take the drag and have to decline it by
+        // asking [`aimed_at`] where the press landed, exactly as the strip
+        // below IS declined. Two rectangles rather than one check because a
+        // check can only be reached once egui calls the press a drag, and the
+        // frames before that are ones the button spends looking pressed while
+        // the track quietly holds the gesture.
         let piece_gap = PIECE_GAP * scale;
         let (id, rect) = ui.allocate_space(Vec2::new(width, spectrum_bar_height(scale)));
         // The track's width is what the two bands and the settings sweep all
@@ -4174,9 +4180,10 @@ mod tests {
     /// with over its OWN rectangle — which works HERE, where the strip below
     /// needs a position check as well, because the button senses clicks and not
     /// drags: a press on it produces no drag hit for the track to inherit, at
-    /// any distance. Sensed together, a press that began on the button reaches
-    /// the track's rotate branch the moment egui calls it a drag, and the
-    /// circle spins under a pointer that pressed a button.
+    /// any distance. Sensed together, the track takes that press and the only
+    /// thing left standing between it and the rotate branch is the same
+    /// [`aimed_at`] check the strip is declined by — a position test doing the
+    /// work a rectangle does for free, and doing it a few frames late.
     #[test]
     fn a_drag_begun_on_the_flip_button_turns_nothing() {
         let before =
