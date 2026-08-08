@@ -1574,11 +1574,21 @@ impl SpreadGrab {
     fn at(v: f32, (centre, spread): (f32, f32), near: f32) -> SpreadGrab {
         let (low_end, high_end) = (centre - spread * 0.5, centre + spread * 0.5);
         let (d_low, d_high) = ((v - low_end).abs(), (v - high_end).abs());
-        // A tie goes to the low-pitch end, which is the flat-ramp case: the two
-        // stand on the same point and nothing distinguishes them, and taking the
-        // low end means dragging DOWN the axis opens the ramp the way the
-        // picture's default runs — dark at the bottom of the pitch range.
-        let nearer = if d_low <= d_high { SpreadGrab::Low } else { SpreadGrab::High };
+        let nearer = if d_low == d_high {
+            // A tie is the FLAT ramp — the two ends stand on the same point, so
+            // which one a press takes is a rule rather than a measurement. Take
+            // the end on the side the pointer is, and the ramp opens the way it
+            // is dragged: up lifts the top of the pitch range, down darkens the
+            // bottom, and neither leaves the picture upside down. A fixed
+            // choice inverts it in whichever direction it is not — and parked
+            // on black or white that is the ONLY direction, so the right way
+            // round would be unreachable from there.
+            if v < centre { SpreadGrab::Low } else { SpreadGrab::High }
+        } else if d_low < d_high {
+            SpreadGrab::Low
+        } else {
+            SpreadGrab::High
+        };
         // A handle's reach cannot eat the whole ramp, or a narrow one would
         // have no middle left to slide along the axis.
         let reach = near.min(spread.abs() * HANDLE_REACH_SHARE);
@@ -3637,9 +3647,9 @@ mod tests {
     /// bar whose brightness could not be moved at exactly the isoluminant
     /// setting would strand anyone who dialled their way into it.
     ///
-    /// Away from that point the ends take over, and a tie goes to the LOW
-    /// end — so dragging down the axis opens the ramp the way the picture's
-    /// default runs, dark at the bottom of the pitch range.
+    /// Away from that point the ends take over, and WHICH end is the pointer's
+    /// own side — see `a_flat_ramp_opens_the_way_it_is_dragged` for what that
+    /// buys, which is a picture the right way round in either direction.
     #[test]
     fn the_middle_stays_grabbable_at_a_flat_ramp() {
         let flat = (50.0f32, 0.0);
@@ -3651,6 +3661,38 @@ mod tests {
             (35.0, 30.0),
             "and it opens the ramp dark-at-the-bottom",
         );
+    }
+
+    /// Opening a ramp out of a flat one runs the way it is DRAGGED, either
+    /// direction: up lifts the top of the pitch range, down darkens the bottom,
+    /// and both leave the picture the right way round.
+    ///
+    /// A flat ramp is the one setting where nothing distinguishes the two ends
+    /// — they stand on the same point — so which one a press takes is a rule
+    /// rather than a measurement, and taking a FIXED one inverts the picture in
+    /// whichever direction it is not. At black or white that direction is the
+    /// only one there is: the axis runs one way from either, so a bar that
+    /// opened inverted on an up-drag would make an isoluminant black picture
+    /// impossible to open the right way round at all.
+    #[test]
+    fn a_flat_ramp_opens_the_way_it_is_dragged() {
+        for (flat, to, want) in [
+            ((50.0f32, 0.0f32), 70.0f32, (60.0f32, 20.0f32)),
+            ((50.0, 0.0), 30.0, (40.0, 20.0)),
+            // Parked on black, where up is the only way out.
+            ((0.0, 0.0), 40.0, (20.0, 40.0)),
+            // And on white.
+            ((100.0, 0.0), 60.0, (80.0, 40.0)),
+        ] {
+            let grab = SpreadGrab::at(to, flat, NEAR);
+            let got = grab.apply(to, flat, L_STAR_AXIS);
+            assert_eq!(
+                got, want,
+                "flat at {} dragged to {to} gave a ramp of {}, and a negative one is the \
+                 picture upside down",
+                flat.0, got.1,
+            );
+        }
     }
 
     /// A wide ramp divides the bar the way a [`RangeBar`] does: a handle's
