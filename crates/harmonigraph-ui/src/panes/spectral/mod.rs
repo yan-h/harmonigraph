@@ -32,15 +32,19 @@ use gestures::{drag_split, drag_zoom};
 use egui::Sense;
 
 /// How faint a frequency ruling is drawn against [`theme::hairline`], the
-/// pane's quietest line already: the numbered marks first, the ladder between
-/// them second.
+/// pane's quietest line already: a decade boundary first, every other step of
+/// the ladder second.
 ///
-/// Two weights rather than one because the ladder is read in two steps — find
-/// the number, then count off from it — and a grid of uniform lines makes the
-/// second step a count from wherever the eye happened to land. Both stay
-/// quieter than the now-line, which is the one line on this pane that divides
-/// two pictures rather than measuring one.
-const RULING_FADE: (f32, f32) = (0.6, 0.3);
+/// Two weights rather than one, and the DECADE is what earns the stronger one.
+/// A log axis draws every decade at the same length, so nothing in the spacing
+/// says that the step size changes tenfold at 100 Hz and again at 1 kHz — mark
+/// those three and the picture reads as one ruler repeated, rather than as
+/// lines that inexplicably bunch up. The numbered marks do not need it: they
+/// carry a number, which is a stronger signal than any weight of line.
+///
+/// Both stay quieter than the now-line, which is the one line on this pane that
+/// divides two pictures rather than measuring one.
+const RULING_FADE: (f32, f32) = (0.85, 0.45);
 
 /// Three views of the same music over one shared MIDI-pitch axis: the
 /// audio spectrum as a curve (FFT of the input bus, every partial at its
@@ -179,7 +183,7 @@ pub(crate) fn spectral_pane(
     // is 0), and a zero-length segment has no normal for egui to compute.
     if split > 0.0 {
         for ruling in &grid {
-            let fade = if ruling.major { RULING_FADE.0 } else { RULING_FADE.1 };
+            let fade = if ruling.decade { RULING_FADE.0 } else { RULING_FADE.1 };
             painter.line_segment(
                 [axes.at(ruling.t, 0.0), axes.at(ruling.t, split)],
                 egui::Stroke::new(1.0, theme::hairline().gamma_multiply(fade)),
@@ -189,7 +193,7 @@ pub(crate) fn spectral_pane(
 
     let axis_labels: Vec<(f32, String)> = grid
         .iter()
-        .filter(|ruling| ruling.major)
+        .filter(|ruling| ruling.numbered)
         .map(|ruling| {
             let hz = ruling.hz;
             let label = if hz >= 1_000.0 { format!("{}k", hz / 1_000.0) } else { format!("{hz}") };

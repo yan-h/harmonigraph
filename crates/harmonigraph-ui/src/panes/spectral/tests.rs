@@ -627,11 +627,18 @@ fn the_frequency_grid_rules_one_step_per_decade() {
 
     // The numbered marks, which are the axis labels this replaced the hardcoded
     // list of: an analyzer's 1-2-5 series, and nothing added or lost.
-    let majors: Vec<f32> = grid.iter().filter(|r| r.major).map(|r| r.hz).collect();
+    let numbered: Vec<f32> = grid.iter().filter(|r| r.numbered).map(|r| r.hz).collect();
     assert_eq!(
-        majors,
+        numbered,
         vec![20.0, 50.0, 100.0, 200.0, 500.0, 1_000.0, 2_000.0, 5_000.0, 10_000.0, 20_000.0],
     );
+
+    // The decade boundaries, which are what gets the stronger ink — the three
+    // places on this axis where the ladder's step size changes tenfold, and NOT
+    // the numbered marks between them. 20 kHz is a number and not a decade;
+    // 100 Hz is both.
+    let decades: Vec<f32> = grid.iter().filter(|r| r.decade).map(|r| r.hz).collect();
+    assert_eq!(decades, vec![100.0, 1_000.0, 10_000.0]);
 
     // Low to high, and on the axis: the pane draws these in the order they come
     // back and clips nothing.
@@ -654,10 +661,10 @@ fn a_short_axis_thins_the_ladder_and_keeps_the_numbers() {
     let short = frequency_grid(&scale, 200.0);
     assert!(short.len() < long.len(), "a 200-point axis kept the whole ladder");
 
-    let majors = |grid: &[Ruling]| -> Vec<f32> {
-        grid.iter().filter(|r| r.major).map(|r| r.hz).collect()
+    let numbered = |grid: &[Ruling]| -> Vec<f32> {
+        grid.iter().filter(|r| r.numbered).map(|r| r.hz).collect()
     };
-    assert_eq!(majors(&short), majors(&long), "thinning ate a numbered mark");
+    assert_eq!(numbered(&short), numbered(&long), "thinning ate a numbered mark");
 
     // Which steps survive turns on the length of a decade, which is the same
     // everywhere on a log axis — so the two full decades on this range keep the
@@ -685,7 +692,7 @@ fn a_short_axis_thins_the_ladder_and_keeps_the_numbers() {
     // Squeezed hard enough it wears down to the numbers alone, rather than to
     // some arbitrary subset that happens to fit.
     let tiny = frequency_grid(&scale, 100.0);
-    assert_eq!(tiny.iter().map(|r| r.hz).collect::<Vec<_>>(), majors(&long));
+    assert_eq!(tiny.iter().map(|r| r.hz).collect::<Vec<_>>(), numbered(&long));
 }
 
 /// A collapsed, inverted or NaN pitch range — which the bars cannot produce and
