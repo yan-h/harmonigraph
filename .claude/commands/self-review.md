@@ -73,7 +73,7 @@ hands back, so you can tell which reading produced which finding.
    Favour large over small, and drop anything that smells like a false
    positive rather than reporting it hedged.
 
-3. **State and invalidation.** For every cache, memo, dirty flag, or
+3. **Cache keys and numeric edges.** For every cache, memo, dirty flag, or
    derived value this diff adds or touches: write down what it is keyed on,
    then ask what *else* feeds the value and is missing from the key. This is
    the standing prior for this project — it is the bug that has actually

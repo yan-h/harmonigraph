@@ -25,7 +25,7 @@ an oversight to work around.
 Run **`/self-review`** instead. It is the project-local command that goes
 where `/code-review` cannot: it spawns a single `diff-reviewer` subagent on
 `git diff main...HEAD`, which works four readings in one pass — conventions,
-bugs, invalidation and test reach. A session has full context on what it just
+bugs, cache keys and test reach. A session has full context on what it just
 wrote, which makes this cheap; it is also biased toward its own work, which
 is what the subagent corrects for, since it did not write it. This half
 catches the bugs that live entirely inside one branch — a stale invalidation
