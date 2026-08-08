@@ -198,9 +198,9 @@ pub struct ViewConfig {
     // Which shimmer sweeps the octave glyphs has no field here: the sheet is
     // the melody/bass rings' alone (`pulse_marks`), and the octave layer draws
     // steady whatever those are doing. Saved blobs still carry the
-    // `pulse_octaves` key, naming any of the six patterns `Pulse` answers to;
-    // serde ignores unknown keys, so such a blob loads intact, opens on the
-    // steady octave layer, and drops the key on the next save.
+    // `pulse_octaves` key, naming a pattern nothing reads any more; serde
+    // ignores unknown keys, so such a blob loads intact, opens on the steady
+    // octave layer, and drops the key on the next save.
     // ---- Note envelope ---------------------------------------------------
     // How a note ARRIVES and how it LEAVES, for every layer of the node at
     // once. The DURATION of both is the host-automatable Fade param and lives
@@ -322,9 +322,8 @@ pub struct ViewConfig {
     /// How fast the shimmer travels, in world units per second — the
     /// lattice's own units, so the DAW window and an exported video sweep at
     /// the same rate across the same nodes, where a rate in screen pixels
-    /// would not. Which WAY it travels is the pattern's own: along the bands'
-    /// normal for the gratings, outward from the origin for
-    /// [`Pulse::Rings`]. 0 freezes the sheet where it stands, which is a look
+    /// would not. It travels along the bands' own normal, every pattern here
+    /// being gratings. 0 freezes the sheet where it stands, which is a look
     /// rather than an off switch (the mode is the switch).
     pub shimmer_speed: f32,
     /// How wide the pattern is, in the same world units: the distance from one
@@ -556,11 +555,19 @@ impl ViewConfig {
     /// [`release_level`](harmonigraph_core::Voice::release_level), where that
     /// is written and argued.
     ///
-    /// One assembly point, called by everything that needs an envelope, so
-    /// the split is invisible past this line and no caller can pair a
-    /// duration with the wrong shape. The shape is clamped to the range its
-    /// bar offers — a hand-edited blob can hold anything, and `sanitize` only
-    /// repairs the non-finite (a finite 40 would be a curve no bar can undo).
+    /// One assembly point for every envelope a NOTE runs on, so the split is
+    /// invisible past this line and no caller can pair a duration with the
+    /// wrong shape. The shape is clamped to the range its bar offers — a
+    /// hand-edited blob can hold anything, and `sanitize` only repairs the
+    /// non-finite (a finite 40 would be a curve no bar can undo).
+    ///
+    /// The Nodes pane's Shape bar builds one of its own, and it is the single
+    /// exception rather than a second assembly point: it is drawing a PICTURE
+    /// of the curve, over a unit duration that is nothing a note ever fades
+    /// on, so it has no note's seconds to pair with and could not reach for
+    /// them here. What it must not do is re-derive the SHAPE, and
+    /// `the_shape_bars_preview_is_the_curve_the_notes_run_on` is what holds
+    /// it to this function's answer.
     pub fn envelope(&self, frame: &FrameParams) -> Envelope {
         Envelope {
             attack_time: frame.fade_time,

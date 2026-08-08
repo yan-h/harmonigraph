@@ -636,15 +636,12 @@ const SHIMMER_ANGLE: f32 = 0.375 * TAU;
 // where the moire would be starting, rather than racing it.
 //
 // Both are scaled by a ROOT TWO the Width bar never sees, because the period
-// the bar sets is not every pattern's finest feature. Crossing two gratings
-// multiplies into their sum and difference frequencies (Checker literally so,
-// Weave with a crease along the same diagonals), and those run at k*sqrt(2) —
-// so a Checker at the bar's Nyquist is already half a period past its own.
-// The row is faded on its tightest member rather than per pattern: one fade
-// for one sheet, and what Bands gives up for it is a slightly earlier finish
-// at a width no shot is framed for anyway. Weave's crease has no band limit
-// at all, being a corner rather than a sine; the scaling is what keeps its
-// gratings honest, and the crease is one line rather than a field.
+// the bar sets is not every pattern's finest feature. Checker multiplies two
+// crossed gratings into their sum and difference frequencies, and those run at
+// k*sqrt(2) — so a Checker at the bar's Nyquist is already half a period past
+// its own. The row is faded on its tightest member rather than per pattern:
+// one fade for one sheet, and what Bands gives up for it is a slightly earlier
+// finish at a width no shot is framed for anyway.
 const SHIMMER_RESOLVE_FULL: f32 = 0.14;
 const SHIMMER_RESOLVE_GONE: f32 = 0.35;
 // Turn a unit vector by `angle`, for the gratings below.
@@ -656,18 +653,13 @@ fn rotated(v: vec2<f32>, angle: f32) -> vec2<f32> {
 // The signed pattern at `p`, in -1..1 — mode by mode, and every one of them
 // built out of gratings of the SAME period, so the Width bar means one thing
 // across the row. `d` is the direction the sheet is laid along and `n` its
-// perpendicular; `field` and `slide` are the unslid position and how far the
-// sheet has travelled, which only the radial pattern needs apart.
+// perpendicular.
 //
-// The three that cross gratings are the tessellating family the checkerboard
-// belongs to: multiply two and you get its cells, take the brighter of two
-// and you get the lines between them instead, sum three at sixty degrees and
-// the cells come out hexagonal — which lands on the lattice better than
+// The two that cross gratings are the tessellating family the checkerboard
+// belongs to: multiply two and you get its cells, sum three at sixty degrees
+// and the cells come out hexagonal — which lands on the lattice better than
 // squares do, its rows running three ways rather than two.
-fn shimmer_pattern(
-    mode: u32, p: vec2<f32>, d: vec2<f32>, n: vec2<f32>,
-    field: vec2<f32>, slide: f32,
-) -> f32 {
+fn shimmer_pattern(mode: u32, p: vec2<f32>, d: vec2<f32>, n: vec2<f32>) -> f32 {
     let k = TAU / shimmer_period();
     if mode == 2u {
         // Checker: two gratings at right angles, multiplied. The product is
@@ -703,21 +695,6 @@ fn shimmer_pattern(
         let b = cos(k * dot(p, rotated(d, TAU / 6.0)));
         let c = cos(k * dot(p, rotated(d, TAU / 3.0)));
         return (a + b + c - 0.75) / 2.25;
-    }
-    if mode == 4u {
-        // Weave: the same two crossed gratings as Checker with the BRIGHTER
-        // taken instead of the product, which lights the lines where Checker
-        // lights the cells, and brightest where two lines cross.
-        return max(sin(k * dot(p, d)), sin(k * dot(p, n)));
-    }
-    if mode == 5u {
-        // Rings: one grating of the distance from the origin, which is why
-        // this is the arm that takes `field` and `slide` apart. A translated
-        // field would slide the center off the lattice, where having one is
-        // what this pattern is FOR, so the travel goes into the radius. The
-        // `length` sits inside this arm rather than at the call site so the
-        // four patterns that never look at it do not pay for a square root.
-        return sin(k * (length(field) - slide));
     }
     // Bands (mode 1): one grating along the sheet's own direction.
     return sin(k * dot(p, d));
@@ -758,10 +735,10 @@ fn shimmer_terms(mode: u32, field: vec2<f32>, footprint: f32) -> vec2<f32> {
     // in f64 on the CPU, where a song position still HAS the resolution to
     // phase a band with. See `Scene::shimmer_slide`.
     let slide = u.misc8.x;
-    // The field slid along the sheet's own direction. The radial pattern
-    // takes `field` and `slide` apart for itself, inside `shimmer_pattern`.
+    // The field slid along the sheet's own direction, which is the one
+    // position every pattern is built on.
     let p = field - dir * slide;
-    let pattern = shimmer_pattern(mode, p, dir, norm, field, slide);
+    let pattern = shimmer_pattern(mode, p, dir, norm);
     // Clamped because the power below is `pow`, which is undefined for a
     // negative base — and sin is only promised to land NEAR its range, so a
     // wave of -1e-8 at a trough would put a NaN into the node's color.

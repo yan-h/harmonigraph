@@ -256,7 +256,7 @@ fn melody_bass_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
 
 /// The patterns the mark rings' sheet can be laid in, for the row above.
 ///
-/// A table beside the row rather than six arms written into it: a pattern is a
+/// A table beside the row rather than four arms written into it: a pattern is a
 /// shape the light takes, and each one's description is a sentence about that
 /// shape rather than about the marks, so it belongs next to the others it is
 /// told apart from.
@@ -280,18 +280,6 @@ const SHIMMER_PATTERNS: &[(Pulse, &str, &str)] = &[
         "Three gratings sixty degrees apart: a honeycomb of bright cells. \
          Tessellates with the lattice where a checkerboard fights it — the \
          rows here run three ways, not two",
-    ),
-    (
-        Pulse::Weave,
-        "Weave",
-        "The same crossed gratings as Checker with the brighter taken: a \
-         lattice of light LINES rather than cells, brightest where two cross",
-    ),
-    (
-        Pulse::Rings,
-        "Rings",
-        "Concentric rings travelling outward from the lattice's origin — the \
-         one pattern with a center, so the light has somewhere it comes from",
     ),
 ];
 
@@ -516,13 +504,33 @@ fn every_layer_section(
     // fine end for an ease to rescue. The one bar in the group that is NOT a
     // duration, hence no seconds on the readout — it is the shape the Fade
     // above it is drawn with.
+    //
+    // The one bar in the pane carrying a picture of itself, and the reason is
+    // that its number says nothing: a Fade of 0.15 is a length anyone can feel
+    // and a Shape of 0.35 is a position on a scale with no unit and no
+    // landmarks. The line is drawn RISING, as an arrival, because that is the
+    // function itself — a release is the same curve upside down, and picking
+    // the falling one would be picking a direction the setting does not have.
     ValueBar::new(&mut view.fade_shape, 0.0..=1.0, "Shape")
+        .curve(|shape, p| {
+            // The scene's own curve, not a second copy of the formula: the
+            // preview is only worth drawing if it cannot disagree with the
+            // notes, and nothing on screen would show the disagreement. A
+            // one-second arrival read `p` seconds in IS the shape at that
+            // fraction of any duration the Fade actually RUNS, the curve
+            // being in the fraction alone — at a Fade of 0 there is no
+            // transition for it to be a fraction of, and the line goes on
+            // describing a curve the notes are not taking.
+            harmonigraph_core::Envelope { attack_time: 1.0, shape, ..Default::default() }
+                .attack(p as f64, 0.0)
+        })
         .show(ui)
         .on_hover_text(
-            "The curve both ends of the Fade run on. 0 is a straight \
-             line — the same change every frame. Higher leaves and arrives \
-             fast and settles slowly, the way a struck note decays; at the \
-             top most of the travel is over in the first quarter of the \
+            "The curve both ends of the Fade run on, drawn across the bar as \
+             an arrival — a release is the same line upside down. 0 is a \
+             straight line — the same change every frame. Higher leaves and \
+             arrives fast and settles slowly, the way a struck note decays; at \
+             the top most of the travel is over in the first quarter of the \
              time. The trail keeps its own straight fade whatever this says",
         );
     // 0 = off (the renderer skips the whole post-process chain), so the bar

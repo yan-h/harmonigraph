@@ -117,6 +117,71 @@ fn every_settings_pane_scrolls_when_its_content_overflows() {
     }
 }
 
+/// The Nodes pane's Shape bar draws the curve the NOTES run on, not a second
+/// copy of the formula that happens to look like it.
+///
+/// The whole value of a preview is that it cannot disagree with what it
+/// previews, and a disagreement here is invisible: a line that bends the wrong
+/// amount still looks like a curve, and the number beside it reads 0.35 either
+/// way. So the bar is painted for real and every point on the line is checked
+/// against `Envelope` — the one place the shape is written.
+///
+/// The line's own ends calibrate the plot box, rather than the paint constants
+/// being restated here: an approach starts at nothing and lands on full, so the
+/// first point IS the floor and the last IS the ceiling. That leaves the test
+/// measuring the SHAPE of the line and nothing about where the widget chose to
+/// put it — inset, height and scale are all free to change under it.
+///
+/// The envelope comes through [`ViewConfig::envelope`], which is where a NOTE's
+/// curve comes from, and that is the half that makes the name true. Read off
+/// the `fade_shape` field instead and the test compares the bar against the
+/// number it was handed rather than against the notes: put a mapping between
+/// the two — a rescale of how hard the setting bends, say — and the picture
+/// drifts from the lattice with this still green.
+#[test]
+fn the_shape_bars_preview_is_the_curve_the_notes_run_on() {
+    let shapes: Vec<egui::Shape> = settings_pane_at_width(
+        panes::Tab::Nodes,
+        320.0,
+        harmonigraph_scene::Projection::default(),
+    )
+    .into_iter()
+    .map(|cs| cs.shape)
+    .collect();
+    let points = crate::widgets::curve_points(&shapes);
+    assert!(points.len() > 8, "the Nodes pane drew {} preview points", points.len());
+
+    // A unit-length arrival, which is the whole curve: the shape lives in the
+    // fraction and not in the seconds, so any positive duration draws it.
+    let envelope = harmonigraph_scene::ViewConfig::default()
+        .envelope(&harmonigraph_scene::FrameParams { fade_time: 1.0, ..Default::default() });
+    let (left, right) = (points[0].x, points[points.len() - 1].x);
+    let (floor, ceiling) = (points[0].y, points[points.len() - 1].y);
+    assert!(right > left, "the line runs backwards, {left} to {right}");
+    assert!(floor > ceiling, "the line runs downward: it is an arrival, and rises");
+    // A fifth of a point, which sounds arbitrary and is not: the widget and the
+    // line below compute the same expression, so the residual is f32 rounding
+    // and nothing else, and the tolerance is only there to name that. What it
+    // must NOT be is a fraction of the picture — the plot is 13 points tall, so
+    // the half-point that reads as "close enough on screen" is 0.04 in level,
+    // and a preview quietly softened to `shape * 0.9` sits inside it.
+    for point in &points {
+        let p = (point.x - left) / (right - left);
+        let want = floor - (floor - ceiling) * envelope.attack(p as f64, 0.0);
+        assert!(
+            (point.y - want).abs() < 0.02,
+            "at {p} through the transition the line is at {} and the envelope at {want}",
+            point.y,
+        );
+    }
+    // A straight line satisfies the loop above at shape 0 and nowhere else, so
+    // the fresh view being curved is what gives it teeth.
+    assert!(
+        envelope.shape > 0.0,
+        "a fresh view fades on a straight line; the test above proves nothing",
+    );
+}
+
 /// The Video pane drawn through the REAL dock, soloed, for a shell that can or
 /// cannot record takes — the one thing that changes which section leads it.
 ///
