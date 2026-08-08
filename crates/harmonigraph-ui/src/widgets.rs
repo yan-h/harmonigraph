@@ -902,39 +902,104 @@ impl<'a> RangeBar<'a> {
         painter.galley(centered(&label, rect.left() + text_pad), label, text_color);
 
         // What is left of the row once the name has taken its place, and the
-        // only part of the bar the numbers are allowed into. This is what makes
-        // three text runs in a 20pt row work rather than collide: the name was
-        // laid out against a width with `reserve` already subtracted, so what
-        // remains here is wide enough for BOTH readouts side by side at every
-        // setting and at every column width — the name can no more be pushed
-        // off by a number than a number can be pushed off the bar.
+        // only part of the bar the numbers are allowed into. It is what keeps
+        // three text runs out of each other's way: the name was laid out
+        // against a width with `reserve` already subtracted, so as long as the
+        // name got the width it asked for, what remains holds both readouts
+        // side by side — the name can no more be pushed off by a number than a
+        // number can push into the name. A bar too narrow to grant even the
+        // elided name its width is past that (the readouts then take what room
+        // there is and the containment below is the only promise left), which
+        // is well under the 120pt the panes are held to.
         let region_left = rect.left() + text_pad + label_width + BAR_LABEL_GAP * scale;
         let region_right = rect.right() - text_gap;
 
-        // Each end's value beside its own handle. First choice is the empty
-        // track outside the span, where a number sits on flat black and reads
-        // cleanly; when the span has grown too close to that edge to leave
-        // room, it moves inside instead, over the fill. (At the full range
-        // there is no empty track at all, so both go inside.)
         let handle_w = HANDLE_W * scale;
-        let reach = handle_w * 0.5 + text_gap;
+        let half_handle = handle_w * 0.5;
+        let reach = half_handle + text_gap;
         let low = painter.layout_no_wrap((self.display)(*self.low), mono.clone(), theme::text());
         let high = painter.layout_no_wrap((self.display)(*self.high), mono, theme::text());
         let (low_w, high_w) = (low.size().x, high.size().x);
-        // Held in reading order, left number first, and each inside the region:
-        // the low end keeps room for the high one beside it, and the high one
-        // starts after the low one ends. Without that a span squeezed against
-        // either limit would have both numbers wanting the same few points.
-        let low_outside = lx - reach - low_w;
-        let low_left = if low_outside >= region_left { low_outside } else { lx + reach };
-        let low_ceiling = (region_right - high_w - text_gap - low_w).max(region_left);
-        let low_left = low_left.clamp(region_left, low_ceiling);
-        let high_outside = hx + reach;
+        // The three runs of clear bar the two thumbs leave inside the region:
+        // outside the span either side, and between the handles. Each is
+        // clipped to the region, which is what holds the numbers off the name
+        // — a handle parked under the name (the low end at the bottom of its
+        // axis, where the two bars that open at the full range both sit) would
+        // otherwise open a run that starts inside the name's own letters.
+        let clipped = |(start, end): (f32, f32)| {
+            (start.max(region_left), end.min(region_right))
+        };
+        let gaps = [
+            clipped((region_left, lx - reach)),
+            clipped((lx + reach, hx - reach)),
+            clipped((hx + reach, region_right)),
+        ];
+        // First choice is each number beside its own handle, on the empty track
+        // outside the span where it sits on flat black and reads cleanly —
+        // snug against the handle it names. When the span has grown too close
+        // to that end of the bar to leave room, it moves inside instead, over
+        // the fill. (At the full range there is no empty track at all, so both
+        // go inside.)
+        let low_left = if gaps[0].1 - gaps[0].0 >= low_w { gaps[0].1 - low_w } else { gaps[1].0 };
         let high_left =
-            if high_outside + high_w <= region_right { high_outside } else { hx - reach - high_w };
-        let high_floor = low_left + low_w + text_gap;
-        let high_left = high_left.clamp(high_floor, (region_right - high_w).max(high_floor));
-        for (galley, left) in [(low, low_left), (high, high_left)] {
+            if gaps[2].1 - gaps[2].0 >= high_w { gaps[2].0 } else { gaps[1].1 - high_w };
+        // A number with a thumb standing in it is the one arrangement this bar
+        // cannot ship: the thumb is drawn in the same near-white as the digits,
+        // so the crossing swallows a character whichever paints last, and "-60
+        // dB" reads "-60 B". A span narrower than the numbers it carries has no
+        // room beside its handles for both, so when the first choice would be
+        // crossed — or would run the two numbers into each other or into the
+        // name — the pair travels TOGETHER into the widest clear run instead,
+        // and reads as the pair it is a little way off the span it describes.
+        let uncrossed = |left: f32, w: f32| {
+            left >= region_left
+                && left + w <= region_right
+                && [lx, hx].iter().all(|&x| x + half_handle <= left || x - half_handle >= left + w)
+        };
+        let apart = low_left + low_w + text_gap <= high_left;
+        let (low_left, high_left) =
+            if uncrossed(low_left, low_w) && uncrossed(high_left, high_w) && apart {
+                (low_left, high_left)
+            } else {
+                let pair = low_w + text_gap + high_w;
+                let widest = gaps
+                    .iter()
+                    .copied()
+                    .enumerate()
+                    .max_by(|(_, a), (_, b)| (a.1 - a.0).total_cmp(&(b.1 - b.0)));
+                match widest {
+                    // Right-aligned in the run BELOW the span, left-aligned in
+                    // either of the others, so the pair sits as near the span
+                    // it names as the run allows.
+                    Some((0, gap)) if gap.1 - gap.0 >= pair => (gap.1 - pair, gap.1 - high_w),
+                    Some((_, gap)) if gap.1 - gap.0 >= pair => {
+                        (gap.0, gap.0 + low_w + text_gap)
+                    }
+                    // No run holds both — a row this narrow has none left that
+                    // does. What survives is reading ORDER: low then high,
+                    // as near the span as the region allows, and a thumb
+                    // crossing one of them. Order is what makes them still a
+                    // range rather than two numbers, and it is the last thing
+                    // worth spending the room on.
+                    _ => {
+                        let start = low_left
+                            .max(region_left)
+                            .min((region_right - pair).max(region_left));
+                        (start, start + low_w + text_gap)
+                    }
+                }
+            };
+        // Never let a readout escape the bar, however cramped the row: off the
+        // bar it is off the pane, where horizontal scrolling is deliberately
+        // off and it can be neither read nor dragged to. `max`/`min` rather
+        // than `clamp`, which asserts `min <= max` and takes the editor down
+        // with it — see `SpectrumConfig::sanitize`, which names the same trap.
+        let contain = |left: f32, w: f32| {
+            let floor = rect.left() + text_gap;
+            left.max(floor).min((rect.right() - text_gap - w).max(floor))
+        };
+        for (galley, left) in [(low, contain(low_left, low_w)), (high, contain(high_left, high_w))]
+        {
             painter.galley(centered(&galley, left), galley, theme::text());
         }
 
@@ -2372,16 +2437,27 @@ mod tests {
     /// pair in the bar. Measured off the pair, the name would re-elide the
     /// moment an end gained a digit — wobbling under the pointer mid-drag,
     /// which is what the monospace face buys the digits themselves.
+    ///
+    /// Painted NARROW, and that is what gives the test its teeth. In a roomy
+    /// row the name is never elided at all, so its galley comes out the same
+    /// width whether the reserve was measured off the range's ends or off the
+    /// pair in the bar, and the test passes under the very mutation it is
+    /// written to catch. At 120pt the name is elided to a width the reserve
+    /// decides, so measuring the pair instead moves it.
     #[test]
     fn the_name_holds_its_place_however_the_handles_move() {
-        let name_of = |low, high| text_boxes(&paint_range_bar(low, high))[0].clone();
-        let name = name_of(AXIS.0, AXIS.1);
-        // Spans of every width, at both ends of the axis and across the middle,
-        // and a different number of digits in the numbers beside them.
-        for (low, high) in
-            [(60.0, 72.0), (AXIS.0, AXIS.0 + OCTAVE), (99.0, AXIS.1), (24.0, 108.0)]
-        {
-            assert_eq!(name_of(low, high), name, "{low}..{high} re-laid the name");
+        for width in [300.0f32, 120.0] {
+            let name_of = |low, high| text_boxes(&paint_range_bar_wide(width, low, high))[0].clone();
+            let name = name_of(AXIS.0, AXIS.1);
+            // Spans of every width, at both ends of the axis and across the
+            // middle, and a different number of digits in the numbers beside
+            // them — "12.00" against "132.00" is the whole of what a
+            // pair-measured reserve would see move.
+            for (low, high) in
+                [(60.0, 72.0), (AXIS.0, AXIS.0 + OCTAVE), (99.0, AXIS.1), (24.0, 108.0)]
+            {
+                assert_eq!(name_of(low, high), name, "{width}pt, {low}..{high} re-laid the name");
+            }
         }
     }
 
@@ -2433,30 +2509,75 @@ mod tests {
     /// swallows a character whichever of the two paints last. "-60 dB" reading
     /// "-60 B" is the concrete thing this holds off.
     ///
-    /// Handle positions, not values: the placements are the four bars' own
-    /// resting spans as fractions of their axes.
+    /// A thumb never stands in a number, at any span. That is the whole reason
+    /// the two ends are not spelled into one run parked at the right the way
+    /// [`BrightnessBar`]'s are: the thumb is drawn in the same near-white as
+    /// the digits, so a crossing swallows a character whichever of the two
+    /// paints last, and "-60 dB" reading "-60 B" is the concrete thing this
+    /// holds off.
     ///
-    /// Held at the widths the settings column actually opens at — around 423pt
-    /// in the reference window, and the whole 680 of a widened one. Squeezed
-    /// far below that, a span narrower than its own number has nowhere left to
-    /// stand it: outside the span runs off the bar and inside crosses the other
-    /// handle. That is the bar's bargain from before it carried a name, and it
-    /// costs the panes less than this sweep suggests, since the numbers here
-    /// are six characters where the widest a pane asks for is "0.85".
+    /// SWEPT, not sampled at the resting spans, and that is the point of it:
+    /// sampled at the three placements the panes open at, this passed while a
+    /// narrow span anywhere near either end of the axis put a thumb in a
+    /// number at every width including the widest.
+    ///
+    /// Held down to 300pt. The settings column opens around 423pt in the
+    /// reference window, and the real bars are clean well past this — swept
+    /// with the pitch range's own `hz_readout`, the widest any pane asks for,
+    /// there is not one crossing at 300pt or above. Under about 240 a span
+    /// narrower than the two numbers it carries has no run of clear bar left
+    /// that holds them, and something has to give.
     #[test]
-    fn a_handle_never_sits_on_a_number_at_the_spans_the_panes_open_at() {
-        // Pitch range and Color range (the full axis), Level (-60..-20 of
-        // -100..0), and Band (0.66..0.85 of 0..1).
-        for (lo_at, hi_at) in [(0.0, 1.0), (0.4, 0.8), (0.66, 0.85)] {
-            let at = |f: f32| AXIS.0 + (AXIS.1 - AXIS.0) * f;
-            for width in [680.0f32, 400.0] {
-                let shapes = paint_range_bar_wide(width, at(lo_at), at(hi_at));
-                let texts = text_boxes(&shapes);
-                for h in handles(&shapes) {
-                    for (t, what) in texts.iter().skip(1) {
+    fn no_thumb_ever_stands_in_a_number_at_the_widths_the_column_opens_at() {
+        for width in [680.0f32, 423.0, 400.0, 300.0] {
+            for i in 0..=20 {
+                for j in i..=20 {
+                    let at = |k: i32| AXIS.0 + (AXIS.1 - AXIS.0) * k as f32 / 20.0;
+                    let (low, high) = (at(i), at(j));
+                    if high - low < OCTAVE {
+                        continue;
+                    }
+                    let shapes = paint_range_bar_wide(width, low, high);
+                    let texts = text_boxes(&shapes);
+                    for h in handles(&shapes) {
+                        for (t, what) in texts.iter().skip(1) {
+                            assert!(
+                                t.right() <= h.left() || t.left() >= h.right(),
+                                "{width}pt, {low}..{high}: a thumb stands in {what:?}",
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// No readout ever leaves the bar, at any span and any width — including
+    /// the widths where nothing fits and the row is past being readable. Off
+    /// the bar is off the pane, where horizontal scrolling is deliberately off
+    /// (`panes::Viewer::scroll_bars`) and a number can be neither read nor
+    /// dragged to, so this is the one promise that survives a hopeless row.
+    ///
+    /// Down to 90pt, which is where the promise stops being one that can be
+    /// kept: a readout wider than the whole bar has to hang off it somewhere,
+    /// and at 40pt these six-character numbers are 36pt against 30pt of room
+    /// between the bar's own text insets.
+    #[test]
+    fn a_readout_never_leaves_the_bar_however_cramped_the_row() {
+        for width in [680.0f32, 300.0, 160.0, 120.0, 90.0] {
+            for i in 0..=12 {
+                for j in i..=12 {
+                    let at = |k: i32| AXIS.0 + (AXIS.1 - AXIS.0) * k as f32 / 12.0;
+                    let (low, high) = (at(i), at(j));
+                    if high - low < OCTAVE {
+                        continue;
+                    }
+                    let shapes = paint_range_bar_wide(width, low, high);
+                    let bar = filled_rects(&shapes)[0].0;
+                    for (t, what) in text_boxes(&shapes).iter().skip(1) {
                         assert!(
-                            t.right() <= h.left() || t.left() >= h.right(),
-                            "{width}pt, {lo_at}..{hi_at}: a handle sits on {what:?}",
+                            t.left() >= bar.left() - 0.01 && t.right() <= bar.right() + 0.01,
+                            "{width}pt, {low}..{high}: {what:?} at {t:?} left the bar {bar:?}",
                         );
                     }
                 }
