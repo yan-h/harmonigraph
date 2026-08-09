@@ -136,6 +136,35 @@ fn vs_glyph(
 /// bound exists to prevent, arriving through the margin meant to fix it.
 const PATCH_MARGIN: f32 = 0.5;
 
+/// What a tap reaching past the ATLAS's own edge must be scaled by: the weight
+/// the texel out there would have carried, had there been one.
+///
+/// [`PATCH_MARGIN`] reads half a texel outside a glyph's patch in order to find
+/// the transparent texel epaint leaves around it. Against the atlas's own
+/// boundary there is no such texel — epaint's first band of glyphs starts at
+/// row 0, and the first glyph of any band at column 0 — and the sampler's
+/// `ClampToEdge` answers a tap past the boundary with the glyph's own edge
+/// texel instead. That is the letter's top row read a SECOND time in place of
+/// the transparency the margin is reading FOR: a doubled row of ink with a seam
+/// under it, which is what a cap detached from the rest of the letter is.
+///
+/// Not a rare edge, either. The first band holds every glyph until the atlas
+/// needs a second one, so at ordinary label sizes this is every glyph in the
+/// frame rather than the few unlucky enough to be packed against a wall.
+///
+/// Exact rather than a softening, because a bilinear tap's four weights are one
+/// weight per axis multiplied together: dropping the pair that lies outside is
+/// dropping a whole row or column of the 2x2, and that is this factor. `texel`
+/// addresses texel CENTRES at `texel - 0.5`, so a tap reaches outside on the
+/// low side while `texel < 0.5` and on the high side while `texel` is within
+/// half a texel of `atlas_size`; everywhere between, this is 1.
+fn outside_atlas(texel: vec2<f32>) -> f32 {
+    let low = clamp(texel + vec2<f32>(0.5), vec2<f32>(0.0), vec2<f32>(1.0));
+    let high = clamp(locals.atlas_size + vec2<f32>(0.5) - texel, vec2<f32>(0.0), vec2<f32>(1.0));
+    let weight = low * high;
+    return weight.x * weight.y;
+}
+
 /// The glyph's coverage at `texel`, and zero outside its own patch of the
 /// atlas (plus [`PATCH_MARGIN`]) — past the transparent texel epaint leaves
 /// around every glyph a neighbouring letter begins, and reading that would
@@ -145,7 +174,8 @@ fn coverage(in: VertexOut, texel: vec2<f32>) -> f32 {
         || texel.x > in.uv_max.x + PATCH_MARGIN || texel.y > in.uv_max.y + PATCH_MARGIN {
         return 0.0;
     }
-    return textureSample(atlas, atlas_sampler, texel / locals.atlas_size).a;
+    return textureSample(atlas, atlas_sampler, texel / locals.atlas_size).a
+        * outside_atlas(texel);
 }
 
 /// Accumulate one ring of the rim: `1 - PRODUCT(1 - alpha * coverage)`,
