@@ -194,10 +194,21 @@ const PATCH_MARGIN: f32 = 0.5;
 /// every letter, digit and lattice name keeps a peak of 1.00 and improves
 /// besides.
 ///
-/// ONE axis. A second pair of taps up and down is worth 0.2 of a point on the
-/// same reading and costs the flat 15% of its contrast, which is the wrong
-/// end of that trade for a subject whose motion is sideways: a name's pitch
-/// is where it sits, and it is time that scrolls.
+/// ONE axis, and x specifically, which covers the roll as it is normally set
+/// rather than as it can be. Time runs ACROSS the pane in the two
+/// orientations either side of the default, and the names ride the time axis,
+/// so sideways is the whole of their motion: a name's pitch is where it sits,
+/// and it is time that scrolls. Turn the now-line to the top or the bottom and
+/// time runs DOWN the pane instead — bilinear is separable, so offsetting in x
+/// leaves the y response its full swing, and those two orientations shimmer as
+/// they did. Issue #311 holds that, along with the lattice's own names, which
+/// an orbiting camera moves both ways at once.
+///
+/// Not answered by taking a second pair of taps up and down. Isotropic is
+/// worth 0.2 of a point on the reading above and costs the flat 15% of its
+/// contrast and the count digits 14%, so it buys the orientations nobody is in
+/// by taxing the one they are — everywhere, including a 30pt lattice name that
+/// swings 0.6% and has nothing to fix.
 ///
 /// A quarter texel, and no more, because [`PATCH_MARGIN`]'s bound is the
 /// wall — a filter reaching a whole texel out reads the glyph packed next
