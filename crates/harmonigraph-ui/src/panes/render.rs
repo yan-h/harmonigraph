@@ -210,10 +210,10 @@ fn clear_everything(ui: &mut egui::Ui, state: &mut SharedState) {
 ///
 /// Its own section rather than rows under Record, which is about CAPTURE: only
 /// the record switch, its status and the clear are about getting a take, and
-/// everything here happens after there is one. The Spectrogram row is here too
-/// rather than under a heading of its own — it was one row calling itself
-/// "Spectrogram" next to the Analyzer tab's section of the same name, and what
-/// it actually decides is what this render bakes.
+/// everything here happens after there is one. The Spectrogram row belongs here
+/// rather than under a heading of its own, which would be one row calling
+/// itself "Spectrogram" beside the Analyzer tab's section of that name; what it
+/// decides is what this render bakes.
 ///
 /// The Spectrogram row draws whatever the shell is, since a standalone with no
 /// transport still renders; the rows that need a take to exist follow the same

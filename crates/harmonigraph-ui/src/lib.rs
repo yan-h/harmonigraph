@@ -171,7 +171,7 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     // meet with no chrome between them — clean for captures). The pane
     // separators keep their regular width, so the spacing between windows
     // matches framed mode. No tab bar also means no way to click back to
-    // the Panel pane (which holds the checkbox) if it's hidden, so Tab
+    // the System pane (which holds the checkbox) if it's hidden, so Tab
     // works from anywhere. It toggles rather than only restoring, so the
     // chrome comes and goes on one key while a take is set up — the
     // checkbox is then just where the feature is documented.
@@ -244,7 +244,7 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     // resize the panes a user sees them dividing (see `fold::shove_target`).
     fold::paint(ui, &mut dock, &dock_style, &state.dial);
     state.dock = dock;
-    // Deferred from the Panel pane's button: replacing the dock BEFORE the
+    // Deferred from the System pane's button: replacing the dock BEFORE the
     // write-back above would be silently undone.
     if std::mem::take(&mut state.reset_layout) {
         // The default layout has every pane open, so the window gets back

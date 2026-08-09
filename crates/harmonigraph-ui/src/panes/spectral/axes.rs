@@ -53,7 +53,7 @@ pub(super) const TILT_PIVOT_MIDI: f32 = 83.213_1;
 /// Point size of an axis marking's label — a dozen standing marks that
 /// should stay quiet.
 ///
-/// Doubled from the 10 it was drawn at before the Label size bar existed. The
+/// Doubled from the 10 it was drawn at before the Marking size bar existed. The
 /// bar went to 2 the first time it was tried and stayed there — so the number
 /// was wrong rather than the bar wanted, and rebasing it leaves the bar
 /// reading 1 at the size the pane is actually read at.

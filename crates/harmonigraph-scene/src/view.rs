@@ -419,7 +419,7 @@ pub struct ViewConfig {
     // ---- Home grid -------------------------------------------------------
     // The faint structural grid between node positions (see `derive_grid`),
     // and with no idle marker under it, the whole of what an unplayed lattice
-    // draws. Thickness and inset are its settings; its COLOR is not among
+    // draws. Line width and inset are its settings; its COLOR is not among
     // them — it draws in the skin's hairline grey (`skin::grid_line`), the
     // same one the panel rules itself with, and a lit segment takes its
     // note's color.
@@ -521,7 +521,7 @@ pub struct ViewConfig {
     /// renderer never draws it, keeping its frames deterministic.
     ///
     /// Off by default: the HUD is a development instrument, and it sits over
-    /// the picture the plugin exists to draw. The Panel pane's Performance
+    /// the picture the plugin exists to draw. The System pane's Performance
     /// section is where it gets switched on.
     ///
     pub show_perf: bool,
