@@ -38,6 +38,19 @@ pub(crate) const AUDIO_RING_CAPACITY: usize = 131_072;
 const DEFAULT_SAMPLE_RATE: f64 = 44_100.0;
 
 pub struct Harmonigraph {
+    /// Keeps the spectrogram's history running while the editor window is
+    /// closed (see [`background`]). Held only to be dropped with the plugin,
+    /// which is what stops its thread.
+    ///
+    /// FIRST, because fields drop in declaration order and this one has to stop
+    /// before any of what it touches is torn down. Declared last instead, the
+    /// worker holds the surviving `Arc` once `editor_shared` drops, so the
+    /// teardown races a live drain and `EditorShared` — `SharedState`, and any
+    /// `egui::TextureHandle` still in its spectrogram surfaces — is destroyed on
+    /// the analyzer thread rather than on the one dropping the plugin. That
+    /// appears to be sound, but PR #112 was a texture freed from the wrong point
+    /// and it cost a crash; ordering the field is cheaper than being sure.
+    _background: background::BackgroundAnalyzer,
     params: Arc<HarmonigraphParams>,
     note_producer: rtrb::Producer<CoreNoteEvent>,
     /// The input bus, interleaved, for the GUI's spectrum analyzer.
@@ -60,10 +73,6 @@ pub struct Harmonigraph {
     /// Count of events recorded in the current take, for the UI's status
     /// line. Reset when recording starts.
     take_events: Arc<AtomicU64>,
-    /// Keeps the spectrogram's history running while the editor window is
-    /// closed (see [`background`]). Held only to be dropped with the plugin,
-    /// which is what stops its thread.
-    _background: background::BackgroundAnalyzer,
 }
 
 #[derive(Params)]
