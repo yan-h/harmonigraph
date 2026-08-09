@@ -324,9 +324,18 @@ pub(crate) fn glyph_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupL
     })
 }
 
-/// Linear, to match how egui samples the same atlas. At the sizes labels are
-/// drawn the glyph lands texel for texel on the framebuffer, so this is an
-/// identity for the fill and only does real work for the rim's off-grid taps.
+/// Linear, to match how egui samples the same atlas — and it does real work on
+/// every tap, the fill's as much as the rim's.
+///
+/// Which is worth stating, because the reverse is the plausible reading and it
+/// is wrong in both of the ways a glyph reaches the framebuffer. A label is
+/// placed where it is handed rather than rounded onto a whole physical pixel
+/// (`harmonigraph_ui::text::TextBatch::text`, which explains why), and the size
+/// ladder draws it a percent or two off the size its atlas patch was
+/// rasterized at. A glyph landing texel for texel is the rare case, not the
+/// ordinary one, so nothing about the fill path is exempt from what this
+/// sampler does — including its `ClampToEdge`, which is what `text.wgsl`'s
+/// `outside_atlas` exists to answer for.
 pub(crate) fn glyph_sampler(device: &wgpu::Device) -> wgpu::Sampler {
     device.create_sampler(&wgpu::SamplerDescriptor {
         label: Some("text_sampler"),
