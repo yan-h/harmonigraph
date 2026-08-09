@@ -1098,3 +1098,111 @@ fn nothing_is_drawn_under_a_settings_pane_scroll_bar() {
     }
     }
 }
+
+/// The Tuning pane's comma table keeps its cells clear of the bar that scrolls
+/// them sideways.
+///
+/// The other half of [`theme::reserve_scroll_gutter`], and the half no pane
+/// margin can cover: this area scrolls HORIZONTALLY, so its bar runs under the
+/// table rather than down a side, and a row of cells has no gutter along its
+/// bottom for one to float in. Unreserved, the lane lands 5.5pt up inside the
+/// bottom row.
+///
+/// Its own test because the table only overflows in a column dragged under
+/// about 135pt (see `comma_controls`), and at every width that fits the table
+/// there is no sideways bar for the sweep above to find.
+///
+/// The pointer is parked on the Temper heading — inside the area, so the bar is
+/// awake and in the shapes at all, and on a plain label rather than a switch,
+/// whose hover would put a second copy of a row's name on screen to be found
+/// instead of the cell.
+#[test]
+fn the_comma_tables_sideways_bar_runs_under_its_cells() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    state.dock = egui_dock::DockState::new(vec![panes::Tab::Tuning]);
+    let backend = RecordingBackend::default();
+    let ctx = egui::Context::default();
+    crate::theme::apply_theme(&ctx);
+    // Narrower than the two columns need, and tall enough that the pane does
+    // not also scroll — one bar in the picture is one bar to find.
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(120.0, 900.0));
+    let mut t = 0.0;
+    let mut frame = |state: &mut SharedState, events: Vec<egui::Event>| {
+        t += 1.0 / 60.0;
+        ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(screen),
+                time: Some(t),
+                events,
+                ..Default::default()
+            },
+            |ui| root_ui(ui, state, &backend, t),
+        )
+    };
+    let heading_rect = |out: &egui::FullOutput| {
+        out.shapes.iter().find_map(|cs| match &cs.shape {
+            egui::Shape::Text(text) if text.galley.text() == "Temper" => {
+                Some(cs.shape.visual_bounding_rect())
+            }
+            _ => None,
+        })
+    };
+    // Where the table is has to be read off a frame before the pointer can be
+    // put in it: the Commas section sits wherever the sections above it end.
+    let out = frame(&mut state, vec![]);
+    let heading = heading_rect(&out).expect("the Tuning pane drew no Temper heading");
+    let mut out = frame(&mut state, vec![egui::Event::PointerMoved(heading.center())]);
+    for _ in 0..20 {
+        out = frame(&mut state, vec![]);
+    }
+
+    let bar = f32::from(crate::theme::dock_pane_margin(1.0));
+    let pane = |cs: &egui::epaint::ClippedShape| {
+        let rect = cs.shape.visual_bounding_rect();
+        (rect.is_finite() && rect.width() < 1.0e4).then_some(rect)
+    };
+    // The bar: as thin as a bar and most of the pane wide, below the table's
+    // headings — not the shape of anything in a two-column table of switches.
+    let painted = out
+        .shapes
+        .iter()
+        .filter(|cs| matches!(cs.shape, egui::Shape::Rect(_)))
+        .filter_map(pane)
+        .filter(|rect| {
+            rect.height() <= bar + 0.5
+                && rect.width() >= screen.width() * 0.5
+                && rect.top() > heading.bottom()
+        })
+        .fold(egui::Rect::NOTHING, egui::Rect::union);
+    assert!(
+        painted.is_finite(),
+        "the comma table drew no sideways bar at {}pt, so it never overflowed and this proves \
+         nothing about it",
+        screen.width(),
+    );
+    // Painted at `floating_width` — the pointer is in the area, not on the bar —
+    // so the lane is a full bar up from its bottom edge, which is what egui
+    // senses and what a hover fills in.
+    let lane_top = painted.bottom() - bar;
+
+    // The table's own cells are the shapes the area clips to its content box.
+    // The bar and the area's fade are clipped to the whole tab body, which is a
+    // margin wider on each side, so neither is mistaken for one.
+    let cells = out
+        .shapes
+        .iter()
+        .filter(|cs| cs.clip_rect.width() < screen.width() - 1.0)
+        .filter_map(pane)
+        .filter(|rect| {
+            rect.top() >= heading.top() - 0.5 && rect.bottom() <= painted.bottom() + 0.5
+        });
+    let lowest = cells.fold(f32::NEG_INFINITY, |low, rect| low.max(rect.bottom()));
+    assert!(
+        lowest > heading.bottom(),
+        "the table drew its headings and no rows under them, so there is nothing to measure",
+    );
+    assert!(
+        lowest <= lane_top + 0.5,
+        "the table's cells run to {lowest} and the lane of the bar under them starts at {lane_top}",
+    );
+}
