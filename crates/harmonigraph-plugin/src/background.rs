@@ -33,8 +33,9 @@
 //! comments warn about.
 //!
 //! Nothing here analyzes anything itself. It calls
-//! [`EditorShared::catch_up`](crate::editor::EditorShared::catch_up), the same
-//! drain a frame runs; see there for why sharing that one path is the point.
+//! [`catch_up_unwatched`](crate::editor::EditorShared::catch_up_unwatched),
+//! which is the frame's own drain plus the ageing a frame instead gets from
+//! `begin_frame`; see there for why sharing that one path is the point.
 //!
 //! [`SpectrumHistory`]: harmonigraph_core::SpectrumHistory
 
@@ -287,7 +288,8 @@ mod tests {
     /// that has to do both halves itself.
     ///
     /// `NoteTracker` parks every note-off in a released tail that only
-    /// [`NoteTracker::prune`] empties, and the frame reaches `prune` through
+    /// [`NoteTracker::prune`](harmonigraph_core::NoteTracker::prune) empties,
+    /// and the frame reaches `prune` through
     /// `begin_frame` rather than through the drain. A window that never opens
     /// therefore feeds that tail and nothing ever empties it — which
     /// `notes.rs` already names as the hazard behind its whole envelope
@@ -348,8 +350,14 @@ mod tests {
     /// Against a baseline rather than a number, because what is being claimed
     /// is an EQUIVALENCE. A count spelled out here would go stale with the hop
     /// or the window length, and worse, would still pass if both paths were
-    /// wrong in the same way; a baseline drained by frames alone is the picture
-    /// this feature promises to reproduce.
+    /// wrong in the same way.
+    ///
+    /// What the baseline is NOT is the real `frame`: it is `Harness::frame`,
+    /// which stands in for it by making the same `catch_up` call. So this is a
+    /// regression guard on `tick` — it catches `tick` growing an analyzer of its
+    /// own, a clock of its own, or a `return` placed after the pop — and not
+    /// evidence that `frame` still routes through `catch_up`. That claim is
+    /// `catch_up_answers_whether_notes_arrived`'s, one file over.
     ///
     /// It is the column GRID this pins and deliberately not the timestamps.
     /// Those hang off `AudioSpectrum`'s anchor, which tracks the SHELL clock —

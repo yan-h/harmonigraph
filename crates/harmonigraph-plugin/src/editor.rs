@@ -364,7 +364,7 @@ impl EditorShared {
     /// taken, and then the tracker aged.
     ///
     /// Ageing is not optional bookkeeping. Every note-off parks a voice in
-    /// `NoteTracker`'s released tail, and [`NoteTracker::prune`] is the only
+    /// `NoteTracker`'s released tail, and [`prune`] is the only
     /// thing that empties it — so a drainer that fed the tail without pruning
     /// would grow it for as long as the plugin ran, which is exactly the
     /// accumulation `notes.rs` designs its envelope around ("the released tail
@@ -382,6 +382,8 @@ impl EditorShared {
     /// until one has run. That is the right stale value to hold: it is the fade
     /// the picture was last drawn with, and the alternative is not ageing at
     /// all.
+    ///
+    /// [`prune`]: harmonigraph_core::NoteTracker::prune
     pub(crate) fn catch_up_unwatched(&mut self, now: f64) {
         self.catch_up(now);
         let envelope = self.ui.view.envelope(&self.ui.frame_params);
