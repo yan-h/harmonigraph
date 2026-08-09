@@ -442,13 +442,14 @@ fn every_gradient_group_previews_itself_above_its_bars() {
                 _ => None,
             })
             .filter(|m| {
-                let b = m.calc_bounds();
+                let b = crate::widgets::band_bounds(m);
                 (b.width() - WIDTH).abs() < 1.0
                     && (b.height() - crate::widgets::preview_height(1.0)).abs() < 0.6
             })
             .collect();
         assert_eq!(drawn.len(), 1, "{tab:?} drew {} gradient previews, not one", drawn.len());
-        let previews: Vec<egui::Rect> = drawn.iter().map(|m| m.calc_bounds()).collect();
+        let previews: Vec<egui::Rect> =
+            drawn.iter().map(|m| crate::widgets::band_bounds(m)).collect();
 
         // And it is THIS pane's gradient. The two panes dial different
         // gradients through the same widgets, so a group handed the other one
@@ -461,8 +462,10 @@ fn every_gradient_group_previews_itself_above_its_bars() {
             _ => SpectrumConfig::default().spectrogram_gradient,
         };
         let lut = harmonigraph_scene::color::pitch_ramp_lut(gradient.sanitized());
-        let columns: Vec<egui::Color32> =
-            drawn[0].vertices.chunks(2).map(|column| column[0].color).collect();
+        let columns: Vec<egui::Color32> = crate::widgets::band_columns(drawn[0])
+            .into_iter()
+            .map(|(_, _, color)| color)
+            .collect();
         for (end, drew, want) in [
             ("quiet", columns[0], lut[0]),
             ("loud", columns[columns.len() - 1], lut[lut.len() - 1]),
