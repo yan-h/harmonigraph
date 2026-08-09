@@ -99,8 +99,14 @@ fn wheel_over_settings_pane(tab: panes::Tab, screen_h: f32) -> f32 {
 }
 
 /// Every settings pane scrolls to the wheel once its content is taller than
-/// the pane. These scroll in the dock's own `ScrollArea` and the two readout
-/// panes build their own; from the wheel's side that must not be visible.
+/// the pane. All six reach the wheel through the `ScrollArea` egui_dock wraps
+/// each tab body in, which is what leaves the bar the pane's right margin to
+/// stand in (see [`nothing_is_drawn_under_a_settings_pane_scroll_bar`]).
+///
+/// The two readout panes build an area of their own and are not swept here: the
+/// Console sticks to the bottom, where a wheel DOWN is a no-op, so it answers
+/// this question with the opposite sign and needs a fixture of its own rather
+/// than a row in this one.
 #[test]
 fn every_settings_pane_scrolls_when_its_content_overflows() {
     // A short window, so that every one of them overflows — including System,
