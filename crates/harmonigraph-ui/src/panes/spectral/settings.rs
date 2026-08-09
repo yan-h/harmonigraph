@@ -1,5 +1,5 @@
-//! The Analyzer tab: every setting the Spectral display carries, and the
-//! readouts its bars are dragged against.
+//! The Display tab's Analyzer section: every setting the Spectral display
+//! carries, and the readouts its bars are dragged against.
 
 use crate::widgets::{button_row, choice_row, option_label, RangeBar, ValueBar};
 use crate::SharedState;
@@ -47,7 +47,7 @@ pub(super) fn span_readout(seconds: f32) -> String {
 }
 
 /// The heatmap's level->color gradient on the same preview and three bars the
-/// Nodes tab dials the lattice's pitch gradient with, over a row of presets.
+/// Nodes section dials the lattice's pitch gradient with, over a row of presets.
 ///
 /// Three bars and not six: the group is the gradient itself across the top, and
 /// under it the arc on the spectrum bar, the brightness pair on one of its own
@@ -62,9 +62,9 @@ pub(super) fn span_readout(seconds: f32) -> String {
 /// themselves cannot tell — they are handed a [`harmonigraph_scene::Gradient`]
 /// and a home to reset to, and nothing in either names an axis — so what says
 /// which is the tooltip, and the tooltips below are written for level rather
-/// than shared with the Nodes tab's.
+/// than shared with the Nodes section's.
 ///
-/// **The presets come first**, ahead of the preview the Nodes tab opens its
+/// **The presets come first**, ahead of the preview the Nodes section opens its
 /// group with, and deliberate: a heatmap palette is a thing people pick by name
 /// before they dial it, and the four names are what this pane offered before it
 /// offered any knobs at all. They write the bars below and are not a mode — see
@@ -76,7 +76,7 @@ fn spectrogram_gradient_group(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig
 
     // The gradient a double-click on any of the three goes home to. The fresh
     // heatmap's, NOT the lattice's, which is what the bars assume when a caller
-    // names none: a Spectral pane resetting onto the Nodes tab's arc would land
+    // names none: a Spectral pane resetting onto the Nodes section's arc would land
     // on a picture this pane has never opened on, and the bars carry no text
     // entry to dial it back with.
     let home = crate::SpectrumConfig::default().spectrogram_gradient;
@@ -139,7 +139,7 @@ fn spectrogram_gradient_group(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig
 }
 
 /// Settings for the Spectral pane's display and analyzer (persisted with
-/// the UI state).
+/// the UI state). The Display tab's Analyzer section.
 pub(crate) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState) {
     use crate::{SpectralOrientation, SpectrumWindow};
 
@@ -153,8 +153,8 @@ pub(crate) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
     // extents are deliberately elsewhere, and a heading promising all three is
     // one a reader learns not to trust.
     //
-    // A plain heading rather than `section`: this is the top of the pane, and
-    // a leading rule there is a line under nothing.
+    // A plain heading rather than `section`: this is the top of the section
+    // body, and a leading rule there is a line under nothing.
     ui.heading("Plot");
     let cfg = &mut state.spectrum_config;
     // Named for the side the now-line is on, which is where the spectrum sits
@@ -305,7 +305,7 @@ pub(crate) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
         "Draw incoming MIDI as a scrolling roll over the same pitch axis. \
          Time runs away from the spectrum, so a note leaving the roll meets \
          the peak it is making.\n\nA ribbon takes its color from the pitch \
-         gradient, which is the Nodes tab's Color group — the same colors the \
+         gradient, which is the Nodes section's Color group — the same colors the \
          lattice draws a sounding note in, so a note is the same color in both \
          pictures. The heatmap's own gradient is below, and is a different one.",
     );

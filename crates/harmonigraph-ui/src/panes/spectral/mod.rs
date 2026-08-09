@@ -113,7 +113,7 @@ pub(crate) fn spectral_pane(
 
     // The axis: absolute pitch, linear in MIDI note = logarithmic in
     // frequency, so every octave gets equal room and every note draws at
-    // its actual pitch. The displayed range is the Analyzer tab's pitch
+    // its actual pitch. The displayed range is the Analyzer section's pitch
     // range, which is free to start anywhere — it is not snapped to C.
     let min_midi = cfg.low_midi;
     // Never trust the pair to be ordered. A zero or negative span divides by
@@ -125,7 +125,7 @@ pub(crate) fn spectral_pane(
     // Everything this pane sets text at, decided once from the range it just
     // settled on: the markings hold their size, the names follow the zoom.
     let text = text_scales(&cfg, &axes, scale.span, painter.ctx().pixels_per_point());
-    // dB depth mapping: the Analyzer tab's ceiling tops out where the profile
+    // dB depth mapping: the Analyzer section's ceiling tops out where the profile
     // line lands ON the pane's edge (see `plot_budget`) and its floor sets the
     // bottom. Tilt is the conventional reference slope (negative), so the display
     // SUBTRACTS it per octave above the 1 kHz pivot: -4.5 lifts treble

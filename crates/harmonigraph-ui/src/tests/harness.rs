@@ -143,7 +143,7 @@ pub(super) fn press(pos: egui::Pos2, pressed: bool) -> egui::Event {
 
 /// The projections a settings sweep has to cover, default first.
 ///
-/// Only the View pane's content turns on this, and it turns on it hard:
+/// Only the View section's content turns on this, and it turns on it hard:
 /// `view_pane` hides the whole camera-angle half — Camera yaw and pitch, the
 /// Angle presets, the Save-angle row — under Cabinet, which has a fixed
 /// viewpoint and no angle to set, and hides the two cabinet knobs under the
@@ -155,23 +155,53 @@ pub(super) const PROJECTIONS: [harmonigraph_scene::Projection; 3] = [
     harmonigraph_scene::Projection::Orthographic,
 ];
 
-/// Every settings tab, and the tabs that share the column with them.
-pub(super) const SETTINGS_TABS: [panes::Tab; 9] = [
-    panes::Tab::Tuning,
-    panes::Tab::View,
-    panes::Tab::Nodes,
-    panes::Tab::Scene,
-    panes::Tab::Analyzer,
-    panes::Tab::Video,
-    panes::Tab::System,
-    panes::Tab::Console,
-    panes::Tab::Notes,
+pub(super) use crate::panes::display::Section;
+
+/// One pane of the settings column as a sweep drives it: a tab of its own, or
+/// one of the Display tab's sections, reached through Display's dispatch and
+/// opened ALONE — so every per-section count (short bars, gradient previews)
+/// counts one section's, not four, and each body is measured at the column's
+/// full width.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum SettingsPane {
+    Tab(panes::Tab),
+    Section(Section),
+}
+
+impl SettingsPane {
+    /// The tab that carries this pane — with the section that shows it opened,
+    /// which for a `Section` is the whole difference between measuring the
+    /// pane and measuring four collapsed headers.
+    pub(super) fn install(self, state: &mut SharedState) -> panes::Tab {
+        match self {
+            SettingsPane::Tab(tab) => tab,
+            SettingsPane::Section(section) => {
+                *state.display_sections.open_mut(section) = true;
+                panes::Tab::Display
+            }
+        }
+    }
+}
+
+/// Every settings pane, and the tabs that share the column with them.
+pub(super) const SETTINGS_PANES: [SettingsPane; 9] = [
+    SettingsPane::Tab(panes::Tab::Tuning),
+    SettingsPane::Section(Section::View),
+    SettingsPane::Section(Section::Nodes),
+    SettingsPane::Section(Section::Scene),
+    SettingsPane::Section(Section::Analyzer),
+    SettingsPane::Tab(panes::Tab::Video),
+    SettingsPane::Tab(panes::Tab::System),
+    SettingsPane::Tab(panes::Tab::Console),
+    SettingsPane::Tab(panes::Tab::Notes),
 ];
 
 /// One settings pane whose content box is `width` points wide, as the shapes it
 /// emitted. Driven through [`panes::Viewer`] rather than the dock, so a sweep
 /// over widths costs one pane each instead of a whole window, and the width
-/// under test is the pane's own rather than a window size minus chrome.
+/// under test is the pane's own rather than a window size minus chrome. A
+/// [`SettingsPane::Section`] goes through the Display tab's own dispatch with
+/// that one section open, so its body is measured behind the real headers.
 ///
 /// The dock's nesting IS reproduced, though, because the one thing it does that
 /// a bare `Ui` does not is the thing these tests are about: egui_dock clips the
@@ -186,7 +216,7 @@ pub(super) const SETTINGS_TABS: [panes::Tab; 9] = [
 /// flight — so the Video tab draws the record button, the Options field, and
 /// the progress bar a real session has.
 pub(super) fn settings_pane_at_width(
-    tab: panes::Tab,
+    pane: SettingsPane,
     width: f32,
     projection: harmonigraph_scene::Projection,
 ) -> Vec<egui::epaint::ClippedShape> {
@@ -197,6 +227,7 @@ pub(super) fn settings_pane_at_width(
     state.camera.projection = projection;
     // A saved angle, so the Angle row has the button a real session gives it.
     state.camera_presets.push(CameraPreset { name: "Front".into(), yaw: 0.0, pitch: 0.0 });
+    let tab = pane.install(&mut state);
     let backend = RecordingBackend::default();
     let ctx = egui::Context::default();
     crate::theme::apply_theme(&ctx);
@@ -210,21 +241,21 @@ pub(super) fn settings_pane_at_width(
         |ui| {
             // The body ui's clip is the whole body (the screen here); the pane
             // ui inside it is inset, exactly as the dock's Frame leaves it.
-            let mut pane =
+            let mut body_ui =
                 ui.new_child(egui::UiBuilder::new().max_rect(body.shrink(margin)));
             let mut tab = tab;
             let mut viewer = panes::Viewer { state: &mut state, params: &backend, now: 0.0 };
-            egui_dock::TabViewer::ui(&mut viewer, &mut pane, &mut tab);
+            egui_dock::TabViewer::ui(&mut viewer, &mut body_ui, &mut tab);
         },
     );
     out.shapes
 }
 
-/// The projections worth drawing `tab` at: all of them for View, whose content
-/// depends on it (see [`PROJECTIONS`]), and the default alone for the panes
-/// that draw the same thing either way.
-pub(super) fn projections_for(tab: panes::Tab) -> &'static [harmonigraph_scene::Projection] {
-    if tab == panes::Tab::View { &PROJECTIONS } else { &PROJECTIONS[..1] }
+/// The projections worth drawing `pane` at: all of them for the View section,
+/// whose content depends on it (see [`PROJECTIONS`]), and the default alone
+/// for the panes that draw the same thing either way.
+pub(super) fn projections_for(pane: SettingsPane) -> &'static [harmonigraph_scene::Projection] {
+    if pane == SettingsPane::Section(Section::View) { &PROJECTIONS } else { &PROJECTIONS[..1] }
 }
 
 /// The render the pane fixtures have in flight, so the Video pane's progress

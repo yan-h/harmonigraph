@@ -234,7 +234,7 @@ pub(crate) fn curve_color() -> Color32 {
 /// The preview line in `shapes`, as the points it was drawn through.
 ///
 /// Shared by the two places that ask: the bar's own tests, which check WHERE
-/// the line is drawn, and the Nodes pane's, which checks WHICH curve it is.
+/// the line is drawn, and the Nodes section's, which checks WHICH curve it is.
 /// The color is what identifies it — nothing else in a settings pane draws an
 /// open path in it.
 #[cfg(test)]
@@ -391,7 +391,7 @@ impl<'a> ValueBar<'a> {
 
     /// Draw what the value DOES across the track: `curve(value, p)` for `p`
     /// walking 0 to 1 gives the level reached that far through, and the line
-    /// is those points. For the Nodes pane's Shape bar, whose number names a
+    /// is those points. For the Nodes section's Shape bar, whose number names a
     /// curve and says nothing about its character — the difference between a
     /// straight line and a knee is the whole setting, and 0.35 does not carry
     /// it.
@@ -1897,7 +1897,7 @@ const UNCLAIMED_ALPHA: f32 = 74.0 / 255.0;
 /// their own directly beneath it. A circle drawn at the gradient's own
 /// brightness and chroma answers those bars as well, and answers them by going
 /// blind: at a chroma of 0 the whole turn is grey, at a dark setting it is
-/// nearly black, and both are one click away — Mono, on the Analyzer tab's
+/// nearly black, and both are one click away — Mono, on the Analyzer section's
 /// Palette row, is exactly the first of them. The one control that has to show
 /// hues would show none at the settings a reader is most likely to be dialling
 /// their way out of. What the six knobs COMPOSE is the [`GradientPreview`]
@@ -4544,7 +4544,7 @@ mod tests {
     ///
     /// `min_span` bounds what the bar PRODUCES, not what it is handed, so
     /// every bar that declares one can still be given a pair that breaks it:
-    /// the Nodes tab's Color range is two host params with nothing between
+    /// the Nodes section's Color range is two host params with nothing between
     /// them, and the Band bar's pair reaches `ViewConfig` from a blob
     /// unsanitized. The slide is what a closed span needs and it carries its
     /// width forward, so without the floor below it carries a zero — and the
@@ -4937,7 +4937,7 @@ mod tests {
     /// invisible to every other test here — a track painted out of the pitch
     /// ramp draws the same rounded mesh in the same place at the same size, and
     /// passes all of them. What it costs is the control: Mono is one click on
-    /// the Analyzer tab, and a track that answered the chroma pair would be a
+    /// the Analyzer section, and a track that answered the chroma pair would be a
     /// hue picker drawn in grey.
     #[test]
     fn the_track_is_hue_alone_and_the_preview_is_the_gradient() {
@@ -5053,7 +5053,7 @@ mod tests {
         // squeezed into it, and now it stops `p <= claimed` from lighting the
         // one column at `p == 0`. A lit column at the left edge of a track
         // claiming nothing is a picture that says the gradient reaches the
-        // first hue, and Mono is one click away on the Analyzer tab.
+        // first hue, and Mono is one click away on the Analyzer section.
         let nothing = track_of(Gradient { hue_span: 0.0, ..arc });
         let lit: Vec<usize> = nothing
             .iter()

@@ -29,11 +29,12 @@ fn unfold_the_readout_panes(state: &mut SharedState) {
 /// out of the clip rect and the custom bars paint past it, so every
 /// position-of-the-ink metric reports movement that isn't there (and misses
 /// movement that is). The y of a string drawn in both frames cannot lie.
-fn wheel_over_settings_pane(tab: panes::Tab, screen_h: f32) -> f32 {
+fn wheel_over_settings_pane(pane: SettingsPane, screen_h: f32) -> f32 {
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
     unfold_the_readout_panes(&mut state);
     // The settings leaf opens on Tuning; every other settings pane is a tab
-    // behind it.
+    // behind it (a Section is the Display tab with that section open).
+    let tab = pane.install(&mut state);
     let path = state.dock.find_tab(&tab).expect("{tab:?} is not in the default dock");
     state.dock.set_active_tab(path).expect("selecting the tab");
     let backend = RecordingBackend::default();
@@ -93,7 +94,7 @@ fn wheel_over_settings_pane(tab: panes::Tab, screen_h: f32) -> f32 {
         .iter()
         .filter_map(|(text, y)| after.get(text).map(|moved| moved - y))
         .collect();
-    assert!(!deltas.is_empty(), "{tab:?} drew no text to measure");
+    assert!(!deltas.is_empty(), "{pane:?} drew no text to measure");
     deltas.sort_by(f32::total_cmp);
     deltas[deltas.len() / 2]
 }
@@ -102,6 +103,8 @@ fn wheel_over_settings_pane(tab: panes::Tab, screen_h: f32) -> f32 {
 /// the pane. All seven reach the wheel through the `ScrollArea` egui_dock wraps
 /// each tab body in, which is what leaves the bar the pane's right margin to
 /// stand in (see [`nothing_is_drawn_under_a_settings_pane_scroll_bar`]).
+/// Display is swept once per section, opened alone: a section's content is
+/// what overflows, four collapsed headers being shorter than any window.
 ///
 /// The two readout panes build an area of their own and are not swept here: the
 /// Console sticks to the bottom, where a wheel DOWN is a no-op, so it answers
@@ -111,17 +114,17 @@ fn wheel_over_settings_pane(tab: panes::Tab, screen_h: f32) -> f32 {
 fn every_settings_pane_scrolls_when_its_content_overflows() {
     // A short window, so that every one of them overflows — including System,
     // the shortest list of the set.
-    for tab in [
-        panes::Tab::Tuning,
-        panes::Tab::View,
-        panes::Tab::Nodes,
-        panes::Tab::Scene,
-        panes::Tab::Analyzer,
-        panes::Tab::Video,
-        panes::Tab::System,
+    for pane in [
+        SettingsPane::Tab(panes::Tab::Tuning),
+        SettingsPane::Section(Section::View),
+        SettingsPane::Section(Section::Nodes),
+        SettingsPane::Section(Section::Scene),
+        SettingsPane::Section(Section::Analyzer),
+        SettingsPane::Tab(panes::Tab::Video),
+        SettingsPane::Tab(panes::Tab::System),
     ] {
-        let moved = wheel_over_settings_pane(tab, 300.0);
-        assert!(moved < -8.0, "{tab:?} did not scroll to the wheel (content moved {moved})");
+        let moved = wheel_over_settings_pane(pane, 300.0);
+        assert!(moved < -8.0, "{pane:?} did not scroll to the wheel (content moved {moved})");
     }
 }
 
@@ -149,7 +152,7 @@ fn every_settings_pane_scrolls_when_its_content_overflows() {
 #[test]
 fn the_shape_bars_preview_is_the_curve_the_notes_run_on() {
     let shapes: Vec<egui::Shape> = settings_pane_at_width(
-        panes::Tab::Nodes,
+        SettingsPane::Section(Section::Nodes),
         320.0,
         harmonigraph_scene::Projection::default(),
     )
@@ -372,9 +375,9 @@ fn bar_track_widths(shapes: &[egui::epaint::ClippedShape]) -> Vec<f32> {
 #[test]
 fn every_bar_in_a_settings_pane_is_the_width_of_the_pane() {
     for width in [400.0f32, 240.0, 160.0, 120.0, 100.0, 80.0] {
-        for tab in SETTINGS_TABS {
-            for &projection in projections_for(tab) {
-                let widths = bar_track_widths(&settings_pane_at_width(tab, width, projection));
+        for pane in SETTINGS_PANES {
+            for &projection in projections_for(pane) {
+                let widths = bar_track_widths(&settings_pane_at_width(pane, width, projection));
                 // One bar per gradient is deliberately shorter: the spectrum
                 // track, which gives the right end of its row to the flip
                 // button. It still narrows with the column, which is what this
@@ -387,9 +390,9 @@ fn every_bar_in_a_settings_pane_is_the_width_of_the_pane() {
                 // column's own length and passes on the first alternative,
                 // with the button painted over its left end. So the short
                 // length is allowed exactly once per pane that holds one, and
-                // two panes now do: Nodes dials the lattice's pitch gradient
-                // and Analyzer the heatmap's level gradient, on the same three
-                // bars over the same type.
+                // two do: the Nodes section dials the lattice's pitch gradient
+                // and the Analyzer section the heatmap's level gradient, on
+                // the same three bars over the same type.
                 let track = crate::widgets::spectrum_track_width(width, 1.0);
                 let mut short = 0;
                 for bar in &widths {
@@ -399,29 +402,38 @@ fn every_bar_in_a_settings_pane_is_the_width_of_the_pane() {
                     short += 1;
                     assert!(
                         (bar - track).abs() < 1.0,
-                        "{tab:?}/{projection:?} at {width}pt drew a {bar}pt bar, \
+                        "{pane:?}/{projection:?} at {width}pt drew a {bar}pt bar, \
                          neither the column nor the spectrum track's {track}pt \
                          (all of {widths:?})"
                     );
                 }
-                let want =
-                    usize::from(matches!(tab, panes::Tab::Nodes | panes::Tab::Analyzer));
+                let want = usize::from(matches!(
+                    pane,
+                    SettingsPane::Section(Section::Nodes | Section::Analyzer)
+                ));
                 assert_eq!(
                     short, want,
-                    "{tab:?}/{projection:?} at {width}pt drew {short} short bars, not {want} \
+                    "{pane:?}/{projection:?} at {width}pt drew {short} short bars, not {want} \
                      (all of {widths:?})"
                 );
             }
         }
     }
     // The sniffing above finds nothing if the bars stop being painted this way,
-    // and a test that measures nothing passes. The Nodes pane is the deepest
+    // and a test that measures nothing passes. The Nodes section is the deepest
     // stack of bars in the dock — every layer of the note contributes one or
     // more, and the gated ones still paint, greyed — so it is the pane to ask
     // whether bars are still being painted at all.
-    let bars =
-        bar_track_widths(&settings_pane_at_width(panes::Tab::Nodes, 400.0, PROJECTIONS[0])).len();
-    assert!(bars >= 15, "only found {bars} bar tracks in the Nodes pane; has the paint changed?");
+    let bars = bar_track_widths(&settings_pane_at_width(
+        SettingsPane::Section(Section::Nodes),
+        400.0,
+        PROJECTIONS[0],
+    ))
+    .len();
+    assert!(
+        bars >= 15,
+        "only found {bars} bar tracks in the Nodes section; has the paint changed?"
+    );
 }
 
 /// Each gradient group opens with its preview: one band of color the width of
@@ -437,8 +449,8 @@ fn every_bar_in_a_settings_pane_is_the_width_of_the_pane() {
 #[test]
 fn every_gradient_group_previews_itself_above_its_bars() {
     const WIDTH: f32 = 400.0;
-    for tab in [panes::Tab::Nodes, panes::Tab::Analyzer] {
-        let shapes = settings_pane_at_width(tab, WIDTH, PROJECTIONS[0]);
+    for section in [Section::Nodes, Section::Analyzer] {
+        let shapes = settings_pane_at_width(SettingsPane::Section(section), WIDTH, PROJECTIONS[0]);
         // A preview is the one full-column band of color in a settings pane: a
         // spectrum's circle is the track's width and a fade ramp is a row high,
         // so the pair of measurements tells all three apart.
@@ -454,18 +466,18 @@ fn every_gradient_group_previews_itself_above_its_bars() {
                     && (b.height() - crate::widgets::preview_height(1.0)).abs() < 0.6
             })
             .collect();
-        assert_eq!(drawn.len(), 1, "{tab:?} drew {} gradient previews, not one", drawn.len());
+        assert_eq!(drawn.len(), 1, "{section:?} drew {} gradient previews, not one", drawn.len());
         let previews: Vec<egui::Rect> =
             drawn.iter().map(|m| crate::widgets::band_bounds(m)).collect();
 
-        // And it is THIS pane's gradient. The two panes dial different
+        // And it is THIS section's gradient. The two sections dial different
         // gradients through the same widgets, so a group handed the other one
         // draws a picture that is wrong about everything and wrong in no
         // position — every other assertion here passes on it. Read at the ends,
         // where the ramp is the table's own first and last entry and no
         // interpolation stands between the mesh and the value.
-        let gradient = match tab {
-            panes::Tab::Nodes => harmonigraph_scene::ViewConfig::default().pitch_gradient,
+        let gradient = match section {
+            Section::Nodes => harmonigraph_scene::ViewConfig::default().pitch_gradient,
             _ => SpectrumConfig::default().spectrogram_gradient,
         };
         let lut = harmonigraph_scene::color::pitch_ramp_lut(gradient.sanitized());
@@ -480,8 +492,8 @@ fn every_gradient_group_previews_itself_above_its_bars() {
             let want = crate::panes::scene_color(want, 1.0);
             assert_eq!(
                 drew, want,
-                "{tab:?} drew its preview's {end} end in {drew:?}, not the \
-                 {want:?} its own gradient reaches — the other pane's?",
+                "{section:?} drew its preview's {end} end in {drew:?}, not the \
+                 {want:?} its own gradient reaches — the other section's?",
             );
         }
         let track = crate::widgets::spectrum_track_width(WIDTH, 1.0);
@@ -497,10 +509,10 @@ fn every_gradient_group_previews_itself_above_its_bars() {
                 _ => None,
             })
             .collect();
-        assert_eq!(tracks.len(), 1, "{tab:?} drew {tracks:?} as spectrum tracks, not one");
+        assert_eq!(tracks.len(), 1, "{section:?} drew {tracks:?} as spectrum tracks, not one");
         assert!(
             previews[0].bottom() <= tracks[0].top(),
-            "{tab:?} drew its preview at {:?}, not above the spectrum bar at {:?}",
+            "{section:?} drew its preview at {:?}, not above the spectrum bar at {:?}",
             previews[0],
             tracks[0],
         );
@@ -520,7 +532,8 @@ fn every_gradient_group_previews_itself_above_its_bars() {
 #[test]
 fn the_render_bar_fills_to_the_share_of_frames_done() {
     const WIDTH: f32 = 400.0;
-    let shapes = settings_pane_at_width(panes::Tab::Video, WIDTH, PROJECTIONS[0]);
+    let shapes =
+        settings_pane_at_width(SettingsPane::Tab(panes::Tab::Video), WIDTH, PROJECTIONS[0]);
     let share = FIXTURE_RENDER.fraction().expect("the fixture render knows its total");
     let fills: Vec<f32> = shapes
         .iter()
@@ -579,11 +592,11 @@ fn no_settings_pane_overruns_a_narrow_column() {
         // The pane's own clip is the tab body, a margin wider than the content
         // box on each side.
         let body_right = edge + crate::theme::PANE_INNER_MARGIN;
-        let panes = SETTINGS_TABS
+        let panes = SETTINGS_PANES
             .into_iter()
-            .flat_map(|tab| projections_for(tab).iter().map(move |&p| (tab, p)));
-        for (tab, projection) in panes {
-            let shapes = settings_pane_at_width(tab, width, projection);
+            .flat_map(|pane| projections_for(pane).iter().map(move |&p| (pane, p)));
+        for (pane, projection) in panes {
+            let shapes = settings_pane_at_width(pane, width, projection);
             let over_edge = |cs: &egui::epaint::ClippedShape| {
                 let rect = cs.shape.visual_bounding_rect();
                 // Shapes that carry no geometry answer with an inverted or
@@ -615,7 +628,7 @@ fn no_settings_pane_overruns_a_narrow_column() {
                 });
             assert!(
                 worst.is_none(),
-                "{tab:?}/{projection:?} at {width}pt ran {:?} past the pane edge",
+                "{pane:?}/{projection:?} at {width}pt ran {:?} past the pane edge",
                 worst.unwrap()
             );
         }
@@ -634,10 +647,14 @@ fn no_settings_pane_overruns_a_narrow_column() {
 #[test]
 fn a_drag_that_loses_its_release_does_not_strand_the_wheel() {
     // Default dock: the Analyzer picture is the column at x ~518..720, the
-    // settings leaf is top-right.
-    for (what, at) in [("the analyzer picture", 600.0f32), ("a settings bar", 860.0)] {
+    // settings leaf is top-right. The bar is grabbed by NAME — where it sits
+    // under the Display pane's headers is layout, not this test's business.
+    for (what, grab) in [
+        ("the analyzer picture", Grab::Point(egui::pos2(600.0, 200.0))),
+        ("a settings bar", Grab::Bar("Pitch range")),
+    ] {
         for lose_it in [Lose::Pointer, Lose::Focus] {
-            let moved = scroll_settings_after_lost_drag(egui::pos2(at, 200.0), lose_it);
+            let moved = scroll_settings_after_lost_drag(grab, lose_it);
             assert!(
                 moved < -8.0,
                 "a drag on {what} that lost its release to {lose_it:?} left the settings \
@@ -655,12 +672,23 @@ enum Lose {
     Focus,
 }
 
-/// Press and drag at `from`, lose the release, then wheel over the settings
+/// Where the doomed drag takes hold: a fixed point in a picture pane, or a
+/// named settings bar found where it was painted — a bar draws its name at
+/// its own left end, so a small offset from the text is inside the track.
+#[derive(Clone, Copy, Debug)]
+enum Grab {
+    Point(egui::Pos2),
+    Bar(&'static str),
+}
+
+/// Press and drag at `grab`, lose the release, then wheel over the settings
 /// pane and answer how far its content moved.
-fn scroll_settings_after_lost_drag(from: egui::Pos2, lose: Lose) -> f32 {
+fn scroll_settings_after_lost_drag(grab: Grab, lose: Lose) -> f32 {
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
     unfold_the_readout_panes(&mut state);
-    let path = state.dock.find_tab(&panes::Tab::Analyzer).expect("the Analyzer settings tab");
+    // The Analyzer settings, open in the Display tab.
+    let tab = SettingsPane::Section(Section::Analyzer).install(&mut state);
+    let path = state.dock.find_tab(&tab).expect("the Display tab");
     state.dock.set_active_tab(path).expect("selecting the tab");
     let backend = RecordingBackend::default();
     let ctx = egui::Context::default();
@@ -669,8 +697,9 @@ fn scroll_settings_after_lost_drag(from: egui::Pos2, lose: Lose) -> f32 {
     let body =
         egui::Rect::from_min_max(egui::pos2(700.0, 20.0), egui::pos2(1000.0, screen_h * 0.55 + 2.0));
     // Named texts inside the settings body, as `wheel_over_settings_pane` does:
-    // the y of a string drawn in both frames is the one metric a clip rect and
-    // a culled shape cannot lie about.
+    // the position of a string drawn in both frames is the one metric a clip
+    // rect and a culled shape cannot lie about. The whole position rather than
+    // the y alone, so [`Grab::Bar`] can aim a press at a bar it can name.
     let texts = |out: &egui::FullOutput| {
         let mut map = std::collections::HashMap::new();
         for cs in &out.shapes {
@@ -681,7 +710,7 @@ fn scroll_settings_after_lost_drag(from: egui::Pos2, lose: Lose) -> f32 {
                 continue;
             }
             if let egui::Shape::Text(t) = &cs.shape {
-                map.entry(t.galley.text().to_owned()).or_insert(t.pos.y);
+                map.entry(t.galley.text().to_owned()).or_insert(t.pos);
             }
         }
         map
@@ -703,10 +732,27 @@ fn scroll_settings_after_lost_drag(from: egui::Pos2, lose: Lose) -> f32 {
         pressed,
         modifiers: egui::Modifiers::NONE,
     };
+    // Where the press lands, off a laid-out frame: a named bar is wherever
+    // the layout put it, which under the Display pane's headers is nowhere a
+    // constant can point.
+    let laid_out = frame(&mut state, vec![]);
+    let from = match grab {
+        Grab::Point(pos) => pos,
+        Grab::Bar(name) => {
+            let pos = laid_out
+                .get(name)
+                .unwrap_or_else(|| panic!("no {name:?} bar in the settings body"));
+            *pos + egui::vec2(2.0, 4.0)
+        }
+    };
     // Hover, press, drag — and then the release goes missing.
     frame(&mut state, vec![egui::Event::PointerMoved(from)]);
     frame(&mut state, vec![press(from, true)]);
     frame(&mut state, vec![egui::Event::PointerMoved(from + egui::vec2(0.0, 40.0))]);
+    // The gesture must have taken hold, or losing it costs nothing and the
+    // wheel below was never in danger — a fixture aimed at a label would pass
+    // whatever the stranding did.
+    assert!(ctx.dragged_id().is_some(), "the press for {grab:?} started no drag");
     frame(
         &mut state,
         match lose {
@@ -734,7 +780,7 @@ fn scroll_settings_after_lost_drag(from: egui::Pos2, lose: Lose) -> f32 {
         after = frame(&mut state, vec![]);
     }
     let mut deltas: Vec<f32> =
-        before.iter().filter_map(|(text, y)| after.get(text).map(|m| m - y)).collect();
+        before.iter().filter_map(|(text, pos)| after.get(text).map(|m| m.y - pos.y)).collect();
     assert!(!deltas.is_empty(), "the settings pane drew no text to measure");
     deltas.sort_by(f32::total_cmp);
     deltas[deltas.len() / 2]
@@ -759,13 +805,17 @@ fn scroll_settings_after_lost_drag(from: egui::Pos2, lose: Lose) -> f32 {
 fn a_bar_dragged_past_the_window_edge_keeps_tracking_the_pointer() {
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
     unfold_the_readout_panes(&mut state);
-    let path = state.dock.find_tab(&panes::Tab::Analyzer).expect("the Analyzer settings tab");
+    // The Analyzer settings, open in the Display tab.
+    let tab = SettingsPane::Section(Section::Analyzer).install(&mut state);
+    let path = state.dock.find_tab(&tab).expect("the Display tab");
     state.dock.set_active_tab(path).expect("selecting the tab");
     let backend = RecordingBackend::default();
     let ctx = egui::Context::default();
-    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1000.0, 500.0));
+    // Tall enough that the Smoothing bar is on screen below the Display
+    // pane's section headers and the whole Plot section above it.
+    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1000.0, 700.0));
     // The settings leaf, whose bars run the width of the column at x ~700..1000.
-    let body = egui::Rect::from_min_max(egui::pos2(700.0, 20.0), egui::pos2(1000.0, 277.0));
+    let body = egui::Rect::from_min_max(egui::pos2(700.0, 20.0), egui::pos2(1000.0, 387.0));
     // Where a named bar was drawn, so the gesture takes hold of a bar this test
     // can name rather than of whatever a fixed coordinate lands on. A bar draws
     // its name inside its own rectangle, at the left end.
@@ -843,7 +893,7 @@ fn a_bar_dragged_past_the_window_edge_keeps_tracking_the_pointer() {
 /// preview shrank towards a sliver instead of the controls staying reachable.
 #[test]
 fn the_video_pane_scrolls_instead_of_squeezing_its_preview() {
-    let moved = wheel_over_settings_pane(panes::Tab::Video, 600.0);
+    let moved = wheel_over_settings_pane(SettingsPane::Tab(panes::Tab::Video), 600.0);
     assert!(moved < -8.0, "the Video pane did not scroll to the wheel (content moved {moved})");
 }
 
@@ -862,9 +912,9 @@ fn the_video_pane_scrolls_instead_of_squeezing_its_preview() {
 #[test]
 fn the_commas_section_lays_its_rows_out_as_a_table() {
     let shapes = settings_pane_at_width(
-        panes::Tab::Tuning,
+        SettingsPane::Tab(panes::Tab::Tuning),
         423.0,
-        projections_for(panes::Tab::Tuning)[0],
+        PROJECTIONS[0],
     );
     let find = |needle: &str| {
         shapes.iter().find_map(|cs| match &cs.shape {
@@ -923,9 +973,10 @@ const SCALES: [f32; 5] = [0.7, 0.9, 1.0, 1.1, 1.5];
 ///
 /// Both readout panes list what has come in, and an empty one has nothing to
 /// scroll, so the fixture gives the Console lines and the Notes pane voices.
-fn scrolling_settings_pane(tab: panes::Tab, scale: f32) -> Vec<egui::epaint::ClippedShape> {
+fn scrolling_settings_pane(pane: SettingsPane, scale: f32) -> Vec<egui::epaint::ClippedShape> {
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
     state.ui_scale = scale;
+    let tab = pane.install(&mut state);
     state.dock = egui_dock::DockState::new(vec![tab]);
     // The same shell [`settings_pane_at_width`] draws for, so the Video pane
     // brings its record row and its progress bar — the two controls
@@ -1015,12 +1066,12 @@ fn nothing_is_drawn_under_a_settings_pane_scroll_bar() {
         egui::pos2(0.0, crate::theme::tab_bar_height(scale)),
         (SCROLLING_PANE * scale).to_pos2(),
     );
-    for tab in SETTINGS_TABS {
-        let shapes = scrolling_settings_pane(tab, scale);
+    for pane in SETTINGS_PANES {
+        let shapes = scrolling_settings_pane(pane, scale);
         // The pane's own shapes are the ones clipped to the tab BODY. The dock's
         // chrome — the leaf fill, the body border, the tab bar and its rule — is
         // clipped to the leaf, which starts a tab bar higher up.
-        let pane = |cs: &egui::epaint::ClippedShape| {
+        let pane_shape = |cs: &egui::epaint::ClippedShape| {
             let rect = cs.shape.visual_bounding_rect();
             let mine = cs.clip_rect.top() >= body.top() - 0.5;
             // Shapes that carry no geometry answer with an inverted or infinite
@@ -1030,7 +1081,7 @@ fn nothing_is_drawn_under_a_settings_pane_scroll_bar() {
         let bar_edges: Vec<f32> = shapes
             .iter()
             .filter_map(|cs| {
-                let rect = pane(cs)?;
+                let rect = pane_shape(cs)?;
                 let is_rect = matches!(cs.shape, egui::Shape::Rect(_));
                 (is_rect && rect.width() <= bar + 0.5 && rect.height() >= body.height() * 0.5)
                     .then(|| rect.right())
@@ -1038,7 +1089,7 @@ fn nothing_is_drawn_under_a_settings_pane_scroll_bar() {
             .collect();
         assert!(
             !bar_edges.is_empty(),
-            "{tab:?} at scale {scale} drew no scroll bar, so it never overflowed and this \
+            "{pane:?} at scale {scale} drew no scroll bar, so it never overflowed and this \
              proves nothing about it",
         );
         // The lane is the bar's full width in from its right edge, whatever the
@@ -1049,7 +1100,7 @@ fn nothing_is_drawn_under_a_settings_pane_scroll_bar() {
         let leftmost = bar_edges.iter().copied().fold(f32::INFINITY, f32::min);
         assert!(
             right - leftmost < 0.5,
-            "{tab:?} at {scale} drew scroll bars in two places, ending at {leftmost} and {right}",
+            "{pane:?} at {scale} drew scroll bars in two places, ending at {leftmost} and {right}",
         );
         let left = right - bar;
 
@@ -1057,17 +1108,20 @@ fn nothing_is_drawn_under_a_settings_pane_scroll_bar() {
         // scrolls, whose area IS the body. The two readout panes scroll in an
         // area of their own — a row that must not scroll sits above each — so
         // theirs stands one content margin further in.
-        let own_area = matches!(tab, panes::Tab::Console | panes::Tab::Notes);
+        let own_area = matches!(
+            pane,
+            SettingsPane::Tab(panes::Tab::Console | panes::Tab::Notes)
+        );
         let edge = body.right() - if own_area { margin } else { 0.0 };
         assert!(
             (right - edge).abs() < 0.5,
-            "{tab:?} at {scale} puts its scroll bar at {left}..{right}, not against {edge}",
+            "{pane:?} at {scale} puts its scroll bar at {left}..{right}, not against {edge}",
         );
 
         let under: Vec<String> = shapes
             .iter()
             .filter_map(|cs| {
-                let rect = pane(cs)?;
+                let rect = pane_shape(cs)?;
                 if rect.right() <= left + 1.0 {
                     return None;
                 }
@@ -1093,7 +1147,7 @@ fn nothing_is_drawn_under_a_settings_pane_scroll_bar() {
             .collect();
         assert!(
             under.is_empty(),
-            "{tab:?} at {scale} draws into its scroll bar's lane {left}..{right}: {under:?}",
+            "{pane:?} at {scale} draws into its scroll bar's lane {left}..{right}: {under:?}",
         );
     }
     }

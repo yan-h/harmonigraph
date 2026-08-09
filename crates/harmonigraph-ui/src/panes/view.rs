@@ -1,20 +1,20 @@
-//! The View tab: how you look at the lattice (projection, camera angle, saved
-//! angles) and how much of it shows (per-axis extents and window center).
-//! Purely what's framed — the note styling lives in [`super::nodes`] and
-//! [`super::scene`], the render/workspace knobs in [`super::system`].
+//! The Display tab's View section: how you look at the lattice (projection,
+//! camera angle, saved angles) and how much of it shows (per-axis extents and
+//! window center). Purely what's framed — the note styling lives in
+//! [`super::nodes`] and [`super::scene`], the render/workspace knobs in
+//! [`super::system`].
 //!
-//! A tab of its own rather than a section of [`super::tuning`], though the two
-//! answer halves of one question — where the nodes sit in pitch, and which of
-//! them you are looking at. That kinship is real about the CONTENT and no help
-//! on the tab bar, which shows one word: these are thirteen control rows to
-//! Tuning's five, so a merged tab is named for its smaller half and the camera
-//! is reachable only by opening something called Tuning and scrolling. Merging
-//! them is worth it only while both halves are short enough that the name does
-//! not have to carry them, and this half is not.
+//! A section of [`super::display`] rather than of [`super::tuning`], though
+//! view and tuning answer halves of one question — where the nodes sit in
+//! pitch, and which of them you are looking at. That kinship is real about
+//! the CONTENT and no help on a label, which shows one word: these are
+//! thirteen control rows to Tuning's five, so a tab merging the two is named
+//! for its smaller half, and the camera is reachable only by opening
+//! something called Tuning and scrolling.
 //!
 //! Called View and not Frame because the Video tab's Frame is the video's —
 //! aspect, letterbox, crop ticks — and one word naming two unrelated things is
-//! the thing this split exists to avoid.
+//! the thing the names are audited against (#286).
 //!
 //! Three sections: the Camera (where you stand and what the lens does), the
 //! Extents (how much lattice there is to stand in front of), and the Sevenths
@@ -40,9 +40,10 @@ const PRESET_NAME_WIDTH: f32 = 110.0;
 /// Camera framing and the lattice window: projection, angle, and per-axis
 /// extents/center.
 pub(super) fn view_pane(ui: &mut egui::Ui, state: &mut SharedState) {
-    // A plain heading rather than `section`: this is the top of the pane, and
-    // the leading rule `section` draws would be a line under nothing. Matches
-    // the Tuning, Nodes, Scene, System and Analyzer panes.
+    // A plain heading rather than `section`: this is the top of the section
+    // body, and the leading rule `section` draws would sit directly under the
+    // Display pane's own View header. Matches the Nodes, Scene and Analyzer
+    // section bodies, and the Tuning and System panes.
     ui.heading("Camera");
     // Projection: perspective converges with depth; orthographic keeps
     // equal intervals at equal screen offsets everywhere (isometric-style
@@ -215,7 +216,7 @@ pub(super) fn view_pane(ui: &mut egui::Ui, state: &mut SharedState) {
 /// the picture — but to let the sevens layer sit ON it, smaller and clearing
 /// its own gutter.
 ///
-/// The gutter itself is in the Nodes pane, not here. It is cleared by every
+/// The gutter itself is in the Nodes section, not here. It is cleared by every
 /// sounding node on every sheet, so it is a property of the node rather than
 /// of this layer, whatever its field names say.
 fn sevens_layer_controls(ui: &mut egui::Ui, state: &mut SharedState) {

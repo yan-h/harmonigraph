@@ -24,7 +24,7 @@ pub(super) const SPLIT_GRAB_HALF: f32 = 6.0;
 /// panes detach, which this divider must not). Instead the handle drags
 /// [`roll_fraction`](crate::SpectrumConfig::roll_fraction) directly, so the
 /// drag persists with the rest of the UI state. It is the only way to set the
-/// split: a "Roll share" bar on the Analyzer tab would be a second control for
+/// split: a "Roll share" bar on the Analyzer section would be a second control for
 /// the same field, and dragging the boundary you can see beats aiming a number
 /// at it.
 ///
@@ -84,7 +84,7 @@ const DEPTH_ZOOM_PER_DRAG_POINT: f32 = 0.006;
 /// How far a drag must lean along the depth axis before it is a zoom rather
 /// than a pitch pan, in points. Panning is the default — the axes do NOT both
 /// move at once, because what a depth drag zooms is a value being dialled in
-/// (it shows on the Analyzer tab's bars), and a pitch pan with a few points of
+/// (it shows on the Analyzer section's bars), and a pitch pan with a few points of
 /// depthwise slop in it would leave the Span or the Level quietly breathing.
 /// The margin is small enough that the pitch the picture slides by before a
 /// zoom takes over is a fraction of a semitone.
@@ -102,7 +102,7 @@ enum DepthZoom {
     Level,
 }
 
-/// Drag or scroll to navigate the picture instead of aiming the Analyzer tab's
+/// Drag or scroll to navigate the picture instead of aiming the Analyzer section's
 /// bars at it: across the pitch axis to pan the range, the wheel to zoom it,
 /// and along the depth axis to zoom what that part of the depth axis measures —
 /// the Span over the roll and spectrogram, the Level over the spectrum. All
@@ -154,7 +154,7 @@ pub(super) fn drag_zoom(
     let mut low = cfg.low_midi;
     let mut span = (cfg.high_midi - cfg.low_midi).max(crate::PITCH_RANGE_MIN_SPAN);
     // Nothing is written unless a gesture actually moved something. The range
-    // is also the Analyzer tab's range bar, and rewriting it every frame would
+    // is also the Analyzer section's range bar, and rewriting it every frame would
     // put this function's rounding between that bar and the value it shows.
     let mut moved = false;
 

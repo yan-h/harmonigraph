@@ -1,9 +1,9 @@
-//! The Scene pane: everything drawn *around* the sounding notes — the home
-//! grid that carries the lattice's shape at rest, the note-name labels, and
-//! the trail of where the music has been. The played note's own look lives in
-//! [`super::nodes`], and Bloom went with it: a halo around bright notes is a
-//! property of the notes, and it was the only thing an "Effects" heading here
-//! ever had to hold.
+//! The Display tab's Scene section: everything drawn *around* the sounding
+//! notes — the home grid that carries the lattice's shape at rest, the
+//! note-name labels, and the trail of where the music has been. The played
+//! note's own look lives in [`super::nodes`], and Bloom went with it: a halo
+//! around bright notes is a property of the notes, and it was the only thing
+//! an "Effects" heading here ever had to hold.
 
 use super::section;
 use crate::widgets::{button_row, ValueBar};
@@ -36,8 +36,8 @@ pub(super) fn scene_pane(ui: &mut egui::Ui, state: &mut SharedState) {
 /// drawn in. The structural layer is chrome that happens to be in the
 /// picture, and every color control in the panel is for the music.
 fn home_grid_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
-    // First section of the pane: a plain heading, no leading rule (matches
-    // the Nodes pane's Color section, which leads that pane the same way).
+    // First heading of the section body: plain, no leading rule (matches the
+    // Nodes section's Color heading, which leads its body the same way).
     ui.heading("Home grid");
     ValueBar::new(&mut view.grid_thickness, 0.0..=4.0, "Line width")
         .show(ui)

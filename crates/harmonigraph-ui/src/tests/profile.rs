@@ -361,7 +361,11 @@ fn profile_settings_panes() {
     let body = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(300.0 + 2.0 * margin, 900.0));
 
     println!("\n-- one settings pane at 300 points wide, ms per frame --");
-    for tab in SETTINGS_TABS {
+    for pane in SETTINGS_PANES {
+        // Each section alone: `install` opens flags on the shared state, and a
+        // flag left over from the previous row would profile two bodies as one.
+        state.display_sections = Default::default();
+        let tab = pane.install(&mut state);
         let mut samples = Vec::new();
         let mut shapes = 0;
         for i in 0..200 {
@@ -374,11 +378,11 @@ fn profile_settings_panes() {
                     ..Default::default()
                 },
                 |ui| {
-                    let mut pane =
+                    let mut body_ui =
                         ui.new_child(egui::UiBuilder::new().max_rect(body.shrink(margin)));
                     let mut tab = tab;
                     let mut viewer = panes::Viewer { state: &mut state, params: &backend, now };
-                    egui_dock::TabViewer::ui(&mut viewer, &mut pane, &mut tab);
+                    egui_dock::TabViewer::ui(&mut viewer, &mut body_ui, &mut tab);
                 },
             );
             let ms = start.elapsed().as_secs_f64() * 1000.0;
@@ -388,7 +392,7 @@ fn profile_settings_panes() {
             }
         }
         let (min, med) = stats(samples);
-        println!("{tab:>10?}  {min:6.3} ms (med {med:6.3})  shapes {shapes}");
+        println!("{pane:>24?}  {min:6.3} ms (med {med:6.3})  shapes {shapes}");
     }
 }
 
