@@ -832,9 +832,9 @@ pub(crate) struct MarkPatch {
 /// A mark is a bitmap of coverage keyed on (design, size, weight) — the same
 /// thing a font rasterizer hands an atlas for a glyph — so what it wants is
 /// what egui's atlas gives type: rasterize once, pack, hand out a patch, and
-/// re-upload only when the pixels move. What it got instead was one
-/// `egui::TextureHandle` per bitmap, which is what forced marks onto the
-/// painter's image path and out of the pass their letters are drawn in.
+/// re-upload only when the pixels move. A `egui::TextureHandle` per bitmap is
+/// the alternative, and it forces marks onto the painter's image path and out
+/// of the pass their letters are drawn in.
 ///
 /// Packed rather than shared with egui's own image, though that would need no
 /// second binding: a patch in a shared sheet has to keep the whole sheet's

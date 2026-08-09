@@ -1033,10 +1033,10 @@ fn curve_arms(p: [egui::Pos2; 4], thick: f32) -> Vec<MarkPiece> {
 /// and a staircase.
 ///
 /// What it costs is the mark's own area, once per size the camera asks for —
-/// the whole of it, since the halo is no longer a second bitmap read off this
-/// grid at twenty offsets. At the largest size a zoom can reach that is a
-/// couple of milliseconds for a `♭`, paid on the frame that size is first
-/// asked for.
+/// the whole of it and no more, since the halo is `fs_rim`'s arithmetic
+/// rather than a second bitmap read off this grid at twenty offsets. At the
+/// largest size a zoom can reach that is a couple of milliseconds for a `♭`,
+/// paid on the frame that size is first asked for.
 const MARK_SUPERSAMPLE: usize = 4;
 
 /// Rasterize a mark to an alpha coverage image -- the same thing a font
@@ -1093,8 +1093,8 @@ pub(crate) fn rasterize_mark(key: MarkKey) -> egui::ColorImage {
 ///   - the rim is `fs_rim`'s arithmetic rather than a bitmap of its own, so
 ///     the stamped order -- every rim, then every fill -- holds ACROSS the
 ///     seam between a sign and the count typeset beside it. On the painter
-///     that order broke at every such seam, and broke the opposite way in each
-///     pane, depending on when the batch happened to flush.
+///     that order breaks at every such seam, and breaks the opposite way in
+///     each pane, depending on when the batch flushes.
 ///
 /// Returns how far the mark reaches from its own center, which the caller
 /// needs to know what the cents readout has to clear.
