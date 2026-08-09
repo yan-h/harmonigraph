@@ -603,6 +603,12 @@ const SHARP_SLANT: f32 = 0.202;
 /// silhouette however close the areas are. So the fit carries the tangency as
 /// a constraint, and `a_flats_outline_has_no_crease_where_the_bowl_lands`
 /// holds it.
+///
+/// The touch is INTERIOR to the curve. Requiring it at the curve's end
+/// instead is the tidier-looking condition -- it reduces to putting the last
+/// two control points on the run, offset inward by half a stroke -- and it is
+/// much worse, 9.9% against 5.4%, because it straightens the whole last third
+/// of the bowl.
 const FLAT_BOWL: [[f32; 2]; 4] =
     [[0.2104, 0.4242], [1.0655, 0.2518], [1.2094, 0.7585], [0.1252, 0.9020]];
 /// What the bowl weighs against [`MARK_WEIGHT`], which is the stem's.
@@ -613,7 +619,10 @@ const FLAT_BOWL: [[f32; 2]; 4] =
 /// runs 70 units at its right extreme where the stroke is vertical, 63 across
 /// the top where it is horizontal, and 59..61 for the whole lower-left run
 /// into the stem. One number for a curve that carries three is a compromise,
-/// and 0.861 is where it lands.
+/// and 0.861 is where it lands. A width that VARIES along the curve is the
+/// obvious improvement and it is not one: fitted, it lands the counter's tip
+/// exactly and is worth 0.01 of a point, which does not pay for giving
+/// [`curve_arms`] a width function again.
 ///
 /// It is not a nicety. A bowl at the stem's full weight is too fat on the
 /// inside exactly where the counter is trying to close, so the counter tips
