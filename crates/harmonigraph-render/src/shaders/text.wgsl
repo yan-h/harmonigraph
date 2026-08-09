@@ -175,6 +175,11 @@ fn outside_atlas(texel: vec2<f32>) -> f32 {
 /// atlas (plus [`PATCH_MARGIN`]) — past the transparent texel epaint leaves
 /// around every glyph a neighbouring letter begins, and reading that would
 /// smear pieces of unrelated letters into the rim.
+///
+/// Inside the margin the answer is the atlas's own alpha only while the tap
+/// stays inside the atlas; against a wall it is that alpha scaled by
+/// [`outside_atlas`]. So this is not the two-valued thing it reads as, and a
+/// caller cannot take a return between zero and the alpha as impossible.
 fn coverage(in: VertexOut, texel: vec2<f32>) -> f32 {
     if texel.x < in.uv_min.x - PATCH_MARGIN || texel.y < in.uv_min.y - PATCH_MARGIN
         || texel.x > in.uv_max.x + PATCH_MARGIN || texel.y > in.uv_max.y + PATCH_MARGIN {
