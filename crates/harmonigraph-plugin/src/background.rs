@@ -62,7 +62,7 @@ use crate::editor::{EditorShared, EguiState};
 /// it happens, and 50 wakeups a second against a 5%-of-a-core FFT load is not
 /// where the cost is. What a shorter poll would buy is a shorter lock hold, and
 /// at 20 ms that is already about a millisecond of FFT.
-const POLL: Duration = Duration::from_millis(20);
+pub(crate) const POLL: Duration = Duration::from_millis(20);
 
 /// The thread, and the flag that ends it.
 ///

@@ -540,6 +540,59 @@ nice_export_vst3!(Harmonigraph);
 mod tests {
     use super::*;
 
+    /// The window flag the editor announces itself through has to be the one
+    /// the background analyzer watches, and nothing but this says so.
+    ///
+    /// They are two clones of one `Arc<EguiState>` today — `Default` hands one
+    /// to [`background::BackgroundAnalyzer::spawn`] and `editor` hands the same
+    /// field to `editor::create`. A second `EguiState` on either side compiles,
+    /// passes every other test, and leaves the analyzer reading a flag nobody
+    /// sets: it would then race an open editor for both rings on every poll,
+    /// which is a timing bug with nothing between it and a release.
+    ///
+    /// Driven through the REAL spawned thread rather than by calling `tick`,
+    /// because the wiring is precisely what a direct call would bypass.
+    #[test]
+    fn the_background_analyzer_watches_the_flag_the_editor_sets() {
+        // Five polls: long enough that a round cannot merely be late.
+        let settle = background::POLL * 5;
+        let columns =
+            |plugin: &Harmonigraph| plugin.editor_shared.lock().ui.spectrum.history().len();
+
+        let mut plugin = Harmonigraph::default();
+        // Announced BEFORE any audio exists, and given time to be seen, so the
+        // tick already in flight from construction meets an empty ring rather
+        // than racing the fill below.
+        plugin.params.editor_state.set_open(true);
+        std::thread::sleep(settle);
+
+        // Fill the ring the way `process` does: enough to fill an analysis
+        // window and cross hop boundaries, so anything draining it leaves a
+        // mark that cannot be missed.
+        for i in 0..20_000 {
+            let t = i as f32 / 48_000.0;
+            plugin
+                .audio_producer
+                .push((std::f32::consts::TAU * 440.0 * t).sin() * 0.5)
+                .expect("the ring is sized for this");
+        }
+        std::thread::sleep(settle);
+        assert_eq!(
+            columns(&plugin),
+            0,
+            "the analyzer drained a ring the editor had claimed: it is not watching the \
+             EguiState the editor sets",
+        );
+
+        plugin.params.editor_state.set_open(false);
+        std::thread::sleep(settle);
+        assert!(
+            columns(&plugin) > 0,
+            "the analyzer never noticed the window close: it is not watching the \
+             EguiState the editor sets",
+        );
+    }
+
     /// `ParamKey::id` is what a recorded take names its automation by, and
     /// what the host names its automation lanes by. They are declared in
     /// two places — the enum's `id()` and the `#[id = "..."]` attributes
