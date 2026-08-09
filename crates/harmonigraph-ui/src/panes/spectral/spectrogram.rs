@@ -193,9 +193,11 @@ struct Bin {
 ///
 /// What it costs is absolute level on anything NARROWER than its row, which up
 /// near the top of the axis a lobe can be: alone in a run of ten buckets, it
-/// reads 2.5 dB down. That is a trade rather than a win — for the lobes wider
-/// than their row, which is most of the axis, the floor drops away from them and
-/// contrast improves by about a dB; for the narrow ones both come down together.
+/// reads 2.5 dB down. That is a trade rather than a win. For a lobe WIDER than
+/// its row — which is most of the axis, since the analysis lobe spans many
+/// buckets wherever the axis outruns the FFT — the lobe reads unchanged and the
+/// floor drops away beneath it, so contrast improves by 1.3 dB over a run of
+/// four buckets and 1.8 over eight. For a narrow one both come down together.
 /// What does not vary either way is the zoom.
 ///
 /// Read by the CURVE as well as by the heatmap, through [`power_mean`] — the two
@@ -1066,11 +1068,13 @@ pub(super) fn draw_spectrogram(
 /// The two axes aggregate DIFFERENTLY, and the asymmetry is the point. Time
 /// takes a plain max, because a spectrogram cell answers "was there anything
 /// here" and averaging a brief loud column with the silence either side answers
-/// "not much" — a slab spans a few columns of a stream that is already 95%
-/// overlapped, so the max is over near-copies of one measurement rather than
-/// over a distribution. Pitch takes a power mean instead ([`RowRead`]), because
-/// a row zoomed out spans a dozen INDEPENDENT buckets, and the max of a dozen
-/// samples of a noise floor is a function of how many were drawn.
+/// "not much" — a slab spans a few columns of a heavily OVERLAPPED stream (95%
+/// at the live rate, and 84% even where
+/// [`WholeSong`](crate::WholeSong) stretches the hop for a three-minute take),
+/// so the max is over near-copies of one measurement rather than over a
+/// distribution. Pitch takes a power mean instead ([`RowRead`]), because a row
+/// zoomed out spans a dozen INDEPENDENT buckets, and the max of a dozen samples
+/// of a noise floor is a function of how many were drawn.
 ///
 /// The slab a column lands in is `floor(time / bucket)` — a function of
 /// absolute time alone, so it doesn't move as columns scroll off the far end
