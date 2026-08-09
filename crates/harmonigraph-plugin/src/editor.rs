@@ -89,7 +89,10 @@ pub struct EditorShared {
     /// bus. Read every drain, never cached: de-interleaving by a stale count
     /// would read one channel as two.
     audio_channels: Arc<AtomicU32>,
-    ui: SharedState,
+    /// Crate-visible because [`crate::background`] shares this state with the
+    /// frame — it logs a failure to start into the same console, and its tests
+    /// read back the history it filled.
+    pub(crate) ui: SharedState,
     /// GUI clock epoch; audio event times are mapped onto this clock.
     start: Instant,
     /// Audio->GUI clock mapping (see ClockMapper).
@@ -317,6 +320,36 @@ impl EditorShared {
             self.ui.spectrum.push_samples(&self.audio_buf, channels, sample_rate, now, &config);
         }
     }
+
+    /// The clock everything the editor stamps is measured on: seconds since
+    /// the PLUGIN was instantiated, not since the window opened.
+    ///
+    /// That distinction is what makes a closed window recoverable at all. The
+    /// clock runs across one, so a column analyzed while nothing was drawing
+    /// lands on the same axis as the columns either side of it, and the
+    /// heatmap has no seam to hide.
+    pub(crate) fn now(&self) -> f64 {
+        self.start.elapsed().as_secs_f64()
+    }
+
+    /// Drain both audio-thread rings onto that clock — notes into the tracker,
+    /// samples into the analyzer — and say whether any note arrived.
+    ///
+    /// A frame calls this, and so does [`crate::background`] while the window
+    /// is closed. That they share ONE path is the property the whole
+    /// closed-window capture rests on: a second, parallel analyzer would give
+    /// back a heatmap on its own hop grid, its own anchor and its own window,
+    /// and nothing on screen would say which stretch came from which. Here the
+    /// picture is the same picture whether or not anyone was watching it
+    /// arrive.
+    ///
+    /// The notes are drained FIRST so a frame can ask for its repaint before
+    /// spending the audio's FFTs; the two are otherwise independent.
+    pub(crate) fn catch_up(&mut self, now: f64) -> bool {
+        let notes = self.drain_into_tracker(now);
+        self.drain_audio(now);
+        notes
+    }
 }
 
 /// The plugin's per-frame GUI work, in order: take the frame's lock, close
@@ -349,12 +382,11 @@ fn frame(
 
     shared.note_frame();
 
-    let now = shared.start.elapsed().as_secs_f64();
-    if shared.drain_into_tracker(now) {
+    let now = shared.now();
+    if shared.catch_up(now) {
         // New MIDI must render this tick, not at the idle poll.
         ui.ctx().request_repaint();
     }
-    shared.drain_audio(now);
     let sample_rate = shared.sample_rate();
     shared.sync_take(sample_rate);
 
@@ -624,6 +656,16 @@ impl EguiState {
     pub fn is_open(&self) -> bool {
         self.open.load(Ordering::Acquire)
     }
+
+    /// Record that the window has opened or closed.
+    ///
+    /// Named rather than stored inline because it is no longer only the host's
+    /// business: [`crate::background`] reads it to decide whether a frame is
+    /// already draining the rings, so the two transitions are a seam between
+    /// threads and not just a bit.
+    pub(crate) fn set_open(&self, open: bool) {
+        self.open.store(open, Ordering::Release);
+    }
 }
 
 impl<'a> nice_plug::params::persist::PersistentField<'a, EguiState> for Arc<EguiState> {
@@ -788,7 +830,7 @@ impl Editor for LatticeEditor {
             },
         );
 
-        self.egui_state.open.store(true, Ordering::Release);
+        self.egui_state.set_open(true);
         Box::new(LatticeEditorHandle {
             egui_state: self.egui_state.clone(),
             shared: self.shared.clone(),
@@ -861,8 +903,12 @@ impl Drop for LatticeEditorHandle {
     fn drop(&mut self) {
         // Persist the UI state (dock layout, camera, view settings) into
         // the plugin state so the host saves it with the project.
+        // The lock is taken here with `open` still TRUE, which is what keeps
+        // the background analyzer off it for the whole of this — see
+        // [`crate::background`] on why that ordering is load-bearing rather
+        // than incidental.
         *self.params.ui_state.write() = self.shared.lock().ui.save_persist();
-        self.egui_state.open.store(false, Ordering::Release);
+        self.egui_state.set_open(false);
         self.window.close();
     }
 }

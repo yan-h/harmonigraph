@@ -12,11 +12,12 @@ use harmonigraph_ui::params::{ParamBackend, ParamKey};
 use nice_plug::prelude::*;
 use parking_lot::Mutex;
 
+mod background;
 mod editor;
 
 /// Capacity of the audio→GUI note event ring buffer. Events are dropped
 /// (silently) if the GUI stalls long enough to fill it.
-const EVENT_RING_CAPACITY: usize = 4096;
+pub(crate) const EVENT_RING_CAPACITY: usize = 4096;
 
 /// Capacity of the audio→GUI sample ring feeding the Spectral pane's
 /// analyzer: >1 s of STEREO at 48 kHz. Overflow just drops frames — a spectrum
@@ -26,7 +27,10 @@ const EVENT_RING_CAPACITY: usize = 4096;
 /// the channels themselves (see `process`), so the seconds it holds — which is
 /// what bounds the GUI's catch-up work after a stall, see
 /// `AudioSpectrum::push_samples` — stayed where it was.
-const AUDIO_RING_CAPACITY: usize = 131_072;
+///
+/// It is also what paces [`background`], whose poll has to stay well inside the
+/// span this holds; see `POLL` there.
+pub(crate) const AUDIO_RING_CAPACITY: usize = 131_072;
 
 /// Sample rate assumed until the host reports the real one in `initialize`.
 /// Held in two representations (the f64 `sample_rate` field and the f32 bit
@@ -56,6 +60,10 @@ pub struct Harmonigraph {
     /// Count of events recorded in the current take, for the UI's status
     /// line. Reset when recording starts.
     take_events: Arc<AtomicU64>,
+    /// Keeps the spectrogram's history running while the editor window is
+    /// closed (see [`background`]). Held only to be dropped with the plugin,
+    /// which is what stops its thread.
+    _background: background::BackgroundAnalyzer,
 }
 
 #[derive(Params)]
@@ -305,24 +313,35 @@ impl Default for Harmonigraph {
         let audio_channels = Arc::new(AtomicU32::new(1));
         let (take, take_control) = harmonigraph_record::channel();
         let take_events = Arc::new(AtomicU64::new(0));
+        let params = Arc::new(HarmonigraphParams::default());
+        let editor_shared = Arc::new(Mutex::new(editor::EditorShared::new(
+            consumer,
+            audio_consumer,
+            sample_rate_bits.clone(),
+            audio_channels.clone(),
+            take_control,
+            take_events.clone(),
+        )));
+        // From HERE, not from `initialize` or the editor: the point of the
+        // thread is to cover the stretches nothing else does, and both of those
+        // are stretches. `initialize` runs on activation, so a suspended plugin
+        // would go dark; the editor is the very thing being covered for.
+        let _background = background::BackgroundAnalyzer::spawn(
+            editor_shared.clone(),
+            params.editor_state.clone(),
+        );
         Harmonigraph {
-            params: Arc::new(HarmonigraphParams::default()),
+            params,
             note_producer: producer,
             audio_producer,
-            sample_rate_bits: sample_rate_bits.clone(),
-            audio_channels: audio_channels.clone(),
-            editor_shared: Arc::new(Mutex::new(editor::EditorShared::new(
-                consumer,
-                audio_consumer,
-                sample_rate_bits,
-                audio_channels,
-                take_control,
-                take_events.clone(),
-            ))),
+            sample_rate_bits,
+            audio_channels,
+            editor_shared,
             sample_rate: DEFAULT_SAMPLE_RATE,
             samples_processed: 0,
             take,
             take_events,
+            _background,
         }
     }
 }
