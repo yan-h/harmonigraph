@@ -398,6 +398,14 @@ impl TextBatch {
         // The softening is real — a glyph at a fractional offset resamples
         // its atlas cell. Constant softness reads as a typeface;
         // intermittent stepping reads as a bug.
+        //
+        // Which is a claim on the shader, and the reason the margin in
+        // `text.wgsl`'s `coverage` is load-bearing rather than a detail of
+        // sampling: the offset is only a softening while the coverage it
+        // resamples is continuous across the glyph's own patch edge. Cut
+        // there and the softness stops being constant — a letter's edge
+        // column snaps on and off once per pixel it travels, which is this
+        // paragraph's own bug arriving by the other road.
         let pos = align.anchor_size(anchor, galley.size()).min;
 
         // The size the quad is drawn at, against the size the atlas holds. One
