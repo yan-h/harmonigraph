@@ -115,12 +115,12 @@ in the exception; it is now the ordinary rot case, because no code reads an
 old blob differently. State what the value is and why, not which build wrote
 it.
 
-This matters more here than in most repos: comments are ~36% of the non-blank
-lines under `crates/`, a quarter of it doc comments, and the codebase is
-heavily rationale-driven, so a comment is often the only carrier of why the
-code is weird, and it acts as a tripwire against plausible-but-wrong
-"simplifications". New PRs keep regenerating the pattern, so this is a habit
-to maintain rather than a one-time cleanup.
+This matters more here than in most repos: comments are ~40% of the non-blank
+lines under `crates/` — doc comments alone are ~28% of every non-blank line —
+and the codebase is heavily rationale-driven, so a comment is often the only
+carrier of why the code is weird, and it acts as a tripwire against
+plausible-but-wrong "simplifications". New PRs keep regenerating the pattern,
+so this is a habit to maintain rather than a one-time cleanup.
 
 ## Backwards compatibility is not a constraint
 

@@ -23,7 +23,7 @@ jobs:
       # gesture is over. See ci.sh.
       - name: Vendored tests
         run: cargo test --manifest-path vendor/baseview/Cargo.toml --target-dir target/vendor-baseview
-      # Doc links are the only mechanical check on comments, which are ~38% of
+      # Doc links are the only mechanical check on comments, which are ~40% of
       # the non-blank lines under crates/. --document-private-items is what
       # makes it cover more than the exported surface; private_intra_doc_links
       # is allowed because it only matters for published HTML. See ci.sh.
