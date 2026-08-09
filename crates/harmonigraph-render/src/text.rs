@@ -810,19 +810,30 @@ pub(crate) mod tests {
     ///
     /// Three patches of one 8x8 square: against the top-left corner, padded in
     /// the middle, and against the bottom-right. All four boundaries, and the
-    /// middle one is what the other two have to match. Drawn at a fractional
-    /// offset, since a glyph on the pixel grid reads no margin at all and would
-    /// pass this with the fade removed; the offsets differ by whole points, so
-    /// all three sit at the same sub-pixel phase and the pictures are
-    /// comparable pixel for pixel.
+    /// middle one is what the other two have to match.
+    ///
+    /// Drawn at a fractional offset because that is where a label actually
+    /// lands, and it is the WEAKER of the two cases rather than the only one
+    /// that fails. On the pixel grid a fragment centre falls on `texel = -0.5`
+    /// exactly, so the tap's second sample carries a weight of zero and the
+    /// clamp returns the edge texel whole: a full extra row of ink against this
+    /// fixture's `[3, 0, 0, 3]` at a fractional offset. Both catch a missing
+    /// fade; the fractional one is the picture the bug was reported from.
+    ///
+    /// The offsets differ by whole points and the patches sit at whole texels,
+    /// so all three are at one sub-pixel phase and the pictures are comparable
+    /// pixel for pixel. The atlas is deliberately NOT square, which is what
+    /// holds the far wall to `atlas_size` per axis: read as a scalar it would
+    /// put the bottom wall at the right one, and only a picture with two
+    /// different walls can tell.
     #[test]
     fn a_glyph_against_the_atlas_edge_paints_what_a_padded_one_does() {
         let Some((device, queue)) = headless_device() else {
             return;
         };
-        // 32x32, so the far corner patch ends exactly on the last texel.
-        let mut image = egui::ColorImage::filled([32, 32], egui::Color32::TRANSPARENT);
-        for (left, top) in [(0, 0), (12, 12), (24, 24)] {
+        // 32x48, so the far corner patch ends exactly on the last texel of both.
+        let mut image = egui::ColorImage::filled([32, 48], egui::Color32::TRANSPARENT);
+        for (left, top) in [(0, 0), (12, 12), (24, 40)] {
             for y in top..top + 8 {
                 for x in left..left + 8 {
                     image[(x, y)] = egui::Color32::WHITE;
@@ -830,11 +841,11 @@ pub(crate) mod tests {
             }
         }
         let cb = TextCallback {
-            glyphs: [(4.3, 0.0), (24.3, 12.0), (44.3, 24.0)]
+            glyphs: [(4.3, 0.0, 0.0), (24.3, 12.0, 12.0), (44.3, 24.0, 40.0)]
                 .iter()
-                .map(|&(x, uv)| GlyphInstance {
+                .map(|&(x, u, v)| GlyphInstance {
                     rect: [x, 24.3, 8.0, 8.0],
-                    uv: [uv, uv, uv + 8.0, uv + 8.0],
+                    uv: [u, v, u + 8.0, v + 8.0],
                     ..glyph()
                 })
                 .collect(),
