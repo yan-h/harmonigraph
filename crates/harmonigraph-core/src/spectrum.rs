@@ -260,6 +260,18 @@ impl SpectrumAnalyzer {
         for k in first..mag_to {
             self.bin_mag[k] = power(&self.re, &self.im, k).sqrt();
         }
+        // The bin below the first usable one, HELD at its value rather than
+        // measured. `reconstruct` reads one bin either side of the pair it
+        // interpolates, so a bucket sitting on the first usable bin needs a
+        // sample below it — and the two candidates are both wrong: bin 1 is
+        // where the window's own leakage dominates, which is why `first` starts
+        // above it, and leaving the entry unwritten reads whatever the previous
+        // call left there. Holding the endpoint is the third answer, and it
+        // makes the tangent there zero, which is what "the curve stops here"
+        // should look like.
+        if mag_to > first {
+            self.bin_mag[first - 1] = self.bin_mag[first];
+        }
         let bin_mag = &self.bin_mag[..mag_to];
 
         let mut buckets = [0.0f32; SPECTRUM_BINS];
@@ -268,8 +280,14 @@ impl SpectrumAnalyzer {
             // The bucket's own frequency band, in bins.
             let x0 = midi_to_hz(midi - half_bucket) / bin_hz;
             let x1 = midi_to_hz(midi + half_bucket) / bin_hz;
-            let (k0, k1) = (x0.ceil(), x1.floor());
-            let p = if k1 >= k0 && k0 >= first as f32 && k1 <= last as f32 {
+            // The top is CLAMPED rather than required to be in range. A bucket
+            // whose upper edge reaches past the last usable bin still CONTAINS
+            // usable bins, and the loudest of those is what it means; rejecting
+            // it sent it to the branch below instead, which is a bucket wider
+            // than a bin asking to be read BETWEEN two of them. Only reachable
+            // where the axis runs to Nyquist, so at half rates.
+            let (k0, k1) = (x0.ceil(), x1.floor().min(last as f32));
+            let p = if k1 >= k0 && k0 >= first as f32 {
                 // Wider than the bin spacing: the loudest bin it contains.
                 let (k0, k1) = (k0 as usize, k1 as usize);
                 (k0..=k1).fold(0.0f32, |acc, k| acc.max(power(&self.re, &self.im, k)))
@@ -279,9 +297,14 @@ impl SpectrumAnalyzer {
                 // instead of combed where it outruns the FFT.
                 let x = midi_to_hz(midi) / bin_hz;
                 let k = x.floor();
-                // The cubic reads a bin either side of that pair, so it needs
-                // one more at each end than a straight read between them would.
-                if k < (first + 1) as f32 || k + 2.0 > last as f32 {
+                // Exactly the pair being read between, and no wider: the cubic
+                // wants a bin either side of that pair too, but it takes those
+                // by holding the endpoint where the usable range runs out
+                // rather than by demanding them. Requiring them instead put the
+                // bottom of the axis outside its own analyzer — at the Fast
+                // window the first two usable bins span 23 to 35 Hz, and the
+                // seven semitones between them went dark.
+                if k < first as f32 || k + 1.0 > last as f32 {
                     continue;
                 }
                 let k = k as usize;
@@ -551,9 +574,21 @@ mod tests {
 
     /// Feed a sum of sines and return the folded spectrum.
     fn analyze(freqs_amps: &[(f32, f32)], sample_rate: f32) -> [f32; SPECTRUM_BINS] {
+        analyze_with(DEFAULT_FFT_SIZE, freqs_amps, sample_rate)
+    }
+
+    /// [`analyze`] at a chosen window length — the Fast and Precise settings
+    /// reach parts of the axis the default one does not, because where the
+    /// usable bins START is a fixed BIN and so a moving frequency.
+    fn analyze_with(
+        fft_size: usize,
+        freqs_amps: &[(f32, f32)],
+        sample_rate: f32,
+    ) -> [f32; SPECTRUM_BINS] {
         let mut analyzer = SpectrumAnalyzer::new(sample_rate);
+        analyzer.set_fft_size(fft_size);
         // Push in awkward chunk sizes to exercise the ring seam.
-        let samples: Vec<f32> = (0..DEFAULT_FFT_SIZE + 1234)
+        let samples: Vec<f32> = (0..fft_size + 1234)
             .map(|i| {
                 let t = i as f32 / sample_rate;
                 freqs_amps
@@ -609,6 +644,41 @@ mod tests {
             "amplitude 0.8 should read ~0.64 at its pitch, got {}",
             buckets[peak]
         );
+    }
+
+    /// The bottom of the axis draws at every window length, not just the one
+    /// the rest of these tests use.
+    ///
+    /// Where the usable bins START is a fixed BIN (2, below which the window's
+    /// own leakage dominates) and therefore a moving FREQUENCY: 23 Hz through an
+    /// 8192-point window at 48 kHz, but 47 Hz through a 4096-point one, and
+    /// 94 Hz at 96 kHz. So the buckets that read the first usable bins are only
+    /// on the axis AT ALL at the shorter windows and the higher rates, and a
+    /// bound that quietly excludes them is invisible at 8192/48 kHz — which is
+    /// every other test here.
+    ///
+    /// The failure this pins is a band of the axis reading as silence with the
+    /// tone in it: a run of buckets returning nothing while the buckets either
+    /// side of them, which reach the same bins through the other branch, stay
+    /// lit. Two static lines with a hole between them, and the hole does not
+    /// move when the tone does.
+    #[test]
+    fn the_lowest_buckets_draw_at_every_window_length() {
+        for (fft_size, sr) in [(4096, 48_000.0f32), (4096, 96_000.0), (8192, 96_000.0)] {
+            let bin_hz = sr / fft_size as f32;
+            // A tone on the first usable bin, which is where this band sits.
+            let hz = 2.5 * bin_hz;
+            let buckets = analyze_with(fft_size, &[(hz, 0.8)], sr);
+            let at = bucket_of_midi(hz_to_midi(hz));
+            let near = (at.saturating_sub(2)..=(at + 2).min(SPECTRUM_BINS - 1))
+                .map(|b| buckets[b])
+                .fold(0.0f32, f32::max);
+            assert!(
+                near > 1e-6,
+                "{fft_size}-point window at {sr} Hz: a tone at {hz:.1} Hz \
+                 (bin 2.5) left bucket {at} and its neighbours silent",
+            );
+        }
     }
 
     /// The reconstruction is continuous where it changes which bins it reads,
