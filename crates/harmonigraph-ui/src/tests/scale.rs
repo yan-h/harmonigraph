@@ -62,7 +62,7 @@ fn tallest_text(shapes: &[egui::epaint::ClippedShape]) -> f32 {
 /// control.
 #[test]
 fn the_ui_scale_shrinks_the_panel_chrome() {
-    for tab in [panes::Tab::Tuning, panes::Tab::Panel, panes::Tab::Nodes] {
+    for tab in [panes::Tab::Tuning, panes::Tab::System, panes::Tab::Nodes] {
         let (full, small) =
             (settings_pane_at_scale(tab, 1.0), settings_pane_at_scale(tab, 0.7));
 
@@ -390,7 +390,13 @@ fn every_settings_row_is_one_row_high() {
 /// never reaches it.
 #[test]
 fn every_bar_is_one_row_high() {
-    for tab in [panes::Tab::Tuning, panes::Tab::Nodes, panes::Tab::Analyzer, panes::Tab::Video] {
+    for tab in [
+        panes::Tab::Tuning,
+        panes::Tab::View,
+        panes::Tab::Nodes,
+        panes::Tab::Analyzer,
+        panes::Tab::Video,
+    ] {
         for step in 0..=16u8 {
             let scale = 0.7 + 0.05 * f32::from(step);
             let want = crate::theme::row_height(scale);

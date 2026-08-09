@@ -151,7 +151,7 @@ pub struct SharedState {
     /// reopening one is exactly when the detects should look afresh.
     pub(crate) temper_judged: [Option<(i32, i32, i32)>; Comma::COUNT],
     /// User-saved camera angles, applied like the built-in Flat/Isometric
-    /// presets (persisted; see the Frame pane).
+    /// presets (persisted; see the View pane).
     pub camera_presets: Vec<CameraPreset>,
     /// Entry buffer for naming a new preset. Runtime-only.
     pub preset_name: String,
@@ -167,7 +167,7 @@ pub struct SharedState {
     /// window. `Some` only in the offline renderer. Runtime-only, never
     /// persisted (mirrors `learn_active`).
     pub whole_song: Option<WholeSong>,
-    /// Set by the Panel pane's "Reset layout" button; consumed by root_ui
+    /// Set by the System pane's "Reset layout" button; consumed by root_ui
     /// AFTER the frame's DockArea writes the dock back (panes run inside
     /// that pass, so a direct write from one would be overwritten).
     pub(crate) reset_layout: bool,
@@ -368,29 +368,32 @@ pub struct CameraPreset {
 ///
 /// It is a named constant because the layout is not the only thing that
 /// depends on it. What the column has to clear is the widest thing in it,
-/// which is its own TAB BAR — six tab names need 347.5pt laid across it,
-/// measured — so this fraction and the window width together decide whether
-/// egui_dock draws a scroll bar over the settings.
+/// which is its own TAB BAR — seven tab names want a window of about 1428pt at
+/// this fraction, measured — so this fraction and the window width together
+/// decide whether egui_dock scrolls the tab bar over the settings.
 ///
-/// Widening the column is what a scroll bar over the TAB BAR costs, and the
-/// price is charged to the picture twice over: 0.68 would carry the tab bar
-/// down to a window about 1090pt wide instead of 1240, but it also takes 8pt
-/// off the Spectral pane, which is already within a few points of being
-/// narrower than the perf HUD it has to contain. So the column is not widened
-/// on account of a bar that does not appear at 1240pt and wider.
+/// Widening the column is what scrolling the TAB BAR costs, and the price is
+/// charged to the picture twice over: a smaller fraction buys the bar a
+/// narrower window to survive, but it also takes width off the Spectral pane,
+/// which is already within a few points of being narrower than the perf HUD it
+/// has to contain. So the column is not widened on account of the bar.
 ///
-/// Nothing checks that automatically. The test that did held the whole column
-/// — tab bar and pane content together — to needing no scroll bar of either
-/// kind, and it came out when the Nodes pane was allowed to scroll. A pane
-/// scrolling is now a normal thing; the TAB BAR overflowing is still not, and
-/// it is a figure to re-measure by hand rather than a guarantee.
+/// `every_settings_tab_fits_on_its_tab_bar` (in `tests::shell`, so not linkable
+/// from here) is what checks it, by the CLIP rather than by re-deriving
+/// egui_dock's sums.
+/// It holds the tab bar alone, and has to: a pane scrolling is a normal thing,
+/// so a guard over tab bar and pane content together fires on the panes that
+/// are meant to scroll. Note what neither it nor this
+/// fraction covers — the editor's own `DEFAULT_SIZE` is 1000pt, well under what
+/// any version of this bar has needed, so the default window scrolls its tab
+/// bar. That is issue #287 and it is not this constant's to fix.
 pub(crate) const SETTINGS_SPLIT: f32 = 0.72;
 
 /// The default pane arrangement: big lattice with the Spectral pane
 /// beside it on the right (sharing the pitch intuition: what sounds is
 /// what lights up), the tuning column further right, console and notes
 /// folded to a tab bar below that. Users can re-dock at runtime; the result
-/// persists via UiPersist, and the Panel pane's "Reset layout" button
+/// persists via UiPersist, and the System pane's "Reset layout" button
 /// returns here.
 pub(crate) fn default_dock() -> DockState<panes::Tab> {
     let mut dock = DockState::new(vec![panes::Tab::Lattice]);
@@ -399,16 +402,17 @@ pub(crate) fn default_dock() -> DockState<panes::Tab> {
         NodeIndex::root(),
         SETTINGS_SPLIT,
         vec![
-            // Reading outward from the picture: what the lattice is (its
-            // tuning, and how it's framed), then how a note is drawn, the
-            // scene around it, the analyzer, video export, and the plugin's
-            // own render/layout knobs last.
+            // Reading outward from the picture: what the lattice is, which of
+            // it you are looking at, then how a note is drawn, the scene
+            // around it, the analyzer, video export, and the plugin's own
+            // render/layout knobs last.
             panes::Tab::Tuning,
+            panes::Tab::View,
             panes::Tab::Nodes,
             panes::Tab::Scene,
             panes::Tab::Analyzer,
             panes::Tab::Video,
-            panes::Tab::Panel,
+            panes::Tab::System,
         ],
     );
     // Notes first so it sits left of Console and is the selected tab by
@@ -683,7 +687,18 @@ fn default_ui_scale() -> f32 {
 /// 2: Tuning and Frame merged into one tab. A version-1 layout has both, and
 /// they now name the same variant — kept as the floor's worked example, since
 /// a dock opening with the merged pane in it twice is what the refusal avoids.
-pub(crate) const UI_PERSIST_VERSION: u32 = 2;
+///
+/// 3: that merge undone, and `Panel` renamed to `System`. Two breaks, and only
+/// one of them would reach this check. The RENAME fails the parse outright —
+/// `Panel` is a variant no build has any more — so a version-2 blob dies in
+/// `load_persist`'s `Err` arm before the version is ever read, which is loud
+/// and is why that arm says what it says. The SPLIT is the one this floor is
+/// for, and it is the quieter of the two: a version-2 dock names only `Tuning`,
+/// which still parses and still draws, so without a bump an old project would
+/// open with the tuning bars intact and the whole camera simply absent, no tab
+/// to reach it by and nothing said. That is the silent break the floor exists
+/// to turn into an audible one.
+pub(crate) const UI_PERSIST_VERSION: u32 = 3;
 
 /// On-disk format of [`SharedState::save_persist`]. Bump thoughtfully; a
 /// failed deserialize silently falls back to defaults.

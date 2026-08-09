@@ -536,7 +536,7 @@ fn a_zoom_past_the_raster_ceiling_stops_growing_the_drawn_label() {
     let (a, b) = (tallest(&just_past), tallest(&far_past));
     assert!(
         (a - b).abs() <= a * 0.01,
-        "the Size bar kept growing the drawn label past the raster ceiling: \
+        "the Name size bar kept growing the drawn label past the raster ceiling: \
          {a} then {b}, a factor of {:.2} stretched out of one bitmap",
         b / a,
     );

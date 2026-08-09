@@ -102,15 +102,16 @@ fn wheel_over_settings_pane(tab: panes::Tab, screen_h: f32) -> f32 {
 /// their own; from the wheel's side that must not be visible.
 #[test]
 fn every_settings_pane_scrolls_when_its_content_overflows() {
-    // A short window, so that every one of them overflows — including Panel,
+    // A short window, so that every one of them overflows — including System,
     // the shortest list of the set.
     for tab in [
         panes::Tab::Tuning,
+        panes::Tab::View,
         panes::Tab::Nodes,
         panes::Tab::Scene,
         panes::Tab::Analyzer,
         panes::Tab::Video,
-        panes::Tab::Panel,
+        panes::Tab::System,
     ] {
         let moved = wheel_over_settings_pane(tab, 300.0);
         assert!(moved < -8.0, "{tab:?} did not scroll to the wheel (content moved {moved})");
@@ -236,13 +237,13 @@ fn text_y(shapes: &[egui::epaint::ClippedShape], needle: &str) -> Option<f32> {
 ///
 /// Both shells, because which section leads the Video pane depends on the
 /// shell: a host can record takes, so Record leads; the standalone cannot, so
-/// `render_settings` returns early and Frame leads instead. `section` decides
+/// `record_controls` returns early and Frame leads instead. `section` decides
 /// it from what has been drawn rather than from the caller, and this is what
 /// holds it to that for the case the caller could not have known.
 #[test]
 fn the_video_pane_does_not_start_with_a_rule() {
     // Which section leads, per shell: a host can record takes, so Record
-    // leads; the standalone cannot, so `render_settings` returns early.
+    // leads; the standalone cannot, so `record_controls` returns early.
     for (supported, leads) in [(true, "Record"), (false, "Frame")] {
         let (shapes, rule) = video_pane_shapes(supported);
         let heading = text_y(&shapes, leads)
@@ -261,6 +262,49 @@ fn the_video_pane_does_not_start_with_a_rule() {
             !above,
             "take.supported={supported}: a rule sits above {leads:?}, the pane's \
              first heading, at y {heading}"
+        );
+    }
+}
+
+/// The standalone keeps the one render control it can act on, and neither shell
+/// grows a row the other should not have.
+///
+/// `render_controls` serves both shells out of one function, and which rows each
+/// gets is decided by where a single `if !supported { return }` sits: above the
+/// Spectrogram row the standalone loses it, below the row it keeps it. That is a
+/// line of ordering doing the work of a policy, and nothing else in the suite
+/// looks at it — hoisting that return two lines leaves all 439 tests green while
+/// the standalone silently loses its only say over what an offline render bakes,
+/// `RenderConfig::playhead` becoming unreachable from that shell entirely.
+///
+/// Both directions, because a gate is two claims: the Spectrogram row survives
+/// with no take support, and the rows that need a take to mean anything do not
+/// appear without one. `the_video_pane_does_not_start_with_a_rule` above is the
+/// only other test that draws this pane in the standalone, and it asks about the
+/// FIRST heading, so every row below it is unwatched.
+#[test]
+fn the_standalone_keeps_the_render_row_a_take_is_not_needed_for() {
+    // Shared by both shells: the section, the row, and the choice on it. The
+    // standalone has no transport to record with and still renders, so this is
+    // the one thing in Render it can act on.
+    for row in ["Render", "Spectrogram", "Live", "Playhead"] {
+        for supported in [true, false] {
+            let (shapes, _) = video_pane_shapes(supported);
+            assert!(
+                text_y(&shapes, row).is_some(),
+                "take.supported={supported}: the Video pane drew no {row:?}",
+            );
+        }
+    }
+    // Take-only, and gated on exactly the same flag: a shell that cannot record
+    // has nothing for these to describe.
+    for row in ["Finish", "Lead-in"] {
+        let (with, _) = video_pane_shapes(true);
+        assert!(text_y(&with, row).is_some(), "a recording shell drew no {row:?}");
+        let (without, _) = video_pane_shapes(false);
+        assert!(
+            text_y(&without, row).is_none(),
+            "the standalone drew {row:?}, which needs a take to mean anything",
         );
     }
 }
@@ -364,11 +408,13 @@ fn every_bar_in_a_settings_pane_is_the_width_of_the_pane() {
         }
     }
     // The sniffing above finds nothing if the bars stop being painted this way,
-    // and a test that measures nothing passes. The Tuning pane is the deepest
-    // stack of bars in the dock.
+    // and a test that measures nothing passes. The Nodes pane is the deepest
+    // stack of bars in the dock — every layer of the note contributes one or
+    // more, and the gated ones still paint, greyed — so it is the pane to ask
+    // whether bars are still being painted at all.
     let bars =
-        bar_track_widths(&settings_pane_at_width(panes::Tab::Tuning, 400.0, PROJECTIONS[0])).len();
-    assert!(bars >= 10, "only found {bars} bar tracks in the Tuning pane; has the paint changed?");
+        bar_track_widths(&settings_pane_at_width(panes::Tab::Nodes, 400.0, PROJECTIONS[0])).len();
+    assert!(bars >= 15, "only found {bars} bar tracks in the Nodes pane; has the paint changed?");
 }
 
 /// Each gradient group opens with its preview: one band of color the width of

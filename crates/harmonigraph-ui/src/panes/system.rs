@@ -1,14 +1,20 @@
-//! The Panel pane: the plugin's own knobs rather than the lattice's — how
+//! The System pane: the plugin's own knobs rather than the lattice's — how
 //! sharply and how hard it renders, and how the panes are arranged. None of
 //! this is part of the picture; it's what surrounds it. Kept out of the
-//! Frame pane, where it would sit at the bottom looking like a view setting.
+//! [`super::view`] pane, where it would sit at the bottom looking like a view
+//! setting.
+//!
+//! Called System because the tab bar is where a name has to do its work.
+//! "Panel" names the thing being looked AT rather than what the tab changes,
+//! and sits one letter from "pane", which is what every other tab in the dock
+//! is.
 
 use super::section;
 use crate::widgets::{button_row, choice_row, ValueBar};
 use crate::SharedState;
 
 /// Render quality/cost, then the workspace layout.
-pub(super) fn panel_pane(ui: &mut egui::Ui, state: &mut SharedState) {
+pub(super) fn system_pane(ui: &mut egui::Ui, state: &mut SharedState) {
     // Performance: the cost dial and the meter to judge it by. Render scale is
     // presented as GPU cost rather than as a look setting, because that is what
     // it is: the renderer pins the two things that decide how the lattice LOOKS
