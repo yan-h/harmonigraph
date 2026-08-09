@@ -419,7 +419,7 @@ pub(crate) fn spectral_pane(
     names::draw(&painter, &note_names, text.names, &mut labels);
     // Flushed before the divider: a batch is drawn where it is flushed, and
     // the divider belongs over the plots, not under the names.
-    labels.flush(&painter, rect, state, crate::text::spectral_labels(surface));
+    labels.flush(&painter, rect, state, crate::text::spectral_labels(surface), names_slide(&cfg));
 
     // The divider, over the plots so it stays findable against a loud
     // spectrogram. Nothing at rest — the roll's now-line already marks where
@@ -437,6 +437,22 @@ pub(crate) fn spectral_pane(
             painter.line_segment(axes.across_pitch(split), egui::Stroke::new(2.0, color));
         }
     }
+}
+
+/// Which way this pane's text travels, for the glyph shader's reconstruction
+/// filter (`FILTER_TAP` in `text.wgsl`, and [`harmonigraph_render::SlideAxis`]).
+///
+/// A note name rides the TIME axis: its pitch is where it sits, and time is
+/// what scrolls under it. So the answer is the orientation's own, and it is
+/// both of the horizontal ones and both of the vertical ones rather than the
+/// default either way — a filter fixed on x reconstructs nothing at all for a
+/// pane running time down the page, and does it silently, since a picture that
+/// is merely resampled worse looks like a picture.
+///
+/// The axis labels share the batch and stand still, so they are indifferent to
+/// this; the one answer serves both.
+fn names_slide(cfg: &crate::SpectrumConfig) -> harmonigraph_render::SlideAxis {
+    harmonigraph_render::SlideAxis::vertical(cfg.orientation.is_time_vertical())
 }
 
 #[cfg(test)]

@@ -151,7 +151,15 @@ fn draw_learn_overlay(
         egui::Stroke::new(2.0, theme::armed().gamma_multiply(learn_pulse(now))),
         egui::StrokeKind::Inside,
     );
-    badge.flush(&painter, rect, state, crate::text::LATTICE_LEARN);
+    // Pinned to the corner, so it slides along nothing; the filter's axis is
+    // whichever, and the default is what says so.
+    badge.flush(
+        &painter,
+        rect,
+        state,
+        crate::text::LATTICE_LEARN,
+        harmonigraph_render::SlideAxis::default(),
+    );
 }
 
 /// The badge's word, laid out into a batch of its own and drawn by

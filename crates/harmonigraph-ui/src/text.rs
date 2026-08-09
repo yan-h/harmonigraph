@@ -544,12 +544,19 @@ impl TextBatch {
     /// `pane_id` must be unique per batch drawn in one frame — a pane that
     /// flushes twice (to put something between two groups of labels) needs
     /// an id for each, since each keeps its own buffer.
+    ///
+    /// `slide` is which way this batch's text travels, which the glyph
+    /// shader's reconstruction filter follows. It is asked of the caller
+    /// rather than defaulted because the caller is the only one that knows:
+    /// the analyzer's names ride its time axis and so scroll whichever way
+    /// its orientation points that, and nothing here can see it.
     pub(crate) fn flush(
         &mut self,
         painter: &egui::Painter,
         rect: egui::Rect,
         state: &crate::SharedState,
         pane_id: u64,
+        slide: harmonigraph_render::SlideAxis,
     ) {
         if self.glyphs.is_empty() {
             return;
@@ -571,6 +578,7 @@ impl TextBatch {
             rings(painter.ctx()),
             atlas,
             marks,
+            slide,
             state.target_format,
             pane_id,
         ));
@@ -633,6 +641,11 @@ impl TextBatch {
             rings: rings(painter.ctx()),
             atlas,
             marks,
+            // The default, and here that is a want of an answer rather than
+            // one: an orbiting camera carries a node name across the screen
+            // and up it at once, so there is no axis its motion is along.
+            // See `FILTER_TAP` in the glyph shader.
+            slide: harmonigraph_render::SlideAxis::default(),
         }
     }
 }

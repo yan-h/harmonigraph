@@ -212,6 +212,37 @@ fn the_now_line_lands_on_the_side_the_orientation_names() {
     );
 }
 
+/// The reconstruction filter is pointed along the axis a name actually
+/// travels, in every orientation — see [`names_slide`].
+///
+/// Asked of the DEPTH axis rather than of `is_time_vertical`, which would be
+/// the same sentence twice: a name rides time, `dir_depth` is where the pane
+/// puts time, and this is the claim that the two agree. The filter is
+/// one-dimensional and separable, so pointing it across a pane whose text
+/// scrolls downward is not a smaller correction but no correction at all —
+/// measured at 89.6% of a hairline's coverage swinging as it slides, against
+/// the 40% bound `a_sliding_hairline_keeps_its_weight` holds it to.
+///
+/// Nothing else on the pane cares: the axis labels share the batch and stand
+/// still.
+#[test]
+fn the_names_filter_follows_the_axis_time_runs_along() {
+    for orientation in EVERY_ORIENTATION {
+        let cfg = SpectrumConfig { orientation, ..Default::default() };
+        // Both rects, since a filter axis read off the pane's SHAPE rather
+        // than its orientation would pass on one and fail on the other.
+        for rect in [WIDE, TALL] {
+            let depth = Axes::new(rect, &cfg).dir_depth();
+            let down = depth.y.abs() > depth.x.abs();
+            assert_eq!(
+                super::names_slide(&cfg),
+                harmonigraph_render::SlideAxis::vertical(down),
+                "{orientation:?} runs time along {depth:?}, and the filter is pointed elsewhere",
+            );
+        }
+    }
+}
+
 /// Pitch reads the conventional way in all four, rather than mirroring
 /// with time: low at the BOTTOM wherever time is horizontal, low at the
 /// LEFT wherever it is vertical. Flipping it along with time would turn
