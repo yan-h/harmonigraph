@@ -847,6 +847,12 @@ enum MarkKind {
     Flat,
 }
 
+/// Clear pixels around every mark bitmap, so a mark's own ink never reaches
+/// the quad that carries it. One is enough: a bilinear tap half a texel past
+/// the ink already reads the margin whole. See [`mark_geometry`], which is
+/// where the reasoning and the measurement live.
+pub(crate) const MARK_BITMAP_PAD: usize = 1;
+
 /// A mark's geometry in its bitmap's pixel space, with the bitmap size.
 ///
 /// Built once per (design, size, weight) on a canonical grid at the origin,
@@ -867,9 +873,32 @@ fn mark_geometry(key: MarkKey) -> (Vec<MarkPiece>, [usize; 2]) {
         MarkKind::Flat => (FLAT_INK_W * size, FLAT_INK_H * size),
         _ => (MARK_INK_W * size, PLUS_INK_H * size),
     };
-    // The bitmap is a whole number of pixels and the shape is centered in
-    // it, so a design and its mirror rasterize to mirror images.
-    let (bw, bh) = (w.ceil().max(1.0), h.ceil().max(1.0));
+    // The bitmap is a whole number of pixels with the shape centered in it, so
+    // a design and its mirror rasterize to mirror images, and it carries a
+    // clear pixel on every side.
+    //
+    // That margin is what keeps a sliding mark from stepping. `paint_mark`
+    // draws the bitmap into a quad of its own size and the GPU samples that
+    // quad at pixel CENTRES, so a centre a hair outside it takes nothing at
+    // all: ink reaching the bitmap's own edge has its outermost column
+    // dropped and picked up again once per pixel of travel. `ceil` alone
+    // leaves under half a pixel there, which is not enough for the coverage
+    // to have fallen to zero by the bound. Padded, the ink is interior at
+    // every phase and the edge fades rather than snapping -- the bargain
+    // epaint strikes by padding every glyph in its atlas, and the one
+    // `crate::text`'s shader keeps by growing a glyph's quad past its ink.
+    //
+    // The accidentals are where it shows, because they are the marks with a
+    // full-height stroke standing at the edge of the box. Walking a name at
+    // the roll's own 1.4286 physical pixels a frame, the drawn ink's centre
+    // of mass advances by 0.86..2.14 pixels bare against 1.41..1.44 padded --
+    // a mark lurching a pixel around its own motion, against one that glides.
+    // `a_sliding_marks_ink_advances_with_the_quad_that_carries_it` is that
+    // reading.
+    let (bw, bh) = (
+        w.ceil().max(1.0) + 2.0 * MARK_BITMAP_PAD as f32,
+        h.ceil().max(1.0) + 2.0 * MARK_BITMAP_PAD as f32,
+    );
     let c = egui::pos2(bw / 2.0, bh / 2.0);
     let (hw, hh) = (w / 2.0, h / 2.0);
     let pieces = match key.kind {
@@ -1318,7 +1347,11 @@ fn paint_mark(
     // size and this is one of its measurements — the magnification is applied
     // once, to the finished label, and a measurement that had it applied
     // already would carry it twice.
-    h as f32 / ppp / 2.0
+    //
+    // Less the clear margin the bitmap carries on every side, which is quad
+    // and not reach: counting it would hold the cents readout a pixel further
+    // off than the ink it is clearing.
+    (h - 2 * MARK_BITMAP_PAD) as f32 / ppp / 2.0
 }
 
 /// The key for one mark at the size a label is drawing at.
@@ -1606,6 +1639,30 @@ mod tests {
     /// The alpha at one pixel of a rasterized mark.
     fn coverage(img: &egui::ColorImage, x: usize, y: usize) -> u8 {
         img.pixels[y * img.size[0] + x].a()
+    }
+
+    /// A mark's bitmap with its clear margin cropped off, so the box a test
+    /// scans is the box the DESIGN fills.
+    ///
+    /// [`MARK_BITMAP_PAD`] exists for the draw path -- it keeps a sliding
+    /// mark's outermost column inside the quad that carries it -- and it says
+    /// nothing about the shape. A test asking whether a stroke reaches its
+    /// box's edge is asking about the design, so it reads this rather than
+    /// the bitmap and stays a statement about the mark.
+    fn mark_ink(key: MarkKey) -> egui::ColorImage {
+        let img = rasterize_mark(key);
+        let [w, h] = img.size;
+        let pad = MARK_BITMAP_PAD;
+        let (cw, ch) = (w - 2 * pad, h - 2 * pad);
+        let pixels = (0..ch)
+            .flat_map(|y| (0..cw).map(move |x| (x, y)))
+            .map(|(x, y)| img.pixels[(y + pad) * w + x + pad])
+            .collect();
+        egui::ColorImage {
+            size: [cw, ch],
+            pixels,
+            source_size: egui::vec2(cw as f32, ch as f32),
+        }
     }
 
     /// A `+` rasterizes to its own mirror, both ways.
@@ -2189,7 +2246,7 @@ mod tests {
         // From the size the analyzer's names set at on a Retina grid up to a
         // zoom that magnifies it twenty times.
         for size in [6.79_f32, 12.35, 33.0, 140.0] {
-            let img = rasterize_mark(mark_key(MarkKind::Flat, size, MARK_WEIGHT, 2.0));
+            let img = mark_ink(mark_key(MarkKind::Flat, size, MARK_WEIGHT, 2.0));
             let [w, h] = img.size;
             // The upright runs the whole height down the left edge.
             for y in 0..h {
@@ -2243,7 +2300,7 @@ mod tests {
         let want = -FLAT_FOOT_SLOPE * FLAT_INK_W / FLAT_INK_H;
         for size in [33.0_f32, 60.0, 140.0] {
             let key = mark_key(MarkKind::Flat, size, MARK_WEIGHT, 2.0);
-            let img = rasterize_mark(key);
+            let img = mark_ink(key);
             let [w, h] = img.size;
             let ink_h = FLAT_INK_H * key.size_px as f32;
             let merge = (h as f32 - ink_h) / 2.0 + FLAT_MERGE * ink_h;
@@ -2358,7 +2415,7 @@ mod tests {
     fn a_flats_stem_and_bowl_close_into_one_foot() {
         for size in [6.79_f32, 12.35, 33.0, 140.0] {
             let key = mark_key(MarkKind::Flat, size, MARK_WEIGHT, 2.0);
-            let img = rasterize_mark(key);
+            let img = mark_ink(key);
             let [w, h] = img.size;
             let thick = key.weight_16 as f32 / 16.0;
             let lit = |x: usize, y: usize| coverage(&img, x, y) > 0;
@@ -2540,4 +2597,149 @@ mod tests {
             );
         }
     }
+
+    /// A mark's INK advances with the quad that carries it, instead of
+    /// lurching about inside it.
+    ///
+    /// [`a_drawn_accidental_breathes_less_than_the_type_it_replaced`] reads
+    /// how much a mark's ink varies in AMOUNT as it slides; this reads where
+    /// that ink is. They are different complaints and they had different
+    /// causes: breathing is the stroke's sub-pixel width, and this is the
+    /// quad's own bound. A mark can be perfectly steady in weight while
+    /// stepping a pixel back and forth across its own motion, which is what
+    /// the accidentals did on the roll.
+    ///
+    /// Read as the centre of MASS, sampled through the quad the way the GPU
+    /// samples it -- bilinear, and only at pixel centres that fall inside the
+    /// quad. That last part is the whole mechanism: a centre a hair outside
+    /// takes nothing at all, so ink reaching the bitmap's edge is dropped and
+    /// picked up once per pixel of travel, and the mark's apparent position
+    /// jumps by the weight of a whole column. The centroid is what sees it --
+    /// the quad's own corners are an exact straight line either way, and
+    /// per-pixel alpha deltas read as smooth motion, so both miss it.
+    ///
+    /// Walked at the roll's own 1.4286 physical pixels a frame, which is
+    /// deliberately not a whole one: at a whole pixel a step and a straight
+    /// line are the same picture, and every phase would be the same phase.
+    ///
+    /// Every mark, not just the two that were reported: the bound belongs to
+    /// [`paint_mark`]'s quad and reaches all of them, and an accidental is
+    /// only where it shows worst. Measured, the spread is 0.025 pixels for
+    /// every kind, against 1.27 for a `♭` and 0.70 for a `♯` drawn to a
+    /// bitmap with no margin -- which is a mark lurching a pixel around its
+    /// own motion. The bound here is far under the broken reading and well
+    /// over the fixed one.
+    #[test]
+    fn a_sliding_marks_ink_advances_with_the_quad_that_carries_it() {
+        const PPP: f32 = 2.0;
+        const RATE: f32 = 1.4286;
+
+        let ctx = egui::Context::default();
+        crate::theme::apply_theme(&ctx);
+        ctx.set_pixels_per_point(PPP);
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 400.0));
+        // The analyzer's own label setting, split the way `names::draw` splits
+        // it: the rung a mark is rasterized on, and the rest as magnification.
+        let (raster, magnify) = crate::text::ladder(1.0, 12.35, PPP);
+        let scale = 12.35 * raster / NAME_SIZE;
+
+        let bare = |sharps, syntonic_commas, septimal_commas| harmonigraph_core::NoteName {
+            letter: 'D',
+            sharps,
+            syntonic_commas,
+            septimal_commas,
+        };
+        for (what, kind, name) in [
+            ("flat", MarkKind::Flat, bare(-1, 0, 0)),
+            ("sharp", MarkKind::Sharp, bare(1, 0, 0)),
+            ("minus", MarkKind::Minus, bare(0, -1, 0)),
+            ("plus", MarkKind::Plus, bare(0, 1, 0)),
+            ("septimal", MarkKind::Septimal(true), bare(0, 0, 1)),
+        ] {
+            let bitmap = rasterize_mark(mark_key(kind, MARK_SIZE * scale, MARK_WEIGHT, PPP));
+            let centroids: Vec<f32> = (0..40)
+                .map(|frame| {
+                    let anchor = egui::pos2(100.0 + frame as f32 * RATE / PPP, 100.0);
+                    let mut batch = crate::text::TextBatch::default();
+                    let out = ctx.run_ui(
+                        egui::RawInput { screen_rect: Some(screen), ..Default::default() },
+                        |ui| {
+                            draw_stacked_name(
+                                &mut batch,
+                                ui.painter(),
+                                anchor,
+                                name,
+                                egui::Color32::WHITE,
+                                egui::Color32::TRANSPARENT,
+                                scale,
+                                magnify,
+                            );
+                        },
+                    );
+                    // Rim then fill, and it is the fill that is the mark.
+                    let quad = out
+                        .shapes
+                        .iter()
+                        .filter_map(|c| match &c.shape {
+                            egui::epaint::Shape::Mesh(m) => Some(m.calc_bounds()),
+                            _ => None,
+                        })
+                        .next_back()
+                        .unwrap_or_else(|| panic!("{what} should draw a fill quad"));
+                    ink_centroid(&bitmap, quad, PPP)
+                })
+                .collect();
+
+            let steps: Vec<f32> = centroids.windows(2).map(|w| w[1] - w[0]).collect();
+            let lo = steps.iter().copied().fold(f32::INFINITY, f32::min);
+            let hi = steps.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+            assert!(
+                hi - lo < 0.15,
+                "{what}'s ink advances between {lo:.4} and {hi:.4} pixels a frame against a \
+                 quad that advances by {RATE} every time: the mark steps inside its own quad",
+            );
+        }
+    }
+
+    /// Where a mark's ink sits on screen, in physical pixels: its bitmap
+    /// sampled through `quad` the way the GPU samples it, reduced to a centre
+    /// of mass.
+    ///
+    /// Bilinear against clamped taps, and a pixel counts only if its CENTRE
+    /// falls inside the quad -- which is rasterization, not an approximation
+    /// of it, for the axis-aligned textured quad `paint_mark` emits.
+    fn ink_centroid(img: &egui::ColorImage, quad: egui::Rect, ppp: f32) -> f32 {
+        let [w, h] = img.size;
+        let tap = |x: isize, y: isize| {
+            let (x, y) = (x.clamp(0, w as isize - 1), y.clamp(0, h as isize - 1));
+            img.pixels[y as usize * w + x as usize].a() as f32
+        };
+        let (x0, x1) = (quad.left() * ppp, quad.right() * ppp);
+        let (y0, y1) = (quad.top() * ppp, quad.bottom() * ppp);
+        let (mut mass, mut moment) = (0.0f64, 0.0f64);
+        for py in (y0.floor() as i32)..=(y1.ceil() as i32) {
+            for px in (x0.floor() as i32)..=(x1.ceil() as i32) {
+                let (cx, cy) = (px as f32 + 0.5, py as f32 + 0.5);
+                if cx < x0 || cx > x1 || cy < y0 || cy > y1 {
+                    continue;
+                }
+                // The quad's own uv runs 0..1, so a pixel centre maps to a
+                // texel coordinate and the tap sits half a texel back of it.
+                let tx = (cx - x0) / (x1 - x0) * w as f32 - 0.5;
+                let ty = (cy - y0) / (y1 - y0) * h as f32 - 0.5;
+                let (ix, iy) = (tx.floor(), ty.floor());
+                let (fx, fy) = (tx - ix, ty - iy);
+                let (ix, iy) = (ix as isize, iy as isize);
+                let a = tap(ix, iy) * (1.0 - fx) * (1.0 - fy)
+                    + tap(ix + 1, iy) * fx * (1.0 - fy)
+                    + tap(ix, iy + 1) * (1.0 - fx) * fy
+                    + tap(ix + 1, iy + 1) * fx * fy;
+                mass += f64::from(a);
+                moment += f64::from(a) * f64::from(cx);
+            }
+        }
+        assert!(mass > 0.0, "a mark that samples to nothing has no position");
+        (moment / mass) as f32
+    }
 }
+

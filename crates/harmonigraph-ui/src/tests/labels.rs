@@ -30,16 +30,25 @@ fn drawn_label(
     (pieces.into_iter().map(|(galley, _, text)| (galley, text)).collect(), shapes)
 }
 
-/// One box per drawn mark: its FILL, which is the mark's own bitmap, without
-/// the halo the rim quad pads it out by.
+/// One box per drawn mark: its own INK, without the halo the rim quad pads it
+/// out by and without the clear margin its bitmap carries.
 ///
 /// The shapes arrive rim-then-fill per mark, in the order the label draws
 /// them -- accidental, then syntonic comma, then septimal -- so this both
 /// names the pieces and pins that pairing: an odd count means a mark drew one
 /// quad instead of two, or collapsed and left the list entirely.
+///
+/// The fill QUAD is a pixel wider than the mark on every side
+/// ([`MARK_BITMAP_PAD`](panes::lattice::MARK_BITMAP_PAD), which is there so a
+/// sliding mark's edge fades instead of snapping), and every question asked
+/// here -- which column a mark sits in, whether two rows clear each other --
+/// is about where the mark IS. Shrinking once here is what keeps those
+/// readings about the mark rather than about its margin. A point per side
+/// exactly, because every fixture in this file draws at ppp 1 and magnify 1.
 fn mark_fills(shapes: &[egui::Rect]) -> Vec<egui::Rect> {
     assert_eq!(shapes.len() % 2, 0, "a mark is a rim and a fill: {shapes:?}");
-    shapes.chunks(2).map(|pair| pair[1]).collect()
+    let pad = panes::lattice::MARK_BITMAP_PAD as f32;
+    shapes.chunks(2).map(|pair| pair[1].shrink(pad)).collect()
 }
 
 /// The same label measured as INK — tight to the glyphs, with none of the
@@ -427,7 +436,12 @@ fn both_comma_marks_get_their_own_column() {
     let letter = text_box(&texts, "E");
     // Two drawn marks, so two columns' worth of shapes: the syntonic bar
     // sits left of the septimal shape rather than on top of it.
-    let left = shapes.iter().copied().reduce(|a, b| a.union(b)).expect("marks drawn");
+    //
+    // Off the marks' own ink, not the union of every quad: a mark's rim is a
+    // halo that is SUPPOSED to reach back over the letter, the way a glyph's
+    // does, so where the halo lands says nothing about which column the mark
+    // is in.
+    let left = mark_fills(&shapes).into_iter().reduce(|a, b| a.union(b)).expect("marks drawn");
     assert!(left.left() >= letter.right() - 2.0, "marks follow the letter, {left:?}");
 
     // Cluster the stamps into columns rather than reading the flat list's
@@ -719,6 +733,12 @@ fn a_drawn_mark_holds_its_size_in_points_at_every_pixel_density() {
 /// number and the quad are two readings of one bitmap that have to agree --
 /// the same `h / ppp` from opposite ends, and nothing else in the label
 /// compares them.
+///
+/// They agree on the INK, which is the quad less the clear margin every mark
+/// bitmap carries ([`MARK_BITMAP_PAD`](panes::lattice::MARK_BITMAP_PAD)). The
+/// readout is placed to clear the mark, and a margin is not something to
+/// clear: reported off the quad instead, every cents line in the app would
+/// hang a pixel lower than the ink it is getting out of the way of.
 #[test]
 fn the_reach_a_label_reports_is_where_its_drawn_mark_ends() {
     let anchor = egui::pos2(200.0, 200.0);
@@ -738,11 +758,12 @@ fn the_reach_a_label_reports_is_where_its_drawn_mark_ends() {
         assert_eq!(shapes.len(), 2, "one mark, rim and fill, at ppp {ppp}: {shapes:?}");
         let (rim, fill) = (shapes[0], shapes[1]);
         assert!(rim.contains_rect(fill), "the rim should be the padded one: {rim:?} {fill:?}");
+        let ink_bottom = fill.bottom() - panes::lattice::MARK_BITMAP_PAD as f32 / ppp;
         assert!(
-            (anchor.y + reach - fill.bottom()).abs() < 0.01,
+            (anchor.y + reach - ink_bottom).abs() < 0.01,
             "at ppp {ppp} the label reports reaching {:.3} where its mark ends at {:.3}",
             anchor.y + reach,
-            fill.bottom(),
+            ink_bottom,
         );
     }
 }
