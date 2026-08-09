@@ -560,31 +560,38 @@ const SHARP_BAR_Y: f32 = 0.186;
 ///
 /// Levelling the bars is worth 0.1 of a point on the reading that matters --
 /// 29.3% against 29.4%, where the same glyph set as type is 40.8% (the swing
-/// `a_drawn_accidental_breathes_less_than_the_type_it_replaced` takes). At
-/// the larger sizes a zoom asks for it is worse
-/// levelled than slanted, 36.5% against 34.7%. The walk is horizontal and
-/// the bars are what runs that way, so sliding one moves it ALONG itself and
-/// lights very nearly the same pixels either way; it is the UPRIGHTS that a
-/// horizontal walk smears, and they are vertical in both designs. The slant
-/// is free. Do not spend the glyph to buy back a tenth of a point.
+/// `a_drawn_accidental_breathes_less_than_the_type_it_replaced` takes) -- and
+/// 0.4 of a point at three times that size, 37.5% against 37.9%. The walk is
+/// horizontal and the bars are what runs that way, so sliding one moves it
+/// ALONG itself and lights very nearly the same pixels either way; it is the
+/// UPRIGHTS that a horizontal walk smears, and they are vertical in both
+/// designs. The slant is all but free, and what it buys is that the mark is a
+/// sharp rather than a hash. Do not spend the glyph to buy back a fraction of
+/// a point.
 const SHARP_SLANT: f32 = 0.202;
 
 /// `♭`'s bowl, as one cubic along the centre of Iosevka's own: control points
 /// in fractions of the ink box, x rightward and y DOWN from its top, which is
 /// the space a mark's pieces are built in.
 ///
-/// Fitted to the midline sampled between the bowl's outer and inner contours,
-/// and within 8/1000 em of it everywhere -- a fifth of a pixel at the size
-/// the analyzer draws names at. The middle two points sit off the box to the
-/// right, which is ordinary for a cubic: the curve itself bulges to 0.893 of
-/// the width, and the stroke around it reaches the box's edge exactly.
+/// One width the whole way, as every other drawn mark is. The middle two
+/// points sit off the box to the right, which is ordinary for a cubic: the
+/// curve itself bulges to 0.89 of the width, and the stroke around it reaches
+/// the box's edge exactly.
 ///
-/// A stroke of one width where the face tapers its bowl to a point at the
-/// stem's foot. The taper is under a pixel wherever it differs, and a mark
-/// whose stroke thins is a mark that loses its core at the far end -- the
-/// same argument that levels the sharp's bars.
+/// Chosen against the face's own outline rather than by eye or by a midline
+/// fit: the points that minimise the coverage difference between this mark
+/// and a rasterization of Iosevka's `uni266D` contours, read over the range
+/// of sizes a name is drawn at. That difference is 7.2% of the glyph's ink,
+/// against 11.5% for a bowl fitted to the midline instead.
+///
+/// The midline is the tempting target and it is the wrong one at the bottom
+/// of the glyph, where there is no bowl to have a midline: stem and bowl are
+/// one mass below [`FLAT_MERGE`], so a midline sampled there is the MASS's,
+/// and a cubic pulled onto it leaves the bowl arriving at the stem from the
+/// wrong angle -- which is what makes a taper look necessary.
 const FLAT_BOWL: [[f32; 2]; 4] =
-    [[0.2104, 0.4242], [1.1472, 0.2654], [1.1309, 0.7609], [0.1052, 0.9279]];
+    [[0.2104, 0.4242], [1.059, 0.250], [1.212, 0.792], [0.113, 0.894]];
 /// The straight run that closes the bowl into the foot of the upright, as the
 /// width the glyph still carries per unit of height above the tip.
 ///
@@ -594,13 +601,23 @@ const FLAT_BOWL: [[f32; 2]; 4] =
 /// slope is the foot, and it is what makes the bottom of a `♭` a point rather
 /// than a stem with a bowl stuck on the side of it.
 const FLAT_FOOT_SLOPE: f32 = 3.86;
-/// How much of the bowl's length is spent narrowing into that foot.
+/// Where the counter bottoms out, as a fraction of the ink height: Iosevka
+/// closes it at 49 of a box running -69..749.
 ///
-/// The face thins its bowl as it merges with the upright; a stroke of one
-/// width all the way instead pokes out past the foot's own edge, which is the
-/// squared-off corner this exists to remove. A third is where the taper stops
-/// being visible as a taper and starts reading as the bowl simply arriving.
-const FLAT_TAPER: f32 = 0.33;
+/// Below this there is no hole, so there are no longer two strokes to see --
+/// the stem and the bowl are ONE mass, as wide as [`FLAT_FOOT_SLOPE`] says
+/// and narrowing to the point at the corner. Drawing that mass is what makes
+/// the bottom of the mark read as one thing. Two strokes carried down to the
+/// corner separately do not join however close they are brought: the counter
+/// simply never closes, and the bowl reads as hung off the stem rather than
+/// merged into it.
+///
+/// It can afford to be the measurement rather than a knob because the reading
+/// does not move over 0.84..0.92 -- lower and the foot starts filling the
+/// counter it should be leaving open, higher and it is too small to close the
+/// two into anything. Tuning it inside that band buys nothing, so it is set
+/// where the face sets it.
+const FLAT_MERGE: f32 = 0.8557;
 /// Air between the accidental/comma column and the septimal mark, as a
 /// fraction of the mark's font size. Small: enough that the mark is not
 /// read as another row of the stack it sits beside, not so much that it
@@ -623,7 +640,10 @@ const SEPTIMAL_BULK: f32 = 1.0;
 /// none of the artifacts of drawing them separately can arise.
 enum MarkPiece {
     Bar(egui::Rect),
-    /// A stroked segment with FLAT terminals, as four corners.
+    /// Any convex four corners: a stroked segment with FLAT terminals, the
+    /// `♯`'s slanted bars, or -- with a corner repeated -- the triangle that
+    /// closes a `♭`'s foot, which the coverage test handles as the degenerate
+    /// quad it is.
     ///
     /// Not a distance-to-segment test, which is the easy way to stroke a
     /// line and gives round caps and a round join. Iosevka cuts its
@@ -711,27 +731,22 @@ impl<'a> Scanline<'a> {
     }
 }
 
-/// One arm of a stroked mark: the segment `a`-`b`, `from` wide at one end and
-/// `to` at the other, with flat terminals, extended past `b` by half its end
-/// width so two arms meeting there overlap into a clean point instead of
-/// leaving a notch in the outer corner. Overlap is free -- coverage is a
-/// union.
+/// One arm of a stroked mark: the segment `a`-`b`, `thick` wide, with flat
+/// terminals, extended past `b` by half that width so two arms meeting there
+/// overlap into a clean point instead of leaving a notch in the outer corner.
+/// Overlap is free -- coverage is a union.
 ///
-/// Two widths rather than one because a stroke that tapers is a real shape
-/// rather than a special case: `♭`'s bowl narrows into the foot of its
-/// upright, and a bowl of one width butts into it and reads as a rectangle
-/// where the face comes to a point. `to` of zero gives a triangle, which the
-/// coverage test handles as the degenerate quad it is.
-fn arm(a: egui::Pos2, b: egui::Pos2, from: f32, to: f32) -> MarkPiece {
+/// One width and not two: every drawn mark is the face's single stroke weight
+/// end to end, including `♭`'s bowl. Where the face's own bowl stops being a
+/// stroke it is because it has MERGED with the stem, and that mass is drawn
+/// as a mass (see [`FLAT_MERGE`]) rather than approximated by thinning the
+/// stroke into it -- a stroke that thins is a stroke that loses its core at
+/// the far end, which is the same argument that levels the sharp's bars.
+fn arm(a: egui::Pos2, b: egui::Pos2, thick: f32) -> MarkPiece {
     let along = (b - a).normalized();
-    let across = egui::vec2(-along.y, along.x);
-    let tip = b + along * (to / 2.0);
-    MarkPiece::Quad([
-        a + across * (from / 2.0),
-        tip + across * (to / 2.0),
-        tip - across * (to / 2.0),
-        a - across * (from / 2.0),
-    ])
+    let across = egui::vec2(-along.y, along.x) * (thick / 2.0);
+    let tip = b + along * (thick / 2.0);
+    MarkPiece::Quad([a + across, tip + across, tip - across, a - across])
 }
 
 /// Which mark, at what size in physical pixels -- the identity of one
@@ -817,7 +832,7 @@ fn mark_geometry(key: MarkKey) -> (Vec<MarkPiece>, [usize; 2]) {
             let tip = egui::pos2(c.x, c.y + dir * hh);
             let base_l = egui::pos2(c.x - hw, c.y - dir * hh);
             let base_r = egui::pos2(c.x + hw, c.y - dir * hh);
-            vec![arm(base_l, tip, thick, thick), arm(base_r, tip, thick, thick)]
+            vec![arm(base_l, tip, thick), arm(base_r, tip, thick)]
         }
         MarkKind::Sharp => {
             let stem_h = SHARP_STEM_H * h;
@@ -849,21 +864,33 @@ fn mark_geometry(key: MarkKey) -> (Vec<MarkPiece>, [usize; 2]) {
         }
         MarkKind::Flat => {
             let (left, top) = (c.x - hw, c.y - hh);
-            // The upright is flush with the left of the ink box, as the
-            // face's is, and its foot is a POINT at the box's bottom-left
-            // corner rather than a squared-off end: below the height where
-            // the closing run of the bowl crosses the upright's own width,
-            // its right edge is that run. Squared off, the two together read
-            // as a rectangle where the face comes to a point.
-            let foot = h * (1.0 - thick / (w * FLAT_FOOT_SLOPE));
-            let mut pieces = vec![MarkPiece::Quad([
-                egui::pos2(left, top),
-                egui::pos2(left + thick, top),
-                egui::pos2(left + thick, top + foot),
-                egui::pos2(left, top + h),
-            ])];
+            // The mark is a stem and a bowl down to where the counter closes,
+            // and ONE mass below that -- so the merge is drawn as a piece of
+            // its own rather than left to the two strokes meeting.
+            //
+            // Held no lower than the height at which the foot's own run is
+            // still as wide as the stem: at a weight floored to a whole pixel
+            // (see `mark_key`) the stroke can be a third of the ink width, and
+            // a wedge narrower than the stem it continues would put a step in
+            // the left edge where the face has none.
+            let merge = FLAT_MERGE.min(1.0 - thick / (w * FLAT_FOOT_SLOPE));
+            let (mouth, waist) = (top + merge * h, FLAT_FOOT_SLOPE * (1.0 - merge) * w);
+            let mut pieces = vec![
+                MarkPiece::Bar(egui::Rect::from_min_max(
+                    egui::pos2(left, top),
+                    egui::pos2(left + thick, mouth),
+                )),
+                // The foot, as the triangle its own straight run cuts: widest
+                // where the counter runs out, nothing at the box's corner.
+                MarkPiece::Quad([
+                    egui::pos2(left, mouth),
+                    egui::pos2(left + waist, mouth),
+                    egui::pos2(left, top + h),
+                    egui::pos2(left, top + h),
+                ]),
+            ];
             let bowl = FLAT_BOWL.map(|[u, v]| egui::pos2(left + u * w, top + v * h));
-            pieces.extend(curve_arms(bowl, thick, FLAT_TAPER));
+            pieces.extend(curve_arms(bowl, thick));
             pieces
         }
     };
@@ -886,7 +913,7 @@ const CURVE_TOLERANCE: f32 = 0.1;
 /// across would be paid at the dozen-pixel sizes that are the ordinary case
 /// and buy nothing there. A cubic's polyline sits within `max|B''| / 8n²` of
 /// it, which is the bound solved for `n` here.
-fn curve_arms(p: [egui::Pos2; 4], thick: f32, taper: f32) -> Vec<MarkPiece> {
+fn curve_arms(p: [egui::Pos2; 4], thick: f32) -> Vec<MarkPiece> {
     let bend = |a: egui::Pos2, b: egui::Pos2, c: egui::Pos2| {
         ((a.to_vec2() - b.to_vec2() * 2.0 + c.to_vec2()) * 6.0).length()
     };
@@ -900,8 +927,6 @@ fn curve_arms(p: [egui::Pos2; 4], thick: f32, taper: f32) -> Vec<MarkPiece> {
             + (p[3].to_vec2() * t * t * t))
             .to_pos2()
     };
-    // Full width until the taper begins, then straight to nothing at the end.
-    let width = |t: f32| thick * ((1.0 - t) / taper).clamp(0.0, 1.0);
     (0..n)
         .map(|i| {
             let (t0, t1) = (i as f32 / n as f32, (i + 1) as f32 / n as f32);
@@ -911,7 +936,7 @@ fn curve_arms(p: [egui::Pos2; 4], thick: f32, taper: f32) -> Vec<MarkPiece> {
             // that join at the angle the curve happens to depart at. Every
             // later one is already covered by its predecessor's overhang.
             let a = if i == 0 { a - (b - a).normalized() * (thick / 2.0) } else { a };
-            arm(a, b, width(t0), width(t1))
+            arm(a, b, thick)
         })
         .collect()
 }
@@ -1258,7 +1283,7 @@ fn mark_key(kind: MarkKind, size: f32, weight: f32, ppp: f32) -> MarkKey {
     // at a sub-pixel offset is two pixels at half. What changes is how much
     // that varies as the mark slides: a stroke floored at a pixel is nearly
     // the same picture at every phase, where one at 0.58px is not, and the
-    // swing drops from 49.0% to 30.3% for `♭` and 40.8% to 29.4% for `♯`.
+    // swing drops from 49.0% to 30.6% for `♭` and 40.8% to 29.4% for `♯`.
     // The shimmer is the variation, not the softness, which is why this is
     // the fix and a sharper bitmap is not. The reading is the one
     // `a_drawn_accidental_breathes_less_than_the_type_it_replaced` takes.
@@ -2134,6 +2159,68 @@ mod tests {
         }
     }
 
+    /// A `♭`'s stem and bowl are ONE mass where the face has them merged.
+    ///
+    /// The complement of the test above, and the failure it pins is the one
+    /// that reads as a broken glyph rather than a wrong one: bring the two
+    /// strokes down to the corner separately and the counter never closes, so
+    /// the bowl reads as hung off the stem instead of joined to it. What
+    /// makes that hard to catch by eye at the size names are drawn is that it
+    /// is a sub-pixel gap -- the mark still looks like a `♭`, it just will not
+    /// settle.
+    ///
+    /// So: the counter closes where [`FLAT_MERGE`] says the face closes it,
+    /// every row below that is a single run of ink off the left edge, and the
+    /// mark is already a MASS by then rather than two strokes in contact.
+    #[test]
+    fn a_flats_stem_and_bowl_close_into_one_foot() {
+        for size in [6.79_f32, 12.35, 33.0, 140.0] {
+            let key = mark_key(MarkKind::Flat, size, MARK_WEIGHT, 2.0);
+            let img = rasterize_mark(key);
+            let [w, h] = img.size;
+            let thick = key.weight_16 as f32 / 16.0;
+            let lit = |x: usize, y: usize| coverage(&img, x, y) > 0;
+            // A row's ink as (first, last, unbroken), or None where it has none.
+            let run = |y: usize| {
+                let first = (0..w).find(|&x| lit(x, y))?;
+                let last = (0..w).rev().find(|&x| lit(x, y))?;
+                Some((first, last, (first..last).all(|x| lit(x, y))))
+            };
+            // The counter is the only hole in the mark, so the lowest row
+            // with one is where it closes.
+            let closes = (0..h)
+                .rfind(|&y| matches!(run(y), Some((_, _, false))))
+                .unwrap_or_else(|| panic!("a flat with no counter at all, size {size}"));
+            // Never BELOW where the face closes it, which is the direction
+            // that would mean the foot is eating a counter it should leave
+            // open. Above is allowed and at the smallest sizes is what
+            // happens: the hole runs out of pixels before it runs out of
+            // glyph, which is what `a_flat_keeps_its_bowl_open` is for.
+            let ink_h = FLAT_INK_H * key.size_px as f32;
+            let merge = (h as f32 - ink_h) / 2.0 + FLAT_MERGE * ink_h;
+            assert!(
+                (closes as f32) <= merge + 1.0,
+                "the counter closes at row {closes} of {h}, below the merge at {merge:.1}, \
+                 size {size}"
+            );
+            for y in closes + 1..h {
+                assert!(
+                    matches!(run(y), Some((0, _, true)) | None),
+                    "the flat's foot breaks in two at row {y} of {h}, size {size}"
+                );
+            }
+            // A mass, not a touch: where the two meet, the mark is over twice
+            // the stroke across.
+            let (first, last, _) = run(merge as usize).expect("the merge row has ink");
+            let across = last + 1 - first;
+            assert!(
+                across as f32 > 2.0 * thick,
+                "the foot is {across}px across where the two meet, against a {thick:.1}px \
+                 stroke at size {size} -- they are touching, not merged"
+            );
+        }
+    }
+
     /// Coverage as a plain alpha grid, whatever drew it -- a mark's bitmap or
     /// a glyph's cell in egui's atlas, so the two can be read the same way.
     struct Grid {
@@ -2241,7 +2328,7 @@ mod tests {
     /// comparison itself, and it cannot go stale as the face, the size or the
     /// rasterizer move under it.
     ///
-    /// At the size asserted here the readings are 30.3% against 49.0% for
+    /// At the size asserted here the readings are 30.6% against 49.0% for
     /// `♭` and 29.4% against 40.8% for `♯` -- a real margin rather than a
     /// hair either side of equal. The drawn `-` beside them sits at 4.3%,
     /// which is what a mark made of one straight bar can reach and neither
@@ -2249,8 +2336,8 @@ mod tests {
     ///
     /// SMALL sizes, and only those, which is where the complaint was: a name
     /// scrolling slowly is where sub-pixel phase is watchable. At three times
-    /// this size the `♯` still gains (34.7% against 50.4%) and the `♭` is a
-    /// wash (50.1% against 49.9%) -- the type's strokes are over a pixel
+    /// this size the `♯` still gains (37.9% against 52.9%) and the `♭` is a
+    /// wash (39.6% against 40.6%) -- the type's strokes are over a pixel
     /// there, so the floor that makes the drawn mark different has nothing
     /// left to do. Asserting across the range would be asserting something
     /// this change does not claim.
