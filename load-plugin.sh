@@ -69,6 +69,28 @@ find_dylib() {
   return 1
 }
 
+# Put $1 where $2 is, without ever rewriting $2's own bytes.
+#
+# A plain `cp` opens the destination with O_TRUNC and writes through the SAME
+# inode, and a Bitwig plugin host demand-pages the plugin's code from exactly
+# that inode for as long as the plugin is loaded. Overwriting it under a live
+# host therefore leaves that host reading a file that is half one build and
+# half another for every page it has not faulted in yet — and which pages
+# those are is decided by whatever the kernel happened to evict, so the
+# failure is undefined and arrives whenever the host next draws something new.
+#
+# A rename gives the incoming build an inode of its own and leaves the old one
+# whole and unlinked underneath the running host, which keeps running the
+# build it started with until Bitwig restarts the plugin. That is the
+# behaviour the "Rescan/restart" line below already promises. The temp file
+# is in the destination's own directory so the rename stays within one
+# filesystem and is atomic.
+swap_exe() {
+  local src="$1" dst="$2" tmp="$2.incoming"
+  cp "$src" "$tmp"
+  mv -f "$tmp" "$dst"
+}
+
 # Echo the display fields for worktree index $1 as: built<TAB>vshead<TAB>marker
 build_info() {
   local path="${WT_PATH[$1]}" dylib built vshead marker
@@ -98,6 +120,14 @@ print_table() {
   echo
 }
 
+# PIDs of anything that currently has a bundle's executable mapped — in
+# practice one Bitwig plugin host. Read BEFORE the swap, because afterwards
+# the host holds an inode with no name left to look it up by.
+live_hosts() {
+  lsof -t "$BUNDLED/$NAME.clap/Contents/MacOS/$NAME" \
+          "$BUNDLED/$NAME.vst3/Contents/MacOS/$NAME" 2>/dev/null | sort -u | tr '\n' ' '
+}
+
 load_build() {  # $1 = worktree index
   local path="${WT_PATH[$1]}" branch="${WT_BRANCH[$1]}"
   local dylib
@@ -106,6 +136,7 @@ load_build() {  # $1 = worktree index
     echo "       build it first:  (cd \"$path\" && cargo build --release -p $PKG)" >&2
     exit 1
   }
+  local holders; holders="$(live_hosts || true)"
   local updated=0 ext bundle
   for ext in clap vst3; do
     bundle="$BUNDLED/$NAME.$ext"
@@ -114,7 +145,7 @@ load_build() {  # $1 = worktree index
       echo "         (cd \"$MAIN\" && cargo xtask bundle $PKG --release)" >&2
       continue
     fi
-    cp "$dylib" "$bundle/Contents/MacOS/$NAME"
+    swap_exe "$dylib" "$bundle/Contents/MacOS/$NAME"
     codesign --force --sign - "$bundle"
     codesign --verify --verbose=1 "$bundle"
     echo "Loaded + signed: $bundle"
@@ -127,7 +158,9 @@ load_build() {  # $1 = worktree index
   local offline="$path/target/release/harmonigraph-offline"
   local support="$HOME/Library/Application Support/$NAME"
   if [[ -f "$offline" ]]; then
-    mkdir -p "$support"; cp "$offline" "$support/harmonigraph-offline"
+    # Renamed into place for the same reason the bundles are: a render running
+    # right now keeps the whole binary it started from.
+    mkdir -p "$support"; swap_exe "$offline" "$support/harmonigraph-offline"
     echo "Loaded renderer: $support/harmonigraph-offline"
   else
     # Says "if any" because the support directory can hold no renderer at all:
@@ -145,6 +178,14 @@ load_build() {  # $1 = worktree index
 
   echo
   echo "Now loaded: $branch. Rescan/restart the plugin in Bitwig to pick it up."
+  # Naming the host makes the difference between "in the slot" and "in the DAW"
+  # concrete: until it is restarted it is still drawing the build it opened
+  # with, so the overlay tag will not be the one this swap just wrote.
+  if [[ -n "$holders" ]]; then
+    echo
+    echo "NOTE: Bitwig has the previous build open right now (pid ${holders% })."
+    echo "      It keeps drawing that build — and reporting its tag — until you do."
+  fi
 }
 
 # --- dispatch ----------------------------------------------------------------
