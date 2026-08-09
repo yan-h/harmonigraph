@@ -4765,10 +4765,47 @@ mod tests {
         let mut h = Spectrum::settled(&mut g);
         let shapes = h.frame(&mut g, vec![]);
         let (preview, circle) = spectrum_bands(&shapes);
+        for (which, mesh) in [("preview", &preview), ("circle", &circle)] {
+            fades_out_at_its_edges(which, mesh);
+        }
+    }
+
+    /// A fade bar's ramp fades out at its edges too, and it is the band that
+    /// asks the question differently: it is SQUARE at the end it hands to the
+    /// solid head, where the outline turns a right angle and the mitre is the
+    /// one offset in the file longer than the feather it is made of.
+    ///
+    /// The two bands above cannot stand in for it. Their ends are rounded, so
+    /// the last chord before the end already faces all but straight out along
+    /// the axis, and an end that took its facing from that chord instead of
+    /// from its own vertical run misses `fades_out_at_its_edges` by a
+    /// thousandth of a point — it passes, on a ring drawn very nearly right.
+    /// On a square end the same mistake points the offset straight up and
+    /// leaves that end with no ring at all, which is the failure this suite is
+    /// meant to be able to see.
+    #[test]
+    fn a_fade_ramp_fades_out_at_its_square_end() {
+        // Wide enough apart to leave the ramp a stretch of its own, and clear
+        // of the corner the head keeps (see `a_fully_soft_edge_...`).
+        let shapes = paint_fade_bar(60.0, 100.0);
+        let ramp = bands(&shapes);
+        let ramp = match ramp.as_slice() {
+            [one] => one,
+            other => panic!("a fade bar paints one ramp, not {}", other.len()),
+        };
+        fades_out_at_its_edges("fade ramp", ramp);
+    }
+
+    /// The four claims above, asked of one band.
+    ///
+    /// Shared rather than repeated because the third band that needs them is a
+    /// different shape from the two a gradient group draws, and a copy is where
+    /// the two readings drift apart.
+    fn fades_out_at_its_edges(which: &str, mesh: &egui::Mesh) {
         // What egui feathers with at the one pixel per point a test context
         // runs at — `TessellationOptions::feathering_size_in_pixels`.
         let feather = 1.0_f32;
-        for (which, mesh) in [("preview", &preview), ("circle", &circle)] {
+        {
             let band = band_bounds(mesh);
             let ring = mesh.calc_bounds();
             // Signed so the far sides read the same way round as the near ones.
