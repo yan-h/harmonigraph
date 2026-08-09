@@ -984,9 +984,10 @@ fn scroll_bar_width(scale: f32) -> f32 {
 /// gutter, so it reserves one (`theme::reserve_scroll_gutter`).
 ///
 /// Get either wrong and the bar lands on the right end of every row in the
-/// column, which is where the value readouts are. That is what it did: the two
-/// list panes built their own area inside the margin, putting a 10pt bar 8pt in
-/// from the pane edge and straight across the end of every bar below it.
+/// column, which is where the value readouts are. A pane that builds its own
+/// area and does not reserve is the loud version: its bar stands a whole margin
+/// in from the pane edge with every point of its width over the controls, where
+/// an oversized bar only overhangs them by the difference.
 ///
 /// The lane is FOUND rather than assumed, because where it lands is the thing
 /// under test. What identifies it is the bar's own rect: no wider than a bar,
