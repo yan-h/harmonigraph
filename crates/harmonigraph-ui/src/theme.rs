@@ -107,6 +107,12 @@ const WIDGET_RADIUS: CornerRadius = CornerRadius::same(CONTROL_RADIUS);
 /// far OUTSIDE the content box. Anything asking "where does the pane end"
 /// wants the content box, not the clip.
 ///
+/// It is also the width of every scroll bar in the panel, which is a second job
+/// worth knowing before retuning it: a floating bar is drawn over the content,
+/// and this gutter is the only air it has to sit in ([`style_at`]). Narrow the
+/// margin and the bars narrow with it; widen the bar past it on its own and it
+/// goes back to standing on the controls.
+///
 /// The design size, at [scale](ui_scale) 1.0; anything drawing with it wants
 /// [`pane_inner_margin`].
 pub(crate) const PANE_INNER_MARGIN: f32 = 8.0;
@@ -230,6 +236,18 @@ pub(crate) fn pane_inner_margin(scale: f32) -> f32 {
     PANE_INNER_MARGIN * scale
 }
 
+/// The same margin as the WHOLE POINTS a pane actually gets.
+///
+/// egui stores a `Margin` as `i8`, so the inset [`dock_style`] gives a tab body
+/// is the scaled margin truncated, and at any scale that leaves it fractional
+/// the gutter is up to a point narrower than [`pane_inner_margin`] says.
+/// Anything that has to line up with the content box — the scroll bar, which
+/// floats in the gutter rather than beside it (see [`style_at`]) — has to line
+/// up with the truncation and not with the float, so both read this.
+pub(crate) fn dock_pane_margin(scale: f32) -> i8 {
+    pane_inner_margin(scale) as i8
+}
+
 /// [`ROW_HEIGHT`] at this scale.
 pub(crate) fn row_height(scale: f32) -> f32 {
     ROW_HEIGHT * scale
@@ -262,6 +280,26 @@ pub(crate) fn tab_bar_height(scale: f32) -> f32 {
 /// is the way to get it out of the way, and it is a click on the arrow.
 pub(crate) fn min_pane(scale: f32) -> f32 {
     4.0 * tab_bar_height(scale)
+}
+
+/// Give a scroll area built INSIDE a pane a lane of its own to draw its bar in.
+///
+/// The bar is [as wide as the gutter](style_at) a pane leaves down its right
+/// side, which is what keeps it clear of the controls in the panes the dock
+/// scrolls for: that area's edge is the pane's edge, and the gutter is the air
+/// between them. An area built inside a pane starts at the CONTENT box, where
+/// there is no such air, so a floating bar there sits on the last few points of
+/// whatever it scrolls — the run of a log line, the right end of a row.
+///
+/// Reserving the lane costs the area the bar's width, and only while a bar is
+/// showing: egui takes `floating_allocated_width` out of a floating area's size
+/// per axis that actually overflows. It rides on the UI's spacing, which is the
+/// only place egui reads a scroll bar's size from — there is no per-area way to
+/// set one — so it holds for every area built in `ui` from here on. A pane that
+/// wants the lane for one of its areas wants it for all of them.
+pub(crate) fn reserve_scroll_gutter(ui: &mut egui::Ui) {
+    let scroll = &mut ui.spacing_mut().scroll;
+    scroll.floating_allocated_width = scroll.bar_width;
 }
 
 // ---- Fonts -----------------------------------------------------------------
@@ -462,6 +500,28 @@ fn style_at(scale: f32) -> egui::Style {
     w.open.corner_radius = WIDGET_RADIUS;
 
     scale_chrome(&mut style, scale);
+
+    // A floating scroll bar is drawn OVER the content rather than beside it, so
+    // its width is only free where the pane already leaves air: the
+    // [`PANE_INNER_MARGIN`] gutter down the right of every settings pane. egui's
+    // default bar is 10pt against that 8pt gutter, and the 2pt of overhang lands
+    // on the right end of every bar in the column, which is where the value
+    // readouts are. Sized to the gutter it fills the air that is there and
+    // touches nothing, expanded or dormant.
+    //
+    // Set HERE, after the scale, and this is the one number in the block above
+    // that cannot be written at the design size: the gutter is a `Margin`, egui
+    // stores those as whole points, and truncation does not survive being
+    // multiplied. A bar scaled as a float overhangs the truncated gutter by the
+    // fraction — 0.8pt of bar over every control at scale 1.1 — so it is taken
+    // from [`dock_pane_margin`], which is what the dock actually insets by.
+    //
+    // The alternative is `floating_allocated_width`, which reserves the bar a
+    // lane of its own and takes it out of the content — right for a scroll area
+    // that has no gutter to sit in (see [`reserve_scroll_gutter`]), wrong here,
+    // where it would inset the column a second time and reflow the whole pane
+    // the moment its content grew past the bottom.
+    style.spacing.scroll.bar_width = f32::from(dock_pane_margin(scale));
     style
 }
 
@@ -510,8 +570,9 @@ fn scale_chrome(style: &mut egui::Style, scale: f32) {
         &mut s.combo_height,
         // The scroll bars a settings pane overflows into, which are chrome
         // like everything else — a full-size bar down the side of a shrunken
-        // pane is the one piece that would give the game away.
-        &mut s.scroll.bar_width,
+        // pane is the one piece that would give the game away. `bar_width` is
+        // not here: it has a whole-point gutter to fit inside rather than a
+        // factor to follow, so [`style_at`] sets it after this runs.
         &mut s.scroll.handle_min_length,
         &mut s.scroll.bar_inner_margin,
         &mut s.scroll.bar_outer_margin,
@@ -666,7 +727,7 @@ pub fn dock_style(egui_style: &egui::Style, scale: f32) -> egui_dock::Style {
     tab.tab_body.stroke = Stroke::NONE;
     tab.tab_body.corner_radius = CornerRadius::ZERO;
     tab.tab_body.bg_fill = panel();
-    tab.tab_body.inner_margin = egui::Margin::same(pane_inner_margin(scale) as i8);
+    tab.tab_body.inner_margin = egui::Margin::same(dock_pane_margin(scale));
 
     style
 }

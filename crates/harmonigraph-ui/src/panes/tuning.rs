@@ -157,6 +157,11 @@ fn comma_controls(ui: &mut egui::Ui, state: &mut SharedState) {
     // (`Region::expand_to_include_rect` unions `max_rect`, so an over-wide
     // child moves everything below it out too). It shrinks to the table at any
     // width that fits one, which is every width the column actually opens at.
+    //
+    // The bar it scrolls by runs UNDER the table, where the pane has no margin
+    // to spare it, so the lane comes out of the area's height — a row of cells
+    // with a scroll bar drawn across its feet is the alternative.
+    theme::reserve_scroll_gutter(ui);
     egui::ScrollArea::horizontal().show(ui, |ui| {
         egui::Grid::new("commas").num_columns(2).show(ui, |ui| {
             for heading in ["Temper", "Auto"] {
