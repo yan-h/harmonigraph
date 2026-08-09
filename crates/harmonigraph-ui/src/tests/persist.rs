@@ -1152,9 +1152,11 @@ fn a_blob_older_than_the_version_floor_is_refused_whole() {
 /// of `load_persist`'s three callers. A `.take` is a file on disk and
 /// `harmonigraph-take` refuses only takes from the FUTURE, so an old one opens
 /// and hands its `ui_state` straight through; the standalone's `app.ron` has no
-/// identity gate either. What keeps this from being reachable today is only
-/// that every take on disk is at the current version — which the next bump
-/// ends, for all of them at once.
+/// identity gate either. Reachable today rather than in principle: the floor
+/// stands at 3, so a take recorded before it was raised holds a version-2 blob
+/// and re-renders at the default look and frame. That is accepted rather than
+/// shimmed, which is what makes the agreement this test pins the thing that
+/// matters — both doors have to refuse the same blobs, and say so.
 #[test]
 fn both_doors_into_a_blob_agree_about_the_version_floor() {
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);

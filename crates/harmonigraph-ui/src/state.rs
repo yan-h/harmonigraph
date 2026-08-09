@@ -590,11 +590,17 @@ impl SharedState {
     /// reading a `.take` header, and the standalone reading its `app.ron`. A
     /// take is an archive — `harmonigraph-take` refuses only takes from the
     /// FUTURE — so an old one opens and hands its `ui_state` straight here.
-    /// What keeps that harmless is that every take on disk is at the current
-    /// version, which the next bump ends for all of them at once; the floor is
-    /// mirrored in [`render_config_from_persist`] so the two doors into one
-    /// blob at least agree, and a refused take renders wholly at defaults
-    /// rather than a recorded frame wrapped around them.
+    /// That case is live rather than hypothetical: the floor is 3, and a take
+    /// recorded before it was raised carries a version-2 blob that is refused
+    /// whole, so the video renders at the default camera, view, spectrum AND
+    /// frame rather than the ones it was recorded with. The floor is mirrored
+    /// in [`render_config_from_persist`] so the two doors into one blob at
+    /// least agree, and a refused take renders wholly at defaults rather than a
+    /// recorded frame wrapped around them.
+    ///
+    /// What makes that acceptable is that it is LOUD on both doors — this
+    /// returns whether it applied and writes the reason to the console, and the
+    /// offline renderer prints to stderr — not that it cannot happen.
     ///
     /// That is what the identity change bought and what a future one would
     /// buy again: a clean floor under the format. A bump WITHOUT one strands

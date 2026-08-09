@@ -1956,9 +1956,10 @@ pub(crate) fn spectrum_track_width(column: f32, scale: f32) -> f32 {
 /// The far end from where the arc starts, so the button sits past the end of
 /// the reading rather than in front of it: the track is cut at the arc's own
 /// start and fills from the left, and the thing that reverses it belongs after
-/// what it reverses. The cost is the settings pane's scroll bar, which is drawn
-/// INSIDE the column over the right edge of every bar in it — so when the pane
-/// scrolls, the button's last couple of points sit under it.
+/// what it reverses. It costs the button nothing to sit there: the settings
+/// pane's scroll bar runs in the dock's own gutter, outside the content box,
+/// so the button ends where the bar's lane begins rather than under it —
+/// `nothing_is_drawn_under_a_settings_pane_scroll_bar` holds that lane empty.
 const FLIP_W: f32 = 18.0;
 
 /// The name a [`SpectrumBar`] writes along its own track.
