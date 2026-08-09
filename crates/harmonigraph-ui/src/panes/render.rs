@@ -418,9 +418,10 @@ fn preview_lattice(ui: &mut egui::Ui, rect: egui::Rect, state: &SharedState, now
     );
     // The lattice's place in the shape list, claimed now and filled in below:
     // the node names are drawn inside its own pass, and are not known until
-    // they have been laid out. The drawn marks still go on top of it, which is
-    // what the order of these two is about — see the Lattice pane, which does
-    // the same for the same reason.
+    // they have been laid out. Nothing is added to this painter after it, so
+    // the slot orders nothing — it is here for the claim-then-fill alone,
+    // which is the same shape the Lattice pane uses (there it also has a badge
+    // to order against).
     let lattice = ui.painter().add(egui::Shape::Noop);
     // Node names/cents, exactly as the Lattice pane and the render draw them:
     // sized off this rect, so a preview a third of the render's size draws
