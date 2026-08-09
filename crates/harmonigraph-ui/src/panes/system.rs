@@ -4,10 +4,10 @@
 //! [`super::view`] pane, where it would sit at the bottom looking like a view
 //! setting.
 //!
-//! Called System because the tab bar is where a name has to do its work, and
-//! "Panel" did none: it named the thing being looked AT rather than what the
-//! tab changes, and sat one letter from "pane", which is what every other tab
-//! in the dock is.
+//! Called System because the tab bar is where a name has to do its work.
+//! "Panel" names the thing being looked AT rather than what the tab changes,
+//! and sits one letter from "pane", which is what every other tab in the dock
+//! is.
 
 use super::section;
 use crate::widgets::{button_row, choice_row, ValueBar};

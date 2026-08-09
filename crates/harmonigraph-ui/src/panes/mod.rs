@@ -68,8 +68,8 @@ pub enum Tab {
     /// it tempers out.
     Tuning,
     /// Which of the lattice you are looking at and from where: projection,
-    /// camera, extents, and the sevenths layer. A section inside [`Tab::Tuning`]
-    /// until it outgrew the name that hid it.
+    /// camera, extents, and the sevenths layer. Its own tab and not a section
+    /// of [`Tab::Tuning`], whose name covers none of it — see [`view`].
     View,
     /// How a sounding note is drawn.
     Nodes,
@@ -84,9 +84,10 @@ pub enum Tab {
     /// A live preview of the offline video frame, composed and adjusted here.
     /// Titled "Video".
     Video,
-    /// The plugin's own render-quality and pane-layout knobs. Titled "System";
-    /// spelled `Panel` until that name proved to describe the thing being
-    /// looked at rather than anything the tab changes.
+    /// The plugin's own render-quality and pane-layout knobs. Titled "System"
+    /// rather than "Panel", which would name the thing being looked at rather
+    /// than anything the tab changes — and sits one letter from "pane", which
+    /// is what every tab in this dock is.
     System,
 }
 

@@ -410,8 +410,8 @@ fn every_bar_in_a_settings_pane_is_the_width_of_the_pane() {
     // The sniffing above finds nothing if the bars stop being painted this way,
     // and a test that measures nothing passes. The Nodes pane is the deepest
     // stack of bars in the dock — every layer of the note contributes one or
-    // more, and the gated ones still paint, greyed. Tuning stood here until the
-    // camera left it for View and took two thirds of its rows along.
+    // more, and the gated ones still paint, greyed — so it is the pane to ask
+    // whether bars are still being painted at all.
     let bars =
         bar_track_widths(&settings_pane_at_width(panes::Tab::Nodes, 400.0, PROJECTIONS[0])).len();
     assert!(bars >= 15, "only found {bars} bar tracks in the Nodes pane; has the paint changed?");

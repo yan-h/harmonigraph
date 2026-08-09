@@ -3,18 +3,18 @@
 //! Purely what's framed — the note styling lives in [`super::nodes`] and
 //! [`super::scene`], the render/workspace knobs in [`super::system`].
 //!
-//! A tab of its own, which it was, then was not, and is again. It spent a while
-//! as a "Frame" section inside Tuning, on the grounds that where the nodes sit
-//! in pitch and which of them you are looking at are two halves of what the
-//! lattice IS. That is true of the CONTENT and false of the tab bar, which
-//! shows one word: thirteen of the merged tab's eighteen control rows were
-//! these, under a name that mentions none of them, so the camera was reachable
-//! only by opening a tab called Tuning and scrolling. The merge's own reason
-//! was that both halves were short, and this one stopped being short.
+//! A tab of its own rather than a section of [`super::tuning`], though the two
+//! answer halves of one question — where the nodes sit in pitch, and which of
+//! them you are looking at. That kinship is real about the CONTENT and no help
+//! on the tab bar, which shows one word: these are thirteen control rows to
+//! Tuning's five, so a merged tab is named for its smaller half and the camera
+//! is reachable only by opening something called Tuning and scrolling. Merging
+//! them is worth it only while both halves are short enough that the name does
+//! not have to carry them, and this half is not.
 //!
 //! Called View and not Frame because the Video tab's Frame is the video's —
 //! aspect, letterbox, crop ticks — and one word naming two unrelated things is
-//! what the split was for.
+//! the thing this split exists to avoid.
 //!
 //! Three sections: the Camera (where you stand and what the lens does), the
 //! Extents (how much lattice there is to stand in front of), and the Sevenths

@@ -75,13 +75,11 @@ fn the_picture_panes_do_not_scroll() {
 /// Every tab in the settings column fits on its tab bar, unclipped, at the
 /// window this UI is dialled against.
 ///
-/// The guard this restores was lost, not retired: it used to hold the whole
-/// column — tab bar and pane content together — to needing no scroll bar, and
-/// came out when the panes were allowed to scroll (see
-/// [`crate::state::SETTINGS_SPLIT`]). A pane scrolling is normal; the tab bar
-/// overflowing is the thing worth catching, and splitting Tuning into Tuning
-/// and View took the column from six tabs to seven, which is what makes it a
-/// live question rather than a margin.
+/// The tab bar ALONE, not the column: a settings pane scrolling is a normal
+/// thing, so a guard over tab bar and pane content together fires on panes that
+/// are meant to scroll and has to come out — which is why this asks the
+/// narrower question that stays true (see [`crate::state::SETTINGS_SPLIT`]).
+/// Seven tabs is what makes it a live question rather than a margin.
 ///
 /// What overflow actually costs is worth stating exactly, because it is not
 /// unreachability: egui_dock SCROLLS a bar that does not fit (`tab_bar_scroll`,

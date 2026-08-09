@@ -381,9 +381,9 @@ pub struct CameraPreset {
 /// `every_settings_tab_fits_on_its_tab_bar` (in `tests::shell`, so not linkable
 /// from here) is what checks it, by the CLIP rather than by re-deriving
 /// egui_dock's sums.
-/// It holds the tab bar alone: a pane scrolling is a normal thing and the test
-/// that once held the whole column to needing no scroll bar of either kind came
-/// out when the Nodes pane was allowed to scroll. Note what neither it nor this
+/// It holds the tab bar alone, and has to: a pane scrolling is a normal thing,
+/// so a guard over tab bar and pane content together fires on the panes that
+/// are meant to scroll. Note what neither it nor this
 /// fraction covers — the editor's own `DEFAULT_SIZE` is 1000pt, well under what
 /// any version of this bar has needed, so the default window scrolls its tab
 /// bar. That is issue #287 and it is not this constant's to fix.

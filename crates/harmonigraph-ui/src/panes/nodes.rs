@@ -20,10 +20,11 @@ use harmonigraph_scene::{
 /// from the center, and last the sweep the outermost layer can be set to run.
 ///
 /// Whole-note first, because those settings are the ones reached for most and
-/// because none of them belongs to a layer: putting them after Core, Octaves
-/// and the marks left the pane's most-used controls below a scroll in a column
-/// this pane already overruns. Reading outward is still what orders the rest.
-/// Scrolls so the full list is reachable in a short pane.
+/// because none of them belongs to a layer. Ordering them after Core, Octaves
+/// and the marks would read more consistently outward and would put the
+/// pane's most-used controls below a scroll, in a column this pane already
+/// overruns. Reading outward is what orders the rest. Scrolls so the full list
+/// is reachable in a short pane.
 pub(super) fn nodes_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBackend) {
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
@@ -286,9 +287,9 @@ const SHIMMER_PATTERNS: &[(Pulse, &str, &str)] = &[
 ///
 /// The pattern is the first row and the four bars follow it, because the row
 /// says WHETHER there is a sweep and the bars only say what it looks like. It
-/// sits here rather than in Melody/bass — where a "Shimmer" row under a
-/// "Shimmer" heading two sections down made one feature read as two — even
-/// though the marks are what the sheet crosses.
+/// sits here rather than in Melody/bass, even though the marks are what the
+/// sheet crosses: a "Shimmer" row under that heading with a "Shimmer" section
+/// below it splits one feature across two places and spends its name twice.
 ///
 /// The two gates are different questions and are written as two. The pattern
 /// needs a ring to lay light on, so it follows [`ViewConfig::mark_rings_draw`]
@@ -454,12 +455,13 @@ fn spectrum_group(ui: &mut egui::Ui, view: &mut ViewConfig) {
 /// Color: the pitch->color gradient every pitch-colored shape is tinted
 /// through, and the span of pitch it is stretched over.
 ///
-/// Named for its subject rather than for its scope — these were the head of an
-/// "Every layer" section, which told a reader which controls it left out and
-/// not one thing about what was in it. First in the pane because it is what is
-/// reached for most, and because it is the least local setting here: it is not
-/// about the core, the octave glyphs or the marks, and it does not stop at the
-/// lattice either (see below).
+/// Named for its subject rather than for its scope. A heading like "Every
+/// layer" would be accurate and useless: it tells a reader which controls it
+/// leaves out and nothing about what is in it, so neither someone guessing
+/// where color lives nor someone half-remembering "the gradient" can reach it.
+/// First in the pane because it is what is reached for most, and because it is
+/// the least local setting here: it is not about the core, the octave glyphs or
+/// the marks, and it does not stop at the lattice either (see below).
 fn color_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBackend) {
     ui.heading("Color");
     // The gradient above the range because it is the coarser of the two: it

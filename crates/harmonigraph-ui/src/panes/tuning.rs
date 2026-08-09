@@ -4,9 +4,9 @@
 //! Two sections in one tab because they are two halves of one question: where
 //! the lattice's nodes sit in pitch, the bars answering it by number and the
 //! commas by identity. Which of those nodes you are then looking at is
-//! [`super::view`] — a section here until the tab bar made the case against
-//! it, since a tab called Tuning is not where anyone looks for a camera.
-//! Everything else in the settings dock is about how what is there gets drawn.
+//! [`super::view`], and it is a tab rather than a third section here because a
+//! tab called Tuning is not where anyone looks for a camera. Everything else in
+//! the settings dock is about how what is there gets drawn.
 
 use super::param_bar;
 use super::section;
