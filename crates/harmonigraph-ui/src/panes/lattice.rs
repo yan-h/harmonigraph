@@ -2384,9 +2384,10 @@ mod tests {
         /// ppp 2: (radius, per-stamp alpha, samples), outer ring first.
         const RINGS_PX: [(f32, f32, u32); 2] = [(4.0, 0.21, 8), (2.0, 1.0, 12)];
 
-        /// `text.wgsl`'s `FILL_TAP`, and the single tap it replaced. Mirrored
-        /// rather than shared -- nothing links a WGSL constant to a Rust one,
-        /// so the shader is where the value lives and this follows it.
+        /// `text.wgsl`'s `FILTER_TAP`, and the single tap it is read against.
+        /// Mirrored rather than shared -- nothing links a WGSL constant to a
+        /// Rust one, so the shader is where the value lives, this follows it,
+        /// and the NAME is the whole of the thread between them.
         const TWO_TAP: [(f32, f32); 2] = [(-0.25, 0.0), (0.25, 0.0)];
         const ONE_TAP: [(f32, f32); 1] = [(0.0, 0.0)];
 

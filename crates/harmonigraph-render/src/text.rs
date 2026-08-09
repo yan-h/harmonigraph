@@ -964,7 +964,7 @@ pub(crate) mod tests {
     /// stands outside it in the rim's color — the whole contract in one
     /// picture.
     ///
-    /// The ink's own edge is soft by a quarter texel, which is `FILL_TAP`'s
+    /// The ink's own edge is soft by a quarter texel, which is `FILTER_TAP`'s
     /// outer tap and the price of a stroke that holds its weight as it
     /// slides. It is asserted here rather than tolerated, since the fringe is
     /// exactly as wide as that constant and a fringe any wider is the filter
@@ -1450,8 +1450,7 @@ pub(crate) mod tests {
     /// A stroke a pixel wide keeps its weight as it slides, instead of
     /// tightening and loosening once per pixel it crosses.
     ///
-    /// The complaint [`FILL_TAP`](super::super::TEXT_ENTRY_POINTS) answers,
-    /// and a different one from
+    /// The complaint `FILTER_TAP` answers, and a different one from
     /// [`a_glyph_slides_across_a_pixel_without_a_step`]: that reads whether
     /// the picture JUMPS between two offsets, and a mark can walk perfectly
     /// smoothly while still being a different weight at each end of the walk.
@@ -1472,7 +1471,7 @@ pub(crate) mod tests {
     /// coverage anywhere in the frame — and two taps a quarter texel apart
     /// hold it to 24.8%. The bound sits between, near the measurement: this
     /// is a claim about the FILTER, and a filter that quietly lost its second
-    /// tap reads 100 rather than 41.
+    /// tap reads 100 rather than 40.
     ///
     /// No rim, which is deliberate and is the whole of what this fixture
     /// isolates: the FILL read through the filter, with nothing else in the
