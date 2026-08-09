@@ -4847,6 +4847,80 @@ mod tests {
         }
     }
 
+    /// A band lands on the pixel grid, wherever in a point the layout leaves
+    /// it.
+    ///
+    /// epaint puts a rect there before it tessellates one
+    /// (`TessellationOptions::round_rects_to_pixels`), so the well under a band
+    /// and every bar fill beside it have their edges on whole physical pixels.
+    /// A mesh is not touched, and half a pixel of offset is the difference
+    /// between a fade covering one pixel and one smeared across two — which is
+    /// a blurred edge standing beside sharp ones, the same complaint as a hard
+    /// edge and a harder one to name.
+    ///
+    /// The whole rest of the suite runs at one pixel per point on fixtures that
+    /// are already whole, so the rounding is a no-op in every one of them and
+    /// can be deleted with all of them staying green. Hence a context that puts
+    /// the band a quarter of a point down: half a physical pixel, the worst
+    /// offset there is and the one a snap has to move.
+    #[test]
+    fn a_band_lands_on_the_pixel_grid_the_bars_beside_it_do() {
+        const PPP: f32 = 2.0;
+        let ctx = egui::Context::default();
+        crate::theme::apply_theme(&ctx);
+        ctx.set_pixels_per_point(PPP);
+        let asked = std::cell::Cell::new(egui::Rect::NOTHING);
+        let out = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::pos2(0.0, 0.0),
+                    egui::vec2(300.0, 100.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                ui.add_space(0.25);
+                let preview = GradientPreview::reserve(ui);
+                asked.set(preview.show(ui, &Gradient::default()).rect);
+            },
+        );
+        // The scale has to have taken, or the rounding under test is being
+        // asked for whole points and the fixture is back on the grid it is
+        // meant to be off.
+        assert_eq!(ctx.pixels_per_point(), PPP, "the context ignored the scale");
+        let shapes: Vec<egui::Shape> = out.shapes.into_iter().map(|s| s.shape).collect();
+        let band = band_bounds(bands(&shapes).first().expect("a preview paints one band"));
+        let asked = asked.get();
+        // And the row has to land off the grid, or a band snapped by doing
+        // nothing passes this for the wrong reason.
+        let fraction = |edge: f32| edge * PPP - (edge * PPP).round();
+        assert!(
+            fraction(asked.top()).abs() > 0.1,
+            "the fixture put the preview at {asked:?}, already on the grid",
+        );
+        for (side, edge) in [
+            ("top", band.top()),
+            ("bottom", band.bottom()),
+            ("left", band.left()),
+            ("right", band.right()),
+        ] {
+            assert!(
+                fraction(edge).abs() < 1e-4,
+                "the band's {side} edge is at {edge}pt, {} of a pixel off the grid",
+                fraction(edge),
+            );
+        }
+        // Onto the NEAREST boundary, which is the whole of what the well under
+        // a band does: a band that snapped somewhere else would be square with
+        // the pixels and half a row from the layout.
+        assert!(
+            (band.top() - asked.top()).abs() <= 0.5 / PPP + 1e-4,
+            "the band's top moved from {} to {}, further than the grid is apart",
+            asked.top(),
+            band.top(),
+        );
+    }
+
     /// Both bands are rounded by their own mesh, on the corner circle, and
     /// sampled through the arc rather than chamfered across it.
     ///
