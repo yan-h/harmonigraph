@@ -12,11 +12,12 @@ use harmonigraph_ui::params::{ParamBackend, ParamKey};
 use nice_plug::prelude::*;
 use parking_lot::Mutex;
 
+mod background;
 mod editor;
 
 /// Capacity of the audio→GUI note event ring buffer. Events are dropped
 /// (silently) if the GUI stalls long enough to fill it.
-const EVENT_RING_CAPACITY: usize = 4096;
+pub(crate) const EVENT_RING_CAPACITY: usize = 4096;
 
 /// Capacity of the audio→GUI sample ring feeding the Spectral pane's
 /// analyzer: >1 s of STEREO at 48 kHz. Overflow just drops frames — a spectrum
@@ -26,7 +27,10 @@ const EVENT_RING_CAPACITY: usize = 4096;
 /// the channels themselves (see `process`), so the seconds it holds — which is
 /// what bounds the GUI's catch-up work after a stall, see
 /// `AudioSpectrum::push_samples` — stayed where it was.
-const AUDIO_RING_CAPACITY: usize = 131_072;
+///
+/// It is also what paces [`background`], whose poll has to stay well inside the
+/// span this holds; see `POLL` there.
+pub(crate) const AUDIO_RING_CAPACITY: usize = 131_072;
 
 /// Sample rate assumed until the host reports the real one in `initialize`.
 /// Held in two representations (the f64 `sample_rate` field and the f32 bit
@@ -34,6 +38,19 @@ const AUDIO_RING_CAPACITY: usize = 131_072;
 const DEFAULT_SAMPLE_RATE: f64 = 44_100.0;
 
 pub struct Harmonigraph {
+    /// Keeps the spectrogram's history running while the editor window is
+    /// closed (see [`background`]). Held only to be dropped with the plugin,
+    /// which is what stops its thread.
+    ///
+    /// FIRST, because fields drop in declaration order and this one has to stop
+    /// before any of what it touches is torn down. Declared last instead, the
+    /// worker holds the surviving `Arc` once `editor_shared` drops, so the
+    /// teardown races a live drain and `EditorShared` — `SharedState`, and any
+    /// `egui::TextureHandle` still in its spectrogram surfaces — is destroyed on
+    /// the analyzer thread rather than on the one dropping the plugin. That
+    /// appears to be sound, but PR #112 was a texture freed from the wrong point
+    /// and it cost a crash; ordering the field is cheaper than being sure.
+    _background: background::BackgroundAnalyzer,
     params: Arc<HarmonigraphParams>,
     note_producer: rtrb::Producer<CoreNoteEvent>,
     /// The input bus, interleaved, for the GUI's spectrum analyzer.
@@ -305,24 +322,35 @@ impl Default for Harmonigraph {
         let audio_channels = Arc::new(AtomicU32::new(1));
         let (take, take_control) = harmonigraph_record::channel();
         let take_events = Arc::new(AtomicU64::new(0));
+        let params = Arc::new(HarmonigraphParams::default());
+        let editor_shared = Arc::new(Mutex::new(editor::EditorShared::new(
+            consumer,
+            audio_consumer,
+            sample_rate_bits.clone(),
+            audio_channels.clone(),
+            take_control,
+            take_events.clone(),
+        )));
+        // From HERE, not from `initialize` or the editor: the point of the
+        // thread is to cover the stretches nothing else does, and both of those
+        // are stretches. `initialize` runs on activation, so a suspended plugin
+        // would go dark; the editor is the very thing being covered for.
+        let _background = background::BackgroundAnalyzer::spawn(
+            editor_shared.clone(),
+            params.editor_state.clone(),
+        );
         Harmonigraph {
-            params: Arc::new(HarmonigraphParams::default()),
+            params,
             note_producer: producer,
             audio_producer,
-            sample_rate_bits: sample_rate_bits.clone(),
-            audio_channels: audio_channels.clone(),
-            editor_shared: Arc::new(Mutex::new(editor::EditorShared::new(
-                consumer,
-                audio_consumer,
-                sample_rate_bits,
-                audio_channels,
-                take_control,
-                take_events.clone(),
-            ))),
+            sample_rate_bits,
+            audio_channels,
+            editor_shared,
             sample_rate: DEFAULT_SAMPLE_RATE,
             samples_processed: 0,
             take,
             take_events,
+            _background,
         }
     }
 }
@@ -520,6 +548,59 @@ nice_export_vst3!(Harmonigraph);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The window flag the editor announces itself through has to be the one
+    /// the background analyzer watches, and nothing but this says so.
+    ///
+    /// They are two clones of one `Arc<EguiState>` today — `Default` hands one
+    /// to [`background::BackgroundAnalyzer::spawn`] and `editor` hands the same
+    /// field to `editor::create`. A second `EguiState` on either side compiles,
+    /// passes every other test, and leaves the analyzer reading a flag nobody
+    /// sets: it would then race an open editor for both rings on every poll,
+    /// which is a timing bug with nothing between it and a release.
+    ///
+    /// Driven through the REAL spawned thread rather than by calling `tick`,
+    /// because the wiring is precisely what a direct call would bypass.
+    #[test]
+    fn the_background_analyzer_watches_the_flag_the_editor_sets() {
+        // Five polls: long enough that a round cannot merely be late.
+        let settle = background::POLL * 5;
+        let columns =
+            |plugin: &Harmonigraph| plugin.editor_shared.lock().ui.spectrum.history().len();
+
+        let mut plugin = Harmonigraph::default();
+        // Announced BEFORE any audio exists, and given time to be seen, so the
+        // tick already in flight from construction meets an empty ring rather
+        // than racing the fill below.
+        plugin.params.editor_state.set_open(true);
+        std::thread::sleep(settle);
+
+        // Fill the ring the way `process` does: enough to fill an analysis
+        // window and cross hop boundaries, so anything draining it leaves a
+        // mark that cannot be missed.
+        for i in 0..20_000 {
+            let t = i as f32 / 48_000.0;
+            plugin
+                .audio_producer
+                .push((std::f32::consts::TAU * 440.0 * t).sin() * 0.5)
+                .expect("the ring is sized for this");
+        }
+        std::thread::sleep(settle);
+        assert_eq!(
+            columns(&plugin),
+            0,
+            "the analyzer drained a ring the editor had claimed: it is not watching the \
+             EguiState the editor sets",
+        );
+
+        plugin.params.editor_state.set_open(false);
+        std::thread::sleep(settle);
+        assert!(
+            columns(&plugin) > 0,
+            "the analyzer never noticed the window close: it is not watching the \
+             EguiState the editor sets",
+        );
+    }
 
     /// `ParamKey::id` is what a recorded take names its automation by, and
     /// what the host names its automation lanes by. They are declared in

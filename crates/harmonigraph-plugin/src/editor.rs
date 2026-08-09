@@ -89,7 +89,10 @@ pub struct EditorShared {
     /// bus. Read every drain, never cached: de-interleaving by a stale count
     /// would read one channel as two.
     audio_channels: Arc<AtomicU32>,
-    ui: SharedState,
+    /// Crate-visible because [`crate::background`] shares this state with the
+    /// frame — it logs a failure to start into the same console, and its tests
+    /// read back the history it filled.
+    pub(crate) ui: SharedState,
     /// GUI clock epoch; audio event times are mapped onto this clock.
     start: Instant,
     /// Audio->GUI clock mapping (see ClockMapper).
@@ -299,23 +302,92 @@ impl EditorShared {
         true
     }
 
-    /// Drain the audio sample ring into the spectrum analyzer. Always
-    /// drains — the ring must not hold stale audio for a burst when the
-    /// display is toggled on — but skips the analyzer while nothing shows it.
+    /// Drain the audio sample ring into the spectrum analyzer.
+    ///
+    /// Always drains AND always feeds. There is no display state that makes the
+    /// samples unwanted: the curve and the spectrogram read this one analyzer,
+    /// the curve is always drawn, and feeding it is also what drives smooth
+    /// repaint (via `is_flowing`). Draining without feeding would only leave the
+    /// ring holding stale audio to burst later — and gating the feed on
+    /// something being on screen is what [`crate::background`] exists to say is
+    /// wrong, since the whole point there is to analyze when nothing shows it.
     fn drain_audio(&mut self, now: f64) {
         self.audio_buf.clear();
         while let Ok(sample) = self.audio_consumer.pop() {
             self.audio_buf.push(sample);
         }
-        // The curve and the spectrogram read this one analyzer, and the curve
-        // is always drawn, so it is always fed (which, via `is_flowing`, also
-        // drives smooth repaint).
         if !self.audio_buf.is_empty() {
             let sample_rate = self.sample_rate();
             let channels = self.audio_channels();
             let config = self.ui.spectrum_config;
             self.ui.spectrum.push_samples(&self.audio_buf, channels, sample_rate, now, &config);
         }
+    }
+
+    /// The clock everything the editor stamps is measured on: seconds since
+    /// the PLUGIN was instantiated, not since the window opened.
+    ///
+    /// That distinction is what makes a closed window recoverable at all. The
+    /// clock runs across one, so a column analyzed while nothing was drawing
+    /// lands on the same axis as the columns either side of it, and the
+    /// heatmap has no seam to hide.
+    pub(crate) fn now(&self) -> f64 {
+        self.start.elapsed().as_secs_f64()
+    }
+
+    /// Drain both audio-thread rings onto that clock — notes into the tracker,
+    /// samples into the analyzer — and say whether any note arrived.
+    ///
+    /// A frame calls this, and so does [`crate::background`] while the window
+    /// is closed. That they share ONE path is the property the whole
+    /// closed-window capture rests on: a second, parallel analyzer would give
+    /// back a heatmap on its own hop grid, its own anchor and its own window,
+    /// and nothing on screen would say which stretch came from which. Here the
+    /// picture is the same picture whether or not anyone was watching it
+    /// arrive.
+    ///
+    /// The notes are drained FIRST so a frame can ask for its repaint before
+    /// spending the audio's FFTs; the two are otherwise independent.
+    ///
+    /// This is HALF of what a drain owes the tracker. Feeding it is here;
+    /// ageing it is in [`harmonigraph_ui::begin_frame`], which a frame reaches
+    /// through `root_ui` and a caller that never draws does not reach at all.
+    /// Anything draining without going on to draw wants
+    /// [`catch_up_unwatched`](Self::catch_up_unwatched) instead.
+    pub(crate) fn catch_up(&mut self, now: f64) -> bool {
+        let notes = self.drain_into_tracker(now);
+        self.drain_audio(now);
+        notes
+    }
+
+    /// The whole of what a drain owes when no frame will follow it: both rings
+    /// taken, and then the tracker aged.
+    ///
+    /// Ageing is not optional bookkeeping. Every note-off parks a voice in
+    /// `NoteTracker`'s released tail, and [`prune`] is the only
+    /// thing that empties it — so a drainer that fed the tail without pruning
+    /// would grow it for as long as the plugin ran, which is exactly the
+    /// accumulation `notes.rs` designs its envelope around ("the released tail
+    /// would accumulate for the whole session against an O(nodes x voices)
+    /// loop"). The roll's own age trim rides on the same call.
+    ///
+    /// It lives here rather than inside [`catch_up`](Self::catch_up) so a frame
+    /// keeps pruning EXACTLY once, in `begin_frame`, against the parameter
+    /// mirrors that frame just refreshed. Pruning on the way in as well would
+    /// judge the fade against the previous frame's envelope, and a fade time
+    /// being dragged UPWARD would drop voices that the new, longer envelope
+    /// still has something to draw.
+    ///
+    /// The envelope here is whatever the last frame left behind — its default
+    /// until one has run. That is the right stale value to hold: it is the fade
+    /// the picture was last drawn with, and the alternative is not ageing at
+    /// all.
+    ///
+    /// [`prune`]: harmonigraph_core::NoteTracker::prune
+    pub(crate) fn catch_up_unwatched(&mut self, now: f64) {
+        self.catch_up(now);
+        let envelope = self.ui.view.envelope(&self.ui.frame_params);
+        self.ui.tracker.prune(now, &envelope);
     }
 }
 
@@ -349,12 +421,11 @@ fn frame(
 
     shared.note_frame();
 
-    let now = shared.start.elapsed().as_secs_f64();
-    if shared.drain_into_tracker(now) {
+    let now = shared.now();
+    if shared.catch_up(now) {
         // New MIDI must render this tick, not at the idle poll.
         ui.ctx().request_repaint();
     }
-    shared.drain_audio(now);
     let sample_rate = shared.sample_rate();
     shared.sync_take(sample_rate);
 
@@ -624,6 +695,16 @@ impl EguiState {
     pub fn is_open(&self) -> bool {
         self.open.load(Ordering::Acquire)
     }
+
+    /// Record that the window has opened or closed.
+    ///
+    /// Named rather than stored inline because it is not only the host's
+    /// business: [`crate::background`] reads it to decide whether a frame is
+    /// already draining the rings, so the two transitions are a seam between
+    /// threads and not just a bit.
+    pub(crate) fn set_open(&self, open: bool) {
+        self.open.store(open, Ordering::Release);
+    }
 }
 
 impl<'a> nice_plug::params::persist::PersistentField<'a, EguiState> for Arc<EguiState> {
@@ -788,7 +869,7 @@ impl Editor for LatticeEditor {
             },
         );
 
-        self.egui_state.open.store(true, Ordering::Release);
+        self.egui_state.set_open(true);
         Box::new(LatticeEditorHandle {
             egui_state: self.egui_state.clone(),
             shared: self.shared.clone(),
@@ -861,8 +942,12 @@ impl Drop for LatticeEditorHandle {
     fn drop(&mut self) {
         // Persist the UI state (dock layout, camera, view settings) into
         // the plugin state so the host saves it with the project.
+        // The lock is taken here with `open` still TRUE, which is what keeps
+        // the background analyzer off it for the whole of this — see
+        // [`crate::background`] on why that ordering is load-bearing rather
+        // than incidental.
         *self.params.ui_state.write() = self.shared.lock().ui.save_persist();
-        self.egui_state.open.store(false, Ordering::Release);
+        self.egui_state.set_open(false);
         self.window.close();
     }
 }
@@ -917,6 +1002,44 @@ mod tests {
 
         // Empty ring: no work, no repaint request.
         assert!(!shared.drain_into_tracker(7.1));
+    }
+
+    /// `catch_up`'s ANSWER, which is the only thing that asks for a repaint on
+    /// the tick a note arrives rather than at the idle poll (see `frame`).
+    ///
+    /// Its own test because the drain and the answer fail independently: every
+    /// other test of this path reads the tracker afterwards, so a `catch_up`
+    /// that drained perfectly and always answered `false` would satisfy all of
+    /// them while costing every note played the latency of the idle poll.
+    #[test]
+    fn catch_up_answers_whether_notes_arrived() {
+        let (mut producer, consumer) = rtrb::RingBuffer::new(64);
+        let (_audio_producer, audio_consumer) = rtrb::RingBuffer::new(64);
+        let (_recorder, take_control) = harmonigraph_record::channel();
+        let mut shared = EditorShared::new(
+            consumer,
+            audio_consumer,
+            std::sync::Arc::new(super::AtomicU32::new(48_000.0f32.to_bits())),
+            std::sync::Arc::new(super::AtomicU32::new(1)),
+            take_control,
+            std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        );
+
+        // An empty ring is not a repaint.
+        assert!(!shared.catch_up(7.0), "nothing arrived, so nothing needs drawing");
+
+        producer
+            .push(NoteEvent {
+                time: 1.0,
+                channel: 0,
+                note: 60,
+                kind: NoteEventKind::On { velocity: 1.0 },
+            })
+            .unwrap();
+        assert!(shared.catch_up(7.1), "a note arrived and the frame was not told");
+
+        // And the ring is empty again, so the next tick asks for nothing.
+        assert!(!shared.catch_up(7.2), "the same note asked for a second repaint");
     }
 
     #[test]
