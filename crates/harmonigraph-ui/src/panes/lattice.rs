@@ -544,17 +544,30 @@ const SHARP_STEM_X: f32 = 0.313;
 /// the right flush with the top. That stagger is the sharp's own, and it is
 /// the cue that still reads when the mark is a dozen pixels tall.
 const SHARP_STEM_H: f32 = 0.932;
-/// The bars, as a fraction of the ink height either side of the centre:
-/// Iosevka runs them through 176.5 and 503.5 about an ink centre of 340.
-///
-/// DRAWN LEVEL, where the face slants them 75 units over the glyph's width.
-/// The slant is what a sharp is usually cut with, and it cannot come along:
-/// a bar one pixel thick that climbs a whole pixel across the mark is
-/// partial coverage from end to end, which is the exact failure that takes
-/// the accidental out of type in the first place (see [`mark_key`]). Level
-/// bars against staggered uprights still read as a sharp -- it is what `#`
-/// is -- and every pixel of them is ink or nothing.
+/// The bars' MIDPOINTS, as a fraction of the ink height either side of the
+/// centre: Iosevka runs them through 176.5 and 503.5 about an ink centre of
+/// 340.
 const SHARP_BAR_Y: f32 = 0.186;
+/// How far a bar climbs across the glyph, as a fraction of the ink width:
+/// Iosevka lifts each one 75 units over the 372 the mark is wide.
+///
+/// The slant is what makes a sharp a sharp rather than a hash, and it looks
+/// like it ought to cost something: a bar this thick is one physical pixel at
+/// the size the analyzer sets its names, and one that climbs a whole pixel
+/// end to end is partial coverage the whole way, where a level bar is a row
+/// of solid ink. That is the argument [`mark_key`] makes for taking the mark
+/// out of type at all, so it is worth saying where it does NOT reach.
+///
+/// Levelling the bars is worth 0.1 of a point on the reading that matters --
+/// 29.3% against 29.4%, where the same glyph set as type is 40.8% (the swing
+/// `a_drawn_accidental_breathes_less_than_the_type_it_replaced` takes). At
+/// the larger sizes a zoom asks for it is worse
+/// levelled than slanted, 36.5% against 34.7%. The walk is horizontal and
+/// the bars are what runs that way, so sliding one moves it ALONG itself and
+/// lights very nearly the same pixels either way; it is the UPRIGHTS that a
+/// horizontal walk smears, and they are vertical in both designs. The slant
+/// is free. Do not spend the glyph to buy back a tenth of a point.
+const SHARP_SLANT: f32 = 0.202;
 
 /// `♭`'s bowl, as one cubic along the centre of Iosevka's own: control points
 /// in fractions of the ink box, x rightward and y DOWN from its top, which is
@@ -572,6 +585,22 @@ const SHARP_BAR_Y: f32 = 0.186;
 /// same argument that levels the sharp's bars.
 const FLAT_BOWL: [[f32; 2]; 4] =
     [[0.2104, 0.4242], [1.1472, 0.2654], [1.1309, 0.7609], [0.1052, 0.9279]];
+/// The straight run that closes the bowl into the foot of the upright, as the
+/// width the glyph still carries per unit of height above the tip.
+///
+/// Iosevka's is straight to within a percent over its whole length: the glyph
+/// is 0.326 of the ink width across at 0.916 of the way down, 0.231 at 0.940,
+/// 0.136 at 0.965, and nothing at all at the bottom-left corner. That single
+/// slope is the foot, and it is what makes the bottom of a `♭` a point rather
+/// than a stem with a bowl stuck on the side of it.
+const FLAT_FOOT_SLOPE: f32 = 3.86;
+/// How much of the bowl's length is spent narrowing into that foot.
+///
+/// The face thins its bowl as it merges with the upright; a stroke of one
+/// width all the way instead pokes out past the foot's own edge, which is the
+/// squared-off corner this exists to remove. A third is where the taper stops
+/// being visible as a taper and starts reading as the bowl simply arriving.
+const FLAT_TAPER: f32 = 0.33;
 /// Air between the accidental/comma column and the septimal mark, as a
 /// fraction of the mark's font size. Small: enough that the mark is not
 /// read as another row of the stack it sits beside, not so much that it
@@ -682,15 +711,27 @@ impl<'a> Scanline<'a> {
     }
 }
 
-/// One arm of a stroked mark: the segment `a`-`b` at `width`, with flat
-/// terminals, extended past `b` by half a width so two arms meeting there
-/// overlap into a clean point instead of leaving a notch in the outer
-/// corner. Overlap is free -- coverage is a union.
-fn arm(a: egui::Pos2, b: egui::Pos2, width: f32) -> MarkPiece {
+/// One arm of a stroked mark: the segment `a`-`b`, `from` wide at one end and
+/// `to` at the other, with flat terminals, extended past `b` by half its end
+/// width so two arms meeting there overlap into a clean point instead of
+/// leaving a notch in the outer corner. Overlap is free -- coverage is a
+/// union.
+///
+/// Two widths rather than one because a stroke that tapers is a real shape
+/// rather than a special case: `♭`'s bowl narrows into the foot of its
+/// upright, and a bowl of one width butts into it and reads as a rectangle
+/// where the face comes to a point. `to` of zero gives a triangle, which the
+/// coverage test handles as the degenerate quad it is.
+fn arm(a: egui::Pos2, b: egui::Pos2, from: f32, to: f32) -> MarkPiece {
     let along = (b - a).normalized();
-    let across = egui::vec2(-along.y, along.x) * (width / 2.0);
-    let tip = b + along * (width / 2.0);
-    MarkPiece::Quad([a + across, tip + across, tip - across, a - across])
+    let across = egui::vec2(-along.y, along.x);
+    let tip = b + along * (to / 2.0);
+    MarkPiece::Quad([
+        a + across * (from / 2.0),
+        tip + across * (to / 2.0),
+        tip - across * (to / 2.0),
+        a - across * (from / 2.0),
+    ])
 }
 
 /// Which mark, at what size in physical pixels -- the identity of one
@@ -776,7 +817,7 @@ fn mark_geometry(key: MarkKey) -> (Vec<MarkPiece>, [usize; 2]) {
             let tip = egui::pos2(c.x, c.y + dir * hh);
             let base_l = egui::pos2(c.x - hw, c.y - dir * hh);
             let base_r = egui::pos2(c.x + hw, c.y - dir * hh);
-            vec![arm(base_l, tip, thick), arm(base_r, tip, thick)]
+            vec![arm(base_l, tip, thick, thick), arm(base_r, tip, thick, thick)]
         }
         MarkKind::Sharp => {
             let stem_h = SHARP_STEM_H * h;
@@ -789,23 +830,40 @@ fn mark_geometry(key: MarkKey) -> (Vec<MarkPiece>, [usize; 2]) {
                     egui::vec2(thick, stem_h),
                 ))
             };
+            // The bars are parallelograms with VERTICAL ends, which is how
+            // the face cuts them: the thickness is measured up the page
+            // rather than across the slant, so a bar meets an upright along
+            // the upright's own edge.
             let bar = |side: f32| {
-                MarkPiece::Bar(egui::Rect::from_center_size(
-                    egui::pos2(c.x, c.y + side * SHARP_BAR_Y * h),
-                    egui::vec2(w, thick),
-                ))
+                let mid = c.y + side * SHARP_BAR_Y * h;
+                let (left, right) =
+                    (mid + SHARP_SLANT * w / 2.0, mid - SHARP_SLANT * w / 2.0);
+                MarkPiece::Quad([
+                    egui::pos2(c.x - hw, left - thick / 2.0),
+                    egui::pos2(c.x + hw, right - thick / 2.0),
+                    egui::pos2(c.x + hw, right + thick / 2.0),
+                    egui::pos2(c.x - hw, left + thick / 2.0),
+                ])
             };
             vec![stem(-1.0), stem(1.0), bar(-1.0), bar(1.0)]
         }
         MarkKind::Flat => {
+            let (left, top) = (c.x - hw, c.y - hh);
             // The upright is flush with the left of the ink box, as the
-            // face's is, and runs the full height.
-            let mut pieces = vec![MarkPiece::Bar(egui::Rect::from_center_size(
-                egui::pos2(c.x - hw + thick / 2.0, c.y),
-                egui::vec2(thick, h),
-            ))];
-            let bowl = FLAT_BOWL.map(|[u, v]| egui::pos2(c.x - hw + u * w, c.y - hh + v * h));
-            pieces.extend(curve_arms(bowl, thick));
+            // face's is, and its foot is a POINT at the box's bottom-left
+            // corner rather than a squared-off end: below the height where
+            // the closing run of the bowl crosses the upright's own width,
+            // its right edge is that run. Squared off, the two together read
+            // as a rectangle where the face comes to a point.
+            let foot = h * (1.0 - thick / (w * FLAT_FOOT_SLOPE));
+            let mut pieces = vec![MarkPiece::Quad([
+                egui::pos2(left, top),
+                egui::pos2(left + thick, top),
+                egui::pos2(left + thick, top + foot),
+                egui::pos2(left, top + h),
+            ])];
+            let bowl = FLAT_BOWL.map(|[u, v]| egui::pos2(left + u * w, top + v * h));
+            pieces.extend(curve_arms(bowl, thick, FLAT_TAPER));
             pieces
         }
     };
@@ -828,7 +886,7 @@ const CURVE_TOLERANCE: f32 = 0.1;
 /// across would be paid at the dozen-pixel sizes that are the ordinary case
 /// and buy nothing there. A cubic's polyline sits within `max|B''| / 8n²` of
 /// it, which is the bound solved for `n` here.
-fn curve_arms(p: [egui::Pos2; 4], thick: f32) -> Vec<MarkPiece> {
+fn curve_arms(p: [egui::Pos2; 4], thick: f32, taper: f32) -> Vec<MarkPiece> {
     let bend = |a: egui::Pos2, b: egui::Pos2, c: egui::Pos2| {
         ((a.to_vec2() - b.to_vec2() * 2.0 + c.to_vec2()) * 6.0).length()
     };
@@ -842,15 +900,18 @@ fn curve_arms(p: [egui::Pos2; 4], thick: f32) -> Vec<MarkPiece> {
             + (p[3].to_vec2() * t * t * t))
             .to_pos2()
     };
+    // Full width until the taper begins, then straight to nothing at the end.
+    let width = |t: f32| thick * ((1.0 - t) / taper).clamp(0.0, 1.0);
     (0..n)
         .map(|i| {
-            let (a, b) = (at(i as f32 / n as f32), at((i + 1) as f32 / n as f32));
+            let (t0, t1) = (i as f32 / n as f32, (i + 1) as f32 / n as f32);
+            let (a, b) = (at(t0), at(t1));
             // The first arm backs off half a width, so its flat terminal is
             // buried in whatever the curve leaves rather than cutting across
             // that join at the angle the curve happens to depart at. Every
             // later one is already covered by its predecessor's overhang.
             let a = if i == 0 { a - (b - a).normalized() * (thick / 2.0) } else { a };
-            arm(a, b, thick)
+            arm(a, b, width(t0), width(t1))
         })
         .collect()
 }
@@ -1188,13 +1249,19 @@ fn mark_key(kind: MarkKind, size: f32, weight: f32, ppp: f32) -> MarkKey {
     // That is a claim about the STROKE and not about the glyph, which is why
     // it reaches the accidentals too. `♯` and `♭` carry 878 and 818 units of
     // ink against the hyphen's 70, and being tall buys them nothing: every
-    // line in them is the same 69-70 units the hyphen is. Set as type at the
-    // size this column uses, 98.6% of a `♭`'s lit pixels are partial
-    // coverage -- nothing in the symbol is decided by anything but sub-pixel
-    // phase, so the whole mark shimmers rather than its outline. Issue #292
-    // holds the measurement, and
-    // `a_drawn_accidental_breathes_less_than_the_type_it_replaced` keeps
-    // taking it on both paths.
+    // line in them is the same 69-70 units the hyphen is, so at the size this
+    // column sets they are the same sub-pixel stroke (issue #292).
+    //
+    // What the floor buys is worth stating exactly, because it is less than
+    // it sounds. At this size a drawn mark's pixels are still ALL partial
+    // coverage, the same as the type's -- one whole pixel of stroke landing
+    // at a sub-pixel offset is two pixels at half. What changes is how much
+    // that varies as the mark slides: a stroke floored at a pixel is nearly
+    // the same picture at every phase, where one at 0.58px is not, and the
+    // swing drops from 49.0% to 30.3% for `♭` and 40.8% to 29.4% for `♯`.
+    // The shimmer is the variation, not the softness, which is why this is
+    // the fix and a sharper bitmap is not. The reading is the one
+    // `a_drawn_accidental_breathes_less_than_the_type_it_replaced` takes.
     let thick = (weight * size * ppp).max(1.0);
     MarkKey {
         kind,
@@ -2093,15 +2160,20 @@ mod tests {
         }
 
         /// How much of this mark's weight breathes as it slides: the swing in
-        /// `sum a(1-a)` across a walk of one pixel in sixteenths, against the
-        /// mark's own total ink.
+        /// `sum a(1-a)` across a walk of one pixel in sixteenths, as a
+        /// fraction of that sum's own maximum.
         ///
-        /// Issue #292's reading, normalised. The sum alone is maximal at half
-        /// coverage and zero for a pixel that is either ink or nothing, so its
-        /// swing is the symbol's weight visibly changing; dividing by the ink
-        /// is what makes a thin mark and a fat one comparable, since a heavier
-        /// mark has more edge to soften and would otherwise look worse for
-        /// being more legible.
+        /// Issue #292's reading, and its normalisation as well as its sum.
+        /// The sum is maximal at half coverage and zero for a pixel that is
+        /// either ink or nothing, so its swing is the symbol's weight visibly
+        /// changing as it slides; against its own peak, that is the share of
+        /// the softness that is moving rather than sitting still.
+        ///
+        /// Not divided by the mark's ink, which is the reading that suggests
+        /// itself and is the wrong one here: the drawn mark and the type do
+        /// not carry the same ink (19.3 against 26.5 for `♭` at the size
+        /// below), so per-ink flatters whichever is heavier and answers a
+        /// question about weight rather than about shimmer.
         fn breathing(&self) -> f32 {
             let (mut lo, mut hi) = (f32::MAX, 0.0f32);
             for step in 0..16 {
@@ -2110,8 +2182,7 @@ mod tests {
                 lo = lo.min(smear);
                 hi = hi.max(smear);
             }
-            let ink: f32 = self.a.iter().sum();
-            (hi - lo) / ink.max(1e-6)
+            (hi - lo) / hi.max(1e-6)
         }
     }
 
@@ -2136,7 +2207,12 @@ mod tests {
         let cell = galley.rows[0].glyphs[0].uv_rect;
         ctx.fonts(|f| {
             let atlas = f.image();
-            let (w, h) = (cell.size[0] as usize, cell.size[1] as usize);
+            // Off `min`/`max`, which are TEXELS. `UvRect::size` is the glyph's
+            // size in POINTS, and taking the cell from it reads a fraction of
+            // the glyph -- a quarter of it at ppp 2 -- which is a crop that
+            // looks like a plausible bitmap and measures nothing.
+            let w = (cell.max[0] - cell.min[0]) as usize;
+            let h = (cell.max[1] - cell.min[1]) as usize;
             let mut a = Vec::with_capacity(w * h);
             for y in 0..h {
                 for x in 0..w {
@@ -2152,9 +2228,11 @@ mod tests {
     /// whole reason they are drawn.
     ///
     /// Issue #292 measured the symptom on the type: at the size the analyzer
-    /// sets its names, 98.6% of a `♭`'s lit pixels are partial coverage, so
-    /// nothing in the symbol is decided by anything but sub-pixel phase and
-    /// the whole mark shimmers rather than its outline.
+    /// sets its names, essentially every lit pixel of a `♭` is partial
+    /// coverage, so nothing in the symbol is decided by anything but
+    /// sub-pixel phase and the whole mark shimmers rather than its outline.
+    /// The reading here is the SWING rather than that count, because the
+    /// count is what a drawn mark shares -- see [`mark_key`].
     ///
     /// Both paths are read HERE, in one test, off the same walk -- rather
     /// than the drawn one being pinned against a number copied out of that
@@ -2163,9 +2241,19 @@ mod tests {
     /// comparison itself, and it cannot go stale as the face, the size or the
     /// rasterizer move under it.
     ///
-    /// At the size asserted here the readings are 16.2% against 24.1% for
-    /// `♭` and 14.7% against 18.9% for `♯`, so the margin is real rather
-    /// than a hair either side of equal.
+    /// At the size asserted here the readings are 30.3% against 49.0% for
+    /// `♭` and 29.4% against 40.8% for `♯` -- a real margin rather than a
+    /// hair either side of equal. The drawn `-` beside them sits at 4.3%,
+    /// which is what a mark made of one straight bar can reach and neither
+    /// accidental can.
+    ///
+    /// SMALL sizes, and only those, which is where the complaint was: a name
+    /// scrolling slowly is where sub-pixel phase is watchable. At three times
+    /// this size the `♯` still gains (34.7% against 50.4%) and the `♭` is a
+    /// wash (50.1% against 49.9%) -- the type's strokes are over a pixel
+    /// there, so the floor that makes the drawn mark different has nothing
+    /// left to do. Asserting across the range would be asserting something
+    /// this change does not claim.
     #[test]
     fn a_drawn_accidental_breathes_less_than_the_type_it_replaced() {
         // The analyzer's own mark size, on a Retina grid: `names::LABEL_PT`
