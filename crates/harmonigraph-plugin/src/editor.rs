@@ -999,6 +999,44 @@ mod tests {
         assert!(!shared.drain_into_tracker(7.1));
     }
 
+    /// `catch_up`'s ANSWER, which is the only thing that asks for a repaint on
+    /// the tick a note arrives rather than at the idle poll (see `frame`).
+    ///
+    /// Its own test because the drain and the answer fail independently: every
+    /// other test of this path reads the tracker afterwards, so a `catch_up`
+    /// that drained perfectly and always answered `false` would satisfy all of
+    /// them while costing every note played the latency of the idle poll.
+    #[test]
+    fn catch_up_answers_whether_notes_arrived() {
+        let (mut producer, consumer) = rtrb::RingBuffer::new(64);
+        let (_audio_producer, audio_consumer) = rtrb::RingBuffer::new(64);
+        let (_recorder, take_control) = harmonigraph_record::channel();
+        let mut shared = EditorShared::new(
+            consumer,
+            audio_consumer,
+            std::sync::Arc::new(super::AtomicU32::new(48_000.0f32.to_bits())),
+            std::sync::Arc::new(super::AtomicU32::new(1)),
+            take_control,
+            std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        );
+
+        // An empty ring is not a repaint.
+        assert!(!shared.catch_up(7.0), "nothing arrived, so nothing needs drawing");
+
+        producer
+            .push(NoteEvent {
+                time: 1.0,
+                channel: 0,
+                note: 60,
+                kind: NoteEventKind::On { velocity: 1.0 },
+            })
+            .unwrap();
+        assert!(shared.catch_up(7.1), "a note arrived and the frame was not told");
+
+        // And the ring is empty again, so the next tick asks for nothing.
+        assert!(!shared.catch_up(7.2), "the same note asked for a second repaint");
+    }
+
     #[test]
     fn preserves_intra_batch_spacing() {
         let mut clock = ClockMapper::new();
