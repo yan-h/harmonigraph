@@ -31,8 +31,19 @@ pub(super) struct DockHarness {
 
 impl DockHarness {
     pub(super) fn new() -> Self {
+        let ctx = egui::Context::default();
+        // The real faces and sizes, like every other fixture that measures a
+        // width (`settings_pane_at_width`, `settings_pane_at_scale`, and the
+        // spectral ones that say "the real Iosevka metrics" outright). `root_ui`
+        // does NOT install them for us: its only style hook is `set_ui_scale`,
+        // which at scale 1.0 on a context that never had the theme returns
+        // early rather than applying one. So a harness that skips this lays
+        // every string out in egui's 12.5pt fallback, and anything measuring
+        // text is measuring the wrong font — which is the whole job of
+        // `every_settings_tab_fits_on_its_tab_bar`.
+        crate::theme::apply_theme(&ctx);
         DockHarness {
-            ctx: egui::Context::default(),
+            ctx,
             backend: RecordingBackend::default(),
             screen: egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1000.0, 800.0)),
             t: 0.0,

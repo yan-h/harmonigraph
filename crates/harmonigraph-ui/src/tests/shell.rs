@@ -90,17 +90,19 @@ fn the_picture_panes_do_not_scroll() {
 /// new user never learns is there — which is the whole thing this arrangement
 /// is for, so a clipped bar undoes the split it was made by.
 ///
-/// Measured, not derived. egui_dock lays the bar out itself and would answer a
-/// re-derivation of its own sums with whatever it was given; what a user can
-/// SEE is whether the glyphs survived the clip rect they were painted under.
-/// So this asks the real dock for a real frame.
+/// Measured, not derived, and measured in the REAL type. egui_dock lays the bar
+/// out itself and would answer a re-derivation of its own sums with whatever it
+/// was given; what a user can SEE is whether the glyphs survived the clip rect
+/// they were painted under. So this asks the real dock for a real frame — and
+/// [`DockHarness`] installs the theme, without which every title here is laid
+/// out in egui's 12.5pt fallback rather than the editor's 13.5pt face, and the
+/// number below comes out flattering by about 18pt of window.
 ///
-/// The numbers, swept at this height on 2026-08-08: the seven-tab bar needs a
-/// window of 1410pt, where the six-tab bar it replaced needed 1250pt. Both are
+/// The numbers, swept at this height on 2026-08-09: the seven-tab bar needs a
+/// window of 1428pt, where the six-tab bar it replaced needed 1274pt. Both are
 /// above the editor's own `DEFAULT_SIZE` of 1000pt, so the default window has
-/// scrolled its tab bar since well before the split — pinning that is a
-/// separate job from this one, and shrinking the default's tab bar is not
-/// something the split made true.
+/// scrolled its tab bar since well before the split — that is issue #287, and
+/// shrinking the default's tab bar is not something the split made true.
 #[test]
 fn every_settings_tab_fits_on_its_tab_bar() {
     // The window the UI is dialled against, and the one the column widths in
@@ -122,23 +124,33 @@ fn every_settings_tab_fits_on_its_tab_bar() {
         panes::Tab::Video,
         panes::Tab::System,
     ];
+    // The settings leaf's own rect, so a title is only counted where this bar
+    // drew it. Scoping rather than matching text anywhere on screen is what
+    // makes the Analyzer row mean anything: `tab_title` gives the display pane
+    // the same name, that pane is a leaf of its own with one tab and room to
+    // spare, and an unscoped search would find ITS unclipped copy and pass no
+    // matter what the settings column did.
+    let path = state.dock.find_tab(&panes::Tab::Tuning).expect("Tuning is docked");
+    let leaf = state.dock[path.surface][path.node].rect().expect("the leaf is laid out");
     for tab in column {
         let title = panes::tab_title(&tab);
-        // The tab bar paints the title of every tab in the leaf, not just the
-        // selected one, so each is findable by its own text. "Analyzer" names
-        // two tabs and so can match the display pane's bar as well; either one
-        // being whole is the claim, hence `any`.
+        // The bar paints the title of every tab in the leaf, not just the
+        // selected one, so each is findable by its own text.
         let drawn: Vec<_> = output
             .shapes
             .iter()
             .filter_map(|cs| match &cs.shape {
-                egui::Shape::Text(t) if t.galley.text() == title => {
+                egui::Shape::Text(t)
+                    if t.galley.text() == title
+                        && t.pos.x >= leaf.left()
+                        && t.pos.x <= leaf.right() =>
+                {
                     Some((t.pos, t.galley.size(), cs.clip_rect))
                 }
                 _ => None,
             })
             .collect();
-        assert!(!drawn.is_empty(), "the tab bar drew no title for {tab:?}");
+        assert!(!drawn.is_empty(), "the settings tab bar drew no title for {tab:?}");
         let whole = drawn.iter().any(|&(pos, size, clip)| {
             let rect = egui::Rect::from_min_size(pos, size);
             clip.contains_rect(rect)
