@@ -1462,10 +1462,14 @@ pub(crate) mod tests {
     /// is a claim about the FILTER, and a filter that quietly lost its second
     /// tap reads 100 rather than 41.
     ///
-    /// No rim, which is deliberate. `fs_rim` still takes one tap per sample
-    /// and is meant to: the halo's own swing measures under 2% of its weight
-    /// at every setting tried, because a halo either saturates or is faint,
-    /// and a rim widened to match would cost twenty taps for nothing.
+    /// No rim, which is deliberate and is the whole of what this fixture
+    /// isolates: the FILL read through the filter, with nothing else in the
+    /// frame. `fs_rim` reads the same `coverage` and so takes the same two
+    /// taps — it is where most of the change's cost and nearly all of its
+    /// effect live, and it is pinned separately by the outer probe of
+    /// [`a_glyph_paints_its_ink_and_the_rim_stands_outside_it`]. Read the two
+    /// together before touching either: this one alone would go on passing
+    /// with the rim back at a single tap.
     #[test]
     fn a_sliding_hairline_keeps_its_weight() {
         let Some((device, queue)) = headless_device() else {
