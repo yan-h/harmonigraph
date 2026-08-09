@@ -57,7 +57,8 @@
 #   - it is not the worktree this session is running in
 #   - its HEAD is an ancestor of main, so the work is merged and nothing is lost
 #   - `git status --porcelain` is empty: no uncommitted and no untracked files
-#   - it is not locked by a process that is still alive
+#   - it is not locked by a live SESSION — a lock whose pid has fallen back to
+#     the `claude bg-spare` pool is stale and does not protect anything
 #   - nothing near its top level was touched in the last MIN_IDLE_MINUTES
 #
 # A worktree's cache is PRUNED (tier 1) on the same ownership, session and
@@ -316,6 +317,21 @@ usable() {
       return 1
     fi
     if ps -p "$pid" >/dev/null 2>&1; then
+      # The pid being alive does NOT make the lock live. When a session ends its
+      # process goes back to the `claude bg-spare` pool STILL holding this lock,
+      # so the pid outlives the session indefinitely and the worktree is skipped
+      # on every run — 11 of 12 locks and 36.6G of cache, once it has run a
+      # while. The cmdline is what separates the two: an unclaimed spare carries
+      # `--bg-spare`, and a claim adds `--session-id`. Reading `--session-id`
+      # FIRST means a spare claimed for a real session still counts as live,
+      # whatever else its argv kept.
+      cmd=$(ps -p "$pid" -o command= 2>/dev/null)
+      case "$cmd" in
+        *--session-id*) : ;;
+        *--bg-spare*)
+          note "stale lock $name: pid $pid is an unclaimed bg-spare, not a session"
+          return 0 ;;
+      esac
       if [ "$DRY_RUN" = 1 ]; then
         kb=$(du -sk "$path/target/debug" "$path/target/doc" 2>/dev/null | awk '{s+=$1} END{print s+0}')
         HELD_LOCKED_KB=$((HELD_LOCKED_KB + ${kb:-0}))
