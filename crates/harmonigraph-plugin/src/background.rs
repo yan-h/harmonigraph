@@ -146,7 +146,7 @@ fn tick(shared: &Mutex<EditorShared>, editor_state: &EguiState) {
         return;
     };
     let now = shared.now();
-    shared.catch_up(now);
+    shared.catch_up_unwatched(now);
 }
 
 /// Drain, sleep, repeat, until the plugin goes away. Drains FIRST, so a plugin
@@ -211,13 +211,16 @@ mod tests {
 
         /// One note-on, stamped on the audio thread's own sample clock.
         fn push_note(&mut self, time: f64, note: u8) {
+            self.push_kind(time, note, NoteEventKind::On { velocity: 1.0 });
+        }
+
+        fn push_note_off(&mut self, time: f64, note: u8) {
+            self.push_kind(time, note, NoteEventKind::Off);
+        }
+
+        fn push_kind(&mut self, time: f64, note: u8, kind: NoteEventKind) {
             self.notes
-                .push(CoreNoteEvent {
-                    time,
-                    channel: 0,
-                    note,
-                    kind: NoteEventKind::On { velocity: 1.0 },
-                })
+                .push(CoreNoteEvent { time, channel: 0, note, kind })
                 .expect("the ring is sized for this");
         }
 
@@ -265,6 +268,40 @@ mod tests {
         tick(&h.shared, &h.editor_state);
 
         assert_eq!(h.voices(), 2, "a closed window dropped its notes on the floor");
+    }
+
+    /// Feeding the tracker and AGEING it are one job, and this is the drainer
+    /// that has to do both halves itself.
+    ///
+    /// `NoteTracker` parks every note-off in a released tail that only
+    /// [`NoteTracker::prune`] empties, and the frame reaches `prune` through
+    /// `begin_frame` rather than through the drain. A window that never opens
+    /// therefore feeds that tail and nothing ever empties it — which
+    /// `notes.rs` already names as the hazard behind its whole envelope
+    /// design: "the released tail would accumulate for the whole session
+    /// against an O(nodes x voices) loop".
+    #[test]
+    fn a_closed_window_ages_the_voices_it_tracks() {
+        let mut h = harness();
+        // Played and released far behind the batch's newest event, which is
+        // what `ClockMapper` pins to `now` — so this voice's 1 s fade is 99 s
+        // over by the time it lands, and nothing but a missing prune can keep
+        // it alive.
+        h.push_note(0.0, 60);
+        h.push_note_off(0.1, 60);
+        // Still held, so it is never a prune candidate: it is here to pin the
+        // batch's newest timestamp, and to prove the count below is measuring
+        // the released tail rather than an empty tracker.
+        h.push_note(100.0, 64);
+
+        tick(&h.shared, &h.editor_state);
+
+        assert_eq!(
+            h.voices(),
+            1,
+            "a voice whose fade finished 99 s ago is still in the tracker: the drain \
+             feeds the released tail and nothing empties it while the window is shut",
+        );
     }
 
     /// And the mirror image, which is what keeps this thread off the lock a

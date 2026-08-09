@@ -345,10 +345,44 @@ impl EditorShared {
     ///
     /// The notes are drained FIRST so a frame can ask for its repaint before
     /// spending the audio's FFTs; the two are otherwise independent.
+    ///
+    /// This is HALF of what a drain owes the tracker. Feeding it is here;
+    /// ageing it is in [`harmonigraph_ui::begin_frame`], which a frame reaches
+    /// through `root_ui` and a caller that never draws does not reach at all.
+    /// Anything draining without going on to draw wants
+    /// [`catch_up_unwatched`](Self::catch_up_unwatched) instead.
     pub(crate) fn catch_up(&mut self, now: f64) -> bool {
         let notes = self.drain_into_tracker(now);
         self.drain_audio(now);
         notes
+    }
+
+    /// The whole of what a drain owes when no frame will follow it: both rings
+    /// taken, and then the tracker aged.
+    ///
+    /// Ageing is not optional bookkeeping. Every note-off parks a voice in
+    /// `NoteTracker`'s released tail, and [`NoteTracker::prune`] is the only
+    /// thing that empties it — so a drainer that fed the tail without pruning
+    /// would grow it for as long as the plugin ran, which is exactly the
+    /// accumulation `notes.rs` designs its envelope around ("the released tail
+    /// would accumulate for the whole session against an O(nodes x voices)
+    /// loop"). The roll's own age trim rides on the same call.
+    ///
+    /// It lives here rather than inside [`catch_up`](Self::catch_up) so a frame
+    /// keeps pruning EXACTLY once, in `begin_frame`, against the parameter
+    /// mirrors that frame just refreshed. Pruning on the way in as well would
+    /// judge the fade against the previous frame's envelope, and a fade time
+    /// being dragged UPWARD would drop voices that the new, longer envelope
+    /// still has something to draw.
+    ///
+    /// The envelope here is whatever the last frame left behind — its default
+    /// until one has run. That is the right stale value to hold: it is the fade
+    /// the picture was last drawn with, and the alternative is not ageing at
+    /// all.
+    pub(crate) fn catch_up_unwatched(&mut self, now: f64) {
+        self.catch_up(now);
+        let envelope = self.ui.view.envelope(&self.ui.frame_params);
+        self.ui.tracker.prune(now, &envelope);
     }
 }
 
