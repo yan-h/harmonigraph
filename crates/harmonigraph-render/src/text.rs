@@ -324,9 +324,18 @@ pub(crate) fn glyph_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupL
     })
 }
 
-/// Linear, to match how egui samples the same atlas. At the sizes labels are
-/// drawn the glyph lands texel for texel on the framebuffer, so this is an
-/// identity for the fill and only does real work for the rim's off-grid taps.
+/// Linear, to match how egui samples the same atlas — and it does real work on
+/// every tap, the fill's as much as the rim's.
+///
+/// Which is worth stating, because the reverse is the plausible reading and it
+/// is wrong in both of the ways a glyph reaches the framebuffer. A label is
+/// placed where it is handed rather than rounded onto a whole physical pixel
+/// (`harmonigraph_ui::text::TextBatch::text`, which explains why), and the size
+/// ladder draws it a percent or two off the size its atlas patch was
+/// rasterized at. A glyph landing texel for texel is the rare case, not the
+/// ordinary one, so nothing about the fill path is exempt from what this
+/// sampler does — including its `ClampToEdge`, which is what `text.wgsl`'s
+/// `outside_atlas` exists to answer for.
 pub(crate) fn glyph_sampler(device: &wgpu::Device) -> wgpu::Sampler {
     device.create_sampler(&wgpu::SamplerDescriptor {
         label: Some("text_sampler"),
@@ -785,6 +794,112 @@ pub(crate) mod tests {
         assert_eq!(pixel(&frame, 23, 28), [255, 0, 0, 255], "the rim, one point out");
         assert_eq!(pixel(&frame, 21, 28), [0, 0, 0, 0], "nothing past the rim's radius");
         assert_eq!(pixel(&frame, 4, 4), [0, 0, 0, 0], "nothing anywhere else");
+    }
+
+    /// A glyph packed against the atlas's own edge paints the same picture as
+    /// one with epaint's transparent texel all the way around it.
+    ///
+    /// Which is not free, and is the reason `outside_atlas` exists. The margin
+    /// `coverage` reads with looks half a texel outside the patch expecting to
+    /// find that transparent texel; at the boundary there is none, and
+    /// `ClampToEdge` answers with the glyph's own edge texel instead — the
+    /// letter's top row drawn a second time above itself, with a seam under it.
+    /// epaint fills its first band from row 0 and starts each band at column 0,
+    /// so the edge case is where most glyphs live rather than where a few
+    /// unlucky ones do.
+    ///
+    /// Three patches of one 8x8 square: against the top-left corner, padded in
+    /// the middle, and against the bottom-right. All four boundaries, and the
+    /// middle one is what the other two have to match.
+    ///
+    /// Drawn at a fractional offset because that is where a label actually
+    /// lands, and it is the WEAKER of the two cases rather than the only one
+    /// that fails. On the pixel grid a fragment centre falls on `texel = -0.5`
+    /// exactly, so the tap's second sample carries a weight of zero and the
+    /// clamp returns the edge texel whole: a full extra row of ink against this
+    /// fixture's `[3, 0, 0, 3]` at a fractional offset. Both catch a missing
+    /// fade; the fractional one is the picture the bug was reported from.
+    ///
+    /// The offsets differ by whole points and the patches sit at whole texels,
+    /// so all three are at one sub-pixel phase and the pictures are comparable
+    /// pixel for pixel. The atlas is deliberately NOT square, which is what
+    /// holds the far wall to `atlas_size` per axis: read as a scalar it would
+    /// put the bottom wall at the right one, and only a picture with two
+    /// different walls can tell.
+    #[test]
+    fn a_glyph_against_the_atlas_edge_paints_what_a_padded_one_does() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        // 32x48, so the far corner patch ends exactly on the last texel of both.
+        let mut image = egui::ColorImage::filled([32, 48], egui::Color32::TRANSPARENT);
+        for (left, top) in [(0, 0), (12, 12), (24, 40)] {
+            for y in top..top + 8 {
+                for x in left..left + 8 {
+                    image[(x, y)] = egui::Color32::WHITE;
+                }
+            }
+        }
+        let cb = TextCallback {
+            glyphs: [(4.3, 0.0, 0.0), (24.3, 12.0, 12.0), (44.3, 24.0, 40.0)]
+                .iter()
+                .map(|&(x, u, v)| GlyphInstance {
+                    rect: [x, 24.3, 8.0, 8.0],
+                    uv: [u, v, u + 8.0, v + 8.0],
+                    ..glyph()
+                })
+                .collect(),
+            rings: [
+                TextRing { radius: 0.0, alpha: 0.0, samples: 0 },
+                TextRing { radius: 2.0, alpha: 1.0, samples: 8 },
+            ],
+            atlas: Some(FontAtlas { image: std::sync::Arc::new(image), key: 1 }),
+            target_format: FORMAT,
+            pane_id: 0,
+        };
+        let mut resources = CallbackResources::default();
+        let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
+        queue.submit(bufs.into_iter().chain([encoder.finish()]));
+        let rect =
+            egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(SIZE[0] as f32, SIZE[1] as f32));
+        let texture =
+            render_to_texture(&device, &queue, SIZE, FORMAT, wgpu::Color::TRANSPARENT, |pass| {
+                cb.paint(
+                    egui::PaintCallbackInfo {
+                        viewport: rect,
+                        clip_rect: rect,
+                        pixels_per_point: 1.0,
+                        screen_size_px: SIZE,
+                    },
+                    pass,
+                    &resources,
+                );
+            });
+        let frame = readback(&device, &queue, &texture, SIZE);
+
+        // Everything the rim reaches, which is where the two edges differ: the
+        // patch bound cuts a tap a whole texel out, so a doubled row shows up
+        // in the fill and in the halo standing over it.
+        for dy in -3i32..12 {
+            for dx in -3i32..12 {
+                let at = |left: i32| pixel(&frame, (left + dx) as u32, (24 + dy) as u32);
+                let (middle, corner, far) = (at(24), at(4), at(44));
+                for (label, edge) in [("top-left", corner), ("bottom-right", far)] {
+                    // A point of tolerance: the same arithmetic on three
+                    // different atlas coordinates need not land on the same
+                    // float. The doubled row it is here to catch is a quarter
+                    // of the ink, not a rounding.
+                    let off = (0..4).map(|c| edge[c].abs_diff(middle[c])).max().unwrap_or(0);
+                    assert!(
+                        off <= 1,
+                        "the {label} glyph draws {edge:?} at ({dx}, {dy}) where the padded \
+                         one draws {middle:?}",
+                    );
+                }
+            }
+        }
     }
 
     /// A pane whose text is already prepared keeps it when a LATER pane in the
