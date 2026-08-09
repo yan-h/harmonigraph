@@ -4746,13 +4746,19 @@ mod tests {
     /// which averages the ring away on purpose so what it reports is the
     /// geometry the caller asked for.
     ///
-    /// Three claims, and they fail apart. The ring stands OUTSIDE the band on
-    /// all four sides, which is what catches an end left square while the long
-    /// edges are softened. The colors stand inside it, which is what keeps the
-    /// band the size of the well beneath it rather than half a pixel fatter all
-    /// round. And along the straight run the two are a whole feather apart and
-    /// square to the edge, which is the fade itself and not just a ring of
-    /// something drawn near it.
+    /// Four claims, and they fail apart. The ring stands OUTSIDE the band on
+    /// all four sides, which is what catches an offset that ignores which way
+    /// its edge faces and pushes every column straight up instead. A triangle
+    /// is DRAWN across each of the two ends, which is a separate failure and
+    /// the quieter one: the ring's vertices are emitted per column either way,
+    /// so an end left untriangulated keeps every other reading here — the
+    /// bounds included, `calc_bounds` reading vertices and not triangles —
+    /// exactly as it is, and hands back the hard edge this all exists to
+    /// remove. The colors stand inside the band, which is what keeps it the
+    /// size of the well beneath it rather than half a pixel fatter all round.
+    /// And along the straight run the two are a whole feather apart and square
+    /// to the edge, which is the fade itself and not just a ring of something
+    /// drawn near it.
     #[test]
     fn both_colour_bands_fade_out_at_their_edges() {
         let mut g = ViewConfig::default().pitch_gradient;
@@ -4775,6 +4781,23 @@ mod tests {
                 assert!(
                     reach <= edge - feather * 0.5 + 1e-3,
                     "{which}: the {side} edge stops at the band's own — nothing outside it fades",
+                );
+            }
+            // The ring closed across the two ends, and not merely built there.
+            // A band's end is one edge of the outline like any other, but it is
+            // the only one whose ring quad stands inside a single column, every
+            // other one spanning the gap to the next — so a triangle with all
+            // three corners on the end column is exactly that quad, and nothing
+            // else in the mesh can be mistaken for it.
+            let last = (mesh.vertices.len() as u32 / 4 - 1) * 4;
+            for (side, base) in [("near", 0), ("far", last)] {
+                let closed = mesh
+                    .indices
+                    .chunks(3)
+                    .any(|tri| tri.iter().all(|i| (base..base + 4).contains(i)));
+                assert!(
+                    closed,
+                    "{which}: the {side} end has its ring of vertices and no triangle across it",
                 );
             }
             for vertex in &mesh.vertices {
