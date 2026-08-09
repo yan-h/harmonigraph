@@ -505,12 +505,16 @@ pub(crate) const MARK_TRACK: f32 = 0.06;
 /// fraction of the mark's font size.
 ///
 /// A constant rather than a setting, because the face gives no other answer
-/// to weigh it against. It uses ONE weight for everything — `♯`'s verticals
-/// are 69 and its bars 70, the hyphen is 70, `+` is about 70 — and it does
-/// that across a glyph 878 units tall (`♯`) and one 70 units tall (`-`)
-/// alike. So the typeface's own answer to "should a smaller mark be drawn
-/// heavier?" is no, and an optical-sizing argument for 0.10 or 0.12 is an
-/// argument against the face these marks sit in.
+/// to weigh it against. It uses ONE weight for everything STRAIGHT — `♯`'s
+/// verticals are 69 and its bars 70, the hyphen is 70, `+` is about 70, and
+/// `♭`'s stem is 69 — and it does that across a glyph 878 units tall (`♯`)
+/// and one 70 units tall (`-`) alike. So the typeface's own answer to
+/// "should a smaller mark be drawn heavier?" is no, and an optical-sizing
+/// argument for 0.10 or 0.12 is an argument against the face these marks sit
+/// in.
+///
+/// The one curve in the set is the one exception, and it is a fraction of
+/// this rather than a weight of its own: see [`FLAT_BOWL_WEIGHT`].
 ///
 /// Heavier weights were also compensating for something since fixed: while
 /// the marks were composited shapes their feathered joins read heavier than
@@ -582,7 +586,7 @@ const SHARP_SLANT: f32 = 0.202;
 /// Chosen against the face's own outline rather than by eye or by a midline
 /// fit: the points that minimise the coverage difference between this mark
 /// and a rasterization of Iosevka's `uni266D` contours, read over the range
-/// of sizes a name is drawn at. That difference is 7.2% of the glyph's ink,
+/// of sizes a name is drawn at. That difference is 5.4% of the glyph's ink,
 /// against 11.5% for a bowl fitted to the midline instead.
 ///
 /// The midline is the tempting target and it is the wrong one at the bottom
@@ -600,7 +604,29 @@ const SHARP_SLANT: f32 = 0.202;
 /// a constraint, and `a_flats_outline_has_no_crease_where_the_bowl_lands`
 /// holds it.
 const FLAT_BOWL: [[f32; 2]; 4] =
-    [[0.2104, 0.4242], [1.0504, 0.2585], [1.2096, 0.7823], [0.1166, 0.8826]];
+    [[0.2104, 0.4242], [1.0655, 0.2518], [1.2094, 0.7585], [0.1252, 0.9020]];
+/// What the bowl weighs against [`MARK_WEIGHT`], which is the stem's.
+///
+/// The face's one weight covers everything STRAIGHT -- `♯`'s verticals and
+/// bars, the hyphen, the `+`, and this mark's own stem -- and its bowl is the
+/// exception. Measured perpendicular between Iosevka's two contours, the bowl
+/// runs 70 units at its right extreme where the stroke is vertical, 63 across
+/// the top where it is horizontal, and 59..61 for the whole lower-left run
+/// into the stem. One number for a curve that carries three is a compromise,
+/// and 0.861 is where it lands.
+///
+/// It is not a nicety. A bowl at the stem's full weight is too fat on the
+/// inside exactly where the counter is trying to close, so the counter tips
+/// out early and the bowl reads as meeting the stem abruptly rather than
+/// running into it. Nor can the shape be bought back by moving the curve: at
+/// full weight, the placement that lengthens the counter is the placement
+/// that pushes the outer edge across the foot's run, which is the crease
+/// `a_flats_outline_has_no_crease_where_the_bowl_lands` exists to forbid. The
+/// two are one trade, and the face buys out of it by thinning the bowl.
+///
+/// Against the face's own outline, over the sizes a name is drawn at: 7.0% of
+/// the glyph's ink at the stem's weight, 5.4% at this one.
+const FLAT_BOWL_WEIGHT: f32 = 0.861;
 /// The straight run that closes the bowl into the foot of the upright, as the
 /// width the glyph still carries per unit of height above the tip.
 ///
@@ -624,16 +650,19 @@ const FLAT_FOOT_SLOPE: f32 = 3.86;
 ///   stem rather than merged into it.
 /// - It is also where [`FLAT_BOWL`]'s outer edge comes onto the foot's run --
 ///   TANGENT to it, so the outline changes hands without changing direction.
-///   The fitted bowl puts that at 0.85551, which is the same height to two
-///   parts in ten thousand: a hundredth of a pixel at any size a name is
-///   drawn at.
+///
+/// The second is the load-bearing one and this is set to it. It sits a little
+/// below the first, which is what leaves the counter room to tip out on its
+/// own rather than being cut off square: the hole closes at 0.849 and the
+/// outline changes hands at 0.873, so the triangle's top edge is buried
+/// inside the mark by the time it appears.
 ///
 /// So the foot is a triangle whose top vertex sits ON the bowl's outer edge,
 /// sharing its tangent -- and the silhouette below the bowl is one straight
 /// run to the corner. Move this without refitting the bowl and the two part
 /// company: the triangle's top corner pokes out of the outline, or the bowl
 /// bulges past the run and creases back onto it.
-const FLAT_MERGE: f32 = 0.8557;
+const FLAT_MERGE: f32 = 0.8729;
 /// Air between the accidental/comma column and the septimal mark, as a
 /// fraction of the mark's font size. Small: enough that the mark is not
 /// read as another row of the stack it sits beside, not so much that it
@@ -752,12 +781,14 @@ impl<'a> Scanline<'a> {
 /// overlap into a clean point instead of leaving a notch in the outer corner.
 /// Overlap is free -- coverage is a union.
 ///
-/// One width and not two: every drawn mark is the face's single stroke weight
-/// end to end, including `♭`'s bowl. Where the face's own bowl stops being a
-/// stroke it is because it has MERGED with the stem, and that mass is drawn
-/// as a mass (see [`FLAT_MERGE`]) rather than approximated by thinning the
-/// stroke into it -- a stroke that thins is a stroke that loses its core at
-/// the far end, which is the same argument that levels the sharp's bars.
+/// One width and not two. Every drawn stroke here is of ONE weight along its
+/// whole length -- the `♭`'s bowl carries less of it than the stem does (see
+/// [`FLAT_BOWL_WEIGHT`]), but it carries the same amount the whole way round.
+/// Where the face's own bowl stops being a stroke it is because it has MERGED
+/// with the stem, and that mass is drawn as a mass (see [`FLAT_MERGE`])
+/// rather than approximated by thinning the stroke into it -- a stroke that
+/// thins is a stroke that loses its core at the far end, which is the same
+/// argument that levels the sharp's bars.
 fn arm(a: egui::Pos2, b: egui::Pos2, thick: f32) -> MarkPiece {
     let along = (b - a).normalized();
     let across = egui::vec2(-along.y, along.x) * (thick / 2.0);
@@ -906,7 +937,13 @@ fn mark_geometry(key: MarkKey) -> (Vec<MarkPiece>, [usize; 2]) {
                 ]),
             ];
             let bowl = FLAT_BOWL.map(|[u, v]| egui::pos2(left + u * w, top + v * h));
-            pieces.extend(curve_arms(bowl, thick));
+            // The bowl's own weight, held to a whole pixel like the stem's:
+            // the floor is why these marks are drawn at all (see `mark_key`),
+            // and a bowl scaled under it would be back to the sub-pixel stroke
+            // it exists to escape. So the two meet at 1px on a mark small
+            // enough for it to matter, and the face's ratio shows through
+            // wherever there are pixels to carry it.
+            pieces.extend(curve_arms(bowl, (thick * FLAT_BOWL_WEIGHT).max(1.0)));
             pieces
         }
     };
@@ -1299,7 +1336,7 @@ fn mark_key(kind: MarkKind, size: f32, weight: f32, ppp: f32) -> MarkKey {
     // at a sub-pixel offset is two pixels at half. What changes is how much
     // that varies as the mark slides: a stroke floored at a pixel is nearly
     // the same picture at every phase, where one at 0.58px is not, and the
-    // swing drops from 49.0% to 30.4% for `♭` and 40.8% to 29.4% for `♯`.
+    // swing drops from 49.0% to 30.8% for `♭` and 40.8% to 29.4% for `♯`.
     // The shimmer is the variation, not the softness, which is why this is
     // the fix and a sharper bitmap is not. The reading is the one
     // `a_drawn_accidental_breathes_less_than_the_type_it_replaced` takes.
@@ -2231,6 +2268,70 @@ mod tests {
         }
     }
 
+    /// The `♭`'s bowl runs lighter than its stem, and still never goes under
+    /// a physical pixel.
+    ///
+    /// Both halves matter and they pull against each other. The bowl is
+    /// lighter because Iosevka's is ([`FLAT_BOWL_WEIGHT`]), and a bowl at the
+    /// stem's weight closes the counter early. But the floor is why the mark
+    /// is drawn rather than typeset at all (see [`mark_key`]), so scaling the
+    /// bowl UNDER it would walk straight back into the sub-pixel stroke this
+    /// whole path exists to escape. Below the size where 0.861 of a stroke is
+    /// still a pixel, the two weights meet and the bowl is the stem's.
+    #[test]
+    fn a_flats_bowl_is_lighter_than_its_stem_and_never_under_a_pixel() {
+        for size in [6.79_f32, 12.35, 33.0, 140.0] {
+            let key = mark_key(MarkKind::Flat, size, MARK_WEIGHT, 2.0);
+            let stem = key.weight_16 as f32 / 16.0;
+            let (pieces, _) = mark_geometry(key);
+            // Read off the geometry rather than the bitmap: a horizontal cut
+            // through a stroke measures the stroke's own width only where it
+            // crosses the row square, so pixels are the wrong instrument for a
+            // ratio. What the pixels have to show is pinned by the three tests
+            // around this one.
+            let bars: Vec<f32> = pieces
+                .iter()
+                .filter_map(|p| match p {
+                    MarkPiece::Bar(r) => Some(r.width()),
+                    MarkPiece::Quad(_) => None,
+                })
+                .collect();
+            assert_eq!(bars.len(), 1, "a flat has one straight piece, its stem");
+            assert!(
+                (bars[0] - stem).abs() < 1e-3,
+                "the stem is {:.3}px, not the {stem:.3}px the key asked for, at size {size}",
+                bars[0]
+            );
+            // Every quad past the foot is an arm of the bowl, and an arm's
+            // width is the span across its own start.
+            let want = (stem * FLAT_BOWL_WEIGHT).max(1.0);
+            let arms: Vec<f32> = pieces
+                .iter()
+                .skip(2)
+                .filter_map(|p| match p {
+                    MarkPiece::Quad(c) => Some((c[0] - c[3]).length()),
+                    MarkPiece::Bar(_) => None,
+                })
+                .collect();
+            assert!(arms.len() >= 2, "a bowl is at least two arms, not {}", arms.len());
+            for a in &arms {
+                assert!(
+                    (a - want).abs() < 1e-3,
+                    "an arm of the bowl is {a:.3}px against the {want:.3}px it should carry \
+                     at size {size}, where the stem is {stem:.3}px"
+                );
+                // The length is computed from corners, so it carries a little
+                // float noise; a pixel short by 1e-7 is still a pixel.
+                assert!(*a > 1.0 - 1e-3, "an arm is {a:.3}px at size {size}, under the floor");
+            }
+            if stem * FLAT_BOWL_WEIGHT >= 1.0 {
+                assert!(want < stem, "the bowl should run lighter than the stem at size {size}");
+            } else {
+                assert_eq!(want, 1.0, "at the floor the bowl is one pixel, size {size}");
+            }
+        }
+    }
+
     /// A `♭`'s stem and bowl are ONE mass where the face has them merged.
     ///
     /// The complement of the test above, and the failure it pins is the one
@@ -2400,7 +2501,7 @@ mod tests {
     /// comparison itself, and it cannot go stale as the face, the size or the
     /// rasterizer move under it.
     ///
-    /// At the size asserted here the readings are 30.4% against 49.0% for
+    /// At the size asserted here the readings are 30.8% against 49.0% for
     /// `♭` and 29.4% against 40.8% for `♯` -- a real margin rather than a
     /// hair either side of equal. The drawn `-` beside them sits at 4.3%,
     /// which is what a mark made of one straight bar can reach and neither
@@ -2409,7 +2510,7 @@ mod tests {
     /// SMALL sizes, and only those, which is where the complaint was: a name
     /// scrolling slowly is where sub-pixel phase is watchable. At three times
     /// this size the `♯` still gains (37.9% against 52.9%) and the `♭` is a
-    /// wash (39.6% against 40.6%) -- the type's strokes are over a pixel
+    /// wash (40.6% either way) -- the type's strokes are over a pixel
     /// there, so the floor that makes the drawn mark different has nothing
     /// left to do. Asserting across the range would be asserting something
     /// this change does not claim.
