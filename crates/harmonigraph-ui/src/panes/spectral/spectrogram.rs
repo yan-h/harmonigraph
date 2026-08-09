@@ -197,13 +197,42 @@ struct Bin {
 /// than their row, which is most of the axis, the floor drops away from them and
 /// contrast improves by about a dB; for the narrow ones both come down together.
 /// What does not vary either way is the zoom.
-const ROW_MEAN_ORDER: f32 = 4.0;
+///
+/// Read by the CURVE as well as by the heatmap, through [`power_mean`] — the two
+/// halves of the pane draw one measurement two ways, and a pixel of each covers
+/// the same run of buckets, so a run that read differently between them would
+/// put a ridge and the curve over it at different heights.
+pub(super) const ROW_MEAN_ORDER: i32 = 4;
+
+/// The power mean of order [`ROW_MEAN_ORDER`] over a run of POWERS — the curve's
+/// form of the read [`RowRead::Mean`] performs on the heatmap's stored dB bytes.
+///
+/// Two implementations of one definition rather than one shared function,
+/// because the two callers hold their buckets differently and each form is the
+/// cheap one where it lives: the heatmap's are bytes of dB, where the mean is a
+/// table lookup and a sum, and the curve's are floats of power, where it is
+/// this. `the_curve_and_the_heatmap_read_a_run_of_buckets_alike` is what keeps
+/// the pair honest.
+///
+/// Denominated against the run's own loudest, exactly as the table is, and for
+/// the same reason: a raw fourth power of an absolute power underflows an `f32`
+/// long before the axis runs out of quiet buckets.
+pub(super) fn power_mean(run: &[f32]) -> f32 {
+    let top = run.iter().fold(0.0f32, |a, &b| a.max(b));
+    if run.len() < 2 || top <= 0.0 {
+        return top;
+    }
+    let sum: f32 = run.iter().map(|&p| (p / top).powi(ROW_MEAN_ORDER)).sum();
+    top * (sum / run.len() as f32).powf(1.0 / ROW_MEAN_ORDER as f32)
+}
 
 /// Stored steps the mean falls per halving of the summed weight — the byte-form
 /// of `(10 / ROW_MEAN_ORDER) * log10(..)`, with `log10` reached through `log2`
 /// and the dB then divided by the store's own step.
 const ROW_MEAN_STEPS: f32 = 10.0
-    / (ROW_MEAN_ORDER * harmonigraph_core::spectrogram::DB_STEP * std::f32::consts::LOG2_10);
+    / (ROW_MEAN_ORDER as f32
+        * harmonigraph_core::spectrogram::DB_STEP
+        * std::f32::consts::LOG2_10);
 
 /// The weight a bucket carries in [`RowRead::Mean`], indexed by how many stored
 /// steps BELOW the loudest bucket of its row it sits.
@@ -215,7 +244,7 @@ const ROW_MEAN_STEPS: f32 = 10.0
 static ROW_WEIGHT: std::sync::LazyLock<[f32; 256]> = std::sync::LazyLock::new(|| {
     std::array::from_fn(|j| {
         let db = j as f32 * harmonigraph_core::spectrogram::DB_STEP;
-        10f32.powf(-0.1 * ROW_MEAN_ORDER * db)
+        10f32.powf(-0.1 * ROW_MEAN_ORDER as f32 * db)
     })
 });
 
@@ -1892,6 +1921,47 @@ mod tests {
     /// so what the aggregation tests below assert against.
     fn q(power: f32) -> BucketDb {
         harmonigraph_core::spectrogram::quantize(power)
+    }
+
+    /// The curve and the heatmap read one run of buckets the same way.
+    ///
+    /// They hold their buckets differently — the curve as floats of power, the
+    /// heatmap as bytes of dB — so the mean is written twice, and two forms of
+    /// one definition drift. What that costs is visible rather than subtle: a
+    /// pixel of the curve and a row of the heatmap cover the SAME buckets, and
+    /// the pane draws both from one gradient through one loudness mapping
+    /// precisely so equal levels read equal, so a disagreement puts a ridge and
+    /// the curve above it at different heights on one tone.
+    ///
+    /// The tolerance is the store's own, not a fudge: the heatmap's side rounds
+    /// to [`DB_STEP`](harmonigraph_core::spectrogram::DB_STEP) twice over, once
+    /// quantizing each bucket and once re-encoding the mean.
+    #[test]
+    fn the_curve_and_the_heatmap_read_a_run_of_buckets_alike() {
+        let mut seed = 0x9E37_79B9_7F4A_7C15u64;
+        let mut next = || {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (seed >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let step = harmonigraph_core::spectrogram::DB_STEP;
+        for run_len in [2usize, 3, 5, 10, 32] {
+            for _ in 0..200 {
+                // Spread across 90 dB, which is where two forms of one mean have
+                // the most room to disagree — a flat run agrees trivially.
+                let powers: Vec<f32> =
+                    (0..run_len).map(|_| 10f64.powf(-9.0 * next()) as f32).collect();
+                let mut column = [0.0f32; SPECTRUM_BINS];
+                column[..run_len].copy_from_slice(&powers);
+                let col = crate::SpectrogramColumn::from_power(0.0, &column);
+
+                let curve = 10.0 * power_mean(&powers).max(1e-30).log10();
+                let heat = db_of(RowRead::Mean { from: 0, to: run_len }.of(&col.db));
+                assert!(
+                    (curve - heat).abs() <= 2.0 * step,
+                    "a run of {run_len}: curve {curve:.3} dB, heatmap {heat:.3} dB",
+                );
+            }
+        }
     }
 
     /// The picture's noise floor SETTLES as the pitch axis zooms out, instead of
