@@ -5,8 +5,8 @@
 # location Bitwig scans — then re-sign ad-hoc (required on Apple Silicon,
 # where an invalid signature makes the dynamic loader refuse the binary).
 #
-# Run this after ANY change you want to see in the DAW, then rescan/restart
-# the plugin in Bitwig. Works from the main checkout or any worktree.
+# Run this after ANY change you want to see in the DAW, then deactivate and
+# reactivate the plugin in Bitwig. Works from the main checkout or any worktree.
 #
 # Why this script exists (two footguns it sidesteps):
 #   1. `cargo xtask bundle` picks the *topmost* Cargo.toml ancestor, so run
@@ -40,28 +40,6 @@ MAIN="$(git worktree list --porcelain | awk '/^worktree /{print substr($0, 10); 
 BUNDLED="$MAIN/target/bundled"
 DYLIB="$HERE/target/release/lib${LIB}.dylib"
 
-# Put $1 where $2 is, without ever rewriting $2's own bytes.
-#
-# A plain `cp` opens the destination with O_TRUNC and writes through the SAME
-# inode, and a Bitwig plugin host demand-pages the plugin's code from exactly
-# that inode for as long as the plugin is loaded. Overwriting it under a live
-# host therefore leaves that host reading a file that is half one build and
-# half another for every page it has not faulted in yet — and which pages
-# those are is decided by whatever the kernel happened to evict, so the
-# failure is undefined and arrives whenever the host next draws something new.
-#
-# A rename gives the incoming build an inode of its own and leaves the old one
-# whole and unlinked underneath the running host, which keeps running the
-# build it started with until Bitwig restarts the plugin — which is what the
-# "rescan/restart" instruction at the top of this file is for. The temp file
-# is in the destination's own directory so the rename stays within one
-# filesystem and is atomic.
-swap_exe() {
-  local src="$1" dst="$2" tmp="$2.incoming"
-  cp "$src" "$tmp"
-  mv -f "$tmp" "$dst"
-}
-
 echo "Building $PKG (release) from $HERE ..."
 ( cd "$HERE" && cargo build --release -p "$PKG" )
 [ -f "$DYLIB" ] || { echo "ERROR: $DYLIB not found after build" >&2; exit 1; }
@@ -74,7 +52,12 @@ for EXT in clap vst3; do
     echo "         checkout: (cd \"$MAIN\" && cargo xtask bundle $PKG --release)" >&2
     continue
   fi
-  swap_exe "$DYLIB" "$BUNDLE/Contents/MacOS/$NAME"
+  # Written through the destination's OWN inode, deliberately — see the same copy
+  # in load-plugin.sh. Bitwig's plugin host keeps the library it opened mapped
+  # across a deactivate/activate, so only a change to the bytes behind that inode
+  # reaches a running host; a fresh inode at the same path leaves it on the old
+  # build until Bitwig restarts.
+  cp "$DYLIB" "$BUNDLE/Contents/MacOS/$NAME"
   codesign --force --sign - "$BUNDLE"
   codesign --verify --verbose=1 "$BUNDLE"
   echo "Updated + signed: $BUNDLE"
@@ -90,9 +73,7 @@ SUPPORT="$HOME/Library/Application Support/$NAME"
 ( cd "$HERE" && cargo build --release -p harmonigraph-offline )
 if [ -f "$HERE/target/release/harmonigraph-offline" ]; then
   mkdir -p "$SUPPORT"
-  # Renamed into place for the same reason the bundles are: a render running
-  # right now keeps the whole binary it started from.
-  swap_exe "$HERE/target/release/harmonigraph-offline" "$SUPPORT/harmonigraph-offline"
+  cp "$HERE/target/release/harmonigraph-offline" "$SUPPORT/harmonigraph-offline"
   echo "Updated renderer:  $SUPPORT/harmonigraph-offline"
 else
   echo "WARNING: harmonigraph-offline not built; auto-render will not work" >&2
@@ -108,7 +89,7 @@ if [ "$updated" -gt 0 ]; then
     echo "commit=$(git -C "$HERE" rev-parse --short HEAD)"
     echo "loaded_at=$(date +%s)"
   } > "$BUNDLED/.loaded"
-  echo "Done ($updated bundle(s)). Rescan/restart the plugin in Bitwig."
+  echo "Done ($updated bundle(s)). Deactivate + reactivate the plugin in Bitwig."
 else
   echo "No bundles updated — see warnings above." >&2
   exit 1
