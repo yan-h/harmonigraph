@@ -927,6 +927,13 @@ fn scrolling_settings_pane(tab: panes::Tab, scale: f32) -> Vec<egui::epaint::Cli
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
     state.ui_scale = scale;
     state.dock = egui_dock::DockState::new(vec![tab]);
+    // The same shell [`settings_pane_at_width`] draws for, so the Video pane
+    // brings its record row and its progress bar — the two controls
+    // `widgets::bar_width` calls out as having nowhere to wrap to, and so the
+    // two likeliest to reach the lane.
+    state.take.supported = true;
+    state.take.last_ready = true;
+    state.take.render_progress = Some(FIXTURE_RENDER);
     for i in 0..40 {
         state.console.log(format!("{i:02} a log line long enough to run the width of the pane"));
     }
