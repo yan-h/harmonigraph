@@ -302,17 +302,20 @@ impl EditorShared {
         true
     }
 
-    /// Drain the audio sample ring into the spectrum analyzer. Always
-    /// drains — the ring must not hold stale audio for a burst when the
-    /// display is toggled on — but skips the analyzer while nothing shows it.
+    /// Drain the audio sample ring into the spectrum analyzer.
+    ///
+    /// Always drains AND always feeds. There is no display state that makes the
+    /// samples unwanted: the curve and the spectrogram read this one analyzer,
+    /// the curve is always drawn, and feeding it is also what drives smooth
+    /// repaint (via `is_flowing`). Draining without feeding would only leave the
+    /// ring holding stale audio to burst later — and gating the feed on
+    /// something being on screen is what [`crate::background`] exists to say is
+    /// wrong, since the whole point there is to analyze when nothing shows it.
     fn drain_audio(&mut self, now: f64) {
         self.audio_buf.clear();
         while let Ok(sample) = self.audio_consumer.pop() {
             self.audio_buf.push(sample);
         }
-        // The curve and the spectrogram read this one analyzer, and the curve
-        // is always drawn, so it is always fed (which, via `is_flowing`, also
-        // drives smooth repaint).
         if !self.audio_buf.is_empty() {
             let sample_rate = self.sample_rate();
             let channels = self.audio_channels();
@@ -693,7 +696,7 @@ impl EguiState {
 
     /// Record that the window has opened or closed.
     ///
-    /// Named rather than stored inline because it is no longer only the host's
+    /// Named rather than stored inline because it is not only the host's
     /// business: [`crate::background`] reads it to decide whether a frame is
     /// already draining the rings, so the two transitions are a seam between
     /// threads and not just a bit.

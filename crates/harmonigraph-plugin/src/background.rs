@@ -1,14 +1,15 @@
 //! The spectrum analyzer that keeps running while the editor window is closed.
 //!
-//! `process` fills both audio→GUI rings whether or not anyone is watching, but
-//! only a GUI frame ever drained them — and the two rings fail very differently
-//! when nothing does. The note ring holds 4096 events, minutes of playing, so a
-//! reopened window replays what it missed and the roll fills in. The audio ring
-//! holds [`AUDIO_RING_CAPACITY`](crate::AUDIO_RING_CAPACITY) samples, 1.37 s of
-//! stereo at 48 kHz, so it saturates within seconds and every sample after that
-//! is dropped on the floor. That asymmetry is what this exists to remove:
-//! reopening a window shut for a minute gave back a roll full of notes over a
-//! heatmap with a minute-wide hole in it.
+//! `process` fills both audio→GUI rings whether or not anyone is watching, and
+//! a GUI frame is otherwise the only thing that drains them — which the two
+//! rings survive very differently. The note ring holds 4096 events, minutes of
+//! playing, so a reopened window replays what it missed and the roll fills in.
+//! The audio ring holds [`AUDIO_RING_CAPACITY`](crate::AUDIO_RING_CAPACITY)
+//! samples, 1.37 s of stereo at 48 kHz, so it saturates within seconds and
+//! every sample after that is dropped on the floor. Without a drainer of its
+//! own, reopening a window shut for a minute would give back a roll full of
+//! notes over a heatmap with a minute-wide hole in it; removing that asymmetry
+//! is what this is for.
 //!
 //! Both rings are drained here, not just the audio one, and the second is not a
 //! bonus. A full ring drops the NEWEST, so once the note ring saturates the
@@ -60,8 +61,10 @@ use crate::editor::{EditorShared, EguiState};
 ///
 /// Bounded below by nothing that matters — the drain is the same work whenever
 /// it happens, and 50 wakeups a second against a 5%-of-a-core FFT load is not
-/// where the cost is. What a shorter poll would buy is a shorter lock hold, and
-/// at 20 ms that is already about a millisecond of FFT.
+/// where the cost is. A shorter poll would shorten the TYPICAL lock hold, which
+/// is already about a millisecond of FFT; it would not shorten the worst one,
+/// because that is set by how full the ring got while this thread was away
+/// rather than by how often it means to look. See [`tick`] for that bound.
 pub(crate) const POLL: Duration = Duration::from_millis(20);
 
 /// The thread, and the flag that ends it.
@@ -128,16 +131,25 @@ impl Drop for BackgroundAnalyzer {
 /// and not a mechanism. A second party on that lock is precisely what that
 /// hypothesis is about, so this one is arranged to be a party only when the
 /// other cannot be: the window is checked BEFORE the lock is asked for, and
-/// asked for with `try_lock`, so an open editor never waits here and this never
-/// waits on a frame.
+/// asked for with `try_lock` — so this thread never waits on a frame at all,
+/// and a frame waits on this thread only for the width of one drain.
 ///
-/// The transitions are ordered to match. `LatticeEditorHandle::drop` takes the
-/// lock with `open` still true, so the save-and-close path is never behind this
-/// thread. `Editor::spawn` sets `open` after the window is built, which leaves
-/// window construction as the one overlap — and there the wait is a single
-/// drain, one poll's worth of audio, rather than a whole frame.
+/// The transitions are ordered to keep even that rare.
+/// `LatticeEditorHandle::drop` takes the lock with `open` still true, so the
+/// save-and-close path is never behind this thread. `Editor::spawn` sets `open`
+/// after the window is built, which leaves window construction as the one
+/// overlap — a check that passed a moment before the window claimed itself.
 ///
-/// A skipped round costs nothing: the ring carries seventeen of them.
+/// **A drain is bounded by the RING, not by the poll**, and the difference is
+/// worth stating because the reassuring number is the wrong one. Descheduled
+/// past 1.37 s with the window shut, this wakes to a full ring and spends ~170
+/// columns of FFT — about 70 ms — under one lock; the steady state is a poll's
+/// worth, about a millisecond. Neither is a hang, but 70 ms on the host's main
+/// thread inside `gui_create` is the figure to argue with if #296 is ever
+/// re-opened against this lock.
+///
+/// A skipped round costs nothing: the ring carries seventeen of them even at
+/// the fastest rate a host offers.
 fn tick(shared: &Mutex<EditorShared>, editor_state: &EguiState) {
     if editor_state.is_open() {
         return;
@@ -149,9 +161,10 @@ fn tick(shared: &Mutex<EditorShared>, editor_state: &EguiState) {
     shared.catch_up_unwatched(now);
 }
 
-/// Drain, sleep, repeat, until the plugin goes away. Drains FIRST, so a plugin
-/// instantiated into a running project starts its history at once rather than a
-/// poll later.
+/// Drain, sleep, repeat, until the plugin goes away.
+///
+/// The flag is read once per round and a round is only a drain, which is what
+/// bounds the join in [`BackgroundAnalyzer::drop`] to a single [`POLL`].
 fn run(shared: &Mutex<EditorShared>, editor_state: &EguiState, stop: &AtomicBool) {
     while !stop.load(Ordering::Relaxed) {
         tick(shared, editor_state);
