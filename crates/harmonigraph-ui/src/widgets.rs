@@ -1177,10 +1177,12 @@ impl<'a> RangeBar<'a> {
             // a mesh rounding this corner instead would put two roundings on
             // the one arc of the one fill.
             //
-            // So the mesh is handed the one stretch with no corner to draw. It
-            // meets the head at `low` in exactly the head's own color and the
-            // bare track at `high` in exactly the well's, so neither of its
-            // square ends is a visible edge at all.
+            // So the mesh is handed the stretch that leaves out the bar's own
+            // left corner — the one end of this fill that stands in full color
+            // against the panel. Its far end rounds itself, on the well's own
+            // radius, and both of its ends land in the color they meet: the
+            // head's at `low` and the well's at `high`, so neither is a visible
+            // edge at all.
             if *self.high > min {
                 let mut fill = rect;
                 fill.max.x = hx;
