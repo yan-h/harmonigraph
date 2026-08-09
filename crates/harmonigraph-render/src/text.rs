@@ -17,6 +17,13 @@
 //! framebuffer. Glyph rasterization is untouched, so a label here is the
 //! same pixels as the rest of the UI's text.
 //!
+//! Nor does it rasterize the DRAWN marks — the accidentals and comma signs a
+//! note name carries, which the UI cuts and packs into a sheet of its own for
+//! the same reasons egui has an atlas. They arrive as instances like any
+//! other, naming that sheet in [`GlyphInstance::atlas`], and everything below
+//! treats them as glyphs: one quad, the rim from `fs_rim`'s arithmetic, and
+//! whatever place in the draw order the run they were collected with has.
+//!
 //! **Who else draws through it.** The pipelines, the atlas mirror and the
 //! shader are shared with the lattice, which draws its node names inside its
 //! own scene pass rather than over the finished picture (see
@@ -45,11 +52,14 @@ const TEXT_SRC: &str = include_str!("shaders/text.wgsl");
 #[cfg(test)]
 pub(crate) const TEXT_ENTRY_POINTS: &[&str] = &["vs_glyph", "fs_rim", "fs_fill"];
 
-/// One glyph: where it goes on screen, where it lives in egui's font atlas,
-/// and the two colors it is drawn in.
+/// One glyph: where it goes on screen, where it lives in the atlas it is cut
+/// from, and the two colors it is drawn in.
 ///
-/// Both rects come straight out of the galley egui laid out, so this crate
-/// never learns what the text says or which font it is in.
+/// A letter's rects come straight out of the galley egui laid out, so this
+/// crate never learns what the text says or which font it is in. A drawn MARK
+/// arrives the same way from a rasterizer of the UI's own ([`Self::atlas`]),
+/// and everything downstream — the quad, the patch bound, the rim's
+/// arithmetic — treats the two alike.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct GlyphInstance {
@@ -65,9 +75,26 @@ pub struct GlyphInstance {
     /// The rim's color at full strength; the rings decide its opacity. A
     /// fully transparent rim skips the rim pass for this glyph.
     pub rim: [u8; 4],
+    /// Which of the pass's two textures [`Self::uv`] addresses:
+    /// [`Self::TYPE`] or [`Self::MARK`].
+    ///
+    /// Two textures rather than one, and the reason is a per-instance
+    /// identity that a shared atlas cannot keep: the shader reads a rim
+    /// radius in POINTS and steps it in TEXELS at `pixels_per_point`, which
+    /// holds only while an atlas's texels are device pixels. Both are today,
+    /// and a mark rasterized finer than the display (the lever
+    /// `harmonigraph_ui::panes::lattice::mark_key` leaves open) would break
+    /// that identity for every letter sharing the sheet. Per texture it stays
+    /// uniform, at the price of this selector.
+    pub atlas: u32,
 }
 
 impl GlyphInstance {
+    /// [`Self::atlas`]: a letter, in egui's font atlas.
+    pub const TYPE: u32 = 0;
+    /// [`Self::atlas`]: a drawn mark, in the marks' own.
+    pub const MARK: u32 = 1;
+
     const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
         array_stride: std::mem::size_of::<GlyphInstance>() as wgpu::BufferAddress,
         step_mode: wgpu::VertexStepMode::Instance,
@@ -76,6 +103,7 @@ impl GlyphInstance {
             1 => Float32x4, // uv
             2 => Unorm8x4,  // fill
             3 => Unorm8x4,  // rim
+            4 => Uint32,    // atlas
         ],
     };
 }
@@ -94,8 +122,9 @@ pub struct TextRing {
     pub samples: u32,
 }
 
-/// egui's font atlas, as this crate needs it: the pixels, and a key that
-/// changes whenever they do.
+/// One of the two sheets a glyph can be cut from — egui's font atlas, or the
+/// drawn marks' — as this crate needs it: the pixels, and a key that changes
+/// whenever they do.
 ///
 /// A callback cannot reach the texture egui uploaded — `CallbackResources`
 /// holds what WE put there — so the atlas is mirrored. The key is what makes
@@ -108,21 +137,22 @@ pub struct FontAtlas {
 
 /// Draw `glyphs` into `rect`. `pane_id` must be unique per pane drawing text
 /// in the same frame (each keeps its own instance buffer; the pipeline and
-/// the atlas are shared).
+/// the atlases are shared).
 ///
-/// `atlas` is `None` on the frames where egui's atlas has not changed, which
-/// is nearly all of them.
+/// `atlas` and `marks` are `None` on the frames where the sheet in question
+/// has not changed, which is nearly all of them.
 pub fn text_paint_callback(
     rect: egui::Rect,
     glyphs: Vec<GlyphInstance>,
     rings: [TextRing; 2],
     atlas: Option<FontAtlas>,
+    marks: Option<FontAtlas>,
     target_format: wgpu::TextureFormat,
     pane_id: u64,
 ) -> egui::PaintCallback {
     egui_wgpu::Callback::new_paint_callback(
         rect,
-        TextCallback { glyphs, rings, atlas, target_format, pane_id },
+        TextCallback { glyphs, rings, atlas, marks, target_format, pane_id },
     )
 }
 
@@ -130,6 +160,7 @@ struct TextCallback {
     glyphs: Vec<GlyphInstance>,
     rings: [TextRing; 2],
     atlas: Option<FontAtlas>,
+    marks: Option<FontAtlas>,
     target_format: wgpu::TextureFormat,
     pane_id: u64,
 }
@@ -146,12 +177,16 @@ struct TextCallback {
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub(crate) struct TextUniforms {
     pub(crate) screen_points: [f32; 2],
+    /// The two sheets' sizes in texels, ADJACENT so one partial write covers
+    /// the pair — see [`ATLAS_SIZES_OFFSET`], which is the whole reason they
+    /// sit together rather than each beside what it belongs to.
     pub(crate) atlas_size: [f32; 2],
+    pub(crate) mark_atlas_size: [f32; 2],
     pub(crate) pixels_per_point: f32,
     /// WGSL aligns a `vec4<f32>` to 16 bytes, so the rings start at 32 and
     /// this is the gap in front of them. Named rather than derived because
     /// the mismatch is a validation error at first paint, not a compile one.
-    pub(crate) _pad: [f32; 3],
+    pub(crate) _pad: f32,
     pub(crate) ring0: [f32; 4],
     pub(crate) ring1: [f32; 4],
 }
@@ -175,6 +210,10 @@ struct TextResources {
     target_format: wgpu::TextureFormat,
     /// The mirrored font atlas, and the key of what is in it.
     atlas: MirroredAtlas,
+    /// And the drawn marks', which a session that never draws one leaves
+    /// empty for its whole life.
+    marks: MirroredAtlas,
+    blank: wgpu::Texture,
     panes: HashMap<u64, TextPane>,
 }
 
@@ -228,6 +267,12 @@ impl MirroredAtlas {
 
     pub(crate) fn view(&self) -> Option<wgpu::TextureView> {
         Some(self.texture.as_ref()?.create_view(&Default::default()))
+    }
+
+    /// The mirrored texture, or `blank` while there is none — the form a bind
+    /// group takes, since a binding cannot be left unfilled.
+    pub(crate) fn view_or(&self, blank: &wgpu::Texture) -> wgpu::TextureView {
+        self.view().unwrap_or_else(|| blank.create_view(&Default::default()))
     }
 
     /// Take a copy of `atlas`, and say whether the texture was RECREATED —
@@ -287,10 +332,20 @@ struct TextPane {
 /// thousand glyphs; it grows by `next_power_of_two` when a frame overflows.
 const INITIAL_GLYPH_CAPACITY: usize = 2048;
 
-/// The bindings every glyph pipeline takes: the surface's uniforms, the
-/// mirrored atlas, and its sampler. Shared with the lattice, which draws the
-/// same glyphs into its own pass.
+/// The bindings every glyph pipeline takes: the surface's uniforms, the two
+/// mirrored sheets, and the sampler they share. Shared with the lattice, which
+/// draws the same glyphs into its own pass.
 pub(crate) fn glyph_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    let sheet = |binding| wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    };
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("text_bind_group_layout"),
         entries: &[
@@ -304,22 +359,14 @@ pub(crate) fn glyph_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupL
                 },
                 count: None,
             },
-            wgpu::BindGroupLayoutEntry {
-                binding: 1,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            },
+            sheet(1),
             wgpu::BindGroupLayoutEntry {
                 binding: 2,
                 visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                 count: None,
             },
+            sheet(3),
         ],
     })
 }
@@ -348,7 +395,11 @@ pub(crate) fn glyph_sampler(device: &wgpu::Device) -> wgpu::Sampler {
 }
 
 impl TextResources {
-    fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Self {
+    fn new(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        target_format: wgpu::TextureFormat,
+    ) -> Self {
         let layout = glyph_bind_group_layout(device);
         let rim_pipeline = create_text_pipeline(device, target_format, &layout, "fs_rim", None);
         let fill_pipeline = create_text_pipeline(device, target_format, &layout, "fs_fill", None);
@@ -359,20 +410,23 @@ impl TextResources {
             sampler: glyph_sampler(device),
             target_format,
             atlas: MirroredAtlas::default(),
+            marks: MirroredAtlas::default(),
+            blank: blank_atlas(device, queue),
             panes: HashMap::new(),
         }
     }
 
-    /// Upload egui's atlas into our own texture, recreating it when it has
-    /// grown — and carrying every pane already prepared this frame over onto
-    /// the new texture, since none of them will prepare again before they are
-    /// painted.
+    /// Upload whichever sheet has moved into our own texture, recreating it
+    /// when it has grown — and carrying every pane already prepared this frame
+    /// over onto the new texture, since none of them will prepare again before
+    /// they are painted.
     ///
     /// That last part is the whole of why this is not four lines. egui-wgpu
     /// runs EVERY callback's `prepare` and only then every `paint`, and which
     /// pane brings a changed atlas is decided by which pane happened to lay out
     /// a glyph nobody had drawn before — the roll scrolling a new name in, a
-    /// lattice node crossing onto a new rung of the size ladder. Every pane
+    /// lattice node crossing onto a new rung of the size ladder, either of them
+    /// asking for a mark at a size the mark atlas has never packed. Every pane
     /// that flushed BEFORE that one has already had its turn:
     ///
     ///   - its bind group names the texture being replaced here, and a pane
@@ -395,46 +449,87 @@ impl TextResources {
     /// frame, so no later pane can bring a SMALLER one and strand an earlier
     /// pane's uvs off the end of it.
     ///
+    /// The mark atlas owes the same two things and pays them the same way:
+    /// `harmonigraph_ui::text::MarkAtlas` hands out a patch before deciding
+    /// whether to publish, and it only ever APPENDS within a pass — a repack
+    /// waits for the next one, where it is ahead of every uv rather than
+    /// behind some of them.
+    ///
     /// The one arrangement neither covers is epaint recycling texels in place,
     /// which it does once a glyph is too big for the atlas to grow for: live
     /// glyphs move at a CONSTANT size, so nothing is recreated and nothing here
     /// can notice. That is held off upstream by `MAX_GLYPH_PX`, and is the
     /// reason that ceiling is a ceiling rather than a preference.
-    fn mirror_atlas(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, atlas: &FontAtlas) {
-        if !self.atlas.upload(device, queue, atlas) {
+    fn mirror_atlas(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        atlas: Option<&FontAtlas>,
+        marks: Option<&FontAtlas>,
+    ) {
+        let mut recreated = false;
+        if let Some(atlas) = atlas.filter(|a| !self.atlas.holds(a)) {
+            recreated |= self.atlas.upload(device, queue, atlas);
+        }
+        if let Some(marks) = marks.filter(|a| !self.marks.holds(a)) {
+            recreated |= self.marks.upload(device, queue, marks);
+        }
+        if !recreated {
             return;
         }
-        let size = self.atlas.size();
-        let view = self.atlas.view().expect("uploaded above");
+        let sizes = self.atlas_sizes();
+        let view = self.atlas.view_or(&self.blank);
+        let mark_view = self.marks.view_or(&self.blank);
         let (layout, sampler) = (&self.layout, &self.sampler);
         for pane in self.panes.values_mut() {
-            // The size alone, not the whole struct: a pane that has already
+            // The sizes alone, not the whole struct: a pane that has already
             // prepared wrote the rest of its uniforms this frame, and one that
-            // has not is about to write all of them including this.
+            // has not is about to write all of them including these.
             queue.write_buffer(
                 &pane.uniform_buffer,
-                ATLAS_SIZE_OFFSET,
-                bytemuck::cast_slice(&[size[0] as f32, size[1] as f32]),
+                ATLAS_SIZES_OFFSET,
+                bytemuck::cast_slice(&sizes),
             );
-            pane.bind_group =
-                Some(bind_group(device, layout, sampler, &view, &pane.uniform_buffer));
+            pane.bind_group = Some(bind_group(
+                device,
+                layout,
+                sampler,
+                &view,
+                &mark_view,
+                &pane.uniform_buffer,
+            ));
         }
+    }
+
+    /// The two sheets' sizes, as the uniforms carry them: font atlas then
+    /// marks, which is the order the struct puts them in.
+    ///
+    /// A sheet that has never been uploaded reports the 1x1 blank standing in
+    /// for it rather than its own zero, because the shader DIVIDES by this: a
+    /// zero there is a NaN coverage, and NaN fails the `<= 0` that would have
+    /// discarded it, so the one glyph that reached an empty sheet would paint
+    /// garbage instead of nothing.
+    fn atlas_sizes(&self) -> [f32; 4] {
+        let (a, m) = (self.atlas.size(), self.marks.size());
+        [a[0], a[1], m[0], m[1]].map(|n| n.max(1) as f32)
     }
 }
 
-/// Where [`TextUniforms::atlas_size`] sits, for the partial write above.
-/// Taken from the type rather than counted, so reordering the struct cannot
-/// leave this pointing at `screen_points`.
-const ATLAS_SIZE_OFFSET: wgpu::BufferAddress =
+/// Where [`TextUniforms::atlas_size`] sits, for the partial write above —
+/// which covers the mark atlas's size too, the two being adjacent. Taken from
+/// the type rather than counted, so reordering the struct cannot leave this
+/// pointing at `screen_points`.
+const ATLAS_SIZES_OFFSET: wgpu::BufferAddress =
     std::mem::offset_of!(TextUniforms, atlas_size) as wgpu::BufferAddress;
 
-/// One surface's bind group: its own uniforms, and the shared atlas and
-/// sampler.
+/// One surface's bind group: its own uniforms, the two shared sheets, and the
+/// sampler they share.
 pub(crate) fn bind_group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
     sampler: &wgpu::Sampler,
     view: &wgpu::TextureView,
+    mark_view: &wgpu::TextureView,
     uniforms: &wgpu::Buffer,
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -450,8 +545,44 @@ pub(crate) fn bind_group(
                 resource: wgpu::BindingResource::TextureView(view),
             },
             wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(sampler) },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::TextureView(mark_view),
+            },
         ],
     })
+}
+
+/// A 1x1 transparent texture, bound wherever a sheet has not arrived.
+///
+/// The bind group layout fixes both bindings, so both have to name a texture
+/// from the first frame — and a sheet can be missing for a whole session
+/// rather than for a moment: egui's atlas arrives only once some pane has laid
+/// text out, and the mark atlas is never built at all in a shell that draws no
+/// note names. Nothing samples this. A glyph pointing at a sheet is one the
+/// batch cut FROM that sheet, and the mirror upstream publishes it before
+/// handing the glyph over.
+pub(crate) fn blank_atlas(device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu::Texture {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("text_blank_atlas"),
+        size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    // Written rather than left as allocated: a texture's initial contents are
+    // undefined, and "nothing samples it" is an argument about this code
+    // rather than a promise the driver makes.
+    queue.write_texture(
+        texture.as_image_copy(),
+        &[0u8; 4],
+        wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4), rows_per_image: Some(1) },
+        wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+    );
+    texture
 }
 
 /// One pass's pipeline: instanced quads blended exactly the way egui blends
@@ -560,14 +691,12 @@ impl CallbackTrait for TextCallback {
             .get::<TextResources>()
             .is_none_or(|r| r.target_format != self.target_format);
         if recreate {
-            callback_resources.insert(TextResources::new(device, self.target_format));
+            callback_resources.insert(TextResources::new(device, queue, self.target_format));
         }
         let resources: &mut TextResources =
             callback_resources.get_mut().expect("inserted above when missing");
 
-        if let Some(atlas) = self.atlas.as_ref().filter(|a| !resources.atlas.holds(a)) {
-            resources.mirror_atlas(device, queue, atlas);
-        }
+        resources.mirror_atlas(device, queue, self.atlas.as_ref(), self.marks.as_ref());
         // No atlas yet means the first frame arrived without one: nothing can
         // be drawn, and the next frame that sees a change will bring it.
         if resources.atlas.is_empty() {
@@ -575,20 +704,22 @@ impl CallbackTrait for TextCallback {
         }
 
         let ppp = screen_descriptor.pixels_per_point.max(f32::EPSILON);
-        let atlas_size = resources.atlas.size();
+        let sizes = resources.atlas_sizes();
         let uniforms = TextUniforms {
             screen_points: [
                 screen_descriptor.size_in_pixels[0] as f32 / ppp,
                 screen_descriptor.size_in_pixels[1] as f32 / ppp,
             ],
-            atlas_size: [atlas_size[0] as f32, atlas_size[1] as f32],
+            atlas_size: [sizes[0], sizes[1]],
+            mark_atlas_size: [sizes[2], sizes[3]],
             pixels_per_point: ppp,
-            _pad: [0.0; 3],
+            _pad: 0.0,
             ring0: TextUniforms::ring(self.rings[0]),
             ring1: TextUniforms::ring(self.rings[1]),
         };
 
         let view = resources.atlas.view().expect("checked above");
+        let mark_view = resources.marks.view_or(&resources.blank);
         let (layout, sampler) = (&resources.layout, &resources.sampler);
         let pane = resources.panes.entry(self.pane_id).or_insert_with(|| TextPane {
             uniform_buffer: device.create_buffer(&wgpu::BufferDescriptor {
@@ -607,8 +738,14 @@ impl CallbackTrait for TextCallback {
             count: 0,
         });
         if pane.bind_group.is_none() {
-            pane.bind_group =
-                Some(bind_group(device, layout, sampler, &view, &pane.uniform_buffer));
+            pane.bind_group = Some(bind_group(
+                device,
+                layout,
+                sampler,
+                &view,
+                &mark_view,
+                &pane.uniform_buffer,
+            ));
         }
 
         if self.glyphs.len() > pane.capacity {
@@ -696,10 +833,10 @@ pub(crate) mod tests {
 
     #[test]
     fn the_pipelines_build_against_a_headless_device() {
-        let Some((device, _queue)) = headless_device() else {
+        let Some((device, queue)) = headless_device() else {
             return;
         };
-        let _resources = TextResources::new(&device, FORMAT);
+        let _resources = TextResources::new(&device, &queue, FORMAT);
     }
 
     /// A stand-in atlas: one opaque 8x8 "glyph" at (8, 8), with nothing
@@ -709,13 +846,36 @@ pub(crate) mod tests {
     /// the same shader in a different pass — so a fixture that changed under
     /// one of them would change under both.
     pub(crate) fn atlas() -> FontAtlas {
+        patch_at([8, 8], 1)
+    }
+
+    /// And a stand-in MARK sheet, with its patch somewhere the font atlas has
+    /// nothing. That is the whole design of the pair: a glyph reading the
+    /// wrong sheet finds transparency and paints nothing, rather than finding
+    /// a plausible square of ink and passing.
+    pub(crate) fn mark_sheet() -> FontAtlas {
+        patch_at([16, 0], 1)
+    }
+
+    /// A 32x32 sheet with one opaque 8x8 patch at `at`.
+    fn patch_at([left, top]: [usize; 2], key: u64) -> FontAtlas {
         let mut image = egui::ColorImage::filled([32, 32], egui::Color32::TRANSPARENT);
-        for y in 8..16 {
-            for x in 8..16 {
+        for y in top..top + 8 {
+            for x in left..left + 8 {
                 image[(x, y)] = egui::Color32::WHITE;
             }
         }
-        FontAtlas { image: std::sync::Arc::new(image), key: 1 }
+        FontAtlas { image: std::sync::Arc::new(image), key }
+    }
+
+    /// The mark of [`mark_sheet`], drawn 8 points wide at (24, 24) — the same
+    /// place and size as [`glyph`], off the other sheet.
+    pub(crate) fn mark() -> GlyphInstance {
+        GlyphInstance {
+            uv: [16.0, 0.0, 24.0, 8.0],
+            atlas: GlyphInstance::MARK,
+            ..glyph()
+        }
     }
 
     /// Draw one glyph through both passes and read the frame back.
@@ -729,6 +889,7 @@ pub(crate) mod tests {
             glyphs: vec![glyph],
             rings,
             atlas: Some(atlas()),
+            marks: None,
             target_format: FORMAT,
             pane_id: 0,
         };
@@ -774,6 +935,7 @@ pub(crate) mod tests {
             uv: [8.0, 8.0, 16.0, 16.0],
             fill: [255, 255, 255, 255],
             rim: [255, 0, 0, 255],
+            atlas: GlyphInstance::TYPE,
         }
     }
 
@@ -794,6 +956,61 @@ pub(crate) mod tests {
         assert_eq!(pixel(&frame, 23, 28), [255, 0, 0, 255], "the rim, one point out");
         assert_eq!(pixel(&frame, 21, 28), [0, 0, 0, 0], "nothing past the rim's radius");
         assert_eq!(pixel(&frame, 4, 4), [0, 0, 0, 0], "nothing anywhere else");
+    }
+
+    /// Each instance reads the sheet it names, and only that one.
+    ///
+    /// The selector is the whole of what makes a drawn mark a glyph here: the
+    /// two sheets are bound together and a fragment picks between them per
+    /// instance. Both directions are drawn, because one alone passes for the
+    /// wrong reason — a shader that ignored the flag and always read the font
+    /// atlas would paint the letter correctly and lose the mark, and one that
+    /// always read the marks would do the reverse.
+    ///
+    /// The two fixtures put their patches at coordinates the OTHER sheet
+    /// leaves transparent, so reading the wrong one is a blank rather than a
+    /// square of ink that happens to look right. The mark also sits against
+    /// the sheet's own top wall, which is where the mark packer starts its
+    /// first shelf — so `outside_atlas` is answering for this sheet's size,
+    /// not for the font atlas's.
+    #[test]
+    fn a_glyph_reads_the_sheet_it_names() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let bare = [TextRing::default(); 2];
+        let cb = TextCallback {
+            // The letter where `glyph` puts it, the mark 16 points to its left.
+            glyphs: vec![glyph(), GlyphInstance { rect: [8.0, 24.0, 8.0, 8.0], ..mark() }],
+            rings: bare,
+            atlas: Some(atlas()),
+            marks: Some(mark_sheet()),
+            target_format: FORMAT,
+            pane_id: 0,
+        };
+        let mut resources = CallbackResources::default();
+        let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
+        queue.submit(bufs.into_iter().chain([encoder.finish()]));
+        let rect =
+            egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(SIZE[0] as f32, SIZE[1] as f32));
+        let texture =
+            render_to_texture(&device, &queue, SIZE, FORMAT, wgpu::Color::TRANSPARENT, |pass| {
+                cb.paint(
+                    egui::PaintCallbackInfo {
+                        viewport: rect,
+                        clip_rect: rect,
+                        pixels_per_point: 1.0,
+                        screen_size_px: SIZE,
+                    },
+                    pass,
+                    &resources,
+                );
+            });
+        let frame = readback(&device, &queue, &texture, SIZE);
+        assert_eq!(pixel(&frame, 28, 28), [255, 255, 255, 255], "the letter, off the font atlas");
+        assert_eq!(pixel(&frame, 12, 28), [255, 255, 255, 255], "the mark, off its own sheet");
     }
 
     /// A glyph packed against the atlas's own edge paints the same picture as
@@ -854,6 +1071,7 @@ pub(crate) mod tests {
                 TextRing { radius: 2.0, alpha: 1.0, samples: 8 },
             ],
             atlas: Some(FontAtlas { image: std::sync::Arc::new(image), key: 1 }),
+            marks: None,
             target_format: FORMAT,
             pane_id: 0,
         };
@@ -959,6 +1177,7 @@ pub(crate) mod tests {
             glyphs: vec![GlyphInstance { rect: [x, 24.0, 8.0, 8.0], ..glyph() }],
             rings: bare,
             atlas,
+            marks: None,
             target_format: FORMAT,
             pane_id,
         };
@@ -1029,6 +1248,7 @@ pub(crate) mod tests {
                 glyphs: vec![reaching],
                 rings: bare,
                 atlas: None,
+                marks: None,
                 target_format: FORMAT,
                 pane_id: 0,
             },

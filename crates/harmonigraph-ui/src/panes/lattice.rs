@@ -84,9 +84,8 @@ pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64)
     // laid out and filled in after. The names go INTO that callback — they are
     // drawn inside its scene pass, so that a node in front covers the name of
     // the node behind it — and they are not known until they have been drawn.
-    // What still has to land on top of the callback is the drawn comma and
-    // septimal marks, which `draw_node_labels` puts straight on this painter
-    // (see #207), so the order the shapes are added in is not free to change.
+    // A label puts NOTHING on this painter, marks included, so the only thing
+    // this slot orders is the learn badge that draws over the finished pane.
     let lattice = ui.painter().add(egui::Shape::Noop);
 
     // One batch for the node labels: a batch draws in the order it collected,
@@ -235,11 +234,9 @@ fn label_strength(node: &harmonigraph_scene::NodeInstance, trailed: bool, keeps_
 /// node each glyph belongs to (`TextBatch::attached_to`); the caller hands the
 /// finished batch to `lattice_paint_callback`.
 ///
-/// The DRAWN marks are the exception, and the one thing here that still goes
-/// straight onto the painter: the syntonic `+`/`-` and the septimal chevron
-/// are egui image quads, so they are drawn over the whole picture and float
-/// on a node that has covered the name beside them. See #207, which is about
-/// putting them in the same instance stream as the glyphs.
+/// The DRAWN marks go the same way and are collected into the same runs: an
+/// accidental or a comma sign is a glyph of a sheet of its own
+/// (`crate::text::MarkAtlas`), so what covers a name covers its marks with it.
 ///
 /// Every factor a label's size answers to is gathered here rather than by the
 /// callers -- the pane's own size, the camera's zoom and the user's Size bar --
@@ -521,7 +518,7 @@ pub(crate) const MARK_TRACK: f32 = 0.06;
 /// the geometry measured, and while they were typeset a bar this thin really
 /// did smear. Rasterized with a whole-pixel floor (see [`mark_key`]), 0.07 is
 /// a clean line — and it is the line the rest of the label is drawn with.
-const MARK_WEIGHT: f32 = 0.07;
+pub(crate) const MARK_WEIGHT: f32 = 0.07;
 
 /// The ink width Iosevka gives `+`, `-` and `♯` alike within that cell
 /// (372/1000 em). Matching it is what keeps a drawn sign from reading as a
@@ -806,9 +803,15 @@ fn arm(a: egui::Pos2, b: egui::Pos2, thick: f32) -> MarkPiece {
 }
 
 /// Which mark, at what size in physical pixels -- the identity of one
-/// rasterized bitmap, and its cache key.
+/// rasterized bitmap, and its place in the mark sheet
+/// ([`crate::text::MarkAtlas`]).
+///
+/// Nothing about the RIM is in here, and that is the whole shape of the mark
+/// path now: the halo is the same per-fragment arithmetic that haloes the
+/// letters (`fs_rim` in `harmonigraph_render`'s text shader), so a bitmap is a
+/// function of the mark's own design and nothing else.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-struct MarkKey {
+pub(crate) struct MarkKey {
     kind: MarkKind,
     /// The mark's font size in whole physical pixels. Whole, because a
     /// bitmap has to be rasterized at SOME integer size, exactly as a glyph
@@ -818,18 +821,10 @@ struct MarkKey {
     /// Stroke weight in physical pixels x16, so the cache key stays integral
     /// without quantizing the weight to something visible.
     weight_16: u32,
-    /// Each [`crate::text::RINGS`] radius in whole physical pixels, which is
-    /// what [`crate::text::ring_radius`] rounds them to.
-    ///
-    /// In the key because the RIM is rasterized into its own bitmap now, so
-    /// the bitmap is a function of the ring geometry as well as the mark's.
-    /// It is the only place `ppp` reaches the rim, the two `size` fields
-    /// having already folded it in.
-    rings_px: [u32; crate::text::RINGS.len()],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-enum MarkKind {
+pub(crate) enum MarkKind {
     Minus,
     Plus,
     /// The septimal mark -- a chevron -- and whether it points up.
@@ -1037,17 +1032,17 @@ fn curve_arms(p: [egui::Pos2; 4], thick: f32) -> Vec<MarkPiece> {
 /// and on a mark a dozen pixels square it is the difference between an edge
 /// and a staircase.
 ///
-/// It used to be free — "a mark bitmap is a dozen pixels square and is built
-/// once per size" — and it is not now that a size follows the camera. The rim
-/// reads this grid twenty times over, so the same 4x4 on a mark two hundred
-/// pixels across was sixteen million coverage tests, several frames' worth,
-/// spent on one `+` the first time a zoom asks for that size. The samples
-/// stayed and the reading of them got cheaper: see [`mark_coverage`].
+/// What it costs is the mark's own area, once per size the camera asks for —
+/// the whole of it, since the halo is no longer a second bitmap read off this
+/// grid at twenty offsets. At the largest size a zoom can reach that is a
+/// couple of milliseconds for a `♭`, paid on the frame that size is first
+/// asked for.
 const MARK_SUPERSAMPLE: usize = 4;
 
 /// Rasterize a mark to an alpha coverage image -- the same thing a font
-/// rasterizer hands the atlas for a glyph.
-fn rasterize_mark(key: MarkKey) -> egui::ColorImage {
+/// rasterizer hands the atlas for a glyph, and packed into a sheet the same
+/// way (see [`crate::text::MarkAtlas`]).
+pub(crate) fn rasterize_mark(key: MarkKey) -> egui::ColorImage {
     let (pieces, [w, h]) = mark_geometry(key);
     let n = MARK_SUPERSAMPLE;
     let step = 1.0 / n as f32;
@@ -1077,272 +1072,48 @@ fn rasterize_mark(key: MarkKey) -> egui::ColorImage {
     egui::ColorImage { size: [w, h], pixels, source_size: egui::vec2(w as f32, h as f32) }
 }
 
-/// The mark's own coverage, supersampled, as a SUMMED-AREA table over a
-/// `(w*n) x (h*n)` grid — every entry the number of covered cells above and
-/// left of it, so the count inside any rectangle is four lookups.
+/// Add a mark to the label's own run of glyphs, haloed like the letters
+/// beside it -- the same rim, by the same arithmetic, over the same kind of
+/// thing.
 ///
-/// Split out of [`rasterize_mark`] because the rim reads the SAME coverage
-/// twenty times over at twenty offsets, and testing the geometry again for
-/// each would be twenty times the work for an answer that cannot differ.
-/// Summed rather than plain because each of those reads is an `n x n` block:
-/// counting it cell by cell made the rim quadratic in the supersampling on
-/// top of everything else, which was survivable while marks were a dozen
-/// pixels square and is what made a zoomed one cost frames. The answer is
-/// identical — this counts the same cells by subtraction.
-fn mark_coverage(pieces: &[MarkPiece], [w, h]: [usize; 2], n: usize) -> Coverage {
-    let (sw, sh) = (w * n, h * n);
-    let step = 1.0 / n as f32;
-    let mut scanline = Scanline::new(pieces);
-    let mut sums = vec![0u32; (sw + 1) * (sh + 1)];
-    for sy in 0..sh {
-        scanline.seek(sy as f32 * step, (sy + 1) as f32 * step);
-        for sx in 0..sw {
-            let p = egui::pos2((sx as f32 + 0.5) * step, (sy as f32 + 0.5) * step);
-            let covered = scanline.covers(p) as u32;
-            sums[(sy + 1) * (sw + 1) + sx + 1] = covered + sums[sy * (sw + 1) + sx + 1]
-                + sums[(sy + 1) * (sw + 1) + sx]
-                - sums[sy * (sw + 1) + sx];
-        }
-    }
-    Coverage { sums, size: [sw, sh] }
-}
-
-/// A mark's supersampled coverage, summed. See [`mark_coverage`].
-struct Coverage {
-    sums: Vec<u32>,
-    /// The supersampled grid's own dimensions, which is `sums` less its zero
-    /// row and column.
-    size: [usize; 2],
-}
-
-impl Coverage {
-    /// How many covered cells lie in the `n x n` block whose top-left cell is
-    /// `(x, y)`, counting cells off the grid as uncovered.
-    fn block(&self, x: isize, y: isize, n: usize) -> u32 {
-        let [sw, sh] = self.size;
-        let (x0, y0) = (x.clamp(0, sw as isize) as usize, y.clamp(0, sh as isize) as usize);
-        let x1 = (x + n as isize).clamp(0, sw as isize) as usize;
-        let y1 = (y + n as isize).clamp(0, sh as isize) as usize;
-        let at = |x: usize, y: usize| self.sums[y * (sw + 1) + x];
-        at(x1, y1) + at(x0, y0) - at(x1, y0) - at(x0, y1)
-    }
-}
-
-/// The mark's RIM, rasterized to alpha as one bitmap: the same rings stamped
-/// the same way, composited here instead of once per stamp in the shape list.
+/// The mark is ONE quad of coverage cut from a sheet, which is exactly what a
+/// glyph is, so every difference that came of drawing it as separate shapes is
+/// gone by construction: no seam between pieces to feather twice, no join to
+/// composite twice, no arm to rasterize at its own subpixel offset. The quad
+/// lands wherever the label lands, and bilinear sampling resolves it the way
+/// it resolves a glyph.
 ///
-/// This is what `crate::text`'s shader does for glyphs, and for the reason it
-/// gives -- twenty copies of every mark was most of the geometry in a frame
-/// that draws a name on every ribbon. Doing it at rasterization time rather
-/// than in a shader keeps the mark on egui's ordinary image path, and costs
-/// nothing per frame: a bitmap is built once per key and cached.
+/// Two things follow from it being an instance of the glyph pass rather than a
+/// pair of image quads on the painter, and both are the point:
 ///
-/// Exact, not an approximation of the stamped version. Every stamp carries
-/// the same colour, and source-over compositing of one colour at successive
-/// alphas is associative -- `1 - prod(1 - a_i)` is the accumulated alpha the
-/// twenty draws arrived at -- so the tinted result is identical. Only the
-/// resampling differs, and in the safe direction: the composite is resolved
-/// once at draw time instead of twenty separately-filtered copies landing on
-/// each other.
-fn rasterize_mark_rim(key: MarkKey) -> egui::ColorImage {
-    let (pieces, [w, h]) = mark_geometry(key);
-    let n = MARK_SUPERSAMPLE;
-    let coverage = mark_coverage(&pieces, [w, h], n);
-    // Room for the widest ring on every side, so no stamp is clipped.
-    let pad = key.rings_px.iter().copied().max().unwrap_or(1) as usize;
-    let (rw, rh) = (w + 2 * pad, h + 2 * pad);
-
-    // Stamp offsets in SUPERSAMPLE cells, in the order the rings are drawn:
-    // compositing is order-dependent, and this is the order the shape list
-    // had.
-    let mut stamps: Vec<(isize, isize, f32)> = Vec::new();
-    for (ring, (_, alpha, samples)) in crate::text::RINGS.iter().enumerate() {
-        if *samples == 0 {
-            continue;
-        }
-        let radius = key.rings_px[ring] as f32;
-        for i in 0..*samples {
-            let angle = std::f32::consts::TAU * i as f32 / *samples as f32;
-            stamps.push((
-                (angle.cos() * radius * n as f32).round() as isize,
-                (angle.sin() * radius * n as f32).round() as isize,
-                *alpha,
-            ));
-        }
-    }
-
-    let mut pixels = Vec::with_capacity(rw * rh);
-    for y in 0..rh {
-        for x in 0..rw {
-            // This pixel's supersample block in the mark's own grid.
-            let (bx, by) = (
-                (x as isize - pad as isize) * n as isize,
-                (y as isize - pad as isize) * n as isize,
-            );
-            let mut a = 0.0f32;
-            for &(ox, oy, alpha) in &stamps {
-                let hits = coverage.block(bx - ox, by - oy, n);
-                if hits > 0 {
-                    let frac = hits as f32 / (n * n) as f32;
-                    a += alpha * frac * (1.0 - a);
-                }
-            }
-            pixels.push(egui::Color32::from_white_alpha((a * 255.0).round() as u8));
-        }
-    }
-    egui::ColorImage {
-        size: [rw, rh],
-        pixels,
-        source_size: egui::vec2(rw as f32, rh as f32),
-    }
-}
-
-/// How many mark bitmaps to keep before starting over. Zooming walks through
-/// sizes, and each one is its own bitmap; this is a ceiling on the churn,
-/// not a working-set estimate.
-pub(crate) const MARK_CACHE_LIMIT: usize = 96;
-
-type MarkTextures = (egui::TextureHandle, egui::TextureHandle);
-
-/// The mark bitmaps, plus the ones evicted too recently to destroy yet.
-#[derive(Clone, Default)]
-struct MarkCache {
-    live: std::collections::HashMap<MarkKey, MarkTextures>,
-    /// Evicted handles, each with the pass it was evicted on, held until a
-    /// LATER pass has begun.
-    ///
-    /// Dropping the last handle to a texture makes egui queue its id into
-    /// `textures_delta.free`, and the wgpu renderer applies those frees
-    /// BEFORE it submits the encoder (see `free_texture` then `queue.submit`
-    /// in egui-baseview's wgpu renderer). So a texture evicted midway
-    /// through a pass is destroyed while draw commands recorded EARLIER in
-    /// that same pass still name it, and the submit fails validation with
-    /// "Texture ... has been destroyed" — which is fatal, not recoverable.
-    /// Eviction picks an arbitrary victim, so the victim is sometimes a mark
-    /// the pass has already painted.
-    ///
-    /// Holding the handle until the next pass is what makes the eviction
-    /// safe: by then the pass that drew it has been submitted, and the key
-    /// is already out of `live`, so nothing new can reference the old id.
-    retired: Vec<(u64, MarkTextures)>,
-}
-
-/// The texture for one mark, rasterized on first use and kept in egui's own
-/// per-frame data store.
-fn mark_texture(ctx: &egui::Context, key: MarkKey) -> MarkTextures {
-    let pass = ctx.cumulative_pass_nr();
-    let cached = ctx.data_mut(|d| d.get_temp::<std::sync::Arc<MarkCache>>(egui::Id::NULL));
-    if let Some(hit) = cached.as_ref().and_then(|c| c.live.get(&key)) {
-        return hit.clone();
-    }
-    // LINEAR, because a mark is placed at a subpixel position and resampled
-    // exactly as a glyph is. NEAREST would put the pixel grid back.
-    let handle = (
-        ctx.load_texture(
-            format!("{:?}", key),
-            rasterize_mark(key),
-            egui::TextureOptions::LINEAR,
-        ),
-        ctx.load_texture(
-            format!("{:?}-rim", key),
-            rasterize_mark_rim(key),
-            egui::TextureOptions::LINEAR,
-        ),
-    );
-    let mut next = cached.map(|c| (*c).clone()).unwrap_or_default();
-    // Anything retired on an earlier pass has had its pass submitted, so the
-    // handle can go now and the texture is destroyed on this pass's frees.
-    next.retired.retain(|(evicted_on, _)| *evicted_on >= pass);
-    // Evict ONE rather than emptying the map. Zooming walks through sizes a
-    // pixel at a time, so the cache fills during an ordinary drag; clearing
-    // it there drops every texture at once and re-rasterizes the whole
-    // visible set on the next frame, which is a stall exactly while the
-    // camera is moving. Which one goes is arbitrary — there is no recency
-    // here to consult — but one at a time keeps the cost flat.
-    if next.live.len() >= MARK_CACHE_LIMIT {
-        if let Some(&victim) = next.live.keys().next() {
-            if let Some(handles) = next.live.remove(&victim) {
-                next.retired.push((pass, handles));
-            }
-        }
-    }
-    next.live.insert(key, handle.clone());
-    ctx.data_mut(|d| d.insert_temp(egui::Id::NULL, std::sync::Arc::new(next)));
-    handle
-}
-
-/// Paint a mark with the rim the glyphs beside it carry -- the same rim, by
-/// the same arithmetic, over the same kind of thing.
+///   - it is drawn where the LETTERS are. On the lattice that is inside the
+///     scene pass at its node's place in the back-to-front order, so a node in
+///     front covers a name and its marks together instead of cutting the name
+///     and leaving the sign floating on the disc that covered it (#207);
+///   - the rim is `fs_rim`'s arithmetic rather than a bitmap of its own, so
+///     the stamped order -- every rim, then every fill -- holds ACROSS the
+///     seam between a sign and the count typeset beside it. On the painter
+///     that order broke at every such seam, and broke the opposite way in each
+///     pane, depending on when the batch happened to flush.
 ///
-/// The mark is ONE textured quad of coverage, which is what a glyph is, so
-/// every difference that came of drawing it as separate shapes is gone by
-/// construction: no seam between pieces to feather twice, no join to
-/// composite twice, no arm to rasterize at its own subpixel offset. The
-/// quad lands wherever the label lands, and bilinear sampling resolves it
-/// the way it resolves a glyph.
-///
-/// `harmonigraph_render`'s text shader states the identity the rim rests on: a
-/// label's rim IS the shape stamped around two rings, and the shader moved
-/// that loop out of the geometry because 20 copies of every glyph was most
-/// of the geometry in a busy frame. The rim here is stamped for the same
-/// reason and by the same arithmetic -- same radii, same sample counts, same
-/// per-stamp alpha, same `angle = 2*PI*i/samples` -- but it is composited
-/// into [`rasterize_mark_rim`]'s bitmap rather than into the shape list, so
-/// a mark costs TWO quads however many stamps its rim is made of.
-///
-/// It has to. A mark was one quad plus twenty stamps when the only marks
-/// were on the handful of hovered and sounding lattice nodes; note names put
-/// one on every roll ribbon and on every lit node of a collapsed 12-EDO
-/// lattice, which is hundreds, and twenty-one quads apiece is most of a
-/// frame's geometry again -- the exact cost the text shader exists to have
-/// removed.
-///
-/// Rim first, then the fill, which is the order stamping had and the order
-/// the shader kept.
 /// Returns how far the mark reaches from its own center, which the caller
-/// needs to know what the cents readout has to clear. Read off the texture
-/// rather than rebuilt: the bitmap's size IS the mark's size, and asking
-/// `mark_geometry` again allocated a fresh piece list per mark per frame on
-/// the label path.
+/// needs to know what the cents readout has to clear.
 fn paint_mark(
-    painter: &egui::Painter,
+    batch: &mut crate::text::TextBatch,
+    ctx: &egui::Context,
     ppp: f32,
     key: MarkKey,
     center: egui::Pos2,
     color: egui::Color32,
     outline: egui::Color32,
-    // The magnification the name beside it is drawn under: a factor, and the
-    // node center it is taken about. See `crate::text::TextBatch::magnified`.
-    magnify: (egui::Pos2, f32),
 ) -> f32 {
-    let (texture, rim) = mark_texture(painter.ctx(), key);
-    let [w, h] = texture.size();
     // The bitmap is rasterized on the same grid the type is (see `mark_key`),
     // and DRAWN at whatever size the label is actually at -- the two are the
     // same split, for the same reason, and they have to be the same split or a
-    // name would glide while the `+` beside it stepped. The textures are
-    // LINEAR, so a quad off its bitmap's size resamples exactly as a glyph off
-    // its atlas cell does.
-    let (origin, k) = magnify;
-    let at = |p: egui::Pos2| origin + (p - origin) * k;
-    let rect = egui::Rect::from_center_size(
-        at(center),
-        egui::vec2(w as f32 / ppp, h as f32 / ppp) * k,
-    );
-    let uv = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0));
-    // The rim's bitmap is the mark's, padded by the widest ring on every
-    // side, and centred on the same point -- so it is placed by its own size
-    // rather than by an offset from the fill.
-    let [rw, rh] = rim.size();
-    let rim_rect = egui::Rect::from_center_size(
-        at(center),
-        egui::vec2(rw as f32 / ppp, rh as f32 / ppp) * k,
-    );
-    painter.image(rim.id(), rim_rect, uv, outline);
-    painter.image(texture.id(), rect, uv, color);
-    // The FILL's half height, not the rim's: this is what the cents readout
-    // has to clear, and the rim is a halo the text already overlaps.
-    //
+    // name would glide while the `+` beside it stepped. Both halves are the
+    // batch's now, which is what makes them the same split rather than two
+    // that have to agree.
+    let [_, h] = batch.mark(ctx, key, center, ppp, color, outline);
     // UNmagnified, because the caller is still laying out at the rasterized
     // size and this is one of its measurements — the magnification is applied
     // once, to the finished label, and a measurement that had it applied
@@ -1351,7 +1122,7 @@ fn paint_mark(
     // Less the clear margin the bitmap carries on every side, which is quad
     // and not reach: counting it would hold the cents readout a pixel further
     // off than the ink it is clearing.
-    (h - 2 * MARK_BITMAP_PAD) as f32 / ppp / 2.0
+    (h as usize - 2 * MARK_BITMAP_PAD) as f32 / ppp / 2.0
 }
 
 /// The key for one mark at the size a label is drawing at.
@@ -1359,7 +1130,7 @@ fn paint_mark(
 /// `size` is the mark font size in points; the bitmap is rasterized in
 /// physical pixels, so the size crosses into pixels here and is rounded --
 /// a bitmap has an integer size or it has none.
-fn mark_key(kind: MarkKind, size: f32, weight: f32, ppp: f32) -> MarkKey {
+pub(crate) fn mark_key(kind: MarkKind, size: f32, weight: f32, ppp: f32) -> MarkKey {
     let size_px = (size * ppp).round().max(2.0);
     // Floored at a whole physical pixel: the whole reason these marks are
     // not type is that Iosevka's own bars are 70/1000 em, which is 0.58px
@@ -1383,12 +1154,7 @@ fn mark_key(kind: MarkKind, size: f32, weight: f32, ppp: f32) -> MarkKey {
     // the fix and a sharper bitmap is not. The reading is the one
     // `a_drawn_accidental_breathes_less_than_the_type_it_replaced` takes.
     let thick = (weight * size * ppp).max(1.0);
-    MarkKey {
-        kind,
-        size_px: size_px as u32,
-        weight_16: (thick * 16.0).round() as u32,
-        rings_px: crate::text::RINGS.map(|(r, _, _)| (r * ppp).round().max(1.0) as u32),
-    }
+    MarkKey { kind, size_px: size_px as u32, weight_16: (thick * 16.0).round() as u32 }
 }
 
 /// A note name centered on `anchor`: the letter, then a column carrying its
@@ -1433,13 +1199,14 @@ pub(crate) fn draw_stacked_name(
     magnify: f32,
 ) -> f32 {
     batch.magnified(anchor, magnify, |batch| {
-        stacked_name(batch, painter, anchor, name, color, outline, scale, magnify)
+        stacked_name(batch, painter, anchor, name, color, outline, scale)
     })
 }
 
-/// [`draw_stacked_name`]'s layout, all of it at the rasterized size. The one
-/// thing that has to know about `magnify` down here is the drawn marks, which
-/// are painted straight onto the painter rather than collected in the batch.
+/// [`draw_stacked_name`]'s layout, all of it at the rasterized size — and
+/// nothing below here knows the label will be drawn at any other, marks
+/// included, because everything it emits goes through the one batch that
+/// applies the magnification.
 #[allow(clippy::too_many_arguments)]
 fn stacked_name(
     batch: &mut crate::text::TextBatch,
@@ -1449,7 +1216,6 @@ fn stacked_name(
     color: egui::Color32,
     outline: egui::Color32,
     scale: f32,
-    magnify: f32,
 ) -> f32 {
     let name_font = egui::FontId::monospace(NAME_SIZE * scale);
     let mark_font = egui::FontId::monospace(MARK_SIZE * scale);
@@ -1540,7 +1306,7 @@ fn stacked_name(
         let key = mark_key(kind, mark_size, MARK_WEIGHT, ppp);
         let center = egui::pos2(x + cell / 2.0, anchor.y + direction * rise);
         let half_height =
-            paint_mark(painter, ppp, key, center, color, outline, (anchor, magnify));
+            paint_mark(batch, painter.ctx(), ppp, key, center, color, outline);
         if !count.is_empty() {
             batch.text(
                 painter,
@@ -2137,41 +1903,43 @@ mod tests {
         );
     }
 
-    /// The rim bitmap IS the stamped halo: the mark's own shape grown by the
-    /// widest ring on every side, opaque where the stamps pile up over the
-    /// mark and clear at the corners no stamp reaches.
+    /// No mark this app can ask for is wider than a shelf of the sheet it is
+    /// packed into.
     ///
-    /// Pins the geometry the fragment-stage move has to preserve. A rim that
-    /// came out unpadded would clip the halo to the mark's own box; one
-    /// padded asymmetrically would put the mark off-centre inside its own
-    /// glow, which reads as a lopsided mark rather than as a bug.
+    /// `crate::text::MarkAtlas` has no fallback for one that is: a shelf
+    /// packer that cannot place something has to either grow sideways —
+    /// moving every patch already handed out this pass, which is the one thing
+    /// the sheet promises not to do — or write across the row into whatever is
+    /// packed beside it. Neither is worth having when the bound is a constant,
+    /// and this is where the constant is checked rather than asserted.
+    ///
+    /// Measured through the ladder rather than computed from the ink ratios,
+    /// so it answers for what a label can actually reach: the ceiling on a
+    /// name's raster (`crate::text::MAX_GLYPH_PX`) is the whole of what bounds
+    /// a mark's size, and the walk below asks for far past it at every density
+    /// the app is drawn at.
     #[test]
-    fn the_rim_bitmap_grows_the_mark_by_its_widest_ring() {
-        let key = mark_key(MarkKind::Minus, 8.0, 0.07, 2.0);
-        let [fw, fh] = rasterize_mark(key).size;
-        let rim = rasterize_mark_rim(key);
-        let [rw, rh] = rim.size;
-
-        let pad = key.rings_px.iter().copied().max().unwrap() as usize;
-        assert_eq!([rw, rh], [fw + 2 * pad, fh + 2 * pad], "padded by the widest ring");
-
-        // Symmetric, so the mark sits centred in its own halo — which is what
-        // lets `paint_mark` place the two quads on one centre.
-        for y in 0..rh {
-            for x in 0..rw {
-                assert_eq!(
-                    rim.pixels[y * rw + x].a(),
-                    rim.pixels[y * rw + (rw - 1 - x)].a(),
-                    "the halo of a symmetric mark is symmetric, at {x},{y}"
+    fn a_mark_is_never_wider_than_the_sheet_it_is_packed_into() {
+        for ppp in [1.0, 1.5, 2.0, 3.0] {
+            // Past the ceiling, so `ladder` is clamping rather than following:
+            // whatever this asks for, the raster stops at MAX_GLYPH_PX.
+            let (raster, _) = crate::text::ladder(1e6, NAME_SIZE, ppp);
+            for kind in [
+                MarkKind::Minus,
+                MarkKind::Plus,
+                MarkKind::Septimal(true),
+                MarkKind::Sharp,
+                MarkKind::Flat,
+            ] {
+                let key = mark_key(kind, MARK_SIZE * raster, MARK_WEIGHT, ppp);
+                let [w, _] = mark_geometry(key).1;
+                assert!(
+                    w as u32 <= crate::text::MARK_SHEET_WIDTH,
+                    "{kind:?} at the raster ceiling is {w} texels wide, past the sheet's {}",
+                    crate::text::MARK_SHEET_WIDTH,
                 );
             }
         }
-
-        // Solid over the mark, and untouched in the corners: a `-` is wide and
-        // flat, so the corners of a box grown by the ring on every side are
-        // past every stamp.
-        assert_eq!(rim.pixels[(rh / 2) * rw + rw / 2].a(), 255, "opaque behind the mark");
-        assert_eq!(rim.pixels[0].a(), 0, "clear where no stamp reaches");
     }
 
     /// A piece never covers anything outside its own bounding box.
@@ -2661,7 +2429,7 @@ mod tests {
                 .map(|frame| {
                     let anchor = egui::pos2(100.0 + frame as f32 * RATE / PPP, 100.0);
                     let mut batch = crate::text::TextBatch::default();
-                    let out = ctx.run_ui(
+                    let _ = ctx.run_ui(
                         egui::RawInput { screen_rect: Some(screen), ..Default::default() },
                         |ui| {
                             draw_stacked_name(
@@ -2676,16 +2444,9 @@ mod tests {
                             );
                         },
                     );
-                    // Rim then fill, and it is the fill that is the mark.
-                    let quad = out
-                        .shapes
-                        .iter()
-                        .filter_map(|c| match &c.shape {
-                            egui::epaint::Shape::Mesh(m) => Some(m.calc_bounds()),
-                            _ => None,
-                        })
-                        .next_back()
-                        .unwrap_or_else(|| panic!("{what} should draw a fill quad"));
+                    let [quad] = batch.marks()[..] else {
+                        panic!("{what} should draw one mark, got {:?}", batch.marks())
+                    };
                     ink_centroid(&bitmap, quad, PPP)
                 })
                 .collect();
@@ -2707,7 +2468,14 @@ mod tests {
     ///
     /// Bilinear against clamped taps, and a pixel counts only if its CENTRE
     /// falls inside the quad -- which is rasterization, not an approximation
-    /// of it, for the axis-aligned textured quad `paint_mark` emits.
+    /// of it, for the axis-aligned quad a mark is drawn as.
+    ///
+    /// The quad the glyph pass actually rasterizes is GROWN by the rim's reach
+    /// on every side, and reading only the mark's own box is deliberate: past
+    /// it the shader is painting the halo, and the halo is not what a claim
+    /// about the mark's position is about. What is left out is the half-texel
+    /// margin the fill reads past its patch, which on a padded bitmap is
+    /// transparent either way.
     fn ink_centroid(img: &egui::ColorImage, quad: egui::Rect, ppp: f32) -> f32 {
         let [w, h] = img.size;
         let tap = |x: isize, y: isize| {
