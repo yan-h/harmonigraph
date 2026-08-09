@@ -98,8 +98,9 @@ with them most of what used to live here. What is left:
   `harmonigraph-plugin`'s `lib.rs` and `harmonigraph-take`'s `params.rs`),
   where the id is a live contract with the host's automation lane and the
   rename it outlived is the whole reason it looks wrong.
-- The note standing where the retired `node_style` key was, in `view.rs` —
-  the only surviving record of a set of seventeen, kept deliberately.
+- The note standing where the retired `node_style` key was, in
+  `harmonigraph-scene`'s `view.rs` — the only surviving record of a set of
+  seventeen, kept deliberately.
 - `DISPLAY_OVERSAMPLE` in `editor.rs`, which carries an explicit
   `HISTORICAL NOTE`: it exists to stop someone tightening the constant on
   reasoning that no longer holds.
