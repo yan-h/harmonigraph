@@ -65,8 +65,8 @@ break either, and both are easy to break by reflex.
 
 **Never run `cargo fmt`.** There is no `rustfmt.toml`, and the tree has
 never been through rustfmt, so rustfmt's idea of this code and the code
-have drifted a long way apart: `cargo fmt --check` currently wants 1346
-changes across 82 of the 89 files in `crates/`. Running it once would bury
+have drifted a long way apart: `cargo fmt --check` currently wants 1762
+changes across 83 of the 89 files in `crates/`. Running it once would bury
 whatever you actually changed under a whole-tree reformat that no reviewer
 can read past, which is why this is a ban rather than a preference. Match
 the surrounding style by hand, and wrap only the lines you write — about
