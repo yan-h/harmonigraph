@@ -2472,8 +2472,14 @@ mod tests {
 
         /// Walk one pixel in sixteenths, reading the composite at each phase.
         fn walk(sheet: &Sheet, taps: &[(f32, f32)], rim_taps: &[(f32, f32)]) -> Vec<Reading> {
-            // The halo reaches four pixels past the ink and the filter a
-            // quarter past that.
+            // The halo reaches four pixels past the ink, the filter a quarter
+            // past that, and the phase up to one more. Six covers a MARK,
+            // whose bitmap carries its own clear border (`MARK_BITMAP_PAD`).
+            // A typeset cell is egui's exact glyph box with no border at all,
+            // so its ink can sit on the edge and the rim's support runs a
+            // fraction past this window -- which is why what is read off type
+            // here is `peak`, the fill alone and nowhere near the edge, while
+            // `weight` and `smear` are asserted on mark bitmaps only.
             let pad = 6.0;
             (0..16)
                 .map(|step| {
@@ -2592,6 +2598,19 @@ mod tests {
                 let one = walk(&sheet, &ONE_TAP, &ONE_TAP);
                 let two = walk(&sheet, &TWO_TAP, &TWO_TAP);
                 let peak = |r: &[Reading]| r.iter().map(|r| r.peak).fold(0.0, f32::max);
+                // The floor first, because everything below it is a RELATIVE
+                // reading and an empty grid satisfies every one of them: a
+                // face that failed to load, or a `uv_rect` that came back
+                // empty, would leave both peaks at zero and report contrast
+                // preserved while measuring nothing. Type at these sizes has
+                // strokes over a pixel, so a glyph that draws at all reaches
+                // very near opaque somewhere.
+                assert!(
+                    peak(&one) > 0.9,
+                    "{what} `{ch}` at {size}pt peaks at only {:.2} before any of this -- \
+                     the fixture is not drawing the glyph it says it is",
+                    peak(&one),
+                );
                 assert!(
                     peak(&two) >= peak(&one) - 0.02,
                     "{what} `{ch}` at {size}pt peaks at {:.2} through two taps against {:.2} \
