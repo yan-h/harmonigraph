@@ -4544,7 +4544,7 @@ mod tests {
     ///
     /// `min_span` bounds what the bar PRODUCES, not what it is handed, so
     /// every bar that declares one can still be given a pair that breaks it:
-    /// the Nodes section's Color range is two host params with nothing between
+    /// Color & light's Color range is two host params with nothing between
     /// them, and the Band bar's pair reaches `ViewConfig` from a blob
     /// unsanitized. The slide is what a closed span needs and it carries its
     /// width forward, so without the floor below it carries a zero — and the

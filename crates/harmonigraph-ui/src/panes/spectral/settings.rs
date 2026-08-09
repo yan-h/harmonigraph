@@ -47,12 +47,13 @@ pub(super) fn span_readout(seconds: f32) -> String {
 }
 
 /// The heatmap's level->color gradient on the same preview and three bars the
-/// Nodes section dials the lattice's pitch gradient with, over a row of presets.
+/// Color & light section dials the lattice's pitch gradient with, over a row of
+/// presets.
 ///
 /// Three bars and not six: the group is the gradient itself across the top, and
 /// under it the arc on the spectrum bar, the brightness pair on one of its own
 /// and the chroma pair on another, each a picture of what its numbers COMPOSE —
-/// see `panes::nodes::spectrum_group`, which is the same set over the same type
+/// see `panes::color::spectrum_group`, which is the same set over the same type
 /// and says why a six-number gradient costs three rows and a preview rather
 /// than six rows.
 ///
@@ -62,9 +63,14 @@ pub(super) fn span_readout(seconds: f32) -> String {
 /// themselves cannot tell — they are handed a [`harmonigraph_scene::Gradient`]
 /// and a home to reset to, and nothing in either names an axis — so what says
 /// which is the tooltip, and the tooltips below are written for level rather
-/// than shared with the Nodes section's.
+/// than shared with Color & light's.
 ///
-/// **The presets come first**, ahead of the preview the Nodes section opens its
+/// That difference is also why the group stays HERE rather than joining the
+/// pitch gradient in Color & light: this one is level->color and read by
+/// nothing but the heatmap, where that one is the table every pitch-colored
+/// shape in either picture reads.
+///
+/// **The presets come first**, ahead of the preview Color & light opens its
 /// group with, and deliberate: a heatmap palette is a thing people pick by name
 /// before they dial it, and the four names are what this pane offered before it
 /// offered any knobs at all. They write the bars below and are not a mode — see
@@ -76,7 +82,7 @@ fn spectrogram_gradient_group(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig
 
     // The gradient a double-click on any of the three goes home to. The fresh
     // heatmap's, NOT the lattice's, which is what the bars assume when a caller
-    // names none: a Spectral pane resetting onto the Nodes section's arc would land
+    // names none: a Spectral pane resetting onto Color & light's arc would land
     // on a picture this pane has never opened on, and the bars carry no text
     // entry to dial it back with.
     let home = crate::SpectrumConfig::default().spectrogram_gradient;
@@ -305,7 +311,7 @@ pub(crate) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
         "Draw incoming MIDI as a scrolling roll over the same pitch axis. \
          Time runs away from the spectrum, so a note leaving the roll meets \
          the peak it is making.\n\nA ribbon takes its color from the pitch \
-         gradient, which is the Nodes section's Color group — the same colors the \
+         gradient, which is the Color & light section's — the same colors the \
          lattice draws a sounding note in, so a note is the same color in both \
          pictures. The heatmap's own gradient is below, and is a different one.",
     );

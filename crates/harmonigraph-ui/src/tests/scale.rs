@@ -389,14 +389,16 @@ fn every_settings_row_is_one_row_high() {
 /// rather than on the day someone remembers to add it to a list here.
 ///
 /// The `SpectrumBar` is a row like the rest, and its width is the one thing
-/// that differs — the flip button takes the right end of the row. The gradient
-/// preview above it is deliberately SHORTER than a row and is not swept: it
-/// paints no well, being a picture rather than a track, so the sniffing below
-/// never reaches it.
+/// that differs — the flip button takes the right end of the row. It is what
+/// Color & light is in the sweep for, the pitch gradient's group being the one
+/// place the lattice's settings draw one. The gradient preview above it is
+/// deliberately SHORTER than a row and is not swept: it paints no well, being
+/// a picture rather than a track, so the sniffing below never reaches it.
 #[test]
 fn every_bar_is_one_row_high() {
     for pane in [
         SettingsPane::Tab(panes::Tab::Tuning),
+        SettingsPane::Section(Section::Color),
         SettingsPane::Section(Section::View),
         SettingsPane::Section(Section::Nodes),
         SettingsPane::Section(Section::Analyzer),

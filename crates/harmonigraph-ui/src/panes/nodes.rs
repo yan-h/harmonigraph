@@ -1,35 +1,31 @@
 //! The Display tab's Nodes section: how a sounding note is drawn — its core
 //! mark, the octave ring around it, the melody/bass marks on the outer held
-//! notes, and the color, fade, halo and cleared gutter the whole node wears.
-//! Everything here is the *played note*; the surrounding structure and
-//! overlays live in [`super::scene`].
+//! notes, and the fade and cleared gutter the whole node wears. Everything
+//! here is a layer of the *played note*, or the whole of one.
+//!
+//! The two settings that used to stretch that name — the pitch gradient and
+//! Bloom, both of which the Analyzer reads as well — are [`super::color`], and
+//! the text a node carries is [`super::labels`].
 
 use super::{edge_bar, param_bar, section};
 use crate::params::{seconds, ParamBackend, ParamKey};
-use crate::widgets::{
-    button_row, choice_row, GradientPreview, OctaveStrip, RangeBar, SpectrumBar, SpreadBar,
-    ValueBar,
-};
+use crate::widgets::{button_row, choice_row, OctaveStrip, RangeBar, ValueBar};
 use crate::SharedState;
 use harmonigraph_scene::{
     Pulse, ViewConfig, MARK_DELAY_MAX, MIN_EXTRA_SIZE, PITCH_CEIL, PITCH_FLOOR,
 };
 
-/// The sounding-note controls: the whole note first — the colors it is drawn
-/// in, and the time and halo it wears — then each layer of it reading outward
-/// from the center, and last the sweep the outermost layer can be set to run.
+/// The sounding-note controls: the whole note first — the time it takes to
+/// arrive and leave, and the gutter it clears — then each layer of it reading
+/// outward from the center, and last the sweep the outermost layer can be set
+/// to run.
 ///
 /// Whole-note first, because those settings are the ones reached for most and
 /// because none of them belongs to a layer. Ordering them after Core, Octaves
-/// and the marks would read more consistently outward and would put the
-/// pane's most-used controls below a scroll, in a column this pane already
-/// overruns. Reading outward is what orders the rest.
-///
-/// Scrolls in the dock's own `ScrollArea` rather than one built here, which is
-/// what puts the bar in the pane's right margin instead of on top of the bars
-/// (see [`super::scene::scene_pane`]).
+/// and the marks would read more consistently outward, and would put the
+/// section's most-used controls under the ones reached for least. Reading
+/// outward is what orders the rest.
 pub(super) fn nodes_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBackend) {
-    color_section(ui, &mut state.view, params);
     note_section(ui, &mut state.view, params);
     core_section(ui, &mut state.view);
     octaves_section(ui, &mut state.view);
@@ -97,7 +93,7 @@ fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // the readout can name.
     ValueBar::new(&mut view.octave_center, PITCH_FLOOR..=PITCH_CEIL, "Center")
         .integer()
-        .display(pitch_readout)
+        .display(super::pitch_readout)
         .show(ui)
         .on_hover_text(
             "The pitch at the TOP of the wheel — on every node, whatever its \
@@ -355,142 +351,9 @@ fn shimmer_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     });
 }
 
-/// A MIDI note as a key name and octave — "C1", "C8" — so a range's ends read
-/// as pitches rather than bare numbers. Shared by the octave Center and the
-/// color range.
-///
-/// It ROUNDS, which is exact for the octave Center (its bar lands on whole
-/// semitones) and a reading for the color range (whose ends are a continuous
-/// gradient, where a tenth of a semitone changes nothing anyone can see). A
-/// caller wanting finer steps than a semitone needs its own readout, not a
-/// looser one here: this one would then name two visibly different settings
-/// the same note.
-fn pitch_readout(midi: f32) -> String {
-    let n = midi.round() as i32;
-    let name = super::KEY_NAMES[n.rem_euclid(12) as usize];
-    format!("{name}{}", harmonigraph_core::notes::display_octave_of(n))
-}
-
-/// The pitch gradient as a picture over three bars: the gradient itself across
-/// the top, and under it the arc on the spectrum bar, the brightness pair on
-/// one of its own, and the chroma pair on another. Each bar is a picture of
-/// what its numbers COMPOSE rather than a row per number, which is what keeps a
-/// six-number gradient down to three rows and a preview.
-///
-/// **The preview stands above all three because it answers all three.** It is
-/// the only thing here that shows what the six knobs make together — each bar
-/// below can only draw its own two — so it belongs to the group rather than to
-/// any one bar, and a reader dialling any of them watches the same picture.
-/// The order is the reading order: the result first, then the three settings
-/// that write it, coarsest first.
-///
-/// One column of full-width bars, like every other settings group —
-/// which here is a budget as much as a habit, and the reason the spectrum is a
-/// bar rather than the hue WHEEL a circular value naturally asks for.
-///
-/// Two measured limits rule the wheel out. A wheel large enough to grab is
-/// 148pt — six bars of height — and this pane has none to spare: it already
-/// runs past the column at the window this UI was dialled against (1512x886),
-/// so a wheel would add 140pt on top of a list that has started to scroll,
-/// and every knob under it would be that much further down. Setting the wheel
-/// BESIDE the bars below recovers the height, and breaks the other rule
-/// instead — the one still pinned by a test: a bar in a settings pane is the
-/// width of its column, so that dragging the column narrower narrows all of
-/// them together (`every_bar_in_a_settings_pane_is_the_width_of_the_pane`).
-/// The spectrum bar is the one exception the test allows, and the size of the
-/// exception is the point: it gives up 20pt of a 400pt column to the flip
-/// button and narrows with the column for the rest, where knobs beside a wheel
-/// would be 284pt of 400 and would not.
-///
-/// A bar costs one row and says the same thing — see [`SpectrumBar`] for how a
-/// circle fits on one, for why the flip and the arc share that row rather than
-/// taking two, and for why the bar's own name is the one text run in the dock
-/// drawn dark.
-fn spectrum_group(ui: &mut egui::Ui, view: &mut ViewConfig) {
-    // The row first, the colors last — see [`GradientPreview`]: read where it
-    // stands, the picture would spend every frame of every drag below it one
-    // frame behind the bar being dragged.
-    let preview = GradientPreview::reserve(ui);
-    SpectrumBar::new(&mut view.pitch_gradient).show(ui).on_hover_text(
-        "The pitch->color spectrum: how far round the color circle the pitch \
-         range walks, out of the whole turn the bar stands for. The hues it \
-         takes fill from the left, low note first; the ones it does not are \
-         dimmed. The track is hue alone — the brightness and chroma bars below \
-         move the picture above, not the arc. Drag the handle to widen or \
-         narrow it, drag the track to turn the circle under it, double-click \
-         to reset. The button past the right end runs the whole thing the \
-         other way round the circle.",
-    );
-    SpreadBar::brightness(&mut view.pitch_gradient).show(ui).on_hover_text(
-        "The stretch of brightness the pitch range spends, in CIELab L*: the \
-         two numbers are the bottom of the pitch range and the top, in that \
-         order, so a picture with its bright end at the bottom reads out \
-         backwards. Drag either end to move it, drag between them to slide the \
-         whole stretch brighter or darker, drag one end past the other to swap \
-         which end is bright, double-click to reset. Closing the two together \
-         makes every note exactly as bright as every other and leaves hue to \
-         carry the pitch alone.",
-    );
-    SpreadBar::chroma(&mut view.pitch_gradient).show(ui).on_hover_text(
-        "The stretch of color the pitch range spends, each end one \
-         colorfulness whatever hue that note lands on — 100% is as \
-         vivid as the screen goes without distorting the color, 0 is grey. The \
-         two numbers are the bottom of the pitch range and the top, in that \
-         order, so a picture with its vivid end at the bottom reads out \
-         backwards. Drag either end to move it, drag between them to slide the \
-         whole stretch, drag one end past the other to swap which end is \
-         vivid, double-click to reset. Closing the two together gives every \
-         note the same share of the color available to it.",
-    );
-    preview.show(ui, &view.pitch_gradient).on_hover_text(
-        "The gradient itself, low note on the left: every one of the six \
-         numbers the bars below carry, composed into the colors every \
-         pitch-colored shape is drawn with — the lattice's discs and octave \
-         glyphs, the trail, and the note ribbons in the Analyzer. A picture \
-         rather than a control — the three bars under it are what move it.",
-    );
-}
-
-/// Color: the pitch->color gradient every pitch-colored shape is tinted
-/// through, and the span of pitch it is stretched over.
-///
-/// Named for its subject rather than for its scope. A heading like "Every
-/// layer" would be accurate and useless: it tells a reader which controls it
-/// leaves out and nothing about what is in it, so neither someone guessing
-/// where color lives nor someone half-remembering "the gradient" can reach it.
-/// First in the pane because it is what is reached for most, and because it is
-/// the least local setting here: it is not about the core, the octave glyphs or
-/// the marks, and it does not stop at the lattice either (see below).
-fn color_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBackend) {
-    ui.heading("Color");
-    // The gradient above the range because it is the coarser of the two: it
-    // says what the colors ARE, the range says which pitches they are spread
-    // over. Both feed the one table every pitch-colored shape reads, so a
-    // change here repaints the discs, the octave glyphs, the trail and the
-    // piano roll together.
-    spectrum_group(ui, view);
-    super::param_range_bar(
-        ui,
-        params,
-        (ParamKey::DarkestPitch, ParamKey::BrightestPitch),
-        0.0..=120.0,
-        crate::COLOR_RANGE_MIN_SPAN,
-        "Color range",
-        pitch_readout,
-    )
-    .on_hover_text(
-        "The pitch span the color gradient covers: the low end takes the \
-         gradient's first color, the high end its last. Drag either end, or \
-         drag between them to slide the whole range.\n\nNot the same thing as \
-         the Analyzer's Pitch range, which is the slice of the spectrum on \
-         show: this one moves no picture, it only decides which pitches get \
-         which colors.",
-    );
-}
-
 /// Note: what the whole node does rather than any one layer of it — the time
-/// it takes to arrive and leave, the curve it runs on, the halo it carries
-/// while lit, and the gap it clears around itself.
+/// it takes to arrive and leave, the curve it runs on, and the gap it clears
+/// around itself.
 ///
 /// One section rather than a heading apiece, because they are one idea: none
 /// is about the core, the octave glyphs or the melody/bass rings in
@@ -499,7 +362,11 @@ fn color_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBac
 /// reads as a single gesture instead of pieces of the node going dark at
 /// different moments.
 fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBackend) {
-    section(ui, "Note");
+    // A plain heading rather than `section`: this is the top of the section
+    // body, and the leading rule `section` draws would sit directly under the
+    // Display pane's own Nodes header. Matches the View and Analyzer section
+    // bodies, and the Tuning and System panes.
+    ui.heading("Note");
     // The note's timing and the curve it runs on, in that order. Fade is an
     // automatable param and Shape a view setting, so the two are stored apart
     // (`ViewConfig::envelope` is where they are put back together); the pane
@@ -547,13 +414,6 @@ fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBack
              arrives fast and settles slowly, the way a struck note decays; at \
              the top most of the travel is over in the first quarter of the \
              time. The trail keeps its own straight fade whatever this says",
-        );
-    // 0 = off (the renderer skips the whole post-process chain), so the bar
-    // doubles as the toggle.
-    ValueBar::new(&mut view.bloom_strength, 0.0..=1.5, "Bloom")
-        .show(ui)
-        .on_hover_text(
-            "Soft halo around bright notes; 0 turns the post-process off",
         );
     // Here rather than with the sevens-layer controls, where a "Sevenths" name
     // misreads what it does: the gutter is cleared by every sounding node on
