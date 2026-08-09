@@ -2392,10 +2392,21 @@ mod tests {
         /// ppp 2: (radius, per-stamp alpha, samples), outer ring first.
         const RINGS_PX: [(f32, f32, u32); 2] = [(4.0, 0.21, 8), (2.0, 1.0, 12)];
 
-        /// `text.wgsl`'s `FILTER_TAP`, and the single tap it is read against.
-        /// Mirrored rather than shared -- nothing links a WGSL constant to a
-        /// Rust one, so the shader is where the value lives, this follows it,
-        /// and the NAME is the whole of the thread between them.
+        /// `text.wgsl`'s `FILTER_TAP` laid along x, and the single tap it is
+        /// read against. Mirrored rather than shared -- nothing links a WGSL
+        /// constant to a Rust one, so the shader is where the value lives,
+        /// this follows it, and the NAME is the whole of the thread between
+        /// them.
+        ///
+        /// The AXIS is this module's own rather than the shader's. There the
+        /// offset is `FILTER_TAP * locals.filter_axis`, a direction each pane
+        /// chooses (`harmonigraph_render::SlideAxis`); here [`walk`] slides in
+        /// x, so x is the axis to model it on. The two agree on what the
+        /// filter is worth, since bilinear is separable and a pane sliding
+        /// along its own named axis is this case turned to match. What this
+        /// module therefore does NOT read is a mark travelling across the
+        /// filter's axis, which is a whole different quantity and is
+        /// `harmonigraph_render`'s to hold.
         const TWO_TAP: [(f32, f32); 2] = [(-0.25, 0.0), (0.25, 0.0)];
         const ONE_TAP: [(f32, f32); 1] = [(0.0, 0.0)];
 
@@ -2559,11 +2570,20 @@ mod tests {
         /// without the test becoming a tripwire for something it is not
         /// about.
         ///
-        /// Why the accidentals and not the `-` beside them: the roll scrolls
-        /// SIDEWAYS, and these are the marks whose ink is mostly vertical
-        /// strokes, which redistribute across columns as they slide. A
-        /// horizontal bar has almost no vertical edge to redistribute, and
+        /// Why the accidentals and not the `-` beside them: read against
+        /// motion ACROSS the pane, these are the marks whose ink is mostly
+        /// vertical strokes, which redistribute across columns as they slide.
+        /// A horizontal bar has almost no vertical edge to redistribute, and
         /// sits at 2.5% before any of this.
+        ///
+        /// Across the pane is the default orientation's motion and not the
+        /// only one -- the roll runs time down the pane in two of its four,
+        /// and there it is the `♯`'s two horizontal bars that redistribute
+        /// while its uprights sit still. The filter turns to follow the pane
+        /// (`harmonigraph_render::SlideAxis`), so what that mirror case reads
+        /// is this same number with the symbols exchanged, and the reading
+        /// that holds it is the vertical half of
+        /// `a_sliding_hairline_keeps_its_weight`.
         #[test]
         fn two_taps_calm_the_accidentals_that_one_could_not() {
             const PPP: f32 = 2.0;
