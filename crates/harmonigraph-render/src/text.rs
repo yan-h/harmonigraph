@@ -999,9 +999,21 @@ pub(crate) mod tests {
         // the outer tap cannot reach the ink. Not quite opaque, because the
         // rim reads the glyph through the same filter the fill does, so the
         // stamp landing here carries the same quarter texel of softness.
+        //
+        // Bounded on BOTH sides, and that is the point of the probe rather
+        // than a tightening of it. This is the only fixture in the crate whose
+        // reading moves when `ring` stops taking `coverage`'s pair: the stamp
+        // reaching in from the right lands on the patch edge and reads 0.875
+        // through two taps against 1.0 through one, which closes the product
+        // and paints 255. A floor alone admits that, so the rim's half of this
+        // change — the expensive half — would sit here untested.
         let outer = pixel(&frame, 22, 28);
         assert_eq!([outer[1], outer[2]], [0, 0], "the rim's own hue, got {outer:?}");
-        assert!(outer[3] >= 240, "the rim two points out reads {outer:?}, not near-opaque");
+        assert!(
+            (240..=250).contains(&outer[3]),
+            "the rim two points out reads {outer:?}: near-opaque, and softened by the \
+             quarter texel its stamps are reconstructed over",
+        );
         assert_eq!(pixel(&frame, 21, 28), [0, 0, 0, 0], "nothing past the rim's radius");
         assert_eq!(pixel(&frame, 4, 4), [0, 0, 0, 0], "nothing anywhere else");
     }
