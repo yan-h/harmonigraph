@@ -846,20 +846,29 @@ pub(crate) mod tests {
     /// the same shader in a different pass — so a fixture that changed under
     /// one of them would change under both.
     pub(crate) fn atlas() -> FontAtlas {
-        patch_at([8, 8], 1)
+        patch_at([8, 8], 32, 1)
     }
 
     /// And a stand-in MARK sheet, with its patch somewhere the font atlas has
     /// nothing. That is the whole design of the pair: a glyph reading the
     /// wrong sheet finds transparency and paints nothing, rather than finding
     /// a plausible square of ink and passing.
+    ///
+    /// TWICE the font atlas's width, which is the other half of the pair. An
+    /// instance carries the sheet it reads and the size to measure it by, and
+    /// two sheets of one size hold the second constant while the first varies
+    /// — so a shader that read the right texture through the font atlas's
+    /// dimensions would land on the patch anyway and pass. In the app the two
+    /// are never alike (epaint's atlas is 2048 wide against
+    /// `MARK_SHEET_WIDTH`), and at 64 the mark's uv normalizes to half of what
+    /// the wrong size gives, which is transparency.
     pub(crate) fn mark_sheet() -> FontAtlas {
-        patch_at([16, 0], 1)
+        patch_at([16, 0], 64, 1)
     }
 
-    /// A 32x32 sheet with one opaque 8x8 patch at `at`.
-    fn patch_at([left, top]: [usize; 2], key: u64) -> FontAtlas {
-        let mut image = egui::ColorImage::filled([32, 32], egui::Color32::TRANSPARENT);
+    /// A `width`x32 sheet with one opaque 8x8 patch at `at`.
+    fn patch_at([left, top]: [usize; 2], width: usize, key: u64) -> FontAtlas {
+        let mut image = egui::ColorImage::filled([width, 32], egui::Color32::TRANSPARENT);
         for y in top..top + 8 {
             for x in left..left + 8 {
                 image[(x, y)] = egui::Color32::WHITE;
