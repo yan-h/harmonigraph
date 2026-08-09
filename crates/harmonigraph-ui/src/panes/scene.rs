@@ -35,7 +35,7 @@ pub(super) fn scene_pane(ui: &mut egui::Ui, state: &mut SharedState) {
 /// picture, and every color control in the panel is for the music.
 fn home_grid_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // First section of the pane: a plain heading, no leading rule (matches
-    // the Nodes pane's Core section).
+    // the Nodes pane's Color section, which leads that pane the same way).
     ui.heading("Home grid");
     ValueBar::new(&mut view.grid_thickness, 0.0..=4.0, "Line width")
         .show(ui)

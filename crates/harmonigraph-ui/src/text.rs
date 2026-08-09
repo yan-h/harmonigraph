@@ -141,7 +141,7 @@ pub(crate) fn snap_scale(scale: f32, base: f32, ppp: f32) -> f32 {
 /// That ceiling is the whole reason this is not two lines at each call site.
 /// [`snap_scale`] clamps what is RASTERIZED to [`MAX_GLYPH_PX`], and a
 /// magnification computed against the raw request absorbs everything past it —
-/// so a camera zoomed fully in with the Size bar at 3 would ask for type twice
+/// so a camera zoomed fully in with the Name size bar at 3 would ask for type twice
 /// the size of the cell behind it, which is not a big label but a blurred one,
 /// and a hand-edited camera makes it far worse. Clamping the request the same
 /// way keeps the ceiling meaning what `harmonigraph_scene::Camera` says it
@@ -1030,7 +1030,7 @@ mod tests {
     /// The ceiling is the point. [`snap_scale`] clamps what is rasterized at
     /// [`MAX_GLYPH_PX`], so a magnification taken against the raw request
     /// absorbs everything past it and the DRAWN size is bounded by nothing: a
-    /// camera zoomed fully in with the Size bar at its top asks for type half
+    /// camera zoomed fully in with the Name size bar at its top asks for type half
     /// again the size of the cell behind it, and a hand-edited camera for many
     /// times that — a blurred label rather than the bounded one the ceiling is
     /// there to promise. `harmonigraph_scene::Camera` says in as many words

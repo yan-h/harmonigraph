@@ -237,13 +237,13 @@ fn text_y(shapes: &[egui::epaint::ClippedShape], needle: &str) -> Option<f32> {
 ///
 /// Both shells, because which section leads the Video pane depends on the
 /// shell: a host can record takes, so Record leads; the standalone cannot, so
-/// `render_settings` returns early and Frame leads instead. `section` decides
+/// `record_controls` returns early and Frame leads instead. `section` decides
 /// it from what has been drawn rather than from the caller, and this is what
 /// holds it to that for the case the caller could not have known.
 #[test]
 fn the_video_pane_does_not_start_with_a_rule() {
     // Which section leads, per shell: a host can record takes, so Record
-    // leads; the standalone cannot, so `render_settings` returns early.
+    // leads; the standalone cannot, so `record_controls` returns early.
     for (supported, leads) in [(true, "Record"), (false, "Frame")] {
         let (shapes, rule) = video_pane_shapes(supported);
         let heading = text_y(&shapes, leads)

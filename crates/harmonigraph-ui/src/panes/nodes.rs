@@ -216,7 +216,7 @@ fn melody_bass_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                  Band inner to make room",
             );
         // The Delay is about a ring that is DRAWN — when it arrives — so it is
-        // gated on there being one. Thickness 0 is the documented off position,
+        // gated on there being one. Ring thickness 0 is the documented off position,
         // where `mark_ring` returns no coverage (the Core section gates its own
         // Solidity on a radius of 0 the same way). The enclosing block already
         // grays this on both marks being off, so what it is gated on either way
