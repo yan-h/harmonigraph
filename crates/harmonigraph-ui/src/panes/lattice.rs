@@ -589,9 +589,18 @@ const SHARP_SLANT: f32 = 0.202;
 /// of the glyph, where there is no bowl to have a midline: stem and bowl are
 /// one mass below [`FLAT_MERGE`], so a midline sampled there is the MASS's,
 /// and a cubic pulled onto it leaves the bowl arriving at the stem from the
-/// wrong angle -- which is what makes a taper look necessary.
+/// wrong angle.
+///
+/// The fit is CONSTRAINED, and the constraint is what the eye actually reads:
+/// the bowl's outer edge has to arrive along the foot's run rather than
+/// across it. Coverage alone will not buy that -- a corner in the outline
+/// costs almost no area, so an unconstrained fit is happy to let the bowl
+/// bulge past the run and cut back onto it, which reads as a crease in the
+/// silhouette however close the areas are. So the fit carries the tangency as
+/// a constraint, and `a_flats_outline_has_no_crease_where_the_bowl_lands`
+/// holds it.
 const FLAT_BOWL: [[f32; 2]; 4] =
-    [[0.2104, 0.4242], [1.059, 0.250], [1.212, 0.792], [0.113, 0.894]];
+    [[0.2104, 0.4242], [1.0504, 0.2585], [1.2096, 0.7823], [0.1166, 0.8826]];
 /// The straight run that closes the bowl into the foot of the upright, as the
 /// width the glyph still carries per unit of height above the tip.
 ///
@@ -601,22 +610,29 @@ const FLAT_BOWL: [[f32; 2]; 4] =
 /// slope is the foot, and it is what makes the bottom of a `♭` a point rather
 /// than a stem with a bowl stuck on the side of it.
 const FLAT_FOOT_SLOPE: f32 = 3.86;
-/// Where the counter bottoms out, as a fraction of the ink height: Iosevka
-/// closes it at 49 of a box running -69..749.
+/// Where the bowl stops being a stroke and the foot takes over, as a fraction
+/// of the ink height.
 ///
-/// Below this there is no hole, so there are no longer two strokes to see --
-/// the stem and the bowl are ONE mass, as wide as [`FLAT_FOOT_SLOPE`] says
-/// and narrowing to the point at the corner. Drawing that mass is what makes
-/// the bottom of the mark read as one thing. Two strokes carried down to the
-/// corner separately do not join however close they are brought: the counter
-/// simply never closes, and the bowl reads as hung off the stem rather than
-/// merged into it.
+/// Two separate things happen at this height in the face, which is why one
+/// constant does both jobs:
 ///
-/// It can afford to be the measurement rather than a knob because the reading
-/// does not move over 0.84..0.92 -- lower and the foot starts filling the
-/// counter it should be leaving open, higher and it is too small to close the
-/// two into anything. Tuning it inside that band buys nothing, so it is set
-/// where the face sets it.
+/// - Iosevka's counter bottoms out here (49 of a box running -69..749, so
+///   0.85575). Below it there is no hole, so there are no longer two strokes
+///   to see: stem and bowl are ONE mass, as wide as [`FLAT_FOOT_SLOPE`] says
+///   and narrowing to the point at the corner. Two strokes carried down to
+///   the corner separately never join, and the bowl reads as hung off the
+///   stem rather than merged into it.
+/// - It is also where [`FLAT_BOWL`]'s outer edge comes onto the foot's run --
+///   TANGENT to it, so the outline changes hands without changing direction.
+///   The fitted bowl puts that at 0.85551, which is the same height to two
+///   parts in ten thousand: a hundredth of a pixel at any size a name is
+///   drawn at.
+///
+/// So the foot is a triangle whose top vertex sits ON the bowl's outer edge,
+/// sharing its tangent -- and the silhouette below the bowl is one straight
+/// run to the corner. Move this without refitting the bowl and the two part
+/// company: the triangle's top corner pokes out of the outline, or the bowl
+/// bulges past the run and creases back onto it.
 const FLAT_MERGE: f32 = 0.8557;
 /// Air between the accidental/comma column and the septimal mark, as a
 /// fraction of the mark's font size. Small: enough that the mark is not
@@ -1283,7 +1299,7 @@ fn mark_key(kind: MarkKind, size: f32, weight: f32, ppp: f32) -> MarkKey {
     // at a sub-pixel offset is two pixels at half. What changes is how much
     // that varies as the mark slides: a stroke floored at a pixel is nearly
     // the same picture at every phase, where one at 0.58px is not, and the
-    // swing drops from 49.0% to 30.6% for `♭` and 40.8% to 29.4% for `♯`.
+    // swing drops from 49.0% to 30.4% for `♭` and 40.8% to 29.4% for `♯`.
     // The shimmer is the variation, not the softness, which is why this is
     // the fix and a sharper bitmap is not. The reading is the one
     // `a_drawn_accidental_breathes_less_than_the_type_it_replaced` takes.
@@ -2159,6 +2175,62 @@ mod tests {
         }
     }
 
+    /// A `♭`'s outline does not crease where the bowl lands on the foot.
+    ///
+    /// The way this fails is not a wrong shape but a wrong JOIN. Below
+    /// [`FLAT_MERGE`] the outline is the foot's own straight run, and above it
+    /// the bowl's outer edge; if the bowl arrives across that run rather than
+    /// along it, the two meet at an angle and the eye reads a crease in the
+    /// side of the mark. Area barely notices -- a bowl that bulges past the
+    /// run and cuts back onto it is within a few percent of the right glyph on
+    /// coverage -- so this is pinned on the OUTLINE instead.
+    ///
+    /// Below the merge every row is solid from the left edge (see
+    /// `a_flats_stem_and_bowl_close_into_one_foot`), so a row's total coverage
+    /// IS its right edge, to sub-pixel accuracy. Those edges have to fall on
+    /// one line, and it has to be the foot's line: a bowl crossing the run
+    /// steepens the fit measurably, which is the reading here.
+    #[test]
+    fn a_flats_outline_has_no_crease_where_the_bowl_lands() {
+        // Per row of descent, which is size-independent: the ink box's own
+        // aspect turns the foot's slope into pixels.
+        let want = -FLAT_FOOT_SLOPE * FLAT_INK_W / FLAT_INK_H;
+        for size in [33.0_f32, 60.0, 140.0] {
+            let key = mark_key(MarkKind::Flat, size, MARK_WEIGHT, 2.0);
+            let img = rasterize_mark(key);
+            let [w, h] = img.size;
+            let ink_h = FLAT_INK_H * key.size_px as f32;
+            let merge = (h as f32 - ink_h) / 2.0 + FLAT_MERGE * ink_h;
+            let edges: Vec<f32> = (merge.ceil() as usize..h)
+                .map(|y| (0..w).map(|x| coverage(&img, x, y) as f32 / 255.0).sum())
+                .collect();
+            let n = edges.len() as f32;
+            let mx = (n - 1.0) / 2.0;
+            let my = edges.iter().sum::<f32>() / n;
+            let sxy: f32 =
+                edges.iter().enumerate().map(|(i, e)| (i as f32 - mx) * (e - my)).sum();
+            let sxx: f32 = (0..edges.len()).map(|i| (i as f32 - mx).powi(2)).sum();
+            let slope = sxy / sxx;
+            assert!(
+                (slope - want).abs() < 0.03 * want.abs(),
+                "the outline below the merge falls {slope:.3}px a row against the foot's \
+                 own {want:.3} at size {size} -- the bowl is crossing the run, not \
+                 landing on it"
+            );
+            // And it is a line, not a curve that averages to one.
+            let off = edges
+                .iter()
+                .enumerate()
+                .map(|(i, e)| (e - (my + slope * (i as f32 - mx))).abs())
+                .fold(0.0_f32, f32::max);
+            assert!(
+                off < 0.012 * w as f32,
+                "the outline below the merge wanders {off:.2}px off its own line at size \
+                 {size}, on a mark {w}px wide"
+            );
+        }
+    }
+
     /// A `♭`'s stem and bowl are ONE mass where the face has them merged.
     ///
     /// The complement of the test above, and the failure it pins is the one
@@ -2328,7 +2400,7 @@ mod tests {
     /// comparison itself, and it cannot go stale as the face, the size or the
     /// rasterizer move under it.
     ///
-    /// At the size asserted here the readings are 30.6% against 49.0% for
+    /// At the size asserted here the readings are 30.4% against 49.0% for
     /// `♭` and 29.4% against 40.8% for `♯` -- a real margin rather than a
     /// hair either side of equal. The drawn `-` beside them sits at 4.3%,
     /// which is what a mark made of one straight bar can reach and neither
