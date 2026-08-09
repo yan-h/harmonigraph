@@ -1567,9 +1567,9 @@ pub(crate) mod tests {
     /// BOTH axes, because the filter is one-dimensional and separable, so a
     /// pass on one says nothing at all about the other. A stroke sliding along
     /// the axis the pane did NOT name reads the single tap's full swing — that
-    /// is the whole of what [`SlideAxis`] carries, and running only the
-    /// sideways case is what let two of the analyzer's four orientations go on
-    /// shimmering after the filter landed.
+    /// is the whole of what [`SlideAxis`] carries. Running the sideways case
+    /// alone leaves two of the analyzer's four orientations shimmering and
+    /// reports a pass, which is the reading this fixture exists to deny.
     #[test]
     fn a_sliding_hairline_keeps_its_weight() {
         let Some((device, queue)) = headless_device() else {
