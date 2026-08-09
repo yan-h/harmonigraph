@@ -215,13 +215,32 @@ fn the_now_line_lands_on_the_side_the_orientation_names() {
 /// The reconstruction filter is pointed along the axis a name actually
 /// travels, in every orientation — see [`names_slide`].
 ///
-/// Asked of the DEPTH axis rather than of `is_time_vertical`, which would be
-/// the same sentence twice: a name rides time, `dir_depth` is where the pane
-/// puts time, and this is the claim that the two agree. The filter is
-/// one-dimensional and separable, so pointing it across a pane whose text
-/// scrolls downward is not a smaller correction but no correction at all —
-/// measured at 89.6% of a hairline's coverage swinging as it slides, against
-/// the 40% bound `a_sliding_hairline_keeps_its_weight` holds it to.
+/// Asked of the DEPTH axis rather than of `is_time_vertical`: a name rides
+/// time, `dir_depth` is where the pane puts time, and this is the claim that
+/// the two agree. The filter is one-dimensional and separable, so pointing it
+/// across a pane whose text scrolls downward is not a smaller correction but
+/// no correction at all — measured at 89.6% of a hairline's coverage swinging
+/// as it slides, against the 40% bound `a_sliding_hairline_keeps_its_weight`
+/// holds it to.
+///
+/// Compared as the UNIT VECTOR the shader reads, which is what keeps this from
+/// being the same sentence twice. Naming the two ends by
+/// [`SlideAxis::vertical`] on both sides is a tautology whatever that function
+/// does with its argument: the constructor is injective, so it cancels, and a
+/// build with its two arms exchanged — every orientation's filter turned 90°,
+/// including the two that were right — passes. `unit` is the value that
+/// reaches `Locals::filter_axis`, so an assertion against it cannot cancel.
+///
+/// Unsigned, because the filter's two taps sit at `±FILTER_TAP` along this and
+/// so cannot tell the ends of the axis apart: `Bottom` runs time up the pane
+/// and `Top` runs it down, and both want the same offset.
+///
+/// Exact rather than within a tolerance. Every orientation lays its axes out
+/// square with the screen, so `dir_depth` normalizes an axis-aligned vector
+/// and the components are exactly 0 and 1. A future orientation that is not
+/// square with the screen should fail here rather than round to whichever axis
+/// it leans toward — a diagonal has no answer in this filter, and quietly
+/// picking one would be the wrong kind of pass.
 ///
 /// Nothing else on the pane cares: the axis labels share the batch and stand
 /// still.
@@ -229,15 +248,18 @@ fn the_now_line_lands_on_the_side_the_orientation_names() {
 fn the_names_filter_follows_the_axis_time_runs_along() {
     for orientation in EVERY_ORIENTATION {
         let cfg = SpectrumConfig { orientation, ..Default::default() };
-        // Both rects, since a filter axis read off the pane's SHAPE rather
-        // than its orientation would pass on one and fail on the other.
+        // Both pane shapes. `names_slide` cannot see a rect, so this is not
+        // asking it about one — it holds the OTHER side of the comparison,
+        // that the depth axis is the orientation's and not the aspect ratio's,
+        // which is what makes the reading it is compared against a fact about
+        // the setting rather than about a 300x100 pane.
         for rect in [WIDE, TALL] {
             let depth = Axes::new(rect, &cfg).dir_depth();
-            let down = depth.y.abs() > depth.x.abs();
             assert_eq!(
-                super::names_slide(&cfg),
-                harmonigraph_render::SlideAxis::vertical(down),
-                "{orientation:?} runs time along {depth:?}, and the filter is pointed elsewhere",
+                super::names_slide(&cfg).unit(),
+                [depth.x.abs(), depth.y.abs()],
+                "{orientation:?} on {rect:?} runs time along {depth:?}, \
+                 and the filter is pointed elsewhere",
             );
         }
     }

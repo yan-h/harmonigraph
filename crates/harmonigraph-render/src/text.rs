@@ -235,7 +235,12 @@ impl SlideAxis {
     }
 
     /// The unit vector, as the shader takes it.
-    pub(crate) fn unit(self) -> [f32; 2] {
+    ///
+    /// Public because it is the only reading of this type that cannot be
+    /// cancelled: a caller checking its own choice against
+    /// [`vertical`](Self::vertical) is checking a constructor against itself,
+    /// and passes whichever way that constructor maps its argument.
+    pub fn unit(self) -> [f32; 2] {
         match self {
             Self::Across => [1.0, 0.0],
             Self::Down => [0.0, 1.0],
