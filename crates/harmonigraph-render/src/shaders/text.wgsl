@@ -130,10 +130,16 @@ fn vs_glyph(
 /// Half a texel further out the tap reads epaint's padding whole, so the
 /// coverage reaches zero on its own and the step is gone.
 ///
-/// Half a texel is also as far as it can go. epaint leaves exactly one
+/// Half a texel is also as far as it can go. epaint leaves at most one
 /// transparent texel around a glyph, so a tap a whole texel out would start
 /// blending the letter packed next door back in — which is the smear the patch
 /// bound exists to prevent, arriving through the margin meant to fix it.
+///
+/// At MOST one, and the difference is the whole of [`outside_atlas`]: epaint
+/// pads after a glyph and between bands, never before the first of either, so
+/// against the atlas's own walls there is no texel out there at all. What this
+/// margin reads there is decided by the sampler rather than by the atlas, and
+/// has to be corrected for.
 const PATCH_MARGIN: f32 = 0.5;
 
 /// What a tap reaching past the ATLAS's own edge must be scaled by: the weight
