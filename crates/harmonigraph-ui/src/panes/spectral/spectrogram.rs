@@ -256,10 +256,11 @@ static ROW_WEIGHT: std::sync::LazyLock<[f32; 256]> = std::sync::LazyLock::new(||
 /// asked for more than it holds, so read between its points instead of repeating
 /// them.
 ///
-/// Repeating was the old behaviour for the narrow case, and it is visible: at a
-/// three-semitone zoom a bucket is seven rows tall, and bilinear filtering
-/// cannot smooth a run of identical texels, so the pitch axis came out as
-/// plateaus with a step between them rather than as a ridge.
+/// Interpolating and not REPEATING in the narrow case, which is the visible
+/// difference: at a three-semitone zoom a bucket is seven rows tall, and
+/// bilinear filtering cannot smooth a run of identical texels, so a repeated
+/// read draws the pitch axis as plateaus with a step between them rather than as
+/// a ridge.
 #[derive(Clone, Copy, PartialEq)]
 enum RowRead {
     /// A power mean over `from..to` (always at least one bucket wide).
@@ -277,8 +278,11 @@ impl RowRead {
             RowRead::Mean { from, to } => {
                 let run = &db[from..to];
                 let top = run.iter().copied().max().unwrap_or(0);
-                // One bucket IS its own mean, and this is the zoomed-in case, so
-                // it is worth not paying a logarithm to be told so.
+                // One bucket IS its own mean. [`bins_for`] cannot produce a
+                // one-bucket run — a row narrower than a bucket is a
+                // [`RowRead::Lerp`] instead — so this is the degenerate case
+                // answered rather than a case the pane reaches, and it is here
+                // so that a hand-built read in a test means what it says.
                 if run.len() < 2 {
                     return top;
                 }
@@ -1977,9 +1981,11 @@ mod tests {
     ///
     /// The comparison starts at 8 rather than at 1 because the step from ONE
     /// bucket to several is inherent and belongs to neither rule: one bucket
-    /// reads a sample of the distribution, and any number of them reads a
-    /// statistic of it, which for a floor of this shape sits 2.3 dB higher. What
-    /// is at issue here is only the part that keeps climbing.
+    /// reads a SAMPLE of the distribution, and any number of them reads a
+    /// STATISTIC of it, which sits higher — 4.5 dB by the time the run is eight
+    /// buckets long, on this floor. That step is paid once, on the way off a
+    /// single bucket, and does not grow. What is at issue here is only the part
+    /// that keeps climbing.
     ///
     /// The second assertion is what gives the first its teeth: it fails if the
     /// noise is too flat, or the runs too short, for either rule to be tested.
@@ -2470,7 +2476,13 @@ mod tests {
     /// the merged ones the store holds, so the comparison starts past it.
     #[test]
     fn incremental_aggregation_matches_the_raw_columns_across_a_tier_merge() {
-        let reads = [RowRead::Mean { from: 4, to: 6 }, RowRead::Lerp { lo: 10, f: 0.5 }];
+        // The `Mean` row spans buckets 10 and 11 for the same reason the `Lerp`
+        // row straddles them: they alternate, so a merge that has already maxed
+        // the pair together reads differently from the two columns it stands
+        // for, and a mean is no more commutative with that max than a lerp is.
+        // Reading a constant pair instead — bucket 4, which never moves —
+        // demonstrates nothing about a mean.
+        let reads = [RowRead::Mean { from: 10, to: 12 }, RowRead::Lerp { lo: 10, f: 0.5 }];
         let bucket = 0.25;
         let interval = 0.008; // SpectrumState::FFT_INTERVAL, the live column rate.
         // Long enough that nothing scrolls out: the whole run stays in window,

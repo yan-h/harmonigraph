@@ -59,11 +59,13 @@ pub fn hz_to_midi(hz: f32) -> f32 {
 /// precision at runtime.
 pub const DEFAULT_FFT_SIZE: usize = 8192;
 
-/// The bin below which a pitch bucket is narrower than the FFT's bin spacing, so
-/// the spectrum between the bins has to be reconstructed rather than sampled.
+/// How far up the spectrum magnitudes are taken: a few bins past the crossover
+/// below which a pitch bucket is narrower than the FFT's bin spacing, and so the
+/// spectrum between the bins has to be reconstructed rather than sampled.
 ///
-/// A fixed BIN INDEX whatever the sample rate and window length are, which is
-/// what makes it a constant at all: a bucket spans a constant RATIO of its own
+/// The CROSSOVER is a fixed BIN INDEX whatever the sample rate and the window
+/// length are, which is what makes any of this a constant: a bucket spans a
+/// constant RATIO of its own
 /// frequency (`ln 2 / (12 * BINS_PER_SEMITONE)` of it) while a bin spans a
 /// constant number of Hz, so the two are equal where `f / bin_hz =
 /// 12 * BINS_PER_SEMITONE / ln 2` — and `f / bin_hz` IS the bin coordinate, with
@@ -330,13 +332,17 @@ impl SpectrumAnalyzer {
 ///
 /// **Monotone tangents** (Fritsch-Carlson: the harmonic mean of the secants
 /// either side, zeroed wherever they disagree in sign) are what make a cubic
-/// safe here, and they are not a refinement — an ordinary cubic is unusable. A
-/// main lobe's skirt drops steeply enough between adjacent bins that a form with
-/// negative weights rings: a Catmull-Rom through these same four bins draws a
-/// partial sitting ON a bin as a ring 1.42 dB ABOVE it with a notch at its true
-/// peak, which is a shape the sound does not have. Shape-preserving tangents
-/// bound every value inside the pair it sits between, so no reconstruction can
-/// invent a level neither bin holds.
+/// safe here, and they are not a refinement — an ordinary cubic is unusable.
+/// The transform's NULLS are why. A partial sitting exactly on a bin puts a
+/// Hann window's zeros on every other bin around it, so runs of three zero bins
+/// beside a nonzero one are the ordinary case rather than a contrived one — and
+/// a Catmull-Rom through `(0, 0, 0, x)` reaches `-2x/27` at a third of the way
+/// across. That is a NEGATIVE magnitude, which the caller squares into a bright
+/// phantom sitting exactly where the transform is silent.
+///
+/// Shape-preserving tangents bound every value inside the pair it sits between,
+/// so no reconstruction can invent a level neither bin holds — and in particular
+/// none can invent one below zero, which is the case a magnitude cannot survive.
 ///
 /// Continuity across the knots is the other half, and rules out the textbook
 /// three-point parabola about the NEAREST bin: right for locating a peak, wrong
@@ -371,10 +377,13 @@ impl SpectrumAnalyzer {
 /// above — and 1.42 dB is 2% of the display's default range, against a ring that
 /// is a feature the sound does not have.
 fn reconstruct(bin_mag: &[f32], k: usize, t: f32) -> f32 {
-    // The upper pair is clamped rather than guarded because the only caller
-    // reaching the end of the array is a bucket at the very top of the
-    // reconstructing range, where the two bins beyond it are its own neighbours
-    // to within far less than the picture resolves.
+    // Reads past the top HOLD the last magnitude, which is the same boundary
+    // the caller writes below its first usable bin — the four-point form wants
+    // an outer sample the measured range does not have at either end, and a
+    // held endpoint gives it one with a zero tangent, which is what "the curve
+    // stops here" should look like. Insurance at THIS end rather than a live
+    // path: the caller's own bound keeps `k + 2` inside the filled range at
+    // every supported rate and window length, with bins to spare.
     let mag = |i: usize| bin_mag[i.min(bin_mag.len() - 1)];
     let (a, b, c, d) = (mag(k - 1), mag(k), mag(k + 1), mag(k + 2));
     // Zero at a turning point, so an extremum stays where the bins put it.
@@ -703,15 +712,28 @@ mod tests {
     }
 
     /// The reconstruction never invents a level neither of the bins it sits
-    /// between holds.
+    /// between holds — and in particular never a negative one.
     ///
     /// The property that makes a cubic usable at all here, and the one an
-    /// ordinary cubic fails: through the same four bins, a Catmull-Rom draws a
-    /// partial sitting ON a bin as a ring 1.42 dB above it with a notch at its
-    /// true peak. Swept over every shape three steps can make, so a form that
-    /// only rings on steep ones is caught too.
+    /// ordinary cubic fails. The named case below is the one that matters: a
+    /// partial sitting exactly ON a bin puts a Hann window's zeros on every
+    /// other bin around it, and a Catmull-Rom through three of those and a
+    /// fourth nonzero bin goes NEGATIVE — a magnitude the caller squares into a
+    /// phantom where the transform is silent. The sweep after it covers every
+    /// shape three steps can make, so a form that only misbehaves on the steep
+    /// ones is caught too.
     #[test]
     fn the_reconstruction_never_overshoots_the_bins_it_reads() {
+        // A null beside a rise: `(0, 0, 0, x)`. A Catmull-Rom reaches -2x/27
+        // here, a third of the way across; anything shape-preserving is pinned
+        // to the zeros it sits between.
+        for x in [0.05f32, 0.4, 1.0] {
+            for i in 0..=20 {
+                let v = reconstruct(&[0.0, 0.0, 0.0, x], 1, i as f32 / 20.0);
+                assert_eq!(v, 0.0, "a null beside a rise of {x} reconstructed {v}");
+            }
+        }
+
         // Every shape three steps can make, up and down, gentle and cliff-edged
         // — so a form that only rings on the steep ones is caught too.
         let steps = [0.0f32, 0.001, 0.05, 0.4, 1.0];
@@ -800,8 +822,15 @@ mod tests {
                 count += 1;
             }
             let rms = |s: f64| (s / count as f64).sqrt();
+            // A MARGIN, not just "better". This is the only test that fails if
+            // `reconstruct` is reverted to a straight line — the continuity and
+            // overshoot tests both pass for one, a line being continuous through
+            // its knots and bounded by them. Reverted, the two quantities here
+            // become the same one computed twice (f32 FFT against f64 direct
+            // transform, agreeing to about 1e-6), and a bare `<` would then be
+            // decided by rounding noise. The worst measured ratio is 0.86.
             assert!(
-                rms(mine) < rms(chord_sq),
+                rms(mine) < 0.9 * rms(chord_sq),
                 "at offset {off} from a bin: {:.2} dB RMS over {count} buckets, \
                  against a straight line's {:.2} dB",
                 rms(mine),
