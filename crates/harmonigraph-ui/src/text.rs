@@ -1180,10 +1180,12 @@ mod tests {
     /// the evidence and the one after it is the earliest that can act. The
     /// walk here is one drag's worth of sizes, then a camera that has stopped.
     ///
-    /// The repack is also skipped when there is nothing dead to drop, which is
-    /// the second half of the trade and the reason this is not simply "pack
-    /// every pass": a frame whose own marks fill the sheet would otherwise
-    /// repack to exactly the same size and re-upload it, every frame, forever.
+    /// Skipping the repack when there is nothing dead to drop is the other
+    /// half of the trade, and it belongs to
+    /// [`a_sheet_still_drawing_all_its_marks_is_not_repacked`] rather than to
+    /// this: what the camera settles on here is three marks, which puts the
+    /// sheet back under the soft height, where height alone is already reason
+    /// enough to leave it alone.
     #[test]
     fn a_pass_boundary_packs_the_sheet_back_down_to_what_is_drawn() {
         let mut sheet = MarkAtlas::default();
@@ -1230,6 +1232,47 @@ mod tests {
             }
         }
         assert_eq!(sheet.key, settled, "a pass that asked for nothing new must not move the sheet");
+    }
+
+    /// A sheet is left alone while everything in it is still being drawn,
+    /// however tall it has grown.
+    ///
+    /// Height is what makes a repack worth doing and is not on its own what
+    /// makes it worth anything: a repack that drops nothing packs the same
+    /// marks to the same size, and mints a fresh key doing it. A fresh key is
+    /// a full re-upload of the sheet into every renderer mirroring it, per
+    /// pane, per frame, for a picture that has not moved — the one cost the
+    /// sheet exists to avoid, and the one nothing downstream would look wrong
+    /// about.
+    ///
+    /// So the live set here is itself past the soft height, which is the state
+    /// the test above cannot reach: it settles on three marks, and under the
+    /// soft height height alone answers whatever the second half of the guard
+    /// does. A camera that stops with the sheet full is an ordinary way to
+    /// arrive here — the drag ended on the frame that filled it.
+    #[test]
+    fn a_sheet_still_drawing_all_its_marks_is_not_repacked() {
+        let mut sheet = MarkAtlas::default();
+        let live = a_zooms_worth(80);
+        for &key in &live {
+            sheet.patch(key, 0);
+        }
+        let filled = sheet.image.height();
+        assert!(
+            filled as u32 > MARK_SHEET_SOFT_HEIGHT,
+            "the LIVE set has to clear the soft height, or height alone answers: {filled}",
+        );
+
+        // The camera has stopped with the sheet full: every pass from here
+        // asks for exactly what is already packed.
+        let settled = sheet.key;
+        for pass in 1..4 {
+            for &key in &live {
+                sheet.patch(key, pass);
+            }
+            assert_eq!(sheet.key, settled, "pass {pass} repacked a sheet with nothing dead in it");
+            assert_eq!(sheet.image.height(), filled, "pass {pass} moved a sheet it must not touch");
+        }
     }
 
     /// The sheet reaches a renderer when it moves, and not otherwise.
