@@ -15,20 +15,25 @@ use harmonigraph_scene::{
     Pulse, ViewConfig, MARK_DELAY_MAX, MIN_EXTRA_SIZE, PITCH_CEIL, PITCH_FLOOR,
 };
 
-/// The sounding-note controls, top to bottom as the note reads outward: the
-/// Core mark at its center, the Octaves ring around it, the melody/bass marks
-/// on the outer notes, the sweep those marks can be set to run, and then the
-/// settings that are not about any one of those layers but about all of them
-/// at once. Scrolls so the full list is reachable in a short pane.
+/// The sounding-note controls: the whole note first — the colors it is drawn
+/// in, and the time and halo it wears — then each layer of it reading outward
+/// from the center, and last the sweep the outermost layer can be set to run.
+///
+/// Whole-note first, because those settings are the ones reached for most and
+/// because none of them belongs to a layer: putting them after Core, Octaves
+/// and the marks left the pane's most-used controls below a scroll in a column
+/// this pane already overruns. Reading outward is still what orders the rest.
+/// Scrolls so the full list is reachable in a short pane.
 pub(super) fn nodes_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBackend) {
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
+            color_section(ui, &mut state.view, params);
+            note_section(ui, &mut state.view, params);
             core_section(ui, &mut state.view);
             octaves_section(ui, &mut state.view);
             melody_bass_section(ui, &mut state.view);
             shimmer_section(ui, &mut state.view);
-            every_layer_section(ui, &mut state.view, params);
         });
 }
 
@@ -38,7 +43,7 @@ pub(super) fn nodes_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dy
 /// sounding octaves' colors. Two bars and no style row: the paint is not a
 /// choice. Independent of the Octaves layer.
 fn core_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
-    ui.heading("Core");
+    section(ui, "Core");
     ValueBar::new(&mut view.core_radius, 0.0..=0.9, "Radius")
         .show(ui)
         .on_hover_text(
@@ -202,7 +207,7 @@ fn melody_bass_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // inside, bass outside), each slit either side of the octave
     // responsible so that stretch reads as its own piece.
     ui.add_enabled_ui(view.mark_melody || view.mark_bass, |ui| {
-        ValueBar::new(&mut view.mark_thickness, 0.0..=0.3, "Thickness")
+        ValueBar::new(&mut view.mark_thickness, 0.0..=0.3, "Ring thickness")
             .show(ui)
             .on_hover_text(
                 "How thick both mark rings are, in the same units as \
@@ -210,19 +215,18 @@ fn melody_bass_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                  values grow the bass ring in over the core, so raise \
                  Band inner to make room",
             );
-        // Both of the below are about a ring that is DRAWN — when it arrives
-        // and what crosses it — so both are gated on there being one.
-        // Thickness 0 is the documented off position, where `mark_ring`
-        // returns no coverage (the Core section gates its own Solidity and
-        // Style on a radius of 0 the same way). The enclosing block already
-        // grays these on both marks being off, so what they are gated on
-        // either way is `mark_rings_draw` — the same predicate `derive_scene`
-        // folds the shimmer on, and the one the Shimmer section reads.
-        // Written as the thickness alone because that is the half this block
-        // adds; the pair is what has to agree.
+        // The Delay is about a ring that is DRAWN — when it arrives — so it is
+        // gated on there being one. Thickness 0 is the documented off position,
+        // where `mark_ring` returns no coverage (the Core section gates its own
+        // Solidity on a radius of 0 the same way). The enclosing block already
+        // grays this on both marks being off, so what it is gated on either way
+        // is `mark_rings_draw` — the same predicate `derive_scene` folds the
+        // shimmer on, and the one the Shimmer section reads. Written as the
+        // thickness alone because that is the half this block adds; the pair is
+        // what has to agree.
         ui.add_enabled_ui(view.mark_thickness > 0.0, |ui| {
             // How long an end has to be HELD before its ring answers. Here
-            // rather than in with the note-wide settings at the foot of the
+            // rather than in with the note-wide settings at the head of the
             // pane, because it is about these two rings alone: the octave
             // sectors under them and the core answer immediately whatever
             // this says.
@@ -244,17 +248,11 @@ fn melody_bass_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                      fast playing from flickering rings across the band. 0 \
                      rings every note the moment it takes an end",
                 );
-            // The sweep, on the only layer that runs one — the sheet takes
-            // both rings and the octave slice each one points at. Off is its
-            // own option rather than a checkbox beside the row: there is no
-            // separate bar the pattern would otherwise gray out, so one row
-            // says both whether the marks shimmer and how.
-            choice_row(ui, "Shimmer", &mut view.pulse_marks, SHIMMER_PATTERNS);
         });
     });
 }
 
-/// The patterns the mark rings' sheet can be laid in, for the row above.
+/// The patterns the mark rings' sheet can be laid in, for the Shimmer row.
 ///
 /// A table beside the row rather than four arms written into it: a pattern is a
 /// shape the light takes, and each one's description is a sentence about that
@@ -283,74 +281,77 @@ const SHIMMER_PATTERNS: &[(Pulse, &str, &str)] = &[
     ),
 ];
 
-/// Shimmer: how the sheet the Melody/bass row lays is sized and paced.
+/// Shimmer: the shape the sheet crossing the marks takes, and how it is sized
+/// and paced. The whole feature, under the one heading that names it.
 ///
-/// Its own section rather than four more bars under that row, because these
-/// size ONE sheet crossing the whole lattice while the row picks its shape,
-/// and because the row sits inside the marks' own gating where a bar about the
-/// light itself does not belong. It stays at the foot of the pane for that
-/// reason.
+/// The pattern is the first row and the four bars follow it, because the row
+/// says WHETHER there is a sweep and the bars only say what it looks like. It
+/// sits here rather than in Melody/bass — where a "Shimmer" row under a
+/// "Shimmer" heading two sections down made one feature read as two — even
+/// though the marks are what the sheet crosses.
 ///
-/// Grayed until something is actually shimmering, on the same grounds every
-/// other gate in this pane uses: the bars do nothing at all with the pattern
-/// Off.
-///
-/// "Actually" is the load-bearing word, and it is why this is not just a mode
-/// check: `derive_scene` folds `pulse_marks` off with the ring layer itself
-/// ([`ViewConfig::mark_rings_draw`]), so a view carrying a pattern with no end
-/// marked, or no ring thickness, is not shimmering — and these bars would
-/// otherwise be live with nothing to move.
+/// The two gates are different questions and are written as two. The pattern
+/// needs a ring to lay light on, so it follows [`ViewConfig::mark_rings_draw`]
+/// — the same predicate `derive_scene` folds `pulse_marks` off with, so a view
+/// carrying a pattern with no end marked, or no ring thickness, is not
+/// shimmering. The bars need light to shape, so they additionally follow
+/// [`Pulse::sweeps`]: with the pattern Off they have nothing to move. Gating
+/// the pattern on `sweeps()` too would strand it — Off could never be left.
 fn shimmer_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     section(ui, "Shimmer");
-    let shimmering = view.pulse_marks.sweeps() && view.mark_rings_draw();
-    ui.add_enabled_ui(shimmering, |ui| {
-        ValueBar::new(&mut view.shimmer_speed, 0.0..=6.0, "Speed")
-            .show(ui)
-            .on_hover_text(
-                "How fast the sheet travels, in lattice units a second -- so \
-                 the plugin window and an exported video sweep at the same \
-                 rate over the same nodes, whatever size either is drawn at. \
-                 Which way it travels is the pattern's own. 0 freezes the \
-                 sheet where it stands",
-            );
-        // Eased, because the range is three orders wide and the useful
-        // settings are not spread evenly over it: the tight end is a
-        // different picture every few hundredths (0.05 to 0.1 halves the
-        // periods on a node), where the wide end changes little between 8 and
-        // 15. Geometric travel gives each end the same share of the bar.
-        ValueBar::new(&mut view.shimmer_width, 0.05..=15.0, "Width")
-            .eased(true)
-            .show(ui)
-            .on_hover_text(
-                "How wide the pattern is, in lattice units from one bright \
-                 peak to the next -- about five nodes at the default spacing. \
-                 Wider peaks are also further apart: it is one shape, sized. \
-                 Around one node to a period the light reads as alternating \
-                 nodes rather than as a sweep; below that several periods \
-                 cross each node at once and it becomes a texture on them",
-            );
-        ValueBar::new(&mut view.shimmer_intensity, 0.0..=2.0, "Intensity")
-            .show(ui)
-            .on_hover_text(
-                "How strong the light is: how much brightness a peak adds to \
-                 the layer, and how far the layer dims between peaks, \
-                 together. Near enough the same amount wherever it lands, so a \
-                 peak reads about as strongly on a low note's dark color as on \
-                 a high note's bright one. 0 draws the layer exactly as it is \
-                 unshimmered; 1 is the tuned depth. From about 0.4 up a peak \
-                 starts washing out the most saturated colors first -- an \
-                 indicator under it says an octave sounds without saying which",
-            );
-        ValueBar::new(&mut view.shimmer_softness, 0.0..=1.0, "Softness")
-            .show(ui)
-            .on_hover_text(
-                "How gradually the light arrives, where Intensity is how much \
-                 of it there is. High, the brightest part fades into the \
-                 clearest across the whole period and nothing is at rest; low, \
-                 the peak narrows to a hard band with a dark field around it, \
-                 which at a tight Width reads as stripes laid on the layer \
-                 rather than as light crossing it",
-            );
+    ui.add_enabled_ui(view.mark_rings_draw(), |ui| {
+        // Off is its own option rather than a checkbox beside the row: one row
+        // says both whether the marks shimmer and how.
+        choice_row(ui, "Pattern", &mut view.pulse_marks, SHIMMER_PATTERNS);
+        ui.add_enabled_ui(view.pulse_marks.sweeps(), |ui| {
+            ValueBar::new(&mut view.shimmer_speed, 0.0..=6.0, "Speed")
+                .show(ui)
+                .on_hover_text(
+                    "How fast the sheet travels, in lattice units a second -- so \
+                     the plugin window and an exported video sweep at the same \
+                     rate over the same nodes, whatever size either is drawn at. \
+                     Which way it travels is the pattern's own. 0 freezes the \
+                     sheet where it stands",
+                );
+            // Eased, because the range is three orders wide and the useful
+            // settings are not spread evenly over it: the tight end is a
+            // different picture every few hundredths (0.05 to 0.1 halves the
+            // periods on a node), where the wide end changes little between 8
+            // and 15. Geometric travel gives each end the same share of the bar.
+            ValueBar::new(&mut view.shimmer_width, 0.05..=15.0, "Width")
+                .eased(true)
+                .show(ui)
+                .on_hover_text(
+                    "How wide the pattern is, in lattice units from one bright \
+                     peak to the next -- about five nodes at the default spacing. \
+                     Wider peaks are also further apart: it is one shape, sized. \
+                     Around one node to a period the light reads as alternating \
+                     nodes rather than as a sweep; below that several periods \
+                     cross each node at once and it becomes a texture on them",
+                );
+            ValueBar::new(&mut view.shimmer_intensity, 0.0..=2.0, "Intensity")
+                .show(ui)
+                .on_hover_text(
+                    "How strong the light is: how much brightness a peak adds to \
+                     the layer, and how far the layer dims between peaks, \
+                     together. Near enough the same amount wherever it lands, so a \
+                     peak reads about as strongly on a low note's dark color as on \
+                     a high note's bright one. 0 draws the layer exactly as it is \
+                     unshimmered; 1 is the tuned depth. From about 0.4 up a peak \
+                     starts washing out the most saturated colors first -- an \
+                     indicator under it says an octave sounds without saying which",
+                );
+            ValueBar::new(&mut view.shimmer_softness, 0.0..=1.0, "Softness")
+                .show(ui)
+                .on_hover_text(
+                    "How gradually the light arrives, where Intensity is how much \
+                     of it there is. High, the brightest part fades into the \
+                     clearest across the whole period and nothing is at rest; low, \
+                     the peak narrows to a hard band with a dark field around it, \
+                     which at a tight Width reads as stripes laid on the layer \
+                     rather than as light crossing it",
+                );
+        });
     });
 }
 
@@ -443,28 +444,24 @@ fn spectrum_group(ui: &mut egui::Ui, view: &mut ViewConfig) {
     );
     preview.show(ui, &view.pitch_gradient).on_hover_text(
         "The gradient itself, low note on the left: every one of the six \
-         numbers the bars below carry, composed into the colors the lattice \
-         draws with. A picture rather than a control — the three bars under it \
-         are what move it.",
+         numbers the bars below carry, composed into the colors every \
+         pitch-colored shape is drawn with — the lattice's discs and octave \
+         glyphs, the trail, and the note ribbons in the Analyzer. A picture \
+         rather than a control — the three bars under it are what move it.",
     );
 }
 
-/// What every layer of the node shares: the pitch->color gradient it is
-/// tinted through, the time it takes to fade on release, the halo it carries
-/// while lit, and the gap it clears around the whole of itself.
+/// Color: the pitch->color gradient every pitch-colored shape is tinted
+/// through, and the span of pitch it is stretched over.
 ///
-/// One section rather than a heading apiece, because they are one idea — none
-/// of them is about the core, the octave glyphs or the melody/bass rings in
-/// particular, and all of them apply to whichever of those happen to be drawn.
-/// Fade especially: one time for the node rather than one per layer, so a
-/// release reads as a single gesture instead of pieces of the node going dark
-/// at different moments.
-fn every_layer_section(
-    ui: &mut egui::Ui,
-    view: &mut ViewConfig,
-    params: &dyn ParamBackend,
-) {
-    section(ui, "Every layer");
+/// Named for its subject rather than for its scope — these were the head of an
+/// "Every layer" section, which told a reader which controls it left out and
+/// not one thing about what was in it. First in the pane because it is what is
+/// reached for most, and because it is the least local setting here: it is not
+/// about the core, the octave glyphs or the marks, and it does not stop at the
+/// lattice either (see below).
+fn color_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBackend) {
+    ui.heading("Color");
     // The gradient above the range because it is the coarser of the two: it
     // says what the colors ARE, the range says which pitches they are spread
     // over. Both feed the one table every pitch-colored shape reads, so a
@@ -477,14 +474,31 @@ fn every_layer_section(
         (ParamKey::DarkestPitch, ParamKey::BrightestPitch),
         0.0..=120.0,
         crate::COLOR_RANGE_MIN_SPAN,
-        "Pitch range",
+        "Color range",
         pitch_readout,
     )
     .on_hover_text(
         "The pitch span the color gradient covers: the low end takes the \
          gradient's first color, the high end its last. Drag either end, or \
-         drag between them to slide the whole range.",
+         drag between them to slide the whole range.\n\nNot the same thing as \
+         the Analyzer's Pitch range, which is the slice of the spectrum on \
+         show: this one moves no picture, it only decides which pitches get \
+         which colors.",
     );
+}
+
+/// Note: what the whole node does rather than any one layer of it — the time
+/// it takes to arrive and leave, the curve it runs on, the halo it carries
+/// while lit, and the gap it clears around itself.
+///
+/// One section rather than a heading apiece, because they are one idea: none
+/// is about the core, the octave glyphs or the melody/bass rings in
+/// particular, and all apply to whichever of those happen to be drawn. Fade
+/// especially — one time for the node rather than one per layer, so a release
+/// reads as a single gesture instead of pieces of the node going dark at
+/// different moments.
+fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBackend) {
+    section(ui, "Note");
     // The note's timing and the curve it runs on, in that order. Fade is an
     // automatable param and Shape a view setting, so the two are stored apart
     // (`ViewConfig::envelope` is where they are put back together); the pane

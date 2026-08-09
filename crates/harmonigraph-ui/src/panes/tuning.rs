@@ -1,12 +1,12 @@
 //! The Tuning pane: the three prime-interval bars and the tuning-learn
-//! controls, then the commas the lattice tempers out, then — under a third
-//! heading — the framing controls from [`super::frame`].
+//! controls, then the commas the lattice tempers out.
 //!
-//! Three sections in one tab because they are three parts of one question:
-//! what the lattice IS. The bars and the commas fix where its nodes sit in
-//! pitch (the bars by number, the commas by identity), and framing fixes
-//! which of them you are looking at and from where. Everything else in the
-//! settings dock is about how what is there gets drawn.
+//! Two sections in one tab because they are two halves of one question: where
+//! the lattice's nodes sit in pitch, the bars answering it by number and the
+//! commas by identity. Which of those nodes you are then looking at is
+//! [`super::view`] — a section here until the tab bar made the case against
+//! it, since a tab called Tuning is not where anyone looks for a camera.
+//! Everything else in the settings dock is about how what is there gets drawn.
 
 use super::param_bar;
 use super::section;
@@ -293,8 +293,4 @@ pub(super) fn tuning_pane(
     // the lattice — a readout in one pane moving another pane's buttons.
     // `state.hovered` drives the lattice's own highlight, which is where a
     // hover belongs.
-
-    // How the lattice is framed: the other half of "what am I looking at".
-    section(ui, "Frame");
-    super::frame::frame_controls(ui, state);
 }

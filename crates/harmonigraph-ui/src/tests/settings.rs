@@ -102,15 +102,16 @@ fn wheel_over_settings_pane(tab: panes::Tab, screen_h: f32) -> f32 {
 /// their own; from the wheel's side that must not be visible.
 #[test]
 fn every_settings_pane_scrolls_when_its_content_overflows() {
-    // A short window, so that every one of them overflows — including Panel,
+    // A short window, so that every one of them overflows — including System,
     // the shortest list of the set.
     for tab in [
         panes::Tab::Tuning,
+        panes::Tab::View,
         panes::Tab::Nodes,
         panes::Tab::Scene,
         panes::Tab::Analyzer,
         panes::Tab::Video,
-        panes::Tab::Panel,
+        panes::Tab::System,
     ] {
         let moved = wheel_over_settings_pane(tab, 300.0);
         assert!(moved < -8.0, "{tab:?} did not scroll to the wheel (content moved {moved})");
@@ -364,11 +365,13 @@ fn every_bar_in_a_settings_pane_is_the_width_of_the_pane() {
         }
     }
     // The sniffing above finds nothing if the bars stop being painted this way,
-    // and a test that measures nothing passes. The Tuning pane is the deepest
-    // stack of bars in the dock.
+    // and a test that measures nothing passes. The Nodes pane is the deepest
+    // stack of bars in the dock — every layer of the note contributes one or
+    // more, and the gated ones still paint, greyed. Tuning stood here until the
+    // camera left it for View and took two thirds of its rows along.
     let bars =
-        bar_track_widths(&settings_pane_at_width(panes::Tab::Tuning, 400.0, PROJECTIONS[0])).len();
-    assert!(bars >= 10, "only found {bars} bar tracks in the Tuning pane; has the paint changed?");
+        bar_track_widths(&settings_pane_at_width(panes::Tab::Nodes, 400.0, PROJECTIONS[0])).len();
+    assert!(bars >= 15, "only found {bars} bar tracks in the Nodes pane; has the paint changed?");
 }
 
 /// Each gradient group opens with its preview: one band of color the width of
