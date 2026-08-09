@@ -100,13 +100,16 @@ fn vs_glyph(
     // before it arrives), so the glyph's own texels stay aligned 1:1 with
     // the framebuffer exactly as egui's own quad has them.
     //
-    // Never less than the margin `coverage` reads into, whatever the rings
+    // Never less than the distance `coverage` reads into, whatever the rings
     // say: a quad that stops at the ink cuts off the same edge column the
     // margin exists to keep, and a caller asking for no rim at all is the one
-    // way to get one. The two are the same distance in different spaces, so
-    // this is the margin's own texel expressed in points. Both rings drawn,
-    // it is a quarter point against the rim's two and changes nothing.
-    let reach = max(rim_reach(), PATCH_MARGIN / locals.pixels_per_point);
+    // way to get one. That distance is the patch margin plus the offset its
+    // taps sit at, since a fragment a quarter texel inside the bound still
+    // reaches the bound with its outer tap. The two are the same distance in
+    // different spaces, so this is those texels expressed in points. Both
+    // rings drawn, it is three eighths of a point against the rim's two and
+    // changes nothing.
+    let reach = max(rim_reach(), (PATCH_MARGIN + FILTER_TAP) / locals.pixels_per_point);
     let pos = rect.xy - vec2<f32>(reach) + corner * (rect.zw + 2.0 * reach);
 
     var out: VertexOut;
@@ -169,6 +172,42 @@ fn vs_glyph(
 /// has to be corrected for.
 const PATCH_MARGIN: f32 = 0.5;
 
+/// How far either side of a fragment [`coverage`]'s reconstruction reaches,
+/// in texels, along the axis a label travels.
+///
+/// One bilinear tap is a tent one texel wide, and a stroke about a pixel
+/// across read through it is a different picture at every sub-pixel offset:
+/// one dark column at one phase, two half-lit ones a half pixel later. The
+/// ink is the same either way — a resample conserves it — so what changes is
+/// how much of the mark is partial coverage, and that is a symbol visibly
+/// tightening and loosening as it slides. Averaging two taps a quarter texel
+/// apart puts a zero in the filter's response at exactly the frequency that
+/// swing lives at, `cos(PI * f / 2)` at f = 1, and most of it goes.
+///
+/// Measured on the composite at the size the spectral roll sets its names,
+/// as a share of each symbol's own ink: the flat falls from 12.6% to 4.2%
+/// and the sharp from 6.6% to 1.5%. They are the marks it is for — ink that
+/// is mostly VERTICAL strokes, against a roll that scrolls sideways — and the
+/// bill is a twentieth of their contrast, the flat's darkest pixel going from
+/// 0.87 to 0.86 and the sharp's from 1.00 to 0.95. Type pays nothing
+/// measurable: a letter's strokes are over a pixel and its halo saturates, so
+/// every letter, digit and lattice name keeps a peak of 1.00 and improves
+/// besides.
+///
+/// ONE axis. A second pair of taps up and down is worth 0.2 of a point on the
+/// same reading and costs the flat 15% of its contrast, which is the wrong
+/// end of that trade for a subject whose motion is sideways: a name's pitch
+/// is where it sits, and it is time that scrolls.
+///
+/// A quarter texel, and no more, because [`PATCH_MARGIN`]'s bound is the
+/// wall — a filter reaching a whole texel out reads the glyph packed next
+/// door. It also has to be HERE rather than baked into the sheets. A kernel
+/// applied on a bitmap's own grid is periodic at the texel rate, so whatever
+/// it does at f = 0 it does again at f = 1, and f = 1 is where all of the
+/// swing is; only a sub-texel offset reaches it, which is a thing the sampler
+/// can do and a rasterizer cannot.
+const FILTER_TAP: f32 = 0.25;
+
 /// What a tap reaching past the ATLAS's own edge must be scaled by: the weight
 /// the texel out there would have carried, had there been one.
 ///
@@ -215,21 +254,48 @@ fn sheet_alpha(in: VertexOut, texel: vec2<f32>) -> f32 {
     return textureSampleLevel(atlas, atlas_sampler, uv, 0.0).a;
 }
 
-/// The glyph's coverage at `texel`, and zero outside its own patch of the
-/// atlas (plus [`PATCH_MARGIN`]) — past the transparent texel epaint leaves
-/// around every glyph a neighbouring letter begins, and reading that would
-/// smear pieces of unrelated letters into the rim.
+/// One tap of [`coverage`]: the sheet's own alpha at `texel`, and zero
+/// outside the glyph's own patch of it (plus [`PATCH_MARGIN`]) — past the
+/// transparent texel epaint leaves around every glyph a neighbouring letter
+/// begins, and reading that would smear pieces of unrelated letters into the
+/// rim.
 ///
 /// Inside the margin the answer is the atlas's own alpha only while the tap
 /// stays inside the atlas; against a wall it is that alpha scaled by
 /// [`outside_atlas`]. So this is not the two-valued thing it reads as, and a
 /// caller cannot take a return between zero and the alpha as impossible.
-fn coverage(in: VertexOut, texel: vec2<f32>) -> f32 {
+///
+/// The bound is applied per TAP rather than once for the pair, and that is
+/// what lets the pair exist at all: a tap clipped here is one that has walked
+/// past the padding into a neighbour, and it reads zero where the padding it
+/// stopped short of also reads zero, so the clip lands between two equal
+/// values and puts no step in the picture.
+fn tap(in: VertexOut, texel: vec2<f32>) -> f32 {
     if texel.x < in.uv_min.x - PATCH_MARGIN || texel.y < in.uv_min.y - PATCH_MARGIN
         || texel.x > in.uv_max.x + PATCH_MARGIN || texel.y > in.uv_max.y + PATCH_MARGIN {
         return 0.0;
     }
     return sheet_alpha(in, texel) * outside_atlas(in, texel);
+}
+
+/// The glyph's coverage at `texel`, reconstructed.
+///
+/// Two taps [`FILTER_TAP`] either side along the axis a label travels, rather
+/// than the one the sampler gives. Both passes read through here — the fill
+/// once per fragment, the rim once per stamp — because the shimmer this
+/// answers is in the PICTURE and not in either half of it. Measured on the
+/// accidentals at the size the spectral roll sets its names, widening the
+/// fill alone takes the ink's own swing from 15.9% of its weight to 4.0% and
+/// leaves the composite at 12.5%, all but unmoved: the halo is a dilation of
+/// the same sub-pixel stroke through `1 - PRODUCT(1 - a)`, it covers several
+/// times the area the ink does, and it is where nearly all of what the eye
+/// catches lives. Through both, the composite falls to 4.2%.
+///
+/// The bill is the rim's, and it is the honest cost of this: twenty stamps a
+/// fragment become forty taps. The fill's own second tap is free beside it.
+fn coverage(in: VertexOut, texel: vec2<f32>) -> f32 {
+    let off = vec2<f32>(FILTER_TAP, 0.0);
+    return 0.5 * (tap(in, texel - off) + tap(in, texel + off));
 }
 
 /// Accumulate one ring of the rim: `1 - PRODUCT(1 - alpha * coverage)`,

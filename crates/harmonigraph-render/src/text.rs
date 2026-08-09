@@ -894,10 +894,22 @@ pub(crate) mod tests {
         glyph: GlyphInstance,
         rings: [TextRing; 2],
     ) -> Vec<u8> {
+        draw_from(device, queue, glyph, rings, atlas())
+    }
+
+    /// The same, off a sheet the caller names — for a fixture whose ink has
+    /// to be a shape [`atlas`]'s opaque square is not.
+    fn draw_from(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        glyph: GlyphInstance,
+        rings: [TextRing; 2],
+        sheet: FontAtlas,
+    ) -> Vec<u8> {
         let cb = TextCallback {
             glyphs: vec![glyph],
             rings,
-            atlas: Some(atlas()),
+            atlas: Some(sheet),
             marks: None,
             target_format: FORMAT,
             pane_id: 0,
@@ -951,6 +963,12 @@ pub(crate) mod tests {
     /// The glyph lands where it was told to, in its own color, and the rim
     /// stands outside it in the rim's color — the whole contract in one
     /// picture.
+    ///
+    /// The ink's own edge is soft by a quarter texel, which is `FILL_TAP`'s
+    /// outer tap and the price of a stroke that holds its weight as it
+    /// slides. It is asserted here rather than tolerated, since the fringe is
+    /// exactly as wide as that constant and a fringe any wider is the filter
+    /// reaching somewhere it must not.
     #[test]
     fn a_glyph_paints_its_ink_and_the_rim_stands_outside_it() {
         let Some((device, queue)) = headless_device() else {
@@ -962,7 +980,28 @@ pub(crate) mod tests {
         ];
         let frame = draw(&device, &queue, glyph(), rings);
         assert_eq!(pixel(&frame, 28, 28), [255, 255, 255, 255], "the glyph itself");
-        assert_eq!(pixel(&frame, 23, 28), [255, 0, 0, 255], "the rim, one point out");
+        // One point out is half a texel past the ink, so the outer tap lands a
+        // quarter texel inside it and takes an eighth of what it finds. This
+        // fixture is the loudest that can be: its glyph is opaque to its patch
+        // edge, where a real one's edge texel is partial already.
+        let fringe = pixel(&frame, 23, 28);
+        assert_eq!(
+            [fringe[0], fringe[3]],
+            [255, 255],
+            "the rim still covers one point out, got {fringe:?}",
+        );
+        assert!(
+            (16..48).contains(&fringe[1]),
+            "the fill's fringe one point out reads {fringe:?}: an eighth of an opaque edge \
+             is what one tap of two, a quarter texel out, picks up",
+        );
+        // Two points out is the rim and nothing else — far enough that even
+        // the outer tap cannot reach the ink. Not quite opaque, because the
+        // rim reads the glyph through the same filter the fill does, so the
+        // stamp landing here carries the same quarter texel of softness.
+        let outer = pixel(&frame, 22, 28);
+        assert_eq!([outer[1], outer[2]], [0, 0], "the rim's own hue, got {outer:?}");
+        assert!(outer[3] >= 240, "the rim two points out reads {outer:?}, not near-opaque");
         assert_eq!(pixel(&frame, 21, 28), [0, 0, 0, 0], "nothing past the rim's radius");
         assert_eq!(pixel(&frame, 4, 4), [0, 0, 0, 0], "nothing anywhere else");
     }
@@ -1290,7 +1329,7 @@ pub(crate) mod tests {
         };
         // Two samples at half alpha, two points either side. The glyph is 8
         // points wide, so a pixel in the middle of it is covered by both and
-        // a pixel near its left edge only by the one reaching in from the
+        // a pixel at its left edge only by the one reaching in from the
         // right — the two cases the arithmetic has to tell apart.
         let rings = [
             TextRing { radius: 0.0, alpha: 0.0, samples: 0 },
@@ -1302,7 +1341,13 @@ pub(crate) mod tests {
             both[3].abs_diff(191) <= 2,
             "two half-alpha samples should compose to 75%, got {both:?}",
         );
-        let one = pixel(&frame, 25, 28);
+        // The left EDGE rather than a point inside it, so that the sample
+        // reaching the other way lands where both of `coverage`'s taps are
+        // past the patch bound and it contributes an exact nothing. A point
+        // further in, its outer tap picks up an eighth of this fixture's
+        // opaque edge and the reading is a sum of two samples again — which
+        // is a fine picture and a poor test of telling one from two.
+        let one = pixel(&frame, 24, 28);
         assert!(
             one[3].abs_diff(128) <= 2,
             "one half-alpha sample should read 50%, got {one:?}",
@@ -1371,6 +1416,92 @@ pub(crate) mod tests {
             "a sixteenth of a pixel moved some pixel by {worst}/255, between position \
              {} and {at}: the picture steps where it should resample",
             at - 1,
+        );
+    }
+
+    /// A sheet holding one HAIRLINE: a single opaque texel column, eight
+    /// tall, inside the transparent texel epaint leaves around a glyph.
+    ///
+    /// [`atlas`]'s opaque square cannot stand in for it. A square's two
+    /// vertical edges are eight texels apart, so each resamples on its own
+    /// and the ink between them is never in doubt; a hairline's are the SAME
+    /// texel's two sides, and it is that — one stroke about a pixel wide —
+    /// that a small accidental is made of and that sub-pixel phase shows on.
+    fn hairline_sheet() -> FontAtlas {
+        let mut image = egui::ColorImage::filled([32, 32], egui::Color32::TRANSPARENT);
+        for y in 8..16 {
+            image[(8, y)] = egui::Color32::WHITE;
+        }
+        FontAtlas { image: std::sync::Arc::new(image), key: 2 }
+    }
+
+    /// A stroke a pixel wide keeps its weight as it slides, instead of
+    /// tightening and loosening once per pixel it crosses.
+    ///
+    /// The complaint [`FILL_TAP`](super::super::TEXT_ENTRY_POINTS) answers,
+    /// and a different one from
+    /// [`a_glyph_slides_across_a_pixel_without_a_step`]: that reads whether
+    /// the picture JUMPS between two offsets, and a mark can walk perfectly
+    /// smoothly while still being a different weight at each end of the walk.
+    /// Smooth and steady are separate properties, and small type on a
+    /// scrolling roll needs both.
+    ///
+    /// Read as `sum a(1-a)` over the frame — how much of the picture is
+    /// partial coverage. A resample conserves the ink exactly, so this is not
+    /// the mark getting heavier and lighter but its weight moving between
+    /// being IN a pixel and being spread across two, which is the same
+    /// quantity the mark bitmaps are tuned against
+    /// (`harmonigraph_ui::panes::lattice`'s `Grid::breathing`).
+    ///
+    /// The fixture is the worst case the app can present: an opaque hairline,
+    /// where one phase puts the whole stroke inside a single pixel and the
+    /// next splits it in half. Through one tap that swings the full 100% —
+    /// at the phase that lands the stroke on a pixel there is no partial
+    /// coverage anywhere in the frame — and two taps a quarter texel apart
+    /// hold it to 24.8%. The bound sits between, near the measurement: this
+    /// is a claim about the FILTER, and a filter that quietly lost its second
+    /// tap reads 100 rather than 41.
+    ///
+    /// No rim, which is deliberate. `fs_rim` still takes one tap per sample
+    /// and is meant to: the halo's own swing measures under 2% of its weight
+    /// at every setting tried, because a halo either saturates or is faint,
+    /// and a rim widened to match would cost twenty taps for nothing.
+    #[test]
+    fn a_sliding_hairline_keeps_its_weight() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let rings = [TextRing::default(); 2];
+        let hairline = || GlyphInstance {
+            rect: [24.0, 24.0, 1.0, 8.0],
+            uv: [8.0, 8.0, 9.0, 16.0],
+            fill: [255, 255, 255, 255],
+            rim: [0, 0, 0, 0],
+            atlas: GlyphInstance::TYPE,
+        };
+        const STEPS: u32 = 16;
+        let smear: Vec<f32> = (0..STEPS)
+            .map(|step| {
+                let mut sliding = hairline();
+                sliding.rect[0] += step as f32 / STEPS as f32;
+                draw_from(&device, &queue, sliding, rings, hairline_sheet())
+                    .chunks(4)
+                    .map(|px| {
+                        let a = px[3] as f32 / 255.0;
+                        a * (1.0 - a)
+                    })
+                    .sum()
+            })
+            .collect();
+        let hi = smear.iter().copied().fold(0.0f32, f32::max);
+        let lo = smear.iter().copied().fold(f32::INFINITY, f32::min);
+        assert!(hi > 0.0, "the hairline drew nothing at any phase");
+        let swing = (hi - lo) / hi;
+        assert!(
+            swing <= 0.40,
+            "a hairline's partial coverage swings {:.1}% of itself across one pixel of \
+             travel ({lo:.2}..{hi:.2}): the stroke changes weight as it slides",
+            100.0 * swing,
         );
     }
 }
