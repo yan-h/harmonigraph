@@ -77,7 +77,14 @@ fn vs_glyph(
     // grown edge lands on a whole physical pixel (the radius is snapped
     // before it arrives), so the glyph's own texels stay aligned 1:1 with
     // the framebuffer exactly as egui's own quad has them.
-    let reach = rim_reach();
+    //
+    // Never less than the margin `coverage` reads into, whatever the rings
+    // say: a quad that stops at the ink cuts off the same edge column the
+    // margin exists to keep, and a caller asking for no rim at all is the one
+    // way to get one. The two are the same distance in different spaces, so
+    // this is the margin's own texel expressed in points. Both rings drawn,
+    // it is a quarter point against the rim's two and changes nothing.
+    let reach = max(rim_reach(), PATCH_MARGIN / locals.pixels_per_point);
     let pos = rect.xy - vec2<f32>(reach) + corner * (rect.zw + 2.0 * reach);
 
     var out: VertexOut;
@@ -111,12 +118,31 @@ fn vs_glyph(
     return out;
 }
 
+/// How far past its own patch a glyph may still be read, in texels.
+///
+/// This is what makes a sampled glyph a picture of a letter rather than of a
+/// letter with its last column sheared off. A tap at the patch's own edge
+/// already reads half of its neighbouring texel — that is what a bilinear tap
+/// on a texel boundary IS — so cutting at the edge exactly puts a step of half
+/// the edge texel's coverage into a function of position, and a label at a
+/// fractional offset walks through it: sliding one physical pixel snaps that
+/// column on and off once, at every glyph, for as long as the picture moves.
+/// Half a texel further out the tap reads epaint's padding whole, so the
+/// coverage reaches zero on its own and the step is gone.
+///
+/// Half a texel is also as far as it can go. epaint leaves exactly one
+/// transparent texel around a glyph, so a tap a whole texel out would start
+/// blending the letter packed next door back in — which is the smear the patch
+/// bound exists to prevent, arriving through the margin meant to fix it.
+const PATCH_MARGIN: f32 = 0.5;
+
 /// The glyph's coverage at `texel`, and zero outside its own patch of the
-/// atlas — a neighbouring glyph sits immediately next to it there, and
-/// reading that would smear pieces of unrelated letters into the rim.
+/// atlas (plus [`PATCH_MARGIN`]) — past the transparent texel epaint leaves
+/// around every glyph a neighbouring letter begins, and reading that would
+/// smear pieces of unrelated letters into the rim.
 fn coverage(in: VertexOut, texel: vec2<f32>) -> f32 {
-    if texel.x < in.uv_min.x || texel.y < in.uv_min.y
-        || texel.x > in.uv_max.x || texel.y > in.uv_max.y {
+    if texel.x < in.uv_min.x - PATCH_MARGIN || texel.y < in.uv_min.y - PATCH_MARGIN
+        || texel.x > in.uv_max.x + PATCH_MARGIN || texel.y > in.uv_max.y + PATCH_MARGIN {
         return 0.0;
     }
     return textureSample(atlas, atlas_sampler, texel / locals.atlas_size).a;

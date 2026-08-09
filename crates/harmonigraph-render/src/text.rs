@@ -964,4 +964,69 @@ pub(crate) mod tests {
             "one half-alpha sample should read 50%, got {one:?}",
         );
     }
+
+    /// A label that slides moves smoothly: over a whole physical pixel of
+    /// travel, no pixel of the picture moves further in one step than the
+    /// step itself can account for.
+    ///
+    /// Every label on a picture pane walks this range. Positions arrive
+    /// unrounded, deliberately — a name rides the thing it names instead of
+    /// stepping across it while the thing glides (`harmonigraph_ui::text`) —
+    /// so a name on a scrolling roll and a node name under a moving camera
+    /// are both at a fresh sub-pixel offset every frame. What that costs has
+    /// to be a resample and nothing more; anything that is a function of the
+    /// offset with a STEP in it is a letter twitching as it travels, once per
+    /// pixel it crosses.
+    ///
+    /// The margin in `coverage` is what this pins. A tap at the patch's own
+    /// edge already reads half of its neighbouring texel, that being what a
+    /// bilinear tap on a texel boundary is, so cutting there exactly puts a
+    /// step of half the edge texel's coverage into the picture — the whole
+    /// 128 levels of it on this fixture, whose glyph is opaque to its edge.
+    ///
+    /// The bound sits between that and what sliding costs on its own, which
+    /// on this fixture is 30: a hard-edged square resamples over one texel
+    /// rather than over a letter's own soft edge, and several of the rim's
+    /// twelve samples cross that edge together, so their contributions
+    /// compound into one pixel's reading. Real glyphs measure 16 through the
+    /// same walk, which is one sixteenth of the way from nothing to opaque —
+    /// exactly what moving a sixteenth of a pixel means.
+    #[test]
+    fn a_glyph_slides_across_a_pixel_without_a_step() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        // The halo the panes draw, at this fixture's scale of one pixel to
+        // the point: both rings, so the rim's own taps cross the same edge.
+        let rings = [
+            TextRing { radius: 2.0, alpha: 0.21, samples: 8 },
+            TextRing { radius: 1.0, alpha: 1.0, samples: 12 },
+        ];
+        const STEPS: u32 = 16;
+        let frames: Vec<Vec<u8>> = (0..STEPS)
+            .map(|step| {
+                let mut sliding = glyph();
+                sliding.rect[0] += step as f32 / STEPS as f32;
+                draw(&device, &queue, sliding, rings)
+            })
+            .collect();
+        let (worst, at) = (1..frames.len())
+            .map(|i| {
+                let step = frames[i - 1]
+                    .chunks(4)
+                    .zip(frames[i].chunks(4))
+                    .map(|(a, b)| (0..4).map(|c| a[c].abs_diff(b[c])).max().unwrap_or(0))
+                    .max()
+                    .unwrap_or(0);
+                (step, i)
+            })
+            .max()
+            .expect("sixteen positions");
+        assert!(
+            worst <= 48,
+            "a sixteenth of a pixel moved some pixel by {worst}/255, between position \
+             {} and {at}: the picture steps where it should resample",
+            at - 1,
+        );
+    }
 }
