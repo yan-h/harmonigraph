@@ -769,6 +769,7 @@ fn the_persist_blob_carries_exactly_these_top_level_keys() {
         "version",
         "dock",
         "folds",
+        "display_sections",
         "camera",
         "view",
         "camera_presets",
@@ -1263,6 +1264,83 @@ fn a_view_missing_any_one_key_reloads_at_the_fresh_value() {
             "dropping {key:?} did not come back at the fresh-install value",
         );
     }
+}
+
+/// A Display section left open survives the editor window closing and
+/// reopening.
+///
+/// The plugin builds a brand-new egui `Context` for every window it opens, so
+/// collapse state kept in egui memory springs shut with the window — the same
+/// class of trap as the stale `TextureHandle`
+/// (`SharedState::release_context_resources`). The section flags live in
+/// `UiPersist` instead, and this holds the whole path: a REAL header click in
+/// the dock, `save_persist`, then a fresh `Context` and `load_persist`. Both
+/// halves are load-bearing — toggling the flag by hand would pass with the
+/// click never wired to it, and asserting inside one `Context` would pass
+/// with the state memory-backed, which is the live bug this exists to catch.
+#[test]
+fn a_display_section_left_open_survives_an_editor_reopen() {
+    use super::harness::{press, DockHarness};
+
+    // A text only an OPEN section body draws — View's projection row, Scene's
+    // leading heading — scoped to the settings leaf.
+    let drawn = |out: &egui::FullOutput, leaf: egui::Rect, needle: &str| {
+        out.shapes.iter().any(|cs| match &cs.shape {
+            egui::Shape::Text(t) => t.galley.text() == needle && leaf.contains(t.pos),
+            _ => false,
+        })
+    };
+
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let path = state.dock.find_tab(&panes::Tab::Display).expect("Display is docked");
+    state.dock.set_active_tab(path).expect("selecting the tab");
+    let mut window = DockHarness::new();
+    window.settle(&mut state);
+    let leaf = state.dock[path.surface][path.node].rect().expect("the leaf is laid out");
+    let out = window.frame(&mut state, vec![]);
+    assert!(!drawn(&out, leaf, "Projection"), "the View section must open collapsed");
+
+    // The View header, found where it was painted and clicked for real.
+    let header = out
+        .shapes
+        .iter()
+        .find_map(|cs| match &cs.shape {
+            egui::Shape::Text(t) if t.galley.text() == "View" && leaf.contains(t.pos) => {
+                Some(egui::Rect::from_min_size(t.pos, t.galley.size()).center())
+            }
+            _ => None,
+        })
+        .expect("the Display pane drew no View header");
+    window.frame(&mut state, vec![egui::Event::PointerMoved(header)]);
+    window.frame(&mut state, vec![egui::Event::PointerMoved(header), press(header, true)]);
+    window.frame(&mut state, vec![press(header, false)]);
+    // The fold-out animates over a few frames.
+    let mut out = window.frame(&mut state, vec![]);
+    for _ in 0..12 {
+        out = window.frame(&mut state, vec![]);
+    }
+    assert!(state.display_sections.view, "the click did not reach the persisted flag");
+    assert!(drawn(&out, leaf, "Projection"), "the click did not open the View section");
+    let saved = state.save_persist();
+
+    // The window closes and reopens: a FRESH `Context`, and the state the
+    // host hands back through `load_persist`.
+    let mut reopened = SharedState::new(TextureFormat::Bgra8Unorm);
+    assert!(reopened.load_persist(&saved), "the blob this build saved must load");
+    let mut fresh_window = DockHarness::new();
+    fresh_window.settle(&mut reopened);
+    let out = fresh_window.frame(&mut reopened, vec![]);
+    let path = reopened.dock.find_tab(&panes::Tab::Display).expect("Display survives the blob");
+    let leaf = reopened.dock[path.surface][path.node].rect().expect("the leaf is laid out");
+    assert!(
+        drawn(&out, leaf, "Projection"),
+        "the View section sprang shut across the reopen — is its state in egui memory?",
+    );
+    // And one open section is ONE open section: Scene stays collapsed.
+    assert!(
+        !drawn(&out, leaf, "Home grid"),
+        "the Scene section opened without ever being clicked",
+    );
 }
 
 /// Split a serialized struct into its top-level `key:value` pairs, as

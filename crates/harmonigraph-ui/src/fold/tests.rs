@@ -1685,7 +1685,7 @@ fn column_with_a_pair() -> DockState<Tab> {
     let surface = dock.main_surface_mut();
     let [_, column] = surface.split_right(NodeIndex::root(), 0.5, vec![Tab::Tuning]);
     let [_, bottom] = surface.split_below(column, 0.5, vec![Tab::Notes]);
-    surface.split_right(bottom, 0.5, vec![Tab::Scene]);
+    surface.split_right(bottom, 0.5, vec![Tab::Display]);
     dock
 }
 
@@ -1710,7 +1710,7 @@ fn a_column_with_a_pair_in_it_is_squeezed_no_further_than_the_pair_allows() {
     let node = |dock: &DockState<Tab>, tab| dock.find_tab(&tab).expect("the tab is docked").node;
     let at = |dock: &DockState<Tab>, tab| width(dock, node(dock, tab));
     let floor = style().separator.extra - style().separator.width * 0.5;
-    let behind = at(&dock, Tab::Scene);
+    let behind = at(&dock, Tab::Display);
     // Rightward, which is the column shrinking: far enough that the pair's near
     // pane reaches its floor well before the column's own would.
     for _ in 0..15 {
@@ -1723,9 +1723,9 @@ fn a_column_with_a_pair_in_it_is_squeezed_no_further_than_the_pair_allows() {
         at(&dock, Tab::Notes),
     );
     assert!(
-        (at(&dock, Tab::Scene) - behind).abs() < 1.0,
+        (at(&dock, Tab::Display) - behind).abs() < 1.0,
         "the pane behind it is not what the separator divides, and moved {:.1}pt",
-        at(&dock, Tab::Scene) - behind,
+        at(&dock, Tab::Display) - behind,
     );
     // The column is one column, however deep either row nests.
     let (top, bottom) = (at(&dock, Tab::Tuning), node(&dock, Tab::Notes).parent().unwrap());

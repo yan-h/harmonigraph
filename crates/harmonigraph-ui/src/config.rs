@@ -8,8 +8,8 @@
 
 use harmonigraph_scene::Gradient;
 
-/// The Spectral pane's analysis window length, picked in the Spectrum
-/// settings tab: longer windows resolve bass pitch more sharply but
+/// The Spectral pane's analysis window length, picked in the Analyzer
+/// settings section: longer windows resolve bass pitch more sharply but
 /// respond more slowly (the tradeoff is physics, not implementation).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SpectrumWindow {
@@ -235,7 +235,7 @@ impl SpectrogramPreset {
 
 
 /// Everything the Spectral pane's display is configured by, edited in the
-/// Spectrum settings tab and persisted with the UI state.
+/// Display tab's Analyzer section and persisted with the UI state.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct SpectrumConfig {
@@ -341,7 +341,7 @@ pub struct SpectrumConfig {
     /// fade are two ([`harmonigraph_scene::ViewConfig::sevens_gutter_soft`]):
     /// tying the fade to the reach makes a wider outline always a blurrier one,
     /// and how far a note stands off its background is a different question
-    /// from how sharply it does. They share one CONTROL — the Analyzer tab's
+    /// from how sharply it does. They share one CONTROL — the Analyzer section's
     /// Outline bar, a handle at each — because both are distances from the
     /// note's edge, which makes them two points on one axis.
     pub roll_outline_fade: f32,
@@ -443,7 +443,7 @@ impl SpectrumConfig {
         // glyph wider than the texture atlas can hold.
         self.marking_scale = sane_scale(self.marking_scale);
         self.note_name_scale = sane_scale(self.note_name_scale);
-        // The outline and its fade, which are ONE control (the Analyzer tab's
+        // The outline and its fade, which are ONE control (the Analyzer section's
         // Outline bar) over two numbers, and held to the same bound for the
         // same reason as the lattice's gutter pair
         // ([`ViewConfig::sanitize`](harmonigraph_scene::ViewConfig::sanitize)):
@@ -510,7 +510,7 @@ impl SpectrumConfig {
 /// ([`SpectrumConfig::sanitize`]), takes included — so a video rendered
 /// from an old take renders at the wider range too.
 ///
-/// The analyzer's alone, and read by nothing else. The Nodes tab's Color range
+/// The analyzer's alone, and read by nothing else. The Nodes section's Color range
 /// is the span the color gradient is spread over, and it
 /// is bounded by [`COLOR_RANGE_MIN_SPAN`] rather than by this: the reasoning
 /// above is about the size of TYPE and says nothing whatever about how tightly
@@ -536,7 +536,7 @@ pub(crate) fn sane_scale(scale: f32) -> f32 {
 /// whether they mean the same thing by 2.
 pub const SCALE_BAR_RANGE: std::ops::RangeInclusive<f32> = 0.3..=3.0;
 
-/// Closest the two ends of the Nodes tab's Color range may come — the span the
+/// Closest the two ends of the Nodes section's Color range may come — the span the
 /// color gradient covers, which is a different bar from the analyzer's window
 /// on the same axis. An octave: a gradient aimed tighter than one has notes a
 /// semitone apart at opposite ends of the spectrum, and nothing about the
@@ -545,7 +545,7 @@ pub const SCALE_BAR_RANGE: std::ops::RangeInclusive<f32> = 0.3..=3.0;
 pub(crate) const COLOR_RANGE_MIN_SPAN: f32 = 12.0;
 
 /// How far the roll's time span may be taken, in seconds. Named because two
-/// controls now set it — the Analyzer tab's Span bar and the drag across the
+/// controls now set it — the Analyzer section's Span bar and the drag across the
 /// picture — and a gesture that clamped to its own idea of the limits would
 /// push the bar past its own ends. The maximum is also what
 /// [`AudioSpectrum::HISTORY_MAX_SECONDS`](crate::AudioSpectrum::HISTORY_MAX_SECONDS)
@@ -571,7 +571,7 @@ pub(crate) const LEVEL_MAX_DB: f32 = 0.0;
 /// this is all edge and no picture — and, unclamped, a collapsed one divides
 /// by zero in `loudness` and paints the NaN geometry egui panics on.
 ///
-/// Two controls hold to it, as with the Span: the Analyzer tab's Level bar and
+/// Two controls hold to it, as with the Span: the Analyzer section's Level bar and
 /// the drag across the spectrum. A gesture clamping to its own idea of how
 /// close the pair may come would push the bar past its own end.
 pub(crate) const LEVEL_RANGE_MIN_SPAN: f32 = 12.0;

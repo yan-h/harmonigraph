@@ -235,7 +235,7 @@ pub(super) fn tuning_pane(
 ) {
     // A plain heading rather than `section`: this is the top of the pane, and
     // the leading rule `section` draws would be a line under nothing. Matches
-    // the View, Nodes, Scene, System and Analyzer panes.
+    // the System pane and the Display tab's section bodies.
     ui.heading("Tuning");
     // Tuning sliders. A comma that is tempered out derives one of these axes
     // (meantone the major third, marvel the harmonic seventh), so that axis's

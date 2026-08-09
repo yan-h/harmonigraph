@@ -151,7 +151,7 @@ pub struct SharedState {
     /// reopening one is exactly when the detects should look afresh.
     pub(crate) temper_judged: [Option<(i32, i32, i32)>; Comma::COUNT],
     /// User-saved camera angles, applied like the built-in Flat/Isometric
-    /// presets (persisted; see the View pane).
+    /// presets (persisted; see the View section).
     pub camera_presets: Vec<CameraPreset>,
     /// Entry buffer for naming a new preset. Runtime-only.
     pub preset_name: String,
@@ -160,7 +160,8 @@ pub struct SharedState {
     pub take: TakeState,
     /// Audio-derived spectrum for the Spectral pane. Runtime-only.
     pub spectrum: AudioSpectrum,
-    /// The Spectral pane's settings (Analyzer tab; persisted).
+    /// The Spectral pane's settings (the Display tab's Analyzer section;
+    /// persisted).
     pub spectrum_config: SpectrumConfig,
     /// Offline playhead render: the whole take's spectrogram laid out
     /// statically with a playhead at `now`, instead of the live scrolling
@@ -172,6 +173,10 @@ pub struct SharedState {
     /// that pass, so a direct write from one would be overwritten).
     pub(crate) reset_layout: bool,
     pub(crate) dock: DockState<panes::Tab>,
+    /// Which of the Display tab's sections stand open (persisted — see
+    /// [`panes::display::DisplaySections`] for why egui `Context` memory
+    /// cannot hold this).
+    pub display_sections: panes::display::DisplaySections,
     /// What each sideways fold is holding — the width the window owes a folded
     /// pane when it opens again, which is the one part of the layout that
     /// cannot be read back off the dock (see [`fold`]).
@@ -368,25 +373,26 @@ pub struct CameraPreset {
 ///
 /// It is a named constant because the layout is not the only thing that
 /// depends on it. What the column has to clear is the widest thing in it,
-/// which is its own TAB BAR — seven tab names want a window of about 1428pt at
-/// this fraction, measured — so this fraction and the window width together
-/// decide whether egui_dock scrolls the tab bar over the settings.
+/// which is its own TAB BAR — this fraction and the window width together
+/// decide whether egui_dock scrolls the tab bar over the settings. Four tabs
+/// is what makes the bar fit at the editor's own `DEFAULT_SIZE` (#287): a tab
+/// per settings pane wants a window of about 1428pt at this fraction,
+/// measured, which is why those panes are sections of the Display tab rather
+/// than tabs of their own.
 ///
-/// Widening the column is what scrolling the TAB BAR costs, and the price is
-/// charged to the picture twice over: a smaller fraction buys the bar a
-/// narrower window to survive, but it also takes width off the Spectral pane,
-/// which is already within a few points of being narrower than the perf HUD it
-/// has to contain. So the column is not widened on account of the bar.
+/// Widening the column is what scrolling the TAB BAR would cost, and the
+/// price is charged to the picture twice over: a smaller fraction buys the
+/// bar a narrower window to survive, but it also takes width off the Spectral
+/// pane, which is already within a few points of being narrower than the perf
+/// HUD it has to contain. So the column is not widened on account of the bar.
 ///
 /// `every_settings_tab_fits_on_its_tab_bar` (in `tests::shell`, so not linkable
-/// from here) is what checks it, by the CLIP rather than by re-deriving
-/// egui_dock's sums.
+/// from here) is what checks it — at `DEFAULT_SIZE` and at the window the UI
+/// is dialled against — by the CLIP rather than by re-deriving egui_dock's
+/// sums.
 /// It holds the tab bar alone, and has to: a pane scrolling is a normal thing,
 /// so a guard over tab bar and pane content together fires on the panes that
-/// are meant to scroll. Note what neither it nor this
-/// fraction covers — the editor's own `DEFAULT_SIZE` is 1000pt, well under what
-/// any version of this bar has needed, so the default window scrolls its tab
-/// bar. That is issue #287 and it is not this constant's to fix.
+/// are meant to scroll.
 pub(crate) const SETTINGS_SPLIT: f32 = 0.72;
 
 /// The default pane arrangement: big lattice with the Spectral pane
@@ -402,15 +408,12 @@ pub(crate) fn default_dock() -> DockState<panes::Tab> {
         NodeIndex::root(),
         SETTINGS_SPLIT,
         vec![
-            // Reading outward from the picture: what the lattice is, which of
-            // it you are looking at, then how a note is drawn, the scene
-            // around it, the analyzer, video export, and the plugin's own
+            // Reading outward from the picture: what the lattice is, then how
+            // everything is drawn (the Display sections carry the same order
+            // one level down), video export, and the plugin's own
             // render/layout knobs last.
             panes::Tab::Tuning,
-            panes::Tab::View,
-            panes::Tab::Nodes,
-            panes::Tab::Scene,
-            panes::Tab::Analyzer,
+            panes::Tab::Display,
             panes::Tab::Video,
             panes::Tab::System,
         ],
@@ -475,6 +478,7 @@ impl SharedState {
             whole_song: None,
             reset_layout: false,
             dock,
+            display_sections: panes::display::DisplaySections::default(),
             folds: fold::Folds::default(),
             window_width_change: 0.0,
             min_window_width: 0.0,
@@ -525,6 +529,7 @@ impl SharedState {
             version: UI_PERSIST_VERSION,
             dock: self.dock.clone(),
             folds: self.folds.clone(),
+            display_sections: self.display_sections,
             camera: self.camera,
             view: self.view.clone(),
             camera_presets: self.camera_presets.clone(),
@@ -643,6 +648,7 @@ impl SharedState {
         self.dial.forget();
         self.folds = persist.folds;
         self.dock = persist.dock;
+        self.display_sections = persist.display_sections;
         self.camera = persist.camera;
         self.view = persist.view;
         // The incoming project's comma modes are its own, so the verdicts
@@ -704,7 +710,16 @@ fn default_ui_scale() -> f32 {
 /// open with the tuning bars intact and the whole camera simply absent, no tab
 /// to reach it by and nothing said. That is the silent break the floor exists
 /// to turn into an audible one.
-pub(crate) const UI_PERSIST_VERSION: u32 = 3;
+///
+/// 4: `View`, `Nodes`, `Scene` and `Analyzer` merged into the Display tab's
+/// collapsible sections (#287 — four tabs is what fits the default window).
+/// The same two-break shape as 3. A version-3 dock still holding any of the
+/// four names a retired variant and dies in the `Err` arm, loudly, before the
+/// version is read. The floor is for the layout that had CLOSED all four: it
+/// parses and draws, and without a bump it would open with no Display tab —
+/// camera, note styling and analyzer knobs all unreachable, nothing said, and
+/// no mechanism to re-add a missing tab but "Reset layout".
+pub(crate) const UI_PERSIST_VERSION: u32 = 4;
 
 /// On-disk format of [`SharedState::save_persist`]. Bump thoughtfully; a
 /// failed deserialize silently falls back to defaults.
@@ -729,6 +744,8 @@ pub(crate) struct UiPersist {
     // one case where reverting the whole document is the honest answer.
     #[serde(default)]
     pub(crate) folds: fold::Folds,
+    #[serde(default)]
+    pub(crate) display_sections: panes::display::DisplaySections,
     #[serde(default)]
     pub(crate) camera: Camera,
     #[serde(default)]

@@ -1,8 +1,8 @@
-//! The Nodes pane: how a sounding note is drawn — its core mark, the octave
-//! ring around it, the melody/bass marks on the outer held notes, and the
-//! color, fade, halo and cleared gutter the whole node wears. Everything here
-//! is the *played note*; the surrounding structure and overlays live in
-//! [`super::scene`].
+//! The Display tab's Nodes section: how a sounding note is drawn — its core
+//! mark, the octave ring around it, the melody/bass marks on the outer held
+//! notes, and the color, fade, halo and cleared gutter the whole node wears.
+//! Everything here is the *played note*; the surrounding structure and
+//! overlays live in [`super::scene`].
 
 use super::{edge_bar, param_bar, section};
 use crate::params::{seconds, ParamBackend, ParamKey};

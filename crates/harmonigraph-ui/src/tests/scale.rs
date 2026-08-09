@@ -13,9 +13,10 @@ const PANE_WIDTH: f32 = 400.0;
 /// as the shapes it emitted. The same nesting as
 /// [`settings_pane_at_width`] — the dock's clip outside the pane's content box
 /// — at a fixed width, because here it is the scale that varies.
-fn settings_pane_at_scale(tab: panes::Tab, scale: f32) -> Vec<egui::epaint::ClippedShape> {
+fn settings_pane_at_scale(pane: SettingsPane, scale: f32) -> Vec<egui::epaint::ClippedShape> {
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
     state.ui_scale = scale;
+    let tab = pane.install(&mut state);
     let backend = RecordingBackend::default();
     let ctx = egui::Context::default();
     crate::theme::apply_theme(&ctx);
@@ -26,10 +27,10 @@ fn settings_pane_at_scale(tab: panes::Tab, scale: f32) -> Vec<egui::epaint::Clip
     let out = ctx.run_ui(
         egui::RawInput { screen_rect: Some(body), time: Some(0.0), ..Default::default() },
         |ui| {
-            let mut pane = ui.new_child(egui::UiBuilder::new().max_rect(body.shrink(margin)));
+            let mut body_ui = ui.new_child(egui::UiBuilder::new().max_rect(body.shrink(margin)));
             let mut tab = tab;
             let mut viewer = panes::Viewer { state: &mut state, params: &backend, now: 0.0 };
-            egui_dock::TabViewer::ui(&mut viewer, &mut pane, &mut tab);
+            egui_dock::TabViewer::ui(&mut viewer, &mut body_ui, &mut tab);
         },
     );
     out.shapes
@@ -62,13 +63,17 @@ fn tallest_text(shapes: &[egui::epaint::ClippedShape]) -> f32 {
 /// control.
 #[test]
 fn the_ui_scale_shrinks_the_panel_chrome() {
-    for tab in [panes::Tab::Tuning, panes::Tab::System, panes::Tab::Nodes] {
+    for pane in [
+        SettingsPane::Tab(panes::Tab::Tuning),
+        SettingsPane::Tab(panes::Tab::System),
+        SettingsPane::Section(Section::Nodes),
+    ] {
         let (full, small) =
-            (settings_pane_at_scale(tab, 1.0), settings_pane_at_scale(tab, 0.7));
+            (settings_pane_at_scale(pane, 1.0), settings_pane_at_scale(pane, 0.7));
 
         let (tall, short) = (tallest_text(&full), tallest_text(&small));
-        assert!(tall > 0.0, "{tab:?} drew no text to measure");
-        assert!(short < tall, "{tab:?} type stayed at {tall} points with the scale at 0.7");
+        assert!(tall > 0.0, "{pane:?} drew no text to measure");
+        assert!(short < tall, "{pane:?} type stayed at {tall} points with the scale at 0.7");
 
         // The column, not just the glyphs in it: a control's height and the
         // gaps between rows come from the style's spacing, so a pane that only
@@ -76,7 +81,7 @@ fn the_ui_scale_shrinks_the_panel_chrome() {
         let (deep, shallow) = (drawn_bottom(&full), drawn_bottom(&small));
         assert!(
             shallow < deep * 0.85,
-            "{tab:?} ran to {shallow} points at 0.7 against {deep} at 1.0 — \
+            "{pane:?} ran to {shallow} points at 0.7 against {deep} at 1.0 — \
              the spacing is not scaling with the type",
         );
     }
@@ -390,17 +395,17 @@ fn every_settings_row_is_one_row_high() {
 /// never reaches it.
 #[test]
 fn every_bar_is_one_row_high() {
-    for tab in [
-        panes::Tab::Tuning,
-        panes::Tab::View,
-        panes::Tab::Nodes,
-        panes::Tab::Analyzer,
-        panes::Tab::Video,
+    for pane in [
+        SettingsPane::Tab(panes::Tab::Tuning),
+        SettingsPane::Section(Section::View),
+        SettingsPane::Section(Section::Nodes),
+        SettingsPane::Section(Section::Analyzer),
+        SettingsPane::Tab(panes::Tab::Video),
     ] {
         for step in 0..=16u8 {
             let scale = 0.7 + 0.05 * f32::from(step);
             let want = crate::theme::row_height(scale);
-            let shapes = settings_pane_at_scale(tab, scale);
+            let shapes = settings_pane_at_scale(pane, scale);
             // Found by WIDTH, never by height: a bar fills the column (the
             // spectrum's track gives its right end to the flip button and is
             // the one exception), so that is a property this test does not
@@ -421,11 +426,11 @@ fn every_bar_is_one_row_high() {
                 found += 1;
                 assert!(
                     (r.rect.height() - want).abs() < 0.01,
-                    "{tab:?} at scale {scale} drew a {}pt bar, not {want}pt",
+                    "{pane:?} at scale {scale} drew a {}pt bar, not {want}pt",
                     r.rect.height(),
                 );
             }
-            assert!(found > 0, "{tab:?} at scale {scale} drew no bar tracks to measure");
+            assert!(found > 0, "{pane:?} at scale {scale} drew no bar tracks to measure");
         }
     }
 }

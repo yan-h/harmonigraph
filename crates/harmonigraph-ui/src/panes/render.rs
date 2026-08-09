@@ -212,7 +212,7 @@ fn clear_everything(ui: &mut egui::Ui, state: &mut SharedState) {
 /// the record switch, its status and the clear are about getting a take, and
 /// everything here happens after there is one. The Spectrogram row belongs here
 /// rather than under a heading of its own, which would be one row calling
-/// itself "Spectrogram" beside the Analyzer tab's section of that name; what it
+/// itself "Spectrogram" beside the Analyzer settings' heading of that name; what it
 /// decides is what this render bakes.
 ///
 /// The Spectrogram row draws whatever the shell is, since a standalone with no

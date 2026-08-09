@@ -3,13 +3,14 @@
 //! in docking, and gets the shared state (hover, console, tracker) for free.
 //!
 //! The lattice's settings read outward from the picture: [`tuning`] is how it
-//! is tuned, [`view`] is which of it you are looking at and from where,
-//! [`nodes`] is how a played note is drawn, [`scene`] is everything around the
-//! notes, and [`system`] is the plugin's own render/layout knobs. Alongside
-//! are the [`spectral`] display and its analyzer settings, [`render`] (the
-//! Video tab), and [`notes`] (Console + Notes). This file holds the `Tab`
-//! enum, the `TabViewer` that dispatches to them, and the small helpers more
-//! than one pane needs.
+//! is tuned, and [`display`] is how everything is drawn — [`view`] (which of
+//! it you are looking at and from where), [`nodes`] (how a played note is
+//! drawn), [`scene`] (everything around the notes) and the analyzer settings,
+//! one collapsible section each. [`system`] is the plugin's own render/layout
+//! knobs. Alongside are the [`spectral`] display, [`render`] (the Video tab),
+//! and [`notes`] (Console + Notes). This file holds the `Tab` enum, the
+//! `TabViewer` that dispatches to them, and the small helpers more than one
+//! pane needs.
 //!
 //! Each tab's name covers everything in it, which is the whole job a tab bar
 //! does: a subject its name omits is one nobody opens the tab to find.
@@ -18,6 +19,7 @@ use crate::params::{ParamBackend, ParamKey};
 use crate::widgets::{RangeBar, ValueBar};
 use crate::SharedState;
 
+pub mod display;
 pub mod lattice;
 pub mod nodes;
 pub mod notes;
@@ -30,15 +32,13 @@ pub mod system;
 pub mod tuning;
 pub mod view;
 
+use display::display_pane;
 use lattice::lattice_pane;
-use nodes::nodes_pane;
 use notes::{console_pane, notes_pane};
 use render::render_pane;
-use scene::scene_pane;
-use spectral::{spectral_pane, spectrum_settings_pane};
+use spectral::spectral_pane;
 use system::system_pane;
 use tuning::tuning_pane;
-use view::view_pane;
 
 /// Wrap degrees into -180..=180 for display (orbit accumulates yaw
 /// without bound).
@@ -67,19 +67,14 @@ pub enum Tab {
     /// Where the lattice's nodes sit in pitch: the prime bars, and the commas
     /// it tempers out.
     Tuning,
-    /// Which of the lattice you are looking at and from where: projection,
-    /// camera, extents, and the sevenths layer. Its own tab and not a section
-    /// of [`Tab::Tuning`], whose name covers none of it — see [`view`].
-    View,
-    /// How a sounding note is drawn.
-    Nodes,
-    /// The structure and overlays around the notes.
-    Scene,
+    /// How everything on screen is drawn: the View, Nodes, Scene and Analyzer
+    /// settings, one collapsible section each — see [`display`] for why one
+    /// tab carries all four.
+    Display,
     Console,
-    /// The Spectral display: FFT curve, voices, and piano roll.
+    /// The Spectral display: FFT curve, voices, and piano roll. Titled
+    /// "Analyzer".
     Spectral,
-    /// Settings for the Spectral display. Titled "Analyzer".
-    Analyzer,
     Notes,
     /// A live preview of the offline video frame, composed and adjusted here.
     /// Titled "Video".
@@ -124,16 +119,13 @@ pub fn tab_title(tab: &Tab) -> &'static str {
     match tab {
         Tab::Lattice => "Lattice",
         Tab::Tuning => "Tuning",
-        Tab::View => "View",
-        Tab::Nodes => "Nodes",
-        Tab::Scene => "Scene",
+        Tab::Display => "Display",
         Tab::Console => "Console",
-        // Deliberately the same name as the settings tab below: the display
-        // and the settings for it are one feature, and they sit in different
-        // docks, so the pair reads as "the analyzer, and its knobs" rather
-        // than as two things to tell apart.
+        // Deliberately the same name as the Display tab's Analyzer section:
+        // the display and the settings for it are one feature, and they sit
+        // on different surfaces, so the pair reads as "the analyzer, and its
+        // knobs" rather than as two things to tell apart.
         Tab::Spectral => "Analyzer",
-        Tab::Analyzer => "Analyzer",
         Tab::Notes => "Notes",
         Tab::Video => "Video",
         Tab::System => "System",
@@ -167,12 +159,14 @@ impl egui_dock::TabViewer for Viewer<'_> {
 
     /// Identify a tab by its VARIANT, never by its title.
     ///
-    /// egui_dock's default is `Id::new(title)`, and this dock deliberately has
-    /// two tabs titled "Analyzer" — the display and the settings for it. That
-    /// made them one id, and the id keys the tab BODY's `Ui`
-    /// (`tab_body_id` mixes in the surface but not the node), so the two
-    /// bodies shared their state: egui_dock wraps every body in a
-    /// `ScrollArea`, and scrolling the settings scrolled the display instead.
+    /// egui_dock's default is `Id::new(title)`, and the id keys the tab
+    /// BODY's `Ui` (`tab_body_id` mixes in the surface but not the node) — so
+    /// under the default, two tabs given one title share their body state:
+    /// egui_dock wraps every body in a `ScrollArea`, and scrolling one pane
+    /// scrolls the other. Keying on the variant is what leaves titles free to
+    /// repeat a name, which the dock still trades on — the Spectral pane
+    /// wears "Analyzer", the same word as the Display section holding its
+    /// settings.
     fn id(&mut self, tab: &mut Tab) -> egui::Id {
         egui::Id::new(("lattice-pane", *tab))
     }
@@ -203,12 +197,9 @@ impl egui_dock::TabViewer for Viewer<'_> {
         match tab {
             Tab::Lattice => lattice_pane(ui, self.state, self.now),
             Tab::Tuning => tuning_pane(ui, self.state, self.params, self.now),
-            Tab::View => view_pane(ui, self.state),
-            Tab::Nodes => nodes_pane(ui, self.state, self.params),
-            Tab::Scene => scene_pane(ui, self.state),
+            Tab::Display => display_pane(ui, self.state, self.params),
             Tab::Console => console_pane(ui, self.state),
             Tab::Spectral => spectral_pane(ui, self.state, self.now, 0),
-            Tab::Analyzer => spectrum_settings_pane(ui, self.state),
             Tab::Notes => notes_pane(ui, self.state),
             Tab::Video => render_pane(ui, self.state, self.now),
             Tab::System => system_pane(ui, self.state),
@@ -318,7 +309,7 @@ pub(super) fn param_bar(
 }
 
 /// A two-handle [`RangeBar`] over a PAIR of parameters — one control for a
-/// range whose ends are both automatable params (the Nodes pane's color
+/// range whose ends are both automatable params (the Nodes section's color
 /// range). `label` names the bar and `display` formats each end's readout.
 ///
 /// Both params are bracketed for the whole drag and written every changed
@@ -415,7 +406,7 @@ pub(super) fn edge_bar(
 pub(super) fn section(ui: &mut egui::Ui, title: &str) {
     // The rule separates a section from the one above it, so the FIRST section
     // in a pane has nothing to separate from and takes a bare heading. The
-    // Nodes and Scene panes write that case out by hand — they are built from
+    // Nodes and Scene bodies write that case out by hand — they are built from
     // section functions in a fixed order, so each knows whether it leads.
     //
     // A pane whose first section depends on the shell cannot know: the Video
