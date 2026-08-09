@@ -2366,6 +2366,329 @@ mod tests {
         }
     }
 
+    /// SCRATCH (#304): survey of what still breathes on a roll-sized mark, and
+    /// what each candidate lever does to it. Not an assertion -- run with
+    /// `--nocapture`.
+    mod shimmer_survey {
+        use super::*;
+        use std::f32::consts::TAU;
+
+        /// The halo as `crate::text::RINGS` sets it, in PHYSICAL pixels at
+        /// ppp 2: (radius, per-stamp alpha, samples), outer ring first.
+        const RINGS_PX: [(f32, f32, u32); 2] = [(4.0, 0.21, 8), (2.0, 1.0, 12)];
+
+        /// A mark bitmap plus how many of its texels one screen pixel spans --
+        /// 1 as the tree draws it, 2 for a bitmap rasterized a rung up and
+        /// drawn at the same size on screen.
+        struct Sheet {
+            g: Grid,
+            texels_per_px: f32,
+        }
+
+        impl Sheet {
+            /// One bilinear tap, addressed in SCREEN pixels from the bitmap's
+            /// own origin. Outside the bitmap reads as nothing, which is what
+            /// `MARK_BITMAP_PAD` already guarantees the ink never needs.
+            fn tap(&self, sx: f32, sy: f32) -> f32 {
+                let k = self.texels_per_px;
+                let (x, y) = (sx * k + (k - 1.0) / 2.0, sy * k + (k - 1.0) / 2.0);
+                let (x0, y0) = (x.floor(), y.floor());
+                let (fx, fy) = (x - x0, y - y0);
+                let at = |ix: f32, iy: f32| {
+                    if ix < 0.0 || iy < 0.0 || ix >= self.g.w as f32 || iy >= self.g.h as f32 {
+                        0.0
+                    } else {
+                        self.g.a[iy as usize * self.g.w + ix as usize]
+                    }
+                };
+                at(x0, y0) * (1.0 - fx) * (1.0 - fy)
+                    + at(x0 + 1.0, y0) * fx * (1.0 - fy)
+                    + at(x0, y0 + 1.0) * (1.0 - fx) * fy
+                    + at(x0 + 1.0, y0 + 1.0) * fx * fy
+            }
+
+            /// Coverage through a reconstruction filter given as tap offsets in
+            /// screen pixels, averaged -- one tap at the origin is what the
+            /// shader does today.
+            fn cov(&self, sx: f32, sy: f32, taps: &[(f32, f32)]) -> f32 {
+                taps.iter().map(|(dx, dy)| self.tap(sx + dx, sy + dy)).sum::<f32>()
+                    / taps.len() as f32
+            }
+
+            /// `fs_rim`'s arithmetic: `1 - PRODUCT(1 - alpha * coverage)` over
+            /// each ring's stamps, the outer ring accumulated first.
+            fn rim(&self, sx: f32, sy: f32, taps: &[(f32, f32)]) -> f32 {
+                let mut acc = 0.0;
+                for (radius, alpha, samples) in RINGS_PX {
+                    let mut open = 1.0 - acc;
+                    for i in 0..samples {
+                        let angle = TAU * i as f32 / samples as f32;
+                        let (ox, oy) = (angle.cos() * radius, angle.sin() * radius);
+                        open *= 1.0 - alpha * self.cov(sx - ox, sy - oy, taps);
+                    }
+                    acc = 1.0 - open;
+                }
+                acc
+            }
+        }
+
+        /// What one phase of the walk looks like on screen.
+        struct Reading {
+            /// Total alpha of the composite (halo with the fill over it). A
+            /// bilinear resample conserves the FILL's sum exactly, so any
+            /// swing here is the halo's nonlinearity -- the mark pulsing.
+            weight: f32,
+            /// `sum a(1-a)` over the composite: how much of it is partial.
+            smear: f32,
+            /// The same over the fill alone, which is `Grid::breathing`'s
+            /// reading and so the number already on record.
+            fill_smear: f32,
+            /// The darkest the fill gets, as a check that a lever is not just
+            /// blurring the mark until the swing has nothing to swing.
+            peak: f32,
+            /// The fill's own ink. A bilinear resample conserves it exactly,
+            /// so this is a constant of the symbol rather than of the phase --
+            /// which is what makes it a denominator.
+            ink: f32,
+        }
+
+        /// Walk one pixel in sixteenths and read the composite at each phase.
+        fn walk(sheet: &Sheet, taps: &[(f32, f32)]) -> Vec<Reading> {
+            let w = sheet.g.w as f32 / sheet.texels_per_px;
+            let h = sheet.g.h as f32 / sheet.texels_per_px;
+            // The halo reaches four pixels past the ink, and the widest filter
+            // half a pixel past that.
+            let pad = 6.0;
+            (0..16)
+                .map(|step| {
+                    let t = step as f32 / 16.0;
+                    let (mut weight, mut smear, mut fill_smear, mut peak) = (0.0, 0.0, 0.0, 0.0f32);
+                    let mut ink = 0.0;
+                    let mut y = -pad;
+                    while y < h + pad {
+                        let mut x = -pad;
+                        while x < w + pad {
+                            let fill = sheet.cov(x - t, y, taps);
+                            let rim = sheet.rim(x - t, y, taps);
+                            let a = fill + rim * (1.0 - fill);
+                            weight += a;
+                            smear += a * (1.0 - a);
+                            fill_smear += fill * (1.0 - fill);
+                            ink += fill;
+                            peak = peak.max(fill);
+                            x += 1.0;
+                        }
+                        y += 1.0;
+                    }
+                    Reading { weight, smear, fill_smear, peak, ink }
+                })
+                .collect()
+        }
+
+        /// The swing of a reading across the walk, as a fraction of the
+        /// symbol's own INK -- how much of what is drawn changes appearance
+        /// between one phase and the next. A different question from
+        /// [`swing`], and the one that asks what the eye sees: a swing spread
+        /// over a whole letter is a letter softening, and the same swing on a
+        /// mark made of two strokes is the mark flickering.
+        fn per_ink(readings: &[Reading], of: impl Fn(&Reading) -> f32) -> f32 {
+            let (mut lo, mut hi) = (f32::MAX, 0.0f32);
+            for r in readings {
+                lo = lo.min(of(r));
+                hi = hi.max(of(r));
+            }
+            (hi - lo) / readings[0].ink.max(1e-6)
+        }
+
+        /// The swing of a reading across the walk, against its own peak.
+        fn swing(readings: &[Reading], of: impl Fn(&Reading) -> f32) -> f32 {
+            let (mut lo, mut hi) = (f32::MAX, 0.0f32);
+            for r in readings {
+                lo = lo.min(of(r));
+                hi = hi.max(of(r));
+            }
+            (hi - lo) / hi.max(1e-6)
+        }
+
+        fn grid_of(img: &egui::ColorImage) -> Grid {
+            Grid {
+                w: img.size[0],
+                h: img.size[1],
+                a: img.pixels.iter().map(|p| p.a() as f32 / 255.0).collect(),
+            }
+        }
+
+        #[test]
+        fn scratch_survey() {
+            const PPP: f32 = 2.0;
+            // The roll's own setting: scale 1 through the ladder anchored at
+            // `names::LABEL_PT`, which is the size the complaint is about.
+            let (raster, magnify) = crate::text::ladder(1.0, 12.35, PPP);
+            let mark_size = 12.35 * raster * MARK_SCALE;
+            println!(
+                "\nroll mark size {mark_size:.3}pt, raster rung {raster:.4}, magnify \
+                 {magnify:.4}, ppp {PPP}"
+            );
+            println!(
+                "Iosevka's own 70/1000 stroke here: {:.3} physical px",
+                mark_size * MARK_WEIGHT * PPP
+            );
+
+            let one = [(0.0, 0.0)];
+            let iso4 = [(-0.25, -0.25), (0.25, -0.25), (-0.25, 0.25), (0.25, 0.25)];
+            let x2 = [(-0.25, 0.0), (0.25, 0.0)];
+
+            for kind in [MarkKind::Flat, MarkKind::Sharp, MarkKind::Minus] {
+                let key = mark_key(kind, mark_size, MARK_WEIGHT, PPP);
+                let img = rasterize_mark(key);
+                println!(
+                    "\n=== {kind:?} === bitmap {}x{}, stroke floored to {:.2}px",
+                    img.size[0],
+                    img.size[1],
+                    key.weight_16 as f32 / 16.0
+                );
+                let sheet = Sheet { g: grid_of(&img), texels_per_px: 1.0 };
+
+                let report = |what: &str, sheet: &Sheet, taps: &[(f32, f32)]| {
+                    let r = walk(sheet, taps);
+                    println!(
+                        "  {what:<38} halo {:>4.1}%  composite {:>5.1}%  fill {:>5.1}%  | \
+                         per-ink: composite {:>5.1}%  fill {:>5.1}%  | ink {:>5.1}  peak {:.2}",
+                        100.0 * swing(&r, |r| r.weight),
+                        100.0 * swing(&r, |r| r.smear),
+                        100.0 * swing(&r, |r| r.fill_smear),
+                        100.0 * per_ink(&r, |r| r.smear),
+                        100.0 * per_ink(&r, |r| r.fill_smear),
+                        r[0].ink,
+                        r.iter().map(|r| r.peak).fold(0.0, f32::max),
+                    );
+                };
+
+                report("today (1 tap)", &sheet, &one);
+                report("lever 1: fill 4-tap +-0.25", &sheet, &iso4);
+                report("lever 1x: fill 2-tap +-0.25 in x", &sheet, &x2);
+
+                // Lever 2: the same mark rasterized a rung up and drawn at the
+                // same size on screen, so one screen pixel spans two texels.
+                let img2 = rasterize_mark(mark_key(kind, mark_size, MARK_WEIGHT, PPP * 2.0));
+                let sheet2 = Sheet { g: grid_of(&img2), texels_per_px: 2.0 };
+                println!("  -- 2x raster: bitmap {}x{}", img2.size[0], img2.size[1]);
+                report("lever 2: 2x raster, 1 tap", &sheet2, &one);
+                report("lever 2b: 2x raster, 4-tap +-0.25", &sheet2, &iso4);
+                // The 2x bitmap above loses the whole-pixel floor at DISPLAY
+                // scale -- 1.93px of stroke is 0.96px once halved -- so the
+                // floor is put back here to keep the comparison about the
+                // resample and not about #292's floor.
+                let key2 = mark_key(kind, mark_size, MARK_WEIGHT, PPP * 2.0);
+                let floored = MarkKey { kind, size_px: key2.size_px, weight_16: 32 };
+                let img2f = rasterize_mark(floored);
+                let sheet2f = Sheet { g: grid_of(&img2f), texels_per_px: 2.0 };
+                report("lever 2c: 2x raster, floor kept, 1 tap", &sheet2f, &one);
+                report("lever 2d: 2x raster, floor kept, 4-tap", &sheet2f, &iso4);
+
+                // A thicker floor on the stroke, which is the one thing that
+                // separates a drawn mark from the type it replaced.
+                for thick in [1.5f32, 2.0] {
+                    let heavy = MarkKey {
+                        kind,
+                        size_px: key.size_px,
+                        weight_16: (thick * 16.0).round() as u32,
+                    };
+                    let img = rasterize_mark(heavy);
+                    let sheet = Sheet { g: grid_of(&img), texels_per_px: 1.0 };
+                    report(&format!("lever 4: stroke floored at {thick}px"), &sheet, &one);
+                }
+
+                // Lever 5: the same widening baked into the BITMAP instead of
+                // the shader. Averaging taps at +-0.25 of a texel is exactly
+                // the kernel [0.125, 0.75, 0.125] on the bitmap, and a
+                // convolution commutes with the resample that follows it -- so
+                // while texels sit 1:1 with pixels these should read identical
+                // to lever 1x and lever 1, at no cost in the shader.
+                let blurred = Sheet { g: blur(&grid_of(&img), true, false), texels_per_px: 1.0 };
+                report("lever 5: bitmap pre-blur in x", &blurred, &one);
+                let blurred = Sheet { g: blur(&grid_of(&img), true, true), texels_per_px: 1.0 };
+                report("lever 5b: bitmap pre-blur both", &blurred, &one);
+            }
+        }
+
+        /// The `[0.125, 0.75, 0.125]` kernel, on either axis or both.
+        fn blur(g: &Grid, x: bool, y: bool) -> Grid {
+            let at = |g: &Grid, ix: isize, iy: isize| {
+                if ix < 0 || iy < 0 || ix >= g.w as isize || iy >= g.h as isize {
+                    0.0
+                } else {
+                    g.a[iy as usize * g.w + ix as usize]
+                }
+            };
+            let pass = |g: &Grid, dx: isize, dy: isize| {
+                let mut a = Vec::with_capacity(g.w * g.h);
+                for iy in 0..g.h as isize {
+                    for ix in 0..g.w as isize {
+                        a.push(
+                            0.125 * at(g, ix - dx, iy - dy)
+                                + 0.75 * at(g, ix, iy)
+                                + 0.125 * at(g, ix + dx, iy + dy),
+                        );
+                    }
+                }
+                Grid { w: g.w, h: g.h, a }
+            };
+            let mut out = Grid { w: g.w, h: g.h, a: g.a.clone() };
+            if x {
+                out = pass(&out, 1, 0);
+            }
+            if y {
+                out = pass(&out, 0, 1);
+            }
+            out
+        }
+
+        /// What the LETTERS do, since [`crate::text`]'s shader is one path and
+        /// widening its fill widens every glyph in the app -- not only the
+        /// marks that prompted it.
+        #[test]
+        fn scratch_type_survey() {
+            const PPP: f32 = 2.0;
+            let one = [(0.0, 0.0)];
+            let iso4 = [(-0.25, -0.25), (0.25, -0.25), (-0.25, 0.25), (0.25, 0.25)];
+            let x2 = [(-0.25, 0.0), (0.25, 0.0)];
+            // The roll's letter, its count digit, and the lattice's letter at
+            // rest -- the three regimes one shader change would reach.
+            for (what, ch, size) in [
+                ("roll letter 'B' 12.35pt", 'B', 12.35),
+                ("roll letter 'C' 12.35pt", 'C', 12.35),
+                ("count digit '2' 6.88pt", '2', 6.875),
+                ("count digit '3' 6.88pt", '3', 6.875),
+                ("lattice letter 'B' 30pt", 'B', 30.0),
+            ] {
+                let sheet =
+                    Sheet { g: typeset_coverage(ch, size, PPP), texels_per_px: 1.0 };
+                println!("\n=== {what} === cell {}x{}", sheet.g.w, sheet.g.h);
+                println!(
+                    "  Iosevka's 70/1000 stroke here: {:.3} physical px",
+                    size * 0.070 * PPP
+                );
+                for (label, taps) in
+                    [("today (1 tap)", &one[..]), ("4-tap +-0.25", &iso4[..]), ("2-tap x", &x2[..])]
+                {
+                    let r = walk(&sheet, taps);
+                    println!(
+                        "  {label:<20} halo {:>4.1}%  composite {:>5.1}%  fill {:>5.1}%  | \
+                         per-ink: composite {:>5.1}%  fill {:>5.1}%  | ink {:>5.1}  peak {:.2}",
+                        100.0 * swing(&r, |r| r.weight),
+                        100.0 * swing(&r, |r| r.smear),
+                        100.0 * swing(&r, |r| r.fill_smear),
+                        100.0 * per_ink(&r, |r| r.smear),
+                        100.0 * per_ink(&r, |r| r.fill_smear),
+                        r[0].ink,
+                        r.iter().map(|r| r.peak).fold(0.0, f32::max),
+                    );
+                }
+            }
+        }
+    }
+
     /// A mark's INK advances with the quad that carries it, instead of
     /// lurching about inside it.
     ///
