@@ -16,17 +16,30 @@ fn text_box(texts: &[(egui::Rect, String)], want: &str) -> egui::Rect {
 
 /// A label's text pieces AND the boxes of its drawn marks.
 ///
-/// The comma signs are geometry rather than type (see
-/// [`panes::lattice::draw_stacked_name`]), so a text-only view of a label is
-/// blind to exactly the marks these tests are about. Each drawn piece emits
-/// two shapes, halo then fill, and both are symmetric about the piece, so a
-/// box here is the piece's own box grown by the halo.
+/// EVERY sign is geometry rather than type -- accidental and comma alike (see
+/// [`panes::lattice::draw_stacked_name`]) -- so a text-only view of a label
+/// sees only the letter and the counts, and is blind to exactly the marks
+/// these tests are about. Each drawn piece emits two shapes, halo then fill,
+/// and both are symmetric about the piece, so a box here is the piece's own
+/// box grown by the halo.
 fn drawn_label(
     name: harmonigraph_core::NoteName,
     anchor: egui::Pos2,
 ) -> (Vec<(egui::Rect, String)>, Vec<egui::Rect>) {
     let (pieces, shapes, _) = label_pieces(name, anchor, 1.0, 1.0);
     (pieces.into_iter().map(|(galley, _, text)| (galley, text)).collect(), shapes)
+}
+
+/// One box per drawn mark: its FILL, which is the mark's own bitmap, without
+/// the halo the rim quad pads it out by.
+///
+/// The shapes arrive rim-then-fill per mark, in the order the label draws
+/// them -- accidental, then syntonic comma, then septimal -- so this both
+/// names the pieces and pins that pairing: an odd count means a mark drew one
+/// quad instead of two, or collapsed and left the list entirely.
+fn mark_fills(shapes: &[egui::Rect]) -> Vec<egui::Rect> {
+    assert_eq!(shapes.len() % 2, 0, "a mark is a rim and a fill: {shapes:?}");
+    shapes.chunks(2).map(|pair| pair[1]).collect()
 }
 
 /// The same label measured as INK — tight to the glyphs, with none of the
@@ -152,19 +165,17 @@ fn note_label_stacks_the_marks_and_stays_centered_on_the_node() {
     };
     let (texts, shapes) = drawn_label(name, anchor);
 
-    // Counted marks, not five sharps and four pluses spelled out. The `+`
-    // itself is drawn, so only its COUNT is text -- and each count is its own
+    // Counted marks, not five sharps and four pluses spelled out. Both signs
+    // are drawn, so only their COUNTS are text -- and each count is its own
     // piece, so it can be set closer to its sign than an advance apart.
     let letter = text_box(&texts, "C");
-    let accidental_sign = text_box(&texts, "\u{266F}");
     let accidental_count = text_box(&texts, "5");
-    let accidental = accidental_sign.union(accidental_count);
     let count = text_box(&texts, "4");
-    let sign = shapes
-        .iter()
-        .copied()
-        .reduce(|a, b| a.union(b))
-        .expect("the + should be drawn, not typeset");
+    let fills = mark_fills(&shapes);
+    let [accidental_sign, sign] = fills[..] else {
+        panic!("both signs should be drawn, not typeset: {shapes:?}")
+    };
+    let accidental = accidental_sign.union(accidental_count);
 
     // One column, beginning where the letter ends. The boxes are ink, so
     // they meet within a glyph's own side bearing rather than within the
@@ -181,8 +192,7 @@ fn note_label_stacks_the_marks_and_stays_centered_on_the_node() {
     // A count multiplies the sign beside it rather than continuing a word, so
     // it is tracked in by MARK_TRACK instead of taking a clear cell after it.
     // Both rows pin against the same number off the same cell, because both
-    // set at MARK_SIZE and the typeset sign's box IS one cell -- which is
-    // what the drawn sign under it claims too.
+    // set at MARK_SIZE and each drawn sign is centered in one cell.
     let mark_size = panes::lattice::MARK_SIZE;
     let cell = panes::lattice::MARK_ADVANCE * mark_size;
     let track = panes::lattice::MARK_TRACK * mark_size;
@@ -198,12 +208,14 @@ fn note_label_stacks_the_marks_and_stays_centered_on_the_node() {
     // ...but never so far that it climbs onto the sign.
     //
     // Bounded against the drawn sign's INK -- MARK_INK_W wide, centered in
-    // its cell -- on both counts. `sign` here is the shape box, which carries
-    // a halo wide enough to swallow the overlap this is looking for; and a
-    // tolerance that includes `track` cannot be failed by tracking at all,
-    // which is what this assertion did before: MARK_TRACK could be taken to
-    // 0.35, sitting the digit squarely on the `+` bar, with every label test
-    // still green.
+    // its cell -- on both counts. A tolerance that includes `track` cannot be
+    // failed by tracking at all, which is what this assertion did before:
+    // MARK_TRACK could be taken to 0.35, sitting the digit squarely on the `+`
+    // bar, with every label test still green.
+    //
+    // MARK_INK_W is the `♯`'s width as much as the `+`'s -- the face gives
+    // both 372/1000 em -- so one bound covers the pair. The `♭` is narrower
+    // and only ever clears by more.
     let sign_ink_right = cell_left + cell / 2.0 + panes::lattice::MARK_INK_W * mark_size / 2.0;
     let count_ink = text_box(&drawn_label_ink(name, anchor), "4");
     assert!(
@@ -260,8 +272,12 @@ fn the_two_mark_rows_set_alike_and_clear_each_other() {
         syntonic_commas: 2,
         septimal_commas: 0,
     };
-    let ink = drawn_label_ink(name, anchor);
-    let sharp = text_box(&ink, "\u{266F}");
+    let (pieces, shapes, _) = label_pieces(name, anchor, 1.0, 1.0);
+    let ink: Vec<(egui::Rect, String)> =
+        pieces.into_iter().map(|(_, ink, text)| (ink, text)).collect();
+    // The `♯`'s own bitmap, which is the whole of the mark: a drawn sign has
+    // no galley, and the bitmap is a tighter box than one anyway.
+    let sharp = mark_fills(&shapes)[0];
     let sharp_count = text_box(&ink, "3");
     let comma_count = text_box(&ink, "2");
 
@@ -330,7 +346,14 @@ fn the_septimal_mark_sits_across_the_divide_between_the_other_two() {
             septimal_commas,
         };
         let (_, shapes) = drawn_label(name, anchor);
-        shapes.into_iter().reduce(|a, b| a.union(b)).expect("a septimal mark should be drawn")
+        // The `♭` is drawn too, so the septimal mark is the SECOND of the two
+        // -- named by its place in the draw order rather than taken as the
+        // only thing in the list.
+        let fills = mark_fills(&shapes);
+        let [_accidental, septimal] = fills[..] else {
+            panic!("the flat and the septimal mark should both be drawn: {shapes:?}")
+        };
+        septimal
     };
     // Both directions sit on the same line, and it is the letter's own.
     for commas in [-1, 1] {
@@ -340,8 +363,10 @@ fn the_septimal_mark_sits_across_the_divide_between_the_other_two() {
             "a septimal mark belongs on the letter's line, got {mark:?} against {anchor:?}"
         );
     }
-    // A home-sheet name draws no mark at all.
-    let (_, none) = drawn_label(
+    // A home-sheet name draws no septimal mark -- the same `B♭`, one column
+    // shorter. Counted rather than checked for emptiness, since the accidental
+    // is itself a drawn mark and the list is never bare.
+    let (_, home) = drawn_label(
         harmonigraph_core::NoteName {
             letter: 'B',
             sharps: -1,
@@ -350,7 +375,11 @@ fn the_septimal_mark_sits_across_the_divide_between_the_other_two() {
         },
         anchor,
     );
-    assert!(none.is_empty(), "no sevens component, no mark: {none:?}");
+    assert_eq!(
+        mark_fills(&home).len(),
+        1,
+        "no sevens component, no septimal mark -- just the flat: {home:?}"
+    );
 }
 
 /// A mark costs a bounded few quads, exactly as the glyphs beside it do.
@@ -638,13 +667,13 @@ fn a_drawn_mark_holds_its_size_in_points_at_every_pixel_density() {
         syntonic_commas: 2,
         septimal_commas: -2,
     };
-    // Two marks, each a rim and a fill. Pinned as a NUMBER rather than read
+    // Three marks, each a rim and a fill. Pinned as a NUMBER rather than read
     // off the list, because the failure this is watching for is a quad
     // collapsing to nothing -- and a collapsed quad leaves the list instead of
     // failing an assertion about its size (see `label_pieces`).
-    const SHAPES: usize = 4;
+    const SHAPES: usize = 6;
     let (_, shapes, _) = label_pieces(name, anchor, 1.0, 1.0);
-    assert_eq!(shapes.len(), SHAPES, "the fixture has to draw both marks: {shapes:?}");
+    assert_eq!(shapes.len(), SHAPES, "the fixture has to draw all three marks: {shapes:?}");
 
     // What the raster ladder can move a box by at one density, in points. The
     // bitmap is a whole number of device pixels (`mark_geometry` ceils) around
@@ -845,7 +874,7 @@ fn the_lattice_label_bar_persists_through_the_range_it_offers() {
 fn mark_cache_pass(ctx: &egui::Context) -> (std::collections::HashSet<egui::TextureId>, Vec<egui::TextureId>) {
     use panes::lattice::{MARK_CACHE_LIMIT, MARK_SIZE};
     let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 400.0));
-    // Both comma marks, so each size contributes more than one key.
+    // Accidental and both comma marks, so each size contributes three keys.
     let name =
         harmonigraph_core::NoteName { letter: 'C', sharps: 1, syntonic_commas: 1, septimal_commas: 1 };
     let out = ctx.run_ui(
