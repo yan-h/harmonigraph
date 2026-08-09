@@ -1842,4 +1842,59 @@ mod tests {
         let hi = xs.iter().copied().fold(f32::NEG_INFINITY, f32::max);
         assert!(hi - lo > 250.0, "names span the window: {lo}..{hi}");
     }
+
+    /// A name's drawn position is a straight line in the clock: over ninety
+    /// frames of scrolling it advances by the same distance every time.
+    ///
+    /// Read off the GLYPHS, not off [`plan`]'s box, so everything between a
+    /// take time and a letter's ink is inside it — the time axis, the box, the
+    /// centring, and the size ladder [`draw`] rasterizes on. Any of those
+    /// quantizing to the pixel grid would put a stair in a picture whose
+    /// ribbons glide, which is judder against a name's own subject and reads
+    /// as the name twitching.
+    ///
+    /// The rate is deliberately NOT a whole pixel per frame — the one speed at
+    /// which a stair and a straight line are the same picture, and the reason
+    /// the fixture's span is 7 seconds rather than the 10 its neighbours use.
+    /// At 300 points over 7 seconds a frame is 1.4286 physical pixels, so the
+    /// name lands on a different sub-pixel offset almost every frame and a
+    /// stair anywhere would show as a step that is not that number.
+    #[test]
+    fn a_names_drawn_position_advances_by_the_same_step_every_frame() {
+        const PPP: f32 = 2.0;
+        let mut st = state(24.0, 7.0);
+        st.tracker.handle_event(on(10.0, 60));
+        st.tracker.handle_event(off(10.3, 60));
+
+        let ctx = egui::Context::default();
+        crate::theme::apply_theme(&ctx);
+        ctx.set_pixels_per_point(PPP);
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 400.0));
+
+        let mut drawn = Vec::new();
+        for frame in 0..90 {
+            let now = 12.0 + f64::from(frame) / 60.0;
+            let labels = labels(&st, now);
+            let mut batch = crate::text::TextBatch::default();
+            let _ = ctx
+                .run_ui(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ui| {
+                    draw(ui.painter(), &labels, 1.0, &mut batch);
+                });
+            if let Some(piece) = batch.pieces().iter().find(|p| p.text == "C") {
+                drawn.push(piece.ink.left() * PPP);
+            }
+        }
+        assert!(drawn.len() > 60, "the name has to be on the pane to be measured: {}", drawn.len());
+
+        let steps: Vec<f32> = drawn.windows(2).map(|w| w[1] - w[0]).collect();
+        let lo = steps.iter().copied().fold(f32::INFINITY, f32::min);
+        let hi = steps.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        // A tenth of a pixel: far under what a stair would cost (a whole one,
+        // taken every frame or two) and far over f32's own noise at these
+        // magnitudes, which measures below a thousandth.
+        assert!(
+            hi - lo < 0.1,
+            "the name advances between {lo} and {hi} pixels a frame: its position stairs",
+        );
+    }
 }
