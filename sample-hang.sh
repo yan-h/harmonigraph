@@ -10,8 +10,8 @@
 # and one sample cannot tell them apart: a thread parked in the same lock in
 # both is stuck, a thread that has moved is working.
 #
-#   sh ~/harmonigraph-hang-watch.sh &        # start
-#   pkill -f harmonigraph-hang-watch         # stop
+#   sh sample-hang.sh &        # start, from the repo root
+#   pkill -f sample-hang.sh    # stop
 #
 # Writes to ~/harmonigraph-hangs/.
 
