@@ -894,6 +894,12 @@ fn the_commas_section_lays_its_rows_out_as_a_table() {
 /// the sweep — Panel, the shortest list of them — overflows it.
 const SCROLLING_PANE: egui::Vec2 = egui::vec2(320.0, 200.0);
 
+/// The chrome scales the sweep runs at: the design size, both ends of
+/// [`theme::UI_SCALE_RANGE`], and two in between that leave `8 * scale`
+/// fractional — which is the case the gutter truncates and the bar must not
+/// (see `theme::dock_pane_margin`).
+const SCALES: [f32; 5] = [0.7, 0.9, 1.0, 1.1, 1.5];
+
 /// One settings pane soloed in the REAL dock at a size it overflows, as the
 /// shapes it drew.
 ///
@@ -911,8 +917,9 @@ const SCROLLING_PANE: egui::Vec2 = egui::vec2(320.0, 200.0);
 ///
 /// Both readout panes list what has come in, and an empty one has nothing to
 /// scroll, so the fixture gives the Console lines and the Notes pane voices.
-fn scrolling_settings_pane(tab: panes::Tab) -> Vec<egui::epaint::ClippedShape> {
+fn scrolling_settings_pane(tab: panes::Tab, scale: f32) -> Vec<egui::epaint::ClippedShape> {
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    state.ui_scale = scale;
     state.dock = egui_dock::DockState::new(vec![tab]);
     for i in 0..40 {
         state.console.log(format!("{i:02} a log line long enough to run the width of the pane"));
@@ -928,7 +935,10 @@ fn scrolling_settings_pane(tab: panes::Tab) -> Vec<egui::epaint::ClippedShape> {
     let backend = RecordingBackend::default();
     let ctx = egui::Context::default();
     crate::theme::apply_theme(&ctx);
-    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, SCROLLING_PANE);
+    crate::theme::set_ui_scale(&ctx, scale);
+    // The window scales with the chrome, so every pane overflows it by the same
+    // margin at every scale rather than the sweep having a size per scale.
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, SCROLLING_PANE * scale);
     let mut t = 0.0;
     let mut frame = |state: &mut SharedState, events: Vec<egui::Event>| {
         t += 1.0 / 60.0;
@@ -942,7 +952,7 @@ fn scrolling_settings_pane(tab: panes::Tab) -> Vec<egui::epaint::ClippedShape> {
             |ui| root_ui(ui, state, &backend, t),
         )
     };
-    let margin = crate::theme::PANE_INNER_MARGIN;
+    let margin = crate::theme::pane_inner_margin(scale);
     let inside = egui::pos2(screen.right() - 2.0 * margin, screen.center().y);
     frame(&mut state, vec![egui::Event::PointerMoved(inside)]);
     let mut out = frame(&mut state, vec![]);
@@ -954,11 +964,12 @@ fn scrolling_settings_pane(tab: panes::Tab) -> Vec<egui::epaint::ClippedShape> {
     out.shapes
 }
 
-/// The theme's widest scroll bar, read back off a themed context rather than
-/// restated here.
-fn scroll_bar_width() -> f32 {
+/// The theme's widest scroll bar at a given chrome scale, read back off a
+/// themed context rather than restated here.
+fn scroll_bar_width(scale: f32) -> f32 {
     let ctx = egui::Context::default();
     crate::theme::apply_theme(&ctx);
+    crate::theme::set_ui_scale(&ctx, scale);
     ctx.style_of(egui::Theme::Dark).spacing.scroll.bar_width
 }
 
@@ -982,15 +993,16 @@ fn scroll_bar_width() -> f32 {
 /// and as tall as the area it scrolls, which is not a shape a pane draws.
 #[test]
 fn nothing_is_drawn_under_a_settings_pane_scroll_bar() {
-    let margin = crate::theme::PANE_INNER_MARGIN;
-    let bar = scroll_bar_width();
-    assert!(bar <= margin + 0.01, "a {bar}pt bar does not fit the {margin}pt gutter it floats in");
+    for scale in SCALES {
+    let margin = f32::from(crate::theme::dock_pane_margin(scale));
+    let bar = scroll_bar_width(scale);
+    assert!(bar <= margin + 0.01, "at {scale} a {bar}pt bar does not fit the {margin}pt gutter");
     let body = egui::Rect::from_min_max(
-        egui::pos2(0.0, crate::theme::TAB_BAR_HEIGHT),
-        SCROLLING_PANE.to_pos2(),
+        egui::pos2(0.0, crate::theme::tab_bar_height(scale)),
+        (SCROLLING_PANE * scale).to_pos2(),
     );
     for tab in SETTINGS_TABS {
-        let shapes = scrolling_settings_pane(tab);
+        let shapes = scrolling_settings_pane(tab, scale);
         // The pane's own shapes are the ones clipped to the tab BODY. The dock's
         // chrome — the leaf fill, the body border, the tab bar and its rule — is
         // clipped to the leaf, which starts a tab bar higher up.
@@ -1012,7 +1024,7 @@ fn nothing_is_drawn_under_a_settings_pane_scroll_bar() {
             .collect();
         assert!(
             !bar_edges.is_empty(),
-            "{tab:?} drew no scroll bar at {SCROLLING_PANE:?}, so it never overflowed and this \
+            "{tab:?} at scale {scale} drew no scroll bar, so it never overflowed and this \
              proves nothing about it",
         );
         // The lane is the bar's full width in from its right edge, whatever the
@@ -1023,7 +1035,7 @@ fn nothing_is_drawn_under_a_settings_pane_scroll_bar() {
         let leftmost = bar_edges.iter().copied().fold(f32::INFINITY, f32::min);
         assert!(
             right - leftmost < 0.5,
-            "{tab:?} drew scroll bars in two places, ending at {leftmost} and {right}",
+            "{tab:?} at {scale} drew scroll bars in two places, ending at {leftmost} and {right}",
         );
         let left = right - bar;
 
@@ -1035,7 +1047,7 @@ fn nothing_is_drawn_under_a_settings_pane_scroll_bar() {
         let edge = body.right() - if own_area { margin } else { 0.0 };
         assert!(
             (right - edge).abs() < 0.5,
-            "{tab:?} puts its scroll bar at {left}..{right}, not against {edge}",
+            "{tab:?} at {scale} puts its scroll bar at {left}..{right}, not against {edge}",
         );
 
         let under: Vec<String> = shapes
@@ -1067,7 +1079,8 @@ fn nothing_is_drawn_under_a_settings_pane_scroll_bar() {
             .collect();
         assert!(
             under.is_empty(),
-            "{tab:?} draws into its scroll bar's lane {left}..{right}: {under:?}",
+            "{tab:?} at {scale} draws into its scroll bar's lane {left}..{right}: {under:?}",
         );
+    }
     }
 }
