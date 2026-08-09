@@ -1,5 +1,4 @@
-//! Note labels: how a name and its comma marks stack over a node, and the
-//! mark cache that hands their textures to egui.
+//! Note labels: how a name and its comma marks stack over a node.
 
 use crate::*;
 use harmonigraph_render::wgpu::TextureFormat;
@@ -14,41 +13,36 @@ fn text_box(texts: &[(egui::Rect, String)], want: &str) -> egui::Rect {
         .unwrap_or_else(|| panic!("no {want:?} drawn, got {texts:?}"))
 }
 
-/// A label's text pieces AND the boxes of its drawn marks.
+/// A label's text pieces AND the quads of its drawn marks.
 ///
 /// EVERY sign is geometry rather than type -- accidental and comma alike (see
 /// [`panes::lattice::draw_stacked_name`]) -- so a text-only view of a label
 /// sees only the letter and the counts, and is blind to exactly the marks
-/// these tests are about. Each drawn piece emits two shapes, halo then fill,
-/// and both are symmetric about the piece, so a box here is the piece's own
-/// box grown by the halo.
+/// these tests are about. A mark is one quad, cut from a sheet of its own and
+/// haloed by the same shader that haloes the letters, so there is nothing to
+/// pair up here: the list is one entry per mark, in the order the label drew
+/// them.
 fn drawn_label(
     name: harmonigraph_core::NoteName,
     anchor: egui::Pos2,
 ) -> (Vec<(egui::Rect, String)>, Vec<egui::Rect>) {
-    let (pieces, shapes, _) = label_pieces(name, anchor, 1.0, 1.0);
-    (pieces.into_iter().map(|(galley, _, text)| (galley, text)).collect(), shapes)
+    let (pieces, marks, _) = label_pieces(name, anchor, 1.0, 1.0);
+    (pieces.into_iter().map(|(galley, _, text)| (galley, text)).collect(), marks)
 }
 
-/// One box per drawn mark: its own INK, without the halo the rim quad pads it
-/// out by and without the clear margin its bitmap carries.
+/// One box per drawn mark: its own INK, without the clear margin its bitmap
+/// carries.
 ///
-/// The shapes arrive rim-then-fill per mark, in the order the label draws
-/// them -- accidental, then syntonic comma, then septimal -- so this both
-/// names the pieces and pins that pairing: an odd count means a mark drew one
-/// quad instead of two, or collapsed and left the list entirely.
-///
-/// The fill QUAD is a pixel wider than the mark on every side
+/// A mark's QUAD is a pixel wider than the mark on every side
 /// ([`MARK_BITMAP_PAD`](panes::lattice::MARK_BITMAP_PAD), which is there so a
 /// sliding mark's edge fades instead of snapping), and every question asked
 /// here -- which column a mark sits in, whether two rows clear each other --
 /// is about where the mark IS. Shrinking once here is what keeps those
 /// readings about the mark rather than about its margin. A point per side
 /// exactly, because every fixture in this file draws at ppp 1 and magnify 1.
-fn mark_fills(shapes: &[egui::Rect]) -> Vec<egui::Rect> {
-    assert_eq!(shapes.len() % 2, 0, "a mark is a rim and a fill: {shapes:?}");
+fn mark_fills(marks: &[egui::Rect]) -> Vec<egui::Rect> {
     let pad = panes::lattice::MARK_BITMAP_PAD as f32;
-    shapes.chunks(2).map(|pair| pair[1].shrink(pad)).collect()
+    marks.iter().map(|mark| mark.shrink(pad)).collect()
 }
 
 /// The same label measured as INK — tight to the glyphs, with none of the
@@ -102,18 +96,17 @@ fn label_ink_at(
     batch.pieces().iter().map(|p| (p.ink, p.text.clone())).collect()
 }
 
-/// Every text piece of a label as (galley box, ink box, text), and the boxes
+/// Every text piece of a label as (galley box, ink box, text), and the quads
 /// of its drawn marks.
 ///
 /// `magnify` is what the label is DRAWN at against the size it was rasterized
-/// at — the split [`crate::text::TextBatch::magnified`] exists for. It reaches
-/// the text pieces and the drawn marks by two entirely separate routes, the
-/// batch's transform and `paint_mark`'s own, so a fixture that leaves it at 1
-/// is blind to the two of them disagreeing.
+/// at — the split [`crate::text::TextBatch::magnified`] exists for. It now
+/// reaches the text pieces and the drawn marks by ONE route, the batch's own
+/// transform, and a fixture that leaves it at 1 sees nothing of it either way.
 ///
 /// `ppp` is the panel's device pixels per point, which the marks cross twice:
-/// they are rasterized in pixels and drawn in points, so `paint_mark` divides
-/// the bitmap's size back out by it. At 1 that division is the identity and a
+/// they are rasterized in pixels and drawn in points, so the batch divides the
+/// bitmap's size back out by it. At 1 that division is the identity and a
 /// fixture cannot see it at all.
 ///
 /// The third return is what `draw_stacked_name` reports as the label's reach
@@ -131,7 +124,7 @@ fn label_pieces(
     let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 400.0));
     let mut batch = crate::text::TextBatch::default();
     let mut reach = 0.0;
-    let out = ctx.run_ui(
+    let _ = ctx.run_ui(
         egui::RawInput { screen_rect: Some(screen), ..Default::default() },
         |ui| {
             reach = panes::lattice::draw_stacked_name(
@@ -147,17 +140,7 @@ fn label_pieces(
         },
     );
     let texts = batch.pieces().iter().map(|p| (p.galley, p.ink, p.text.clone())).collect();
-    // Degenerate shapes are dropped rather than measured — but a drawn mark
-    // collapsing to nothing is a defect, not an absence, so every test that
-    // reads this list has to pin how many marks it expects rather than take
-    // the length it is given.
-    let shapes = out
-        .shapes
-        .iter()
-        .map(|s| s.shape.visual_bounding_rect())
-        .filter(|r| r.is_finite() && r.width() > 0.0 && r.height() > 0.0)
-        .collect();
-    (texts, shapes, reach)
+    (texts, batch.marks().to_vec(), reach)
 }
 
 /// The lattice's note labels stack the accidental over the comma sign in one
@@ -391,19 +374,23 @@ fn the_septimal_mark_sits_across_the_divide_between_the_other_two() {
     );
 }
 
-/// A mark costs a bounded few quads, exactly as the glyphs beside it do.
+/// A mark costs ONE quad, exactly as a glyph beside it does — and it puts
+/// nothing at all on the painter.
 ///
-/// This is the invariant `crate::text` exists to hold: a label's rim is
-/// stamped in the FRAGMENT stage precisely because "20 copies of every glyph
-/// was most of the geometry in a busy frame". `paint_mark` reasoned its way
-/// out of that with "a mark is one quad, so the loop is affordable here" --
-/// true of the handful of hovered and sounding nodes it was written against,
-/// and false the moment note names put a mark on every roll ribbon and every
-/// lit node of a collapsed 12-EDO lattice.
+/// Two claims in one count. The first is the invariant `crate::text` exists to
+/// hold: a label's rim is stamped in the FRAGMENT stage precisely because "20
+/// copies of every glyph was most of the geometry in a busy frame", and a mark
+/// that took its rim as geometry, or as a second bitmap under a second quad,
+/// would be paying for it once per roll ribbon and once per lit node of a
+/// collapsed 12-EDO lattice.
+///
+/// The second is #207's own: what a label emits onto the PAINTER is what a
+/// nearer node cannot cover, since the painter draws over the finished
+/// picture. Zero is the only answer that leaves the marks coverable.
 ///
 /// A count, not a timing, so it cannot go quiet on a fast machine.
 #[test]
-fn a_mark_costs_a_bounded_number_of_quads() {
+fn a_mark_is_one_quad_in_the_batch_and_nothing_on_the_painter() {
     let anchor = egui::pos2(200.0, 200.0);
     let name = harmonigraph_core::NoteName {
         letter: 'E',
@@ -411,13 +398,35 @@ fn a_mark_costs_a_bounded_number_of_quads() {
         syntonic_commas: -1,
         septimal_commas: -1,
     };
-    let (_, shapes) = drawn_label(name, anchor);
-    assert!(
-        shapes.len() <= 4,
-        "two marks cost {} quads; the rim belongs in the fragment stage, \
-         not once per stamp in the shape list",
-        shapes.len()
+    let ctx = egui::Context::default();
+    theme::apply_theme(&ctx);
+    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 400.0));
+    let mut batch = crate::text::TextBatch::default();
+    let out = ctx.run_ui(
+        egui::RawInput { screen_rect: Some(screen), ..Default::default() },
+        |ui| {
+            panes::lattice::draw_stacked_name(
+                &mut batch,
+                ui.painter(),
+                anchor,
+                name,
+                egui::Color32::WHITE,
+                egui::Color32::BLACK,
+                1.0,
+                1.0,
+            );
+        },
     );
+    assert_eq!(batch.marks().len(), 2, "two marks: {:?}", batch.marks());
+    // The letter, the two signs, and no count digit — both commas are single.
+    assert_eq!(batch.len(), 3, "a mark is one instance, like the letter beside it");
+    let painted: Vec<_> = out
+        .shapes
+        .iter()
+        .map(|s| s.shape.visual_bounding_rect())
+        .filter(|r| r.is_finite() && r.width() > 0.0 && r.height() > 0.0)
+        .collect();
+    assert!(painted.is_empty(), "a label draws nothing on the painter, got {painted:?}");
 }
 
 /// The septimal mark gets a column of its own, so a name carrying both
@@ -431,48 +440,36 @@ fn both_comma_marks_get_their_own_column() {
         syntonic_commas: -1,
         septimal_commas: -1,
     };
-    let (texts, shapes) = drawn_label(name, anchor);
+    let (texts, marks) = drawn_label(name, anchor);
     assert!(texts.iter().all(|(_, t)| t == "E"), "single marks carry no count: {texts:?}");
     let letter = text_box(&texts, "E");
-    // Two drawn marks, so two columns' worth of shapes: the syntonic bar
-    // sits left of the septimal shape rather than on top of it.
+    // Two drawn marks, so two columns: the syntonic bar sits left of the
+    // septimal shape rather than on top of it.
     //
-    // Off the marks' own ink, not the union of every quad: a mark's rim is a
-    // halo that is SUPPOSED to reach back over the letter, the way a glyph's
-    // does, so where the halo lands says nothing about which column the mark
-    // is in.
-    let left = mark_fills(&shapes).into_iter().reduce(|a, b| a.union(b)).expect("marks drawn");
+    // Off the marks' own ink, not their quads: a mark's quad carries the clear
+    // margin its bitmap is padded by, and the halo the shader paints reaches
+    // further still and is SUPPOSED to run back over the letter, the way a
+    // glyph's does. Neither says which column the mark is in.
+    let fills = mark_fills(&marks);
+    let [syntonic, septimal] = fills[..] else {
+        panic!("both commas should be drawn: {marks:?}")
+    };
+    let left = syntonic.union(septimal);
     assert!(left.left() >= letter.right() - 2.0, "marks follow the letter, {left:?}");
 
-    // Cluster the stamps into columns rather than reading the flat list's
-    // extremes. A mark is not one shape: `paint_mark` stamps its rim as ~20
-    // separate quads around the fill, so ONE mark already spreads its centers
-    // over four points, and `min(x) < max(x)` holds with the other mark
-    // missing entirely or drawn on top of it -- the two failures this test
-    // exists to catch. Within a mark consecutive stamps are under a point
-    // apart; between the columns they are nearly two.
-    const COLUMN_GAP: f32 = 1.0;
-    let mut stamps: Vec<egui::Pos2> = shapes.iter().map(|r| r.center()).collect();
-    stamps.sort_by(|a, b| a.x.total_cmp(&b.x));
-    let mut columns: Vec<Vec<egui::Pos2>> = Vec::new();
-    for stamp in stamps {
-        match columns.last_mut() {
-            Some(col) if stamp.x - col[col.len() - 1].x <= COLUMN_GAP => col.push(stamp),
-            _ => columns.push(vec![stamp]),
-        }
-    }
-    let widths: Vec<usize> = columns.iter().map(|c| c.len()).collect();
-    assert_eq!(columns.len(), 2, "two marks, two columns, got {widths:?}");
-    assert_eq!(widths[0], widths[1], "each column is a whole mark, not one mark's rim");
-
-    // The right-hand column is the septimal one, and it is on the letter's own
-    // line while the syntonic bar sits below it -- so which column is which is
-    // checked, not assumed from the ordering the split already imposed.
-    let line = |col: &[egui::Pos2]| col.iter().map(|p| p.y).sum::<f32>() / col.len() as f32;
+    // Clear of each other left to right, rather than the one column that a
+    // mark drawn on top of its neighbour (or missing entirely) would leave.
     assert!(
-        line(&columns[1]) < line(&columns[0]),
-        "the septimal mark takes the right column, across the letter's line: {:?}",
-        columns.iter().map(|c| line(c)).collect::<Vec<_>>()
+        syntonic.right() <= septimal.left(),
+        "two marks, two columns: {syntonic:?} then {septimal:?}",
+    );
+    // And which is which is checked, not assumed from the order they were
+    // drawn in: the septimal mark is the one on the letter's own line, while
+    // the syntonic bar sits below it.
+    assert!(
+        septimal.center().y < syntonic.center().y,
+        "the septimal mark takes the right column, across the letter's line: \
+         {septimal:?} against {syntonic:?}",
     );
 }
 
@@ -588,24 +585,22 @@ fn a_zoom_past_the_raster_ceiling_stops_growing_the_drawn_label() {
 /// The drawn marks follow the zoom the letters follow.
 ///
 /// A label is rasterized at one size and DRAWN at another, and the comma marks
-/// had to take the same split as the type: they are bitmaps on a whole-pixel
-/// grid, so rasterizing them per zoom would step while the name beside them
-/// glided. `paint_mark` therefore applies the magnification itself, in three
-/// places — the position it transforms about the anchor, the fill quad's size,
-/// and the rim quad's — by an entirely separate route from the batch transform
-/// the text pieces go through.
+/// take the same split as the type: they are bitmaps on a whole-pixel grid, so
+/// rasterizing them per zoom would step while the name beside them glided.
 ///
-/// Which is what makes this worth a test of its own: every other fixture here
-/// draws at magnification 1, where the two routes cannot disagree. Invert all
-/// three of those transforms — place and size every mark by the RECIPROCAL of
-/// the magnification — and nothing else in the suite moves. On screen that is
-/// the letters gliding smoothly through a zoom while the `+` beside them jumps
-/// to the wrong side of the letter and the wrong size.
+/// One route now rather than two — a mark is an instance of the same batch,
+/// magnified by the same transform — which makes this test cheaper to satisfy
+/// and no less worth keeping: what it pins is that a mark goes THROUGH that
+/// transform at all. Emit one outside the `magnified` scope, or from a second
+/// batch, and nothing else in the suite moves, because every other fixture
+/// here draws at magnification 1. On screen it is the letters gliding smoothly
+/// through a zoom while the `+` beside them jumps to the wrong side of the
+/// letter and the wrong size.
 ///
 /// Asserted as an identity rather than against measured coordinates: at
 /// magnification `k` the whole label, text and marks alike, is its unmagnified
-/// self scaled about the anchor by `k`. Measured numbers would only restate
-/// `paint_mark`'s own arithmetic and pass with it however it is written.
+/// self scaled about the anchor by `k`. Measured numbers would only restate the
+/// batch's own arithmetic and pass with it however it is written.
 #[test]
 fn the_drawn_marks_magnify_with_the_letters_beside_them() {
     let anchor = egui::pos2(200.0, 200.0);
@@ -621,9 +616,8 @@ fn the_drawn_marks_magnify_with_the_letters_beside_them() {
     let (texts, shapes, _) = label_pieces(name, anchor, 1.0, 1.0);
     assert!(!shapes.is_empty(), "the fixture has to carry drawn marks to say anything");
 
-    // About the anchor -- the point both `TextBatch::magnified` and
-    // `paint_mark` are handed, so that the label grows about the node it names
-    // rather than sliding off it.
+    // About the anchor -- the point `TextBatch::magnified` is handed, so that
+    // the label grows about the node it names rather than sliding off it.
     let scaled = |r: egui::Rect, k: f32| {
         egui::Rect::from_min_max(anchor + (r.min - anchor) * k, anchor + (r.max - anchor) * k)
     };
@@ -681,20 +675,18 @@ fn a_drawn_mark_holds_its_size_in_points_at_every_pixel_density() {
         syntonic_commas: 2,
         septimal_commas: -2,
     };
-    // Three marks, each a rim and a fill. Pinned as a NUMBER rather than read
-    // off the list, because the failure this is watching for is a quad
-    // collapsing to nothing -- and a collapsed quad leaves the list instead of
-    // failing an assertion about its size (see `label_pieces`).
-    const SHAPES: usize = 6;
+    // Three marks, one quad each. Pinned as a NUMBER rather than read off the
+    // list, so a mark that stopped being drawn at one density is a failure
+    // rather than a shorter list quietly compared against itself.
+    const MARKS: usize = 3;
     let (_, shapes, _) = label_pieces(name, anchor, 1.0, 1.0);
-    assert_eq!(shapes.len(), SHAPES, "the fixture has to draw all three marks: {shapes:?}");
+    assert_eq!(shapes.len(), MARKS, "the fixture has to draw all three marks: {shapes:?}");
 
     // What the raster ladder can move a box by at one density, in points. The
     // bitmap is a whole number of device pixels (`mark_geometry` ceils) around
-    // a shape whose size was itself rounded to a whole pixel (`mark_key`), and
-    // the rim adds a ring radius rounded the same way on each side -- under
-    // 2.25 device pixels all told, which is that many points at ppp 1 and half
-    // as many at ppp 2. A bound, not a measurement: the widest gap these
+    // a shape whose size was itself rounded to a whole pixel (`mark_key`) --
+    // under 2.25 device pixels all told, which is that many points at ppp 1 and
+    // half as many at ppp 2. A bound, not a measurement: the widest gap these
     // densities actually open is 0.7pt, on boxes 7 and 11 points across.
     let slack = |ppp: f32| 2.25 / ppp;
 
@@ -703,7 +695,7 @@ fn a_drawn_mark_holds_its_size_in_points_at_every_pixel_density() {
     // happened to divide evenly at 2 would sail through on its own.
     for ppp in [1.5, 2.0, 3.0] {
         let (_, at_ppp, _) = label_pieces(name, anchor, 1.0, ppp);
-        assert_eq!(at_ppp.len(), SHAPES, "a mark collapsed at ppp {ppp}: {at_ppp:?}");
+        assert_eq!(at_ppp.len(), MARKS, "a mark collapsed at ppp {ppp}: {at_ppp:?}");
         for (i, (one, dense)) in shapes.iter().zip(&at_ppp).enumerate() {
             let room = slack(1.0) + slack(ppp);
             assert!(
@@ -729,10 +721,9 @@ fn a_drawn_mark_holds_its_size_in_points_at_every_pixel_density() {
 /// What a label reports as its reach is the bottom of the mark it drew.
 ///
 /// The reach is the caller's only view of a drawn mark: the cents readout is
-/// placed off it, and a mark is a bitmap the text pass cannot see. So the
-/// number and the quad are two readings of one bitmap that have to agree --
-/// the same `h / ppp` from opposite ends, and nothing else in the label
-/// compares them.
+/// placed off it, and a mark carries no text to be found by. So the number and
+/// the quad are two readings of one bitmap that have to agree -- the same
+/// `h / ppp` from opposite ends, and nothing else in the label compares them.
 ///
 /// They agree on the INK, which is the quad less the clear margin every mark
 /// bitmap carries ([`MARK_BITMAP_PAD`](panes::lattice::MARK_BITMAP_PAD)). The
@@ -752,13 +743,12 @@ fn the_reach_a_label_reports_is_where_its_drawn_mark_ends() {
         septimal_commas: 0,
     };
     for ppp in [1.0, 2.0] {
-        let (_, shapes, reach) = label_pieces(name, anchor, 1.0, ppp);
-        // Rim then fill, and it is the FILL the reach reports: the rim is a
-        // halo the readout is meant to overlap, the way it overlaps a glyph's.
-        assert_eq!(shapes.len(), 2, "one mark, rim and fill, at ppp {ppp}: {shapes:?}");
-        let (rim, fill) = (shapes[0], shapes[1]);
-        assert!(rim.contains_rect(fill), "the rim should be the padded one: {rim:?} {fill:?}");
-        let ink_bottom = fill.bottom() - panes::lattice::MARK_BITMAP_PAD as f32 / ppp;
+        let (_, marks, reach) = label_pieces(name, anchor, 1.0, ppp);
+        // The QUAD, which is the mark's bitmap: the halo the shader paints
+        // around it reaches further and is one the readout is meant to overlap,
+        // the way it overlaps a glyph's.
+        let [mark] = marks[..] else { panic!("one mark at ppp {ppp}: {marks:?}") };
+        let ink_bottom = mark.bottom() - panes::lattice::MARK_BITMAP_PAD as f32 / ppp;
         assert!(
             (anchor.y + reach - ink_bottom).abs() < 0.01,
             "at ppp {ppp} the label reports reaching {:.3} where its mark ends at {:.3}",
@@ -847,8 +837,8 @@ fn the_cents_readout_sits_right_under_the_note_name() {
         let gap = readout.top() - name.bottom();
         // Slack enough for a DRAWN comma hanging below the letter's ink: the
         // readout clears it (`draw_stacked_name` reports it) but the clusters
-        // above cannot see it, a drawn mark being a bitmap rather than a
-        // glyph. It is a fraction of the type, so the slack is quoted against
+        // above are built out of the batch's TEXT pieces, and a mark carries no
+        // text. It is a fraction of the type, so the slack is quoted against
         // the gap rather than in absolute points — the regression this is
         // watching for, hanging the readout off the galley box instead of the
         // ink, is worth twice the gap and clears any of this.
@@ -887,93 +877,6 @@ fn the_lattice_label_bar_persists_through_the_range_it_offers() {
     let (low, high) = (*SCALE_BAR_RANGE.start(), *SCALE_BAR_RANGE.end());
     assert_eq!(through_view(low - 1.0), low, "the bar's floor");
     assert_eq!(through_view(high + 1.0), high, "...and its ceiling");
-}
-
-/// Draw enough distinct marks in ONE pass to outrun the cache limit, so
-/// eviction is running while the pass is still drawing. Returns the texture
-/// ids the pass drew, and the ids it asked egui to destroy.
-fn mark_cache_pass(ctx: &egui::Context) -> (std::collections::HashSet<egui::TextureId>, Vec<egui::TextureId>) {
-    use panes::lattice::{MARK_CACHE_LIMIT, MARK_SIZE};
-    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 400.0));
-    // Accidental and both comma marks, so each size contributes three keys.
-    let name =
-        harmonigraph_core::NoteName { letter: 'C', sharps: 1, syntonic_commas: 1, septimal_commas: 1 };
-    let out = ctx.run_ui(
-        egui::RawInput { screen_rect: Some(screen), ..Default::default() },
-        |ui| {
-            let mut batch = crate::text::TextBatch::default();
-            // One mark per whole pixel size, far enough past the limit that
-            // the pass evicts marks it has already painted.
-            for size_px in 3..=(3 + MARK_CACHE_LIMIT / 2 + 8) {
-                panes::lattice::draw_stacked_name(
-                    &mut batch,
-                    ui.painter(),
-                    egui::pos2(200.0, 200.0),
-                    name,
-                    egui::Color32::WHITE,
-                    egui::Color32::BLACK,
-                    size_px as f32 / MARK_SIZE,
-                    1.0,
-                );
-            }
-        },
-    );
-    let drawn = out
-        .shapes
-        .iter()
-        .filter_map(|clipped| match &clipped.shape {
-            egui::Shape::Mesh(mesh) => Some(mesh.texture_id),
-            _ => None,
-        })
-        .collect();
-    (drawn, out.textures_delta.free)
-}
-
-/// A pass that fills the mark cache must not destroy a texture it has
-/// already drawn.
-///
-/// Eviction drops the last handle to a bitmap, which makes egui queue that
-/// id into `textures_delta.free` -- and egui-baseview's wgpu renderer
-/// applies those frees BEFORE it submits the encoder. So a mark evicted
-/// midway through a pass is destroyed while the draw commands naming it are
-/// still queued, and `Queue::submit` fails validation with "Texture ... has
-/// been destroyed", which wgpu treats as fatal. The victim is arbitrary, so
-/// it is sometimes a mark this pass has already painted.
-///
-/// Reachable from any control that walks a mark's key: the sizes zooming
-/// steps through, or the weight when that was still a setting. Each pass
-/// mints fresh keys, so the cache sits at its limit and evicts on every
-/// insert.
-#[test]
-fn filling_the_mark_cache_never_frees_a_texture_the_pass_drew() {
-    let ctx = egui::Context::default();
-    theme::apply_theme(&ctx);
-    let (drawn, freed) = mark_cache_pass(&ctx);
-    let bad: Vec<_> = freed.iter().copied().filter(|id| drawn.contains(id)).collect();
-    assert!(bad.is_empty(), "the pass freed {} textures it had drawn: {bad:?}", bad.len());
-}
-
-/// ...and the pass AFTER it must actually destroy them.
-///
-/// The retention is a delay, not a reprieve: holding an evicted bitmap
-/// forever would trade the crash above for a leak that grows for as long as
-/// the editor is open, since a zoom drag mints fresh keys every pass. This
-/// pins the half the single-pass test cannot see -- with the prune deleted
-/// that test still passes, because pass 0 frees nothing either way.
-#[test]
-fn the_next_pass_destroys_what_the_last_one_retired() {
-    let ctx = egui::Context::default();
-    theme::apply_theme(&ctx);
-    let (_, freed_first) = mark_cache_pass(&ctx);
-    assert!(freed_first.is_empty(), "the first pass should hold its evictions, freed {freed_first:?}");
-
-    let (drawn, freed_second) = mark_cache_pass(&ctx);
-    assert!(
-        !freed_second.is_empty(),
-        "the second pass should destroy what the first retired, or they accumulate"
-    );
-    let bad: Vec<_> = freed_second.iter().copied().filter(|id| drawn.contains(id)).collect();
-    assert!(bad.is_empty(), "the second pass freed {} textures it had drawn: {bad:?}", bad.len());
 }
 
 /// Every label reaches the lattice attached to the node it names, and in the
@@ -1096,3 +999,72 @@ fn every_label_names_its_own_node_in_the_panes_own_space() {
     );
 }
 
+/// A name's drawn marks go into the run that names its own node, so whatever
+/// covers the name covers them.
+///
+/// This is #207 from the collecting end, and the run is the whole mechanism:
+/// the lattice's callback splices a label into the node draw order by its
+/// `Label`, so a mark emitted outside that run — on the painter, in a second
+/// batch, or simply after the `attached_to` scope closed — is a sign left
+/// floating on the disc that just cut the letter beside it.
+///
+/// A held C sharp, so every name in the picture carries an accidental: the
+/// home sheet spells it with one, and the sheets either side add a septimal
+/// mark of their own. Both halves are asserted, and the first is what stops
+/// the second passing over an empty list.
+#[test]
+fn a_names_drawn_marks_go_into_its_own_nodes_run() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    state.view.show_labels = true;
+    state.frame_params.fade_time = 0.0;
+    state.tracker.handle_event(harmonigraph_core::NoteEvent {
+        time: 0.0,
+        channel: 0,
+        note: 61,
+        kind: harmonigraph_core::NoteEventKind::On { velocity: 1.0 },
+    });
+    let scene = harmonigraph_scene::derive_scene(
+        &state.tracker,
+        &state.tuning,
+        &state.view,
+        &state.frame_params,
+        state.camera,
+        None,
+        0.0,
+    );
+
+    let ctx = egui::Context::default();
+    theme::apply_theme(&ctx); // the real Iosevka metrics, not egui's fallback
+    let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1000.0, 800.0));
+    let mut batch = crate::text::TextBatch::default();
+    let mut labels = None;
+    let _ = ctx.run_ui(
+        egui::RawInput { screen_rect: Some(rect), time: Some(0.0), ..Default::default() },
+        |ui| {
+            panes::lattice::draw_node_labels(ui, rect, &scene, &state.view, &mut batch);
+            labels = Some(batch.lattice_labels(ui.painter(), rect.min, &state));
+        },
+    );
+    let labels = labels.expect("the closure runs");
+    assert!(!labels.labels.is_empty(), "a held C sharp has to be named somewhere");
+
+    let is_mark = |g: &harmonigraph_render::GlyphInstance| {
+        g.atlas == harmonigraph_render::GlyphInstance::MARK
+    };
+    assert!(
+        labels.glyphs.iter().any(is_mark),
+        "no drawn mark reached the pass at all, so the run assertion below says nothing",
+    );
+    let mut cursor = 0usize;
+    for label in &labels.labels {
+        let run = &labels.glyphs[cursor..cursor + label.glyphs as usize];
+        cursor += label.glyphs as usize;
+        assert!(
+            run.iter().any(is_mark),
+            "the name of node {} carries no mark of its own: {} glyphs, none from the mark sheet",
+            label.node,
+            run.len(),
+        );
+    }
+    assert_eq!(cursor, labels.glyphs.len(), "every glyph handed over belongs to some run");
+}

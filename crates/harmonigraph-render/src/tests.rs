@@ -3299,7 +3299,7 @@ fn one_node_behind_another() -> Scene {
 }
 
 /// A node in front covers the label of the node behind it, the way it covers
-/// that node itself.
+/// that node itself — the LETTERS of that label and its drawn marks alike.
 ///
 /// This is the whole feature in one picture, and it is end to end on purpose:
 /// the name is drawn inside the lattice's own scene pass, at its node's place
@@ -3312,6 +3312,13 @@ fn one_node_behind_another() -> Scene {
 /// something: a mapping that put the glyph anywhere but on the node would
 /// leave the "covered" picture looking exactly right and this one looking
 /// blank.
+///
+/// Run twice over: once for a letter off egui's atlas, once for a drawn mark
+/// off the marks' own sheet. The second is #207 — a mark that reaches this
+/// pass is covered by the arithmetic that covers everything else in it, so
+/// there is nothing mark-shaped in the assertions, and that is the claim. A
+/// mark on the painter instead passes none of them: it is drawn over the
+/// finished picture, so the disc in front of it never gets a chance.
 #[test]
 fn a_nearer_node_covers_the_label_of_the_node_behind() {
     let Some((device, queue)) = headless_device() else {
@@ -3337,13 +3344,10 @@ fn a_nearer_node_covers_the_label_of_the_node_behind() {
     // rim: the fill alone answers the question, and a rim would spread the
     // reading over pixels nothing is being asked about.
     let bare = [TextRing::default(); 2];
-    let picture = |off: f32, label: Option<u32>| -> Vec<u8> {
+    let picture = |instance: GlyphInstance, off: f32, label: Option<u32>| -> Vec<u8> {
         let (glyphs, labels) = match label {
             Some(node) => (
-                vec![GlyphInstance {
-                    rect: [x + off - 4.0, y - 4.0, 8.0, 8.0],
-                    ..crate::text::tests::glyph()
-                }],
+                vec![GlyphInstance { rect: [x + off - 4.0, y - 4.0, 8.0, 8.0], ..instance }],
                 vec![Label { node, glyphs: 1 }],
             ),
             None => (Vec::new(), Vec::new()),
@@ -3355,6 +3359,7 @@ fn a_nearer_node_covers_the_label_of_the_node_behind() {
                 labels,
                 rings: bare,
                 atlas: Some(crate::text::tests::atlas()),
+                marks: Some(crate::text::tests::mark_sheet()),
             },
             points,
             format,
@@ -3394,49 +3399,57 @@ fn a_nearer_node_covers_the_label_of_the_node_behind() {
     // means.
     const NEAR: u32 = 0;
     const FAR: u32 = 1;
-    let at = |off: f32, label: Option<u32>| -> u8 {
-        let frame = picture(off, label);
-        let i = (((y as u32) * SCENE_SIZE[0] + (x + off) as u32) * 4) as usize;
-        frame[i + 1]
-    };
 
-    // On the disc, which is opaque: the far node's name is gone, exactly
-    // gone — this is compositing, not a mask, so "under an opaque disc" is
-    // the picture with no label in it at all.
-    let (bare_disc, under, over) = (at(0.0, None), at(0.0, Some(FAR)), at(0.0, Some(NEAR)));
-    assert_eq!(under, bare_disc, "a name under an opaque disc must leave no trace of itself");
-    assert!(
-        over.abs_diff(bare_disc) > 32,
-        "the same glyph drawn after the disc must be plainly visible on it, \
-         got {over} against a bare disc's {bare_disc} — if these agree the \
-         glyph is not landing on the node and the assertion above is vacuous",
-    );
+    for (what, instance) in
+        [("a letter", crate::text::tests::glyph()), ("a drawn mark", crate::text::tests::mark())]
+    {
+        let at = |off: f32, label: Option<u32>| -> u8 {
+            let frame = picture(instance, off, label);
+            let i = (((y as u32) * SCENE_SIZE[0] + (x + off) as u32) * 4) as usize;
+            frame[i + 1]
+        };
 
-    // Across the disc's own fading edge, where the difference between
-    // covering and cutting shows: the name dims by exactly what the disc
-    // took, rather than being taken out whole or left alone.
-    let (bare_edge, under_edge, over_edge) =
-        (at(6.0, None), at(6.0, Some(FAR)), at(6.0, Some(NEAR)));
-    assert!(
-        under_edge > bare_edge && under_edge < over_edge,
-        "over the disc's fading edge a name must dim rather than vanish: \
-         {under_edge} against {bare_edge} bare and {over_edge} drawn on top",
-    );
+        // On the disc, which is opaque: the far node's name is gone, exactly
+        // gone — this is compositing, not a mask, so "under an opaque disc" is
+        // the picture with no label in it at all.
+        let (bare_disc, under, over) = (at(0.0, None), at(0.0, Some(FAR)), at(0.0, Some(NEAR)));
+        assert_eq!(
+            under, bare_disc,
+            "{what} under an opaque disc must leave no trace of itself",
+        );
+        assert!(
+            over.abs_diff(bare_disc) > 32,
+            "{what} drawn after the disc must be plainly visible on it, \
+             got {over} against a bare disc's {bare_disc} — if these agree the \
+             glyph is not landing on the node and the assertion above is vacuous",
+        );
 
-    // And out in the glow — inside the node's quad, a percent or two of
-    // opacity, nothing a reader can see — a name is left alone.
-    let (bare_halo, under_halo, over_halo) =
-        (at(16.0, None), at(16.0, Some(FAR)), at(16.0, Some(NEAR)));
-    assert!(
-        over_halo.abs_diff(bare_halo) > 32,
-        "the halo probe must be somewhere a glyph shows at all: {over_halo} \
-         against {bare_halo}",
-    );
-    assert!(
-        under_halo.abs_diff(over_halo) <= 3,
-        "out in the invisible glow a name must be left alone: {under_halo} \
-         against {over_halo} drawn on top",
-    );
+        // Across the disc's own fading edge, where the difference between
+        // covering and cutting shows: the name dims by exactly what the disc
+        // took, rather than being taken out whole or left alone.
+        let (bare_edge, under_edge, over_edge) =
+            (at(6.0, None), at(6.0, Some(FAR)), at(6.0, Some(NEAR)));
+        assert!(
+            under_edge > bare_edge && under_edge < over_edge,
+            "over the disc's fading edge {what} must dim rather than vanish: \
+             {under_edge} against {bare_edge} bare and {over_edge} drawn on top",
+        );
+
+        // And out in the glow — inside the node's quad, a percent or two of
+        // opacity, nothing a reader can see — a name is left alone.
+        let (bare_halo, under_halo, over_halo) =
+            (at(16.0, None), at(16.0, Some(FAR)), at(16.0, Some(NEAR)));
+        assert!(
+            over_halo.abs_diff(bare_halo) > 32,
+            "the halo probe must be somewhere {what} shows at all: {over_halo} \
+             against {bare_halo}",
+        );
+        assert!(
+            under_halo.abs_diff(over_halo) <= 3,
+            "out in the invisible glow {what} must be left alone: {under_halo} \
+             against {over_halo} drawn on top",
+        );
+    }
 }
 
 /// A label is drawn immediately after the node it names, counted over the
@@ -3489,6 +3502,7 @@ fn a_label_takes_its_own_nodes_place_in_the_order() {
                 .to_vec(),
             rings: [TextRing::default(); 2],
             atlas: Some(crate::text::tests::atlas()),
+            marks: None,
         },
         egui::vec2(256.0, 256.0),
         wgpu::TextureFormat::Rgba8Unorm,
@@ -3569,6 +3583,7 @@ fn a_culled_home_nodes_name_draws_over_the_grid_it_shares_a_seam_with() {
             labels: vec![Label { node: 0, glyphs: 1 }],
             rings: [TextRing::default(); 2],
             atlas: Some(crate::text::tests::atlas()),
+            marks: None,
         },
         egui::vec2(256.0, 256.0),
         wgpu::TextureFormat::Rgba8Unorm,
@@ -3643,6 +3658,7 @@ fn a_label_adds_no_light_through_the_bloom() {
                 labels,
                 rings: [TextRing::default(); 2],
                 atlas: Some(crate::text::tests::atlas()),
+                marks: None,
             },
             points,
             format,

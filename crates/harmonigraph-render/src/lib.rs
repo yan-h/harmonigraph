@@ -87,6 +87,8 @@ pub struct LatticeLabels {
     /// egui's font atlas, on the frames the renderer's mirror of it is
     /// stale. `None` on the rest, which is nearly all of them.
     pub atlas: Option<FontAtlas>,
+    /// And the drawn marks' own sheet, on the frames it has moved.
+    pub marks: Option<FontAtlas>,
 }
 
 /// One label: which node it names, and how many glyphs it is.
@@ -471,9 +473,10 @@ struct LatticeCallback {
     /// label falls in the node run (see [`GlyphSeam`]).
     glyphs: Vec<GlyphInstance>,
     seams: Vec<GlyphSeam>,
-    /// The halo's rings, and egui's atlas on the frames it has moved.
+    /// The halo's rings, and the two sheets on the frames either has moved.
     rings: [TextRing; 2],
     atlas: Option<FontAtlas>,
+    marks: Option<FontAtlas>,
     edges: Vec<GpuEdge>,
     uniforms: Uniforms,
     target_format: wgpu::TextureFormat,
@@ -728,6 +731,7 @@ impl LatticeCallback {
             seams,
             rings: labels.rings,
             atlas: labels.atlas,
+            marks: labels.marks,
             edges,
             uniforms: Uniforms {
                 view_proj: view_proj.to_cols_array(),
@@ -830,9 +834,12 @@ struct LatticeResources {
     glyph_fill_pipeline: wgpu::RenderPipeline,
     glyph_layout: wgpu::BindGroupLayout,
     glyph_sampler: wgpu::Sampler,
-    /// This renderer's copy of egui's font atlas. Its own, not the text
+    /// This renderer's copies of the two sheets a glyph can be cut from —
+    /// egui's font atlas and the drawn marks'. Its own, not the text
     /// callback's: a mirror answers for one texture, and these are two.
     atlas: text::MirroredAtlas,
+    marks: text::MirroredAtlas,
+    blank: wgpu::Texture,
     target_format: wgpu::TextureFormat,
     panes: HashMap<u64, PaneBuffers>,
     /// GPU-side timing of the lattice passes. `None` when the device didn't
@@ -1058,10 +1065,10 @@ struct PaneBuffers {
     /// What the glyph shader is told about this pane: its size in points,
     /// the atlas's, and the rim's rings.
     glyph_uniform_buffer: wgpu::Buffer,
-    /// Names the mirrored atlas, so it is rebuilt whenever a fresh one has
-    /// been uploaded — and `glyph_atlas_key` is which upload it names.
+    /// Names both mirrored sheets, so it is rebuilt whenever a fresh one has
+    /// been uploaded — and `glyph_sheet_keys` is which uploads it names.
     glyph_bind_group: Option<wgpu::BindGroup>,
-    glyph_atlas_key: u64,
+    glyph_sheet_keys: (u64, u64),
     offscreen: Option<Offscreen>,
 }
 
@@ -1642,12 +1649,58 @@ impl LatticeResources {
             glyph_layout,
             glyph_sampler: text::glyph_sampler(device),
             atlas: text::MirroredAtlas::default(),
+            marks: text::MirroredAtlas::default(),
+            blank: text::blank_atlas(device, queue),
             target_format,
             panes: HashMap::new(),
             timer: GpuTimer::new(device, queue),
             #[cfg(feature = "hot-reload")]
             watcher: ShaderWatcher::new(),
         }
+    }
+
+    /// Upload whichever of the two label sheets has moved.
+    ///
+    /// The text callback answers the same question with a great deal more
+    /// (`text::TextResources::mirror_atlas`, which carries every pane already
+    /// prepared this frame onto the new texture), and the difference is not an
+    /// omission — it is where the two record their draws. That callback draws
+    /// in `paint`, after every `prepare` in the frame, so a pane's bind group
+    /// and uniforms have to still be right once some LATER pane has grown a
+    /// sheet under it. A lattice pane draws in its OWN `prepare`, into its own
+    /// offscreen: by the time a later pane uploads anything, this one's pass is
+    /// encoded, holding the bind group it was recorded with.
+    ///
+    /// Which makes the carry-over not merely unnecessary here but wrong. The
+    /// pass is encoded, not submitted — egui-wgpu runs the shared encoder after
+    /// every prepare — and a `write_buffer` is ordered ahead of that encoder,
+    /// so rewriting a prepared pane's atlas size would reach a pass that is
+    /// still going to sample the texture it was recorded against. Old texture,
+    /// new size, which is exactly the mismatch the text callback's version
+    /// exists to prevent, arriving by the other road.
+    fn mirror_sheets(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        atlas: Option<&FontAtlas>,
+        marks: Option<&FontAtlas>,
+    ) {
+        if let Some(atlas) = atlas.filter(|a| !self.atlas.holds(a)) {
+            self.atlas.upload(device, queue, atlas);
+        }
+        if let Some(marks) = marks.filter(|a| !self.marks.holds(a)) {
+            self.marks.upload(device, queue, marks);
+        }
+    }
+
+    /// The two sheets' sizes, as the glyph uniforms carry them.
+    ///
+    /// A sheet that has never been uploaded reports the 1x1 blank standing in
+    /// for it rather than its own zero, because the shader DIVIDES by this.
+    /// See `text::TextResources::atlas_sizes`, which says what a zero costs.
+    fn sheet_sizes(&self) -> [f32; 4] {
+        let (a, m) = (self.atlas.size(), self.marks.size());
+        [a[0], a[1], m[0], m[1]].map(|n| n.max(1) as f32)
     }
 
     /// Fetch (or create) a pane's GPU objects, and when `offscreen_size` is
@@ -1668,7 +1721,8 @@ impl LatticeResources {
         // `prepare` uploads before it gets here.
         let (glyph_layout, glyph_sampler) = (&self.glyph_layout, &self.glyph_sampler);
         let atlas_view = self.atlas.view();
-        let atlas_key = self.atlas.key();
+        let mark_view = self.marks.view_or(&self.blank);
+        let sheet_keys = (self.atlas.key(), self.marks.key());
         let shared = OffscreenShared {
             format: self.target_format,
             composite_layout: &self.composite_layout,
@@ -1723,26 +1777,27 @@ impl LatticeResources {
                     mapped_at_creation: false,
                 }),
                 glyph_bind_group: None,
-                glyph_atlas_key: u64::MAX,
+                glyph_sheet_keys: (u64::MAX, u64::MAX),
                 offscreen: None,
             }
         });
-        // A bind group names one texture, and an atlas that GREW is a new
-        // one — so a pane that prepared against the old texture has to be
-        // handed the new one before it draws again. Rebuilt on the key rather
-        // than on the size, which is the cheap way to be right about the
+        // A bind group names one texture per sheet, and a sheet that GREW is a
+        // new one — so a pane that prepared against the old texture has to be
+        // handed the new one before it draws again. Rebuilt on the keys rather
+        // than on the sizes, which is the cheap way to be right about the
         // same-size re-upload too: nothing is stale there, and one bind group
         // per publication is nothing.
         if let Some(view) = &atlas_view {
-            if pane.glyph_bind_group.is_none() || pane.glyph_atlas_key != atlas_key {
+            if pane.glyph_bind_group.is_none() || pane.glyph_sheet_keys != sheet_keys {
                 pane.glyph_bind_group = Some(text::bind_group(
                     device,
                     glyph_layout,
                     glyph_sampler,
                     view,
+                    &mark_view,
                     &pane.glyph_uniform_buffer,
                 ));
-                pane.glyph_atlas_key = atlas_key;
+                pane.glyph_sheet_keys = sheet_keys;
             }
         }
         if let Some(size) = offscreen_size {
@@ -1848,17 +1903,18 @@ impl CallbackTrait for LatticeCallback {
             }
         }
 
-        // The labels' atlas, before anything is encoded: the glyphs are drawn
-        // inside the scene pass below, so the texture they read has to be the
-        // current one by the time that pass is recorded.
+        // The labels' sheets, before anything is encoded: the glyphs are drawn
+        // inside the scene pass below, so the textures they read have to be the
+        // current ones by the time that pass is recorded.
         let write_start = std::time::Instant::now();
-        if let Some(atlas) = self.atlas.as_ref().filter(|a| !resources.atlas.holds(a)) {
-            resources.atlas.upload(device, queue, atlas);
-        }
+        resources.mirror_sheets(device, queue, self.atlas.as_ref(), self.marks.as_ref());
         // Nothing has ever been uploaded: the first frames of a session arrive
         // before any pane has drawn a glyph, and the labels wait for the frame
-        // that brings one.
-        let atlas_size = (!resources.atlas.is_empty()).then(|| resources.atlas.size());
+        // that brings one. Gated on the FONT atlas alone, which is not a
+        // shortcut: a mark is always drawn beside a letter, so a frame with a
+        // mark in it is a frame with type in it.
+        let has_atlas = !resources.atlas.is_empty();
+        let sheet_sizes = resources.sheet_sizes();
 
         // Offscreen pixel size: the callback rect at native resolution,
         // scaled by the render-scale view setting (clamped in from_scene).
@@ -1917,7 +1973,7 @@ impl CallbackTrait for LatticeCallback {
 
         // The labels. With no atlas there is nothing to sample, so the pass
         // draws none of them rather than sampling a texture that isn't there.
-        if let Some(atlas_size) = atlas_size {
+        if has_atlas {
             // The glyphs are a VERTEX buffer, so growing it leaves the bind
             // group — uniforms, atlas, sampler — naming everything it named
             // before. Dropping it here would blank this pane's labels for the
@@ -1947,9 +2003,10 @@ impl CallbackTrait for LatticeCallback {
                     0,
                     bytemuck::bytes_of(&text::TextUniforms {
                         screen_points: self.size_points,
-                        atlas_size: [atlas_size[0] as f32, atlas_size[1] as f32],
+                        atlas_size: [sheet_sizes[0], sheet_sizes[1]],
+                        mark_atlas_size: [sheet_sizes[2], sheet_sizes[3]],
                         pixels_per_point: screen_descriptor.pixels_per_point.max(f32::EPSILON),
-                        _pad: [0.0; 3],
+                        _pad: 0.0,
                         ring0: text::TextUniforms::ring(self.rings[0]),
                         ring1: text::TextUniforms::ring(self.rings[1]),
                     }),

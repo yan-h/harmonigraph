@@ -26,6 +26,16 @@
 //! own, because a name belongs at its node's place in the scene's own
 //! back-to-front order: a node in front covers the name of the node behind
 //! it, which nothing drawn over the finished picture can reproduce.
+//!
+//! A label's DRAWN marks — the accidentals, the syntonic `+`/`−`, the
+//! septimal chevron — are glyphs here too. They are rasterized by
+//! `panes::lattice` rather than by egui and packed into a sheet of their own
+//! ([`MarkAtlas`]), and from there everything is shared: one quad apiece, the
+//! rim from `fs_rim`'s arithmetic rather than a second bitmap, and a place in
+//! whichever run of letters they were collected with. That last is what the
+//! move is for — a mark on the painter is drawn over the finished picture,
+//! where the node in front that just covered the name beside it cannot reach
+//! it.
 
 use harmonigraph_render::{GlyphInstance, TextRing};
 
@@ -46,7 +56,7 @@ use harmonigraph_render::{GlyphInstance, TextRing};
 /// Radii are snapped to whole physical pixels before use: mixed
 /// cardinal/diagonal offsets and sub-pixel radii both read as a lumpy
 /// outline on a high-DPI display.
-pub(crate) const RINGS: [(f32, f32, u32); 2] = [(2.0, 0.21, 8), (1.2, 1.0, 12)];
+const RINGS: [(f32, f32, u32); 2] = [(2.0, 0.21, 8), (1.2, 1.0, 12)];
 
 /// One ring's radius on this display, rounded to a whole physical pixel.
 ///
@@ -55,11 +65,11 @@ pub(crate) const RINGS: [(f32, f32, u32); 2] = [(2.0, 0.21, 8), (1.2, 1.0, 12)];
 /// and unlike a position it is a constant of the frame, so rounding it
 /// cannot make anything step as it moves.
 ///
-/// Shared because the drawn label marks build the same two rings out of
-/// geometry (`panes::lattice::paint_mark`), and a rim that is 1.2pt around
-/// a glyph and 1.0pt around the `+` beside it is exactly the mismatch this
-/// pairing exists to avoid.
-pub(crate) fn ring_radius(radius: f32, ppp: f32) -> f32 {
+/// One rim for everything the pass draws, marks included: they are instances
+/// of the same shader, so the `+` and the letter beside it take their halo
+/// from one radius by construction rather than from two constants that have
+/// to be kept equal.
+fn ring_radius(radius: f32, ppp: f32) -> f32 {
     (radius * ppp).round().max(1.0) / ppp
 }
 
@@ -279,6 +289,12 @@ pub(crate) struct TextBatch {
     /// typography tests are all about which piece sits where.
     #[cfg(test)]
     pieces: Vec<TextPiece>,
+    /// Test-only: the quad of every drawn mark, in the order they were added.
+    /// A mark carries no text to be found by, and it is a `GlyphInstance` like
+    /// any other once it is in `glyphs`, so this is the only handle a
+    /// typography test has on which mark went where.
+    #[cfg(test)]
+    marks: Vec<egui::Rect>,
 }
 
 /// One `text()` call, for tests: what it said, at what size, and the ink it
@@ -431,6 +447,7 @@ impl TextBatch {
                     ],
                     fill: color.to_array(),
                     rim: outline.to_array(),
+                    atlas: GlyphInstance::TYPE,
                 });
             }
         }
@@ -455,10 +472,65 @@ impl TextBatch {
         }
     }
 
+    /// Add one drawn mark, centred on `center` and haloed like the glyphs it
+    /// sits among — the same instance stream, the same rim, the same run.
+    ///
+    /// The quad is the mark's BITMAP rather than its ink, margin included, and
+    /// the uv is that bitmap's whole patch. The two are the same box in two
+    /// spaces, exactly as a glyph's screen rect and atlas patch are, which is
+    /// what keeps the mark's own ink interior to the quad that carries it
+    /// (see `panes::lattice::mark_geometry`) once the shader grows both by the
+    /// rim's reach.
+    ///
+    /// Returns the bitmap's size in texels, which is what the caller needs to
+    /// know how far the mark reaches — and it is the caller that knows how
+    /// much of that is margin.
+    pub(crate) fn mark(
+        &mut self,
+        ctx: &egui::Context,
+        key: crate::panes::lattice::MarkKey,
+        center: egui::Pos2,
+        ppp: f32,
+        color: egui::Color32,
+        outline: egui::Color32,
+    ) -> [u32; 2] {
+        let sheet = mark_sheet(ctx);
+        let patch = sheet
+            .lock()
+            .expect("the mark sheet is never held across a panic")
+            .patch(key, ctx.cumulative_pass_nr());
+        // Rasterized in device pixels and drawn in points, which is the one
+        // boundary a mark crosses that a glyph does not have to be told about:
+        // egui's own text path crosses it inside the galley.
+        let size = egui::vec2(patch.size[0] as f32, patch.size[1] as f32) / ppp;
+        // The same split the type takes, by the same route: laid out at the
+        // rasterized size, then magnified with everything else in the label.
+        let k = self.magnify.map_or(1.0, |m| m.factor);
+        let min = center - size / 2.0;
+        let min = self.magnify.map_or(min, |m| m.point(min));
+        let [x, y] = patch.at.map(|n| n as f32);
+        self.glyphs.push(GlyphInstance {
+            rect: [min.x, min.y, size.x * k, size.y * k],
+            uv: [x, y, x + patch.size[0] as f32, y + patch.size[1] as f32],
+            fill: color.to_array(),
+            rim: outline.to_array(),
+            atlas: GlyphInstance::MARK,
+        });
+        #[cfg(test)]
+        self.marks.push(egui::Rect::from_min_size(min, size * k));
+        patch.size
+    }
+
     /// Every piece of text collected so far (tests only).
     #[cfg(test)]
     pub(crate) fn pieces(&self) -> &[TextPiece] {
         &self.pieces
+    }
+
+    /// Every drawn mark's quad, in the order they were added (tests only).
+    #[cfg(test)]
+    pub(crate) fn marks(&self) -> &[egui::Rect] {
+        &self.marks
     }
 
     /// How many glyphs are waiting — what a batch actually costs.
@@ -483,17 +555,22 @@ impl TextBatch {
             return;
         }
         #[cfg(test)]
-        self.pieces.clear();
+        {
+            self.pieces.clear();
+            self.marks.clear();
+        }
         let atlas = atlas_if_changed(
             painter.ctx(),
             &state.instruments.font_atlas,
             std::mem::take(&mut self.drawn),
         );
+        let marks = marks_if_changed(painter.ctx(), &state.instruments.font_atlas);
         painter.add(harmonigraph_render::text_paint_callback(
             rect,
             std::mem::take(&mut self.glyphs),
             rings(painter.ctx()),
             atlas,
+            marks,
             state.target_format,
             pane_id,
         ));
@@ -520,7 +597,10 @@ impl TextBatch {
         state: &crate::SharedState,
     ) -> harmonigraph_render::LatticeLabels {
         #[cfg(test)]
-        self.pieces.clear();
+        {
+            self.pieces.clear();
+            self.marks.clear();
+        }
         // A batch that drew nothing publishes nothing. [`flush`](Self::flush)
         // says this by returning outright; this has a value to hand back, so
         // it skips the publication alone — and it has to skip it explicitly,
@@ -530,13 +610,16 @@ impl TextBatch {
         // empty `drawn` would hand back the whole atlas and a new key on
         // every frame — and the lattice pane draws no names at all whenever
         // `show_labels` is off, or before the first note or hover.
-        let atlas = if self.glyphs.is_empty() {
-            None
+        let (atlas, marks) = if self.glyphs.is_empty() {
+            (None, None)
         } else {
-            atlas_if_changed(
-                painter.ctx(),
-                &state.instruments.lattice_atlas,
-                std::mem::take(&mut self.drawn),
+            (
+                atlas_if_changed(
+                    painter.ctx(),
+                    &state.instruments.lattice_atlas,
+                    std::mem::take(&mut self.drawn),
+                ),
+                marks_if_changed(painter.ctx(), &state.instruments.lattice_atlas),
             )
         };
         let mut glyphs = std::mem::take(&mut self.glyphs);
@@ -549,6 +632,7 @@ impl TextBatch {
             labels: std::mem::take(&mut self.labels),
             rings: rings(painter.ctx()),
             atlas,
+            marks,
         }
     }
 }
@@ -629,6 +713,13 @@ pub(crate) struct AtlasMirror {
     /// Bumped on every refresh; the callback compares it against what it
     /// last uploaded.
     key: u64,
+    /// The version of the MARK sheet this renderer was last handed. Nothing
+    /// like the four guards above is needed for it: that sheet is ours, so it
+    /// carries a version of its own and this is simply which one has been
+    /// published here (see [`marks_if_changed`]). It rides along in this
+    /// struct because a mirror answers for one RENDERER's copies, and each
+    /// renderer holds both sheets.
+    marks_key: u64,
 }
 
 impl AtlasMirror {
@@ -642,11 +733,18 @@ impl AtlasMirror {
     /// `key` is deliberately kept: it counts publications rather than
     /// describing an atlas, and a renderer that survived the context still
     /// compares against the last one it uploaded, so it has to keep rising.
+    ///
+    /// `marks_key` goes, and for the opposite reason: the mark sheet lives in
+    /// the context's own data store, so a new context builds a new one, and
+    /// "already published" here would name a sheet that no longer exists.
+    /// Belt and braces — [`next_sheet_key`] is process-wide, so the new
+    /// sheet's versions are past this one's anyway.
     pub(crate) fn forget_context(&mut self) {
         self.seen.clear();
         self.size = [0, 0];
         self.ppp = 0;
         self.fill = 0.0;
+        self.marks_key = 0;
     }
 }
 
@@ -689,9 +787,530 @@ fn atlas_if_changed(
     })
 }
 
+/// The drawn marks' sheet, on the frames one renderer's mirror of it is
+/// stale, and `None` on the rest.
+///
+/// Simpler than [`atlas_if_changed`], and for one reason: this atlas is OURS.
+/// egui's has to be probed for staleness a glyph at a time because nothing
+/// says when it moved; here the only thing that moves it is a mark being
+/// packed, which happens right here, so the sheet carries a version and the
+/// comparison is that version against what this renderer was last handed.
+fn marks_if_changed(
+    ctx: &egui::Context,
+    mirror: &std::sync::Mutex<AtlasMirror>,
+) -> Option<harmonigraph_render::FontAtlas> {
+    let sheet = mark_sheet(ctx);
+    let sheet = sheet.lock().expect("the mark sheet is never held across a panic");
+    // Nothing has ever been packed — a shell that draws no note names, or a
+    // session before its first one. There is no sheet to hand over.
+    if sheet.key == 0 {
+        return None;
+    }
+    let mut mirror = mirror.lock().expect("the label mirror is never held across a panic");
+    if mirror.marks_key == sheet.key {
+        return None;
+    }
+    mirror.marks_key = sheet.key;
+    Some(harmonigraph_render::FontAtlas { image: sheet.image.clone(), key: sheet.key })
+}
+
+/// Where one mark sits in the sheet.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct MarkPatch {
+    /// Top-left texel of the patch.
+    pub(crate) at: [u32; 2],
+    /// The bitmap's own size in texels, which is also the mark's quad in
+    /// device pixels — the clear margin
+    /// ([`MARK_BITMAP_PAD`](crate::panes::lattice::MARK_BITMAP_PAD)) is part
+    /// of both.
+    pub(crate) size: [u32; 2],
+}
+
+/// The drawn marks, packed into one sheet the glyph pass binds beside egui's
+/// font atlas.
+///
+/// A mark is a bitmap of coverage keyed on (design, size, weight) — the same
+/// thing a font rasterizer hands an atlas for a glyph — so what it wants is
+/// what egui's atlas gives type: rasterize once, pack, hand out a patch, and
+/// re-upload only when the pixels move. A `egui::TextureHandle` per bitmap is
+/// the alternative, and it forces marks onto the painter's image path and out
+/// of the pass their letters are drawn in.
+///
+/// Packed rather than shared with egui's own image, though that would need no
+/// second binding: a patch in a shared sheet has to keep the whole sheet's
+/// texel:pixel identity, and `text.wgsl` steps the rim in texels at
+/// `pixels_per_point` on that basis. A sheet of our own keeps that identity
+/// per texture, so a mark could be rasterized finer than the display without
+/// dragging every letter with it (issue #304).
+///
+/// Two rules make the sheet safe to hand out mid-frame, and they are the same
+/// two egui's atlas keeps (see `harmonigraph_render::text`'s `mirror_atlas`):
+/// a patch is only ever APPENDED within a pass, and the sheet only ever grows
+/// downward, so a uv issued earlier in the pass still points at its own mark.
+/// A repack waits for the next pass, where it runs before any uv is issued.
+#[derive(Default)]
+pub(crate) struct MarkAtlas {
+    /// Behind an `Arc` because publishing it is handing this very image to a
+    /// renderer: a mutation while one is still held clones (`Arc::make_mut`),
+    /// and the ordinary case — nobody holding it — mutates in place.
+    image: std::sync::Arc<egui::ColorImage>,
+    at: std::collections::HashMap<crate::panes::lattice::MarkKey, MarkPatch>,
+    /// The shelf being filled: the row it starts on, how tall it is, and how
+    /// far along it the next patch goes.
+    shelf: (u32, u32, u32),
+    /// Which version of the pixels this is. Zero is "nothing packed yet";
+    /// every other value comes from [`next_sheet_key`], so no two states of
+    /// any sheet in the process ever share one.
+    key: u64,
+    /// The pass the marks below were asked for on, and which of them were —
+    /// the set a repack keeps. Read at the pass boundary, which is the only
+    /// place the packing may move.
+    pass: u64,
+    used: std::collections::HashSet<crate::panes::lattice::MarkKey>,
+}
+
+/// How wide the sheet is, in texels.
+///
+/// Wide enough that no mark can fail to fit on a shelf, which is what makes
+/// the packer a packer rather than a packer plus a fallback: a label's type is
+/// bounded at [`MAX_GLYPH_PX`] and every mark sets at a fixed fraction of it,
+/// so the widest bitmap the app can ask for is a constant —
+/// `a_mark_is_never_wider_than_the_sheet_it_is_packed_into` in
+/// `panes::lattice` measures it. Four of those to a shelf at the ceiling, and
+/// dozens at the sizes a label is really drawn at.
+pub(crate) const MARK_SHEET_WIDTH: u32 = 512;
+
+/// How tall the sheet may get before a pass boundary repacks it down to what
+/// is actually being drawn.
+///
+/// A ceiling on the CHURN, not on the live set: zooming walks through sizes
+/// and each is its own bitmap, so an hour's use would otherwise pack every
+/// size the camera ever passed through. A frame whose own marks need more than
+/// this gets more than this — the repack is skipped when there is nothing dead
+/// to drop, since repacking a live set to the same size every pass is a
+/// full-sheet re-upload per frame for nothing.
+const MARK_SHEET_SOFT_HEIGHT: u32 = 512;
+
+/// Where the [`MarkAtlas`] lives: in egui's own per-frame data store, keyed on
+/// the context, so it dies with the window that built it — exactly as the
+/// textures a renderer holds do.
+fn mark_sheet(ctx: &egui::Context) -> std::sync::Arc<std::sync::Mutex<MarkAtlas>> {
+    let id = egui::Id::new("harmonigraph-mark-sheet");
+    type Shared = std::sync::Arc<std::sync::Mutex<MarkAtlas>>;
+    ctx.data_mut(|d| d.get_temp_mut_or_default::<Shared>(id).clone())
+}
+
+/// The next version any sheet in this process may take.
+///
+/// Process-wide and monotone, so a mirror's "I already hold key K" can never
+/// be true of a DIFFERENT sheet's K: egui evicts an untouched entry from its
+/// data store, and a context that closes takes its sheet with it, so a fresh
+/// [`MarkAtlas`] counting from its own zero would eventually mint a key some
+/// renderer still names — and answer a stale mirror with "nothing has moved"
+/// while holding another sheet's pixels.
+fn next_sheet_key() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+impl MarkAtlas {
+    /// Where `key`'s bitmap sits, rasterizing and packing it if this is the
+    /// first time this pass has been asked.
+    fn patch(&mut self, key: crate::panes::lattice::MarkKey, pass: u64) -> MarkPatch {
+        if pass != self.pass {
+            self.retire();
+            self.pass = pass;
+            self.used.clear();
+        }
+        self.used.insert(key);
+        if let Some(&patch) = self.at.get(&key) {
+            return patch;
+        }
+        let image = crate::panes::lattice::rasterize_mark(key);
+        let size = [image.size[0] as u32, image.size[1] as u32];
+        let at = self.claim(size);
+        self.blit(&image, at);
+        let patch = MarkPatch { at, size };
+        self.at.insert(key, patch);
+        self.key = next_sheet_key();
+        patch
+    }
+
+    /// Drop what the last pass did not draw, and pack what it did afresh.
+    ///
+    /// Only worth doing when there is something to drop AND the sheet has
+    /// grown past what it should be carrying — see [`MARK_SHEET_SOFT_HEIGHT`].
+    fn retire(&mut self) {
+        if self.image.height() as u32 <= MARK_SHEET_SOFT_HEIGHT
+            || self.used.len() >= self.at.len()
+        {
+            return;
+        }
+        // Tallest first, so a shelf is set by its tallest member and the rest
+        // fill in beside it rather than each mark starting one of its own.
+        //
+        // Broken by the old POSITION, which is unique per patch, so the order
+        // is total and the packing is a function of the frames that came
+        // before rather than of a `HashMap`'s iteration. The picture would be
+        // the same either way — a patch holds its own mark wherever it lands —
+        // but the offline renderer promises byte-identical frames between
+        // runs, and "identical unless you look at the atlas" is not a promise
+        // worth having to re-derive.
+        let mut keep: Vec<_> = self
+            .at
+            .iter()
+            .filter(|(key, _)| self.used.contains(*key))
+            .map(|(&key, &patch)| (key, patch))
+            .collect();
+        keep.sort_by_key(|(_, p)| {
+            std::cmp::Reverse((p.size[1], p.size[0], p.at[1], p.at[0]))
+        });
+
+        let old = std::mem::take(&mut self.image);
+        self.at.clear();
+        self.shelf = (0, 0, 0);
+        for (key, patch) in keep {
+            let at = self.claim(patch.size);
+            self.copy_patch(&old, patch, at);
+            self.at.insert(key, MarkPatch { at, size: patch.size });
+        }
+        self.key = next_sheet_key();
+    }
+
+    /// Reserve `size` texels on the current shelf (or the next), growing the
+    /// sheet downward if the shelf runs off the bottom.
+    fn claim(&mut self, [w, h]: [u32; 2]) -> [u32; 2] {
+        // A mark too wide for a shelf has nowhere to go, and what it would do
+        // instead is write across the row into whatever is packed under it.
+        // Unreachable rather than handled: the widest mark the app can ask for
+        // is a constant of the size ladder's ceiling, and
+        // `a_mark_is_never_wider_than_the_sheet_it_is_packed_into` is where
+        // that is worked out.
+        debug_assert!(w <= MARK_SHEET_WIDTH, "a mark {w} texels wide cannot be packed");
+        let (mut top, mut height, mut x) = self.shelf;
+        if x + w > MARK_SHEET_WIDTH {
+            top += height;
+            height = 0;
+            x = 0;
+        }
+        let at = [x, top];
+        self.shelf = (top, height.max(h), x + w);
+        self.grow(top + h);
+        at
+    }
+
+    /// Make sure the sheet is at least `rows` tall, appending transparent rows
+    /// rather than repacking: everything already in it keeps its texels, which
+    /// is what lets a uv handed out earlier in this pass stay correct.
+    fn grow(&mut self, rows: u32) {
+        if self.image.height() as u32 >= rows {
+            return;
+        }
+        // A power of two, so a shelf at a time does not mean an upload at a
+        // time: a sheet filling up doubles a handful of times and then stops.
+        let rows = rows.next_power_of_two() as usize;
+        let image = std::sync::Arc::make_mut(&mut self.image);
+        image.pixels.resize(MARK_SHEET_WIDTH as usize * rows, egui::Color32::TRANSPARENT);
+        image.size = [MARK_SHEET_WIDTH as usize, rows];
+        image.source_size = egui::vec2(MARK_SHEET_WIDTH as f32, rows as f32);
+    }
+
+    /// Copy a freshly rasterized bitmap into the sheet at `at`.
+    fn blit(&mut self, mark: &egui::ColorImage, [x, y]: [u32; 2]) {
+        let stride = MARK_SHEET_WIDTH as usize;
+        let (w, h) = (mark.size[0], mark.size[1]);
+        let image = std::sync::Arc::make_mut(&mut self.image);
+        for row in 0..h {
+            let from = row * w;
+            let to = (y as usize + row) * stride + x as usize;
+            image.pixels[to..to + w].copy_from_slice(&mark.pixels[from..from + w]);
+        }
+    }
+
+    /// Copy a patch out of a previous sheet, for a repack.
+    fn copy_patch(&mut self, old: &egui::ColorImage, from: MarkPatch, [x, y]: [u32; 2]) {
+        let stride = MARK_SHEET_WIDTH as usize;
+        let (w, h) = (from.size[0] as usize, from.size[1] as usize);
+        let image = std::sync::Arc::make_mut(&mut self.image);
+        for row in 0..h {
+            let src = (from.at[1] as usize + row) * old.size[0] + from.at[0] as usize;
+            let dst = (y as usize + row) * stride + x as usize;
+            image.pixels[dst..dst + w].copy_from_slice(&old.pixels[src..src + w]);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::panes::lattice::{mark_key, MarkKind, MARK_WEIGHT};
+
+    /// A mark at a size in physical pixels, which is the axis a zoom walks:
+    /// every rung of the size ladder is one more of these.
+    fn mark_at(kind: MarkKind, size_px: f32) -> crate::panes::lattice::MarkKey {
+        mark_key(kind, size_px, MARK_WEIGHT, 1.0)
+    }
+
+    /// A walk of `count` distinct sizes, tall enough that a few dozen of them
+    /// fill the sheet past [`MARK_SHEET_SOFT_HEIGHT`] — which is what a zoom
+    /// drag does, a rung at a time.
+    fn a_zooms_worth(count: usize) -> Vec<crate::panes::lattice::MarkKey> {
+        (0..count).map(|step| mark_at(MarkKind::Sharp, 60.0 + step as f32)).collect()
+    }
+
+    /// What the sheet holds at `patch`, read back out as an image — so a test
+    /// can ask whether a mark is still where it was told it would be.
+    fn patched(sheet: &MarkAtlas, patch: MarkPatch) -> egui::ColorImage {
+        let (w, h) = (patch.size[0] as usize, patch.size[1] as usize);
+        let stride = sheet.image.size[0];
+        let pixels = (0..h)
+            .flat_map(|row| {
+                let at = (patch.at[1] as usize + row) * stride + patch.at[0] as usize;
+                sheet.image.pixels[at..at + w].to_vec()
+            })
+            .collect();
+        egui::ColorImage { size: [w, h], pixels, source_size: egui::vec2(w as f32, h as f32) }
+    }
+
+    /// Every mark a pass asked for is somewhere of its own in the sheet, and
+    /// what is there is that mark's own bitmap.
+    ///
+    /// Two failures in one reading, and neither one shows up as an error. A
+    /// packer that lets two patches meet draws each mark with a bite of its
+    /// neighbour in it; one whose blit disagrees with the coordinates it hands
+    /// out draws a mark that is simply somewhere else on the sheet, which is
+    /// another mark or nothing at all.
+    ///
+    /// Sizes that grow, because a shelf packer is at its most interesting when
+    /// the things it packs do not fit each other: even sizes fill a shelf
+    /// tidily and hide an off-by-one that a ragged set exposes.
+    #[test]
+    fn every_mark_gets_a_patch_of_its_own() {
+        let mut sheet = MarkAtlas::default();
+        let kinds = [
+            MarkKind::Minus,
+            MarkKind::Plus,
+            MarkKind::Sharp,
+            MarkKind::Flat,
+            MarkKind::Septimal(true),
+        ];
+        let mut packed = Vec::new();
+        for step in 0..14 {
+            for kind in kinds {
+                let key = mark_at(kind, 7.0 + step as f32 * 3.0);
+                packed.push((key, sheet.patch(key, 0)));
+            }
+        }
+
+        // Touching is allowed and overlapping is not, so this is a strict
+        // comparison rather than `Rect::intersects`, which counts a shared
+        // edge as an intersection. Touching is in fact the ordinary case: a
+        // shelf packs its marks side by side, and what keeps their INK apart
+        // there is the clear texel each bitmap carries of its own.
+        let apart = |a: &MarkPatch, b: &MarkPatch| {
+            a.at[0] + a.size[0] <= b.at[0]
+                || b.at[0] + b.size[0] <= a.at[0]
+                || a.at[1] + a.size[1] <= b.at[1]
+                || b.at[1] + b.size[1] <= a.at[1]
+        };
+        for (i, (_, a)) in packed.iter().enumerate() {
+            assert!(
+                a.at[0] + a.size[0] <= MARK_SHEET_WIDTH
+                    && a.at[1] + a.size[1] <= sheet.image.height() as u32,
+                "patch {i} runs off a sheet of {:?}: {a:?}",
+                sheet.image.size,
+            );
+            for (j, (_, b)) in packed.iter().enumerate().skip(i + 1) {
+                assert!(apart(a, b), "patches {i} and {j} share texels: {a:?} and {b:?}");
+            }
+        }
+        for (i, (key, patch)) in packed.iter().enumerate() {
+            assert_eq!(
+                patched(&sheet, *patch).pixels,
+                crate::panes::lattice::rasterize_mark(*key).pixels,
+                "patch {i} does not hold the mark it was handed out for",
+            );
+        }
+    }
+
+    /// A patch handed out earlier in a pass still points at its own mark after
+    /// the sheet has grown under it.
+    ///
+    /// This is the rule the whole publication scheme rests on, and it is the
+    /// same one egui's atlas keeps: `harmonigraph_render`'s `mirror_atlas`
+    /// carries a pane that has already prepared onto a texture some LATER pane
+    /// grew, and what makes that safe is that the earlier pane's uvs still
+    /// name their own texels. Repack inside a pass instead and every mark
+    /// already drawn this frame is reading whatever moved into its place.
+    ///
+    /// Driven past the soft height on purpose: that is where a repack becomes
+    /// tempting, and the test is that it does not happen HERE. The pass after
+    /// it is the one allowed to move things.
+    #[test]
+    fn the_sheet_only_grows_downward_within_a_pass() {
+        let mut sheet = MarkAtlas::default();
+        let first = mark_at(MarkKind::Plus, 11.0);
+        let early = sheet.patch(first, 0);
+        for key in a_zooms_worth(80) {
+            sheet.patch(key, 0);
+        }
+        assert!(
+            sheet.image.height() as u32 > MARK_SHEET_SOFT_HEIGHT,
+            "the walk has to fill the sheet past the point a repack would be due, got {:?}",
+            sheet.image.size,
+        );
+        assert_eq!(sheet.patch(first, 0), early, "a patch moved under the pass that was handed it");
+        assert_eq!(
+            patched(&sheet, early).pixels,
+            crate::panes::lattice::rasterize_mark(first).pixels,
+            "the first mark's texels are not its own any more",
+        );
+    }
+
+    /// ...and once a pass has gone by without them, the sheet packs back down
+    /// to what is being drawn.
+    ///
+    /// Without that, an hour of zooming is an hour of sizes: each rung of the
+    /// ladder is its own bitmap, so the sheet would carry every size the
+    /// camera ever passed through and be re-uploaded at that size whenever a
+    /// new one arrived.
+    ///
+    /// It takes a whole pass to notice, and it has to: what a mark being dead
+    /// MEANS is that a pass drew without it, so the pass that stops asking is
+    /// the evidence and the one after it is the earliest that can act. The
+    /// walk here is one drag's worth of sizes, then a camera that has stopped.
+    ///
+    /// Skipping the repack when there is nothing dead to drop is the other
+    /// half of the trade, and it belongs to
+    /// [`a_sheet_still_drawing_all_its_marks_is_not_repacked`] rather than to
+    /// this: what the camera settles on here is three marks, which puts the
+    /// sheet back under the soft height, where height alone is already reason
+    /// enough to leave it alone.
+    #[test]
+    fn a_pass_boundary_packs_the_sheet_back_down_to_what_is_drawn() {
+        let mut sheet = MarkAtlas::default();
+        for key in a_zooms_worth(80) {
+            sheet.patch(key, 0);
+        }
+        let filled = sheet.image.height();
+        assert!(filled as u32 > MARK_SHEET_SOFT_HEIGHT, "the walk has to fill the sheet: {filled}");
+
+        // The camera stops: from here on the pass draws three marks at one
+        // size, and asks for them again on every frame.
+        let live: Vec<_> = [MarkKind::Sharp, MarkKind::Plus, MarkKind::Septimal(false)]
+            .map(|kind| mark_at(kind, 13.0))
+            .to_vec();
+        for &key in &live {
+            sheet.patch(key, 1);
+        }
+        assert_eq!(
+            sheet.image.height(),
+            filled,
+            "the pass that stopped asking is the evidence, not the repack",
+        );
+
+        let patches: Vec<_> = live.iter().map(|&key| sheet.patch(key, 2)).collect();
+        assert!(
+            sheet.image.height() * 4 < filled,
+            "the sheet stayed at {:?} a pass after the zoom stopped",
+            sheet.image.size,
+        );
+        for (key, patch) in live.iter().zip(&patches) {
+            assert_eq!(
+                patched(&sheet, *patch).pixels,
+                crate::panes::lattice::rasterize_mark(*key).pixels,
+                "a repacked mark does not hold its own bitmap",
+            );
+        }
+
+        // And every pass after that leaves it alone, rather than repacking a
+        // live set to the same size on every frame.
+        let settled = sheet.key;
+        for pass in 3..6 {
+            for &key in &live {
+                sheet.patch(key, pass);
+            }
+        }
+        assert_eq!(sheet.key, settled, "a pass that asked for nothing new must not move the sheet");
+    }
+
+    /// A sheet is left alone while everything in it is still being drawn,
+    /// however tall it has grown.
+    ///
+    /// Height is what makes a repack worth doing and is not on its own what
+    /// makes it worth anything: a repack that drops nothing packs the same
+    /// marks to the same size, and mints a fresh key doing it. A fresh key is
+    /// a full re-upload of the sheet into every renderer mirroring it, per
+    /// pane, per frame, for a picture that has not moved — the one cost the
+    /// sheet exists to avoid, and the one nothing downstream would look wrong
+    /// about.
+    ///
+    /// So the live set here is itself past the soft height, which is the state
+    /// the test above cannot reach: it settles on three marks, and under the
+    /// soft height height alone answers whatever the second half of the guard
+    /// does. A camera that stops with the sheet full is an ordinary way to
+    /// arrive here — the drag ended on the frame that filled it.
+    #[test]
+    fn a_sheet_still_drawing_all_its_marks_is_not_repacked() {
+        let mut sheet = MarkAtlas::default();
+        let live = a_zooms_worth(80);
+        for &key in &live {
+            sheet.patch(key, 0);
+        }
+        let filled = sheet.image.height();
+        assert!(
+            filled as u32 > MARK_SHEET_SOFT_HEIGHT,
+            "the LIVE set has to clear the soft height, or height alone answers: {filled}",
+        );
+
+        // The camera has stopped with the sheet full: every pass from here
+        // asks for exactly what is already packed.
+        let settled = sheet.key;
+        for pass in 1..4 {
+            for &key in &live {
+                sheet.patch(key, pass);
+            }
+            assert_eq!(sheet.key, settled, "pass {pass} repacked a sheet with nothing dead in it");
+            assert_eq!(sheet.image.height(), filled, "pass {pass} moved a sheet it must not touch");
+        }
+    }
+
+    /// The sheet reaches a renderer when it moves, and not otherwise.
+    ///
+    /// One publication per change is the whole cost model: the sheet is a
+    /// `ColorImage` handed over to be written into a texture whole, so an
+    /// unconditional hand-over is a full re-upload per pane per frame. Nothing
+    /// downstream would look wrong, which is why this is a test rather than
+    /// something a picture catches.
+    #[test]
+    fn the_mark_sheet_is_published_when_it_moves_and_not_otherwise() {
+        let ctx = egui::Context::default();
+        let state = crate::SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
+        let mirror = &state.instruments.font_atlas;
+
+        // Nothing packed: there is no sheet to publish, on any frame.
+        assert!(marks_if_changed(&ctx, mirror).is_none(), "an empty sheet publishes nothing");
+
+        let sheet = mark_sheet(&ctx);
+        sheet.lock().expect("fresh").patch(mark_at(MarkKind::Plus, 11.0), 0);
+        assert!(marks_if_changed(&ctx, mirror).is_some(), "a first mark has to reach the renderer");
+        assert!(marks_if_changed(&ctx, mirror).is_none(), "nothing has moved");
+
+        // A mark already packed is not a change...
+        sheet.lock().expect("held").patch(mark_at(MarkKind::Plus, 11.0), 0);
+        assert!(marks_if_changed(&ctx, mirror).is_none(), "the same mark again is the same sheet");
+        // ...and a new one is.
+        sheet.lock().expect("held").patch(mark_at(MarkKind::Sharp, 11.0), 0);
+        assert!(marks_if_changed(&ctx, mirror).is_some(), "a new mark has to reach the renderer");
+
+        // The lattice keeps a mirror of its own, and it holds none of this:
+        // each mirror answers for ONE renderer's texture, and a sheet
+        // published to the text callback is not in the lattice's copy.
+        assert!(
+            marks_if_changed(&ctx, &state.instruments.lattice_atlas).is_some(),
+            "a second renderer must be shown the sheet too, not told it already has it",
+        );
+    }
 
     /// Lay `text` out at `ppp` and report exactly what a pane drawing it would
     /// hand [`atlas_if_changed`]: the keys of its glyphs, with the atlas

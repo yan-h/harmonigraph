@@ -16,13 +16,23 @@
 // Glyphs come from egui: it lays the text out, rasterizes into its font
 // atlas, and hands over each glyph's screen rect and atlas rect. This
 // shader only decides how they reach the framebuffer.
+//
+// A drawn MARK — the `+`, the chevron, the accidentals — is a glyph here too,
+// cut from a sheet of its own that the UI rasterizes and packs. It reaches the
+// framebuffer through everything below unchanged, which is the point of it
+// being here at all: it takes its rim from the same arithmetic instead of a
+// second bitmap, and its place in the lattice's draw order from the run of
+// letters it was collected with, so a node in front covers a name and its
+// marks together.
 
 struct Locals {
     /// egui's screen size in points; positions arrive in points.
     screen_points: vec2<f32>,
     /// Font atlas size in texels, for normalizing the glyph's uv rect.
     atlas_size: vec2<f32>,
-    /// Physical pixels per point: the atlas is rasterized at device scale,
+    /// And the drawn marks' own sheet, the same way.
+    mark_atlas_size: vec2<f32>,
+    /// Physical pixels per point: both sheets are rasterized at device scale,
     /// so this converts a rim radius in points into a texel offset.
     pixels_per_point: f32,
     _pad: f32,
@@ -35,6 +45,11 @@ struct Locals {
 @group(0) @binding(0) var<uniform> locals: Locals;
 @group(0) @binding(1) var atlas: texture_2d<f32>;
 @group(0) @binding(2) var atlas_sampler: sampler;
+@group(0) @binding(3) var mark_atlas: texture_2d<f32>;
+
+/// The `atlas` an instance carries when it is a drawn mark rather than a
+/// letter — `GlyphInstance::MARK`, against `::TYPE`'s zero.
+const SHEET_MARK: u32 = 1u;
 
 struct VertexOut {
     @builtin(position) position: vec4<f32>,
@@ -48,6 +63,11 @@ struct VertexOut {
     /// Premultiplied sRGB, as egui carries `Color32`.
     @location(3) @interpolate(flat) fill: vec4<f32>,
     @location(4) @interpolate(flat) rim: vec4<f32>,
+    /// Which sheet this glyph is cut from, and that sheet's size in texels —
+    /// carried rather than looked up per sample, so only the texture read
+    /// itself has to choose.
+    @location(5) @interpolate(flat) sheet: u32,
+    @location(6) @interpolate(flat) sheet_size: vec2<f32>,
 };
 
 /// How far outside its own rect a glyph's rim can reach, in points.
@@ -67,6 +87,8 @@ fn vs_glyph(
     @location(1) uv: vec4<f32>,
     @location(2) fill: vec4<f32>,
     @location(3) rim: vec4<f32>,
+    // Which sheet `uv` addresses.
+    @location(4) sheet: u32,
 ) -> VertexOut {
     let corner = vec2<f32>(
         select(0.0, 1.0, (vertex & 1u) == 1u),
@@ -115,6 +137,8 @@ fn vs_glyph(
     out.uv_max = uv.zw;
     out.fill = fill;
     out.rim = rim;
+    out.sheet = sheet;
+    out.sheet_size = select(locals.atlas_size, locals.mark_atlas_size, sheet == SHEET_MARK);
     return out;
 }
 
@@ -133,7 +157,10 @@ fn vs_glyph(
 /// Half a texel is also as far as it can go. epaint leaves at most one
 /// transparent texel around a glyph, so a tap a whole texel out would start
 /// blending the letter packed next door back in — which is the smear the patch
-/// bound exists to prevent, arriving through the margin meant to fix it.
+/// bound exists to prevent, arriving through the margin meant to fix it. The
+/// mark sheet buys the margin the same way and owes the same bound: every mark
+/// bitmap carries exactly one clear texel of its own on each side
+/// (`MARK_BITMAP_PAD`), and they are packed touching.
 ///
 /// At MOST one, and the difference is the whole of [`outside_atlas`]: epaint
 /// pads after a glyph and between bands, never before the first of either, so
@@ -163,12 +190,29 @@ const PATCH_MARGIN: f32 = 0.5;
 /// dropping a whole row or column of the 2x2, and that is this factor. `texel`
 /// addresses texel CENTRES at `texel - 0.5`, so a tap reaches outside on the
 /// low side while `texel < 0.5` and on the high side while `texel` is within
-/// half a texel of `atlas_size`; everywhere between, this is 1.
-fn outside_atlas(texel: vec2<f32>) -> f32 {
+/// half a texel of the sheet's own size; everywhere between, this is 1.
+///
+/// The mark sheet's walls are the same case for the same reason: a shelf
+/// packer starts its first shelf at row 0 and every shelf at column 0.
+fn outside_atlas(in: VertexOut, texel: vec2<f32>) -> f32 {
     let low = clamp(texel + vec2<f32>(0.5), vec2<f32>(0.0), vec2<f32>(1.0));
-    let high = clamp(locals.atlas_size + vec2<f32>(0.5) - texel, vec2<f32>(0.0), vec2<f32>(1.0));
+    let high = clamp(in.sheet_size + vec2<f32>(0.5) - texel, vec2<f32>(0.0), vec2<f32>(1.0));
     let weight = low * high;
     return weight.x * weight.y;
+}
+
+/// The alpha of `in`'s own sheet at `texel`.
+///
+/// `textureSampleLevel` rather than `textureSample`: which sheet is read is a
+/// per-instance branch, so the read sits in non-uniform control flow and an
+/// implicit-derivative sample is not allowed there. Nothing is lost — both
+/// sheets are single-level, so level 0 is what the implicit form resolved to.
+fn sheet_alpha(in: VertexOut, texel: vec2<f32>) -> f32 {
+    let uv = texel / in.sheet_size;
+    if in.sheet == SHEET_MARK {
+        return textureSampleLevel(mark_atlas, atlas_sampler, uv, 0.0).a;
+    }
+    return textureSampleLevel(atlas, atlas_sampler, uv, 0.0).a;
 }
 
 /// The glyph's coverage at `texel`, and zero outside its own patch of the
@@ -185,8 +229,7 @@ fn coverage(in: VertexOut, texel: vec2<f32>) -> f32 {
         || texel.x > in.uv_max.x + PATCH_MARGIN || texel.y > in.uv_max.y + PATCH_MARGIN {
         return 0.0;
     }
-    return textureSample(atlas, atlas_sampler, texel / locals.atlas_size).a
-        * outside_atlas(texel);
+    return sheet_alpha(in, texel) * outside_atlas(in, texel);
 }
 
 /// Accumulate one ring of the rim: `1 - PRODUCT(1 - alpha * coverage)`,

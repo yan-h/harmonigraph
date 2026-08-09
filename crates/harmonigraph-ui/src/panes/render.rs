@@ -418,24 +418,20 @@ fn preview_lattice(ui: &mut egui::Ui, rect: egui::Rect, state: &SharedState, now
     );
     // The lattice's place in the shape list, claimed now and filled in below:
     // the node names are drawn inside its own pass, and are not known until
-    // they have been laid out. The drawn marks still go on top of it, which is
-    // what the order of these two is about — see the Lattice pane, which does
-    // the same for the same reason.
+    // they have been laid out. Nothing is added to this painter after it, so
+    // the slot orders nothing — it is here for the claim-then-fill alone,
+    // which is the same shape the Lattice pane uses (there it also has a badge
+    // to order against).
     let lattice = ui.painter().add(egui::Shape::Noop);
     // Node names/cents, exactly as the Lattice pane and the render draw them:
     // sized off this rect, so a preview a third of the render's size draws
-    // them a third of the size, which is what makes it a preview. Clipped
-    // to the lattice rect: a node near the frame edge would otherwise paint its
-    // MARKS out past the preview box, since draw_node_labels puts those on an
-    // unclipped painter (harmless in the docked pane, which owns its whole rect
-    // and is clipped by the dock; here the rect is only a sub-region of the
-    // pane). The names themselves are clipped by the lattice's own target,
-    // which is the rect.
+    // them a third of the size, which is what makes it a preview. Nothing here
+    // needs clipping to the lattice rect — a label puts nothing on the painter,
+    // marks included, and everything it collects is drawn into the lattice's
+    // own target, which IS the rect.
     let mut batch = crate::text::TextBatch::default();
     if state.view.show_labels {
-        let mut clipped = ui.new_child(egui::UiBuilder::new().max_rect(rect));
-        clipped.set_clip_rect(rect);
-        super::lattice::draw_node_labels(&clipped, rect, &scene, &state.view, &mut batch);
+        super::lattice::draw_node_labels(ui, rect, &scene, &state.view, &mut batch);
     }
     // No GPU-time slot: the Video pane's preview is a second lattice on
     // screen, and reporting its cost as THE lattice cost would be wrong.
