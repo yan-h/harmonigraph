@@ -199,11 +199,18 @@ impl SpectrogramPreset {
     /// shows.
     ///
     /// The chroma pair is where a fraction of the gamut earns its keep. It does
-    /// not fall to 0 at the quiet end and does not need to: the gamut's own
-    /// maximum collapses toward 0 as `L*` approaches either end of its axis, so
-    /// a constant share already draws black at the bottom, saturated in the
-    /// middle and pale at the top — the shape all three colored ramps were
-    /// hand-picked to have. See [`Gradient::chroma`].
+    /// not fall to 0 at the quiet end and does not need to: what the fraction is
+    /// OF collapses toward 0 as `L*` approaches either end of its axis, so a
+    /// constant share already draws black at the bottom, saturated in the middle
+    /// and pale at the top — the shape all three colored ramps were hand-picked
+    /// to have. See [`Gradient::chroma`].
+    ///
+    /// The shares are denominated in the floor every hue can hold rather than in
+    /// each hue's own ceiling, which is a tighter axis and sits them high: each
+    /// pair is the one holding ITS preset's mean colorfulness where the ceiling
+    /// held it at the pair these were hand-dialled as (Ice 0.55..0.90, Aurora
+    /// 0.40..0.85, Magma 0.70..0.85). A preset is its look, not its numbers, so
+    /// the numbers move when the denominator does.
     pub fn gradient(self) -> Gradient {
         let of = |(l_lo, l_hi): (f32, f32), hue: (f32, f32), (c_lo, c_hi): (f32, f32)| Gradient {
             hue_start: hue.0,
@@ -219,9 +226,9 @@ impl SpectrogramPreset {
             // dragged off 0 opens on a color rather than on whatever angle 0
             // happened to be spelled with.
             SpectrogramPreset::Mono => of((0.0, 100.0), (269.0, 0.0), (0.0, 0.0)),
-            SpectrogramPreset::Ice => of((0.0, 92.0), (269.0, -70.0), (0.55, 0.90)),
-            SpectrogramPreset::Aurora => of((0.0, 88.0), (302.0, -193.0), (0.40, 0.85)),
-            SpectrogramPreset::Magma => of((0.0, 90.0), (295.0, 136.0), (0.70, 0.85)),
+            SpectrogramPreset::Ice => of((0.0, 92.0), (269.0, -70.0), (0.635, 0.985)),
+            SpectrogramPreset::Aurora => of((0.0, 88.0), (302.0, -193.0), (0.518, 0.968)),
+            SpectrogramPreset::Magma => of((0.0, 90.0), (295.0, 136.0), (0.819, 0.969)),
         }
     }
 }
@@ -330,11 +337,13 @@ pub struct SpectrumConfig {
     /// How much of that reach the outline spends fading out, in points: 0 is a
     /// hard edge, and at or past the reach it fades over the whole of it.
     ///
-    /// Two settings rather than one, exactly as the lattice's gutter and gutter
+    /// Two numbers rather than one, exactly as the lattice's gutter and gutter
     /// fade are two ([`harmonigraph_scene::ViewConfig::sevens_gutter_soft`]):
     /// tying the fade to the reach makes a wider outline always a blurrier one,
     /// and how far a note stands off its background is a different question
-    /// from how sharply it does.
+    /// from how sharply it does. They share one CONTROL — the Analyzer tab's
+    /// Outline bar, a handle at each — because both are distances from the
+    /// note's edge, which makes them two points on one axis.
     pub roll_outline_fade: f32,
     /// Write each note's name over its ribbon, at the moment it was struck —
     /// see [`panes::spectral::names`](crate::panes::spectral::names).
@@ -434,6 +443,29 @@ impl SpectrumConfig {
         // glyph wider than the texture atlas can hold.
         self.marking_scale = sane_scale(self.marking_scale);
         self.note_name_scale = sane_scale(self.note_name_scale);
+        // The outline and its fade, which are ONE control (the Analyzer tab's
+        // Outline bar) over two numbers, and held to the same bound for the
+        // same reason as the lattice's gutter pair
+        // ([`ViewConfig::sanitize`](harmonigraph_scene::ViewConfig::sanitize)):
+        // the fade is measured back from the reach, so a fade wider than its
+        // reach has no place on the axis to draw a handle. It draws as a fade
+        // over the whole reach either way — `roll.wgsl` floors it at the
+        // note's own edge — so the clamp costs the picture nothing.
+        //
+        // The finite check is not redundant with the clamp beside it: a NaN
+        // reach becomes the MAX of the fade's clamp, and `f32::clamp` asserts
+        // `min <= max`, which a NaN fails — taking the editor down as the
+        // project opens. The same trap the level pair below names.
+        let fresh = SpectrumConfig::default();
+        self.roll_outline =
+            if self.roll_outline.is_finite() { self.roll_outline } else { fresh.roll_outline }
+                .clamp(0.0, ROLL_OUTLINE_MAX);
+        self.roll_outline_fade = if self.roll_outline_fade.is_finite() {
+            self.roll_outline_fade
+        } else {
+            fresh.roll_outline_fade
+        }
+        .clamp(0.0, self.roll_outline);
         // The level pair, against the same threat and for the same reason.
         // `loudness_raw` already refuses a collapsed or inverted window, which
         // is what a `max` can answer; a NaN end it cannot, because NaN loses
@@ -478,11 +510,11 @@ impl SpectrumConfig {
 /// ([`SpectrumConfig::sanitize`]), takes included — so a video rendered
 /// from an old take renders at the wider range too.
 ///
-/// Named for the analyzer alone, and read by nothing else. The Nodes tab's
-/// colour range is a span of pitch as well and used to borrow this; it has
-/// [`COLOR_RANGE_MIN_SPAN`] of its own now, because the reasoning above is
-/// about the size of TYPE and says nothing whatever about how tightly a
-/// gradient may be aimed.
+/// The analyzer's alone, and read by nothing else. The Nodes tab carries a
+/// Pitch range of its own — the span the color gradient is spread over — and it
+/// is bounded by [`COLOR_RANGE_MIN_SPAN`] rather than by this: the reasoning
+/// above is about the size of TYPE and says nothing whatever about how tightly
+/// a gradient may be aimed.
 pub(crate) const PITCH_RANGE_MIN_SPAN: f32 = 24.0;
 
 /// A persisted text scale, fit to the range its bar offers.
@@ -504,9 +536,12 @@ pub(crate) fn sane_scale(scale: f32) -> f32 {
 /// whether they mean the same thing by 2.
 pub const SCALE_BAR_RANGE: std::ops::RangeInclusive<f32> = 0.3..=3.0;
 
-/// Closest the two ends of the Nodes tab's colour range may come: an octave,
-/// which is where it sat while it shared [`PITCH_RANGE_MIN_SPAN`] and had no
-/// reason to move when that one did.
+/// Closest the two ends of the Nodes tab's Pitch range may come — the span the
+/// color gradient covers, which is a different bar from the analyzer's window
+/// on the same axis. An octave: a gradient aimed tighter than one has notes a
+/// semitone apart at opposite ends of the spectrum, and nothing about the
+/// analyzer's own floor ([`PITCH_RANGE_MIN_SPAN`], which is about how small
+/// type may be drawn) says anything about that.
 pub(crate) const COLOR_RANGE_MIN_SPAN: f32 = 12.0;
 
 /// How far the roll's time span may be taken, in seconds. Named because two

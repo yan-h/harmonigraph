@@ -386,6 +386,110 @@ impl PitchScale {
     }
 }
 
+/// One decade of frequency, in semitones. Ten times the frequency is
+/// log2(10) octaves up and the axis is linear in semitones, so a decade is
+/// the same length wherever on the axis it falls — which is what lets
+/// [`frequency_grid`] settle its ladder once for all of them.
+pub(super) const DECADE_SEMITONES: f32 = 12.0 * std::f32::consts::LOG2_10;
+
+/// The closest two rulings may be drawn, in points.
+///
+/// The ladder is even in FREQUENCY and the axis is logarithmic, so the steps
+/// inside a decade crowd toward its top: 9 kHz to 10 kHz gets a sixth of the
+/// room 1 kHz to 2 kHz does. Left alone the last few of every decade close into
+/// a smear that reads as one thick line, and the smear lands in the same place
+/// in every decade, so it looks like a feature of the picture rather than of the
+/// drawing. Dropping the steps that no longer fit is what a log axis does
+/// anywhere, and it degrades in the right direction: squeezed hard enough the
+/// ladder wears down to the numbered marks alone — a line under every number
+/// and nothing else, which is a legible axis rather than a broken one.
+pub(super) const MIN_RULING_GAP_PT: f32 = 8.0;
+
+/// One frequency ruled across the pitch axis.
+///
+/// The two flags are separate because they answer separate questions, and the
+/// same line often answers only one of them: 200 Hz carries a number and is not
+/// a decade, 10 kHz is both, 300 Hz is neither.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Ruling {
+    /// Where it falls on the pitch axis, `0..1`.
+    pub(super) t: f32,
+    pub(super) hz: f32,
+    /// A decade boundary — 100 Hz, 1 kHz, 10 kHz — drawn a shade stronger.
+    ///
+    /// This is where the ladder RESTARTS: the step below one of these is a
+    /// tenth of the step above it, which is the one thing about a grid even in
+    /// frequency that the eye cannot get from the spacing alone, since a log
+    /// axis draws every decade at the same length. Marking the boundary is what
+    /// turns the picture from lines-that-bunch-up into three copies of one
+    /// ruler.
+    pub(super) decade: bool,
+    /// One of the 1-2-5 series — the analyzer-standard marks, which are the
+    /// ones the axis writes a number beside, and the ones thinning never drops.
+    pub(super) numbered: bool,
+}
+
+/// The frequency ladder the pane rules and labels, low to high: every 10 Hz
+/// below 100, every 100 Hz below 1 kHz, every 1 kHz below 10 kHz, and so on —
+/// one step per decade, so the grid makes the same claim about every part of
+/// the axis instead of a finer one down where the numbers happen to be smaller.
+///
+/// Only the steps `scale` shows come back, and of the UNNUMBERED ones only
+/// those with room for themselves ([`MIN_RULING_GAP_PT`]) — a numbered step
+/// draws at any spacing, since a label with no line under it is worse than two
+/// lines close together. Which of the rest have room turns on the length of a
+/// DECADE alone, not on where the decade sits, so it is settled once and the
+/// surviving ladder is identical in every decade on the axis.
+pub(super) fn frequency_grid(scale: &PitchScale, pitch_len: f32) -> Vec<Ruling> {
+    // A collapsed or inverted range has no axis to rule: `t_of` divides by its
+    // span, so every ruling would be placed at a NaN, and egui panics on NaN
+    // geometry. The pane's own scale cannot hold one (it opens the range to
+    // `PITCH_RANGE_MIN_SPAN` first) and a hand-edited state blob can. Past this,
+    // `contains` is what makes a ruling's `t` finite and inside `0..1`.
+    if !scale.span.is_finite() || scale.span <= 0.0 {
+        return Vec::new();
+    }
+    let numbered = |step: i32| matches!(step, 1 | 2 | 5);
+    let decade_pt = DECADE_SEMITONES / scale.span * pitch_len;
+    let at = |step: i32| (step as f32).log10() * decade_pt;
+
+    let mut keep = [false; 9];
+    keep[0] = true; // Step 1 opens a decade and is numbered; it always draws.
+    let mut last = at(1);
+    for step in 2..=9 {
+        // A numbered step draws whatever else is on the axis — it is the mark a
+        // label is written beside — so the rest have to clear the ruling below
+        // AND leave the next numbered step its room, or they crowd a line they
+        // cannot displace.
+        let next_numbered = if step < 5 { 5 } else { 10 };
+        let room = at(step) - last >= MIN_RULING_GAP_PT
+            && at(next_numbered) - at(step) >= MIN_RULING_GAP_PT;
+        if numbered(step) || room {
+            keep[step as usize - 1] = true;
+            last = at(step);
+        }
+    }
+
+    let mut rulings = Vec::new();
+    // 1 Hz to 9 MHz. The analyzer's axis is 20 Hz to 20 kHz, so this is slack
+    // around it rather than a second range to keep in step with the first —
+    // what bounds the ladder is the visible range, tested per step below.
+    for decade in 0..=6 {
+        for step in 1..=9 {
+            if !keep[step as usize - 1] {
+                continue;
+            }
+            let hz = step as f32 * 10f32.powi(decade);
+            let midi = harmonigraph_core::spectrum::hz_to_midi(hz);
+            if scale.contains(midi) {
+                let t = scale.t_of(midi);
+                rulings.push(Ruling { t, hz, decade: step == 1, numbered: numbered(step) });
+            }
+        }
+    }
+    rulings
+}
+
 /// Maps take time to a depth fraction on the shared time axis (the region the
 /// roll and spectrogram split between them), and back. One mapping for two
 /// modes, so the live and offline paths go through the same place instead of

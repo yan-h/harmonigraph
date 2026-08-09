@@ -80,7 +80,7 @@ fn every_separator_a_fold_has_pinned_resizes_the_open_panes_across_it() {
         panes::Tab::Spectral,
         panes::Tab::Tuning,
         panes::Tab::Notes,
-        panes::Tab::Panel,
+        panes::Tab::System,
     ];
     // Two collapsed panes and then three, since each rail nests the next fold one
     // split deeper and the drag has to reach out past all of them.

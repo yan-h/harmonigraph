@@ -168,7 +168,10 @@ pub fn derive_scene(
     // recompute each node's pitch class to do it.
     let mut node_pcs = Vec::with_capacity(view.visible_count());
     let center = view.center();
-    let node_idle = idle_color(view);
+    // What a node with no voice on it is colored: read by nothing that draws
+    // while it stays that way -- an idle node paints no pixel -- so this is
+    // the neutral a node falls back to rather than a look.
+    let node_idle = idle_color();
     let live_extremes = held_extremes(tracker, view.mark_melody, view.mark_bass);
     let mark_delay = view.mark_delay.clamp(0.0, MARK_DELAY_MAX) as f64;
     let env = view.envelope(frame);
@@ -482,10 +485,11 @@ pub fn derive_scene(
         node_pcs.push(node_pc);
     }
 
-    // Marks only the idle layer (see `trail`), so nothing downstream that
-    // reads "is sounding" — the grid's sevens chains above all — can pick a
-    // memory up by mistake, whatever order these run in.
-    if let Some(field) = TrailField::build(tracker.history(), view, frame, now) {
+    // Writes `trail` and nothing else (see `trail`), so nothing downstream
+    // that reads "is sounding" — the grid's sevens chains above all — can
+    // pick a memory up by mistake, whatever order these run in. The label
+    // layer is the only reader, and it draws no shape.
+    if let Some(field) = TrailField::build(tracker.history(), view, now) {
         field.apply(&mut nodes, &node_pcs, tuning);
     }
 
@@ -515,13 +519,8 @@ pub fn derive_scene(
         outer_outer,
         outer_gap,
         octave_layout,
-        idle_marker: view.idle_marker,
-        idle_radius: view.idle_radius.clamp(0.0, 0.9),
         grid,
         grid_thickness: view.grid_thickness.clamp(0.0, 8.0),
-        node_idle,
-        trail_mark: view.trail_mark,
-        trail_strength: view.trail_strength.clamp(0.0, 1.0),
         mark_thickness,
         // A mark sheet reaches the ring AND the octave slice that ring points
         // at, so with the ring layer off — no end marked, or no thickness to
@@ -591,7 +590,7 @@ const GRID_LIT_OPACITY: f32 = 0.85;
 /// where a note hangs from, not what the note is.
 pub(crate) fn derive_grid(view: &ViewConfig, nodes: &[NodeInstance]) -> Vec<EdgeInstance> {
     let inset = view.spacing * NODE_RADIUS_FACTOR * view.grid_inset.max(0.0);
-    let base = Vec4::from_array(view.grid_color);
+    let base = crate::skin::grid_line();
     // `nodes` is exactly `view.visible_positions()` in order: a dense
     // row-major grid (threes outer, fives, sevens inner). So a neighbor's
     // index is plain offset arithmetic — no per-frame HashMap build and no
@@ -639,9 +638,10 @@ pub(crate) fn derive_grid(view: &ViewConfig, nodes: &[NodeInstance]) -> Vec<Edge
             // until the music lights them. Links render dashed.
             let on_home = !along_sevens && p.sevens == view.center_sevens;
             let idle = if on_home { base.w } else { 0.0 };
-            // The sevens links are always dashed: that dash is what tells a
-            // depth link from an in-sheet line, not a style choice.
-            let dashed = along_sevens || view.grid_dashed;
+            // A sevens link is dashed and an in-sheet line is not, and that
+            // is structural rather than a style: the dash is the whole of
+            // what tells a depth link from a line drawn within one sheet.
+            let dashed = along_sevens;
 
             // A sevens link lights as part of the chain hanging a sounding
             // off-sheet note from something visible: it runs from that note

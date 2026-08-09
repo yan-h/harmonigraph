@@ -25,11 +25,26 @@ pub(super) use settings::spectrum_settings_pane;
 use crate::{theme, SharedState};
 use crate::panes::nearest_visible_node;
 use axes::{
-    loudness, plot_budget, spectrum_share, text_scales, Axes, PitchScale, TimeAxis,
-    MARKING_PT, PROFILE_PT,
+    frequency_grid, loudness, plot_budget, spectrum_share, text_scales, Axes, PitchScale,
+    TimeAxis, MARKING_PT, PROFILE_PT,
 };
 use gestures::{drag_split, drag_zoom};
 use egui::Sense;
+
+/// How faint a frequency ruling is drawn against [`theme::hairline`], the
+/// pane's quietest line already: a decade boundary first, every other step of
+/// the ladder second.
+///
+/// Two weights rather than one, and the DECADE is what earns the stronger one.
+/// A log axis draws every decade at the same length, so nothing in the spacing
+/// says that the step size changes tenfold at 100 Hz and again at 1 kHz — mark
+/// those three and the picture reads as one ruler repeated, rather than as
+/// lines that inexplicably bunch up. The numbered marks do not need it: they
+/// carry a number, which is a stronger signal than any weight of line.
+///
+/// Both stay quieter than the now-line, which is the one line on this pane that
+/// divides two pictures rather than measuring one.
+const RULING_FADE: (f32, f32) = (0.85, 0.45);
 
 /// Three views of the same music over one shared MIDI-pitch axis: the
 /// audio spectrum as a curve (FFT of the input bus, every partial at its
@@ -59,7 +74,7 @@ pub(crate) fn spectral_pane(
     // Render preview, so two live copies don't clobber one shared texture.
     surface: usize,
 ) {
-    use harmonigraph_core::spectrum::{hz_to_midi, BINS_PER_SEMITONE, SPECTRUM_MIN_MIDI};
+    use harmonigraph_core::spectrum::{BINS_PER_SEMITONE, SPECTRUM_MIN_MIDI};
 
     let cfg = state.spectrum_config;
     // Drag-sensing, so the pitch range can be panned and the Span or the Level
@@ -142,27 +157,55 @@ pub(crate) fn spectral_pane(
         painter.rect_filled(bed, 0.0, egui::Color32::BLACK);
     }
 
-    // Axis markings: the analyzer-standard 1-2-5 frequency series, and only
-    // that. The alternative is a mark at every C with Bitwig octave numbers,
-    // which answers a question the pane answers better elsewhere — every ribbon
-    // carries its note NAME, spelled the lattice's way and placed at the pitch
-    // that is sounding. What an axis is for is the other reading: where in the
-    // spectrum a band sits, which is a frequency. Numbers only, no gridline: a
-    // line run the full depth would outrun the spectrogram's heatmap (which
-    // only grows out from the now-line as history accumulates) and sit bare on
-    // the bed ahead of it, and a line stopped at the data would still cross the
-    // live spectrum curve and the roll's ribbons for no reading a number
-    // doesn't already give.
-    let mut axis_labels: Vec<(f32, String)> = Vec::new();
-    for hz in [20.0f32, 50.0, 100.0, 200.0, 500.0, 1_000.0, 2_000.0, 5_000.0, 10_000.0, 20_000.0] {
-        let midi = hz_to_midi(hz);
-        if !scale.contains(midi) {
-            continue;
+    // Axis markings: one frequency ladder, ruled faintly across the spectrum
+    // and numbered at the analyzer-standard 1-2-5 series of each decade (see
+    // `frequency_grid`). One source for both, so a number always has its own
+    // line under it and the two can't drift apart.
+    //
+    // A mark at every C with Bitwig octave numbers is the alternative reading
+    // and stays rejected: every ribbon already carries its note NAME, spelled
+    // the lattice's way and placed at the pitch that is sounding. What an axis
+    // is for is the other question — where in the spectrum a band sits, which
+    // is a frequency.
+    let grid = frequency_grid(&scale, axes.pitch_len());
+
+    // The rulings, before anything is drawn over them: they are what the
+    // picture sits ON rather than lines across it, which is what makes a grid
+    // affordable here at all — over the spectrum's fill or the roll's ribbons
+    // they would be a mesh laid across two pictures for a reading the numbers
+    // already give. Under them they answer the reading BETWEEN two numbers,
+    // which on an axis logarithmic in frequency is not where the eye puts it.
+    //
+    // They stop at the now-line because that is where the spectrum stops. Run
+    // the full depth they would outrun the spectrogram's heatmap — which only
+    // grows out from the now-line as history accumulates — and sit bare on the
+    // bed ahead of it.
+    //
+    // The guard is that same rule at its limit rather than a crash guard: a
+    // `split` of 0 is a pane with no spectrum on it at all (whole-song mode,
+    // and a roll dragged shut over the curve), so there is nothing to rule.
+    // egui tessellates a zero-length segment to an invisible degenerate quad,
+    // so what this saves is a shape per ruling in every frame of a `--playhead`
+    // export, not a NaN.
+    if split > 0.0 {
+        for ruling in &grid {
+            let fade = if ruling.decade { RULING_FADE.0 } else { RULING_FADE.1 };
+            painter.line_segment(
+                [axes.at(ruling.t, 0.0), axes.at(ruling.t, split)],
+                egui::Stroke::new(1.0, theme::hairline().gamma_multiply(fade)),
+            );
         }
-        let t = scale.t_of(midi);
-        let label = if hz >= 1_000.0 { format!("{}k", hz / 1_000.0) } else { format!("{hz}") };
-        axis_labels.push((t, label));
     }
+
+    let axis_labels: Vec<(f32, String)> = grid
+        .iter()
+        .filter(|ruling| ruling.numbered)
+        .map(|ruling| {
+            let hz = ruling.hz;
+            let label = if hz >= 1_000.0 { format!("{}k", hz / 1_000.0) } else { format!("{hz}") };
+            (ruling.t, label)
+        })
+        .collect();
 
     // Nothing to pump here: the analyzer runs off the samples the shell pushes
     // (see `AudioSpectrum::push_samples`), so the spectrogram's columns arrive

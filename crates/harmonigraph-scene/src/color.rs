@@ -18,7 +18,6 @@
 //! cheaper half of that trade and the whole of it that matters here — see
 //! `tests/hue_space.rs`, which measures both and prices them.
 
-use crate::view::ViewConfig;
 use crate::style::Gradient;
 use crate::PITCH_LUT_N;
 use glam::Vec4;
@@ -339,6 +338,117 @@ fn max_chroma(l_star: f64, h: f64) -> f64 {
     lo
 }
 
+/// The most Oklab chroma EVERY hue can hold at an `L*`, sampled at one point
+/// per unit of it — the FLOOR of [`max_chroma`] around the whole hue circle,
+/// where that function is the ceiling at one hue.
+///
+/// This is the denominator the chroma knob is a fraction of, and it depends on
+/// lightness alone. That is the whole point: a fraction of a per-HUE ceiling
+/// draws one setting at 2.4x the chroma in magenta that it draws in the
+/// teal-blues (3.5x at `L*` 42, 4.8x at 86), because the sRGB solid is far
+/// wider at some hues than others. Denominated in what every hue can hold, one
+/// setting is one colorfulness whatever hue the arc is passing through.
+///
+/// Two straight lines with a kink at `L*` 71, which is the sRGB blue corner
+/// giving way to the blue-violet one — so linear interpolation between entries
+/// is exact to about 1e-5 over the whole middle of the axis, and only the bends
+/// against black and white cost anything.
+///
+/// **Every entry sits at or below the true floor**, and it is worth being exact
+/// about what that buys, because the obvious answer is wrong: it is NOT gamut
+/// safety. [`chroma_of`] ends on this hue's own ceiling and is in gamut for any
+/// floor whatever, over-high entries included — see the proof there. What an
+/// entry above the true floor costs is UNIFORMITY at that lightness: the hues
+/// too narrow to hold it get their share of a number they cannot reach, so the
+/// one thing this table exists to deliver quietly stops holding.
+///
+/// That is still worth a construction rather than a hope, which is why the table
+/// is built by lowering any entry whose CHORD rides above the floor anywhere in
+/// its cell and then dropping the lot by 1e-4 — two orders above the gamut
+/// bisection's own resolution and well under the 1/255 the answer is quantized
+/// to. `the_hue_floor_is_never_above_the_gamut` re-derives the floor from
+/// scratch and holds this to it.
+const HUE_FLOOR: [f32; 101] = [
+    0.000000, 0.017159, 0.021645, 0.024792, 0.027297, 0.029412,
+    0.031262, 0.032915, 0.034418, 0.035856, 0.037294, 0.038733,
+    0.040171, 0.041609, 0.043047, 0.044486, 0.045924, 0.047362,
+    0.048800, 0.050238, 0.051677, 0.053115, 0.054553, 0.055992,
+    0.057430, 0.058868, 0.060306, 0.061745, 0.063183, 0.064621,
+    0.066059, 0.067498, 0.068936, 0.070374, 0.071813, 0.073251,
+    0.074689, 0.076127, 0.077565, 0.079004, 0.080442, 0.081880,
+    0.083318, 0.084757, 0.086195, 0.087633, 0.089072, 0.090510,
+    0.091948, 0.093386, 0.094825, 0.096263, 0.097701, 0.099139,
+    0.100578, 0.102016, 0.103454, 0.104893, 0.106331, 0.107769,
+    0.109207, 0.110645, 0.112084, 0.113522, 0.114960, 0.116398,
+    0.117837, 0.119275, 0.120713, 0.122152, 0.123590, 0.125028,
+    0.120588, 0.115958, 0.111349, 0.106762, 0.102197, 0.097655,
+    0.093135, 0.088640, 0.084168, 0.079719, 0.075294, 0.070894,
+    0.066518, 0.062166, 0.057840, 0.053538, 0.049262, 0.045009,
+    0.040783, 0.036581, 0.032404, 0.028253, 0.024131, 0.019992,
+    0.015867, 0.011796, 0.007776, 0.003807, 0.000000,
+];
+
+/// [`HUE_FLOOR`] read at an arbitrary `L*`, interpolated between its entries.
+///
+/// A table and not a search, where the per-hue ceiling beside it is bisected
+/// live: the floor is a minimum ACROSS the hue circle, so deriving it honestly
+/// would cost a bisection per hue per entry of the ramp — 165us of gamut probes
+/// becomes 12ms, which is a visible hitch on every frame of a knob drag. It is
+/// also a function of one variable where the ceiling is a function of two,
+/// which is exactly what makes baking it affordable.
+fn hue_floor(l_star: f64) -> f64 {
+    let x = (l_star.clamp(0.0, 100.0)) / 100.0 * (HUE_FLOOR.len() - 1) as f64;
+    // The floor of a value already inside the axis, so the index is in range;
+    // the `min` catches only `l_star` landing exactly on 100.
+    let i = (x.floor() as usize).min(HUE_FLOOR.len() - 2);
+    let f = x - i as f64;
+    f64::from(HUE_FLOOR[i]) * (1.0 - f) + f64::from(HUE_FLOOR[i + 1]) * f
+}
+
+/// The absolute Oklab chroma a FRACTION asks for at one point of a curve: the
+/// floor every hue can hold at the bottom of the knob, this hue's own ceiling
+/// at the top, and one curve joining them.
+///
+/// ```text
+/// C = m*f / (1 - f*(1 - m/M))     m = hue_floor(L*), M = max_chroma(L*, h)
+/// ```
+///
+/// The shape is what the two ends are worth. Denominating in `M` alone is what
+/// makes one setting read as three different colorfulnesses around the circle;
+/// denominating in `m` alone fixes that and costs the top of the knob its
+/// reach, since the vivid hues could hold 2.4x what the narrowest one can and
+/// would never be asked for it. This is neither: near 0 it is `m*f`, flat across
+/// hue to within 17-25% at a quarter of the knob and 41-65% at half — the wide
+/// end of each pair is `L*` 86, the narrow end 64 — and at `f` = 1 it is exactly
+/// `M`, the gamut boundary, with nothing given up. The spread grows with `f` by
+/// construction, so a figure quoted here is worth nothing without the fraction
+/// and the lightness it was measured at; `one_chroma_setting_is_one_colorfulness_across_hue`
+/// carries the bounds.
+///
+/// Ottosson's Okhsl reaches for the same compromise against the same problem —
+/// he anchors three chromas per hue and interpolates, to "keep the unevenness
+/// local to colors close to the edge of the gamut". One rational curve says it
+/// with no anchors to choose, which is the version worth having here.
+///
+/// **In gamut for any `m` at all**, which is why the table above buys
+/// uniformity rather than safety: `C/M` is `r*f / (1 - f + r*f)` for
+/// `r = m/M`, and `r*f <= 1 - f + r*f` reduces to `f <= 1`. A fraction past 1
+/// is the one ask that can leave the gamut, and it is meant to — see
+/// `ramp_sample_in_gamut`.
+fn chroma_of(fraction: f64, l_star: f64, h: f64) -> f64 {
+    let ceiling = max_chroma(l_star, h);
+    // Black and white, where the circle has closed to a point and every
+    // fraction of it is the neutral.
+    if ceiling <= 0.0 {
+        return 0.0;
+    }
+    let r = hue_floor(l_star) / ceiling;
+    // The denominator reaches 0 only past `f` = 1, where the ask is already
+    // outside the gamut; the floor keeps that an enormous chroma rather than a
+    // sign flip, so the check that asks "was this drawable?" still says no.
+    hue_floor(l_star) * fraction / (1.0 - fraction * (1.0 - r)).max(1e-6)
+}
+
 /// One color of the ramp: `L*` for lightness, an Oklab hue, and an ABSOLUTE
 /// Oklab chroma (the fraction is resolved by [`ramp_coords`]).
 ///
@@ -362,9 +472,9 @@ fn oklab_srgb(l_star: f64, h: f64, c: f64) -> Vec4 {
 /// the curve can never drift into two different answers for one pitch.
 ///
 /// The chroma pair is the one part of the gradient not simply read off
-/// [`Gradient`]: it arrives as a FRACTION of what the gamut holds here,
-/// so the curve stays inside sRGB at every setting of the other knobs and
-/// `L*` — hence the luminance — is exactly what was asked for. See
+/// [`Gradient`]: it arrives as a FRACTION, which [`chroma_of`] resolves against
+/// the gamut here, so the curve stays inside sRGB at every setting of the other
+/// knobs and `L*` — hence the luminance — is exactly what was asked for. See
 /// [`Gradient::chroma`] for why an absolute chroma cannot be, and
 /// `the_gradient_is_in_gamut_and_flat_when_its_ramp_is` for what holds this to
 /// it.
@@ -390,7 +500,7 @@ fn ramp_color(t: f64, gradient: Gradient) -> Vec4 {
 /// hand in the out-of-range fraction a control cannot produce.
 fn ramp_coords(t: f64, gradient: Gradient) -> (f64, f64, f64) {
     let (l, h) = gradient.lightness_and_hue(t);
-    (l, h, gradient.chroma_at(t) * max_chroma(l, h))
+    (l, h, chroma_of(gradient.chroma_at(t), l, h))
 }
 
 /// Whether the curve's ask at `t` is a color sRGB can actually show, put to the
@@ -560,47 +670,42 @@ pub fn pitch_ramp_lut(gradient: Gradient) -> [Vec4; PITCH_LUT_N] {
 /// of the ring at the size the pane draws it.
 pub const HUE_CIRCLE_N: usize = 96;
 
-/// The whole hue circle at one lightness and chroma — what a gradient's six
-/// knobs would give at every hue, not just the arc it takes. The pair handed in
-/// is the MIDDLE of each ramp, which is the one point of the curve a circle
-/// standing for every hue at once can be drawn at.
+/// The whole hue circle at one lightness and chroma — every hue there is, drawn
+/// at one point of the curve rather than along a gradient's own arc.
 ///
-/// This is what lets the pane draw the spectrum a gradient has NOT claimed
-/// beside the part it has, from the same curve, so the two cannot disagree
-/// about what a hue looks like. `chroma` is a fraction of the gamut's maximum
-/// exactly as [`Gradient::chroma`] is, so the circle is in gamut at every
-/// hue for the same reason the ramp is.
+/// This is what a spectrum bar's track is made of, both the stretch its arc
+/// claims and the remainder beyond the handle: one circle at two strengths, so
+/// the two halves cannot disagree about what a hue looks like. `chroma` is
+/// resolved by [`chroma_of`] exactly as [`Gradient::chroma`] is, so the circle
+/// is in gamut at every hue for the same reason the ramp is — and turns far more
+/// evenly than one drawn straight off [`max_chroma`], though not perfectly:
+/// `TRACK_CHROMA` is high enough that colorfulness still spans 2.26x around the
+/// circle, against 2.90x off the ceiling. Evenness is what the bottom of the
+/// knob buys, and a track has to sit near the top of it to show hues at all.
 ///
-/// Keyed on the two knobs it actually depends on rather than on a whole
-/// gradient: the hue arc is the one being dragged while this is on screen, and
-/// keying on the gradient would rebuild the circle every frame of a drag that
-/// cannot change it.
-///
-/// In [`LUT_SLOTS`] slots for the reason the color table is, and it is the same
-/// two gradients: a dock can hold the Nodes tab and the Analyzer tab open side
-/// by side, each drawing a spectrum bar, and one slot between them would rebuild
-/// both circles every frame rather than neither. Two panes at two lightnesses is
-/// also why the key cannot be reduced further.
-///
-/// What the key does NOT buy is a free Brightness or Chroma drag. Those move
-/// the circle, so every frame of one is a real miss here and another in the
-/// pitch table beside it — the two together are (`HUE_CIRCLE_N` +
-/// [`PITCH_LUT_N`]) x [`GAMUT_BISECTIONS`] gamut probes, each a Newton solve
-/// and an Oklab->sRGB conversion, measuring 412us on the UI thread per frame of
-/// such a drag.
+/// **Memoized in one slot, because every caller asks for the same pair.** The
+/// key is the two knobs the circle depends on rather than a whole gradient, and
+/// a bar's track hands it a FIXED reference pair (`TRACK_LIGHTNESS`, in
+/// `harmonigraph-ui`'s `widgets`) rather than the gradient's own: two bars open
+/// side by side — the Nodes tab and the Analyzer tab — therefore share the one
+/// entry, and no drag of any knob moves this table at all. A second caller
+/// wanting a pair of its own is what would make this want [`LUT_SLOTS`]-style
+/// slots, and it would be worth giving them rather than rebuilding on every
+/// alternation: a rebuild is `HUE_CIRCLE_N` x [`GAMUT_BISECTIONS`] gamut
+/// probes, each a Newton solve and an Oklab->sRGB conversion, and a frame that
+/// misses in this table and the pitch table both measures 412us on the UI
+/// thread.
 ///
 /// That is the standing price of a chroma that follows the gamut instead of a
-/// figure worked out in advance (see [`max_chroma`]), and it is paid only while
-/// one of those two knobs is actually moving. Cutting it means either
+/// figure worked out in advance (see [`max_chroma`]). Cutting it means either
 /// coarsening the bisection, which MOVES THE COLORS every pixel test is pinned
 /// to, or caching `max_chroma` against a quantized lightness — a second table
 /// with its own staleness to keep honest, for a cost nothing but a drag pays.
 pub fn hue_circle(lightness: f32, chroma: f32) -> [Vec4; HUE_CIRCLE_N] {
-    /// The circles and the lightness/chroma pairs they were built for, most
-    /// recently used first — [`with_lut`]'s policy, one table over.
-    type Memo = Vec<((f32, f32), [Vec4; HUE_CIRCLE_N])>;
+    /// The circle last built, and the lightness/chroma pair it was built for.
+    type Memo = Option<((f32, f32), [Vec4; HUE_CIRCLE_N])>;
     thread_local! {
-        static MEMO: std::cell::RefCell<Memo> = const { std::cell::RefCell::new(Vec::new()) };
+        static MEMO: std::cell::RefCell<Memo> = const { std::cell::RefCell::new(None) };
     }
     let key = (
         if lightness.is_finite() { lightness.clamp(0.0, 100.0) } else { 0.0 },
@@ -608,23 +713,15 @@ pub fn hue_circle(lightness: f32, chroma: f32) -> [Vec4; HUE_CIRCLE_N] {
     );
     MEMO.with(|memo| {
         let mut memo = memo.borrow_mut();
-        match memo.iter().position(|(k, _)| *k == key) {
-            Some(0) => {}
-            Some(i) => {
-                let hit = memo.remove(i);
-                memo.insert(0, hit);
-            }
-            None => {
-                let (l, c) = (f64::from(key.0), f64::from(key.1));
-                let circle = std::array::from_fn(|k| {
-                    let h = k as f64 * 360.0 / HUE_CIRCLE_N as f64;
-                    oklab_srgb(l, h, c * max_chroma(l, h))
-                });
-                memo.truncate(LUT_SLOTS - 1);
-                memo.insert(0, (key, circle));
-            }
+        if !matches!(&*memo, Some((held, _)) if *held == key) {
+            let (l, c) = (f64::from(key.0), f64::from(key.1));
+            let circle = std::array::from_fn(|k| {
+                let h = k as f64 * 360.0 / HUE_CIRCLE_N as f64;
+                oklab_srgb(l, h, chroma_of(c, l, h))
+            });
+            *memo = Some((key, circle));
         }
-        memo.first().expect("filled above").1
+        memo.as_ref().expect("filled above").1
     })
 }
 
@@ -713,6 +810,20 @@ pub(crate) fn max_chroma_for_docs(l_star: f64, h: f64) -> f64 {
     max_chroma(l_star, h)
 }
 
+/// [`hue_floor`] and [`chroma_of`], for the tests that hold the denominator to
+/// the gamut and to its own uniformity claim. Nothing outside a test may reach
+/// either direct, for [`max_chroma_for_docs`]'s reason.
+#[cfg(test)]
+pub(crate) fn hue_floor_for_docs(l_star: f64) -> f64 {
+    hue_floor(l_star)
+}
+
+#[cfg(test)]
+pub(crate) fn chroma_of_for_docs(fraction: f64, l_star: f64, h: f64) -> f64 {
+    chroma_of(fraction, l_star, h)
+}
+
+
 /// The luminance an `L*` names, for the tests that hold a DRAWN color to the
 /// curve's own promise rather than to another drawn color. The promise is the
 /// whole of what the two-space design buys, and only this side of it is a
@@ -736,11 +847,14 @@ pub(crate) fn ramp_luminance(l_star: f64, h: f64, c: f64) -> (f64, f64) {
     (target_y, 0.2126 * r + 0.7152 * g + 0.0722 * b)
 }
 
-/// The idle layer's color: the grid color's RGB at full alpha. The grid's
-/// alpha is the LINE opacity and doesn't belong to the markers, which have
-/// their own presence — so it's dropped here rather than dimming them
-/// along with the lines.
-pub(crate) fn idle_color(view: &ViewConfig) -> Vec4 {
-    let c = view.grid_color;
-    Vec4::new(c[0], c[1], c[2], 1.0)
+/// What a node with no voice on it is colored: the
+/// [grid line](crate::skin::grid_line)'s RGB, at full alpha because the
+/// line's own alpha is a LINE opacity and says nothing about a node.
+///
+/// No layer draws a node while it holds this — an idle node paints no pixel
+/// — so it is the neutral such a node falls back to rather than a look. It
+/// is the grid's grey rather than an arbitrary one so that a node arriving
+/// or leaving crosses no seam against the lines around it.
+pub(crate) fn idle_color() -> Vec4 {
+    crate::skin::grid_line().with_w(1.0)
 }

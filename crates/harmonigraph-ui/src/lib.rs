@@ -92,6 +92,15 @@ use egui_dock::{DockArea, DockState};
 /// never comes at all, where the alternative is every settings pane's wheel
 /// dead until the next click.
 ///
+/// What this cannot see is a release lost while the window keeps BOTH the focus
+/// and the pointer — a host popup handed the mouse-up, a modal opened under the
+/// finger — because every signal it reads says the gesture is still going. From
+/// in here the two are indistinguishable, so the repair is the shell's: the
+/// plugin's frame tick asks the OS whether the button is really held and
+/// synthesises the release it is owed (`settle_stuck_buttons` in the vendored
+/// baseview), which is the one authority neither egui nor this has. This stays
+/// as the guard for the shells that offer no such answer.
+///
 /// Not a `Sense::drag` problem in any one pane — a ValueBar strands the wheel
 /// exactly as well as the Analyzer's pan does, which is why this sits once at
 /// the root rather than in whichever pane the drag came from.

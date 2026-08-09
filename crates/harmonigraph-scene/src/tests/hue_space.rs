@@ -55,6 +55,17 @@ fn deciles() -> impl Iterator<Item = f64> {
 const RETIRED_ARC_START: f64 = 260.0;
 const RETIRED_ARC_SPAN: f64 = 190.0;
 
+/// The chroma fraction that arc was DRAWN at, which is part of the historical
+/// object and not a reading of today's gradient.
+///
+/// A CIELAB hue angle is not one hue — its color swings up to 10 degrees toward
+/// purple between a fifth of the gamut and all of it — so which color the
+/// retired arc opened on depends on how much chroma it opened with, and that
+/// was half of what CIELAB held. Reading `Gradient::chroma` here instead would
+/// make the retired arc move whenever the fresh look is retuned, which is
+/// backwards: the conversion is a fact about a curve that no longer exists.
+const RETIRED_ARC_CHROMA: f64 = 0.5;
+
 /// The color the shipped path draws at `t` for this gradient, off the curve
 /// rather than the table, so table resolution is not in the measurement.
 fn sample(t: f64, gradient: Gradient) -> Vec4 {
@@ -426,11 +437,11 @@ fn retired_arc(lab_start: f64, lab_span: f64, g: Gradient) -> (f32, f32) {
     let end_lightness = |t: f64| {
         (f64::from(g.lightness) + (t - 0.5) * f64::from(g.lightness_ramp)).clamp(0.0, 100.0)
     };
-    let start = oklab_hue_of_retired_lab_hue(end_lightness(0.0), lab_start, g.chroma_at(0.0));
+    let start = oklab_hue_of_retired_lab_hue(end_lightness(0.0), lab_start, RETIRED_ARC_CHROMA);
     let end = oklab_hue_of_retired_lab_hue(
         end_lightness(1.0),
         (lab_start + lab_span) % 360.0,
-        g.chroma_at(1.0),
+        RETIRED_ARC_CHROMA,
     );
     // The ENDS are what convert: a hue angle's color moves with lightness and
     // chroma, so each end converts at its own end of BOTH ramps, and what lies
@@ -527,4 +538,158 @@ fn what_going_on_to_cam16_would_buy() {
          and unlike that, it is two good spaces disagreeing rather than a defect)",
         worst * 100.0,
     );
+}
+
+/// The floor of the gamut across the whole hue circle at one `L*`, re-derived
+/// rather than read out of `HUE_FLOOR` — the point being to check the table
+/// against the search it was baked from.
+///
+/// A coarse sweep and then a refinement around the best of it, because the
+/// minimum is smooth in hue but the sweep that finds it is not free: a flat
+/// 0.05 degree sweep is 7200 gamut bisections per lightness, and this is asked
+/// at two hundred of them.
+fn measured_hue_floor(l_star: f64) -> f64 {
+    let at = |h: f64| crate::color::max_chroma_for_docs(l_star, h);
+    let coarse = (0..360)
+        .map(f64::from)
+        .min_by(|&a, &b| at(a).partial_cmp(&at(b)).expect("a bisection returns a real chroma"))
+        .expect("360 hues");
+    (-40..=40)
+        .map(|k| at((coarse + f64::from(k) * 0.05).rem_euclid(360.0)))
+        .fold(f64::INFINITY, f64::min)
+}
+
+/// `HUE_FLOOR` never rides above the gamut it stands for.
+///
+/// The one property the table MUST have: an entry above the true floor names a
+/// chroma some hue cannot hold, and the whole design's promise is that no
+/// setting of the six knobs asks for a color sRGB has to clip. Interpolation
+/// between entries is what makes this worth SWEEPING rather than checking at
+/// the entries alone — a chord can ride above a curve whose ends it touches.
+#[test]
+fn the_hue_floor_is_never_above_the_gamut() {
+    let (mut worst, mut worst_at) = (f64::NEG_INFINITY, 0.0);
+    let (mut slackest, mut slackest_at) = (0.0f64, 0.0);
+    for k in 0..=200 {
+        let l = f64::from(k) * 0.5;
+        let (table, measured) = (crate::color::hue_floor_for_docs(l), measured_hue_floor(l));
+        if table - measured > worst {
+            worst = table - measured;
+            worst_at = l;
+        }
+        // The other direction, which the <= above cannot see. An entry far
+        // BELOW the floor is in gamut and silently pale, and the only other
+        // thing pinning magnitude walks the default arc's L* 42..86 — while all
+        // four heatmap presets open at L* 0 and run to 88..92, so they live
+        // precisely on the entries nothing else holds down.
+        if measured > 0.0 && 1.0 - table / measured > slackest {
+            slackest = 1.0 - table / measured;
+            slackest_at = l;
+        }
+    }
+    assert!(
+        worst <= 0.0,
+        "HUE_FLOOR rides {worst:.2e} above the gamut at L*={worst_at:.1}; \
+         every entry must sit at or below what every hue can hold",
+    );
+    // Two percent, which the 1e-4 safety drop reaches only where the floor
+    // itself has closed to nearly nothing against black and white.
+    assert!(
+        slackest < 0.02 || crate::color::hue_floor_for_docs(slackest_at) < 0.01,
+        "HUE_FLOOR gives up {:.1}% of the gamut at L*={slackest_at:.1}, where the \
+         floor is {:.4}; the table has drifted low and the picture is pale for it",
+        slackest * 100.0,
+        crate::color::hue_floor_for_docs(slackest_at),
+    );
+}
+
+/// One Chroma setting is one colorfulness, whatever hue the arc is passing
+/// through — the defect this denominator exists to fix.
+///
+/// Stated as a bound on the SPREAD around the hue circle rather than on any one
+/// hue, and checked against what a fraction of the per-hue ceiling would have
+/// drawn at the same setting, so the test says what was bought rather than
+/// merely that a number is small. The bound loosens with the fraction by
+/// construction: `chroma_of` opens flat and reaches each hue's own ceiling at
+/// 1.0, where the spread is the gamut's own and nothing can be claimed.
+#[test]
+fn one_chroma_setting_is_one_colorfulness_across_hue() {
+    let spread = |f: &dyn Fn(f64) -> f64| {
+        let cs: Vec<f64> = (0..72).map(|d| f(f64::from(d) * 5.0)).collect();
+        cs.iter().cloned().fold(0.0f64, f64::max) / cs.iter().cloned().fold(f64::INFINITY, f64::min)
+    };
+    for l in [42.0f64, 64.0, 86.0] {
+        // The last row is the fraction the type default OPENS on, which is
+        // above both of the others and is where the headline claim is actually
+        // made. Without it the suite would not notice the default drifting up
+        // to a setting where the fix buys almost nothing.
+        for (fraction, bound) in [
+            (0.25f64, 1.30f64),
+            (0.5, 1.70),
+            (f64::from(Gradient::default().chroma), 2.15),
+        ] {
+            let got = spread(&|h| crate::color::chroma_of_for_docs(fraction, l, h));
+            let ceiling = spread(&|h| fraction * crate::color::max_chroma_for_docs(l, h));
+            assert!(
+                got <= bound,
+                "at L*={l} and Chroma {fraction}, colorfulness spans {got:.2}x around the \
+                 hue circle, over the {bound:.2}x this denominator promises",
+            );
+            assert!(
+                got < ceiling,
+                "at L*={l} and Chroma {fraction}, this denominator spans {got:.2}x where a \
+                 fraction of the per-hue ceiling spans {ceiling:.2}x — the fix has stopped \
+                 buying anything",
+            );
+        }
+    }
+}
+
+/// The fresh look opens about as colored as a fraction of the per-hue ceiling
+/// opened it, and spends that color evenly instead of banking it in the
+/// magentas.
+///
+/// What `default_chroma`'s 0.669 IS: the figure holding the default arc's MEAN
+/// absolute chroma where the retired denominator put it at 0.5. Pinned because
+/// the alternative reading of this change — that it simply washed the picture
+/// out — is one a number can settle, and because the figure moves whenever the
+/// arc does.
+///
+/// **Both gradients, because retuning one does not reach the other.** The type's
+/// default and `ViewConfig`'s composed one are independent numbers by design
+/// (see `view.rs`, which says so), and the one a fresh install actually DRAWS is
+/// the composed one — so a retune that reached only `default_chroma` would leave
+/// the lattice 37% duller with every test still green. The retired fraction is
+/// each gradient's OWN, since each was dialled against the per-hue ceiling.
+#[test]
+fn the_default_opens_at_the_colorfulness_it_used_to() {
+    for (name, g, retired_fraction) in [
+        ("Gradient::default", Gradient::default().sanitized(), 0.5),
+        (
+            "ViewConfig's lattice",
+            crate::ViewConfig::default().pitch_gradient.sanitized(),
+            0.601_670_8,
+        ),
+    ] {
+        let mean = |f: &dyn Fn(f64, f64, f64) -> f64| {
+            (0..=200)
+                .map(|k| {
+                    let t = f64::from(k) / 200.0;
+                    let (l, h) = g.lightness_and_hue(t);
+                    f(l, h, g.chroma_at(t))
+                })
+                .sum::<f64>()
+                / 201.0
+        };
+        let now = mean(&|l, h, fraction| crate::color::chroma_of_for_docs(fraction, l, h));
+        // The ramp is flat on both of these, so the retired fraction is one
+        // number rather than a curve; `chroma_at` is read above anyway so a
+        // ramped gradient added here would still be measured honestly.
+        let retired = mean(&|l, h, _| retired_fraction * crate::color::max_chroma_for_docs(l, h));
+        assert!(
+            (now - retired).abs() / retired < 0.02,
+            "{name}'s mean chroma is {now:.4} where the retired denominator at \
+             {retired_fraction} put it at {retired:.4}; its chroma no longer holds it there",
+        );
+    }
 }

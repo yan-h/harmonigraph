@@ -38,6 +38,36 @@ pub(crate) struct BaseviewView {
     /// (see `mouse_exited`), owed to the handler once the button comes up.
     exit_withheld: Cell<bool>,
 
+    /// Buttons this view has reported pressed and not yet reported released,
+    /// in `NSEvent::pressedMouseButtons`' bit order (see
+    /// `buttons_owed_release`). One bit is one release owed, and whoever pays
+    /// it — AppKit's `mouseUp:`, or `settle_stuck_buttons` — the other does not
+    /// pay it again.
+    ///
+    /// A bit, which is not the same as a press: every button past the first two
+    /// shares bit 2, so two of them held at once are one bit between them. The
+    /// second release is swallowed as a duplicate, and a button still held
+    /// after the first has been released is no longer recorded to be repaired.
+    /// Neither reaches the consumer, because a button is a bool at that end too
+    /// (egui's `down[Middle]`): the first release already puts it up, so nothing
+    /// is left held and no scroll area stays shut. Counting presses per bit
+    /// would buy a truer number that nothing reads.
+    buttons_reported_down: Cell<u8>,
+
+    /// Of those, the ones the OS already showed up at the previous SETTLE — a
+    /// release is synthesised only for a button stuck across two of them. A
+    /// `mouseUp:` sitting in the queue while the hardware is already up is an
+    /// ordinary fast click, and it deserves the gap it takes to arrive.
+    ///
+    /// A settle rather than a frame interval, because a settle is what this
+    /// counts: `trigger_frame` runs it, and the frame timer is not
+    /// `trigger_frame`'s only caller — `handle_occlusion_notification` paints
+    /// from inside a notification. Two settles can land microseconds apart
+    /// there, leaving a queued release almost no gap at all. What that costs is
+    /// a release sent early, carrying `last_mods()` rather than the event's
+    /// modifiers, on a window coming back from occlusion.
+    buttons_seen_up: Cell<u8>,
+
     frame_timer: Cell<Option<TimerHandle>>,
     notification_center_observer: Cell<Option<NotificationCenterObserver>>,
     occlusion_observer: Cell<Option<NotificationCenterObserver>>,
@@ -71,6 +101,8 @@ impl BaseviewView {
 
             deferred_events: RefCell::default(),
             exit_withheld: false.into(),
+            buttons_reported_down: 0.into(),
+            buttons_seen_up: 0.into(),
             keyboard_state: KeyboardState::new(),
             frame_timer: None.into(),
             window_handler: None.into(),
@@ -240,7 +272,13 @@ impl BaseviewView {
     /// still borrows infallibly, and says so.
     fn trigger_frame(this: ViewRef<Self>) {
         // Before the frame, so a pointer that has quietly stopped being ours is
-        // gone by the time anything is drawn from where it was.
+        // gone by the time anything is drawn from where it was. The button
+        // first only to order the two within the settle: a release belongs
+        // ahead of the exit it precedes, the same way `report_release` sends
+        // one before paying a withheld exit. Neither reads the other's work —
+        // `settle_pointer_exit` asks the OS, not `buttons_reported_down` — so
+        // the other order would cost no time, just deliver `CursorLeft` first.
+        Self::settle_stuck_buttons(this);
         Self::settle_pointer_exit(this);
 
         let Ok(mut handler) = this.window_handler.try_borrow_mut() else { return };
@@ -265,6 +303,106 @@ impl BaseviewView {
         }
         this.exit_withheld.set(false);
         Self::trigger_deferrable_event(this, Event::Mouse(MouseEvent::CursorLeft));
+    }
+
+    /// Report the release of a button the OS says is no longer held.
+    ///
+    /// A press this view reported is owed a release, and AppKit does not always
+    /// pay: a `mouseUp:` handed to a host popup, a modal that opens under the
+    /// finger, a gesture the host takes out of our hands — the press is ours,
+    /// the release is delivered somewhere else, and nothing ever tells the view.
+    /// The handler is then left believing a button is down forever.
+    ///
+    /// What that costs is out of all proportion to how obscure it sounds,
+    /// because a consumer's drag state is global: egui gates EVERY `ScrollArea`
+    /// on `dragged_id().is_none()`, so one unreleased press silently stops the
+    /// wheel in every scrollable pane at once, with the window focused and the
+    /// pointer sitting right over the pane that will not move.
+    ///
+    /// The two guards already here do not reach it. `settle_pointer_exit` waits
+    /// on an exit that never happens if the pointer never leaves, and a consumer
+    /// that ends its drags on lost focus never sees focus go. Both are about the
+    /// POINTER; this is about the BUTTON, and a stuck button is invisible in
+    /// terms of either.
+    ///
+    /// So ask the OS, which is the same authority `settle_pointer_exit` already
+    /// trusts over any count of the presses this view has seen. Ordinary
+    /// gestures are untouched: through a real drag, however far it wanders, the
+    /// button reads down and nothing is synthesised.
+    fn settle_stuck_buttons(this: ViewRef<Self>) {
+        // Nothing owed and nothing pending is nothing to settle, which is the
+        // state all but a handful of settles are in. Read locally first, the
+        // way `settle_pointer_exit` reads `exit_withheld` before it asks AppKit
+        // anything — a matched shape rather than a measured cost. Both masks,
+        // because a bit left in `buttons_seen_up` by a press that has since
+        // been released properly still has to be cleared below.
+        if (this.buttons_reported_down.get() | this.buttons_seen_up.get()) == 0 {
+            return;
+        }
+
+        let owed =
+            buttons_owed_release(this.buttons_reported_down.get(), NSEvent::pressedMouseButtons());
+        // Stuck at this settle AND the one before it. A single one is not
+        // evidence: the hardware goes up before the `mouseUp:` queued behind it
+        // is dispatched, so a fast enough click reads exactly like a stuck
+        // button once.
+        let confirmed = owed & this.buttons_seen_up.replace(owed);
+        if confirmed == 0 {
+            return;
+        }
+
+        this.buttons_reported_down.set(this.buttons_reported_down.get() & !confirmed);
+        let modifiers = make_modifiers(this.keyboard_state.last_mods());
+        // Which bit stands for which button is `button_bit`'s to answer, asked
+        // rather than restated. A table written out here would be an inverse
+        // with nothing holding it to the original, and one entry out of step
+        // reports the wrong button going up: a stuck RIGHT button released as
+        // Middle leaves the right one held, and every scroll area shut — the
+        // bug this whole path exists to repair, silently back.
+        for button in [MouseButton::Left, MouseButton::Right, MouseButton::Middle] {
+            if confirmed & button_bit(button) != 0 {
+                Self::trigger_deferrable_event(
+                    this,
+                    Event::Mouse(ButtonReleased { button, modifiers }),
+                );
+            }
+        }
+    }
+
+    /// Report a press, and record the release it now owes the handler.
+    fn report_press(this: ViewRef<Self>, button: MouseButton, event: &NSEvent) {
+        this.buttons_reported_down.set(this.buttons_reported_down.get() | button_bit(button));
+        Self::trigger_event(
+            this,
+            Event::Mouse(ButtonPressed {
+                button,
+                modifiers: make_modifiers(event.modifierFlags()),
+            }),
+        );
+    }
+
+    /// Report a release, unless the debt is already paid.
+    ///
+    /// A `mouseUp:` for a bit that is no longer set is dropped rather than
+    /// passed on — the release `settle_stuck_buttons` gave up on and sent
+    /// itself, or the second of two buttons sharing bit 2. Sending it twice
+    /// would end the NEXT gesture as well: a second release against a fresh
+    /// press is how a click lands on whatever the pointer moved to since.
+    fn report_release(this: ViewRef<Self>, button: MouseButton, event: &NSEvent) {
+        let owed = this.buttons_reported_down.get();
+        if owed & button_bit(button) != 0 {
+            this.buttons_reported_down.set(owed & !button_bit(button));
+            Self::trigger_event(
+                this,
+                Event::Mouse(ButtonReleased {
+                    button,
+                    modifiers: make_modifiers(event.modifierFlags()),
+                }),
+            );
+        }
+        // After the release, never before it: the gesture ends where the
+        // pointer still is, and only then is the pointer gone.
+        Self::settle_pointer_exit(this);
     }
 
     fn send_deferred_events(this: ViewRef<Self>, window_handler: &mut dyn WindowHandler) {
@@ -649,68 +787,27 @@ impl ViewImpl for BaseviewView {
     }
 
     fn mouse_down(this: ViewRef<Self>, event: &NSEvent) {
-        Self::trigger_event(
-            this,
-            Event::Mouse(ButtonPressed {
-                button: MouseButton::Left,
-                modifiers: make_modifiers(event.modifierFlags()),
-            }),
-        );
+        Self::report_press(this, MouseButton::Left, event);
     }
 
     fn mouse_up(this: ViewRef<Self>, event: &NSEvent) {
-        Self::trigger_event(
-            this,
-            Event::Mouse(ButtonReleased {
-                button: MouseButton::Left,
-                modifiers: make_modifiers(event.modifierFlags()),
-            }),
-        );
-        // After the release, never before it: the gesture ends where the
-        // pointer still is, and only then is the pointer gone.
-        Self::settle_pointer_exit(this);
+        Self::report_release(this, MouseButton::Left, event);
     }
 
     fn right_mouse_down(this: ViewRef<Self>, event: &NSEvent) {
-        Self::trigger_event(
-            this,
-            Event::Mouse(ButtonPressed {
-                button: MouseButton::Right,
-                modifiers: make_modifiers(event.modifierFlags()),
-            }),
-        );
+        Self::report_press(this, MouseButton::Right, event);
     }
 
     fn right_mouse_up(this: ViewRef<Self>, event: &NSEvent) {
-        Self::trigger_event(
-            this,
-            Event::Mouse(ButtonReleased {
-                button: MouseButton::Right,
-                modifiers: make_modifiers(event.modifierFlags()),
-            }),
-        );
-        Self::settle_pointer_exit(this);
+        Self::report_release(this, MouseButton::Right, event);
     }
 
     fn other_mouse_down(this: ViewRef<Self>, event: &NSEvent) {
-        Self::trigger_event(
-            this,
-            Event::Mouse(ButtonPressed {
-                button: MouseButton::Middle,
-                modifiers: make_modifiers(event.modifierFlags()),
-            }),
-        );
+        Self::report_press(this, MouseButton::Middle, event);
     }
 
     fn other_mouse_up(this: ViewRef<Self>, event: &NSEvent) {
-        Self::trigger_event(
-            this,
-            Event::Mouse(ButtonReleased {
-                button: MouseButton::Middle,
-                modifiers: make_modifiers(event.modifierFlags()),
-            }),
-        );
-        Self::settle_pointer_exit(this);
+        Self::report_release(this, MouseButton::Middle, event);
     }
 
     fn mouse_entered(this: ViewRef<Self>) {
@@ -787,6 +884,108 @@ impl ViewImpl for BaseviewView {
                     let () = msg_send![super(this.view, superclass), flagsChanged:event];
                 }
             }
+        }
+    }
+}
+
+/// The bit standing for a button this view reports, in
+/// `NSEvent::pressedMouseButtons`' order.
+///
+/// Every button but the first two shares one bit, because that is how they
+/// reach the handler: `otherMouseDown:` reports the third, fourth and fifth
+/// alike as `MouseButton::Middle`, so this side of the comparison cannot tell
+/// them apart either (see `buttons_owed_release`).
+fn button_bit(button: MouseButton) -> u8 {
+    match button {
+        MouseButton::Left => 0b001,
+        MouseButton::Right => 0b010,
+        _ => 0b100,
+    }
+}
+
+/// Which of the buttons a view has reported pressed are no longer held,
+/// according to `NSEvent::pressedMouseButtons`.
+///
+/// Both sides are bitmasks in that method's order — bit 0 the left button, bit
+/// 1 the right — and they part company above that. AppKit gives every remaining
+/// button a bit of its own (bit 2 the third button, bit 3 the fourth, on up a
+/// mouse with side buttons), while `button_bit` has only the one to give them.
+/// So the tail is folded to match: ANY button above the first two being down
+/// counts as that bit held. Comparing the masks unfolded would read a thumb
+/// button held on bit 3 as bit 2 standing empty, and end a gesture the hand is
+/// still making.
+fn buttons_owed_release(reported_down: u8, os_pressed: usize) -> u8 {
+    let os_down = (os_pressed as u8 & 0b11) | u8::from(os_pressed & !0b11 != 0) << 2;
+    reported_down & !os_down
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{button_bit, buttons_owed_release};
+    use crate::MouseButton;
+
+    /// A button held is a button owed nothing, however long the drag runs.
+    #[test]
+    fn a_button_the_os_still_holds_is_never_released() {
+        for (button, os) in
+            [(MouseButton::Left, 0b001), (MouseButton::Right, 0b010), (MouseButton::Middle, 0b100)]
+        {
+            let bit = button_bit(button);
+            assert_eq!(
+                buttons_owed_release(bit, os),
+                0,
+                "{button:?} was let go of while the OS still had it down",
+            );
+        }
+    }
+
+    /// The case the whole repair exists for: the press was reported, the OS
+    /// says nothing is down, and no `mouseUp:` ever came.
+    #[test]
+    fn a_press_the_os_has_forgotten_is_owed_its_release() {
+        for button in [MouseButton::Left, MouseButton::Right, MouseButton::Middle] {
+            let bit = button_bit(button);
+            assert_eq!(
+                buttons_owed_release(bit, 0),
+                bit,
+                "{button:?} stayed down forever after its release went missing",
+            );
+        }
+    }
+
+    /// One button going up does not take another down with it.
+    #[test]
+    fn only_the_button_the_os_let_go_of_is_released() {
+        let (left, right) = (button_bit(MouseButton::Left), button_bit(MouseButton::Right));
+        assert_eq!(buttons_owed_release(left | right, 0b010), left);
+        assert_eq!(buttons_owed_release(left | right, 0b001), right);
+    }
+
+    /// A side button holds the one bit every button past the first two shares,
+    /// so a mouse with more than three of them keeps its drag.
+    ///
+    /// `otherMouseDown:` reports the fourth button as `Middle` — bit 2 here —
+    /// while the OS has it on bit 3. Comparing the masks as they come would
+    /// find bit 2 empty and let go mid-gesture.
+    #[test]
+    fn a_button_past_the_third_holds_the_middle_bit() {
+        let middle = button_bit(MouseButton::Middle);
+        for os in [0b100, 0b1000, 0b10000, 0b1 << 20] {
+            assert_eq!(
+                buttons_owed_release(middle, os),
+                0,
+                "a button held on the OS mask {os:b} read as let go",
+            );
+        }
+        assert_eq!(buttons_owed_release(middle, 0b011), middle, "no other button was down");
+    }
+
+    /// Nothing pressed here is nothing to settle, whatever the OS reports —
+    /// a drag begun in the host's own window is not this view's to end.
+    #[test]
+    fn a_press_this_view_never_saw_is_not_its_to_release() {
+        for os in [0, 0b001, 0b010, 0b100, 0b111] {
+            assert_eq!(buttons_owed_release(0, os), 0);
         }
     }
 }

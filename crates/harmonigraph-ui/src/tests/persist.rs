@@ -19,8 +19,6 @@ fn persist_round_trips_camera_and_view() {
     state.view.core_solidity = 0.4;
     state.view.outer_inner = 0.1;
     state.view.outer_outer = 0.7;
-    state.view.idle_marker = harmonigraph_scene::IdleMarker::Dot;
-    state.view.idle_radius = 0.31;
     // Melody alone: both marks on is the default, and this test's whole
     // point is that the fields prove they round-trip rather than
     // matching the defaults by luck.
@@ -39,10 +37,11 @@ fn persist_round_trips_camera_and_view() {
     state.view.octave_extras = 2;
     state.view.octave_extra_size = 0.4;
     state.view.octave_extra_blend = 0.5;
-    state.view.grid_color = [0.9, 0.1, 0.4, 0.25];
     state.view.grid_thickness = 2.5;
     state.view.grid_inset = 0.0;
-    state.view.grid_dashed = true;
+    // The trail's on/off, and on by default -- so off is the value a project
+    // has to keep, and the one a fresh view would overwrite if it did not.
+    state.view.trail_labels = false;
     state.view.meantone = true;
     // Off is the non-default here, and the one a project has to keep: the
     // detect would otherwise re-engage the mode the user switched it off for.
@@ -68,18 +67,15 @@ fn persist_round_trips_camera_and_view() {
     assert_eq!(restored.view.core_solidity, 0.4);
     assert_eq!(restored.view.outer_inner, 0.1);
     assert_eq!(restored.view.outer_outer, 0.7);
-    assert_eq!(restored.view.idle_marker, harmonigraph_scene::IdleMarker::Dot);
-    assert_eq!(restored.view.idle_radius, 0.31);
     assert!(restored.view.mark_melody);
     assert!(!restored.view.mark_bass, "bass off round-trips");
     assert_eq!((restored.view.octave_count, restored.view.octave_center), (7, 64.5));
     assert_eq!(restored.view.octave_extras, 2, "the fringe round-trips");
     assert_eq!(restored.view.octave_extra_size, 0.4);
     assert_eq!(restored.view.octave_extra_blend, 0.5);
-    assert_eq!(restored.view.grid_color, [0.9, 0.1, 0.4, 0.25]);
     assert_eq!(restored.view.grid_thickness, 2.5);
     assert_eq!(restored.view.grid_inset, 0.0, "0 (lines to the center) round-trips");
-    assert!(restored.view.grid_dashed);
+    assert!(!restored.view.trail_labels, "a switched-off trail round-trips");
     assert!(restored.view.meantone);
     assert!(!restored.view.meantone_auto, "a switched-off auto-detect round-trips");
     assert!(!restored.view.marvel, "each comma keeps its own mode");
@@ -208,6 +204,177 @@ fn a_blob_naming_an_undrawable_level_range_opens_on_a_drawable_one() {
         // would be the silent break the loud one is preferred to.
         let level = crate::panes::spectral::axes::loudness_db(&cfg, cfg.ceiling_db, 0.0);
         assert!(level.is_finite(), "{hint}: the repaired pair still maps to {level}");
+        assert_eq!(restored.camera.yaw, 1.23, "{hint}: the rest of the blob still restores");
+    }
+}
+
+/// A double-click on a soft edge's bar puts it back to the FRESH pair, not to
+/// the ends of its axis.
+///
+/// A range bar's own reset means "show the whole axis", which is the useful
+/// thing to land on for a window onto something — the pitch range, the level.
+/// It is the worst thing to land on here: the axis ends are the widest reach
+/// there is at the softest it goes, so the gesture would replace a dialled
+/// edge with the most extreme one instead of a neutral one. `edge_bar` takes
+/// the fresh pair for exactly this.
+///
+/// It is also the gesture most likely to be aimed here by habit: both controls
+/// take a six-digit number that gets captured out of a project rather than
+/// dragged, and on a `ValueBar` a double-click opens the box to type one.
+///
+/// Driven through the real widget rather than asserted on the mapping, since
+/// what is being pinned is which of two resets the gesture reaches.
+#[test]
+fn a_double_click_on_a_soft_edge_restores_the_fresh_pair() {
+    let ctx = egui::Context::default();
+    crate::theme::apply_theme(&ctx);
+    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(300.0, 100.0));
+    let fresh = harmonigraph_scene::ViewConfig::default();
+    // Dialled somewhere else first, so landing on the fresh pair is a move.
+    let (mut reach, mut fade) = (0.42f32, 0.1f32);
+    let mut time = 0.0;
+    let mut click = |reach: &mut f32, fade: &mut f32, events: Vec<egui::Event>| {
+        time += 1.0 / 60.0;
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(screen),
+                time: Some(time),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                crate::panes::edge_bar(
+                    ui,
+                    (reach, fade),
+                    0.5,
+                    "Gutter",
+                    (fresh.sevens_gutter, fresh.sevens_gutter_soft),
+                    |v| format!("{v:.2}"),
+                );
+            },
+        );
+    };
+    let at = egui::pos2(150.0, 10.0);
+    let press = |pressed: bool| egui::Event::PointerButton {
+        pos: at,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: Default::default(),
+    };
+    click(&mut reach, &mut fade, vec![]);
+    for _ in 0..2 {
+        let events = vec![egui::Event::PointerMoved(at), press(true), press(false)];
+        click(&mut reach, &mut fade, events);
+    }
+    assert_eq!(
+        (reach, fade),
+        (fresh.sevens_gutter, fresh.sevens_gutter_soft),
+        "a double-click landed on ({reach}, {fade}) rather than the fresh pair",
+    );
+}
+
+/// Both soft edges — the lattice's knockout gutter and the roll's note
+/// outline — open on a pair their own bar can reach: a fade no wider than the
+/// reach it is measured back from.
+///
+/// The picture does not care. Both shaders floor the fade at the edge it
+/// surrounds, so a fade dialled past its reach DRAWS as a fade over the whole
+/// of it — which is exactly why the repair is safe to make, and why it has to
+/// be made here rather than left to the draw path: the two are one bar reading
+/// out two points on one axis, and an unclamped fade puts its low end off the
+/// bottom of that axis, where the bar would report a number the blob does not
+/// hold.
+#[test]
+fn a_blob_naming_a_fade_wider_than_its_edge_opens_on_one_that_fits() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    state.camera.yaw = 1.23;
+    let saved = state.save_persist();
+    let edited = saved
+        .replace(
+            &format!("sevens_gutter_soft:{:?},", state.view.sevens_gutter_soft),
+            "sevens_gutter_soft:0.5,",
+        )
+        .replace(
+            &format!("sevens_gutter:{:?},", state.view.sevens_gutter),
+            "sevens_gutter:0.1,",
+        )
+        .replace(
+            &format!("roll_outline_fade:{:?},", state.spectrum_config.roll_outline_fade),
+            "roll_outline_fade:9.0,",
+        )
+        .replace(
+            &format!("roll_outline:{:?},", state.spectrum_config.roll_outline),
+            "roll_outline:1.0,",
+        );
+    assert_ne!(edited, saved, "the edge keys are not in the blob to edit");
+
+    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+    restored.load_persist(&edited);
+    assert_eq!(
+        (restored.view.sevens_gutter, restored.view.sevens_gutter_soft),
+        (0.1, 0.1),
+        "the gutter's fade opened wider than the gutter",
+    );
+    assert_eq!(
+        (restored.spectrum_config.roll_outline, restored.spectrum_config.roll_outline_fade),
+        (1.0, 1.0),
+        "the outline's fade opened wider than the outline",
+    );
+    assert_eq!(restored.camera.yaw, 1.23, "the rest of the blob still restores");
+}
+
+/// And a non-finite REACH opens on a drawable pair rather than taking the
+/// editor down with it.
+///
+/// This is the one that has to be repaired rather than clamped, and the clamp
+/// beside it is why: the reach is the fade's own upper bound, so a NaN reach
+/// reaches `f32::clamp` as its `max`, and `clamp` asserts `min <= max` — which
+/// NaN fails, panicking inside the host as the project opens. A NaN fade is
+/// the milder half of the same input and survives its own clamp untouched,
+/// leaving the bar to place a handle at a position that is not a number.
+///
+/// Both bars can produce neither shape, so a hand-edited or corrupted blob is
+/// the only way in — the same standing this pair's neighbours have, and the
+/// reason `a_blob_naming_an_undrawable_level_range_opens_on_a_drawable_one`
+/// exists a few tests up.
+#[test]
+fn a_blob_naming_a_nonsense_soft_edge_opens_on_a_drawable_one() {
+    let cases: [(&str, &str, &str); 4] = [
+        ("sevens_gutter", "NaN", "a NaN gutter"),
+        ("sevens_gutter_soft", "NaN", "a NaN gutter fade"),
+        ("roll_outline", "inf", "an infinite outline"),
+        ("roll_outline_fade", "NaN", "a NaN outline fade"),
+    ];
+    for (key, value, hint) in cases {
+        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        state.camera.yaw = 1.23;
+        let saved = state.save_persist();
+        let was = match key {
+            "sevens_gutter" => state.view.sevens_gutter,
+            "sevens_gutter_soft" => state.view.sevens_gutter_soft,
+            "roll_outline" => state.spectrum_config.roll_outline,
+            _ => state.spectrum_config.roll_outline_fade,
+        };
+        let edited = saved.replace(&format!("{key}:{was:?},"), &format!("{key}:{value},"));
+        assert_ne!(edited, saved, "{hint}: `{key}` is not in the blob to edit");
+
+        let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+        restored.load_persist(&edited);
+        let view = &restored.view;
+        let cfg = &restored.spectrum_config;
+        for (name, v) in [
+            ("sevens_gutter", view.sevens_gutter),
+            ("sevens_gutter_soft", view.sevens_gutter_soft),
+            ("roll_outline", cfg.roll_outline),
+            ("roll_outline_fade", cfg.roll_outline_fade),
+        ] {
+            assert!(v.is_finite(), "{hint}: `{name}` opened at {v}");
+        }
+        assert!(
+            view.sevens_gutter_soft <= view.sevens_gutter
+                && cfg.roll_outline_fade <= cfg.roll_outline,
+            "{hint}: opened on a fade wider than its reach",
+        );
         assert_eq!(restored.camera.yaw, 1.23, "{hint}: the rest of the blob still restores");
     }
 }
@@ -1097,7 +1264,7 @@ fn a_view_missing_any_one_key_reloads_at_the_fresh_value() {
 }
 
 /// Split a serialized struct into its top-level `key:value` pairs, as
-/// `(key, whole pair)`. Depth-aware, so `grid_color:(r,g,b,a)` stays one pair
+/// `(key, whole pair)`. Depth-aware, so `pitch_gradient:(...)` stays one pair
 /// rather than splitting on the commas inside it — which is equally what lets
 /// a whole persist section (`render:(...)`, `dock:(...)`) be dropped or
 /// counted as one.

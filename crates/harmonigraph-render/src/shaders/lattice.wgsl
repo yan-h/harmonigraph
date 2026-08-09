@@ -38,14 +38,10 @@ struct Uniforms {
     // exactly rather than closely (length mirrors
     // harmonigraph_scene::PITCH_LUT_N).
     pitch_lut: array<vec4<f32>, 64>,
-    // Idle node color (the view's grid color): the home-sheet placeholder ring is
-    // drawn in this constant grey, so a releasing note's ring stays grey
-    // (not the note hue) and never snaps color when the voice is pruned.
-    node_idle: vec4<f32>,
     // x: core solidity (0 = soft glow, 1 = solid orb) — the single axis the
-    // core layer runs on. y: unused — it carried the octave glyphs'
-    // solidity, which is fixed crisp below. z: idle marker radius.
-    // w: idle marker style (0 none, 1 dot, 2 circle).
+    // core layer runs on. y/z/w: unused — y carried the octave glyphs'
+    // solidity, which is fixed crisp below, and z/w the idle marker's radius
+    // and style, from when an unlit node drew a placeholder of its own.
     misc4: vec4<f32>,
     // x: grid line thickness, a multiple of the built-in grid width.
     // y: unused.
@@ -53,15 +49,12 @@ struct Uniforms {
     // between neighbouring sectors AND between the band and the mark
     // rings. w: melody/bass ring thickness, same units; 0 = no rings.
     misc5: vec4<f32>,
-    // x: trail mark style — how a node the music has already visited is
-    //    marked (0 off, 1 lift, 2 ring, 3 tint; see TrailMark). y: trail
-    //    strength 0..1. z: the sevens knockout's fade width, read below by
-    //    the vertex stage. w: the melody/bass mark rings' shimmer pattern
+    // x/y: unused — they carried the trail's mark style and strength, from
+    //    when a memory was a change to the idle marker rather than a kept
+    //    note name. z: the sevens knockout's fade width, read below by the
+    //    vertex stage. w: the melody/bass mark rings' shimmer pattern
     //    (0 off, then one index per pattern; see Pulse::shader_index), read
     //    by mark_pulse — NOT a free slot.
-    // x and y are read ONLY by idle_marker: a memory must never be mistakable
-    // for a sounding note, and confining them to the idle layer is what
-    // guarantees that rather than merely intending it.
     misc6: vec4<f32>,
     // The ground the lattice is painted onto (the pane fill this pass is
     // composited over). Only the sevens knockout reads it: without it the
@@ -176,13 +169,11 @@ const EARLY_OUT: bool = true;
 //     GLYPH_FADE_LIMIT;
 //   - the core disc ends at its radius plus the widest edge softness the
 //     solidity axis can ask for;
-//   - the idle marker ends at its own radius, or the trail ring's;
 //   - the mark rings taper off at QUAD_MARGIN, but only exist while a slot
 //     is marked;
 //   - the knockout clears out to rim + gutter, and nothing beyond.
 fn paint_reach(in: VsOut, aa: f32) -> f32 {
     var reach = max(GLYPH_FADE_LIMIT, u.misc3.x + CORE_EDGE_SOFT + aa);
-    reach = max(reach, max(u.misc4.z, TRAIL_RING_R) + aa);
     if in.marks.x != 0u || in.marks.y != 0u {
         reach = max(reach, QUAD_MARGIN);
     }
@@ -208,9 +199,6 @@ struct Instance {
     // at that pitch's angle on the shared axis (see oct_sector) in that
     // pitch's color.
     @location(4) cents: f32,
-    // 1 on the home (center sevens) sheet: idle home nodes draw a blank
-    // placeholder ring where their disc would be.
-    @location(5) home: f32,
     // Melody/bass marks: x = melody slots, y = bass slots, one bit per
     // octave slot. Which SECTOR each mark's ring links back to (see
     // mark_ring); the ring itself is per node, and its fade level rides
@@ -221,9 +209,6 @@ struct Instance {
     // belonging to the indicator it points at rather than as a fixed livery.
     @location(7) melody_color: vec4<f32>,
     @location(8) bass_color: vec4<f32>,
-    // How strongly the music is remembered at this node, 0..1 (see
-    // NodeInstance::trail). Feeds the idle marker and nothing else.
-    @location(9) visited: f32,
     // The sevens layer: x = billboard size factor (1 on the home sheet,
     // smaller with every step off it), y = knockout gutter width, in the uv
     // units of a FULL-SIZE node — the vertex shader divides by the size
@@ -239,11 +224,9 @@ struct VsOut {
     @location(2) params: vec3<f32>,
     @location(3) @interpolate(flat) octaves: vec3<u32>,
     @location(4) @interpolate(flat) cents: f32,
-    @location(5) @interpolate(flat) home: f32,
     @location(6) @interpolate(flat) marks: vec2<u32>,
     @location(7) @interpolate(flat) melody_color: vec4<f32>,
     @location(8) @interpolate(flat) bass_color: vec4<f32>,
-    @location(9) @interpolate(flat) visited: f32,
     // Already converted to THIS node's uv (see vs_main).
     @location(10) @interpolate(flat) gutter: f32,
     // The node's own outermost feature and the clearing's fade width, both
@@ -307,11 +290,9 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
     out.params = inst.params;
     out.octaves = inst.octaves;
     out.cents = inst.cents;
-    out.home = inst.home;
     out.marks = inst.marks;
     out.melody_color = inst.melody_color;
     out.bass_color = inst.bass_color;
-    out.visited = inst.visited;
     out.gutter = gutter_uv;
     out.rim = rim;
     // The shimmer's shared coordinate — see VsOut::field. Taken off the
@@ -655,15 +636,12 @@ const SHIMMER_ANGLE: f32 = 0.375 * TAU;
 // where the moire would be starting, rather than racing it.
 //
 // Both are scaled by a ROOT TWO the Width bar never sees, because the period
-// the bar sets is not every pattern's finest feature. Crossing two gratings
-// multiplies into their sum and difference frequencies (Checker literally so,
-// Weave with a crease along the same diagonals), and those run at k*sqrt(2) —
-// so a Checker at the bar's Nyquist is already half a period past its own.
-// The row is faded on its tightest member rather than per pattern: one fade
-// for one sheet, and what Bands gives up for it is a slightly earlier finish
-// at a width no shot is framed for anyway. Weave's crease has no band limit
-// at all, being a corner rather than a sine; the scaling is what keeps its
-// gratings honest, and the crease is one line rather than a field.
+// the bar sets is not every pattern's finest feature. Checker multiplies two
+// crossed gratings into their sum and difference frequencies, and those run at
+// k*sqrt(2) — so a Checker at the bar's Nyquist is already half a period past
+// its own. The row is faded on its tightest member rather than per pattern:
+// one fade for one sheet, and what Bands gives up for it is a slightly earlier
+// finish at a width no shot is framed for anyway.
 const SHIMMER_RESOLVE_FULL: f32 = 0.14;
 const SHIMMER_RESOLVE_GONE: f32 = 0.35;
 // Turn a unit vector by `angle`, for the gratings below.
@@ -675,18 +653,13 @@ fn rotated(v: vec2<f32>, angle: f32) -> vec2<f32> {
 // The signed pattern at `p`, in -1..1 — mode by mode, and every one of them
 // built out of gratings of the SAME period, so the Width bar means one thing
 // across the row. `d` is the direction the sheet is laid along and `n` its
-// perpendicular; `field` and `slide` are the unslid position and how far the
-// sheet has travelled, which only the radial pattern needs apart.
+// perpendicular.
 //
-// The three that cross gratings are the tessellating family the checkerboard
-// belongs to: multiply two and you get its cells, take the brighter of two
-// and you get the lines between them instead, sum three at sixty degrees and
-// the cells come out hexagonal — which lands on the lattice better than
+// The two that cross gratings are the tessellating family the checkerboard
+// belongs to: multiply two and you get its cells, sum three at sixty degrees
+// and the cells come out hexagonal — which lands on the lattice better than
 // squares do, its rows running three ways rather than two.
-fn shimmer_pattern(
-    mode: u32, p: vec2<f32>, d: vec2<f32>, n: vec2<f32>,
-    field: vec2<f32>, slide: f32,
-) -> f32 {
+fn shimmer_pattern(mode: u32, p: vec2<f32>, d: vec2<f32>, n: vec2<f32>) -> f32 {
     let k = TAU / shimmer_period();
     if mode == 2u {
         // Checker: two gratings at right angles, multiplied. The product is
@@ -722,21 +695,6 @@ fn shimmer_pattern(
         let b = cos(k * dot(p, rotated(d, TAU / 6.0)));
         let c = cos(k * dot(p, rotated(d, TAU / 3.0)));
         return (a + b + c - 0.75) / 2.25;
-    }
-    if mode == 4u {
-        // Weave: the same two crossed gratings as Checker with the BRIGHTER
-        // taken instead of the product, which lights the lines where Checker
-        // lights the cells, and brightest where two lines cross.
-        return max(sin(k * dot(p, d)), sin(k * dot(p, n)));
-    }
-    if mode == 5u {
-        // Rings: one grating of the distance from the origin, which is why
-        // this is the arm that takes `field` and `slide` apart. A translated
-        // field would slide the center off the lattice, where having one is
-        // what this pattern is FOR, so the travel goes into the radius. The
-        // `length` sits inside this arm rather than at the call site so the
-        // four patterns that never look at it do not pay for a square root.
-        return sin(k * (length(field) - slide));
     }
     // Bands (mode 1): one grating along the sheet's own direction.
     return sin(k * dot(p, d));
@@ -777,10 +735,10 @@ fn shimmer_terms(mode: u32, field: vec2<f32>, footprint: f32) -> vec2<f32> {
     // in f64 on the CPU, where a song position still HAS the resolution to
     // phase a band with. See `Scene::shimmer_slide`.
     let slide = u.misc8.x;
-    // The field slid along the sheet's own direction. The radial pattern
-    // takes `field` and `slide` apart for itself, inside `shimmer_pattern`.
+    // The field slid along the sheet's own direction, which is the one
+    // position every pattern is built on.
     let p = field - dir * slide;
-    let pattern = shimmer_pattern(mode, p, dir, norm, field, slide);
+    let pattern = shimmer_pattern(mode, p, dir, norm);
     // Clamped because the power below is `pow`, which is undefined for a
     // negative base — and sin is only promised to land NEAR its range, so a
     // wave of -1e-8 at a trough would put a NaN into the node's color.
@@ -866,10 +824,6 @@ const CORE_EDGE_SOFT: f32 = 0.30;
 // the off state and the core grows in smoothly (no pop) as the bar leaves
 // the bottom.
 const CORE_FADE_IN: f32 = 0.06;
-// Thickness of the idle position ring (see idle_marker), matched to the old
-// home placeholder ring (which spanned 0.37..0.46 at the classic radius).
-const IDLE_RING_THICK: f32 = 0.09;
-
 // How much of the glyph BAND this pixel is inside, which every slot's glyph
 // is scaled by. It asks only about the radius, so it is the same answer for
 // every slot on the node — hoisted out of [`outer_glyph`] so the caller can
@@ -998,84 +952,17 @@ fn octave_glow_color(
     return csum / wsum;
 }
 
-// ---- Trail marks -----------------------------------------------------------
-// How a node the music has ALREADY been to differs from one it hasn't. The
-// whole feature lives inside idle_marker below, which is the point: it can
-// only ever change the small grey mark on a resting node, so no setting and
-// no future edit can let a memory read as a sounding note.
+// An unlit node draws NOTHING -- no marker, no trail mark, no placeholder.
+// What says a node position is there is the grid: the lines around it stop
+// short of it on every side, leaving a gap exactly where its disc would
+// light. So the resting lattice is drawn once, in one layer, and every disc
+// on screen is a note.
 //
-// Every constant here is a ceiling on how loud a mark can get at strength 1.
-// They are deliberately low. A trail is meant to be noticed on the second
-// look, not the first.
-
-// Lift: how far toward white the idle grey goes.
-const TRAIL_LIFT_MAX: f32 = 0.55;
-// Ring: radius of the pale circle, its thickness, its opacity, and how
-// pale it is. The radius is the classic disc edge -- the circle sits where
-// the note's own core would light, reading as a ghost of it -- and is
-// deliberately independent of the idle marker's radius, so the ring keeps
-// its size (and stays inside the default octave band) whatever that is set
-// to.
-const TRAIL_RING_R: f32 = 0.40;
-const TRAIL_RING_THICK: f32 = 0.045;
-const TRAIL_RING_ALPHA: f32 = 0.55;
-const TRAIL_RING_PALE: f32 = 0.45;
-// Tint: how much of the remembered note's color the grey takes.
-const TRAIL_TINT_MAX: f32 = 0.75;
-
-// The idle (unlit) node marker: a minimal grey mark at a home-sheet
-// position, drawn from its OWN uniforms (misc4.z/.w) so it is independent
-// of the active appearance. A filled dot or an outline circle at the idle
-// radius (style in misc4.w: 0 none, 1 dot, 2 circle), in the idle grey.
-// Returns the color premultiplied in .xyz with coverage in .w; style None
-// draws nothing. The caller keeps it showing regardless of the note state.
-//
-// A node the music has been to (visited > 0) wears a quietly different
-// version of that same mark -- see the trail constants above. It also gets
-// a marker OFF the home sheet, where an unvisited node draws nothing: a
-// blank off-sheet node is blank because its pitch would be information from
-// nowhere, and having been played there is exactly what answers that.
-//
-// `tint` is the node's own color, which for a silent node the scene sets to
-// the remembered note's (see TrailField::apply).
-fn idle_marker(d: f32, home: f32, visited: f32, tint: vec3<f32>, aa: f32) -> vec4<f32> {
-    let style = u32(u.misc4.w + 0.5);
-    let trail_style = u32(u.misc6.x + 0.5);
-    var trail = 0.0;
-    if trail_style != 0u {
-        trail = clamp(visited, 0.0, 1.0) * clamp(u.misc6.y, 0.0, 1.0);
-    }
-
-    // Straight (non-premultiplied) color and coverage; premultiplied on the
-    // way out so the two marks below can composite in the obvious order.
-    var rgb = u.node_idle.rgb;
-    var cov = 0.0;
-    if style != 0u && (home >= 0.5 || trail > 0.0) {
-        let r = u.misc4.z;
-        cov = aa_inside(r, d, aa);                // dot: filled disc
-        if style == 2u {                          // circle: hollow it out
-            cov = cov * (1.0 - aa_inside(r - IDLE_RING_THICK, d, aa));
-        }
-        if trail_style == 1u {                    // lift: a lighter grey
-            rgb = mix(rgb, vec3<f32>(1.0), trail * TRAIL_LIFT_MAX);
-        } else if trail_style == 3u {             // tint: a hint of the note
-            rgb = mix(rgb, tint, trail * TRAIL_TINT_MAX);
-        }
-    }
-
-    // The pale circle is its own mark rather than a change to the marker,
-    // so it still reads with the idle marker turned off.
-    if trail_style == 2u && trail > 0.0 {
-        let ring = aa_inside(TRAIL_RING_R, d, aa)
-            * (1.0 - aa_inside(TRAIL_RING_R - TRAIL_RING_THICK, d, aa));
-        let a = ring * trail * TRAIL_RING_ALPHA;
-        let pale = mix(u.node_idle.rgb, vec3<f32>(1.0), TRAIL_RING_PALE);
-        // Circle over the marker, premultiplied.
-        return vec4<f32>(pale * a + rgb * cov * (1.0 - a), a + cov * (1.0 - a));
-    }
-
-    return vec4<f32>(rgb * cov, cov);
-}
+// The trail rides no layer here at all. A node the music has been to is
+// captioned by the LABEL layer, on the CPU (see harmonigraph_scene::trail) --
+// which is what makes a memory unmistakable for a sounding note: the two are
+// not the same kind of thing on screen, rather than the same kind kept apart
+// by a ceiling on how loud a mark may get.
 
 // ---- Melody / bass marks ---------------------------------------------------
 // Two full rings concentric with the octave band: the melody just INSIDE
@@ -1171,8 +1058,8 @@ fn mark_ring(
 // How much of the destination a node's knockout clears at radius `d`.
 //
 // `reach` is where the clearing ENDS, measured past the node's own rim, and
-// `soft` is how gradual that ending is — two settings rather than one,
-// because tying the fade to the reach meant a wider gap was always a
+// `soft` is how gradual that ending is — two numbers rather than one,
+// because tying the fade to the reach means a wider gap is always a
 // blurrier one. Solid from the rim out to `reach - soft`, gone by `reach`.
 // The inner bound is floored at the rim so a fade wider than the reach eats
 // outward instead of into the node's own footprint, which is the one part
@@ -1266,8 +1153,10 @@ fn core_layer(in: VsOut, d: f32, aa: f32, oct: OctRing) -> vec4<f32> {
     // way would need the halo held out of it, which is a mix weighted by the
     // share of the coverage that is glow-beyond-disc.)
     //
-    // Premultiplied: the idle marker is composited UNDER this, so a sounding
-    // note draws over its own marker and reveals it again as it fades.
+    // Premultiplied, like every layer here: the knockout gutter composites
+    // the GROUND under this at the end of fs_main, and the pass itself blends
+    // premultiplied onto the pane. Coverage and color travel together or the
+    // glow's soft edge darkens against whatever is behind it.
     let core_alpha = clamp(disc + glow, 0.0, 1.0);
     return vec4<f32>(octave_mix * core_alpha, core_alpha);
 }
@@ -1300,25 +1189,22 @@ fn node_paint(in: VsOut) -> vec4<f32> {
         discard;
     }
 
-    // An idle node paints its marker and nothing else — no disc (presence
-    // gates it), no glow, no glyphs (a ghost needs presence too),
-    // no mark rings (their own levels gate them), no knockout (it fades with
-    // the note). Everything below still computes all of it and multiplies it
-    // away, which on a lattice where most nodes are idle most of the time is
-    // most of the fragment work in the frame. The three levels and the
-    // octave word are exactly the terms those gates read, so this branch
-    // returns what the full path would, not an approximation of it.
+    // An idle node paints NOTHING — no disc (presence gates it), no glow, no
+    // glyphs (a ghost needs presence too), no mark rings (their own levels
+    // gate them), no knockout (it fades with the note), and no marker of its
+    // own: the grid's gap around the position is what says a node is there.
+    // Everything below still computes all of that and multiplies it away,
+    // which on a lattice where most nodes are idle most of the time is most
+    // of the fragment work in the frame. The three levels and the octave word
+    // are exactly the terms those gates read, so this branch discards what
+    // the full path would have discarded, not an approximation of it.
     if EARLY_OUT
         && in.params.x <= 0.0
         && in.params.y <= 0.0
         && in.params.z <= 0.0
         && (in.octaves.x | in.octaves.y | in.octaves.z) == 0u
     {
-        let marker = idle_marker(d, in.home, in.visited, in.color.rgb, aa);
-        if marker.a < 0.01 {
-            discard;
-        }
-        return marker;
+        discard;
     }
 
     // Where THIS node's ring sits — which octaves it draws and how far it is
@@ -1574,18 +1460,6 @@ fn node_paint(in: VsOut) -> vec4<f32> {
     let active_alpha = glyph + base_alpha * (1.0 - glyph);
     let active_rgb = glyph_rgb * glyph + base_rgb * (1.0 - glyph);
 
-    // The idle marker (how an unlit home-sheet node reads), computed from
-    // its OWN uniforms — independent of the active appearance AND of the
-    // note state: it is drawn at full strength always. A sounding note
-    // simply composites over it below (occluding it where the note is
-    // opaque, showing it around/through the note otherwise).
-    let idle = idle_marker(d, in.home, in.visited, in.color.rgb, aa);
-
-    // Active over idle, premultiplied: a sounding note draws over its own
-    // marker; the marker is unchanged whether or not a note plays.
-    let over_idle = active_alpha + idle.a * (1.0 - active_alpha);
-    let final_rgb = active_rgb + idle.rgb * (1.0 - active_alpha);
-
     // The knockout gutter (off-sheet nodes only; in.gutter is 0 on the home
     // sheet). This is what lets the sevens layer overlap the home sheet
     // instead of needing clearance of its own: the node clears its own
@@ -1606,7 +1480,7 @@ fn node_paint(in: VsOut) -> vec4<f32> {
     //    node's own footprint and eases off over a band twice the gutter
     //    width, which is what the setting really buys.
     //
-    // Compositing it UNDER the node's own paint is what the `(1 - over_idle)`
+    // Compositing it UNDER the node's own paint is what the `(1 - active_alpha)`
     // terms say: the node keeps its color exactly, and the ground only fills
     // the part of its quad the node itself leaves empty.
     // Scaled by the note's OWN envelope, the same one `presence` paints the
@@ -1619,11 +1493,11 @@ fn node_paint(in: VsOut) -> vec4<f32> {
     if in.gutter > 0.0 {
         gutter_cov = gutter_coverage(d, in.rim, in.gutter, in.soft) * activation;
     }
-    let final_alpha = over_idle + gutter_cov * (1.0 - over_idle);
+    let final_alpha = active_alpha + gutter_cov * (1.0 - active_alpha);
     if final_alpha < 0.01 {
         discard;
     }
-    let with_ground = final_rgb + u.background.rgb * gutter_cov * (1.0 - over_idle);
+    let with_ground = active_rgb + u.background.rgb * gutter_cov * (1.0 - active_alpha);
     return vec4<f32>(with_ground, final_alpha);
 }
 

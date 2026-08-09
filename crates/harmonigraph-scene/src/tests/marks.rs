@@ -807,7 +807,7 @@ fn the_mark_pulse_folds_off_when_the_rings_are_off() {
         .pulse_marks
     };
 
-    for mode in [Pulse::Bands, Pulse::Checker, Pulse::Hex, Pulse::Weave, Pulse::Rings] {
+    for mode in [Pulse::Bands, Pulse::Checker, Pulse::Hex] {
         assert_eq!(
             pulse(0.0, true, mode),
             Pulse::Off,

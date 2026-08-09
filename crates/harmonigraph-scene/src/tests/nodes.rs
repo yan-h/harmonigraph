@@ -162,7 +162,7 @@ fn neither_end_of_the_curve_leaves_the_chroma_axis() {
 
 /// A chroma ramp spends COLOR on pitch, the way a brightness ramp spends
 /// brightness: the vivid end of it is the one its sign names, and at 0 every
-/// note carries the same share of what the gamut holds for it.
+/// note asks for the same fraction as every other.
 ///
 /// Read off an isoluminant gradient of one hue, which is what leaves the
 /// measurement with one thing in it. Both other knobs move the color too — the
@@ -226,8 +226,8 @@ fn a_chroma_ramp_spends_color_on_pitch() {
 /// being the one that was asked for — but clipping cannot happen without
 /// moving the luminance off the `L*` that named it, so the luminance assertion
 /// catches every clip as well as every solve that failed to land. That is what
-/// [`chroma`](Gradient::chroma) being a fraction of the gamut's own
-/// maximum buys, and this is what holds it to the claim.
+/// [`chroma`](Gradient::chroma) being a fraction of the gamut rather than an
+/// absolute buys, and this is what holds it to the claim.
 ///
 /// Against the `L*` each entry names, rather than against the SPREAD of the
 /// entries: a ratio between the ends only says a flat ramp came out flat, so it
@@ -281,6 +281,28 @@ fn the_gradient_is_in_gamut_and_flat_when_its_ramp_is() {
         !crate::color::ramp_sample_in_gamut(0.5, past_the_gamut),
         "a chroma five times what the gamut holds passed the in-gamut check, \
          so the check is reading something other than what was asked for",
+    );
+
+    // Far enough past it to invert `chroma_of`'s denominator, which is the case
+    // its `.max(1e-6)` floor exists for and the one the gradient above cannot
+    // reach: at five times the fraction the denominator is merely small, and the
+    // unguarded value comes back negative but LARGE, which the check refuses for
+    // the right answer by luck. Here the unguarded value is -0.216 — a negative
+    // chroma draws the hue opposite the one named, and 0.216 at hue 305 is a
+    // color sRGB does hold, so without the floor a fraction fifty times past the
+    // gamut reports as perfectly drawable.
+    let denominator_inverted = Gradient {
+        hue_start: 125.0,
+        hue_span: 0.0,
+        lightness: 30.0,
+        lightness_ramp: 0.0,
+        chroma: 50.0,
+        chroma_ramp: 0.0,
+    };
+    assert!(
+        !crate::color::ramp_sample_in_gamut(0.5, denominator_inverted),
+        "a chroma fifty times what the gamut holds passed the in-gamut check — \
+         `chroma_of`'s denominator has gone negative and taken the answer with it",
     );
 }
 

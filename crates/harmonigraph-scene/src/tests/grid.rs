@@ -2,7 +2,7 @@
 //! colour, and the chains that link a played note to what is under it.
 
 use crate::*;
-use glam::{Vec3, Vec4};
+use glam::Vec3;
 use harmonigraph_core::{NoteEvent, NoteEventKind, NoteTracker, Tuning};
 use super::harness::*;
 
@@ -114,56 +114,70 @@ fn grid_inset_sets_how_far_lines_stop_short_of_a_node() {
 }
 
 #[test]
-fn the_grid_color_drives_the_idle_nodes_too() {
-    // Grid lines and idle markers are one visual layer -- the idle
-    // structure -- so they share a color. The markers take only the
-    // RGB: the grid's alpha is the LINE opacity, and letting it dim
-    // the markers would dissolve them whenever the lines are faint.
-    let tinted = [0.9f32, 0.1, 0.4, 0.25];
-    let view = ViewConfig { grid_color: tinted, ..grid_view() };
+fn an_unlit_node_carries_the_idle_grey_and_draws_nothing() {
+    // An idle node has no mark of its own: the grid's gap around it is what
+    // says a position is there. `color` is what a node with no voice on it
+    // falls back to, and nothing draws while it holds that -- so this pins
+    // the neutral rather than a look, and pins that the trail never
+    // overwrites it (see the trail tests).
+    let line = skin::grid_line();
+    assert!(line.w < 1.0, "the lines are the faint half of the pair");
     let scene = scene_of(
         &NoteTracker::new(),
         &Tuning::default(),
-        &view,
+        &grid_view(),
         &plain_frame(),
         0.0,
     );
-    assert_eq!(scene.node_idle, Vec4::new(0.9, 0.1, 0.4, 1.0));
     let idle = scene
         .nodes
         .iter()
         .find(|n| n.activation == 0.0)
         .expect("nothing is playing");
-    assert_eq!(idle.color, Vec4::new(0.9, 0.1, 0.4, 1.0));
+    assert_eq!(idle.color, line.with_w(1.0));
+    assert!(
+        scene.nodes.iter().all(|n| n.activation == 0.0),
+        "nothing sounds, so every node is idle",
+    );
 }
 
 #[test]
-fn grid_color_and_dashes_come_from_the_view() {
-    // The color (and its alpha, the idle line opacity) is a view
-    // setting, not read from the skin.
-    let tinted = [0.9f32, 0.1, 0.4, 0.25];
-    let grid = grid_of(&ViewConfig { grid_color: tinted, ..grid_view() });
-    let unlit = grid
-        .iter()
+fn the_grid_draws_in_the_chromes_hairline_grey() {
+    // The idle structure has no color of its own and no setting: it draws in
+    // the grey the panel rules ITSELF with, so the picture and the chrome
+    // around it cannot drift apart. Compared against the skin's bytes rather
+    // than against `grid_line`'s own output, which is what makes a re-added
+    // near-copy of the hairline fail here instead of passing against itself.
+    let [r, g, b] = skin::active_skin().hairline;
+    let unlit = grid_of(&grid_view())
+        .into_iter()
         .find(|s| s.strength > 0.0)
         .expect("the home sheet draws an idle grid");
-    assert_eq!(unlit.color, Vec4::from_array(tinted));
-    assert_eq!(unlit.strength, tinted[3], "alpha is the idle line opacity");
+    assert_eq!(
+        unlit.color.truncate(),
+        Vec3::new(f32::from(r), f32::from(g), f32::from(b)) / 255.0,
+    );
+    assert_eq!(unlit.strength, unlit.color.w, "alpha is the idle line opacity");
+}
 
-    // Dashes: off by default for in-plane lines, on for sevens links
-    // either way (that dash marks a depth link, it isn't a style).
-    let tracker = sounding();
-    let plain = grid_of_with(&grid_view(), &tracker);
-    let dashed =
-        grid_of_with(&ViewConfig { grid_dashed: true, ..grid_view() }, &tracker);
+#[test]
+fn a_sevens_link_dashes_and_an_in_sheet_line_never_does() {
+    // The dash is structural, not a style, and there is no setting either
+    // way: it is the whole of what tells a depth link from a line drawn
+    // within one sheet, so a dashed in-plane line would say "depth" about a
+    // line that has none.
+    let grid = grid_of_with(&grid_view(), &sounding());
     assert!(
-        plain.iter().any(|s| (s.b.z - s.a.z).abs() > 1e-5),
+        grid.iter().any(|s| (s.b.z - s.a.z).abs() > 1e-5),
         "want some sevens links in the mix"
     );
-    for (before, after) in plain.iter().zip(&dashed) {
-        let along_sevens = (before.b.z - before.a.z).abs() > 1e-5;
-        assert_eq!(before.dashed, along_sevens, "only links dash by default");
-        assert!(after.dashed, "every line dashes when the style is on");
+    assert!(
+        grid.iter().any(|s| (s.b.z - s.a.z).abs() <= 1e-5),
+        "and some in-sheet lines, or the claim is half-tested"
+    );
+    for seg in &grid {
+        let along_sevens = (seg.b.z - seg.a.z).abs() > 1e-5;
+        assert_eq!(seg.dashed, along_sevens, "only depth links dash");
     }
 }
 
@@ -189,7 +203,7 @@ fn grid_lines_never_light_between_played_neighbors() {
     }
     let view = ViewConfig { extent_threes: 3, extent_fives: 3, ..ViewConfig::default() };
     let scene = scene_of(&tracker, &tuning, &view, &plain_frame(), 0.0);
-    let base = Vec4::from_array(view.grid_color);
+    let base = skin::grid_line();
     let segment_at = |mid: Vec3| {
         scene
             .grid
@@ -296,7 +310,7 @@ fn a_lit_chain_keeps_the_lattices_own_color() {
         .filter(|e| (e.b.z - e.a.z).abs() > 0.25 && e.strength > 0.5)
         .collect();
     assert!(!lit.is_empty(), "the chain has to be lit for this to mean anything");
-    let base = Vec4::from_array(view.grid_color);
+    let base = skin::grid_line();
     for link in lit {
         assert_eq!(link.color, base, "a lit link keeps the grid color");
     }

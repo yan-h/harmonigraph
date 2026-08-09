@@ -2021,9 +2021,9 @@ mod tests {
             use crate::SpectrogramPreset::*;
             match p {
                 Mono => ((0.0, 100.0), (0.0, 0.0)),
-                Ice => ((0.0, 92.0), (0.55, 0.90)),
-                Aurora => ((0.0, 88.0), (0.40, 0.85)),
-                Magma => ((0.0, 90.0), (0.70, 0.85)),
+                Ice => ((0.0, 92.0), (0.635, 0.985)),
+                Aurora => ((0.0, 88.0), (0.518, 0.968)),
+                Magma => ((0.0, 90.0), (0.819, 0.969)),
             }
         };
         // A middle and a signed ramp do not recompose to their own ends bit for

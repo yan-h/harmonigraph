@@ -102,19 +102,85 @@ fn wheel_over_settings_pane(tab: panes::Tab, screen_h: f32) -> f32 {
 /// their own; from the wheel's side that must not be visible.
 #[test]
 fn every_settings_pane_scrolls_when_its_content_overflows() {
-    // A short window, so that every one of them overflows — including Panel,
+    // A short window, so that every one of them overflows — including System,
     // the shortest list of the set.
     for tab in [
         panes::Tab::Tuning,
+        panes::Tab::View,
         panes::Tab::Nodes,
         panes::Tab::Scene,
         panes::Tab::Analyzer,
         panes::Tab::Video,
-        panes::Tab::Panel,
+        panes::Tab::System,
     ] {
         let moved = wheel_over_settings_pane(tab, 300.0);
         assert!(moved < -8.0, "{tab:?} did not scroll to the wheel (content moved {moved})");
     }
+}
+
+/// The Nodes pane's Shape bar draws the curve the NOTES run on, not a second
+/// copy of the formula that happens to look like it.
+///
+/// The whole value of a preview is that it cannot disagree with what it
+/// previews, and a disagreement here is invisible: a line that bends the wrong
+/// amount still looks like a curve, and the number beside it reads 0.35 either
+/// way. So the bar is painted for real and every point on the line is checked
+/// against `Envelope` — the one place the shape is written.
+///
+/// The line's own ends calibrate the plot box, rather than the paint constants
+/// being restated here: an approach starts at nothing and lands on full, so the
+/// first point IS the floor and the last IS the ceiling. That leaves the test
+/// measuring the SHAPE of the line and nothing about where the widget chose to
+/// put it — inset, height and scale are all free to change under it.
+///
+/// The envelope comes through [`ViewConfig::envelope`], which is where a NOTE's
+/// curve comes from, and that is the half that makes the name true. Read off
+/// the `fade_shape` field instead and the test compares the bar against the
+/// number it was handed rather than against the notes: put a mapping between
+/// the two — a rescale of how hard the setting bends, say — and the picture
+/// drifts from the lattice with this still green.
+#[test]
+fn the_shape_bars_preview_is_the_curve_the_notes_run_on() {
+    let shapes: Vec<egui::Shape> = settings_pane_at_width(
+        panes::Tab::Nodes,
+        320.0,
+        harmonigraph_scene::Projection::default(),
+    )
+    .into_iter()
+    .map(|cs| cs.shape)
+    .collect();
+    let points = crate::widgets::curve_points(&shapes);
+    assert!(points.len() > 8, "the Nodes pane drew {} preview points", points.len());
+
+    // A unit-length arrival, which is the whole curve: the shape lives in the
+    // fraction and not in the seconds, so any positive duration draws it.
+    let envelope = harmonigraph_scene::ViewConfig::default()
+        .envelope(&harmonigraph_scene::FrameParams { fade_time: 1.0, ..Default::default() });
+    let (left, right) = (points[0].x, points[points.len() - 1].x);
+    let (floor, ceiling) = (points[0].y, points[points.len() - 1].y);
+    assert!(right > left, "the line runs backwards, {left} to {right}");
+    assert!(floor > ceiling, "the line runs downward: it is an arrival, and rises");
+    // A fifth of a point, which sounds arbitrary and is not: the widget and the
+    // line below compute the same expression, so the residual is f32 rounding
+    // and nothing else, and the tolerance is only there to name that. What it
+    // must NOT be is a fraction of the picture — the plot is 13 points tall, so
+    // the half-point that reads as "close enough on screen" is 0.04 in level,
+    // and a preview quietly softened to `shape * 0.9` sits inside it.
+    for point in &points {
+        let p = (point.x - left) / (right - left);
+        let want = floor - (floor - ceiling) * envelope.attack(p as f64, 0.0);
+        assert!(
+            (point.y - want).abs() < 0.02,
+            "at {p} through the transition the line is at {} and the envelope at {want}",
+            point.y,
+        );
+    }
+    // A straight line satisfies the loop above at shape 0 and nowhere else, so
+    // the fresh view being curved is what gives it teeth.
+    assert!(
+        envelope.shape > 0.0,
+        "a fresh view fades on a straight line; the test above proves nothing",
+    );
 }
 
 /// The Video pane drawn through the REAL dock, soloed, for a shell that can or
@@ -200,12 +266,33 @@ fn the_video_pane_does_not_start_with_a_rule() {
     }
 }
 
+/// The bar tracks a pane drew, by width.
+///
+/// A `ValueBar`/`RangeBar` track is a `theme::ROW_HEIGHT`-tall rect in `well()`,
+/// which the accent fill over it does not answer to — that is the same height in
+/// a different color. The record button's panel does: it is a control in a
+/// settings row, so it is a row high like everything else in one, and it is
+/// painted in the same track color. The dot inside it is what tells the two
+/// apart, and it is read out of the paint rather than the panel being skipped
+/// for having an odd width — a width is exactly what is under test here, so
+/// excusing a rect for being an odd length would excuse the bug.
 fn bar_track_widths(shapes: &[egui::epaint::ClippedShape]) -> Vec<f32> {
     let well = crate::theme::well();
+    let dots: Vec<egui::Pos2> = shapes
+        .iter()
+        .filter_map(|cs| match &cs.shape {
+            egui::Shape::Circle(c) => Some(c.center),
+            _ => None,
+        })
+        .collect();
     shapes
         .iter()
         .filter_map(|cs| match &cs.shape {
-            egui::Shape::Rect(r) if r.fill == well && (r.rect.height() - 20.0).abs() < 0.6 => {
+            egui::Shape::Rect(r)
+                if r.fill == well
+                    && (r.rect.height() - crate::theme::ROW_HEIGHT).abs() < 0.6
+                    && !dots.iter().any(|&dot| r.rect.contains(dot)) =>
+            {
                 Some(r.rect.width())
             }
             _ => None,
@@ -239,7 +326,7 @@ fn every_bar_in_a_settings_pane_is_the_width_of_the_pane() {
             for &projection in projections_for(tab) {
                 let widths = bar_track_widths(&settings_pane_at_width(tab, width, projection));
                 // One bar per gradient is deliberately shorter: the spectrum
-                // track, which gives the left end of its row to the flip
+                // track, which gives the right end of its row to the flip
                 // button. It still narrows with the column, which is what this
                 // is about, so it is allowed its own length rather than excused
                 // from the sweep.
@@ -278,11 +365,93 @@ fn every_bar_in_a_settings_pane_is_the_width_of_the_pane() {
         }
     }
     // The sniffing above finds nothing if the bars stop being painted this way,
-    // and a test that measures nothing passes. The Tuning pane is the deepest
-    // stack of bars in the dock.
+    // and a test that measures nothing passes. The Nodes pane is the deepest
+    // stack of bars in the dock — every layer of the note contributes one or
+    // more, and the gated ones still paint, greyed. Tuning stood here until the
+    // camera left it for View and took two thirds of its rows along.
     let bars =
-        bar_track_widths(&settings_pane_at_width(panes::Tab::Tuning, 400.0, PROJECTIONS[0])).len();
-    assert!(bars >= 10, "only found {bars} bar tracks in the Tuning pane; has the paint changed?");
+        bar_track_widths(&settings_pane_at_width(panes::Tab::Nodes, 400.0, PROJECTIONS[0])).len();
+    assert!(bars >= 15, "only found {bars} bar tracks in the Nodes pane; has the paint changed?");
+}
+
+/// Each gradient group opens with its preview: one band of color the width of
+/// the column, standing ABOVE the spectrum track that is the first of the three
+/// bars writing it.
+///
+/// The order is the whole claim. Nothing else here would notice it moving — the
+/// preview paints no well, so the width and height sweeps both step over it,
+/// and a group that drew its picture at the bottom, or dropped it, would leave
+/// every other test green. Both panes are asked, because the two groups are
+/// separate calls over the same widgets and only one of them has the preset row
+/// above (see `spectrogram_gradient_group`).
+#[test]
+fn every_gradient_group_previews_itself_above_its_bars() {
+    const WIDTH: f32 = 400.0;
+    for tab in [panes::Tab::Nodes, panes::Tab::Analyzer] {
+        let shapes = settings_pane_at_width(tab, WIDTH, PROJECTIONS[0]);
+        // A preview is the one full-column band of color in a settings pane: a
+        // spectrum's circle is the track's width and a fade ramp is a row high,
+        // so the pair of measurements tells all three apart.
+        let drawn: Vec<&egui::Mesh> = shapes
+            .iter()
+            .filter_map(|cs| match &cs.shape {
+                egui::Shape::Mesh(m) => Some(&**m),
+                _ => None,
+            })
+            .filter(|m| {
+                let b = m.calc_bounds();
+                (b.width() - WIDTH).abs() < 1.0
+                    && (b.height() - crate::widgets::preview_height(1.0)).abs() < 0.6
+            })
+            .collect();
+        assert_eq!(drawn.len(), 1, "{tab:?} drew {} gradient previews, not one", drawn.len());
+        let previews: Vec<egui::Rect> = drawn.iter().map(|m| m.calc_bounds()).collect();
+
+        // And it is THIS pane's gradient. The two panes dial different
+        // gradients through the same widgets, so a group handed the other one
+        // draws a picture that is wrong about everything and wrong in no
+        // position — every other assertion here passes on it. Read at the ends,
+        // where the ramp is the table's own first and last entry and no
+        // interpolation stands between the mesh and the value.
+        let gradient = match tab {
+            panes::Tab::Nodes => harmonigraph_scene::ViewConfig::default().pitch_gradient,
+            _ => SpectrumConfig::default().spectrogram_gradient,
+        };
+        let lut = harmonigraph_scene::color::pitch_ramp_lut(gradient.sanitized());
+        let columns: Vec<egui::Color32> =
+            drawn[0].vertices.chunks(2).map(|column| column[0].color).collect();
+        for (end, drew, want) in [
+            ("quiet", columns[0], lut[0]),
+            ("loud", columns[columns.len() - 1], lut[lut.len() - 1]),
+        ] {
+            let want = crate::panes::scene_color(want, 1.0);
+            assert_eq!(
+                drew, want,
+                "{tab:?} drew its preview's {end} end in {drew:?}, not the \
+                 {want:?} its own gradient reaches — the other pane's?",
+            );
+        }
+        let track = crate::widgets::spectrum_track_width(WIDTH, 1.0);
+        let tracks: Vec<egui::Rect> = shapes
+            .iter()
+            .filter_map(|cs| match &cs.shape {
+                egui::Shape::Rect(r)
+                    if r.fill == crate::theme::well()
+                        && (r.rect.width() - track).abs() < 1.0 =>
+                {
+                    Some(r.rect)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(tracks.len(), 1, "{tab:?} drew {tracks:?} as spectrum tracks, not one");
+        assert!(
+            previews[0].bottom() <= tracks[0].top(),
+            "{tab:?} drew its preview at {:?}, not above the spectrum bar at {:?}",
+            previews[0],
+            tracks[0],
+        );
+    }
 }
 
 /// The render bar fills to the share of frames done — which is the whole

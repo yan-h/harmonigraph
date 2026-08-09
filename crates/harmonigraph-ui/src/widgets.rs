@@ -7,7 +7,7 @@
 
 use std::ops::RangeInclusive;
 
-use egui::{CornerRadius, Key, Response, Sense, TextEdit, TextStyle, Ui, Vec2};
+use egui::{Color32, CornerRadius, Key, Response, Sense, TextEdit, TextStyle, Ui, Vec2};
 use harmonigraph_scene::{
     clamp_wheel, hue_circle, octave_layout, pitch_ramp_lut, Gradient, ViewConfig,
     DEFAULT_CENTER, DEFAULT_COUNT, HUE_CIRCLE_N, MAX_SPAN, MIN_SPAN, PITCH_LUT_N,
@@ -41,7 +41,17 @@ pub fn toggle_switch(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
     let scale = theme::ui_scale(ui.ctx());
     let switch = SWITCH_SIZE * scale;
     let gap = 6.0 * scale;
-    let desired = Vec2::new(switch.x + gap + galley.size().x, switch.y.max(galley.size().y));
+    // A row's height, though the pill itself is shorter than one. Asked for
+    // here rather than inherited, because `allocate_exact_size` means exactly:
+    // the `interact_size` floor that brings egui's own controls up to the row
+    // never applies to a widget that names its own size, so a switch that asked
+    // only for its pill would be the short row in every pane it appears in —
+    // and in the Commas table, which is a `Grid` taking each row's height from
+    // the cells in it, a short row all the way down.
+    let desired = Vec2::new(
+        switch.x + gap + galley.size().x,
+        theme::row_height(scale).max(switch.y).max(galley.size().y),
+    );
     let (rect, mut response) = ui.allocate_exact_size(desired, Sense::click());
     if response.clicked() {
         *on = !*on;
@@ -111,9 +121,18 @@ pub fn record_button(ui: &mut Ui, on: &mut bool, rolling: bool, label: &str) -> 
     let scale = theme::ui_scale(ui.ctx());
     let dot_r = 5.0 * scale;
     let gap = 8.0 * scale;
-    let pad = Vec2::new(10.0, 5.0) * scale;
+    let pad_x = 10.0 * scale;
     let inner = Vec2::new(dot_r * 2.0 + gap + galley.size().x, galley.size().y.max(dot_r * 2.0));
-    let (rect, mut response) = ui.allocate_exact_size(inner + pad * 2.0, Sense::click());
+    // A row's height, asked for the same way and for the same reason as
+    // [`toggle_switch`]'s: naming an exact size opts out of the floor that
+    // brings every other button to the row. A padding of its own would make
+    // this the one control in the Video pane standing taller than the bars
+    // under it, which reads as the pane being out of alignment rather than as
+    // the button being important — and what makes it important is its panel,
+    // its dot and its pulse, none of which cost height.
+    let height = theme::row_height(scale).max(inner.y);
+    let (rect, mut response) =
+        ui.allocate_exact_size(Vec2::new(inner.x + 2.0 * pad_x, height), Sense::click());
     if response.clicked() {
         *on = !*on;
         response.mark_changed();
@@ -143,7 +162,7 @@ pub fn record_button(ui: &mut Ui, on: &mut bool, rolling: bool, label: &str) -> 
                 egui::StrokeKind::Inside,
             );
         }
-        let dot = egui::pos2(rect.left() + pad.x + dot_r, rect.center().y);
+        let dot = egui::pos2(rect.left() + pad_x + dot_r, rect.center().y);
         if *on {
             painter.circle_filled(dot, dot_r, theme::armed().gamma_multiply(alpha));
         } else {
@@ -154,7 +173,7 @@ pub fn record_button(ui: &mut Ui, on: &mut bool, rolling: bool, label: &str) -> 
             );
         }
         painter.galley(
-            egui::pos2(rect.left() + pad.x + dot_r * 2.0 + gap, rect.center().y - galley.size().y / 2.0),
+            egui::pos2(rect.left() + pad_x + dot_r * 2.0 + gap, rect.center().y - galley.size().y / 2.0),
             galley,
             theme::text(),
         );
@@ -166,9 +185,13 @@ pub fn record_button(ui: &mut Ui, on: &mut bool, rolling: bool, label: &str) -> 
 // multiplied by `theme::ui_scale` where it is drawn, so a bar shrinks with the
 // type inside it rather than keeping a 20-point row around 9-point text.
 
-/// Row height of a ValueBar (taller than the theme's interact_size: these
-/// are the primary controls and carry two text runs).
-const BAR_HEIGHT: f32 = 20.0;
+// A bar's own HEIGHT is not among them: it is `theme::row_height`, which every
+// control in a settings row is drawn at. A number here instead would be free to
+// drift from that one, and a bar standing a few points off the buttons beside
+// it is the whole thing the shared height exists to prevent — a bar being the
+// tallest thing a row has to hold, two text runs inside a track, makes it what
+// the row height is FOR rather than something measured against it.
+
 /// Corner rounding of the bar track — the shared control radius, so a bar and
 /// a button beside it round the same.
 fn bar_radius(scale: f32) -> u8 {
@@ -179,6 +202,55 @@ const BAR_TEXT_PAD: f32 = 8.0;
 /// Clear space kept between the two, so an elided name stops short of the
 /// number rather than touching it.
 const BAR_LABEL_GAP: f32 = 6.0;
+
+/// How many segments a [`ValueBar::curve`] preview is drawn in.
+///
+/// The preview is one bend and no more, so the count only has to keep that
+/// bend from reading as a corner — 64 puts a vertex every few points at the
+/// widest a settings column opens to, and the sharpest curve on offer spends
+/// a dozen of them on its knee.
+const CURVE_SEGMENTS: usize = 64;
+
+/// How far a [`ValueBar::curve`] preview is held off the top and bottom of the
+/// track, so the flat ends of the curve read as a line rather than as the
+/// track's own rim.
+const CURVE_INSET: f32 = 3.5;
+
+/// Thickness of the preview line.
+const CURVE_WIDTH: f32 = 1.5;
+
+/// The preview line's color: the dim text, softened again.
+///
+/// It crosses both halves of the track — accent fill up to the value, bare
+/// well past it — so it cannot be a color that only reads on one of them. Dim
+/// on purpose beyond that: the line is a PICTURE of what the number means and
+/// the number itself is the reading, so it stays under the two text runs it
+/// passes behind rather than competing with them.
+pub(crate) fn curve_color() -> Color32 {
+    theme::text_dim().gamma_multiply(0.55)
+}
+
+/// The preview line in `shapes`, as the points it was drawn through.
+///
+/// Shared by the two places that ask: the bar's own tests, which check WHERE
+/// the line is drawn, and the Nodes pane's, which checks WHICH curve it is.
+/// The color is what identifies it — nothing else in a settings pane draws an
+/// open path in it.
+#[cfg(test)]
+pub(crate) fn curve_points(shapes: &[egui::Shape]) -> Vec<egui::Pos2> {
+    shapes
+        .iter()
+        .filter_map(|shape| match shape {
+            egui::Shape::Path(path)
+                if path.stroke.color == egui::epaint::ColorMode::Solid(curve_color()) =>
+            {
+                Some(path.points.clone())
+            }
+            _ => None,
+        })
+        .flatten()
+        .collect()
+}
 
 /// How wide a bar draws: the width the layout offers, but never past the
 /// visible edge of the pane. Shared by [`ValueBar`] and [`RangeBar`], so every
@@ -233,6 +305,9 @@ pub struct ValueBar<'a> {
     /// How the value READS OUT, when plain decimals won't say it (see
     /// [`ValueBar::display`]). Never how it is typed in.
     display: Option<fn(f32) -> String>,
+    /// A picture of what the value MEANS, drawn across the track (see
+    /// [`ValueBar::curve`]).
+    curve: Option<fn(f32, f32) -> f32>,
 }
 
 impl<'a> ValueBar<'a> {
@@ -247,6 +322,7 @@ impl<'a> ValueBar<'a> {
             badge: None,
             magnet: None,
             display: None,
+            curve: None,
         }
     }
 
@@ -312,6 +388,31 @@ impl<'a> ValueBar<'a> {
         self
     }
 
+    /// Draw what the value DOES across the track: `curve(value, p)` for `p`
+    /// walking 0 to 1 gives the level reached that far through, and the line
+    /// is those points. For the Nodes pane's Shape bar, whose number names a
+    /// curve and says nothing about its character — the difference between a
+    /// straight line and a knee is the whole setting, and 0.35 does not carry
+    /// it.
+    ///
+    /// **The curve's x is not the bar's own axis**, and it spans the whole
+    /// track at every value because of that: the bar's x is where the value
+    /// sits in its range, the curve's is progress through the transition the
+    /// value shapes. Two rulers over one rectangle is what a preview drawn
+    /// inside a control costs, and the alternative — a picture in a row of its
+    /// own — costs the row instead. What keeps it readable is that the curve
+    /// is drawn as a LINE and the value as a filled slice, so neither reads as
+    /// a measurement of the other.
+    ///
+    /// Hand it the same function the thing being previewed runs on rather than
+    /// a copy of the formula: a preview that drifts from what it previews is
+    /// worse than none, and there is nothing on screen that would show the
+    /// drift.
+    pub fn curve(mut self, curve: fn(f32, f32) -> f32) -> Self {
+        self.curve = Some(curve);
+        self
+    }
+
     fn min(&self) -> f32 {
         *self.range.start()
     }
@@ -364,8 +465,10 @@ impl<'a> ValueBar<'a> {
     pub fn show(self, ui: &mut Ui) -> Response {
         let scale = theme::ui_scale(ui.ctx());
         let width = bar_width(ui);
-        let (rect, mut response) =
-            ui.allocate_exact_size(Vec2::new(width, BAR_HEIGHT * scale), Sense::click_and_drag());
+        let (rect, mut response) = ui.allocate_exact_size(
+            Vec2::new(width, theme::row_height(scale)),
+            Sense::click_and_drag(),
+        );
 
         let edit_id = response.id.with("edit");
         let focus_id = edit_id.with("focus_pending");
@@ -446,6 +549,34 @@ impl<'a> ValueBar<'a> {
         let mut fill = rect;
         fill.set_width(rect.width() * t);
         painter.rect_filled(fill, radius, fill_color);
+
+        // Over the fill and under the text: the fill is what the curve is
+        // drawn ON and the two text runs are what it is drawn UNDER, which is
+        // the order that keeps the number legible where the line passes behind
+        // it (`a_curve_preview_is_drawn_over_the_fill_and_under_the_bars_own_text`).
+        // The fill half is not a nicety — an accent mix is fully opaque, so a
+        // line drawn under it is erased rather than dimmed.
+        if let Some(curve) = self.curve {
+            let plot = rect.shrink2(Vec2::new(BAR_TEXT_PAD * scale, CURVE_INSET * scale));
+            let points = (0..=CURVE_SEGMENTS)
+                .map(|i| {
+                    let p = i as f32 / CURVE_SEGMENTS as f32;
+                    // Clamped because the caller's function is the real one and
+                    // not a drawing routine: it answers for the thing being
+                    // previewed, and a level off either end would draw over the
+                    // bars above and below rather than being cut off here.
+                    let level = curve(*self.value, p).clamp(0.0, 1.0);
+                    egui::pos2(
+                        plot.left() + plot.width() * p,
+                        plot.bottom() - plot.height() * level,
+                    )
+                })
+                .collect::<Vec<_>>();
+            painter.add(egui::Shape::line(
+                points,
+                egui::Stroke::new(CURVE_WIDTH * scale, curve_color()),
+            ));
+        }
 
         let text_color = if response.hovered() || response.dragged() {
             theme::text()
@@ -528,7 +659,7 @@ pub fn progress_bar(ui: &mut Ui, fraction: Option<f32>, label: &str, value: &str
     let scale = theme::ui_scale(ui.ctx());
     let width = bar_width(ui);
     let (rect, response) =
-        ui.allocate_exact_size(Vec2::new(width, BAR_HEIGHT * scale), Sense::hover());
+        ui.allocate_exact_size(Vec2::new(width, theme::row_height(scale)), Sense::hover());
 
     let radius = CornerRadius::same(bar_radius(scale));
     let painter = ui.painter();
@@ -634,16 +765,26 @@ const TEXT_GAP: f32 = 5.0;
 /// in, since `chroma_ramp` defaults to 0 — so this is a case that ships, not a
 /// corner.
 ///
-/// The clip is square where the grip is rounded, so a glyph pixel in one of the
-/// 2pt corner notches lands beside the thumb rather than on it. What saves it
-/// is the geometry after all: the notch is the 2pt corner of a grip drawn 3pt
-/// shy of a 20pt row, and a Body galley's ink does not reach the top and bottom
-/// of its own box, let alone the corners of that one. Worth knowing what the
-/// fallback is NOT, though — outside the span the notch sits on `well()`, which
-/// is darker than the knockout rather than lighter, and on the inner side it
-/// sits on `accent_fill()`, where panel is only 2.7:1 and a stray pixel would
-/// show. A thumb rounded much harder wants a rounded clip rather than this
-/// argument.
+/// **The clip is square where the grip is rounded**, so a glyph pixel in a
+/// corner notch lands beside the thumb rather than on it, in the panel colour,
+/// over whatever the bar has there. egui has no rounded clip to ask for, so
+/// this is a bound rather than a fix, and how tight it is depends on the
+/// caller's `radius`:
+///
+/// - At a grip's own 2pt the notch is a sliver at the extreme corners of a grip
+///   drawn 3pt shy of a 20pt row, well outside a Body galley's ink.
+/// - A [`RangeBar::fade_span`] bar hands in the BAR's radius instead, so its
+///   thumb is a 6pt-wide pill (epaint holds a corner to half the width, so 5
+///   becomes 3) and the notch is the whole of the top and bottom 3pt. A
+///   descender reaches into that band.
+///
+/// What keeps the second case cheap is where it lands rather than whether it
+/// happens: outside the span the notch is over `well()`, which is DARKER than
+/// the knockout, so nothing shows; over the span fill it is 2.7:1, a faint
+/// speck at the tip of a descender. Not nothing, and the thing to fix if a
+/// thumb is ever rounded harder still — by shrinking the runs' boxes to the
+/// grip's straight section rather than by tightening this clip, which would
+/// only hand the cap band back to a swallowed letter.
 ///
 /// Guarded on a rect intersection, and the guard is cheaper than it looks
 /// rather than the reverse: epaint sets its clip per shape and culls text per
@@ -669,12 +810,45 @@ fn grip_over_text(
     }
 }
 
+/// Where a gesture was AIMED, as against where it has since got to: the point
+/// the press landed on, falling back to the live position when there is no
+/// press on record.
+///
+/// **Every bar here decides WHICH of its handles a drag has hold of from this,
+/// and where that handle then goes from the live position.** The two questions
+/// want different positions because egui calls a press a drag only once the
+/// pointer has left a six-point click threshold: the first frame a bar sees is
+/// already that far along, in the direction of travel, and a real frame of a
+/// brisk drag carries a good deal more. So a press that landed squarely inside
+/// a handle's reach arrives with the pointer clear of it, pointing at whatever
+/// the hand was aiming PAST — and the bar hands over the span instead of the
+/// end it was aimed at, or the turn instead of the handle.
+///
+/// A reach is also what the CURSOR promises, and it promises it under a pointer
+/// at rest, which is where a press lands. Deciding from anywhere else is the
+/// control disagreeing with the arrow the hand aimed with.
+///
+/// [`GRAB_PX`]'s fourteen points are no protection: that is barely twice the
+/// threshold, so it is the outer half of every reach that misbehaves — which is
+/// what makes the failure intermittent rather than total, and so what let it
+/// stand.
+fn aimed_at(ui: &Ui, live: egui::Pos2) -> egui::Pos2 {
+    ui.input(|i| i.pointer.press_origin()).unwrap_or(live)
+}
+
+/// Segments the ramp half of a [`fade_span`](RangeBar::fade_span) fill is drawn
+/// in. The ramp is a part of a bar that is a couple of hundred points wide at
+/// most, so this is already finer than the pixels it lands on — and it is a
+/// whole-strip count rather than a per-point one because the strip is sampled
+/// over its own width, which the span does not fix.
+const FADE_SEGMENTS: usize = 64;
+
 /// Which part of a [`RangeBar`] a drag took hold of. Decided once, at
 /// drag-start, and remembered for the gesture — otherwise dragging one end
 /// past the other would hand the drag to whichever handle is nearest now.
 /// (`Default` is derived only to satisfy egui's `remove_temp` bound; the
 /// value is always written by drag-start before anything reads it.)
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 enum Grab {
     #[default]
     Low,
@@ -701,7 +875,56 @@ impl Grab {
     /// that only panned from the middle would be dead exactly where everyone
     /// first meets it. When there's no room to pan, a middle drag takes the
     /// nearer end instead.
+    ///
+    /// **The mirror of that has no fallback, and the cost is a band that is
+    /// inert one way.** An end held against `min_span` cannot move inward, so a
+    /// press inside its reach dragged that way writes nothing — the whole
+    /// `near` band, either side of both handles, on a pair already at its
+    /// minimum. The pitch range parks exactly there, since that is where
+    /// zooming the analyzer all the way in leaves it, and `HANDLE_REACH_SHARE`
+    /// is what keeps the middle grabbable beside it (at the 24-semitone minimum
+    /// on a 423pt bar: 14 points claimed at each end out of 83).
+    ///
+    /// No fallback because the reach is claimed before the DIRECTION is known,
+    /// and the end is only pinned one way: the same press dragged outward opens
+    /// the span, which is the gesture nothing else offers. Handing the band to
+    /// the span instead would cost that to buy the other, and reading `v`'s
+    /// direction here is reading a position, not a travel. What is left is a
+    /// handle that answers in one direction and holds in the other, which is
+    /// what a handle against a wall should do — and what the cursor says it is,
+    /// since the band draws `ResizeHorizontal`.
+    ///
+    /// The alternative is [`apply`](Self::apply) letting a pinned end carry its
+    /// partner, the way the span branch squishes against a wall. That is a
+    /// change to what `Low` and `High` MEAN rather than to this rule, and it is
+    /// not made here.
     fn at(v: f32, (lo, hi): (f32, f32), _range: (f32, f32), near: f32) -> Grab {
+        // A CLOSED span has no middle to take hold of and no side to either
+        // handle: both ends stand on one point, so which gesture a press
+        // starts is a rule rather than a measurement. Below it the LOW end,
+        // which is the only end that can open a closed span and opens it
+        // downward; at or above it the span SLIDES, keeping its width.
+        //
+        // Both halves are load-bearing for a [`fade_span`](RangeBar::fade_span)
+        // bar, where the pair is a reach and the fade that ends it: closed
+        // means a HARD EDGE, which is an ordinary setting rather than a
+        // degenerate one, and the two gestures it needs are widening the reach
+        // without softening it (slide) and softening it (the low end). Without
+        // this the tie below hands every press to `Low`, which is pinned
+        // against `hi` and cannot move — a hard edge the bar can neither widen
+        // nor soften.
+        //
+        // A bar that declares a `min_span` reaches this too, and its slide is
+        // what repairs the pair rather than what breaks it: `min_span` bounds
+        // what a bar PRODUCES, so a closed or inverted pair still arrives from
+        // a host param or a blob. `apply` floors the slid width there.
+        if hi <= lo {
+            return if v < lo {
+                Grab::Low
+            } else {
+                Grab::Span { offset: v - lo, width: 0.0 }
+            };
+        }
         // A handle's reach cannot eat the whole span, or a narrow range would
         // have no middle left to grab and could never be slid along the axis.
         let near = near.min((hi - lo) * HANDLE_REACH_SHARE);
@@ -733,6 +956,14 @@ impl Grab {
             // reads only the gesture's own offset and width, never the
             // squished pair it produced.
             Grab::Span { offset, width } => {
+                // A width the gesture froze can be under the minimum, because
+                // `min_span` bounds what this bar PRODUCES and not what it was
+                // handed: a closed or inverted pair reaches it from a host
+                // param or a blob, and closed is the one shape the slide is
+                // the repair for. Floored here rather than at the grab, which
+                // measures the pair it found; the walls below already open to
+                // the minimum, so this is the interior agreeing with them.
+                let width = width.max(min_span);
                 let (want_lo, want_hi) = (v - offset, v - offset + width);
                 if want_lo < min {
                     (min, want_hi.clamp(min + min_span, max))
@@ -799,20 +1030,25 @@ impl Grab {
 /// difference is that the name cannot be placed: it is pinned to the left of
 /// the bar so the row reads as a row, while a number is free to take whichever
 /// run of clear track is going. A thumb roams the whole track, so the one fixed
-/// run is the one it eventually stands in.
+/// run is the one it eventually stands in. The name's own share of the bar is
+/// about a sixth of the axis at the width the settings column opens at, a
+/// tenth on a bar twice that wide.
 ///
-/// It happens only while the low end is dragged down into the name's own share
-/// of the bar: about a sixth of the axis at the width the settings column opens
-/// at, a tenth on a bar twice that wide. Where the four bars REST it does not
-/// arise — the two that open at the full axis stand their low handle a point
-/// clear of the name, and the Level and Band bars open at 40% and 66% of
-/// theirs — which `the_name_is_painted_once_where_no_thumb_reaches_it` pins.
+/// Most bars only reach it while the low end is DRAGGED there: the two that
+/// open at the full axis stand their low handle a point clear of the name, and
+/// the Level and Band bars open at 40% and 66% of theirs. The two
+/// [`fade_span`](RangeBar::fade_span) bars rest inside it, and the Gutter does
+/// so at a fresh install — its low end is where the gutter stops being solid,
+/// which on a nearly-fully-soft default is 1.4% of the axis, so the thumb
+/// stands on the "G".
 ///
-/// **The crossing costs no letter**, because the name is painted a second time
-/// clipped to the thumb, in the panel colour, so its letters cross the grip in
-/// reverse rather than disappearing under it (see [`Self::show`]). Nothing
-/// moves and the thumb keeps its full width; a letter changes colour for as
-/// long as a handle is standing in it.
+/// **That costs no letter**, and it is why the fresh look does not have to be
+/// chosen around it. The name is painted a second time clipped to the thumb, in
+/// the panel colour, so its letters cross the grip in reverse rather than
+/// disappearing under it ([`grip_over_text`]). Nothing moves and the thumb
+/// keeps its full width; the "G" changes colour for as long as the handle
+/// stands on it. A look picked to keep a handle off a letter would be the
+/// picture paying for the panel, and this is what buys it back.
 ///
 /// Letting the name slide out of the way instead was measured and dropped: it
 /// has to snap back the moment the handle passes it, and a name jumping the
@@ -827,6 +1063,9 @@ pub struct RangeBar<'a> {
     min_span: f32,
     /// Whether a drag lands on whole values only (see [`RangeBar::integer`]).
     integer: bool,
+    /// Whether the span is painted as a fade off the end of a fill (see
+    /// [`RangeBar::fade_span`]) rather than as a filled slice of the track.
+    fade_span: bool,
     display: fn(f32) -> String,
 }
 
@@ -844,12 +1083,39 @@ impl<'a> RangeBar<'a> {
             label,
             min_span: 0.0,
             integer: false,
+            fade_span: false,
             display: |v| format!("{v:.2}"),
         }
     }
 
     pub fn min_span(mut self, span: f32) -> Self {
         self.min_span = span;
+        self
+    }
+
+    /// Paint the pair as a REACH and the fade that ends it: the fill starts at
+    /// the axis floor rather than at `low`, runs solid to `low`, and ramps out
+    /// to nothing by `high`.
+    ///
+    /// For the pairs that describe a soft edge — the lattice's knockout gutter
+    /// and the piano roll's note outline. Both are two distances from the same
+    /// place (the node's rim, the note's edge), so they are already two points
+    /// on one axis, and the ordinary two-handle reading of them is the true
+    /// one: solid out to `low`, gone by `high`. What the fill adds is that the
+    /// bar then LOOKS like the edge it sets — the ramp on the track is the ramp
+    /// on screen — which the default paint, a bright slice floating over bare
+    /// track, says the opposite of: it fills exactly the part that is fading
+    /// and leaves the solid part bare.
+    ///
+    /// Only the paint. The gestures are a range's own, and they are everything
+    /// a bar apiece would give: sliding the span is the reach at a fixed
+    /// fade, and the low end is the fade at a fixed reach. Which is the whole
+    /// reason this is one CONTROL and not one NUMBER — a fade tied to its
+    /// reach as a fraction would make a wider edge always a blurrier one, and
+    /// there would be no way to ask for a wide crisp gutter or a narrow soft
+    /// one.
+    pub fn fade_span(mut self) -> Self {
+        self.fade_span = true;
         self
     }
 
@@ -884,12 +1150,26 @@ impl<'a> RangeBar<'a> {
     pub fn show(self, ui: &mut Ui) -> Response {
         let scale = theme::ui_scale(ui.ctx());
         let width = bar_width(ui);
-        let (rect, mut response) =
-            ui.allocate_exact_size(Vec2::new(width, BAR_HEIGHT * scale), Sense::click_and_drag());
+        let (rect, mut response) = ui.allocate_exact_size(
+            Vec2::new(width, theme::row_height(scale)),
+            Sense::click_and_drag(),
+        );
         let (min, max) = (*self.range.start(), *self.range.end());
-        // Values live on an inset track, so both limits are positions a handle
-        // can sit AT rather than edges it merges into. See HANDLE_INSET.
-        let track = rect.shrink2(Vec2::new(HANDLE_INSET * scale, 0.0));
+        // A [`fade_span`](RangeBar::fade_span) bar's values run the whole bar,
+        // the way the octave strip's wheel does: its low end IS the bar's left
+        // end — a gutter of no softness at all, a note standing off nothing —
+        // and a handle stopping a point clear of it reads as a control that
+        // cannot reach its own floor. The handles are still drawn whole, by
+        // clamping where they are PLACED rather than where they mean, which is
+        // the same bargain the strip makes.
+        //
+        // Every other range bar keeps the inset. They open at the FULL axis,
+        // where flush handles at both ends sit under the corner rounding on a
+        // bare track and read as the bar's own border — the affordance
+        // HANDLE_INSET exists for, and which a bar opening on a fill does not
+        // need.
+        let inset = if self.fade_span { 0.0 } else { HANDLE_INSET * scale };
+        let track = rect.shrink2(Vec2::new(inset, 0.0));
         let x_of =
             |v: f32| track.left() + track.width() * ((v - min) / (max - min)).clamp(0.0, 1.0);
         let value_at = |x: f32| {
@@ -921,7 +1201,14 @@ impl<'a> RangeBar<'a> {
                 let grab = match stored {
                     Some(grab) => grab,
                     None => {
-                        let grab = Grab::at(v, (*self.low, *self.high), (min, max), near);
+                        // From where the press LANDED (see `aimed_at`), snapped
+                        // the same way the live value is: the span grab reads
+                        // its own offset off this, so an unsnapped one would
+                        // leave a fraction of a value inside a gesture whose
+                        // whole point is whole ones.
+                        let aim = value_at(aimed_at(ui, p).x);
+                        let aim = if self.integer { aim.round() } else { aim };
+                        let grab = Grab::at(aim, (*self.low, *self.high), (min, max), near);
                         ui.data_mut(|d| d.insert_temp(grab_id, grab));
                         grab
                     }
@@ -938,7 +1225,9 @@ impl<'a> RangeBar<'a> {
         }
 
         // ---- Paint ----------------------------------------------------------
-        let radius = CornerRadius::same(bar_radius(scale));
+        let r = bar_radius(scale);
+        let corner = f32::from(r);
+        let radius = CornerRadius::same(r);
         let painter = ui.painter();
         painter.rect_filled(rect, radius, theme::well());
 
@@ -950,10 +1239,112 @@ impl<'a> RangeBar<'a> {
             theme::accent_fill()
         };
         let (lx, hx) = (x_of(*self.low), x_of(*self.high));
-        let mut span = rect;
-        span.min.x = lx;
-        span.max.x = hx;
-        painter.rect_filled(span, radius, fill_color);
+        if self.fade_span {
+            // One fill from the bar's left edge out to `high`, solid as far as
+            // `low` and ramping to the well over the rest — the picture of the
+            // edge this pair sets. Mixed toward the WELL rather than painted
+            // with alpha, so the ramp ends on exactly the color the bare track
+            // beyond it already is and the fill has no seam at its own end.
+            //
+            // Its floor is the bar's own left edge, which is where this bar's
+            // axis floors too, so it is the same fill as the ValueBars it sits
+            // among. An inset axis — what every other range bar puts its values
+            // on — leaves a sliver of bare well at the far left, HANDLE_INSET
+            // of it, and that sliver reads as a notch cut out of the control
+            // rather than as reach the edge has not got to, because no other
+            // bar in the pane has one.
+            //
+            // A reach of zero is then the one thing the fill cannot say for
+            // itself, and the guard below is what says it: the solid head is
+            // widened past its own end so that its corner survives (see below)
+            // and the clip is what takes it back, so at a reach of zero there
+            // is nothing left to cut it back TO and a control switched off
+            // keeps a hair of its own feathered edge.
+            //
+            // **The two parts are drawn by different machinery, and the split
+            // is what puts the rounded corner in the right hands.** Everything
+            // left of `low` is one flat color, so it is a `rect_filled` like
+            // any other bar's fill — epaint curves and FEATHERS that corner.
+            // The ramp cannot be one: a rect is a single color, which is what
+            // makes a mesh the only way to carry a gradient at all. What the
+            // mesh gives up is the antialiasing — egui leaves a mesh edge hard,
+            // and the arc it fakes by pinching its columns (see CORNER_SAMPLES)
+            // undershoots the true circle by a pixel or so, which against the
+            // panel behind the bar reads as a stepped corner beside the smooth
+            // ones above it.
+            //
+            // So the mesh is handed the one stretch with no corner to draw. It
+            // meets the head at `low` in exactly the head's own color and the
+            // bare track at `high` in exactly the well's, so neither of its
+            // hard ends is a visible edge at all.
+            if *self.high > min {
+                let mut fill = rect;
+                fill.max.x = hx;
+                // Where the solid head gives way to the ramp — at `low`, held
+                // off both ends of the fill.
+                //
+                // It never begins INSIDE the corner, because the corner can
+                // only be drawn by a rounded rect and a rounded rect is one
+                // color. A fade dragged fully open puts `low` at the bar's own
+                // end, so without that the mesh would take the corner back —
+                // square-ended, poking a whole radius out through the well's
+                // arc, or stepped if it rounded itself. What it costs is the
+                // first few points of the fade painted solid: five points of a
+                // ramp a hundred long is a few percent of one, and a ramp short
+                // enough for it to be more than that is a reach of a few
+                // points, under two handles standing on each other.
+                //
+                // And it never begins past the fill's own end, which is what a
+                // pair arriving crossed (`low` above `high`, which a host param
+                // or a blob can still say) would otherwise ask for.
+                let ramp_start = lx.max(fill.left() + corner).min(hx);
+                // Held to the reach, so the head below can be widened past it
+                // without ever drawing reach the edge does not have. Only the
+                // far end is cut — the sides are pushed out of the way so the
+                // fill's own antialiasing is not shaved with them.
+                let mut clip = rect.expand(2.0);
+                clip.max.x = hx;
+                let painter = painter.with_clip_rect(clip);
+                let mut head = fill;
+                // Never narrow enough for its own corner to be clamped. epaint
+                // holds a corner radius to half the rect's shortest side, so a
+                // head cut to fit — one radius, five points, is where a fade
+                // dragged fully open leaves it — would round at two and a half
+                // points where the well rounds at five, and poke out through
+                // the well's arc. That is the bar changing shape as a handle
+                // reaches the end of its travel.
+                //
+                // Twice the radius is what leaves the corner alone, and it
+                // costs nothing to ask for: the ramp is drawn over the excess,
+                // and past the reach the clip takes it.
+                head.max.x = ramp_start.max(fill.left() + 2.0 * corner);
+                // Square where the ramp continues it, round where the bar is:
+                // a rounded right end here would cut a notch out of a fill that
+                // does not stop there.
+                painter.rect_filled(
+                    head,
+                    CornerRadius { nw: r, sw: r, ne: 0, se: 0 },
+                    fill_color,
+                );
+                let mut ramp = fill;
+                ramp.min.x = ramp_start;
+                // A hard edge closes the span, which leaves the head the whole
+                // fill and the ramp nothing — an ordinary setting, and the one
+                // case that has no gradient to draw.
+                if ramp.width() > 0.0 {
+                    let from = egui::Rgba::from(fill_color);
+                    let to = egui::Rgba::from(theme::well());
+                    gradient_strip(&painter, ramp, FADE_SEGMENTS, (0.0, corner), |p| {
+                        egui::lerp(from..=to, p).into()
+                    });
+                }
+            }
+        } else {
+            let mut span = rect;
+            span.min.x = lx;
+            span.max.x = hx;
+            painter.rect_filled(span, radius, fill_color);
+        }
 
         // The name first, in the same place and the same faces a ValueBar puts
         // its own. Values in monospace: digits align and don't wiggle as they
@@ -1013,6 +1404,26 @@ impl<'a> RangeBar<'a> {
 
         let handle_w = HANDLE_W * scale;
         let half_handle = handle_w * 0.5;
+        // Where the thumbs are DRAWN, as against what they mean. A fade bar's
+        // axis runs to the bar's own ends, so a value at either limit puts a
+        // thumb's center on the edge with half its width out over the pane:
+        // held in by half a handle it stands flush instead, whole and inside,
+        // which is how the octave strip places its own. A no-op on a bar whose
+        // track is already inset, where no value reaches this far.
+        //
+        // The readouts step around these rather than around `lx`/`hx`, since
+        // what a number must not be crossed by is the thumb that is there.
+        //
+        // `max`/`min` rather than `clamp`, for the reason `contain` below names:
+        // a row with less width than one handle inverts the pair, and `clamp`
+        // asserts `min <= max` and takes the editor down with it. `bar_width`
+        // floors at zero, so a column squeezed past its own controls reaches
+        // that.
+        let held = |x: f32| {
+            let floor = rect.left() + half_handle;
+            x.max(floor).min((rect.right() - half_handle).max(floor))
+        };
+        let (lgx, hgx) = (held(lx), held(hx));
         let reach = half_handle + text_gap;
         let low = painter.layout_no_wrap((self.display)(*self.low), mono.clone(), theme::text());
         let high = painter.layout_no_wrap((self.display)(*self.high), mono, theme::text());
@@ -1027,9 +1438,9 @@ impl<'a> RangeBar<'a> {
             (start.max(region_left), end.min(region_right))
         };
         let gaps = [
-            clipped((region_left, lx - reach)),
-            clipped((lx + reach, hx - reach)),
-            clipped((hx + reach, region_right)),
+            clipped((region_left, lgx - reach)),
+            clipped((lgx + reach, hgx - reach)),
+            clipped((hgx + reach, region_right)),
         ];
         // First choice is each number beside its own handle, on the empty track
         // outside the span where it sits on flat black and reads cleanly —
@@ -1051,7 +1462,9 @@ impl<'a> RangeBar<'a> {
         let uncrossed = |left: f32, w: f32| {
             left >= region_left
                 && left + w <= region_right
-                && [lx, hx].iter().all(|&x| x + half_handle <= left || x - half_handle >= left + w)
+                && [lgx, hgx]
+                    .iter()
+                    .all(|&x| x + half_handle <= left || x - half_handle >= left + w)
         };
         let apart = low_left + low_w + text_gap <= high_left;
         let (low_left, high_left) =
@@ -1102,7 +1515,17 @@ impl<'a> RangeBar<'a> {
 
         // The handles go on top of everything, text included: they are the
         // part you operate, and a readout digit sliding under one is a better
-        // outcome than a handle disappearing behind a digit.
+        // outcome than a handle disappearing behind a digit. A flat light
+        // thumb, no outline — a 1px dark stroke inside a 6px rounded rect
+        // lands on fractional pixels and reads as a ragged edge, and the thumb
+        // has plenty of contrast against both the filled span and the empty
+        // track without one.
+        //
+        // A thumb that can stand in the bar's own corner is rounded like the
+        // bar rather than like a grip, so it follows the arc it is standing in
+        // as closely as six points of width can — epaint holds a corner to half
+        // that, which is near enough to keep the thumb inside the well. A bar
+        // whose track is inset never gets there, and keeps the grip's own.
         //
         // Only the NAME is knocked out through the thumb. The two numbers are
         // PLACED clear of every thumb instead, which is the better answer where
@@ -1111,20 +1534,18 @@ impl<'a> RangeBar<'a> {
         // opens_at` is the sweep that holds that placement honest. Knocking the
         // numbers out too would give the placement somewhere soft to fail into
         // and cost that check its teeth. The name has no such option: it is
-        // pinned to the left of the bar and a thumb comes to rest on it.
-        //
-        // A flat light thumb, no outline — a 1px dark stroke inside a 6px
-        // rounded rect lands on fractional pixels and reads as a ragged edge,
-        // and the thumb has plenty of contrast against both the filled span
-        // and the empty track without one.
-        for x in [lx, hx] {
+        // pinned to the left of the bar and a thumb comes to rest on it — which
+        // for the two `fade_span` bars and a fresh Gutter is where they OPEN.
+        let grip_radius =
+            CornerRadius::same(if self.fade_span { r } else { theme::scaled_points(2, scale) });
+        for x in [lgx, hgx] {
             grip_over_text(
                 painter,
                 egui::Rect::from_center_size(
                     egui::pos2(x, rect.center().y),
                     Vec2::new(handle_w, rect.height() - 3.0 * scale),
                 ),
-                CornerRadius::same(theme::scaled_points(2, scale)),
+                grip_radius,
                 &[(label_pos, label.clone())],
             );
         }
@@ -1132,10 +1553,10 @@ impl<'a> RangeBar<'a> {
         // The cursor says which of the two gestures a press would start, so the
         // difference is visible BEFORE committing to a drag: an end resizes,
         // the middle picks the whole range up and slides it.
-        let aimed_at = response
+        let would_start = response
             .hover_pos()
             .map(|p| Grab::at(value_at(p.x), (*self.low, *self.high), (min, max), near));
-        match aimed_at {
+        match would_start {
             Some(Grab::Span { .. }) => response.on_hover_cursor(egui::CursorIcon::Grab),
             Some(_) => response.on_hover_cursor(egui::CursorIcon::ResizeHorizontal),
             None => response,
@@ -1289,8 +1710,10 @@ impl<'a> OctaveStrip<'a> {
     pub fn show(self, ui: &mut Ui) -> Response {
         let scale = theme::ui_scale(ui.ctx());
         let width = bar_width(ui);
-        let (rect, mut response) =
-            ui.allocate_exact_size(Vec2::new(width, BAR_HEIGHT * scale), Sense::click_and_drag());
+        let (rect, mut response) = ui.allocate_exact_size(
+            Vec2::new(width, theme::row_height(scale)),
+            Sense::click_and_drag(),
+        );
         let slot = (rect.width() / MAX_SPAN as f32).max(1.0);
         let middle = rect.center().x;
         // How far from the middle of the wheel a point is, in slots — the one
@@ -1315,21 +1738,15 @@ impl<'a> OctaveStrip<'a> {
                 let grab = match stored {
                     Some(grab) => grab,
                     None => {
-                        // From where the press LANDED, which is not where the
-                        // pointer is on the frame this first runs: egui calls
-                        // a gesture a drag only once it has left a six-point
-                        // click threshold, so by here it is already that far
-                        // along, in the direction of travel. A `RangeBar`
-                        // survives reading the live position because its
-                        // handles carry fourteen points of reach; this control
-                        // splits its two gestures on a hard line, and half of
-                        // the drawn handle sits inside the six — so the live
-                        // position hands "grab the handle, pull it outward",
-                        // which is the count, to the fringe.
-                        let start = ui
-                            .ctx()
-                            .input(|i| i.pointer.press_origin())
-                            .map_or(reach, |p| out(p.x));
+                        // From where the press LANDED (see `aimed_at`), which
+                        // this control needs more than the bars with handles do
+                        // and not differently: it splits its two gestures on a
+                        // hard line rather than on a reach, and half of the
+                        // drawn handle sits inside the six points egui spends
+                        // deciding a press is a drag — so the live position
+                        // hands "grab the handle, pull it outward", which is the
+                        // count, to the fringe.
+                        let start = out(aimed_at(ui, p).x);
                         let grab = StripGrab::at(start, *self.count, *self.extras);
                         ui.data_mut(|d| d.insert_temp(grab_id, grab));
                         grab
@@ -1472,41 +1889,62 @@ const FULL_TURN: f32 = 360.0;
 /// whatever the pane is instead of ringing itself in a slightly wrong color.
 const UNCLAIMED_ALPHA: f32 = 74.0 / 255.0;
 
-/// Height of the pitch-order strip under a [`SpectrumBar`]'s track. Shorter
-/// than the track, because it is a picture and not a control: a press on it
-/// is declined ([`SpectrumGrab::Outside`]), and a full-height second bar would
-/// say otherwise.
-const STRIP_H: f32 = 11.0;
-
-/// The pane showing between the three pieces of a [`SpectrumBar`] — beside the
-/// button, and between the track and the strip. ONE value for both, because
-/// what it buys is that the three read as one control: two gaps of different
-/// sizes would group the pieces, and the grouping would be wrong either way
-/// round.
+/// The `L*` and the chroma fraction the track's hue circle is drawn at —
+/// FIXED, and not the gradient's own pair.
 ///
-/// Narrow enough to be tighter than the pane's own row spacing, so the strip
-/// belongs to the track above it rather than to the bar below.
-const PIECE_GAP: f32 = 2.0;
+/// The track is the HUE control, and the two knobs it does not set have bars of
+/// their own directly beneath it. A circle drawn at the gradient's own
+/// brightness and chroma answers those bars as well, and answers them by going
+/// blind: at a chroma of 0 the whole turn is grey, at a dark setting it is
+/// nearly black, and both are one click away — Mono, on the Analyzer tab's
+/// Palette row, is exactly the first of them. The one control that has to show
+/// hues would show none at the settings a reader is most likely to be dialling
+/// their way out of. What the six knobs COMPOSE is the [`GradientPreview`]
+/// the group stands under, which is drawn from the same table the picture is.
+///
+/// Mid `L*`, so no part of the circle is crowded against either end of the
+/// axis, and short of the gamut boundary for the reason [`Gradient`]'s own
+/// default chroma is short of it: at a fraction of 1 the maximum's kinks
+/// between the sRGB primaries show up as bumps in a sweep whose whole job is to
+/// read as an even turn.
+const TRACK_LIGHTNESS: f32 = 60.0;
+/// The chroma fraction that goes with [`TRACK_LIGHTNESS`]. High, because the
+/// fraction is of the floor every hue can hold rather than of each hue's own
+/// ceiling, and a track drawn low on that axis reads as washed out.
+const TRACK_CHROMA: f32 = 0.85;
 
-/// A [`SpectrumBar`] stands two rows tall: the track, the strip under it, and
-/// the gap between.
-fn spectrum_bar_height(scale: f32) -> f32 {
-    (BAR_HEIGHT + PIECE_GAP + STRIP_H) * scale
+/// Height of a [`GradientPreview`]. Shorter than a row, because it is a
+/// picture and not a control: nothing on it can be dragged, and a band standing
+/// as tall as the bars under it would read as a fourth bar that has lost its
+/// handle.
+const PREVIEW_H: f32 = 14.0;
+
+/// [`PREVIEW_H`] at this scale.
+///
+/// Shared with the settings tests, whose sweeps find a bar by its own height
+/// and a preview by this one. A test restating the number instead would keep
+/// passing on the day the preview changed height, by then measuring nothing.
+pub(crate) fn preview_height(scale: f32) -> f32 {
+    PREVIEW_H * scale
 }
 
-/// What a [`SpectrumBar`]'s track and strip measure in a column `column` points
-/// wide: the column, less the flip button at the left end and the gap beside
-/// it.
+/// The pane showing between a [`SpectrumBar`]'s flip button and the track
+/// beside it. Narrow enough to be tighter than the pane's own row spacing, so
+/// the two read as one control rather than as a button with a bar near it.
+const FLIP_GAP: f32 = 2.0;
+
+/// What a [`SpectrumBar`]'s track measures in a column `column` points wide:
+/// the column, less the flip button at the right end and the gap beside it.
 ///
 /// Shared with the settings tests, whose sweep pins every bar in a pane to the
 /// width of its column. This is the one bar that is narrower, and the sweep has
 /// to know by how much or it is choosing between failing on a bar that is
 /// correct and passing on one that has stopped tracking the column.
 pub(crate) fn spectrum_track_width(column: f32, scale: f32) -> f32 {
-    (column - (FLIP_W + PIECE_GAP) * scale).max(0.0)
+    (column - (FLIP_W + FLIP_GAP) * scale).max(0.0)
 }
 
-/// Width of the flip button at the LEFT end of a [`SpectrumBar`], taken out of
+/// Width of the flip button at the RIGHT end of a [`SpectrumBar`], taken out of
 /// the row the bar already has rather than off a row of its own.
 ///
 /// It costs the track that much travel, which is the whole trade and a cheap
@@ -1514,15 +1952,45 @@ pub(crate) fn spectrum_track_width(column: f32, scale: f32) -> f32 {
 /// coarser drag and nothing else — 18pt of 400 is a twentieth of a degree per
 /// pixel. A row costs 20pt of a column that already scrolls.
 ///
-/// The left end rather than the right because a settings pane scrolls, and its
-/// scroll bar is drawn INSIDE the column over the right edge of every bar in
-/// it. A track under it loses nothing that can be read — the dimmed remainder
-/// says the least of anything on the bar — but a button under it is a button
-/// with a bar across it, and the last few pixels of one are not clickable at
-/// all. Nothing else in the row minds the swap: the arc is laid out from the
-/// track's own left edge either way, so it still reads low-to-high, left to
-/// right.
+/// The far end from where the arc starts, so the button sits past the end of
+/// the reading rather than in front of it: the track is cut at the arc's own
+/// start and fills from the left, and the thing that reverses it belongs after
+/// what it reverses. The cost is the settings pane's scroll bar, which is drawn
+/// INSIDE the column over the right edge of every bar in it — so when the pane
+/// scrolls, the button's last couple of points sit under it.
 const FLIP_W: f32 = 18.0;
+
+/// The name a [`SpectrumBar`] writes along its own track.
+///
+/// Here rather than handed in by the caller, for the reason [`Spread::label`]
+/// is: a bar over a gradient is a bar over the hue pair whichever gradient it
+/// is, and a name passed separately is a way for one pane to call it something
+/// the next pane does not.
+const SPAN_LABEL: &str = "Color span";
+
+/// The color a [`SpectrumBar`] writes its own name in: the ground the bar sits
+/// on, which is the one text run in the dock not drawn in the theme's text.
+///
+/// **The circle is drawn at ONE lightness ([`TRACK_LIGHTNESS`]), so a word on it
+/// has exactly two possible grounds** whatever the six knobs say: the circle at
+/// `L*` 60 where the arc claims it, and that same circle held back to the well
+/// beyond the handle. Nothing reads well on both — the theme's text is about
+/// 2.5:1 against the claimed half and 6:1 against the held-back one, and the
+/// well is those two the other way round — so the name takes the color that
+/// reads where the name actually stands. It is pinned to the track's LEFT end,
+/// which is the CLAIMED end at every arc wide enough to reach past it, about 60
+/// degrees on the column this pane opens at.
+///
+/// What that costs is Mono and the arcs narrower than the name is wide: there
+/// the word stands on held-back color and goes quiet. That is the right way for
+/// it to fail — those are the settings where the bar has least to say, and the
+/// alternative is the whole rest of the range spent at 2.5:1.
+///
+/// The theme's own well rather than a black named here, so a re-skin moves the
+/// name with the ground it is drawn to match.
+fn span_name_color() -> Color32 {
+    theme::well()
+}
 
 /// Which part of a [`SpectrumBar`]'s track a drag took hold of. Decided once,
 /// at drag-start, and remembered for the gesture, exactly as [`Grab`] is: a
@@ -1539,16 +2007,18 @@ enum SpectrumGrab {
     /// a turn never reads back the circle it is itself moving.
     Rotate { held: f32 },
     /// A press that landed off the track, which for this widget means on the
-    /// pitch-order strip below it.
+    /// [`GradientPreview`] above it — or in the pane's own row spacing either
+    /// side.
     ///
-    /// A rectangle the strip is not inside is NOT enough to keep a press on it
-    /// out of the track, and that is the whole reason this variant exists:
+    /// A rectangle the preview is not inside is NOT enough to keep a press on
+    /// it out of the track, and that is the whole reason this variant exists:
     /// egui's hit test gathers every widget within
     /// `interaction.interact_radius` of the pointer and, when the press hits
     /// none of them squarely, gives it to the nearest. At the default radius of
-    /// 5 the track reaches five points below its own bottom edge — past
-    /// [`PIECE_GAP`] and into the strip — so the widget is handed drags it has
-    /// to decline by position.
+    /// 5 the track reaches five points past its own edges — further than the
+    /// 4pt of row spacing above it, and the preview senses hover alone, so a
+    /// press on the preview's lower edge is a press the widget is handed and
+    /// has to decline by position.
     ///
     /// Remembered for the gesture like the other two, so a drag that started
     /// off the track does not catch hold the moment the pointer crosses onto
@@ -1577,20 +2047,103 @@ fn default_home() -> Gradient {
     ViewConfig::default().pitch_gradient
 }
 
-/// The pitch gradient's hue arc, as three pieces of one control: the button
-/// that reverses it at the left end, and beside that a full turn of the color
-/// circle laid along a track, CUT at the arc's own start, with the stretch the
-/// gradient walks filled from the track's left edge and the hues it does not
-/// reach dimmed beyond it. Under the track, a gap below it, the gradient itself
-/// in pitch order, low note on the left.
+/// The gradient itself, end to end at a fixed scale: the picture the bars under
+/// it compose, low note (or silence) on the left.
+///
+/// **The one place a reader sees all six knobs at once**, which is why it
+/// stands above the three bars rather than beside any one of them. Each bar
+/// below is a picture of the two numbers IT sets — the hue arc on a
+/// [`SpectrumBar`], the brightness and chroma pairs on a [`SpreadBar`] each —
+/// and none of them can show what the six make together. It is also the only
+/// one of the four that survives every setting: at a span of zero the arc has
+/// no width at all, and a single hue over a brightness ramp is a real gradient
+/// that the hue track alone would draw as one column of nothing.
+///
+/// Read out of the same table the lattice draws from, so the preview cannot
+/// drift from the picture. A band mixed here from the widget's own idea of the
+/// gradient would be a second definition of the color, wrong the first time
+/// either changed.
+///
+/// A picture and not a control: it senses hover, so it can carry a tooltip, and
+/// there is nothing on it to drag. What keeps a press ON it from reaching the
+/// bar below is that bar's own position check — see [`SpectrumGrab::Outside`],
+/// where the reason a rectangle is not enough is written out.
+///
+/// Full column width and no well beneath it, unlike every bar: it is opaque end
+/// to end and covers whatever ground it is given, and a recessed track under a
+/// picture would say there is a value in there somewhere.
+///
+/// **Its space is taken first and its paint happens last, and the two are
+/// separate calls for exactly that reason.** A settings pane draws top-down, so
+/// a picture drawn where it STANDS is drawn from the value the bars below it
+/// were handed rather than the one they just wrote: every frame of every drag
+/// in the group would show the gradient as it was one frame ago, above three
+/// bars showing it as it is. `harmonigraph_scene::color`'s `LUT_SLOTS` counts
+/// that frame from the other side — everything above a bar reads what the bar
+/// wrote last frame, which is why the bar re-reads before painting — and a
+/// picture is the one thing in a settings pane that can afford neither the lag
+/// nor a row further down. `a_spectrum_drag_draws_the_preview_it_just_set` is
+/// what holds the order.
+///
+/// Reserving is what makes that possible: the row is claimed at the top of the
+/// group, so the bars land under it, and the colors are read at the bottom of
+/// the group, after every one of them has written.
+pub struct GradientPreview {
+    rect: egui::Rect,
+    id: egui::Id,
+}
+
+impl GradientPreview {
+    /// Claim the row, before the bars that write the gradient are drawn.
+    pub fn reserve(ui: &mut Ui) -> Self {
+        let scale = theme::ui_scale(ui.ctx());
+        let width = bar_width(ui);
+        let (id, rect) = ui.allocate_space(Vec2::new(width, preview_height(scale)));
+        GradientPreview { rect, id }
+    }
+
+    /// Paint it, after them.
+    pub fn show(self, ui: &Ui, gradient: &Gradient) -> Response {
+        let scale = theme::ui_scale(ui.ctx());
+        let response = ui.interact(self.rect, self.id, Sense::hover());
+        // One column per table entry, so every color in the table lands on a
+        // column of its own and only the vertices between two of them are
+        // interpolated.
+        let lut = pitch_ramp_lut(gradient.sanitized());
+        // Rounded at both ends: the preview is a band in its own right, and
+        // each of its ends meets the pane rather than another shape.
+        let corner = f32::from(bar_radius(scale));
+        gradient_strip(
+            ui.painter(),
+            self.rect,
+            PITCH_LUT_N - 1,
+            (corner, corner),
+            |p| {
+                let f = p.clamp(0.0, 1.0) * (PITCH_LUT_N - 1) as f32;
+                let i0 = f.floor() as usize;
+                scene_color(lut[i0].lerp(lut[(i0 + 1).min(PITCH_LUT_N - 1)], f - f.floor()), 1.0)
+            },
+        );
+        response
+    }
+}
+
+/// The pitch gradient's hue arc, as two pieces of one control: a track carrying
+/// a full turn of the color circle, CUT at the arc's own start, with the stretch
+/// the gradient walks lit from the track's left edge and the hues it does not
+/// reach dimmed beyond it — and past the right end of that, the button which
+/// reverses it. The bar's name stands on the circle at the left.
+///
+/// What the arc COMPOSES with the other four knobs is not here at all: it is
+/// the [`GradientPreview`] the group stands under. This bar is the hue pair
+/// and nothing else, and the two spread bars below it are the other four.
 ///
 /// Every piece wears the shared [`CONTROL_RADIUS`](theme::CONTROL_RADIUS) and
-/// sits on the pane, with no frame drawn round the set: the button is a button
-/// down to the table its colors are read out of, and the two bands round
-/// exactly like the fill of a [`ValueBar`] above them. A well large enough to
-/// hold all three would ring the control in a border nothing else in a settings
-/// pane wears — see [`gradient_strip`], which is where the alternative was paid
-/// for.
+/// sits on the pane, with no frame drawn round the pair: the button is a button
+/// down to the table its colors are read out of, and the circle rounds exactly
+/// like the fill of a [`ValueBar`] above it. A well large enough to hold both
+/// would ring the control in a border nothing else in a settings pane wears —
+/// see [`gradient_strip`], which is where the alternative was paid for.
 ///
 /// Drag the handle to set how far round the circle the range walks; drag the
 /// track to turn the whole circle under it; double-click to reset. Which
@@ -1606,49 +2159,49 @@ fn default_home() -> Gradient {
 /// say where on the circle it is in absolute terms, which is a number nobody
 /// reads a color off anyway — the track is painted in the colors themselves.
 ///
-/// **It previews all six knobs, not just the one it sets.** The claimed
-/// stretch is painted straight out of [`pitch_ramp_lut`], the same table the
-/// lattice draws from, so brightness and chroma show up in it too and the
-/// preview cannot drift from the picture. A swatch drawn from the widget's own
-/// idea of the gradient would be a second definition of the color, wrong the
-/// first time either changed. The dimmed remainder comes from [`hue_circle`]
-/// at the gradient's BASE lightness and chroma — the middle of each of its two
-/// ramps — so it reads as the same gradient continued rather than as decoration.
+/// **The circle is hue and nothing else.** It is [`hue_circle`] at one fixed
+/// lightness and chroma ([`TRACK_LIGHTNESS`]) — read out of a table rather than
+/// mixed here, so it cannot drift from what the lattice draws — at full
+/// strength over the stretch the arc claims and dimmed beyond it. Brightness
+/// and chroma show up in the preview above instead, which is where they can be
+/// read against the bars that set them.
 ///
-/// Which means it meets the claimed arc flush only when both ramps are FLAT:
-/// the arc ends at the top of them, and the remainder carries on from the
-/// middle, so a steep ramp puts a step at the handle. Continuing the ramp
-/// instead would close that step and pay for it at the top of the knob, where
-/// an arc reaching `L*` 100 would dim out into a white band saying nothing
-/// about which hues are left — and the remainder's whole job is to say that.
+/// One circle either side of the handle is also what makes the two halves of
+/// the track meet FLUSH at every setting, rather than only where both ramps
+/// happen to be flat: the same hue is drawn at two strengths, so where the arc
+/// stops is a change of strength and nothing else.
+///
+/// **The name stands ON the circle, in the place every other bar puts its own,
+/// and is the one text run in the dock drawn dark rather than light** — see
+/// [`span_name_color`], where the two grounds a word on this track can have are
+/// counted and the choice between them made. The circle runs the whole track
+/// rather than starting past a gutter, which is what keeps the arc reading from
+/// the bar's own left edge.
+///
+/// The readout is held to the stretch RIGHT of the name, exactly as a
+/// [`RangeBar`]'s numbers are, so the two text runs cannot meet however wide
+/// the arc grows. The handle is not: it travels the whole circle, name
+/// included, being the part you operate and drawn over everything.
 ///
 /// **The flip is a button because the track cannot carry the gesture.** The arc
 /// is laid out from its own start, so both directions draw the same stretch of
 /// color in the same place and there is nothing on the track to drag the other
-/// way. It lives in the bar's own row rather than beside it because a settings
-/// column is short of rows and not of width: the two things a reader wants
-/// together are the arc and the direction it runs, and a row spent on one
+/// way. It lives in the bar's own row rather than above or below it because a
+/// settings column is short of rows and not of width: the two things a reader
+/// wants together are the arc and the direction it runs, and a row spent on one
 /// button pushes every knob under it further down a pane that already scrolls.
+/// It sits past the far end of the arc — see [`FLIP_W`] for why that end.
 ///
-/// **The strip is not redundant with the track.** They agree wherever both say
-/// anything — the claimed stretch IS the gradient — but the claimed stretch is
-/// as wide as the span, so at a span of zero it has no width at all, and a
-/// single-hue gradient with a brightness ramp is a real setting that the track
-/// alone would draw as nothing. It is also the one place the gradient is drawn
-/// at a fixed scale: the track squeezes it into whatever fraction of the turn
-/// the arc claims, so a narrow arc's ramp is a sliver there and full width
-/// here.
-///
-/// It sits a hair under the track — [`PIECE_GAP`], the one gap this control
-/// uses, which is also what separates the button from both — rather than a
-/// bar's worth of space away. Three pieces on the pane at one rhythm read as
-/// one control; anything looser reads as a bar with things near it.
-///
-/// **What the flip changes on screen is the sign, and both ramps' ends.** The
-/// claimed stretch and the strip are the same pitch ramp, low note at the left,
-/// so both reverse with the gradient — which is exactly the change, drawn where
-/// the change is. The readout spells the direction out on top of that, because
-/// an arc and its flip claim exactly the same colors.
+/// **What the flip changes on screen is the sign, and the HUE of the circle and
+/// the preview alike.** Each reads low note at the left — the circle from the
+/// hue the bottom of the range takes, the preview from the color it takes — so
+/// the arc runs the other way round the circle in both, which is exactly the
+/// change drawn where the change is. Neither RAMP turns around with it:
+/// [`Gradient::flipped`] rewrites the hue pair and carries brightness and
+/// chroma through untouched, so the preview keeps its dark end where it was and
+/// the two spread bars read out the same pair after a flip as before it. The
+/// readout spells the direction out on top of all that, because an arc and its
+/// flip claim exactly the same colors.
 pub struct SpectrumBar<'a> {
     gradient: &'a mut Gradient,
     home: Gradient,
@@ -1673,34 +2226,29 @@ impl<'a> SpectrumBar<'a> {
         let width = bar_width(ui);
         // Space first, senses after: the row holds two controls side by side,
         // and each is interacted with over its OWN rectangle. That is what
-        // keeps a press on the flip button out of the track. One rectangle
-        // sensed for both would hand a sideways drag begun on the button
-        // straight to the rotate branch, and asking the widget where the press
-        // LANDED is no answer either — egui calls a press a drag only once it
-        // has moved, by which time the pointer can be over the track.
-        let piece_gap = PIECE_GAP * scale;
-        let (id, rect) = ui.allocate_space(Vec2::new(width, spectrum_bar_height(scale)));
-        // The track's width is what the two bands and the settings sweep all
+        // keeps a press on the flip button out of the track — a button that
+        // senses clicks and not drags produces no drag hit at all, so there is
+        // nothing for the track to inherit at any distance.
+        //
+        // One rectangle sensed for both would put that on a position check
+        // instead: the widget would take the drag and have to decline it by
+        // asking [`aimed_at`] where the press landed, exactly as the preview
+        // above IS declined. Two rectangles rather than one check because a
+        // check can only be reached once egui calls the press a drag, and the
+        // frames before that are ones the button spends looking pressed while
+        // the track quietly holds the gesture.
+        let flip_gap = FLIP_GAP * scale;
+        let (id, rect) = ui.allocate_space(Vec2::new(width, theme::row_height(scale)));
+        // The track's width is what the circle and the settings sweep both
         // measure, so the row is laid out from it rather than from the button:
         // a column too narrow to leave the track anything then gives the button
         // the row, which is the right way round. A coarse handle beats an
         // unreachable one, but a button with no width cannot be pressed at all.
-        let split = rect.right() - spectrum_track_width(rect.width(), scale);
-        // The button stands the full height of both rows, because it reverses
-        // what both of them draw.
+        let split = rect.left() + spectrum_track_width(rect.width(), scale);
+        let track_rect =
+            egui::Rect::from_min_max(rect.min, egui::pos2(split, rect.bottom()));
         let flip_rect = egui::Rect::from_min_max(
-            rect.min,
-            egui::pos2((split - piece_gap).max(rect.left()), rect.bottom()),
-        );
-        let track_rect = egui::Rect::from_min_max(
-            egui::pos2(split, rect.top()),
-            egui::pos2(rect.right(), rect.top() + BAR_HEIGHT * scale),
-        );
-        // Only the track is sensed, and the strip is a picture — but sensing
-        // stops short of the strip rather than keeping presses off it. What
-        // does that is `on_track` below; see [`SpectrumGrab::Outside`].
-        let strip_rect = egui::Rect::from_min_max(
-            egui::pos2(track_rect.left(), track_rect.bottom() + piece_gap),
+            egui::pos2((split + flip_gap).min(rect.right()), rect.top()),
             rect.max,
         );
         let mut response = ui.interact(track_rect, id.with("track"), Sense::click_and_drag());
@@ -1710,16 +2258,73 @@ impl<'a> SpectrumBar<'a> {
                 "Run the spectrum the other way round the circle — the same \
                  colors, low and high swapped",
             );
-        // The handle sits ON a position rather than between two, so the track
-        // is inset by half of one at each end and both limits — a span of zero
-        // and a whole turn — are places it can stand rather than edges it
-        // merges into. Same reason as HANDLE_INSET.
-        let track = track_rect.shrink2(Vec2::new(HANDLE_INSET * scale, 0.0));
-        // Where a gradient puts itself on this track: which way round the
-        // circle it runs, how much of the turn it claims, and where that leaves
-        // the handle. A function rather than three bindings because the answer
-        // is wanted TWICE — once for the gradient a gesture is aimed at, and
-        // again for the one that gesture just wrote.
+
+        // ---- The name, and the stretch it keeps the readout out of ----------
+        // Laid out HERE rather than with the rest of the paint, so its width is
+        // in hand before anything else is placed against it.
+        let painter = ui.painter();
+        // Whether a point is on the control, as opposed to on the picture above
+        // it or in the row spacing either side. The track's sensed rectangle
+        // stops at its own edges, and this is still the only thing standing
+        // between a press off it and a gesture — see [`SpectrumGrab::Outside`]
+        // for why the rectangle is not enough.
+        let on_track = |p: &egui::Pos2| track_rect.contains(*p);
+        // Lit by a pointer ON the track, not merely by one egui has decided the
+        // track is nearest to, which reaches a row's spacing either side. A
+        // readout that brightens while the pointer is over the preview says the
+        // picture is the control.
+        //
+        // The READOUT alone answers the pointer. The name is one color at every
+        // state ([`span_name_color`]) because it is drawn to be read against the
+        // hue behind it, and dimming it means nothing but losing it.
+        let pointing = response.hover_pos().filter(on_track);
+        let text_color = if pointing.is_some() || response.dragged() {
+            theme::text()
+        } else {
+            theme::text_dim()
+        };
+        let mono = TextStyle::Monospace.resolve(ui.style());
+        let text_gap = TEXT_GAP * scale;
+        // Room kept clear for the readout, measured from the widest string it
+        // can produce rather than from the span in the bar now — a RangeBar
+        // reserves its ends the same way and for the same reason: a name that
+        // re-elides as the number gains a digit wobbles under the pointer
+        // mid-drag. A whole turn is as long as it gets, and the sign is always
+        // written.
+        let reserve = painter
+            .layout_no_wrap(format!("{:+.0}°", -FULL_TURN), mono.clone(), theme::text())
+            .size()
+            .x;
+        let mut job = egui::text::LayoutJob::simple_singleline(
+            SPAN_LABEL.to_owned(),
+            TextStyle::Body.resolve(ui.style()),
+            span_name_color(),
+        );
+        let text_pad = BAR_TEXT_PAD * scale;
+        job.wrap.max_width =
+            (track_rect.width() - 2.0 * text_pad - BAR_LABEL_GAP * scale - reserve).max(0.0);
+        job.wrap.max_rows = 1;
+        job.wrap.overflow_character = Some('\u{2026}');
+        let label = painter.layout_job(job);
+        // Where the name ends, and so the only part of the track the readout is
+        // allowed into. The name was laid out against a width with the widest
+        // readout already subtracted, so what is left here holds it: the name
+        // can no more be pushed off by the number than the number can push into
+        // the name.
+        let readable_left =
+            track_rect.left() + text_pad + label.size().x + BAR_LABEL_GAP * scale;
+        // What the handle travels: the track, less half a handle at each end,
+        // so both limits — a span of zero and a whole turn — are places it can
+        // stand rather than edges it merges into. Same reason as HANDLE_INSET.
+        // The whole track, name and all: a handle standing in the name is the
+        // same bargain a RangeBar's ends make, and the handle is the part you
+        // operate.
+        let travel = track_rect.shrink2(Vec2::new(HANDLE_INSET * scale, 0.0));
+        // Where a gradient puts itself on that: which way round the circle it
+        // runs, how much of the turn it claims, and where that leaves the
+        // handle. A function rather than three bindings because the answer is
+        // wanted TWICE — once for the gradient a gesture is aimed at, and again
+        // for the one that gesture just wrote.
         let laid_out = |g: Gradient| {
             // A span of zero has no direction of its own, and opening rightward
             // is the useful reading: dragging the handle out of nothing then
@@ -1727,13 +2332,8 @@ impl<'a> SpectrumBar<'a> {
             // is what makes the test sound, by keeping -0.0 out of the field.
             let winding = if g.hue_span < 0.0 { -1.0f32 } else { 1.0 };
             let claimed = (g.hue_span / FULL_TURN).abs().clamp(0.0, 1.0);
-            (winding, claimed, track.left() + track.width() * claimed)
+            (winding, claimed, travel.left() + travel.width() * claimed)
         };
-        // Whether a point is on the control, as opposed to on the picture below
-        // it. The track's sensed rectangle stops at the gap, and this is still
-        // the only thing standing between a press on the strip and a gesture —
-        // see [`SpectrumGrab::Outside`] for why the rectangle is not enough.
-        let on_track = |p: &egui::Pos2| track_rect.contains(*p);
 
         // ---- Interaction ----------------------------------------------------
         // Ahead of the snapshot below, so the frame that flips is the frame
@@ -1750,10 +2350,10 @@ impl<'a> SpectrumBar<'a> {
         }
         let aimed = self.gradient.sanitized();
         let (winding, _, handle_x) = laid_out(aimed);
-        // Where a point across the track sits on the circle, as a signed
-        // offset in degrees from the hue at the left edge.
+        // Where a point across the circle sits on it, as a signed offset in
+        // degrees from the hue at the left edge.
         let offset_at = |x: f32| {
-            ((x - track.left()) / track.width().max(1.0)).clamp(0.0, 1.0) * FULL_TURN * winding
+            ((x - travel.left()) / travel.width().max(1.0)).clamp(0.0, 1.0) * FULL_TURN * winding
         };
         let grab_id = response.id.with("spectrum_grab");
         let clicked_track = response.interact_pointer_pos().is_some_and(|p| on_track(&p));
@@ -1771,22 +2371,24 @@ impl<'a> SpectrumBar<'a> {
                 let grab = match stored {
                     Some(grab) => grab,
                     None => {
-                        // Whether the gesture is ours is asked of where the
-                        // press LANDED, and which grab it is of where the
-                        // pointer has reached. Two positions on purpose: egui
-                        // only calls a press a drag once it has moved past a
-                        // threshold, so by this frame a press that began on the
-                        // strip may already be over the track — while the
-                        // handle-or-track question is settled on the first live
-                        // frame exactly as [`Grab`]'s is, so the two bars answer
-                        // a mid-gesture jump the same way.
-                        let origin = ui.input(|i| i.pointer.press_origin()).unwrap_or(p);
+                        // All three of these are asked of where the press
+                        // LANDED — see [`aimed_at`] — and none of them of where
+                        // the pointer has since got to. Whether the gesture is
+                        // ours, because a press that began on the preview is
+                        // already over the track by the first live frame;
+                        // handle or track, because a press inside the handle's
+                        // reach is already clear of it; and the hue a turn
+                        // holds, because the gesture begins where the hand put
+                        // it down and turning the circle by less than the
+                        // pointer has travelled is a gesture that starts behind
+                        // and stays there.
+                        let origin = aimed_at(ui, p);
                         let grab = if !on_track(&origin) {
                             SpectrumGrab::Outside
-                        } else if (p.x - handle_x).abs() <= GRAB_PX * scale {
+                        } else if (origin.x - handle_x).abs() <= GRAB_PX * scale {
                             SpectrumGrab::Span
                         } else {
-                            SpectrumGrab::Rotate { held: aimed.hue_start + offset_at(p.x) }
+                            SpectrumGrab::Rotate { held: aimed.hue_start + offset_at(origin.x) }
                         };
                         ui.data_mut(|d| d.insert_temp(grab_id, grab));
                         grab
@@ -1819,86 +2421,63 @@ impl<'a> SpectrumBar<'a> {
         // ---- Paint ----------------------------------------------------------
         // The gradient read BACK, not the snapshot the gesture was aimed at. A
         // drag has just written it, and painting the value from before that
-        // write leaves the handle, the arc, the strip and the readout a whole
-        // frame behind the pointer for the length of the gesture — a step of
-        // one value and about 17px at a brisk drag. ValueBar and RangeBar both
-        // re-read their values here for the same reason.
+        // write leaves the handle, the arc and the readout a whole frame behind
+        // the pointer for the length of the gesture — a step of one value and
+        // about 17px at a brisk drag. ValueBar and RangeBar both re-read their
+        // values here for the same reason.
         let g = self.gradient.sanitized();
         let (winding, claimed, handle_x) = laid_out(g);
-        let lut = pitch_ramp_lut(g);
-        let circle = hue_circle(g.lightness, g.chroma);
+        let circle = hue_circle(TRACK_LIGHTNESS, TRACK_CHROMA);
         let corner = bar_radius(scale);
         let radius = CornerRadius::same(corner);
-        let painter = ui.painter();
-        // The pitch ramp at `p` along itself, read out of the same table the
-        // lattice draws from so the preview cannot drift from the picture. Both
-        // bands want it — the track squeezed into the claimed stretch, the strip
-        // end to end — and reading the table twice is how they would stop
-        // agreeing.
-        let ramp_at = |p: f32| {
-            let f = p.clamp(0.0, 1.0) * (PITCH_LUT_N - 1) as f32;
-            let i0 = f.floor() as usize;
-            lut[i0].lerp(lut[(i0 + 1).min(PITCH_LUT_N - 1)], f - f.floor())
-        };
-        // A well under the track and nothing under the strip, because the
-        // dimmed hues are drawn with alpha and need a recessed ground to sit
-        // on — the same ground the unfilled end of a ValueBar shows. The strip
-        // is opaque end to end and covers whatever it is given.
+        // A well under the whole track, because the dimmed hues are drawn with
+        // alpha and need a recessed ground to sit on — the same ground the
+        // unfilled end of a ValueBar shows, and the color the name is written
+        // in ([`span_name_color`]).
         painter.rect_filled(track_rect, radius, theme::well());
-        gradient_strip(painter, track_rect, SPECTRUM_SEGMENTS, corner as f32, |p| {
-            if claimed > 0.0 && p <= claimed {
-                // Along the gradient, not around the circle: the two agree by
-                // construction here, and reading the table is what keeps them
-                // agreeing if they ever stop.
-                scene_color(ramp_at(p / claimed), 1.0)
-            } else {
-                // The hues the gradient does not reach, held back far enough to
-                // read as ground.
-                let hue = g.hue_start + p * FULL_TURN * winding;
-                let f = hue.rem_euclid(FULL_TURN) / FULL_TURN * HUE_CIRCLE_N as f32;
-                let i0 = f.floor() as usize % HUE_CIRCLE_N;
-                scene_color(
-                    circle[i0].lerp(circle[(i0 + 1) % HUE_CIRCLE_N], f - f.floor()),
-                    UNCLAIMED_ALPHA,
-                )
-            }
+        // ONE circle across the whole track, at full strength over the stretch
+        // the arc claims and held back to ground beyond it. The same hue on
+        // both sides of the handle, so the two meet flush at every setting and
+        // what the handle marks is how far round the turn the gradient reaches
+        // — which is the only thing this track is for.
+        gradient_strip(painter, track_rect, SPECTRUM_SEGMENTS, (corner as f32, corner as f32), |p| {
+            let hue = g.hue_start + p * FULL_TURN * winding;
+            let f = hue.rem_euclid(FULL_TURN) / FULL_TURN * HUE_CIRCLE_N as f32;
+            let i0 = f.floor() as usize % HUE_CIRCLE_N;
+            let alpha = if claimed > 0.0 && p <= claimed { 1.0 } else { UNCLAIMED_ALPHA };
+            scene_color(circle[i0].lerp(circle[(i0 + 1) % HUE_CIRCLE_N], f - f.floor()), alpha)
         });
+        let centered = |galley: &egui::Galley, x: f32| {
+            egui::pos2(x, track_rect.center().y - galley.size().y * 0.5)
+        };
+        painter.galley(centered(&label, track_rect.left() + text_pad), label, span_name_color());
 
         // How far round the circle the arc reaches, read out beside the handle
         // — on the dimmed side, where it sits on flat color, and on the claimed
         // side when the arc has grown too wide to leave room there, which is
         // the same bargain a [`RangeBar`]'s ends make. One number and one
         // handle, so it needs none of the arithmetic that keeps a range's TWO
-        // roaming numbers out of each other and off the name. The sign is the
-        // direction, and it is spelled out because the track cannot show it:
-        // an arc and its flip claim exactly the same colors.
-        let font = TextStyle::Monospace.resolve(ui.style());
-        // Lit by a pointer ON the track, not merely by one egui has decided the
-        // track is nearest to — which reaches into the strip below. A readout
-        // that brightens while the pointer is over the picture says the picture
-        // is the control.
-        let pointing = response.hover_pos().filter(on_track);
-        let text_color = if pointing.is_some() || response.dragged() {
-            theme::text()
-        } else {
-            theme::text_dim()
-        };
-        let galley =
-            painter.layout_no_wrap(format!("{:+.0}°", g.hue_span), font, text_color);
-        let gap = TEXT_GAP * scale;
-        let reach = HANDLE_W * 0.5 * scale + gap;
+        // roaming numbers out of each other. The sign is the direction, and it
+        // is spelled out because the track cannot show it: an arc and its flip
+        // claim exactly the same colors.
+        //
+        // Held clear of the NAME at its left, which is the one text run it
+        // cannot slide under: the name is a word and the two would read as one
+        // string. Its room came out of the name's own width above.
+        let galley = painter.layout_no_wrap(format!("{:+.0}°", g.hue_span), mono, text_color);
+        let reach = HANDLE_W * 0.5 * scale + text_gap;
         let outside = handle_x + reach;
-        let left = if outside + galley.size().x <= track_rect.right() - gap {
+        let left = if outside + galley.size().x <= track_rect.right() - text_gap {
             outside
         } else {
             handle_x - reach - galley.size().x
         };
         let left = left.clamp(
-            track_rect.left() + gap,
-            (track_rect.right() - gap - galley.size().x).max(track_rect.left() + gap),
+            readable_left,
+            (track_rect.right() - text_gap - galley.size().x).max(readable_left),
         );
-        let y = track_rect.center().y - galley.size().y * 0.5;
-        painter.galley(egui::pos2(left, y), galley, text_color);
+        let at = centered(&galley, left);
+        painter.galley(at, galley, text_color);
 
         // The handle on top of everything, readout included: it is the part
         // you operate, and a digit sliding under it beats it disappearing
@@ -1911,16 +2490,6 @@ impl<'a> SpectrumBar<'a> {
             CornerRadius::same(theme::scaled_points(2, scale)),
             theme::text(),
         );
-
-        // ---- The same gradient, in pitch order ------------------------------
-        // A gap under the track, aligned with it end to end: two rows of one
-        // control, not a second bar. One column per table entry, so every color
-        // in the table lands on a column of its own and only the vertices
-        // between two of them are interpolated.
-        let strip_corner = corner as f32;
-        gradient_strip(painter, strip_rect, PITCH_LUT_N - 1, strip_corner, |p| {
-            scene_color(ramp_at(p), 1.0)
-        });
 
         // ---- The flip button ------------------------------------------------
         // Painted out of the theme's own widget visuals, state for state, and
@@ -2002,16 +2571,16 @@ fn flip_mark(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32, sc
 /// Samples taken through each of a band's corner arcs, on top of the columns
 /// the band is already drawn in.
 ///
-/// Those columns are far too coarse to round with on their own, and the strip
-/// is the case that settles it: 63 columns across the column this pane opens
-/// at puts them 6pt apart, wider than the radius, so a corner crosses fewer
-/// than ONE of them and is drawn from its two endpoints — a diagonal cut. The
-/// track's 192 are 2pt apart and give a corner three steps, which is a chamfer.
-/// egui does not antialias a mesh edge, so how finely the arc is sampled is the
-/// only smoothness there is.
+/// Those columns are far too coarse to round with on their own, and the
+/// preview is the case that settles it: 63 columns across the column this pane
+/// opens at puts them 6pt apart, wider than the radius, so a corner crosses
+/// fewer than ONE of them and is drawn from its two endpoints — a diagonal cut.
+/// The hue circle's 192 are 2pt apart and give a corner three steps, which is a
+/// chamfer. egui does not antialias a mesh edge, so how finely the arc is
+/// sampled is the only smoothness there is.
 ///
 /// Both figures move with the column, and in the direction that makes the
-/// strip's case the one to size for: narrow the pane and every column narrows
+/// preview's case the one to size for: narrow the pane and every column narrows
 /// while the radius holds, so the samples matter most where the pane is widest.
 const CORNER_SAMPLES: usize = 8;
 
@@ -2344,9 +2913,9 @@ impl SpreadGrab {
 /// neither. Pitch order is also the only place the SIGN can live: a ramp and
 /// its negative put the two handles in exactly the same places, so the bar
 /// cannot draw the difference, and an inverted ramp reads out backwards
-/// instead, high to low. (What the sign means for the picture is one row up, on
-/// the strip under the spectrum bar, which draws the gradient in pitch order
-/// and so reverses with it.)
+/// instead, high to low. (What the sign means for the picture is at the top of
+/// the group, on the [`GradientPreview`], which draws the gradient in pitch
+/// order and so reverses with it.)
 ///
 /// **Both ends stay on the axis at every setting.** That is the bar's own
 /// geometry — a handle off the track is not a value it can express — and
@@ -2400,8 +2969,10 @@ impl<'a> SpreadBar<'a> {
     pub fn show(self, ui: &mut Ui) -> Response {
         let scale = theme::ui_scale(ui.ctx());
         let width = bar_width(ui);
-        let (rect, mut response) =
-            ui.allocate_exact_size(Vec2::new(width, BAR_HEIGHT * scale), Sense::click_and_drag());
+        let (rect, mut response) = ui.allocate_exact_size(
+            Vec2::new(width, theme::row_height(scale)),
+            Sense::click_and_drag(),
+        );
         let axis = self.spread.axis();
         let (min, max) = axis;
         // Values live on an inset track, so both limits are places a handle can
@@ -2433,7 +3004,8 @@ impl<'a> SpreadBar<'a> {
                 let grab = match stored {
                     Some(grab) => grab,
                     None => {
-                        let grab = SpreadGrab::at(v, aimed, near);
+                        // From where the press LANDED; see [`aimed_at`].
+                        let grab = SpreadGrab::at(value_at(aimed_at(ui, p).x), aimed, near);
                         ui.data_mut(|d| d.insert_temp(grab_id, grab));
                         grab
                     }
@@ -2554,15 +3126,16 @@ impl<'a> SpreadBar<'a> {
 
 /// A band of `segments + 1` colored columns across `rect`, each column's color
 /// taken from `color` at its position along the band (0 at the left edge, 1 at
-/// the right) and interpolated between columns, with the band's ends rounded to
-/// `radius`.
+/// the right) and interpolated between columns, with the band's two ends rounded
+/// to `radii`.
 ///
-/// One builder for a [`SpectrumBar`]'s two bands — the track, whose color comes
-/// off the hue circle and the pitch ramp either side of the handle, and the
-/// pitch-order strip below it, which is the ramp end to end. A quad strip
-/// written out twice is two places to get the vertex order or the first-column
-/// case wrong, and the second copy is the one that quietly keeps the older
-/// answer.
+/// One builder for both bands a gradient group draws — a [`SpectrumBar`]'s
+/// track, which is the hue circle lit and then dimmed either side of the
+/// handle, and the [`GradientPreview`] above it, which is the pitch ramp end
+/// to end — and for the ramp half of a [`fade_span`](RangeBar::fade_span) fill.
+/// A quad strip written out twice is two places to get the vertex order or the
+/// first-column case wrong, and the second copy is the one that quietly keeps
+/// the older answer.
 ///
 /// **The rounding is in the MESH, and that is the whole reason this is not a
 /// square band inside a rounded well.** A well showing round an inset mesh is
@@ -2572,22 +3145,38 @@ impl<'a> SpreadBar<'a> {
 /// [`CONTROL_RADIUS`](theme::CONTROL_RADIUS) of 5 a one-point inset does not
 /// even cover the arc, so the band's square corners poke out through it.
 /// Pinching the columns to the corner circle instead lets the colors go edge to
-/// edge and round exactly like the fill of a [`ValueBar`] beside them.
+/// edge and round about like the fill of a [`ValueBar`] beside them.
+///
+/// **About, and not exactly, which is why the two radii are separate.** egui
+/// antialiases the rounded rect a `ValueBar` fills with and leaves a mesh edge
+/// hard, and the arc pinched here is a chord polygon inscribed in the circle at
+/// [`CORNER_SAMPLES`] samples, so it undershoots by around a pixel where the
+/// circle is steepest. Both are invisible on a band that ends in the color
+/// behind it — which is every end a `SpectrumBar` draws, and the far end of a
+/// fade — and neither is on one ending in full color against the panel. An end
+/// like that is given a radius of 0 here and a `rect_filled` of its own.
 fn gradient_strip(
     painter: &egui::Painter,
     rect: egui::Rect,
     segments: usize,
-    radius: f32,
+    radii: (f32, f32),
     color: impl Fn(f32) -> egui::Color32,
 ) {
-    let radius = radius.clamp(0.0, (rect.height() * 0.5).min(rect.width() * 0.5));
+    let cap = (rect.height() * 0.5).min(rect.width() * 0.5);
+    let (left_r, right_r) = (radii.0.clamp(0.0, cap), radii.1.clamp(0.0, cap));
     let mut xs: Vec<f32> = (0..=segments)
         .map(|i| rect.left() + rect.width() * i as f32 / segments as f32)
         .collect();
+    // A squared end has no arc to sample, and asking for one puts a whole run
+    // of samples on the end itself for the loop below to throw away again.
     for k in 1..CORNER_SAMPLES {
-        let t = radius * k as f32 / CORNER_SAMPLES as f32;
-        xs.push(rect.left() + t);
-        xs.push(rect.right() - t);
+        let t = k as f32 / CORNER_SAMPLES as f32;
+        if left_r > 0.0 {
+            xs.push(rect.left() + left_r * t);
+        }
+        if right_r > 0.0 {
+            xs.push(rect.right() - right_r * t);
+        }
     }
     xs.sort_by(f32::total_cmp);
 
@@ -2600,7 +3189,11 @@ fn gradient_strip(
             continue;
         }
         drawn = x;
-        let inset = corner_inset((x - rect.left()).min(rect.right() - x), radius);
+        // The nearer end's own profile: each is 0 beyond its own radius, so a
+        // band rounded the same both ways gets the one arc it would from a
+        // single radius, and a squared end simply never pinches.
+        let inset = corner_inset(x - rect.left(), left_r)
+            .max(corner_inset(rect.right() - x, right_r));
         let p = ((x - rect.left()) / rect.width().max(1.0)).clamp(0.0, 1.0);
         let c = color(p);
         let v = mesh.vertices.len() as u32;
@@ -2625,15 +3218,51 @@ fn corner_inset(from_end: f32, radius: f32) -> f32 {
     radius - (radius * radius - across * across).max(0.0).sqrt()
 }
 
-/// A horizontal row of controls in a settings column, sized up front to
-/// framed-button height and wrapping onto further lines when the column is too
-/// narrow to hold it.
+/// A single-line text field a row high, for the one settings row that holds one
+/// (the camera preset's name).
 ///
-/// Plain `ui.horizontal*` starts its row at `interact_size.y`, which is
-/// shorter than a padded button: egui centers early widgets in that short
-/// row, then grows the row downward under the first button it meets, so a
-/// bare label (or checkbox) next to buttons sits a few pixels above their
-/// text. Starting the row at button height centers everything on one line.
+/// A text field is the only control here that egui sizes from neither
+/// `interact_size` nor a size handed to it: a `TextEdit` is its font's row plus
+/// its own margin and nothing else, so the `interact_size` floor that brings
+/// every other control to [`theme::ROW_HEIGHT`] does not reach it, and neither
+/// does `add_sized`. Its default margin is a whole-point constant besides —
+/// 2 points top and bottom at every [chrome scale](theme::ui_scale) — which is
+/// a tenth of a row at the design size and a seventh of one at 0.7. Left alone
+/// it is the one row in the dock that is not a row high.
+///
+/// The margin is therefore the lever, and it takes the largest whole number of
+/// points that still FITS rather than the one nearest the row. egui stores a
+/// margin as whole points, so a field can only land on its text plus an even
+/// number and 20 is not one of them; rounding up puts the field back over the
+/// row and takes the row up with it, which is the whole defect. Rounding down
+/// leaves it a point inside a row that the button beside it holds open, where
+/// it reads as an inset field rather than as a row out of line.
+/// Takes the `Ui` it will be added to, because the margin is measured against
+/// the type that `Ui` is carrying; everything else about the field — its hint,
+/// its width — is the caller's, so this hands back the builder rather than
+/// adding it.
+pub fn row_field<'t>(ui: &Ui, text: &'t mut String) -> TextEdit<'t> {
+    let scale = theme::ui_scale(ui.ctx());
+    let room = theme::row_height(scale) - ui.text_style_height(&TextStyle::Body);
+    TextEdit::singleline(text).margin(egui::Margin::symmetric(
+        // The side margin is egui's own, scaled: a field's WIDTH is nobody's
+        // alignment problem, unlike its height.
+        i8::try_from(theme::scaled_points(4, scale)).unwrap_or(i8::MAX),
+        (room * 0.5).floor().max(0.0) as i8,
+    ))
+}
+
+/// A horizontal row of controls in a settings column, wrapping onto further
+/// lines when the column is too narrow to hold it.
+///
+/// Height is not its business: a row starts at `interact_size.y` and grows
+/// under the first widget taller than that, and nothing in a settings pane is
+/// taller than that — the theme's `interact_size` is [`theme::ROW_HEIGHT`] and
+/// every control here is sized by it or, where egui's floor does not reach
+/// ([`row_field`], [`toggle_switch`], [`record_button`]), asks for it. So the
+/// row is a row high because the things in it are, and a bare label centers on
+/// the button beside it without help. A control that overshot would take the
+/// row with it and leave everything shorter in it sitting above the line.
 ///
 /// The single row helper, deliberately: a settings pane is a column whose width
 /// the dock hands it, and a row that cannot wrap runs its last buttons out past
@@ -2650,15 +3279,7 @@ fn corner_inset(from_end: f32, radius: f32) -> f32 {
 /// under it along, since egui's `Region::expand_to_include_rect` unions
 /// `max_rect` as well as `min_rect`.
 pub fn button_row<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
-    let height =
-        ui.text_style_height(&TextStyle::Button) + 2.0 * ui.spacing().button_padding.y;
-    ui.scope(|ui| {
-        // The row ui reads this as its initial height; buttons already
-        // size to at least it, so only the shorter widgets move.
-        ui.style_mut().spacing.interact_size.y = height;
-        ui.horizontal_wrapped(add).inner
-    })
-    .inner
+    ui.horizontal_wrapped(add).inner
 }
 
 /// A selectable option's label, set in MONOSPACE when the label is a bare
@@ -2805,6 +3426,59 @@ mod tests {
         paint_range_bar_wide(300.0, low, high)
     }
 
+    /// Paint one [`RangeBar::fade_span`] bar across a 300pt row, each shape
+    /// still carrying the rect it is clipped to. No `min_span`, as the bars
+    /// that ask for this paint have none: their span closes for a hard edge.
+    fn paint_fade_bar_clipped(low: f32, high: f32) -> Vec<egui::epaint::ClippedShape> {
+        let ctx = egui::Context::default();
+        crate::theme::apply_theme(&ctx);
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(300.0, 100.0));
+        let (mut lo, mut hi) = (low, high);
+        let out = ctx.run_ui(
+            egui::RawInput { screen_rect: Some(screen), ..Default::default() },
+            |ui| {
+                RangeBar::new(&mut lo, &mut hi, AXIS.0..=AXIS.1, NAME).fade_span().show(ui);
+            },
+        );
+        out.shapes
+    }
+
+    /// The same, as bare shapes — what every reading but the clip wants.
+    fn paint_fade_bar(low: f32, high: f32) -> Vec<egui::Shape> {
+        paint_fade_bar_clipped(low, high).into_iter().map(|s| s.shape).collect()
+    }
+
+    /// Where a value stands on a [`RangeBar::fade_span`] bar's axis, which runs
+    /// the whole bar rather than the inset track every other range bar puts its
+    /// values on — so its floor is the bar's own left edge.
+    fn fade_x_of(bar: egui::Rect, v: f32) -> f32 {
+        bar.left() + bar.width() * (v - AXIS.0) / (AXIS.1 - AXIS.0)
+    }
+
+    /// The SOLID head of a [`RangeBar::fade_span`] fill — the stretch left of
+    /// `low`, which is one flat color and so a rounded rect rather than part of
+    /// the ramp mesh. Picked out by its color: the well beneath it and the two
+    /// handles over it are the only other rects a bar fills, and neither wears
+    /// the accent.
+    fn fade_head(shapes: &[egui::Shape]) -> Option<(egui::Rect, egui::Color32)> {
+        filled_rects(shapes).into_iter().find(|(_, fill)| *fill == theme::accent_fill())
+    }
+
+    /// The gradient fill's columns, left to right: where each one is and what
+    /// color it carries. A column's two vertices share a color, so reading the
+    /// first of each pair is the whole of it.
+    fn fill_ramp(shapes: &[egui::Shape]) -> Vec<(f32, egui::Color32)> {
+        let mut columns = Vec::new();
+        for shape in shapes {
+            if let egui::Shape::Mesh(mesh) = shape {
+                for pair in mesh.vertices.chunks(2) {
+                    columns.push((pair[0].pos.x, pair[0].color));
+                }
+            }
+        }
+        columns
+    }
+
     /// Drag a range bar from `from` to `to` (fractions of its width) and
     /// answer where its two ends ended up. A real gesture through a real
     /// context: press, then move with the button still down, which is the only
@@ -2855,9 +3529,12 @@ mod tests {
             },
         ]);
         // A step clear of egui's drag threshold first, then the rest of the
-        // way. The grab is decided on the first frame the drag is LIVE, so a
-        // gesture that jumps straight to its target decides it there — which
-        // can be a different grab from the one the press was aimed at.
+        // way, because that is what a real hand delivers: egui calls the press
+        // a drag only once the pointer has left the threshold, so the first
+        // frame the bar sees is never at `from`. A harness that jumped straight
+        // to its target would hand the bar a first frame at the destination and
+        // never put a gap between where the press landed and where the gesture
+        // is read — which is the gap [`aimed_at`] exists for.
         let step = 12.0 / bar.width() * (to - from).signum();
         frame(&mut lo, &mut hi, vec![egui::Event::PointerMoved(at(from + step))]);
         frame(&mut lo, &mut hi, vec![egui::Event::PointerMoved(at(to))]);
@@ -3084,6 +3761,52 @@ mod tests {
         }
     }
 
+    /// A [`RangeBar::fade_span`] bar is knocked out like any other, and it is
+    /// the one that needs it most: the two of them rest with a thumb inside the
+    /// name's own share of the bar, and a fresh Gutter stands its low end on
+    /// the "G". Every other bar has to be dragged there.
+    ///
+    /// It is also the bar that stretches the square clip furthest. Its thumb
+    /// takes the BAR's corner rather than a grip's, which on a 6pt width epaint
+    /// holds to a 3pt pill, so the corner notches the clip cannot follow are
+    /// the whole of the top and bottom 3pt rather than a sliver — see
+    /// [`grip_over_text`] for why that is a bound worth stating and not a bug
+    /// worth code. What is asserted here is what the shape list can answer: the
+    /// knockout happens, on the thumb, in the panel colour.
+    #[test]
+    fn a_fade_span_bars_name_is_knocked_out_where_its_thumb_rests_on_it() {
+        let ctx = egui::Context::default();
+        crate::theme::apply_theme(&ctx);
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(300.0, 100.0));
+        // A low end just inside the name, the way a fresh Gutter opens.
+        let (mut lo, mut hi) = (AXIS.0 + 3.0, AXIS.0 + 20.0);
+        let out = ctx.run_ui(
+            egui::RawInput { screen_rect: Some(screen), ..Default::default() },
+            |ui| {
+                RangeBar::new(&mut lo, &mut hi, AXIS.0..=AXIS.1, NAME)
+                    .min_span(OCTAVE)
+                    .fade_span()
+                    .show(ui);
+            },
+        );
+        let flat: Vec<_> = out.shapes.iter().map(|s| s.shape.clone()).collect();
+        let (grips, name) = (handles(&flat), text_boxes(&flat)[0].0);
+        let knocked = knockouts(&out.shapes);
+        let crossing: Vec<_> = grips.iter().copied().filter(|g| g.intersects(name)).collect();
+        assert!(!crossing.is_empty(), "this fixture no longer rests a thumb on the name");
+        assert_eq!(
+            knocked.len(),
+            crossing.len(),
+            "a fade_span bar skipped a knockout: {knocked:?} against {grips:?}",
+        );
+        for ((clip, at, what, colour), grip) in knocked.iter().zip(&crossing) {
+            assert_eq!(what, NAME, "a fade_span bar knocked out {what:?}");
+            assert_eq!(*at, name, "a knockout moved off the name");
+            assert_eq!(*colour, Some(theme::panel()), "a knockout is in the panel colour");
+            assert_eq!(*clip, *grip, "a knockout escaped its thumb");
+        }
+    }
+
     /// At the full range there is no empty track left to write in, so each
     /// readout moves to the inner side of its handle rather than off the bar.
     #[test]
@@ -3248,6 +3971,36 @@ mod tests {
         }
     }
 
+    /// A row with no width at all still PAINTS. Nothing about it is legible,
+    /// which is fine — what is not fine is a panic, and a bar is one `clamp`
+    /// away from one at every step that holds a thumb or a number inside the
+    /// bar's own ends: below one handle's width those bounds cross, `clamp`
+    /// asserts `min <= max`, and the panic takes the whole editor down with it.
+    ///
+    /// Zero rather than merely narrow, because [`bar_width`] floors there: a
+    /// column squeezed past its own controls hands the bar a negative width and
+    /// gets the floor, so this is the row the dock can really produce and not a
+    /// hypothetical one. Both paints, since the fade bar is the one whose
+    /// values reach the ends this arithmetic is about.
+    #[test]
+    fn a_row_of_no_width_paints_rather_than_panicking() {
+        let ctx = egui::Context::default();
+        crate::theme::apply_theme(&ctx);
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(0.0, 100.0));
+        for fade in [false, true] {
+            let (mut lo, mut hi) = (AXIS.0, AXIS.1);
+            let out = ctx.run_ui(
+                egui::RawInput { screen_rect: Some(screen), ..Default::default() },
+                |ui| {
+                    let bar = RangeBar::new(&mut lo, &mut hi, AXIS.0..=AXIS.1, NAME);
+                    if fade { bar.fade_span().show(ui) } else { bar.show(ui) };
+                },
+            );
+            let shapes: Vec<egui::Shape> = out.shapes.into_iter().map(|s| s.shape).collect();
+            assert!(!filled_rects(&shapes).is_empty(), "fade={fade}: the well was not painted");
+        }
+    }
+
     /// Too narrow a row elides the NAME and leaves the numbers whole: the
     /// numbers are what the bar is for, and a name that ran over one, or off
     /// the pane, would cost the reading the control exists to give.
@@ -3310,6 +4063,64 @@ mod tests {
         assert!(matches!(Grab::at(31.0, (24.0, 60.0), AXIS, 8.0), Grab::Low));
     }
 
+    /// And through a real pointer: a press within an end's reach takes THAT
+    /// end, whichever way the drag then runs.
+    ///
+    /// [`Grab::at`] is asked on the first frame egui calls the press a drag,
+    /// which is already six points along — see [`aimed_at`]. Asked at the live
+    /// position, a press in the outer half of the reach that then runs INWARD
+    /// is past the reach by the time the question reaches this bar, so it reads
+    /// as a middle grab and slides both ends. That is exactly the mistake
+    /// [`GRAB_PX`] is generous to prevent, made by the bar itself, and the
+    /// `Grab::at` cases above cannot see it: they hand the function the value
+    /// the gesture never had.
+    #[test]
+    fn a_press_within_an_ends_reach_takes_that_end_whichever_way_it_runs() {
+        let held = (48.0f32, 96.0f32);
+        let bar = filled_rects(&paint_range_bar(held.0, held.1))[0].0;
+        let track = bar.shrink2(Vec2::new(HANDLE_INSET, 0.0));
+        let x_of = |v: f32| track.left() + track.width() * (v - AXIS.0) / (AXIS.1 - AXIS.0);
+        let frac = |x: f32| (x - bar.left()) / bar.width();
+        // Inside the reach on either side of the handle, which the cursor
+        // spells out as a `ResizeHorizontal` before the press.
+        for reach in [-GRAB_PX * 0.8, GRAB_PX * 0.8] {
+            for run in [-50.0f32, 50.0] {
+                let from = x_of(held.0) + reach;
+                let (lo, hi) = drag_range_bar(held, (frac(from), frac(from + run)), false);
+                let aimed = format!("pressed {reach} from the low end and dragged {run}");
+                assert_eq!(hi, held.1, "{aimed}: the high end came along");
+                assert_ne!(lo, held.0, "{aimed}: the low end did not move");
+            }
+        }
+    }
+
+    /// A pair already at `min_span` answers a press in an end's reach one way
+    /// and holds the other — the inert band [`Grab::at`]'s doc names, pinned
+    /// here so it cannot drift back into being an accident.
+    ///
+    /// Both halves matter. Inward the end is against `min_span` and writes
+    /// nothing, which is a handle against a wall; outward the SAME press opens
+    /// the span, which is the gesture the band exists for and the reason it is
+    /// not handed to the slide. A change to `Grab::apply` that let a pinned end
+    /// carry its partner would fail the first half, and should — that is a
+    /// decision about what `Low` means, not a tidy-up.
+    #[test]
+    fn an_end_against_the_minimum_span_holds_inward_and_opens_outward() {
+        // Exactly at OCTAVE, the min_span these bars declare.
+        let held = (60.0f32, 72.0f32);
+        let bar = filled_rects(&paint_range_bar(held.0, held.1))[0].0;
+        let track = bar.shrink2(Vec2::new(HANDLE_INSET, 0.0));
+        let x_of = |v: f32| track.left() + track.width() * (v - AXIS.0) / (AXIS.1 - AXIS.0);
+        let frac = |x: f32| (x - bar.left()) / bar.width();
+        // Inside the reach, which a 12-unit span caps at 0.35 of itself.
+        let from = x_of(held.0) + 8.0;
+        let inward = drag_range_bar(held, (frac(from), frac(from + 40.0)), false);
+        assert_eq!(inward, held, "the low end moved into a span already at its minimum");
+        let outward = drag_range_bar(held, (frac(from), frac(from - 40.0)), false);
+        assert!(outward.0 < held.0, "the same press outward did not open the span");
+        assert_eq!(outward.1, held.1, "opening the span carried the high end with it");
+    }
+
     /// The reach still cannot swallow a narrow span whole, or a zoomed-in
     /// range would have no middle left to slide along the axis.
     #[test]
@@ -3317,6 +4128,328 @@ mod tests {
         let narrow = (60.0, 60.0 + OCTAVE);
         let middle = 60.0 + OCTAVE / 2.0;
         assert!(matches!(Grab::at(middle, narrow, AXIS, 1_000.0), Grab::Span { .. }));
+    }
+
+    /// A `fade_span` bar paints the pair as the edge it describes: solid from
+    /// the bar's left edge as far as `low`, then ramping out to the bare track
+    /// by `high`.
+    ///
+    /// The default paint says the opposite of this — it fills exactly the part
+    /// that is FADING and leaves the solid part bare — which on a pair that is
+    /// a reach and its fade reads as a bright band floating off the node it is
+    /// measured from.
+    ///
+    /// The left edge is the BAR's, not the inset track's: a fill starting where
+    /// the values do leaves a sliver of bare well no other bar in the pane has,
+    /// and it reads as a notch in the control.
+    ///
+    /// Two shapes, and the split is the point rather than an implementation
+    /// detail: the solid part is a rounded RECT, which is what leaves the bar's
+    /// own corner with the machinery that antialiases it, and the mesh takes
+    /// only the stretch that needs a gradient. So this reads them in turn and
+    /// pins the join — the ramp starts where the head stops, in the head's own
+    /// color, or the fill has a seam in the middle of itself.
+    #[test]
+    fn a_fade_span_fills_from_the_floor_and_ramps_out() {
+        let (low, high) = (60.0, 100.0);
+        let shapes = paint_fade_bar(low, high);
+        let bar = filled_rects(&shapes)[0].0;
+        let x_of = |v: f32| fade_x_of(bar, v);
+        let (head, head_color) = fade_head(&shapes).expect("a fade span painted no solid head");
+        assert!(
+            (head.left() - bar.left()).abs() < 0.01,
+            "the fill starts at {} rather than at the bar's left edge {}",
+            head.left(),
+            bar.left(),
+        );
+        assert!(
+            (head.right() - x_of(low)).abs() < 0.01,
+            "the solid head stops at {} rather than at `low` ({})",
+            head.right(),
+            x_of(low),
+        );
+
+        let ramp = fill_ramp(&shapes);
+        assert!(!ramp.is_empty(), "a fade span painted no ramp");
+
+        let (first, last) = (ramp[0], ramp[ramp.len() - 1]);
+        assert!(
+            (first.0 - x_of(low)).abs() < 0.01,
+            "the ramp starts at {} rather than where the head stops ({})",
+            first.0,
+            x_of(low),
+        );
+        assert_eq!(first.1, head_color, "the ramp starts a different color from the head");
+        assert!(
+            (last.0 - x_of(high)).abs() < 0.01,
+            "the fill ends at {} rather than at `high` ({})",
+            last.0,
+            x_of(high),
+        );
+        assert_eq!(last.1, theme::well(), "the fill does not reach the bare track by `high`");
+
+        // Never brightening after `low`. Read as distance from the well rather
+        // than as a color, so this asks the one thing that matters — how much
+        // fill is left — of whatever the skin's accent happens to be.
+        let well = egui::Rgba::from(theme::well());
+        let from_well = |c: egui::Color32| {
+            let c = egui::Rgba::from(c);
+            ((c.r() - well.r()).powi(2) + (c.g() - well.g()).powi(2) + (c.b() - well.b()).powi(2))
+                .sqrt()
+        };
+        let solid = from_well(head_color);
+        assert!(solid > 0.0, "the fill is the same color as the track it sits on");
+        // Halfway along the ramp it is halfway out. This is what pins where
+        // the fade STARTS, which is the one thing the paint exists to show and
+        // the one thing every assertion around it leaves free: a ramp squeezed
+        // into the last quarter is still solid before `low`, still monotone,
+        // and still lands on the well at `high`.
+        let middle = (x_of(low) + x_of(high)) * 0.5;
+        let at_middle = ramp
+            .iter()
+            .min_by(|a, b| (a.0 - middle).abs().total_cmp(&(b.0 - middle).abs()))
+            .expect("the ramp has columns")
+            .1;
+        assert!(
+            (from_well(at_middle) - solid * 0.5).abs() < solid * 0.15,
+            "halfway along the fade the fill is {:.0}% of solid, not about half",
+            100.0 * from_well(at_middle) / solid,
+        );
+        let mut previous = f32::INFINITY;
+        for (x, color) in ramp {
+            assert!(
+                from_well(color) <= previous + 0.01,
+                "the fill brightens again at {x}",
+            );
+            previous = from_well(color);
+        }
+    }
+
+    /// A fade dragged fully OPEN keeps the bar's corner, which takes widening
+    /// the solid head past where it is painted.
+    ///
+    /// The low end at the axis floor puts the head at one radius, five points,
+    /// and epaint holds a corner radius to half the rect's shortest side — so
+    /// the head would round at two and a half points where the well rounds at
+    /// five and poke out through the well's own arc. The bar changing shape as
+    /// a handle reaches the end of its travel is the thing to keep out, and it
+    /// is invisible in the shapes themselves: the radius handed to
+    /// `rect_filled` is the same either way, and only the tessellator clamps
+    /// it. So the width is what this asks about.
+    ///
+    /// The ramp is what makes the widening free, and it must clear the CORNER
+    /// for that: a fade this open has its low end on the bar's own edge, so a
+    /// ramp starting where the value says would take the corner back from the
+    /// rect that can draw it.
+    #[test]
+    fn a_fully_soft_edge_keeps_the_fills_corner_round() {
+        let shapes = paint_fade_bar(AXIS.0, 100.0);
+        let bar = filled_rects(&shapes)[0].0;
+        let (head, _) = fade_head(&shapes).expect("a fully soft edge painted no solid head");
+        let radius = f32::from(bar_radius(1.0));
+        assert!(
+            head.width() >= 2.0 * radius,
+            "the head is {:.1}pt wide, under the {:.1}pt its own corner needs",
+            head.width(),
+            2.0 * radius,
+        );
+        let ramp = fill_ramp(&shapes);
+        let first = ramp.first().expect("a fully soft edge painted no ramp").0;
+        assert!(
+            (first - (bar.left() + radius)).abs() < 0.01,
+            "the ramp starts at {first}, not clear of the corner ({})",
+            bar.left() + radius,
+        );
+    }
+
+    /// A fade bar's thumb reaches the end of the bar. Its axis runs the whole
+    /// bar for that — a low end at the axis floor is a gutter of no softness at
+    /// all, an ordinary setting, and a thumb stopping a point clear of the edge
+    /// says the control cannot reach it.
+    ///
+    /// Flush, not hanging off: the value puts the thumb's CENTER on the edge,
+    /// and what is drawn is held in by half a handle, the same way the octave
+    /// strip holds its own boundary marks.
+    #[test]
+    fn a_fade_bars_thumb_reaches_the_end_of_the_bar() {
+        let shapes = paint_fade_bar(AXIS.0, 100.0);
+        let bar = filled_rects(&shapes)[0].0;
+        let thumb = *handles(&shapes).first().expect("a fade bar painted no thumb");
+        assert!(
+            (thumb.left() - bar.left()).abs() < 0.01,
+            "the thumb's edge is at {} rather than at the bar's own ({})",
+            thumb.left(),
+            bar.left(),
+        );
+        assert!(
+            thumb.width() >= HANDLE_W - 0.01,
+            "the thumb was cut down to {:.1}pt to fit",
+            thumb.width(),
+        );
+    }
+
+    /// The inset stays where a bar opens at the full axis: both handles flush
+    /// on a bare track is the state a plain range bar starts life in, and there
+    /// they read as the bar's own border rather than as something to grab.
+    #[test]
+    fn a_plain_range_bars_thumb_keeps_its_clearance() {
+        let shapes = paint_range_bar(AXIS.0, AXIS.1);
+        let bar = filled_rects(&shapes)[0].0;
+        let thumb = *handles(&shapes).first().expect("a range bar painted no thumb");
+        assert!(
+            thumb.left() > bar.left() + 0.5,
+            "the low thumb sits at {}, flush with the bar's edge ({})",
+            thumb.left(),
+            bar.left(),
+        );
+    }
+
+    /// The widening is cut back at the reach, and the CLIP is what cuts it.
+    ///
+    /// A reach under twice the corner radius leaves the head running past
+    /// `high` — which is the whole point of widening it, since the alternative
+    /// is a corner clamped to half of whatever room is left. Nothing in the
+    /// rect itself then says where the fill stops, so the one thing standing
+    /// between a two-point gutter and ten points of solid bar is the clip. Read
+    /// it directly: a shape's own geometry cannot show it.
+    #[test]
+    fn a_widened_head_is_still_cut_back_at_the_reach() {
+        // A hundredth of the axis: a couple of points of reach on this row.
+        let high = AXIS.0 + (AXIS.1 - AXIS.0) * 0.01;
+        let painted = paint_fade_bar_clipped(AXIS.0, high);
+        let shapes: Vec<egui::Shape> = painted.iter().map(|s| s.shape.clone()).collect();
+        let bar = filled_rects(&shapes)[0].0;
+        let hx = fade_x_of(bar, high);
+        let (clip, head) = painted
+            .iter()
+            .find_map(|s| match &s.shape {
+                egui::Shape::Rect(r) if r.fill == theme::accent_fill() => {
+                    Some((s.clip_rect, r.rect))
+                }
+                _ => None,
+            })
+            .expect("a fade span painted no solid head");
+        assert!(
+            head.right() > hx + 0.01,
+            "the head stops at {} without reaching past `high` ({hx}), so this pins nothing",
+            head.right(),
+        );
+        assert!(
+            (clip.right() - hx).abs() < 0.01,
+            "the fill is cut at {} rather than at the reach ({hx})",
+            clip.right(),
+        );
+    }
+
+    /// An edge of no reach paints NOTHING — neither part of the fill — and it
+    /// takes a check of its own to say so. The solid head is widened past its
+    /// own end so that its corner is never clamped, and the CLIP is what takes
+    /// it back at the reach; with the reach at the floor there is nothing left
+    /// to cut it back to, and a control switched off keeps a hair of the head's
+    /// own feathered edge.
+    #[test]
+    fn an_edge_of_no_reach_paints_no_fill() {
+        let shapes = paint_fade_bar(AXIS.0, AXIS.0);
+        let width = match (fill_ramp(&shapes).first(), fill_ramp(&shapes).last()) {
+            (Some(first), Some(last)) => last.0 - first.0,
+            _ => 0.0,
+        };
+        assert!(width < 0.01, "an edge of no reach paints {width:.2}pt of ramp");
+        assert!(
+            fade_head(&shapes).is_none(),
+            "an edge of no reach paints a solid head of fill",
+        );
+    }
+
+    /// A hard edge closes the span, and the fill is then solid the whole way
+    /// with no ramp at all — which is the picture of a hard edge, and the one
+    /// setting where this bar and the plain fill it replaces look the same.
+    ///
+    /// Solid the whole way means the head takes ALL of it and the mesh is never
+    /// built, so this asks for the absence of a ramp rather than for a flat one.
+    /// The zero-width strip that would otherwise be handed to `gradient_strip`
+    /// is the case the guard beside it exists for.
+    #[test]
+    fn a_closed_fade_span_paints_a_solid_fill() {
+        let shapes = paint_fade_bar(60.0, 60.0);
+        let (head, _) = fade_head(&shapes).expect("a closed fade span painted no fill");
+        let bar = filled_rects(&shapes)[0].0;
+        let x_of = |v: f32| fade_x_of(bar, v);
+        assert!(
+            (head.left() - bar.left()).abs() < 0.01 && (head.right() - x_of(60.0)).abs() < 0.01,
+            "a closed span's solid fill runs {}..{} rather than {}..{}",
+            head.left(),
+            head.right(),
+            bar.left(),
+            x_of(60.0),
+        );
+        assert!(fill_ramp(&shapes).is_empty(), "a closed fade span painted a ramp");
+    }
+
+    /// A CLOSED span is operable from both sides: below it the low end opens
+    /// it, at or above it the whole span slides, keeping its width.
+    ///
+    /// The state is a hard edge on a [`RangeBar::fade_span`] bar — the reach
+    /// and the fade that ends it, with no fade — which is an ordinary setting
+    /// rather than a degenerate one, and the two gestures are the two a bar
+    /// apiece would give: widen without softening (slide), and soften
+    /// (the low end). Every measurement is a tie when the ends coincide, so
+    /// without the rule the tie-break hands every press to `Low`, which is
+    /// pinned against `hi` and moves nothing at all.
+    #[test]
+    fn a_closed_span_slides_from_above_and_opens_from_below() {
+        let closed = (60.0, 60.0);
+        // Above it: the span slides, so the edge widens at the same (zero)
+        // fade rather than softening.
+        let grab = Grab::at(80.0, closed, AXIS, 8.0);
+        assert!(matches!(grab, Grab::Span { .. }), "a press above a closed span took {grab:?}");
+        assert_eq!(grab.apply(90.0, closed, AXIS, 0.0), (70.0, 70.0));
+        // Below it: the low end, which is the only one that can open it.
+        let grab = Grab::at(40.0, closed, AXIS, 8.0);
+        assert!(matches!(grab, Grab::Low), "a press below a closed span took {grab:?}");
+        assert_eq!(grab.apply(40.0, closed, AXIS, 0.0), (40.0, 60.0));
+    }
+
+    /// A span that arrives ALREADY closed — or inverted — opens to the
+    /// minimum on the first drag rather than sliding along shut.
+    ///
+    /// `min_span` bounds what the bar PRODUCES, not what it is handed, so
+    /// every bar that declares one can still be given a pair that breaks it:
+    /// the Nodes tab's Pitch range is two host params with nothing between
+    /// them, and the Band bar's pair reaches `ViewConfig` from a blob
+    /// unsanitized. The slide is what a closed span needs and it carries its
+    /// width forward, so without the floor below it carries a zero — and the
+    /// bar, whose whole job is to repair such a pair by being dragged, would
+    /// hold it shut instead. `Grab::apply` promises the opposite in as many
+    /// words: the span never closes past `min_span`.
+    #[test]
+    fn a_span_handed_in_closed_opens_to_the_minimum() {
+        let cases: [((f32, f32), &str); 2] =
+            [((60.0, 60.0), "a closed pair"), ((100.0, 40.0), "an inverted pair")];
+        for (pair, hint) in cases {
+            let press = pair.0.max(pair.1) + 5.0;
+            let (lo, hi) = Grab::at(press, pair, AXIS, 8.0).apply(press + 10.0, pair, AXIS, OCTAVE);
+            assert!(
+                hi - lo >= OCTAVE - 1e-3,
+                "{hint}: dragging it left a span of {} ({lo}..{hi})",
+                hi - lo,
+            );
+        }
+    }
+
+    /// And a closed span at the axis FLOOR — a soft edge switched off
+    /// altogether — can still be dragged back out. There is no room below it
+    /// for the low end, so the slide is the whole of what the bar has left,
+    /// and it is what turns the edge back on hard rather than fully faded.
+    #[test]
+    fn a_closed_span_at_the_floor_still_opens() {
+        let off = (AXIS.0, AXIS.0);
+        for v in [AXIS.0, 30.0, 60.0, 120.0] {
+            let grab = Grab::at(v, off, AXIS, 8.0);
+            let moved = grab.apply(v + 10.0, off, AXIS, 0.0);
+            assert!(moved != off, "a press at {v} left the bar dead");
+            assert_eq!(moved.1 - moved.0, 0.0, "a press at {v} softened the edge as it widened");
+        }
     }
 
     /// Dragging an end past its partner stops at the minimum span instead of
@@ -3395,7 +4528,8 @@ mod tests {
         }
     }
 
-    /// A [`SpectrumBar`] alone in a 300pt context, driven one frame at a time.
+    /// A [`SpectrumBar`] under a [`GradientPreview`] in a 300pt context,
+    /// driven one frame at a time.
     ///
     /// Real events through a real context, because nothing less reaches the
     /// widget: what a gesture has hold of is decided on the first frame egui
@@ -3403,14 +4537,19 @@ mod tests {
     /// synthetic call would exercise neither the decision nor the memory. A
     /// bare context is the design scale, 1.0, which is why the geometry below
     /// reads the constants unmultiplied.
+    ///
+    /// The preview is drawn as well as the bar, which is not scene-setting: it
+    /// senses hover alone, so a press on it is handed to the nearest widget
+    /// that takes drags — the track, a row's spacing below — and only the bar's
+    /// own position check declines it. A harness holding the bar by itself
+    /// would leave that check unreachable
+    /// (`the_preview_is_a_picture_and_not_a_control` is what walks it).
     struct Spectrum {
         ctx: egui::Context,
         screen: egui::Rect,
         rect: egui::Rect,
-        /// Where the pointer was on the frame egui first called the press a
-        /// drag — the frame the widget settles what it has hold of, and so the
-        /// position a gesture's own arithmetic is anchored to.
-        live_at: egui::Pos2,
+        /// The preview above the bar, read back off the frame just drawn.
+        preview: egui::Rect,
         t: f64,
         /// What the bar is told to reset to, or `None` to leave the builder
         /// alone — which is a caller naming no home, and a different code path
@@ -3423,13 +4562,21 @@ mod tests {
         /// pointer against the PREVIOUS pass's rects, so a press cannot land on
         /// a bar that has never been drawn.
         fn settled(g: &mut Gradient) -> Spectrum {
+            Spectrum::settled_at(g, 300.0)
+        }
+
+        /// The same, in a column of a named width — for the questions whose
+        /// answer is arithmetic against the width rather than against the
+        /// gradient. 173pt is the narrowest column the dock gives a pane, so a
+        /// sweep that reaches it has reached everything a reader can drag to.
+        fn settled_at(g: &mut Gradient, width: f32) -> Spectrum {
             let ctx = egui::Context::default();
             crate::theme::apply_theme(&ctx);
             let mut h = Spectrum {
                 ctx,
-                screen: egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(300.0, 100.0)),
+                screen: egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(width, 100.0)),
                 rect: egui::Rect::NOTHING,
-                live_at: egui::Pos2::ZERO,
+                preview: egui::Rect::NOTHING,
                 t: 0.0,
                 home: None,
             };
@@ -3452,6 +4599,7 @@ mod tests {
         fn frame(&mut self, g: &mut Gradient, events: Vec<egui::Event>) -> Vec<egui::Shape> {
             self.t += 1.0 / 60.0;
             let rect = std::cell::Cell::new(egui::Rect::NOTHING);
+            let preview = std::cell::Cell::new(egui::Rect::NOTHING);
             let out = self.ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(self.screen),
@@ -3460,43 +4608,52 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| {
+                    // The group's own order: the preview's row taken first, its
+                    // colors read after the bar has written — see
+                    // [`GradientPreview`]. A harness that painted it where it
+                    // stands would model a pane this repo does not have and
+                    // would pass `a_spectrum_drag_draws_the_preview_it_just_set`
+                    // against a picture that lags.
+                    let slot = GradientPreview::reserve(ui);
                     let bar = SpectrumBar::new(g);
                     let bar = match self.home {
                         Some(home) => bar.home(home),
                         None => bar,
                     };
-                    rect.set(bar.show(ui).rect)
+                    rect.set(bar.show(ui).rect);
+                    preview.set(slot.show(ui, g).rect);
                 },
             );
             self.rect = rect.get();
+            self.preview = preview.get();
             out.shapes.into_iter().map(|s| s.shape).collect()
         }
 
-        /// The track a handle actually travels. The bar hands back the TRACK's
-        /// rect rather than the whole row it allocated — the flip button beside
-        /// it carries its own tooltip — so the inset at either end is all that
+        /// The stretch a handle travels. The bar hands back the TRACK's rect
+        /// rather than the whole row it allocated — the flip button beside it
+        /// carries its own tooltip — so the inset at either end is all that
         /// separates the two.
         fn track(&self) -> egui::Rect {
             self.rect.shrink2(Vec2::new(HANDLE_INSET, 0.0))
         }
 
-        /// The middle of the flip button, in the gutter before the track's left
+        /// The middle of the flip button, in the gutter past the track's right
         /// edge.
         fn on_flip(&self) -> egui::Pos2 {
-            egui::pos2(self.rect.left() - FLIP_W * 0.5, self.rect.center().y)
+            egui::pos2(self.rect.right() + FLIP_W * 0.5, self.rect.center().y)
         }
 
-        /// A point on the pitch-order strip, `across` of the way along it and
-        /// `down` of the way through it — 0 at the edge nearest the track,
-        /// which is the depth that matters. egui hands a press that hits
-        /// nothing to the nearest widget within `interact_radius`, so the top
-        /// of the strip is the part a gap alone does not protect, and a probe
-        /// at the strip's middle sits clear of the only place the geometry can
-        /// fail.
-        fn on_strip(&self, across: f32, down: f32) -> egui::Pos2 {
+        /// A point on the preview, `across` of the way along it and `up` of the
+        /// way through it — 0 at the edge nearest the track below, which is the
+        /// depth that matters. egui hands a press that hits nothing to the
+        /// nearest widget within `interact_radius`, so the bottom of the
+        /// preview is the part the row spacing alone does not protect, and a
+        /// probe at the preview's middle sits clear of the only place the
+        /// geometry can fail.
+        fn on_preview(&self, across: f32, up: f32) -> egui::Pos2 {
             egui::pos2(
-                self.rect.left() + self.rect.width() * across,
-                self.rect.bottom() + PIECE_GAP + STRIP_H * down,
+                self.preview.left() + self.preview.width() * across,
+                self.preview.bottom() - self.preview.height() * up,
             )
         }
 
@@ -3516,8 +4673,14 @@ mod tests {
         }
 
         /// Press at `from` and drag to `to`, answering what the arriving frame
-        /// painted. A step clear of egui's drag threshold comes first, since
-        /// a gesture that jumps straight to its target settles its grab there.
+        /// painted.
+        ///
+        /// A step clear of egui's drag threshold comes first, and it is the
+        /// part of this that models a real hand: egui calls the press a drag
+        /// only once the pointer has left that threshold, so the first frame
+        /// the widget sees is ALWAYS some way along the drag and never at
+        /// `from`. A harness that jumped straight to `to` would hand the widget
+        /// a first frame at its destination and never exercise the gap.
         fn drag(
             &mut self,
             g: &mut Gradient,
@@ -3526,8 +4689,8 @@ mod tests {
         ) -> Vec<egui::Shape> {
             self.frame(g, vec![egui::Event::PointerMoved(from)]);
             self.frame(g, vec![egui::Event::PointerMoved(from), press(from, true)]);
-            self.live_at = from + (to - from).normalized() * 12.0;
-            self.frame(g, vec![egui::Event::PointerMoved(self.live_at)]);
+            let live_at = from + (to - from).normalized() * 12.0;
+            self.frame(g, vec![egui::Event::PointerMoved(live_at)]);
             self.frame(g, vec![egui::Event::PointerMoved(to)])
         }
 
@@ -3541,16 +4704,44 @@ mod tests {
         }
     }
 
-    /// The one text run a spectrum bar paints: its span, signed.
-    fn spectrum_readout(shapes: &[egui::Shape]) -> String {
-        let texts: Vec<String> = text_boxes(shapes).into_iter().map(|(_, s)| s).collect();
-        assert_eq!(texts.len(), 1, "a spectrum bar draws one readout, not {texts:?}");
-        texts.into_iter().next().expect("checked just above")
+    /// The text runs a spectrum bar draws, each with the box it fills and the
+    /// color it was painted in — the color being a claim of its own here, since
+    /// the name and the readout stand on different halves of the track and are
+    /// drawn from opposite ends of the palette for it.
+    fn spectrum_texts(shapes: &[egui::Shape]) -> Vec<(egui::Rect, String, Color32)> {
+        shapes
+            .iter()
+            .filter_map(|s| match s {
+                egui::Shape::Text(t) => Some((
+                    egui::Rect::from_min_size(t.pos, t.galley.size()),
+                    // The GLYPHS, not `Galley::text()`, which answers with the
+                    // string the galley was laid out from and so reads the same
+                    // whether or not the name fitted — see [`painted_text`].
+                    painted_text(&t.galley),
+                    t.galley.job.sections.first().map_or(t.fallback_color, |s| s.format.color),
+                )),
+                _ => None,
+            })
+            .collect()
     }
 
-    /// The colored bands a spectrum bar paints — the track, then the
-    /// pitch-order strip. Everything else it draws is a rect, a line or a
-    /// convex polygon, so a mesh is a band and nothing else is.
+    /// The span a spectrum bar reads out, as against the name it writes at the
+    /// left. Both are asserted, so a name that has stopped being drawn is a
+    /// failure rather than a readout read off the wrong run.
+    fn spectrum_readout(shapes: &[egui::Shape]) -> String {
+        let texts: Vec<String> = spectrum_texts(shapes).into_iter().map(|(_, s, _)| s).collect();
+        assert_eq!(
+            texts.len(),
+            2,
+            "a spectrum bar draws its name and one readout, not {texts:?}",
+        );
+        assert_eq!(texts[0], SPAN_LABEL, "the bar's first text run is not its name");
+        texts.into_iter().nth(1).expect("checked just above")
+    }
+
+    /// The colored bands the harness paints: the preview and the bar's own hue
+    /// circle. Everything else either draws is a rect, a line or a convex
+    /// polygon, so a mesh is a band and nothing else is.
     fn bands(shapes: &[egui::Shape]) -> Vec<egui::Mesh> {
         shapes
             .iter()
@@ -3559,6 +4750,171 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    /// The same two, named: `(preview, circle)`.
+    ///
+    /// Told apart by WHERE they are rather than by the order they are drawn in.
+    /// The preview is painted last on purpose (see [`GradientPreview`]), so
+    /// draw order says nothing about which band is which, and a helper that
+    /// read it would have quietly swapped the two the day that changed.
+    fn spectrum_bands(shapes: &[egui::Shape]) -> (egui::Mesh, egui::Mesh) {
+        let mut bands = bands(shapes);
+        assert_eq!(
+            bands.len(),
+            2,
+            "a preview and a spectrum bar paint two bands, not {}",
+            bands.len(),
+        );
+        bands.sort_by(|a, b| a.calc_bounds().top().total_cmp(&b.calc_bounds().top()));
+        let mut bands = bands.into_iter();
+        let preview = bands.next().expect("checked just above");
+        let circle = bands.next().expect("checked just above");
+        assert!(
+            preview.calc_bounds().bottom() <= circle.calc_bounds().top(),
+            "the two bands overlap, so neither is the picture above the other",
+        );
+        (preview, circle)
+    }
+
+    /// The color each of a band's columns was painted in, left to right — the
+    /// two vertices of a column carry the same one.
+    fn band_colors(mesh: &egui::Mesh) -> Vec<egui::Color32> {
+        mesh.vertices.chunks(2).map(|column| column[0].color).collect()
+    }
+
+    /// The track is hue and nothing else: the brightness and chroma bars move
+    /// the preview above it and leave the arc alone.
+    ///
+    /// That division is the whole of what the two bands are for, and it is
+    /// invisible to every other test here — a track painted out of the pitch
+    /// ramp draws the same rounded mesh in the same place at the same size, and
+    /// passes all of them. What it costs is the control: Mono is one click on
+    /// the Analyzer tab, and a track that answered the chroma pair would be a
+    /// hue picker drawn in grey.
+    #[test]
+    fn the_track_is_hue_alone_and_the_preview_is_the_gradient() {
+        let base = Gradient {
+            hue_start: 30.0,
+            hue_span: 180.0,
+            lightness: 60.0,
+            lightness_ramp: 0.0,
+            chroma: 0.6,
+            chroma_ramp: 0.0,
+        };
+        let painted = |g: Gradient| {
+            let mut g = g;
+            let mut h = Spectrum::settled(&mut g);
+            let shapes = h.frame(&mut g, vec![]);
+            let (preview, circle) = spectrum_bands(&shapes);
+            (band_colors(&circle), band_colors(&preview))
+        };
+        let (track, preview) = painted(base);
+        for (what, dialled) in [
+            (
+                "a steep brightness ramp",
+                Gradient { lightness: 50.0, lightness_ramp: 100.0, ..base },
+            ),
+            ("a steep chroma ramp", Gradient { chroma: 0.5, chroma_ramp: 1.0, ..base }),
+            ("a dark picture", Gradient { lightness: 12.0, ..base }),
+            ("Mono", Gradient { lightness: 50.0, lightness_ramp: 100.0, chroma: 0.0, ..base }),
+        ] {
+            let (moved, drawn) = painted(dialled);
+            assert_eq!(moved, track, "{what} moved the hue track");
+            // Without this half the claim above is satisfied by a bar that
+            // draws nothing at all: the preview is where those two knobs live,
+            // and a gradient that changed neither band would prove nothing.
+            assert_ne!(drawn, preview, "{what} left the preview alone too");
+        }
+        // And the track does answer the two knobs it IS: the equality above is
+        // a track holding still under the other four, not a picture that never
+        // moves.
+        for (what, dialled) in [
+            ("turning the circle", Gradient { hue_start: base.hue_start + 40.0, ..base }),
+            ("widening the arc", Gradient { hue_span: base.hue_span + 60.0, ..base }),
+        ] {
+            assert_ne!(painted(dialled).0, track, "{what} left the track alone");
+        }
+    }
+
+    /// Past the handle the track carries on in the hues the arc WOULD take if
+    /// it reached them, held back — one circle at two strengths, so the two
+    /// halves meet flush at every setting.
+    ///
+    /// Measured against the same bar with its arc opened to a whole turn, which
+    /// is the only way to ask the question without writing the color out a
+    /// second time here: every column past the handle must be the color that
+    /// column is painted when the arc claims it, at [`UNCLAIMED_ALPHA`].
+    #[test]
+    fn the_dimmed_remainder_is_the_same_circle_held_back() {
+        let arc = Gradient {
+            hue_start: 200.0,
+            hue_span: 120.0,
+            lightness: 50.0,
+            lightness_ramp: 60.0,
+            chroma: 0.5,
+            chroma_ramp: 0.6,
+        };
+        let track_of = |g: Gradient| {
+            let mut g = g;
+            let mut h = Spectrum::settled(&mut g);
+            let shapes = h.frame(&mut g, vec![]);
+            band_colors(&spectrum_bands(&shapes).1)
+        };
+        let part = track_of(arc);
+        let whole = track_of(Gradient { hue_span: FULL_TURN, ..arc });
+        assert_eq!(part.len(), whole.len(), "the two bars drew different columns");
+        let dim = (UNCLAIMED_ALPHA * 255.0) as u8;
+        // Past the handle first, and the two halves in separate passes: this is
+        // the claim, and it is the one a track drawn out of the gradient misses
+        // by a mile, where the lit half below it would miss by a byte or two at
+        // the left edge — the two arcs starting on the same color — and report
+        // a difference no reader could tell from rounding.
+        let mut held = 0;
+        for (i, (drawn, lit)) in part.iter().zip(&whole).enumerate() {
+            if drawn.a() == 255 {
+                continue;
+            }
+            held += 1;
+            assert_eq!(drawn.a(), dim, "column {i} is past the handle at some other strength");
+            // Premultiplied, so the stored bytes are the lit ones scaled by the
+            // alpha. Within a byte or two of it: the color is quantized once on
+            // the way out of the table and again by the multiply.
+            for (channel, (d, l)) in [
+                ("r", (drawn.r(), lit.r())),
+                ("g", (drawn.g(), lit.g())),
+                ("b", (drawn.b(), lit.b())),
+            ] {
+                let want = f32::from(l) * UNCLAIMED_ALPHA;
+                assert!(
+                    (f32::from(d) - want).abs() <= 2.0,
+                    "column {i}'s {channel} is {d}, not the {want} a held-back {l} would be",
+                );
+            }
+        }
+        assert!(held > 0, "the arc claimed the whole track, so nothing was compared");
+        // And the stretch both arcs claim is one color at one strength, the
+        // circle not caring how far round it the gradient reaches.
+        for (i, (drawn, lit)) in part.iter().zip(&whole).enumerate() {
+            if drawn.a() == 255 {
+                assert_eq!(drawn, lit, "column {i} is inside both arcs and must be one color");
+            }
+        }
+        // A span of nothing claims nothing, which is what the `claimed > 0.0`
+        // half of the guard is for and the only thing left holding it up: it
+        // stopped a divide by zero while the claimed stretch was the ramp
+        // squeezed into it, and now it stops `p <= claimed` from lighting the
+        // one column at `p == 0`. A lit column at the left edge of a track
+        // claiming nothing is a picture that says the gradient reaches the
+        // first hue, and Mono is one click away on the Analyzer tab.
+        let nothing = track_of(Gradient { hue_span: 0.0, ..arc });
+        let lit: Vec<usize> = nothing
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.a() != dim)
+            .map(|(i, _)| i)
+            .collect();
+        assert!(lit.is_empty(), "a span of nothing lit columns {lit:?} of {}", nothing.len());
     }
 
     /// Both bands are rounded by their own mesh, on the corner circle, and
@@ -3582,14 +4938,14 @@ mod tests {
         let mut g = ViewConfig::default().pitch_gradient;
         let mut h = Spectrum::settled(&mut g);
         let shapes = h.frame(&mut g, vec![]);
-        let bands = bands(&shapes);
-        assert_eq!(bands.len(), 2, "a spectrum bar paints two bands, not {}", bands.len());
+        let (preview, circle) = spectrum_bands(&shapes);
         let radius = f32::from(bar_radius(1.0));
-        for (which, mesh) in ["track", "strip"].into_iter().zip(&bands) {
-            // The strip is 11pt against a radius of 5, so its ends are all but
-            // semicircular and its straight run is a point tall. That is a
-            // shape, not a limit — what the radius may not do is eat the band's
-            // LENGTH, which the straight-run count below is what catches.
+        for (which, mesh) in [("preview", &preview), ("circle", &circle)] {
+            // The preview is 14pt against a radius of 5, so its ends are all
+            // but semicircular and its straight run is a few points tall. That
+            // is a shape, not a limit — what the radius may not do is eat the
+            // band's LENGTH, which the straight-run count below is what
+            // catches.
             let box_ = mesh.calc_bounds();
             let (mut near, mut far, mut full_height) = (0, 0, 0);
             // Two vertices per column, top then bottom, left to right.
@@ -3646,11 +5002,11 @@ mod tests {
     /// zero, so past that point the track stops shrinking and the button stops
     /// moving — and no sweep reaches it: `no_settings_pane_overruns_a_narrow_column`
     /// bottoms out at 120pt and this needs 20. Which leaves the arithmetic
-    /// under it unexercised, and it is the arithmetic most likely to go
-    /// negative: a track laid out from the RIGHT edge inward.
+    /// under it unexercised, and it is the arithmetic most likely to put the
+    /// button's own left edge past the right edge of the row.
     #[test]
     fn a_column_too_narrow_for_both_gives_the_row_to_the_button() {
-        for column in [FLIP_W + PIECE_GAP + 30.0, FLIP_W + PIECE_GAP, FLIP_W, 6.0, 1.0] {
+        for column in [FLIP_W + FLIP_GAP + 30.0, FLIP_W + FLIP_GAP, FLIP_W, 6.0, 1.0] {
             let ctx = egui::Context::default();
             crate::theme::apply_theme(&ctx);
             let mut g = ViewConfig::default().pitch_gradient;
@@ -3681,18 +5037,18 @@ mod tests {
 
             assert!(track.width() >= 0.0, "at {column}pt the track came out {track:?}");
             assert!(
-                button.right() <= track.left() + 0.01,
+                button.left() >= track.right() - 0.01,
                 "at {column}pt the button {button:?} runs into the track {track:?}",
             );
             // Below the threshold the track is gone and the button holds the
             // row: everything except the gap it would have kept clear.
-            if column <= FLIP_W + PIECE_GAP {
+            if column <= FLIP_W + FLIP_GAP {
                 assert_eq!(track.width(), 0.0, "at {column}pt the track kept {}", track.width());
                 assert!(
-                    button.width() >= track.right() - button.left() - PIECE_GAP - 0.01,
+                    button.width() >= button.right() - track.left() - FLIP_GAP - 0.01,
                     "at {column}pt the button shrank to {} of a {}pt row",
                     button.width(),
-                    track.right() - button.left(),
+                    button.right() - track.left(),
                 );
             } else {
                 assert!(track.width() > 0.0, "at {column}pt the track vanished early");
@@ -3764,6 +5120,103 @@ mod tests {
         assert!(handles(&shapes)[0].right() <= h.rect.right(), "a whole turn hangs the handle off");
     }
 
+    /// The name rides the circle — which runs the track end to end — drawn in
+    /// the ground color rather than the theme's text, and the readout never
+    /// reaches it.
+    ///
+    /// Three claims that fail apart. The circle runs the WHOLE track, so the
+    /// arc still reads from the bar's own left edge and nothing has quietly
+    /// taken a gutter back. The name is DARK, which is what makes it legible
+    /// where it stands — see [`span_name_color`]; a name drawn in the color the
+    /// readout uses sits at about 2.5:1 on the claimed circle, and no test of
+    /// position can see that. And the readout keeps off the name at every span
+    /// — swept to a whole turn, where it crosses to the near side of the
+    /// handle, which is the one arrangement that aims it at the name.
+    #[test]
+    fn the_name_rides_the_circle_and_the_number_keeps_off_it() {
+        // Swept across the column as well as the arc: the reserve the name is
+        // elided against, the stretch it leaves the readout and the clamp that
+        // holds the readout there are all arithmetic against the WIDTH, and one
+        // width exercises one answer.
+        //
+        // Past the dock's own 173pt floor on purpose. Above it the name is
+        // drawn whole and the reserve never binds — a sweep that stopped there
+        // passes with the reserve deleted, which is a test measuring nothing.
+        // The pane sweeps reach this bar at 80pt
+        // (`every_bar_in_a_settings_pane_is_the_width_of_the_pane`), and what
+        // has to hold down there is not the name but the arrangement: elided,
+        // and still clear of the number.
+        const SPANS: [f32; 6] = [0.0, 45.0, 190.0, 330.0, 360.0, -360.0];
+        /// The narrowest column the dock gives a pane, and so the width at
+        /// which the name is still owed in full.
+        const DOCK_FLOOR: f32 = 173.0;
+        for (width, span) in [300.0f32, 240.0, 200.0, DOCK_FLOOR, 140.0, 110.0, 80.0]
+            .into_iter()
+            .flat_map(|width| SPANS.map(move |span| (width, span)))
+        {
+            let aimed = format!("a span of {span} in a {width}pt column");
+            let mut g = Gradient { hue_span: span, ..Gradient::default() };
+            let mut h = Spectrum::settled_at(&mut g, width);
+            let shapes = h.frame(&mut g, vec![]);
+            let texts = spectrum_texts(&shapes);
+            assert_eq!(
+                texts.len(),
+                2,
+                "{aimed} drew {texts:?} rather than a name and a readout",
+            );
+            let (name, written, name_color) = texts[0].clone();
+            let (readout, _, readout_color) = texts[1].clone();
+            // The name in full at every width a reader can drag the column to,
+            // and below that a truthful elision of it — the tail eaten, never
+            // the head, so what survives still names the bar. Where the elision
+            // STARTS is left to the font: the claim is that it cannot start
+            // above the floor.
+            if written != SPAN_LABEL {
+                let kept = written.trim_end_matches('\u{2026}');
+                assert!(
+                    width < DOCK_FLOOR
+                        && written.ends_with('\u{2026}')
+                        && SPAN_LABEL.starts_with(kept),
+                    "{aimed}: the bar wrote {written:?} where {SPAN_LABEL:?} was owed",
+                );
+            }
+            // The circle end to end under it, no gutter anywhere.
+            let circle = spectrum_bands(&shapes).1.calc_bounds();
+            assert!(
+                (circle.left() - h.rect.left()).abs() < 0.01
+                    && (circle.right() - h.rect.right()).abs() < 0.01,
+                "{aimed}: the circle covers {circle:?} of a track that runs {:?}",
+                h.rect,
+            );
+            assert!(
+                name.left() < circle.right() && name.right() > circle.left(),
+                "{aimed}: the name at {name:?} is not on the circle {circle:?} at all",
+            );
+            // Dark, and darker than the number beside it: the two stand on
+            // different halves of the track and take opposite ends of the
+            // palette for it. Asked as a comparison rather than against one
+            // named color, so a re-skin moves both together.
+            assert_eq!(
+                name_color,
+                span_name_color(),
+                "{aimed}: the name is {name_color:?}, not the ground color it is meant to be",
+            );
+            let luma = |c: Color32| f32::from(c.r()) + f32::from(c.g()) + f32::from(c.b());
+            assert!(
+                luma(name_color) < luma(readout_color),
+                "{aimed}: the name {name_color:?} is no darker than the readout {readout_color:?}",
+            );
+            assert!(
+                readout.left() >= name.right(),
+                "{aimed} put the readout at {readout:?}, back into the name {name:?}",
+            );
+            assert!(
+                readout.right() <= h.rect.right() + 0.01,
+                "{aimed} ran the readout past the track's end: {readout:?}",
+            );
+        }
+    }
+
     /// The frame that moves the arc is the frame that DRAWS it moved.
     ///
     /// A bar that snapshots its value before the interaction block and paints
@@ -3796,6 +5249,39 @@ mod tests {
         );
     }
 
+    /// The preview draws the arc the drag just SET, exactly as the bar under it
+    /// does.
+    ///
+    /// A settings pane draws top-down, so a picture drawn WHERE IT STANDS is
+    /// drawn from the value the bars below it were handed rather than the one
+    /// they just wrote — `harmonigraph_scene::color`'s `LUT_SLOTS` counts that
+    /// very frame ("everything above the bar in a frame reads the value the bar
+    /// wrote LAST frame"), and it is the reason the bar itself re-reads. The
+    /// preview is above all three bars, so it is the group's one piece that can
+    /// spend a whole gesture a frame behind the control being dragged, and the
+    /// only fix is to take its space first and paint it last.
+    ///
+    /// Measured against the picture the SAME gradient draws with nothing in
+    /// flight, rather than against a color written out here: the claim is that
+    /// the frame is not stale, and the settled bar is what "not stale" means.
+    #[test]
+    fn a_spectrum_drag_draws_the_preview_it_just_set() {
+        let mut g = Gradient { hue_span: 90.0, ..Gradient::default() };
+        let mut h = Spectrum::settled(&mut g);
+        let shapes = h.drag(&mut g, h.at_span(90.0), h.at_span(270.0));
+        let live = band_colors(&spectrum_bands(&shapes).0);
+
+        let mut landed = g;
+        let mut settled = Spectrum::settled(&mut landed);
+        let shapes = settled.frame(&mut landed, vec![]);
+        let want = band_colors(&spectrum_bands(&shapes).0);
+        assert_eq!(
+            live, want,
+            "the preview drew a gradient other than the one the drag left at \
+             {landed:?} — a frame behind the bar it stands over",
+        );
+    }
+
     /// The flip button reverses the arc, in the frame it is clicked.
     ///
     /// The value half is what says the button is wired to the gradient's own
@@ -3825,9 +5311,10 @@ mod tests {
     /// with over its OWN rectangle — which works HERE, where the strip below
     /// needs a position check as well, because the button senses clicks and not
     /// drags: a press on it produces no drag hit for the track to inherit, at
-    /// any distance. Sensed together, a press that began on the button reaches
-    /// the track's rotate branch the moment egui calls it a drag, and the
-    /// circle spins under a pointer that pressed a button.
+    /// any distance. Sensed together, the track takes that press and the only
+    /// thing left standing between it and the rotate branch is the same
+    /// [`aimed_at`] check the strip is declined by — a position test doing the
+    /// work a rectangle does for free, and doing it a few frames late.
     #[test]
     fn a_drag_begun_on_the_flip_button_turns_nothing() {
         let before =
@@ -3847,51 +5334,52 @@ mod tests {
         assert_ne!(g, before, "the same drag on the track moved nothing, so this proves nothing");
     }
 
-    /// The pitch-order strip is a picture, and a press anywhere on it —
-    /// including hard against the track above — starts nothing.
+    /// The preview is a picture, and a press anywhere on it — including hard
+    /// against the track below — starts nothing.
     ///
-    /// Swept from the strip's top edge down, because a gap is not by itself a
-    /// barrier: egui's hit test collects every widget within
-    /// `interact_radius` of the pointer and, when the press hits nothing
-    /// directly, hands it to the nearest one. At the default radius of 5 that
-    /// reaches five points past the track's bottom edge — over twice
-    /// [`PIECE_GAP`] — so the strip's own top is inside the track's reach and
-    /// only the position check in `show` keeps it out. A probe at the strip's
-    /// middle alone would sit clear of the one region where this can fail.
+    /// Swept from the preview's bottom edge up, because the row spacing is not
+    /// by itself a barrier: egui's hit test collects every widget within
+    /// `interact_radius` of the pointer and, when the press hits nothing that
+    /// takes drags, hands it to the nearest one. At the default radius of 5
+    /// that reaches five points past the track's top edge — past the 4pt of
+    /// spacing between them — so the preview's own bottom is inside the track's
+    /// reach and only the position check in `show` keeps it out. A probe at the
+    /// preview's middle alone would sit clear of the one region where this can
+    /// fail.
     #[test]
-    fn the_pitch_strip_is_a_picture_and_not_a_control() {
+    fn the_preview_is_a_picture_and_not_a_control() {
         // The arc the track's own reset lands on, so the control halves below
         // read the reset rather than a constant that merely used to match it
         // (see `a_double_click_on_the_spectrum_goes_home_to_the_arc_a_fresh_view_opens_on`).
         let home = default_home();
         let dialled = Gradient { hue_start: 12.0, hue_span: 33.0, ..home };
 
-        for down in [0.0f32, 0.05, 0.25, 0.5, 1.0] {
-            // A drag begun on the strip and run up into the track.
+        for up in [0.0f32, 0.05, 0.25, 0.5, 1.0] {
+            // A drag begun on the preview and run down into the track.
             let mut g = home;
             let mut h = Spectrum::settled(&mut g);
-            let from = h.on_strip(0.2, down);
-            let to = egui::pos2(h.on_strip(0.8, down).x, h.track().center().y);
+            let from = h.on_preview(0.2, up);
+            let to = egui::pos2(h.on_preview(0.8, up).x, h.track().center().y);
             h.drag(&mut g, from, to);
-            assert_eq!(g, home, "a drag begun {down} down the pitch strip turned the circle");
+            assert_eq!(g, home, "a drag begun {up} up the preview turned the circle");
 
-            // The same gesture one row higher does move it, so the harness is
+            // The same gesture one row lower does move it, so the harness is
             // delivering something the widget can act on.
             let mut g = home;
             let mut h = Spectrum::settled(&mut g);
-            let from = egui::pos2(from.x, h.track().center().y);
+            let from = egui::pos2(from.x.max(h.track().left()), h.track().center().y);
             h.drag(&mut g, from, to);
             assert_ne!(g, home, "the same drag on the track moved nothing, so this proves nothing");
 
-            // And a double-click on the strip does not reset the arc. A fresh
+            // And a double-click on the preview does not reset the arc. A fresh
             // bar for each pair: run back to back on one, the second lands
             // inside the first's double-click window and arrives as the third
             // click of a sequence, which is a different gesture.
             let mut g = dialled;
             let mut h = Spectrum::settled(&mut g);
-            let at = h.on_strip(0.5, down);
+            let at = h.on_preview(0.5, up);
             h.double_click(&mut g, at);
-            assert_eq!(g, dialled, "a double-click {down} down the pitch strip reset the arc");
+            assert_eq!(g, dialled, "a double-click {up} up the preview reset the arc");
         }
     }
 
@@ -3973,6 +5461,12 @@ mod tests {
 
     /// A turn slides the circle under a fixed left edge, and the hue the
     /// gesture took hold of stays under the pointer for the length of it.
+    ///
+    /// The hue it took hold of is the one under the PRESS, so the turn is the
+    /// pointer's whole travel rather than what is left of it after egui has
+    /// spent six points deciding the press was a drag. Anchoring on the first
+    /// live frame instead leaves the circle behind the hand by that much for
+    /// the rest of the gesture, and nothing on screen ever catches it up.
     #[test]
     fn turning_the_spectrum_keeps_the_grabbed_hue_under_the_pointer() {
         let mut g = Gradient { hue_start: 0.0, hue_span: 90.0, ..Gradient::default() };
@@ -3982,7 +5476,7 @@ mod tests {
         let (from, to) = (h.at_span(300.0), h.at_span(200.0));
         h.drag(&mut g, from, to);
         let track = h.track();
-        let held = hue_under(before, track, h.live_at);
+        let held = hue_under(before, track, from);
         let now = hue_under(g, track, to);
         // Within a degree either side, the far side being the seam: two hues a
         // whisker apart across 0 are 359 apart by subtraction.
@@ -3993,6 +5487,55 @@ mod tests {
         );
         assert_ne!(g.hue_start, before.hue_start, "the turn moved nothing");
         assert_eq!(g.hue_span, before.hue_span, "a turn changed how wide the arc is");
+    }
+
+    /// A press within the handle's reach drags the HANDLE, whichever way the
+    /// drag then runs.
+    ///
+    /// The reach is what the cursor promises — a `ResizeHorizontal` under the
+    /// pointer says a press here resizes the arc — and the promise is made at
+    /// the moment of the press. egui calls a press a drag only once it has left
+    /// a six-point threshold, so a gesture that runs OUTWARD from a press near
+    /// the edge of the reach is already clear of it by the first live frame,
+    /// and settling the question there turns the circle under a hand that aimed
+    /// at the handle. Swept across the reach and both ways, because the middle
+    /// of it survives either rule.
+    #[test]
+    fn a_press_within_the_handles_reach_drags_the_handle_whichever_way_it_runs() {
+        let before = Gradient { hue_start: 40.0, hue_span: 180.0, ..Gradient::default() };
+        for offset in [-GRAB_PX, -GRAB_PX * 0.5, 0.0, GRAB_PX * 0.5, GRAB_PX] {
+            for run in [-40.0f32, 40.0] {
+                let mut g = before;
+                let mut h = Spectrum::settled(&mut g);
+                let from = h.at_span(before.hue_span) + Vec2::new(offset, 0.0);
+                h.drag(&mut g, from, from + Vec2::new(run, 0.0));
+                let aimed = format!("pressed {offset} from the handle and dragged {run}");
+                assert_eq!(
+                    g.hue_start, before.hue_start,
+                    "{aimed}: the circle turned under a press on the handle",
+                );
+                assert_ne!(g.hue_span, before.hue_span, "{aimed}: the arc did not move");
+            }
+        }
+    }
+
+    /// And a press CLEAR of that reach turns the circle, however the drag then
+    /// runs — the other half of the same rule, which without this is satisfied
+    /// by a bar whose handle has swallowed the whole track.
+    #[test]
+    fn a_press_clear_of_the_handle_turns_the_circle_whichever_way_it_runs() {
+        let before = Gradient { hue_start: 40.0, hue_span: 180.0, ..Gradient::default() };
+        for offset in [-GRAB_PX * 3.0, GRAB_PX * 3.0] {
+            for run in [-20.0f32, 20.0] {
+                let mut g = before;
+                let mut h = Spectrum::settled(&mut g);
+                let from = h.at_span(before.hue_span) + Vec2::new(offset, 0.0);
+                h.drag(&mut g, from, from + Vec2::new(run, 0.0));
+                let aimed = format!("pressed {offset} from the handle and dragged {run}");
+                assert_ne!(g.hue_start, before.hue_start, "{aimed}: the circle did not turn");
+                assert_eq!(g.hue_span, before.hue_span, "{aimed}: a turn resized the arc");
+            }
+        }
     }
 
     /// A flip lands on the same arc read backwards — the promise the Flip
@@ -4056,6 +5599,155 @@ mod tests {
             spectrum_readout(&shapes),
             "+0°",
             "a span of nothing read out as running left",
+        );
+    }
+
+    /// Paint one value bar across a `width`-point row and return what it
+    /// emitted, with or without a preview curve.
+    fn paint_value_bar(
+        width: f32,
+        value: f32,
+        curve: Option<fn(f32, f32) -> f32>,
+    ) -> Vec<egui::Shape> {
+        let ctx = egui::Context::default();
+        crate::theme::apply_theme(&ctx);
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(width, 100.0));
+        let mut value = value;
+        let out = ctx.run_ui(
+            egui::RawInput { screen_rect: Some(screen), ..Default::default() },
+            |ui| {
+                let mut bar = ValueBar::new(&mut value, 0.0..=1.0, "Shape");
+                if let Some(curve) = curve {
+                    bar = bar.curve(curve);
+                }
+                bar.show(ui);
+            },
+        );
+        out.shapes.into_iter().map(|cs| cs.shape).collect()
+    }
+
+    /// A straight line, which is what a preview of nothing in particular looks
+    /// like: the tests below are about WHERE the curve is drawn, and the one
+    /// that cares which curve it is samples the real bar in the real pane
+    /// (`the_shape_bars_preview_is_the_curve_the_notes_run_on`).
+    fn ramp(_value: f32, p: f32) -> f32 {
+        p
+    }
+
+    /// The preview is a picture of the transition and not a second reading of
+    /// the value, so it spans the whole track wherever the value sits — the two
+    /// axes over one rectangle that [`ValueBar::curve`] is about. A preview
+    /// that stopped at the fill would read as the part of the curve that has
+    /// happened, which is a claim about time the bar cannot make.
+    #[test]
+    fn a_curve_preview_spans_the_track_at_every_value() {
+        let ends = |value: f32| {
+            let shapes = paint_value_bar(240.0, value, Some(ramp));
+            let points = curve_points(&shapes);
+            assert!(points.len() > 2, "a preview of {value} drew {} points", points.len());
+            (points[0].x, points[points.len() - 1].x)
+        };
+        let empty = ends(0.0);
+        for value in [0.35f32, 1.0] {
+            assert_eq!(
+                ends(value),
+                empty,
+                "the preview moved with the value, which makes its x the bar's own axis",
+            );
+        }
+    }
+
+    /// The line goes over the fill and under the text, and BOTH halves are the
+    /// contract. Text over it, because the curve crosses the whole track and so
+    /// passes behind both runs wherever they sit, and a bar whose number is
+    /// hard to read is a bar that has given up what it is FOR to decorate
+    /// itself. Fill under it, because the fill is opaque — every accent mix is,
+    /// deliberately (see `theme`) — so a line painted first is not dimmed by it
+    /// but erased, over the whole filled part of the track and over all of it
+    /// at the top of the range.
+    ///
+    /// Z-order and not geometry, which is why this reads indices: both halves
+    /// leave every point exactly where it was, so nothing that samples the
+    /// line's own coordinates can see either one go wrong.
+    #[test]
+    fn a_curve_preview_is_drawn_over_the_fill_and_under_the_bars_own_text() {
+        // Mid-range, so there IS a fill to be buried by and empty track past it.
+        let shapes = paint_value_bar(240.0, 0.5, Some(ramp));
+        let line = shapes
+            .iter()
+            .position(|shape| match shape {
+                egui::Shape::Path(path) => {
+                    path.stroke.color == egui::epaint::ColorMode::Solid(curve_color())
+                }
+                _ => false,
+            })
+            .expect("the bar painted no preview");
+        // The fill and not the well: they are both rects and only one of them
+        // is the one the line has to clear.
+        let fill = shapes
+            .iter()
+            .position(|shape| match shape {
+                egui::Shape::Rect(rect) => rect.fill == theme::accent_fill(),
+                _ => false,
+            })
+            .expect("the bar painted no fill");
+        assert!(fill < line, "the fill at {fill} was painted over the line at {line}");
+        let texts: Vec<usize> = shapes
+            .iter()
+            .enumerate()
+            .filter(|(_, shape)| matches!(shape, egui::Shape::Text(_)))
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(texts.len(), 2, "the bar painted {} text runs", texts.len());
+        for text in texts {
+            assert!(text > line, "a text run at {text} was painted under the line at {line}");
+        }
+    }
+
+    /// A caller whose function leaves 0..=1 is drawn inside the bar anyway.
+    ///
+    /// The guard exists because the function handed to [`ValueBar::curve`] is
+    /// the REAL one — it answers for the thing being previewed and owes the
+    /// widget nothing — so the widget cannot assume a level it can draw. The
+    /// one caller in the tree is bounded by construction, which is exactly why
+    /// this needs a fixture rather than a reader: without one the clamp can be
+    /// deleted and the whole suite stays green.
+    ///
+    /// A bar is one row in a column of them, so the cost of getting this wrong
+    /// is not a clipped line but ink over the neighbours' tracks.
+    #[test]
+    fn a_curve_preview_stays_inside_the_bar_when_its_caller_does_not() {
+        // Runs -0.5 to 1.5: half a plot-height below the bar and half above.
+        let shapes = paint_value_bar(240.0, 0.5, Some(|_, p| p * 2.0 - 0.5));
+        let track = shapes
+            .iter()
+            .find_map(|shape| match shape {
+                egui::Shape::Rect(rect) if rect.fill == theme::well() => Some(rect.rect),
+                _ => None,
+            })
+            .expect("the bar painted no track");
+        let points = curve_points(&shapes);
+        assert!(!points.is_empty(), "the bar painted no preview");
+        for point in &points {
+            assert!(
+                point.y >= track.top() && point.y <= track.bottom(),
+                "a preview point at y {} left a track of {}..{}",
+                point.y,
+                track.top(),
+                track.bottom(),
+            );
+        }
+    }
+
+    /// The preview is opt-in, and every other bar in the tree is the bar it
+    /// always was: no line, and no extra shape for the paint tests around it to
+    /// trip over.
+    #[test]
+    fn a_bar_with_no_curve_paints_no_line() {
+        let shapes = paint_value_bar(240.0, 0.35, None);
+        assert!(
+            curve_points(&shapes).is_empty(),
+            "a plain bar painted a preview line",
         );
     }
 
@@ -4175,16 +5867,15 @@ mod tests {
     /// and button. Aliased so clippy doesn't flag the nested `dyn FnMut`.
     type RowFn = fn(&mut Ui, &mut dyn FnMut(&mut Ui));
 
-    /// Label center minus button center in a row built by `row`, under the
-    /// theme's geometry (short interact_size, padded buttons). Not
-    /// `__run_test_ui`: that empties the fonts, text measures zero-height,
-    /// and the too-short row this guards against never happens.
+    /// Label center minus button center in a row built by `row`, under the real
+    /// theme — which is the whole question here, the theme being what sizes both
+    /// of them. Not `__run_test_ui`: that empties the fonts, text measures
+    /// zero-height, and the misalignment this guards against never happens.
     fn row_offset(row: RowFn) -> f32 {
         let mut offset = 0.0;
         let ctx = egui::Context::default();
+        crate::theme::apply_theme(&ctx);
         let _ = ctx.run_ui(Default::default(), |ui| {
-            ui.style_mut().spacing.interact_size.y = 17.0;
-            ui.style_mut().spacing.button_padding = Vec2::new(9.0, 4.0);
             row(ui, &mut |ui| {
                 let label = ui.label("Node style").rect.center().y;
                 let button = ui.button("Steady").rect.center().y;
@@ -4194,21 +5885,26 @@ mod tests {
         offset
     }
 
-    /// A bare label centers on the button text in a `button_row`. The
-    /// companion assert shows plain `horizontal` still misaligns them —
-    /// when an egui upgrade fixes row sizing upstream, that assert fails
-    /// and this whole workaround becomes deletable.
+    /// A bare label sits on the same line as the button beside it, in a
+    /// `button_row` and in a plain `horizontal` alike.
+    ///
+    /// Both, deliberately, because a row is centered by the two being the same
+    /// HEIGHT rather than by anything a row helper does — `theme::ROW_HEIGHT`
+    /// through `interact_size`, and `every_settings_row_is_one_row_high` is
+    /// what holds it. A `button_row` that centered a label its container did
+    /// not would mean the height had gone out from under one of them and the
+    /// wrapping helper was papering over it.
     #[test]
-    fn button_row_centers_label_with_button_text() {
+    fn a_label_sits_on_the_line_of_the_button_beside_it() {
         let plain = row_offset(|ui, add| {
             ui.horizontal(|ui| add(ui));
         });
-        assert!(plain < -1.0, "egui centers rows itself now ({plain}); drop button_row?");
+        assert!(plain.abs() < 0.5, "a plain row's label is off by {plain}px");
 
-        let fixed = row_offset(|ui, add| {
+        let wrapped = row_offset(|ui, add| {
             button_row(ui, |ui| add(ui));
         });
-        assert!(fixed.abs() < 0.5, "button_row label off by {fixed}px");
+        assert!(wrapped.abs() < 0.5, "button_row's label is off by {wrapped}px");
     }
 
     /// A bar's two text runs keep out of each other's way and stay inside the
@@ -4432,10 +6128,10 @@ mod tests {
             "three wide buttons stayed on one line: {rects:?}"
         );
         // The second half, made self-evident rather than incidental: a button
-        // taller than one padded text row is one whose label wrapped.
-        let row = 25.0;
+        // taller than a row is one whose label took a second line, a row being
+        // exactly what a one-line button stands at (`every_settings_row_is_one_row_high`).
         assert!(
-            rects.iter().any(|r| r.height() > row + 5.0),
+            rects.iter().any(|r| r.height() > theme::ROW_HEIGHT + 5.0),
             "no label wrapped, so only the row-wrap half is under test: {rects:?}"
         );
     }
@@ -5664,8 +7360,9 @@ mod tests {
         frame(&mut g, vec![egui::Event::PointerMoved(at(from))]);
         frame(&mut g, vec![egui::Event::PointerMoved(at(from)), press(at(from), true)]);
         // A step clear of egui's drag threshold first, then the rest of the
-        // way: the grab is settled on the first LIVE frame, which a gesture
-        // that jumps straight to its target would settle at the target.
+        // way, for the reason the range bar's harness takes one: it is the gap
+        // between where a press lands and where the gesture is first read, and
+        // a jump straight to the target has no gap in it.
         let step = 12.0 / rect.width() * (to - from).signum();
         frame(&mut g, vec![egui::Event::PointerMoved(at(from + step))]);
         frame(&mut g, vec![egui::Event::PointerMoved(at(to))]);
@@ -5697,6 +7394,60 @@ mod tests {
         assert_eq!(pair.1, 40.0, "the slide restyled the ramp to {}", pair.1);
         let (low, high) = ends(pair);
         assert_eq!((low, high), (low.round(), high.round()), "{low}..{high} is not whole");
+    }
+
+    /// A press within an end's reach takes THAT end here too, whichever way the
+    /// drag then runs — the [`aimed_at`] rule on the third of the bars that
+    /// splits a handle from a middle.
+    ///
+    /// Both bars, because the two work in axes two orders of magnitude apart
+    /// and the reach is converted into each: a conversion that dropped the
+    /// press position on one of them would leave the other passing.
+    ///
+    /// The pairs above nearly reach this and stop short — a press ON a handle
+    /// dragged OUTWARD is still just inside the reach twelve points later,
+    /// which is what the live position leaves. Inward is where it runs out.
+    ///
+    /// Asserted on the two ENDS rather than on the stored pair, which is the
+    /// only form of the claim that holds in both bars. "A slide leaves the ramp
+    /// alone" is false on the chroma bar: `snapped` recomposes the pair through
+    /// a hundredth-wide grid and `legal` runs it through `sanitize`, both in
+    /// f32, so a middle slide shifts `chroma_ramp` by an ulp at some runs and
+    /// not others — and a test that reads the ramp then passes against the live
+    /// position for exactly the runs where it does not. The ends say which
+    /// gesture ran: an end grab moves one and leaves the other standing, a
+    /// slide carries both. Held to a share of each bar's own axis so the one
+    /// assertion spans two units, and loose enough at the far end that an ulp
+    /// of recomposition is not a moved handle.
+    #[test]
+    fn a_press_within_a_spread_ends_reach_takes_that_end_whichever_way_it_runs() {
+        let bars = [(Spread::Brightness, (64.0f32, 44.0f32)), (Spread::Chroma, (0.64, 0.44))];
+        for (spread, pair) in bars {
+            let (min, max) = spread.axis();
+            let bar = filled_rects(&paint_bar(spread, pair))[0].0;
+            let track = bar.shrink2(Vec2::new(HANDLE_INSET, 0.0));
+            let was = ends(pair);
+            let handle = track.left() + track.width() * (was.0 - min) / (max - min);
+            let frac = |x: f32| (x - bar.left()) / bar.width();
+            for reach in [-GRAB_PX * 0.8, GRAB_PX * 0.8] {
+                for run in [-40.0f32, 40.0] {
+                    let from = handle + reach;
+                    let moved = ends(drag_bar(spread, pair, (frac(from), frac(from + run))));
+                    let aimed = format!("{spread:?}: pressed {reach} from the low end, ran {run}");
+                    let share = |a: f32, b: f32| (a - b).abs() / (max - min);
+                    assert!(
+                        share(moved.1, was.1) < 1e-4,
+                        "{aimed}: the high end came along, by {} of the axis",
+                        share(moved.1, was.1),
+                    );
+                    assert!(
+                        share(moved.0, was.0) > 0.02,
+                        "{aimed}: the low end moved {} of the axis, which is nothing",
+                        share(moved.0, was.0),
+                    );
+                }
+            }
+        }
     }
 
     /// The same wiring on the chroma bar, which is where the units the widget

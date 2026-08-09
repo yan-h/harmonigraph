@@ -3,38 +3,42 @@
 //! in docking, and gets the shared state (hover, console, tracker) for free.
 //!
 //! The lattice's settings read outward from the picture: [`tuning`] is how it
-//! is tuned and — via [`frame`], which draws the second half of that same tab
-//! — how it is framed; [`nodes`] is how a played note is drawn, [`scene`] is
-//! everything around the notes, and [`panel`] is the plugin's own render/
-//! layout knobs. Alongside are the [`spectral`] display and its analyzer
-//! settings, [`render`] (the Video tab), and [`notes`] (Console + Notes).
-//! This file holds the `Tab` enum, the `TabViewer` that dispatches to them,
-//! and the small helpers more than one pane needs.
+//! is tuned, [`view`] is which of it you are looking at and from where,
+//! [`nodes`] is how a played note is drawn, [`scene`] is everything around the
+//! notes, and [`system`] is the plugin's own render/layout knobs. Alongside
+//! are the [`spectral`] display and its analyzer settings, [`render`] (the
+//! Video tab), and [`notes`] (Console + Notes). This file holds the `Tab`
+//! enum, the `TabViewer` that dispatches to them, and the small helpers more
+//! than one pane needs.
+//!
+//! Each tab's name covers everything in it, which is the whole job a tab bar
+//! does: a subject its name omits is one nobody opens the tab to find.
 
 use crate::params::{ParamBackend, ParamKey};
 use crate::widgets::{RangeBar, ValueBar};
 use crate::SharedState;
 
-pub mod frame;
 pub mod lattice;
 pub mod nodes;
 pub mod notes;
-pub mod panel;
 /// The offline video frame, composed live so you can preview and adjust it
 /// before rendering. The "Video" tab.
 pub mod render;
 pub mod scene;
 pub mod spectral;
+pub mod system;
 pub mod tuning;
+pub mod view;
 
 use lattice::lattice_pane;
 use nodes::nodes_pane;
 use notes::{console_pane, notes_pane};
-use panel::panel_pane;
 use render::render_pane;
 use scene::scene_pane;
 use spectral::{spectral_pane, spectrum_settings_pane};
+use system::system_pane;
 use tuning::tuning_pane;
+use view::view_pane;
 
 /// Wrap degrees into -180..=180 for display (orbit accumulates yaw
 /// without bound).
@@ -60,9 +64,13 @@ pub(super) const KEY_NAMES: [&str; 12] = [
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Tab {
     Lattice,
-    /// The lattice itself: how it is tuned, and how it is framed. The framing
-    /// half was a tab of its own until the two short panes were merged.
+    /// Where the lattice's nodes sit in pitch: the prime bars, and the commas
+    /// it tempers out.
     Tuning,
+    /// Which of the lattice you are looking at and from where: projection,
+    /// camera, extents, and the sevenths layer. A section inside [`Tab::Tuning`]
+    /// until it outgrew the name that hid it.
+    View,
     /// How a sounding note is drawn.
     Nodes,
     /// The structure and overlays around the notes.
@@ -76,8 +84,10 @@ pub enum Tab {
     /// A live preview of the offline video frame, composed and adjusted here.
     /// Titled "Video".
     Video,
-    /// The plugin's own render-quality and pane-layout knobs.
-    Panel,
+    /// The plugin's own render-quality and pane-layout knobs. Titled "System";
+    /// spelled `Panel` until that name proved to describe the thing being
+    /// looked at rather than anything the tab changes.
+    System,
 }
 
 pub struct Viewer<'a> {
@@ -113,6 +123,7 @@ pub fn tab_title(tab: &Tab) -> &'static str {
     match tab {
         Tab::Lattice => "Lattice",
         Tab::Tuning => "Tuning",
+        Tab::View => "View",
         Tab::Nodes => "Nodes",
         Tab::Scene => "Scene",
         Tab::Console => "Console",
@@ -124,7 +135,7 @@ pub fn tab_title(tab: &Tab) -> &'static str {
         Tab::Analyzer => "Analyzer",
         Tab::Notes => "Notes",
         Tab::Video => "Video",
-        Tab::Panel => "Panel",
+        Tab::System => "System",
     }
 }
 
@@ -191,6 +202,7 @@ impl egui_dock::TabViewer for Viewer<'_> {
         match tab {
             Tab::Lattice => lattice_pane(ui, self.state, self.now),
             Tab::Tuning => tuning_pane(ui, self.state, self.params, self.now),
+            Tab::View => view_pane(ui, self.state),
             Tab::Nodes => nodes_pane(ui, self.state, self.params),
             Tab::Scene => scene_pane(ui, self.state),
             Tab::Console => console_pane(ui, self.state),
@@ -198,7 +210,7 @@ impl egui_dock::TabViewer for Viewer<'_> {
             Tab::Analyzer => spectrum_settings_pane(ui, self.state),
             Tab::Notes => notes_pane(ui, self.state),
             Tab::Video => render_pane(ui, self.state, self.now),
-            Tab::Panel => panel_pane(ui, self.state),
+            Tab::System => system_pane(ui, self.state),
         }
     }
 
@@ -337,6 +349,61 @@ pub(super) fn param_range_bar(
     if response.drag_stopped() {
         params.end_set(low_key);
         params.end_set(high_key);
+    }
+    response
+}
+
+/// One bar for a soft edge: how far it REACHES past whatever it surrounds, and
+/// how much of that reach it spends FADING out. The lattice's knockout gutter
+/// and the piano roll's note outline are both this shape.
+///
+/// The pair is stored as a reach and a fade WIDTH, and dragged as the two
+/// points those describe — solid out to `reach - fade`, gone by `reach` — which
+/// is what a [`RangeBar`] already is. So the two ends read out as the places
+/// they are, the fade is the distance between them, and
+/// [`fade_span`](RangeBar::fade_span) paints the fill to match.
+///
+/// The gestures are everything two bars of their own would give, plus one:
+/// sliding the span moves the reach at a fixed fade, the low end moves the fade
+/// at a fixed reach, and the high end pins where softening STARTS and moves
+/// where it ends. Nothing here ties the fade to the reach — that would make a
+/// wider edge always a blurrier one, which is the whole reason these are two
+/// numbers.
+///
+/// A hard edge (fade 0) closes the span, which is why this bar takes no
+/// `min_span` and why [`Grab::at`](crate::widgets) has a rule for a closed one.
+///
+/// Both numbers are distances from the same place, so the axis floors at 0 and
+/// the caller passes only its far end.
+///
+/// `fresh` is where a double-click lands. A range bar's own reset opens to the
+/// whole axis, which is the useful place to land for a window onto something
+/// and the worst one here: both ends of this axis together are the widest edge
+/// there is at the softest it goes, so the gesture would trade a dialled edge
+/// for the most extreme one. The fresh pair is the neutral answer, and it is
+/// what a double-click reaches for on a bar whose number is captured out of a
+/// project rather than dragged to.
+pub(super) fn edge_bar(
+    ui: &mut egui::Ui,
+    (reach, fade): (&mut f32, &mut f32),
+    max: f32,
+    label: &str,
+    fresh: (f32, f32),
+    display: fn(f32) -> String,
+) -> egui::Response {
+    // Clamped rather than trusted: a fade wider than its reach draws the same
+    // as one exactly as wide (both shaders floor the fade at the edge it
+    // surrounds), but it has no pair of points to put on the axis, and the
+    // low end would read out somewhere the value does not say.
+    // `ViewConfig::sanitize` and `SpectrumConfig::sanitize` hold the stored
+    // pair to the same bound, so this only ever catches a live one.
+    let (mut low, mut high) = ((*reach - *fade).max(0.0), *reach);
+    let response =
+        RangeBar::new(&mut low, &mut high, 0.0..=max, label).fade_span().display(display).show(ui);
+    if response.double_clicked() {
+        (*reach, *fade) = fresh;
+    } else if response.changed() {
+        (*reach, *fade) = (high, high - low);
     }
     response
 }

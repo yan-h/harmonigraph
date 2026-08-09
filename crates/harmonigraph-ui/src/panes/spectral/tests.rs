@@ -595,6 +595,127 @@ fn label_anchors_grow_into_the_pane() {
     }
 }
 
+/// The pitch range the whole analyzer covers, plus a hair either side, so a
+/// frequency landing exactly on an end is inside the range rather than on the
+/// float boundary of it — 20 Hz and 20 kHz are what the axis is DEFINED as, and
+/// whether `hz_to_midi` lands a ulp above or below the constant is not what any
+/// test here is about.
+fn whole_axis() -> PitchScale {
+    use harmonigraph_core::spectrum::{SPECTRUM_MAX_MIDI, SPECTRUM_MIN_MIDI};
+    let (min_midi, max_midi) = (SPECTRUM_MIN_MIDI - 0.5, SPECTRUM_MAX_MIDI + 0.5);
+    PitchScale { min_midi, max_midi, span: max_midi - min_midi }
+}
+
+/// The frequency grid is a decade ladder — every 10 Hz below 100, every 100 Hz
+/// below 1 kHz, every 1 kHz below 10 — and the 1-2-5 series of each decade is
+/// the part of it that carries a number.
+#[test]
+fn the_frequency_grid_rules_one_step_per_decade() {
+    // A long axis, so nothing is thinned for room (that is the next test) and
+    // what comes back is the whole ladder.
+    let grid = frequency_grid(&whole_axis(), 4_000.0);
+    let hz: Vec<f32> = grid.iter().map(|r| r.hz).collect();
+    // From 20 Hz, where the analyzer's axis starts — 10 Hz is a step of this
+    // ladder and simply falls off the bottom of the range.
+    let ladder: Vec<f32> = (2..=9)
+        .map(|s| s as f32 * 10.0)
+        .chain((1..=9).map(|s| s as f32 * 100.0))
+        .chain((1..=9).map(|s| s as f32 * 1_000.0))
+        .chain([10_000.0, 20_000.0])
+        .collect();
+    assert_eq!(hz, ladder, "the ladder is not one even step per decade");
+
+    // The numbered marks: an analyzer's 1-2-5 series, which is exactly the set
+    // the pane writes a label beside. Pinned as a list rather than a count, so
+    // a ladder that swapped one number for another is named and not just
+    // tallied.
+    let numbered: Vec<f32> = grid.iter().filter(|r| r.numbered).map(|r| r.hz).collect();
+    assert_eq!(
+        numbered,
+        vec![20.0, 50.0, 100.0, 200.0, 500.0, 1_000.0, 2_000.0, 5_000.0, 10_000.0, 20_000.0],
+    );
+
+    // The decade boundaries, which are what gets the stronger ink — the three
+    // places on this axis where the ladder's step size changes tenfold, and NOT
+    // the numbered marks between them. 20 kHz is a number and not a decade;
+    // 100 Hz is both.
+    let decades: Vec<f32> = grid.iter().filter(|r| r.decade).map(|r| r.hz).collect();
+    assert_eq!(decades, vec![100.0, 1_000.0, 10_000.0]);
+
+    // Low to high, and on the axis: the pane draws these in the order they come
+    // back and clips nothing.
+    assert!(grid.windows(2).all(|w| w[0].t < w[1].t), "the ladder came back out of order");
+    assert!(grid.iter().all(|r| (0.0..=1.0).contains(&r.t)), "a ruling landed off the axis");
+
+    // A range showing part of a decade gets that part and no more.
+    let octave = PitchScale { min_midi: 60.0, max_midi: 72.0, span: 12.0 }; // 262..523 Hz
+    let inside: Vec<f32> = frequency_grid(&octave, 4_000.0).iter().map(|r| r.hz).collect();
+    assert_eq!(inside, vec![300.0, 400.0, 500.0]);
+}
+
+/// A short axis thins the ladder rather than smearing it, and thins it the
+/// same way in every decade — but never drops a numbered mark, which would
+/// leave a label sitting on nothing.
+#[test]
+fn a_short_axis_thins_the_ladder_and_keeps_the_numbers() {
+    let scale = whole_axis();
+    let long = frequency_grid(&scale, 4_000.0);
+    let short = frequency_grid(&scale, 200.0);
+    assert!(short.len() < long.len(), "a 200-point axis kept the whole ladder");
+
+    let numbered = |grid: &[Ruling]| -> Vec<f32> {
+        grid.iter().filter(|r| r.numbered).map(|r| r.hz).collect()
+    };
+    assert_eq!(numbered(&short), numbered(&long), "thinning ate a numbered mark");
+
+    // Which steps survive turns on the length of a decade, which is the same
+    // everywhere on a log axis — so the two full decades on this range keep the
+    // same steps as each other rather than the grid thinning out along the axis.
+    let steps = |grid: &[Ruling], base: f32| -> Vec<i32> {
+        grid.iter()
+            .filter(|r| r.hz >= base && r.hz < base * 10.0)
+            .map(|r| (r.hz / base).round() as i32)
+            .collect()
+    };
+    assert_eq!(steps(&short, 100.0), steps(&short, 1_000.0));
+    assert!(steps(&short, 100.0).len() < 9, "nothing was thinned at all");
+
+    // And what is left is spaced far enough apart to read as separate lines.
+    for pair in short.windows(2) {
+        let gap = (pair[1].t - pair[0].t) * 200.0;
+        assert!(
+            gap >= MIN_RULING_GAP_PT,
+            "{} Hz and {} Hz came out {gap} points apart",
+            pair[0].hz,
+            pair[1].hz,
+        );
+    }
+
+    // Squeezed hard enough it wears down to the numbers alone, rather than to
+    // some arbitrary subset that happens to fit.
+    let tiny = frequency_grid(&scale, 100.0);
+    assert_eq!(tiny.iter().map(|r| r.hz).collect::<Vec<_>>(), numbered(&long));
+}
+
+/// A collapsed, inverted or NaN pitch range — which the bars cannot produce and
+/// a hand-edited state blob can — rules nothing at all. Its span is what a
+/// position divides by, so any ruling it kept would be placed at a NaN, and egui
+/// panics on NaN geometry.
+#[test]
+fn a_collapsed_range_rules_nothing() {
+    // A frequency landing EXACTLY on a collapsed range is the case that gets
+    // through a guard on the decade length alone: 1 kHz is inside `60.0..60.0`
+    // once the range is written at 1 kHz's own pitch.
+    let khz = harmonigraph_core::spectrum::hz_to_midi(1_000.0);
+    for (min_midi, max_midi) in [(khz, khz), (60.0, 60.0), (90.0, 30.0), (f32::NAN, f32::NAN)] {
+        let scale = PitchScale { min_midi, max_midi, span: max_midi - min_midi };
+        assert!(
+            frequency_grid(&scale, 300.0).is_empty(),
+            "{min_midi}..{max_midi} ruled a line on an axis with no length",
+        );
+    }
+}
+
 /// With the roll off, the spectrum gets the whole depth axis — the
 /// layout the voice-bar/curve calibration was set up against.
 #[test]
@@ -1136,6 +1257,170 @@ fn the_axis_labels_are_rimmed() {
         out.shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Callback(_))),
         "the pane drew no label callback at all",
     );
+}
+
+/// The frequency rulings go UNDER the picture and stop where the spectrum
+/// does.
+///
+/// Both halves are the whole case for ruling this pane at all. Over the
+/// spectrum's fill they would be a mesh laid across a picture for a reading the
+/// numbers already give; under it they are what the picture stands on. And run
+/// the full depth they would cross the roll's ribbons and outrun the
+/// spectrogram's heatmap, which only grows out from the now-line as history
+/// accumulates — leaving the far part of every line sitting bare on the bed.
+/// Checked in every orientation, because which screen side the spectrum is on
+/// is exactly what the pane's four turns change: a ruling drawn along a
+/// hardcoded screen axis is right in one of them and crosses the picture in
+/// the other three.
+#[test]
+fn the_rulings_go_under_the_spectrum_and_stop_at_the_now_line() {
+    for orientation in EVERY_ORIENTATION {
+        let cfg = SpectrumConfig { orientation, ..Default::default() };
+        let rect = reference_pane();
+        let axes = Axes::new(rect, &cfg);
+        let split = spectrum_share(&cfg);
+        assert!(split > 0.0 && split < 1.0, "this needs a pane the spectrum shares");
+
+        let (rulings, slabs) = painted_rulings(rect, cfg);
+        assert!(rulings.len() > 4, "{orientation:?} ruled {} frequencies", rulings.len());
+        assert!(!slabs.is_empty(), "{orientation:?}: the tone drew no spectrum to be behind");
+        assert!(
+            rulings.last().unwrap().index < slabs[0],
+            "{orientation:?}: a ruling is painted over the spectrum's fill",
+        );
+
+        // Every ruling spans the spectrum's share end to end — depth 0 to the
+        // now-line — and none of it reaches past into the heatmap's half.
+        for ruling in &rulings {
+            let ends: Vec<f32> = ruling.points.iter().map(|p| axes.depth_at(*p)).collect();
+            for d in &ends {
+                assert!(
+                    (-1e-3..=split + 1e-3).contains(d),
+                    "{orientation:?}: a ruling reaches depth {d}, past the now-line at {split}",
+                );
+            }
+            assert!(
+                ends.iter().any(|d| d.abs() < 1e-3)
+                    && ends.iter().any(|d| (d - split).abs() < 1e-3),
+                "{orientation:?}: a ruling covers {ends:?} rather than 0..{split}",
+            );
+        }
+    }
+}
+
+/// The stronger ink goes on the decade boundaries and nowhere else.
+///
+/// Pinned as a MAPPING — which pitches got which weight — rather than as two
+/// counts. Two weights and the right totals is what swapping the arms also
+/// produces, and the picture it makes is the ladder highlighted everywhere
+/// except where the step size actually changes.
+#[test]
+fn only_the_decade_boundaries_take_the_stronger_ink() {
+    for orientation in EVERY_ORIENTATION {
+        let cfg = SpectrumConfig { orientation, ..Default::default() };
+        let rect = reference_pane();
+        let axes = Axes::new(rect, &cfg);
+        let scale = PitchScale {
+            min_midi: cfg.low_midi,
+            max_midi: cfg.high_midi,
+            span: cfg.high_midi - cfg.low_midi,
+        };
+        let grid = frequency_grid(&scale, axes.pitch_len());
+        let want: Vec<f32> = grid.iter().filter(|r| r.decade).map(|r| r.t).collect();
+        assert_eq!(want.len(), 3, "the default range holds 100 Hz, 1 kHz and 10 kHz");
+
+        // Back from the painted segment to the pitch it was drawn at, so this
+        // reads the placement rather than re-deriving it.
+        let (rulings, _) = painted_rulings(rect, cfg);
+        assert_eq!(rulings.len(), grid.len(), "{orientation:?} drew a different ladder");
+        let strong: Vec<f32> = rulings
+            .iter()
+            .filter(|ruling| ruling.strong)
+            .map(|ruling| axes.pitch_at(ruling.points[0]))
+            .collect();
+        let inked = strong.len();
+        assert_eq!(inked, want.len(), "{orientation:?} inked {inked} lines strongly");
+        for (got, want) in strong.iter().zip(&want) {
+            assert!(
+                (got - want).abs() < 1e-4,
+                "{orientation:?}: the stronger ink landed at pitch {got}, not {want}",
+            );
+        }
+    }
+}
+
+/// Whole-song playhead mode rules nothing.
+///
+/// It hands the WHOLE depth axis to the roll and the spectrogram (`split` is
+/// 0), so there is no spectrum region for a ruling to measure — and a ruling
+/// drawn anyway would be a zero-length segment per frequency baked into every
+/// frame of a `--playhead` video export.
+#[test]
+fn whole_song_mode_rules_no_frequencies() {
+    let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
+    state.spectrum_config.orientation = SpectralOrientation::Left;
+    state.tracker.handle_event(NoteEvent {
+        time: 0.0,
+        channel: 0,
+        note: 69,
+        kind: NoteEventKind::On { velocity: 1.0 },
+    });
+    state.whole_song = Some(crate::WholeSong {
+        start: 0.0,
+        span: 2.0,
+        columns: Vec::new(),
+        roll: state.tracker.roll().clone(),
+    });
+    let ctx = egui::Context::default();
+    crate::theme::apply_theme(&ctx);
+    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(500.0, 500.0));
+    let out = ctx.run_ui(
+        egui::RawInput { screen_rect: Some(screen), ..Default::default() },
+        |ui| {
+            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(WIDE));
+            spectral_pane(&mut child, &mut state, 1.0, 0);
+        },
+    );
+    let ruled = out.shapes.iter().any(|s| {
+        matches!(&s.shape, egui::Shape::LineSegment { stroke, .. } if is_ruling(stroke.color))
+    });
+    assert!(!ruled, "a whole-song frame ruled a frequency across a pane with no spectrum on it");
+}
+
+/// Whether a stroke color is one of the two a frequency ruling is drawn in.
+fn is_ruling(color: egui::Color32) -> bool {
+    color == theme::hairline().gamma_multiply(RULING_FADE.0)
+        || color == theme::hairline().gamma_multiply(RULING_FADE.1)
+}
+
+/// One frequency ruling as it came off the painter: where in the shape list
+/// it landed, the two screen points it was drawn between, and whether it took
+/// the stronger of the two inks.
+struct PaintedRuling {
+    index: usize,
+    points: [egui::Pos2; 2],
+    strong: bool,
+}
+
+/// One frame of the pane with a tone in it, split into the frequency rulings
+/// and the shape indices of the spectrum's own slabs.
+fn painted_rulings(
+    rect: egui::Rect,
+    cfg: SpectrumConfig,
+) -> (Vec<PaintedRuling>, Vec<usize>) {
+    let strong = theme::hairline().gamma_multiply(RULING_FADE.0);
+    let (mut rulings, mut slabs) = (Vec::new(), Vec::new());
+    for (i, shape) in paint_tone(rect, cfg).into_iter().enumerate() {
+        let egui::Shape::LineSegment { points, stroke } = shape else { continue };
+        if is_ruling(stroke.color) {
+            rulings.push(PaintedRuling { index: i, points, strong: stroke.color == strong });
+        } else if stroke.color.a() == 210 {
+            // The spectrum's own slabs — the one thing on the pane drawn in a
+            // gradient color at that opacity.
+            slabs.push(i);
+        }
+    }
+    (rulings, slabs)
 }
 
 /// The readout names its own unit, and switches to kHz where an analyzer

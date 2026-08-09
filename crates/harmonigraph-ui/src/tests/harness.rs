@@ -132,9 +132,9 @@ pub(super) fn press(pos: egui::Pos2, pressed: bool) -> egui::Event {
 
 /// The projections a settings sweep has to cover, default first.
 ///
-/// Only the Tuning pane's content turns on this, and it turns on it hard:
-/// `frame_controls` hides the whole camera-angle half — Camera yaw and pitch,
-/// the Angle presets, the Save-angle row — under Cabinet, which has a fixed
+/// Only the View pane's content turns on this, and it turns on it hard:
+/// `view_pane` hides the whole camera-angle half — Camera yaw and pitch, the
+/// Angle presets, the Save-angle row — under Cabinet, which has a fixed
 /// viewpoint and no angle to set, and hides the two cabinet knobs under the
 /// others. `Camera::default()` IS Cabinet, so a fixture that takes the default
 /// and stops there never draws that half of the pane at all.
@@ -145,13 +145,14 @@ pub(super) const PROJECTIONS: [harmonigraph_scene::Projection; 3] = [
 ];
 
 /// Every settings tab, and the tabs that share the column with them.
-pub(super) const SETTINGS_TABS: [panes::Tab; 8] = [
+pub(super) const SETTINGS_TABS: [panes::Tab; 9] = [
     panes::Tab::Tuning,
+    panes::Tab::View,
     panes::Tab::Nodes,
     panes::Tab::Scene,
     panes::Tab::Analyzer,
     panes::Tab::Video,
-    panes::Tab::Panel,
+    panes::Tab::System,
     panes::Tab::Console,
     panes::Tab::Notes,
 ];
@@ -208,17 +209,13 @@ pub(super) fn settings_pane_at_width(
     out.shapes
 }
 
-/// The projections worth drawing `tab` at: all of them for Tuning, whose
-/// content depends on it (see [`PROJECTIONS`]), and the default alone for the
-/// panes that draw the same thing either way.
+/// The projections worth drawing `tab` at: all of them for View, whose content
+/// depends on it (see [`PROJECTIONS`]), and the default alone for the panes
+/// that draw the same thing either way.
 pub(super) fn projections_for(tab: panes::Tab) -> &'static [harmonigraph_scene::Projection] {
-    if tab == panes::Tab::Tuning { &PROJECTIONS } else { &PROJECTIONS[..1] }
+    if tab == panes::Tab::View { &PROJECTIONS } else { &PROJECTIONS[..1] }
 }
 
-/// The bar tracks a pane drew, by width. A `ValueBar`/`RangeBar` track is the
-/// one thing in a settings pane painted as a `BAR_HEIGHT`-tall rect in
-/// `well()`: the accent fill over it is the same height in a different color,
-/// and the record button's own `well()` panel is taller.
 /// The render the pane fixtures have in flight, so the Video pane's progress
 /// bar is drawn in every sweep over the settings panes rather than only in the
 /// test below — it takes the column's width like every other bar, and that is
