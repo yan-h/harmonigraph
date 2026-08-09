@@ -9,12 +9,19 @@
 //!
 //! - **A bucket is stored as a byte of dB, not a float of power.** The heatmap
 //!   maps a bucket through `10*log10` into a colour ramp, so dB is the domain it
-//!   is read in, and a byte resolves it to half a dB. MAX (which is all the
-//!   aggregation ever does) is order-preserving under a monotone encoding, so
-//!   nothing downstream has to decode first. Half a dB was checked by eye
-//!   before it was settled on: the store was briefly sixteen bits with a toggle
-//!   that drew either grid, and the two pictures were indistinguishable, so the
-//!   byte stays and the toggle went.
+//!   is read in, and a byte resolves it to half a dB.
+//!
+//!   The encoding therefore owes the readers two things rather than one. It is
+//!   MONOTONE, so the aggregation along TIME — a MAX, here and in the display's
+//!   slabs alike — is order-preserving and needs no decode. And it is AFFINE in
+//!   dB, so the aggregation across PITCH, which is a power mean and does have
+//!   to decode, can do it from a 256-entry table indexed by a difference of
+//!   bytes rather than by reaching for a logarithm per bucket. Neither reader
+//!   ever converts a byte back to a float of power.
+//!
+//!   Half a dB was checked by eye before it was settled on: the store was
+//!   briefly sixteen bits with a toggle that drew either grid, and the two
+//!   pictures were indistinguishable, so the byte stays and the toggle went.
 //! - **Old columns are merged as they age.** The heatmap draws a window ending
 //!   at `now`, so a column of age `a` is only ever on screen when the window is
 //!   at least `a` long — and the window is cut into at most a thousand-odd time
@@ -95,9 +102,11 @@ impl SpectrogramColumn {
     /// Absorb an OLDER column: the pair becomes one column standing for the
     /// whole interval, holding the loudest each bucket reached across it.
     ///
-    /// MAX, not a mean, for the same reason the display aggregates by MAX — a
-    /// spectrogram cell answers "was there anything here", and averaging a
-    /// bright thin partial with its quiet neighbour answers "not much". The
+    /// MAX, not a mean, for the same reason the display aggregates ALONG TIME by
+    /// MAX — a spectrogram cell answers "was there anything here", and averaging
+    /// a bright thin partial with its quiet neighbour answers "not much". This
+    /// merges two columns, so it is that axis and not the pitch one, where the
+    /// display takes a power mean instead over a run of INDEPENDENT buckets. The
     /// timestamp lands at the midpoint, the least any peak inside can be moved.
     fn absorb(&mut self, older: &SpectrogramColumn) {
         for (mine, &theirs) in self.db.iter_mut().zip(older.db.iter()) {
@@ -326,9 +335,12 @@ mod tests {
         SpectrogramColumn::from_power(time, &power)
     }
 
-    /// The whole point of the byte encoding: it must be monotone in power, so a
-    /// MAX over stored bytes is a MAX over the powers they stand for. Anything
-    /// else would let aggregation pick the quieter of two buckets.
+    /// Half of what the byte encoding owes its readers: it must be monotone in
+    /// power, so a MAX over stored bytes is a MAX over the powers they stand
+    /// for. Anything else would let the time-axis aggregation pick the quieter
+    /// of two buckets. (The other half is that it is affine in dB, which is what
+    /// lets the pitch axis take a power mean off a table — the display's own
+    /// `the_curve_and_the_heatmap_read_a_run_of_buckets_alike` holds that end.)
     #[test]
     fn quantizing_preserves_order() {
         let powers = [0.0, 1e-11, 1e-9, 1e-6, 1e-3, 0.01, 0.1, 0.5, 1.0, 2.0, 10.0];

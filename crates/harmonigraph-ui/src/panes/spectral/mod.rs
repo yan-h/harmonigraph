@@ -229,13 +229,23 @@ pub(crate) fn spectral_pane(
     if split > 0.0 {
         if let Some(levels) = state.spectrum.display(now) {
             // Only the buckets inside the pitch range.
-            // One slab per pitch PIXEL, each taking the loudest bucket that
-            // falls in it — not one slab per bucket. The axis holds thousands
-            // of buckets and the pane a few hundred pixels, so per-bucket
-            // meant thousands of shapes a frame stacked on top of each other,
-            // which was survivable only while most buckets were zero. MAX
-            // rather than an average so a thin partial still reads full
-            // height instead of being diluted by its quiet neighbours.
+            // One slab per pitch PIXEL, each reading the whole run of buckets
+            // that falls in it — not one slab per bucket. The axis holds
+            // thousands of buckets and the pane a few hundred pixels, so
+            // per-bucket meant thousands of shapes a frame stacked on top of
+            // each other, which was survivable only while most buckets were
+            // zero.
+            //
+            // The run is read by the heatmap's own power mean
+            // ([`spectrogram::power_mean`]), not by a MAX, and the two must
+            // stay the same read: a pixel of the curve and a row of the heatmap
+            // cover the same buckets, and the pane draws them from one gradient
+            // through one loudness mapping precisely so that equal levels read
+            // equal. A MAX here would put a ridge and the curve above it at
+            // different heights on the same tone — and it carries the same
+            // fault on its own account, since the largest of N draws grows with
+            // N, so the curve's noise floor would lift as the pitch axis was
+            // zoomed out.
             let bucket_at = |midi: f32| {
                 (((midi - SPECTRUM_MIN_MIDI) * BINS_PER_SEMITONE as f32) as isize)
                     .clamp(0, levels.len() as isize - 1) as usize
@@ -245,8 +255,7 @@ pub(crate) fn spectral_pane(
                 .map(|c| {
                     let edge = |i: usize| scale.min_midi + scale.span * i as f32 / cols as f32;
                     let (b0, b1) = (bucket_at(edge(c)), bucket_at(edge(c + 1)));
-                    let level =
-                        levels[b0..=b1.max(b0)].iter().fold(0.0f32, |a, &b| a.max(b));
+                    let level = spectrogram::power_mean(&levels[b0..=b1.max(b0)]);
                     let t = (c as f32 + 0.5) / cols as f32;
                     (scale.min_midi + t * scale.span, t, level)
                 })
