@@ -13,9 +13,8 @@
 //! section here and no tab, where a tab-per-picture bar overflows again a few
 //! pictures in.
 //!
-//! Each header keeps the name the tab it stands for wore (#286's audited
-//! names), "Analyzer" still deliberately shared with the display pane's title
-//! — see [`tab_title`](super::tab_title).
+//! Each header wears its pane's audited name (#286), "Analyzer" deliberately
+//! shared with the display pane's title — see [`tab_title`](super::tab_title).
 
 use super::nodes::nodes_pane;
 use super::scene::scene_pane;

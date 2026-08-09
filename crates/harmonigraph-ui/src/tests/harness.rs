@@ -158,10 +158,10 @@ pub(super) const PROJECTIONS: [harmonigraph_scene::Projection; 3] = [
 pub(super) use crate::panes::display::Section;
 
 /// One pane of the settings column as a sweep drives it: a tab of its own, or
-/// one of the Display tab's sections opened ALONE — the pane a retired tab
-/// used to hold, still measured at the column's full width, now reached
-/// through Display's dispatch. Alone, so every per-section count (short bars,
-/// gradient previews) still means what it meant when the section was a pane.
+/// one of the Display tab's sections, reached through Display's dispatch and
+/// opened ALONE — so every per-section count (short bars, gradient previews)
+/// counts one section's, not four, and each body is measured at the column's
+/// full width.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum SettingsPane {
     Tab(panes::Tab),
