@@ -99,7 +99,7 @@ fn wheel_over_settings_pane(tab: panes::Tab, screen_h: f32) -> f32 {
 }
 
 /// Every settings pane scrolls to the wheel once its content is taller than
-/// the pane. All six reach the wheel through the `ScrollArea` egui_dock wraps
+/// the pane. All seven reach the wheel through the `ScrollArea` egui_dock wraps
 /// each tab body in, which is what leaves the bar the pane's right margin to
 /// stand in (see [`nothing_is_drawn_under_a_settings_pane_scroll_bar`]).
 ///
@@ -897,7 +897,7 @@ fn the_commas_section_lays_its_rows_out_as_a_table() {
 
 /// The size a settings pane is soloed at to make it scroll: narrow enough that
 /// the bars run the width of the column, and short enough that every pane in
-/// the sweep — Panel, the shortest list of them — overflows it.
+/// the sweep — System, the shortest list of them — overflows it.
 const SCROLLING_PANE: egui::Vec2 = egui::vec2(320.0, 200.0);
 
 /// The chrome scales the sweep runs at: the design size, both ends of
