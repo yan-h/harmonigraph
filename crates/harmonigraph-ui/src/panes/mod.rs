@@ -3,38 +3,42 @@
 //! in docking, and gets the shared state (hover, console, tracker) for free.
 //!
 //! The lattice's settings read outward from the picture: [`tuning`] is how it
-//! is tuned and — via [`frame`], which draws the second half of that same tab
-//! — how it is framed; [`nodes`] is how a played note is drawn, [`scene`] is
-//! everything around the notes, and [`panel`] is the plugin's own render/
-//! layout knobs. Alongside are the [`spectral`] display and its analyzer
-//! settings, [`render`] (the Video tab), and [`notes`] (Console + Notes).
-//! This file holds the `Tab` enum, the `TabViewer` that dispatches to them,
-//! and the small helpers more than one pane needs.
+//! is tuned, [`view`] is which of it you are looking at and from where,
+//! [`nodes`] is how a played note is drawn, [`scene`] is everything around the
+//! notes, and [`system`] is the plugin's own render/layout knobs. Alongside
+//! are the [`spectral`] display and its analyzer settings, [`render`] (the
+//! Video tab), and [`notes`] (Console + Notes). This file holds the `Tab`
+//! enum, the `TabViewer` that dispatches to them, and the small helpers more
+//! than one pane needs.
+//!
+//! Each tab's name covers everything in it, which is the whole job a tab bar
+//! does: a subject its name omits is one nobody opens the tab to find.
 
 use crate::params::{ParamBackend, ParamKey};
 use crate::widgets::{RangeBar, ValueBar};
 use crate::SharedState;
 
-pub mod frame;
 pub mod lattice;
 pub mod nodes;
 pub mod notes;
-pub mod panel;
 /// The offline video frame, composed live so you can preview and adjust it
 /// before rendering. The "Video" tab.
 pub mod render;
 pub mod scene;
 pub mod spectral;
+pub mod system;
 pub mod tuning;
+pub mod view;
 
 use lattice::lattice_pane;
 use nodes::nodes_pane;
 use notes::{console_pane, notes_pane};
-use panel::panel_pane;
 use render::render_pane;
 use scene::scene_pane;
 use spectral::{spectral_pane, spectrum_settings_pane};
+use system::system_pane;
 use tuning::tuning_pane;
+use view::view_pane;
 
 /// Wrap degrees into -180..=180 for display (orbit accumulates yaw
 /// without bound).
@@ -60,9 +64,13 @@ pub(super) const KEY_NAMES: [&str; 12] = [
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Tab {
     Lattice,
-    /// The lattice itself: how it is tuned, and how it is framed. The framing
-    /// half was a tab of its own until the two short panes were merged.
+    /// Where the lattice's nodes sit in pitch: the prime bars, and the commas
+    /// it tempers out.
     Tuning,
+    /// Which of the lattice you are looking at and from where: projection,
+    /// camera, extents, and the sevenths layer. A section inside [`Tab::Tuning`]
+    /// until it outgrew the name that hid it.
+    View,
     /// How a sounding note is drawn.
     Nodes,
     /// The structure and overlays around the notes.
@@ -76,8 +84,10 @@ pub enum Tab {
     /// A live preview of the offline video frame, composed and adjusted here.
     /// Titled "Video".
     Video,
-    /// The plugin's own render-quality and pane-layout knobs.
-    Panel,
+    /// The plugin's own render-quality and pane-layout knobs. Titled "System";
+    /// spelled `Panel` until that name proved to describe the thing being
+    /// looked at rather than anything the tab changes.
+    System,
 }
 
 pub struct Viewer<'a> {
@@ -113,6 +123,7 @@ pub fn tab_title(tab: &Tab) -> &'static str {
     match tab {
         Tab::Lattice => "Lattice",
         Tab::Tuning => "Tuning",
+        Tab::View => "View",
         Tab::Nodes => "Nodes",
         Tab::Scene => "Scene",
         Tab::Console => "Console",
@@ -124,7 +135,7 @@ pub fn tab_title(tab: &Tab) -> &'static str {
         Tab::Analyzer => "Analyzer",
         Tab::Notes => "Notes",
         Tab::Video => "Video",
-        Tab::Panel => "Panel",
+        Tab::System => "System",
     }
 }
 
@@ -191,6 +202,7 @@ impl egui_dock::TabViewer for Viewer<'_> {
         match tab {
             Tab::Lattice => lattice_pane(ui, self.state, self.now),
             Tab::Tuning => tuning_pane(ui, self.state, self.params, self.now),
+            Tab::View => view_pane(ui, self.state),
             Tab::Nodes => nodes_pane(ui, self.state, self.params),
             Tab::Scene => scene_pane(ui, self.state),
             Tab::Console => console_pane(ui, self.state),
@@ -198,7 +210,7 @@ impl egui_dock::TabViewer for Viewer<'_> {
             Tab::Analyzer => spectrum_settings_pane(ui, self.state),
             Tab::Notes => notes_pane(ui, self.state),
             Tab::Video => render_pane(ui, self.state, self.now),
-            Tab::Panel => panel_pane(ui, self.state),
+            Tab::System => system_pane(ui, self.state),
         }
     }
 

@@ -399,16 +399,17 @@ pub(crate) fn default_dock() -> DockState<panes::Tab> {
         NodeIndex::root(),
         SETTINGS_SPLIT,
         vec![
-            // Reading outward from the picture: what the lattice is (its
-            // tuning, and how it's framed), then how a note is drawn, the
-            // scene around it, the analyzer, video export, and the plugin's
-            // own render/layout knobs last.
+            // Reading outward from the picture: what the lattice is, which of
+            // it you are looking at, then how a note is drawn, the scene
+            // around it, the analyzer, video export, and the plugin's own
+            // render/layout knobs last.
             panes::Tab::Tuning,
+            panes::Tab::View,
             panes::Tab::Nodes,
             panes::Tab::Scene,
             panes::Tab::Analyzer,
             panes::Tab::Video,
-            panes::Tab::Panel,
+            panes::Tab::System,
         ],
     );
     // Notes first so it sits left of Console and is the selected tab by
@@ -683,7 +684,18 @@ fn default_ui_scale() -> f32 {
 /// 2: Tuning and Frame merged into one tab. A version-1 layout has both, and
 /// they now name the same variant — kept as the floor's worked example, since
 /// a dock opening with the merged pane in it twice is what the refusal avoids.
-pub(crate) const UI_PERSIST_VERSION: u32 = 2;
+///
+/// 3: that merge undone, and `Panel` renamed to `System`. Two breaks, and only
+/// one of them would reach this check. The RENAME fails the parse outright —
+/// `Panel` is a variant no build has any more — so a version-2 blob dies in
+/// `load_persist`'s `Err` arm before the version is ever read, which is loud
+/// and is why that arm says what it says. The SPLIT is the one this floor is
+/// for, and it is the quieter of the two: a version-2 dock names only `Tuning`,
+/// which still parses and still draws, so without a bump an old project would
+/// open with the tuning bars intact and the whole camera simply absent, no tab
+/// to reach it by and nothing said. That is the silent break the floor exists
+/// to turn into an audible one.
+pub(crate) const UI_PERSIST_VERSION: u32 = 3;
 
 /// On-disk format of [`SharedState::save_persist`]. Bump thoughtfully; a
 /// failed deserialize silently falls back to defaults.

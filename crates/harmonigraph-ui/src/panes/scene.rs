@@ -37,7 +37,7 @@ fn home_grid_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // First section of the pane: a plain heading, no leading rule (matches
     // the Nodes pane's Core section).
     ui.heading("Home grid");
-    ValueBar::new(&mut view.grid_thickness, 0.0..=4.0, "Thickness")
+    ValueBar::new(&mut view.grid_thickness, 0.0..=4.0, "Line width")
         .show(ui)
         .on_hover_text(
             "Line width, as a multiple of the classic hairline. 0 takes \
@@ -64,7 +64,7 @@ fn labels_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
         egui::Checkbox::new(&mut view.show_cents, "Cents"),
     );
     ui.add_enabled_ui(view.show_labels, |ui| {
-        ValueBar::new(&mut view.label_scale, crate::SCALE_BAR_RANGE, "Size")
+        ValueBar::new(&mut view.label_scale, crate::SCALE_BAR_RANGE, "Name size")
             .show(ui)
             .on_hover_text(
                 "Overall size of a label -- the name, the marks beside it and \

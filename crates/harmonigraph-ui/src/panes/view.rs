@@ -1,14 +1,29 @@
-//! The Frame controls: how you look at the lattice (projection, camera angle,
-//! saved angles) and how much of it shows (per-axis extents and window
-//! center). Purely what's framed — the note styling lives in [`super::nodes`]
-//! and [`super::scene`], the render/workspace knobs in [`super::panel`].
+//! The View tab: how you look at the lattice (projection, camera angle, saved
+//! angles) and how much of it shows (per-axis extents and window center).
+//! Purely what's framed — the note styling lives in [`super::nodes`] and
+//! [`super::scene`], the render/workspace knobs in [`super::system`].
 //!
-//! Not a pane of its own. These were a "Frame" tab until it and Tuning — both
-//! short, and both about the lattice itself rather than how it is drawn —
-//! became two sections of one tab; [`super::tuning`] draws this below its own
-//! controls. Kept as a file because the two halves have nothing to say to each
-//! other beyond sharing a tab.
+//! A tab of its own, which it was, then was not, and is again. It spent a while
+//! as a "Frame" section inside Tuning, on the grounds that where the nodes sit
+//! in pitch and which of them you are looking at are two halves of what the
+//! lattice IS. That is true of the CONTENT and false of the tab bar, which
+//! shows one word: thirteen of the merged tab's eighteen control rows were
+//! these, under a name that mentions none of them, so the camera was reachable
+//! only by opening a tab called Tuning and scrolling. The merge's own reason
+//! was that both halves were short, and this one stopped being short.
+//!
+//! Called View and not Frame because the Video tab's Frame is the video's —
+//! aspect, letterbox, crop ticks — and one word naming two unrelated things is
+//! what the split was for.
+//!
+//! Three sections: the Camera (where you stand and what the lens does), the
+//! Extents (how much lattice there is to stand in front of), and the Sevenths
+//! layer (how the sheets behind the home one draw). The angle presets live
+//! inside Camera rather than under a heading of their own, because Cabinet
+//! hides that whole block — a section of its own would leave a heading standing
+//! over nothing.
 
+use super::section;
 use crate::widgets::{button_row, choice_row, ValueBar};
 use crate::{CameraPreset, SharedState};
 use super::normalize_deg;
@@ -23,8 +38,12 @@ use harmonigraph_scene::SevensLabel;
 const PRESET_NAME_WIDTH: f32 = 110.0;
 
 /// Camera framing and the lattice window: projection, angle, and per-axis
-/// extents/center. Drawn into the Tuning tab, under its own section heading.
-pub(super) fn frame_controls(ui: &mut egui::Ui, state: &mut SharedState) {
+/// extents/center.
+pub(super) fn view_pane(ui: &mut egui::Ui, state: &mut SharedState) {
+    // A plain heading rather than `section`: this is the top of the pane, and
+    // the leading rule `section` draws would be a line under nothing. Matches
+    // the Tuning, Nodes, Scene, System and Analyzer panes.
+    ui.heading("Camera");
     // Projection: perspective converges with depth; orthographic keeps
     // equal intervals at equal screen offsets everywhere (isometric-style
     // reading — depth shows only through the node size cue and occlusion).
@@ -161,6 +180,11 @@ pub(super) fn frame_controls(ui: &mut egui::Ui, state: &mut SharedState) {
         });
     }
 
+    // How much lattice there is: its own section, because it is a different
+    // question from where you are standing. The camera above moves the view
+    // without changing which nodes exist; these change which nodes exist at
+    // all, whatever the camera then does with them.
+    section(ui, "Extents");
     for (extent, range, label) in [
         // Ranges must contain the ViewConfig defaults (10/6) or the bar
         // could never drag back to them.
@@ -195,6 +219,7 @@ pub(super) fn frame_controls(ui: &mut egui::Ui, state: &mut SharedState) {
 /// sounding node on every sheet, so it is a property of the node rather than
 /// of this layer, whatever its field names say.
 fn sevens_layer_controls(ui: &mut egui::Ui, state: &mut SharedState) {
+    section(ui, "Sevenths");
     let has_depth = state.view.extent_sevens != 0;
     ui.add_enabled_ui(has_depth, |ui| {
         ValueBar::new(&mut state.view.sevens_size, 0.15..=1.0, "Sevenths size")

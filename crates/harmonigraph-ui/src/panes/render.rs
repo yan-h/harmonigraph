@@ -40,9 +40,9 @@ const PREVIEW_MIN_HEIGHT: f32 = 160.0;
 /// Frame controls, then a live preview of exactly what the offline render will
 /// compose.
 pub(crate) fn render_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
-    render_settings(ui, state);
+    record_controls(ui, state);
     frame_controls(ui, state);
-    spectrogram_controls(ui, state);
+    render_controls(ui, state);
 
     section(ui, "Preview");
     let frame = state.take.render_config.frame;
@@ -205,23 +205,32 @@ fn clear_everything(ui: &mut egui::Ui, state: &mut SharedState) {
     });
 }
 
-/// Which spectrogram the render bakes: the live scrolling window (exactly what
-/// the preview shows), or the whole take laid out at once with a sweeping
-/// playhead. The live preview can't lay the whole take out, so a Playhead
-/// choice leaves the preview's spectral region blank — see
-/// `playhead_placeholder`.
+/// Turning a recorded take into a video: which spectrogram gets baked, when the
+/// render fires, how it opens, and how far a running one has got.
 ///
-/// Sets `RenderConfig.playhead`, which rides in the take's `ui_state` and is
-/// the ONLY thing that decides this. The renderer turns the playhead on for
-/// `--playhead` or this setting, whichever says yes, so a plugin that also
-/// passed the flag would be answering a question the row is supposed to own —
-/// and passing it unconditionally would make "Live" unreachable.
-/// `RenderRequest::playhead` is what keeps the row deciding.
-fn spectrogram_controls(ui: &mut egui::Ui, state: &mut SharedState) {
-    section(ui, "Spectrogram");
+/// Its own section rather than rows under Record, which is about CAPTURE: only
+/// the record switch, its status and the clear are about getting a take, and
+/// everything here happens after there is one. The Spectrogram row is here too
+/// rather than under a heading of its own — it was one row calling itself
+/// "Spectrogram" next to the Analyzer tab's section of the same name, and what
+/// it actually decides is what this render bakes.
+///
+/// The Spectrogram row draws whatever the shell is, since a standalone with no
+/// transport still renders; the rows that need a take to exist follow the same
+/// `supported` gate Record does.
+///
+/// `RenderConfig.playhead` is the ONLY thing deciding live-vs-playhead. The
+/// renderer turns the playhead on for `--playhead` or this setting, whichever
+/// says yes, so a plugin that also passed the flag would be answering a
+/// question the row is supposed to own — and passing it unconditionally would
+/// make "Live" unreachable. `RenderRequest::playhead` is what keeps the row
+/// deciding. The live preview can't lay a whole take out, so a Playhead choice
+/// leaves the preview's spectral region blank — see `playhead_placeholder`.
+fn render_controls(ui: &mut egui::Ui, state: &mut SharedState) {
+    section(ui, "Render");
     choice_row(
         ui,
-        "Render",
+        "Spectrogram",
         &mut state.take.render_config.playhead,
         &[
             (false, "Live", "Bake the live scrolling spectrogram, exactly as previewed here"),
@@ -234,6 +243,75 @@ fn spectrogram_controls(ui: &mut egui::Ui, state: &mut SharedState) {
             ),
         ],
     );
+    if !state.take.supported {
+        return;
+    }
+
+    // When a take finishes and turns into a video.
+    choice_row(
+        ui,
+        "Finish",
+        &mut state.take.render_config.trigger,
+        &[
+            (
+                crate::RenderTrigger::OnDisarm,
+                "On disarm",
+                "Render when you switch Record take off — predictable, and works however the \
+                 transport behaves.",
+            ),
+            (
+                crate::RenderTrigger::OnTransportStop,
+                "On stop",
+                "Render as soon as the transport stops after recording something, disarming at \
+                 the same moment — a play-through renders itself.",
+            ),
+            (
+                crate::RenderTrigger::AtLoopEnd,
+                "At loop end",
+                "Record one arranger-loop pass, then end the moment the loop repeats and render \
+                 it — no manual stop to mistime. Turn LOOPING ON: it ends when the transport \
+                 wraps back. With looping off it just waits for you to disarm.",
+            ),
+        ],
+    );
+
+    // The picture's timing rather than its shape, which is why it is here and
+    // not in Frame. Counterpart of the renderer's `--tail`.
+    //
+    // Seconds of lead, NOT a song position, and 0 is the useful default: the
+    // render already opens where the take was CAPTURED, so the run-up actually
+    // played is in the video without asking for it. (Take times are the host's
+    // transport position, so a passage played from a minute in was captured
+    // from 60-odd seconds; rendering from song zero would open on a minute of
+    // nothing, which is what this row's default would otherwise have to paper
+    // over.) What the bar adds is stillness BEFORE the recording, which is
+    // empty frame by construction.
+    ValueBar::new(&mut state.take.render_config.lead_in, 0.0..=5.0, "Lead-in")
+        .show(ui)
+        .on_hover_text(
+            "Extra seconds of empty frame before the video starts. The render \
+             already opens where the recording did, so 0 gives you whatever run-up \
+             you actually played; raise this only to hold on a still frame first.",
+        );
+
+    // Re-render the last take with the frame you've dialed in since recording.
+    // The take carries only a record-time snapshot, so this is how a reframed
+    // preview reaches the video without recording again.
+    if state.take.last_ready {
+        ui.add_space(2.0);
+        if ui
+            .button("Re-render take")
+            .on_hover_text(
+                "Render the take you last recorded again, now, with the current \
+                 frame. Runs in the background; the video lands next to the take. \
+                 Pressing it during a render cancels that one and starts over.",
+            )
+            .clicked()
+        {
+            state.take.render_now = true;
+        }
+    }
+    render_progress(ui, state);
 }
 
 /// The marks that say "this rectangle is the video frame", drawn entirely
@@ -374,9 +452,13 @@ fn preview_lattice(ui: &mut egui::Ui, rect: egui::Rect, state: &SharedState, now
     );
 }
 
-/// Recording and render-output settings. Lives here, in the Video tab, so that
-/// tab is the one home for everything about turning a take into a video.
-fn render_settings(ui: &mut egui::Ui, state: &mut SharedState) {
+/// Capturing a take: the switch, what it is doing, and the clear that gives it
+/// an empty picture to open on. What becomes of the take once it exists is
+/// [`render_controls`].
+///
+/// Absent entirely in a shell with no transport to record against, which is
+/// what leaves the standalone opening on Frame.
+fn record_controls(ui: &mut egui::Ui, state: &mut SharedState) {
     // Take recording: the input half of offline video rendering. A record
     // button that doubles as its own indicator — press to arm; the dot breathes
     // while it waits for the transport, then goes solid while capturing. See
@@ -397,74 +479,6 @@ fn render_settings(ui: &mut egui::Ui, state: &mut SharedState) {
         ui.weak(&state.take.status);
     }
     clear_everything(ui, state);
-    render_progress(ui, state);
-
-    // When a take finishes and turns into a video. No other home, so it sits
-    // right under the switch that starts one.
-    choice_row(
-        ui,
-        "Finish",
-        &mut state.take.render_config.trigger,
-        &[
-            (
-                crate::RenderTrigger::OnDisarm,
-                "On disarm",
-                "Render when you switch Record take off — predictable, and works however the \
-                 transport behaves.",
-            ),
-            (
-                crate::RenderTrigger::OnTransportStop,
-                "On stop",
-                "Render as soon as the transport stops after recording something, disarming at \
-                 the same moment — a play-through renders itself.",
-            ),
-            (
-                crate::RenderTrigger::AtLoopEnd,
-                "At loop end",
-                "Record one arranger-loop pass, then end the moment the loop repeats and render \
-                 it — no manual stop to mistime. Turn LOOPING ON: it ends when the transport \
-                 wraps back. With looping off it just waits for you to disarm.",
-            ),
-        ],
-    );
-
-    // Sits with the render settings rather than in Frame, which is about the
-    // picture's shape — this is about its timing, and it is the counterpart of
-    // the renderer's `--tail`.
-    //
-    // Seconds of lead, NOT a song position, and 0 is the useful default: the
-    // render already opens where the take was CAPTURED, so the run-up actually
-    // played is in the video without asking for it. (Take times are the host's
-    // transport position, so a passage played from a minute in was captured
-    // from 60-odd seconds; rendering from song zero would open on a minute of
-    // nothing, which is what this row's default would otherwise have to paper
-    // over.) What the bar adds is stillness BEFORE the recording, which is
-    // empty frame by construction.
-    ValueBar::new(&mut state.take.render_config.lead_in, 0.0..=5.0, "Lead-in")
-        .show(ui)
-        .on_hover_text(
-            "Extra seconds of empty frame before the video starts. The render \
-             already opens where the recording did, so 0 gives you whatever run-up \
-             you actually played; raise this only to hold on a still frame first.",
-        );
-
-    // Re-render the last take with the frame you've dialed in since recording.
-    // The take carries only a record-time snapshot, so this is how a reframed
-    // preview reaches the video without recording again.
-    if state.take.last_ready {
-        ui.add_space(2.0);
-        if ui
-            .button("Re-render take")
-            .on_hover_text(
-                "Render the take you last recorded again, now, with the current \
-                 frame. Runs in the background; the video lands next to the take. \
-                 Pressing it during a render cancels that one and starts over.",
-            )
-            .clicked()
-        {
-            state.take.render_now = true;
-        }
-    }
 }
 
 /// How far the background render has got, while one is running.

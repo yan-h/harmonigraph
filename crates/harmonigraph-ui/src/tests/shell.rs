@@ -18,6 +18,7 @@ fn every_tab_has_its_own_id_even_where_two_share_a_title() {
     let tabs = [
         panes::Tab::Lattice,
         panes::Tab::Tuning,
+        panes::Tab::View,
         panes::Tab::Nodes,
         panes::Tab::Scene,
         panes::Tab::Console,
@@ -25,7 +26,7 @@ fn every_tab_has_its_own_id_even_where_two_share_a_title() {
         panes::Tab::Analyzer,
         panes::Tab::Notes,
         panes::Tab::Video,
-        panes::Tab::Panel,
+        panes::Tab::System,
     ];
     let mut viewer = panes::Viewer { state: &mut state, params: &params, now: 0.0 };
     let mut title = |mut tab: panes::Tab| viewer.title(&mut tab).text().to_owned();
@@ -66,8 +67,89 @@ fn the_picture_panes_do_not_scroll() {
     // VERTICALLY only: a both-axes area gives the body unbounded width, and the
     // panes that fill the space then never report vertical overflow, so the
     // wheel can't scroll them. Horizontal off; vertical on.
-    for tab in [panes::Tab::Tuning, panes::Tab::Analyzer, panes::Tab::Panel] {
+    for tab in [panes::Tab::Tuning, panes::Tab::Analyzer, panes::Tab::System] {
         assert_eq!(viewer.scroll_bars(&tab), [false, true], "{tab:?} cannot scroll vertically");
+    }
+}
+
+/// Every tab in the settings column fits on its tab bar, unclipped, at the
+/// window this UI is dialled against.
+///
+/// The guard this restores was lost, not retired: it used to hold the whole
+/// column — tab bar and pane content together — to needing no scroll bar, and
+/// came out when the panes were allowed to scroll (see
+/// [`crate::state::SETTINGS_SPLIT`]). A pane scrolling is normal; the tab bar
+/// overflowing is the thing worth catching, and splitting Tuning into Tuning
+/// and View took the column from six tabs to seven, which is what makes it a
+/// live question rather than a margin.
+///
+/// What overflow actually costs is worth stating exactly, because it is not
+/// unreachability: egui_dock SCROLLS a bar that does not fit (`tab_bar_scroll`,
+/// and `leaf.scroll`), so every tab stays clickable. The cost is
+/// discoverability — a tab you have to drag the bar sideways to find is one a
+/// new user never learns is there — which is the whole thing this arrangement
+/// is for, so a clipped bar undoes the split it was made by.
+///
+/// Measured, not derived. egui_dock lays the bar out itself and would answer a
+/// re-derivation of its own sums with whatever it was given; what a user can
+/// SEE is whether the glyphs survived the clip rect they were painted under.
+/// So this asks the real dock for a real frame.
+///
+/// The numbers, swept at this height on 2026-08-08: the seven-tab bar needs a
+/// window of 1410pt, where the six-tab bar it replaced needed 1250pt. Both are
+/// above the editor's own `DEFAULT_SIZE` of 1000pt, so the default window has
+/// scrolled its tab bar since well before the split — pinning that is a
+/// separate job from this one, and shrinking the default's tab bar is not
+/// something the split made true.
+#[test]
+fn every_settings_tab_fits_on_its_tab_bar() {
+    // The window the UI is dialled against, and the one the column widths in
+    // `SETTINGS_SPLIT` were measured at. NOT the editor's default size, which
+    // is smaller than any tab bar this column has had — see above.
+    const WINDOW: egui::Vec2 = egui::vec2(1512.0, 886.0);
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut harness = DockHarness::new();
+    harness.screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), WINDOW);
+    harness.settle(&mut state);
+    let output = harness.frame(&mut state, vec![]);
+
+    let column = [
+        panes::Tab::Tuning,
+        panes::Tab::View,
+        panes::Tab::Nodes,
+        panes::Tab::Scene,
+        panes::Tab::Analyzer,
+        panes::Tab::Video,
+        panes::Tab::System,
+    ];
+    for tab in column {
+        let title = panes::tab_title(&tab);
+        // The tab bar paints the title of every tab in the leaf, not just the
+        // selected one, so each is findable by its own text. "Analyzer" names
+        // two tabs and so can match the display pane's bar as well; either one
+        // being whole is the claim, hence `any`.
+        let drawn: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|cs| match &cs.shape {
+                egui::Shape::Text(t) if t.galley.text() == title => {
+                    Some((t.pos, t.galley.size(), cs.clip_rect))
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(!drawn.is_empty(), "the tab bar drew no title for {tab:?}");
+        let whole = drawn.iter().any(|&(pos, size, clip)| {
+            let rect = egui::Rect::from_min_size(pos, size);
+            clip.contains_rect(rect)
+        });
+        assert!(
+            whole,
+            "{tab:?}'s tab title is clipped on the bar at {WINDOW:?} — the settings \
+             column has run out of room for {} tabs. Shorten a name or merge a tab; \
+             a clipped tab is one a user cannot read. (drawn: {drawn:?})",
+            column.len(),
+        );
     }
 }
 

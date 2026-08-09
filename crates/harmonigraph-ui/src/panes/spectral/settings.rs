@@ -143,14 +143,19 @@ fn spectrogram_gradient_group(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig
 pub(crate) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState) {
     use crate::{SpectralOrientation, SpectrumWindow};
 
-    // ---- Axes -----------------------------------------------------------
+    // ---- Plot -----------------------------------------------------------
     // Which way the plot runs, and how much of the pitch axis it shows. Time's
     // own extent is the roll's Span, and lives with the roll — it is the one
-    // axis setting that means nothing without the layer it measures.
+    // axis setting that means nothing without the layer it measures; the
+    // Level's lives with the Spectrum, which is not the only layer reading it.
+    //
+    // "Plot" rather than "Axes" for exactly that reason: two of the three axis
+    // extents are deliberately elsewhere, and a heading promising all three is
+    // one a reader learns not to trust.
     //
     // A plain heading rather than `section`: this is the top of the pane, and
     // a leading rule there is a line under nothing.
-    ui.heading("Axes");
+    ui.heading("Plot");
     let cfg = &mut state.spectrum_config;
     // Named for the side the now-line is on, which is where the spectrum sits
     // and where a note arrives — so the setting says where to LOOK rather than
@@ -207,7 +212,7 @@ pub(crate) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
     // Bitwig octave numbers — which is what the note NAMES on the ribbons
     // already say, in the lattice's own spelling, at the pitch they are
     // sounding rather than at the nearest C below it.
-    ValueBar::new(&mut cfg.marking_scale, crate::SCALE_BAR_RANGE, "Label size")
+    ValueBar::new(&mut cfg.marking_scale, crate::SCALE_BAR_RANGE, "Marking size")
         .show(ui)
         .on_hover_text(
             "Size of the pane's own markings: the label at each frequency, and \
@@ -299,7 +304,10 @@ pub(crate) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
     ui.checkbox(&mut cfg.show_roll, "Note history").on_hover_text(
         "Draw incoming MIDI as a scrolling roll over the same pitch axis. \
          Time runs away from the spectrum, so a note leaving the roll meets \
-         the peak it is making.",
+         the peak it is making.\n\nA ribbon takes its color from the pitch \
+         gradient, which is the Nodes tab's Color group — the same colors the \
+         lattice draws a sounding note in, so a note is the same color in both \
+         pictures. The heatmap's own gradient is below, and is a different one.",
     );
     ValueBar::new(&mut cfg.roll_seconds, crate::ROLL_SECONDS_MIN..=crate::ROLL_SECONDS_MAX, "Span")
         .eased(true)
