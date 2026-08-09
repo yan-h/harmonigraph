@@ -1,5 +1,6 @@
-//! The settings panes as a column: that each scrolls when it overflows,
-//! that no control overruns a narrow one, and the Video pane's own rows.
+//! The settings panes as a column: that each scrolls when it overflows, that
+//! the bar it scrolls by covers nothing, that no control overruns a narrow one,
+//! and the Video pane's own rows.
 
 use crate::*;
 use harmonigraph_render::wgpu::TextureFormat;
@@ -98,8 +99,8 @@ fn wheel_over_settings_pane(tab: panes::Tab, screen_h: f32) -> f32 {
 }
 
 /// Every settings pane scrolls to the wheel once its content is taller than
-/// the pane. The dock hands some of them its own `ScrollArea` and others build
-/// their own; from the wheel's side that must not be visible.
+/// the pane. These scroll in the dock's own `ScrollArea` and the two readout
+/// panes build their own; from the wheel's side that must not be visible.
 #[test]
 fn every_settings_pane_scrolls_when_its_content_overflows() {
     // A short window, so that every one of them overflows — including System,
@@ -885,5 +886,188 @@ fn the_commas_section_lays_its_rows_out_as_a_table() {
     // And the ratios are on the hover, not in the table.
     for ratio in ["81/80", "225/224"] {
         assert!(find(ratio).is_none(), "{ratio} is drawn in the table");
+    }
+}
+
+/// The size a settings pane is soloed at to make it scroll: narrow enough that
+/// the bars run the width of the column, and short enough that every pane in
+/// the sweep — Panel, the shortest list of them — overflows it.
+const SCROLLING_PANE: egui::Vec2 = egui::vec2(320.0, 200.0);
+
+/// One settings pane soloed in the REAL dock at a size it overflows, as the
+/// shapes it drew.
+///
+/// The dock and not [`settings_pane_at_width`], because where a scroll bar goes
+/// is a question about the wrapping: egui_dock puts each body in a `ScrollArea`
+/// of its own, and a fixture that calls `TabViewer::ui` on a hand-built child
+/// draws the panes that rely on it with no bar at all.
+///
+/// The pointer rests inside the pane because a bar nobody is pointing at is
+/// drawn at zero opacity, and a fully transparent rect answers with no visual
+/// bounding rect — so an unhovered bar is not in the shapes to find. Hovering
+/// the AREA is enough, and hovering the BAR is not asked for: the panes keep
+/// their bars in two different places, no one pointer is over both, and the lane
+/// is the bar's full width in from its right edge however thin it is painted.
+///
+/// Both readout panes list what has come in, and an empty one has nothing to
+/// scroll, so the fixture gives the Console lines and the Notes pane voices.
+fn scrolling_settings_pane(tab: panes::Tab) -> Vec<egui::epaint::ClippedShape> {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    state.dock = egui_dock::DockState::new(vec![tab]);
+    for i in 0..40 {
+        state.console.log(format!("{i:02} a log line long enough to run the width of the pane"));
+    }
+    for note in 40..80 {
+        state.tracker.handle_event(harmonigraph_core::NoteEvent {
+            time: 0.5,
+            channel: 0,
+            note,
+            kind: harmonigraph_core::NoteEventKind::On { velocity: 1.0 },
+        });
+    }
+    let backend = RecordingBackend::default();
+    let ctx = egui::Context::default();
+    crate::theme::apply_theme(&ctx);
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, SCROLLING_PANE);
+    let mut t = 0.0;
+    let mut frame = |state: &mut SharedState, events: Vec<egui::Event>| {
+        t += 1.0 / 60.0;
+        ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(screen),
+                time: Some(t),
+                events,
+                ..Default::default()
+            },
+            |ui| root_ui(ui, state, &backend, t),
+        )
+    };
+    let margin = crate::theme::PANE_INNER_MARGIN;
+    let inside = egui::pos2(screen.right() - 2.0 * margin, screen.center().y);
+    frame(&mut state, vec![egui::Event::PointerMoved(inside)]);
+    let mut out = frame(&mut state, vec![]);
+    // The widening is animated, so the bar reaches its full width a few frames
+    // after the pointer arrives.
+    for _ in 0..20 {
+        out = frame(&mut state, vec![]);
+    }
+    out.shapes
+}
+
+/// The theme's widest scroll bar, read back off a themed context rather than
+/// restated here.
+fn scroll_bar_width() -> f32 {
+    let ctx = egui::Context::default();
+    crate::theme::apply_theme(&ctx);
+    ctx.style_of(egui::Theme::Dark).spacing.scroll.bar_width
+}
+
+/// Nothing a settings pane draws goes under its own scroll bar.
+///
+/// A floating bar is painted OVER the content instead of beside it, so the only
+/// place it fits without covering a control is air the pane already leaves: the
+/// [`theme::PANE_INNER_MARGIN`] gutter down the right of the tab body. Two
+/// things put it there, and neither is visible from the pane that depends on
+/// it — the bar is sized to the gutter (`theme::style_at`), and a pane that
+/// scrolls in an area of its OWN starts at the content box, where there is no
+/// gutter, so it reserves one (`theme::reserve_scroll_gutter`).
+///
+/// Get either wrong and the bar lands on the right end of every row in the
+/// column, which is where the value readouts are. That is what it did: the two
+/// list panes built their own area inside the margin, putting a 10pt bar 8pt in
+/// from the pane edge and straight across the end of every bar below it.
+///
+/// The lane is FOUND rather than assumed, because where it lands is the thing
+/// under test. What identifies it is the bar's own rect: no wider than a bar,
+/// and as tall as the area it scrolls, which is not a shape a pane draws.
+#[test]
+fn nothing_is_drawn_under_a_settings_pane_scroll_bar() {
+    let margin = crate::theme::PANE_INNER_MARGIN;
+    let bar = scroll_bar_width();
+    assert!(bar <= margin + 0.01, "a {bar}pt bar does not fit the {margin}pt gutter it floats in");
+    let body = egui::Rect::from_min_max(
+        egui::pos2(0.0, crate::theme::TAB_BAR_HEIGHT),
+        SCROLLING_PANE.to_pos2(),
+    );
+    for tab in SETTINGS_TABS {
+        let shapes = scrolling_settings_pane(tab);
+        // The pane's own shapes are the ones clipped to the tab BODY. The dock's
+        // chrome — the leaf fill, the body border, the tab bar and its rule — is
+        // clipped to the leaf, which starts a tab bar higher up.
+        let pane = |cs: &egui::epaint::ClippedShape| {
+            let rect = cs.shape.visual_bounding_rect();
+            let mine = cs.clip_rect.top() >= body.top() - 0.5;
+            // Shapes that carry no geometry answer with an inverted or infinite
+            // rect; egui's own `is_finite` lets those through.
+            (mine && rect.is_finite() && rect.width() < 1.0e4).then_some(rect)
+        };
+        let bar_edges: Vec<f32> = shapes
+            .iter()
+            .filter_map(|cs| {
+                let rect = pane(cs)?;
+                let is_rect = matches!(cs.shape, egui::Shape::Rect(_));
+                (is_rect && rect.width() <= bar + 0.5 && rect.height() >= body.height() * 0.5)
+                    .then(|| rect.right())
+            })
+            .collect();
+        assert!(
+            !bar_edges.is_empty(),
+            "{tab:?} drew no scroll bar at {SCROLLING_PANE:?}, so it never overflowed and this \
+             proves nothing about it",
+        );
+        // The lane is the bar's full width in from its right edge, whatever the
+        // bar is painted at: a dormant one is a `floating_width` hairline, but
+        // egui senses the whole `bar_width` either way, so a control under the
+        // thin end of it is as unreachable as one under the fat end.
+        let right = bar_edges.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        let leftmost = bar_edges.iter().copied().fold(f32::INFINITY, f32::min);
+        assert!(
+            right - leftmost < 0.5,
+            "{tab:?} drew scroll bars in two places, ending at {leftmost} and {right}",
+        );
+        let left = right - bar;
+
+        // Where the lane lands: against the pane edge for a pane the dock
+        // scrolls, whose area IS the body. The two readout panes scroll in an
+        // area of their own — a row that must not scroll sits above each — so
+        // theirs stands one content margin further in.
+        let own_area = matches!(tab, panes::Tab::Console | panes::Tab::Notes);
+        let edge = body.right() - if own_area { margin } else { 0.0 };
+        assert!(
+            (right - edge).abs() < 0.5,
+            "{tab:?} puts its scroll bar at {left}..{right}, not against {edge}",
+        );
+
+        let under: Vec<String> = shapes
+            .iter()
+            .filter_map(|cs| {
+                let rect = pane(cs)?;
+                if rect.right() <= left + 1.0 {
+                    return None;
+                }
+                // The bar itself: a background rect and a handle, both inside
+                // the lane they define.
+                if matches!(cs.shape, egui::Shape::Rect(_))
+                    && rect.left() >= left - 0.5
+                    && rect.right() <= right + 0.5
+                {
+                    return None;
+                }
+                // The scroll area's own fade at the foot of its content, which
+                // is the width of the AREA. Every control in a pane starts at
+                // the content box, a margin in, so nothing outside it is one.
+                if rect.left() < body.left() + margin - 0.5 {
+                    return None;
+                }
+                Some(match &cs.shape {
+                    egui::Shape::Text(t) => format!("{:?}", t.galley.text()),
+                    other => format!("{other:?}").chars().take(60).collect(),
+                })
+            })
+            .collect();
+        assert!(
+            under.is_empty(),
+            "{tab:?} draws into its scroll bar's lane {left}..{right}: {under:?}",
+        );
     }
 }

@@ -23,19 +23,18 @@ use harmonigraph_scene::{
 /// because none of them belongs to a layer. Ordering them after Core, Octaves
 /// and the marks would read more consistently outward and would put the
 /// pane's most-used controls below a scroll, in a column this pane already
-/// overruns. Reading outward is what orders the rest. Scrolls so the full list
-/// is reachable in a short pane.
+/// overruns. Reading outward is what orders the rest.
+///
+/// Scrolls in the dock's own `ScrollArea` rather than one built here, which is
+/// what puts the bar in the pane's right margin instead of on top of the bars
+/// (see [`super::scene::scene_pane`]).
 pub(super) fn nodes_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBackend) {
-    egui::ScrollArea::vertical()
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            color_section(ui, &mut state.view, params);
-            note_section(ui, &mut state.view, params);
-            core_section(ui, &mut state.view);
-            octaves_section(ui, &mut state.view);
-            melody_bass_section(ui, &mut state.view);
-            shimmer_section(ui, &mut state.view);
-        });
+    color_section(ui, &mut state.view, params);
+    note_section(ui, &mut state.view, params);
+    core_section(ui, &mut state.view);
+    octaves_section(ui, &mut state.view);
+    melody_bass_section(ui, &mut state.view);
+    shimmer_section(ui, &mut state.view);
 }
 
 /// Core: the mark at a sounding node's center. One continuous shape sized by

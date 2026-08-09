@@ -12,16 +12,18 @@ use harmonigraph_core::NoteTracker;
 use harmonigraph_scene::ViewConfig;
 
 /// The scene-wide look, top to bottom: the always-drawn Home grid, the Labels
-/// on nodes, then the Trail of visited nodes. Scrolls so the full list is
-/// reachable in a short pane.
+/// on nodes, then the Trail of visited nodes.
+///
+/// Draws straight into the body and scrolls in the dock's own `ScrollArea` (see
+/// `Viewer::scroll_bars`), rather than building a second one here. Both scroll
+/// the same list to the same wheel; what tells them apart is where the bar goes.
+/// The dock's area is the pane, so its bar falls in the pane's right margin —
+/// one built here starts at the content box, and a floating bar draws over the
+/// content it has no room beside, which is the right end of every bar below.
 pub(super) fn scene_pane(ui: &mut egui::Ui, state: &mut SharedState) {
-    egui::ScrollArea::vertical()
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            home_grid_section(ui, &mut state.view);
-            labels_section(ui, &mut state.view);
-            trail_section(ui, &mut state.view, &mut state.tracker);
-        });
+    home_grid_section(ui, &mut state.view);
+    labels_section(ui, &mut state.view);
+    trail_section(ui, &mut state.view, &mut state.tracker);
 }
 
 /// Home grid: the whole of what the lattice draws at rest. Idle positions

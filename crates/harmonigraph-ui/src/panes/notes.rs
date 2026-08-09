@@ -12,6 +12,10 @@ pub(super) fn console_pane(ui: &mut egui::Ui, state: &mut SharedState) {
             state.console.clear();
         }
     });
+    // Its own area rather than the dock's, because it sticks to the bottom and
+    // the Clear row above it does not scroll — so it needs the bar's lane
+    // reserved out of its width (see [`theme::reserve_scroll_gutter`]).
+    theme::reserve_scroll_gutter(ui);
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .stick_to_bottom(true)
@@ -47,6 +51,9 @@ pub(super) fn notes_pane(ui: &mut egui::Ui, state: &mut SharedState) {
             .monospace()
             .color(theme::text_dim()),
     );
+    // Its own area rather than the dock's, so the column header above stays put
+    // while the voices scroll under it; the bar's lane comes out of its width.
+    theme::reserve_scroll_gutter(ui);
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {

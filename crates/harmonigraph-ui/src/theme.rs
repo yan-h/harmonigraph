@@ -264,6 +264,26 @@ pub(crate) fn min_pane(scale: f32) -> f32 {
     4.0 * tab_bar_height(scale)
 }
 
+/// Give a scroll area built INSIDE a pane a lane of its own to draw its bar in.
+///
+/// The bar is [as wide as the gutter](style_at) a pane leaves down its right
+/// side, which is what keeps it clear of the controls in the panes the dock
+/// scrolls for: that area's edge is the pane's edge, and the gutter is the air
+/// between them. An area built inside a pane starts at the CONTENT box, where
+/// there is no such air, so a floating bar there sits on the last few points of
+/// whatever it scrolls — the run of a log line, the right end of a row.
+///
+/// Reserving the lane costs the area the bar's width, and only while a bar is
+/// showing: egui takes `floating_allocated_width` out of a floating area's size
+/// per axis that actually overflows. It rides on the UI's spacing, which is the
+/// only place egui reads a scroll bar's size from — there is no per-area way to
+/// set one — so it holds for every area built in `ui` from here on. A pane that
+/// wants the lane for one of its areas wants it for all of them.
+pub(crate) fn reserve_scroll_gutter(ui: &mut egui::Ui) {
+    let scroll = &mut ui.spacing_mut().scroll;
+    scroll.floating_allocated_width = scroll.bar_width;
+}
+
 // ---- Fonts -----------------------------------------------------------------
 
 /// The named family headings resolve to (Atkinson Bold first).
@@ -397,6 +417,20 @@ fn style_at(scale: f32) -> egui::Style {
     style.spacing.interact_size = Vec2::new(36.0, ROW_HEIGHT);
     style.spacing.slider_width = 160.0;
     style.spacing.slider_rail_height = 4.0;
+
+    // A floating scroll bar is drawn OVER the content rather than beside it, so
+    // its width is only free where the pane already leaves air: the
+    // [`PANE_INNER_MARGIN`] gutter down the right of every settings pane. egui's
+    // default bar is 10pt against that 8pt gutter, and the 2pt of overhang lands
+    // on the right end of every bar in the column. Sized to the gutter it fills
+    // exactly the air that is there and touches nothing, expanded or dormant.
+    //
+    // The alternative is `floating_allocated_width`, which reserves the bar a
+    // lane of its own and takes it out of the content — right for a scroll area
+    // that has no gutter to sit in (see [`reserve_scroll_gutter`]), wrong here,
+    // where it would inset the column a second time and reflow the whole pane
+    // the moment its content grew past the bottom.
+    style.spacing.scroll.bar_width = PANE_INNER_MARGIN;
 
     let visuals = &mut style.visuals;
     visuals.panel_fill = panel();
