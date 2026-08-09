@@ -2591,8 +2591,14 @@ const CORNER_SAMPLES: usize = 8;
 /// ramp there has nowhere to open.
 const L_STAR_AXIS: (f32, f32) = (0.0, 100.0);
 
-/// The axis a chroma pair stands on: the FRACTION of the color the gamut holds
-/// at that point of the curve, 0 grey and 1 as vivid as the screen goes there.
+/// The axis a chroma pair stands on: a FRACTION rather than a chroma, 0 grey
+/// and 1 as vivid as the screen goes there. Not a share of this hue's own
+/// ceiling — denominating in that ceiling is what made one setting read as
+/// three different colorfulnesses around the circle. It is denominated in the
+/// floor EVERY hue can hold and reaches this hue's own ceiling only at 1, so
+/// one number is one colorfulness wherever the arc passes. See
+/// [`Gradient::chroma`] for why the axis is a fraction rather than a chroma,
+/// and `chroma_of` in `harmonigraph-scene` for the curve joining the two ends.
 /// Both ends are settings and a pair on either is flat, exactly as a brightness
 /// pair parked on black is — see [`Gradient::chroma`] for why the axis is
 /// a fraction of what is available rather than a chroma.
@@ -2610,7 +2616,7 @@ const CHROMA_AXIS: (f32, f32) = (0.0, 1.0);
 enum Spread {
     /// `L*`, black to white.
     Brightness,
-    /// The share of the color the gamut holds, grey to as vivid as it goes.
+    /// One colorfulness whatever hue it lands on, grey to as vivid as it goes.
     Chroma,
 }
 

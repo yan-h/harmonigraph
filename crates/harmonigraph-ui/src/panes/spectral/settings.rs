@@ -120,8 +120,8 @@ fn spectrogram_gradient_group(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig
          on a pale field, double-click to reset.",
     );
     SpreadBar::chroma(&mut cfg.spectrogram_gradient).home(home).show(ui).on_hover_text(
-        "The stretch of color the level range spends, each end as a share of \
-         the most that cell's own brightness and hue can hold — 100% is as \
+        "The stretch of color the level range spends, each end one \
+         colorfulness whatever hue that cell lands on — 100% is as \
          vivid as the screen goes without distorting the color, 0 is grey. The \
          two numbers are silence and a full bucket, in that order. Closing them \
          together gives every level the same share of the color available to \
