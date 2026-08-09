@@ -157,8 +157,8 @@ const JITTER_SLABS: i64 = 1;
 /// One row of the heatmap image: how it reads the source buckets, its center
 /// MIDI pitch, and that pitch's fraction `t` up the pitch axis.
 ///
-/// A row is a PIXEL of the pitch axis, not a bucket. Zoomed out, a row takes the
-/// max over the buckets that fall in it: the axis holds thousands of buckets and
+/// A row is a PIXEL of the pitch axis, not a bucket. Zoomed out, a row reads the
+/// whole run of buckets that falls in it: the axis holds thousands of buckets and
 /// the pane a few hundred pixels, so one row per bucket would build an image far
 /// taller than the screen (and, at 32 buckets per semitone, taller than the GPU
 /// will allocate) only for the sampler to throw the detail away. Zoomed in,
@@ -170,23 +170,71 @@ struct Bin {
     t: f32,
 }
 
+/// Order of the power mean a row takes over the run of buckets under it — how
+/// hard that read leans toward the loudest of them. See [`RowRead::Mean`].
+///
+/// A plain MAX is the obvious read, and it makes the picture's NOISE FLOOR a
+/// function of the ZOOM. Zoomed out a row covers a dozen-odd buckets, and the
+/// largest of a dozen samples of a fluctuating floor sits well above their
+/// typical value — 4.7 dB for the exponentially distributed power a noise floor
+/// has, against 0 dB for a row reading a single bucket. So the same passage
+/// reads brighter between its partials the further out it is zoomed, and the
+/// brightness is a statement about how wide the pane is rather than about the
+/// sound. It climbs without limit, too: the excess goes as the log of the run,
+/// so there is no zoom at which it settles.
+///
+/// A power mean estimates a fixed property of the distribution instead, so it
+/// CONVERGES as the run widens rather than climbing with it. The order sets
+/// where it sits between the plain mean (1) and the max (infinity). Four is high
+/// enough to keep a partial reading as a partial — the analysis lobe is many
+/// buckets wide wherever the axis outruns the FFT, so a lobe fills its row
+/// rather than being diluted in it — and low enough to settle quickly, landing
+/// 3.4 dB over a noise floor's mean and staying there.
+///
+/// What it costs is absolute level on anything NARROWER than its row, which up
+/// near the top of the axis a lobe can be: alone in a run of ten buckets, it
+/// reads 2.5 dB down. That is a trade rather than a win — for the lobes wider
+/// than their row, which is most of the axis, the floor drops away from them and
+/// contrast improves by about a dB; for the narrow ones both come down together.
+/// What does not vary either way is the zoom.
+const ROW_MEAN_ORDER: f32 = 4.0;
+
+/// Stored steps the mean falls per halving of the summed weight — the byte-form
+/// of `(10 / ROW_MEAN_ORDER) * log10(..)`, with `log10` reached through `log2`
+/// and the dB then divided by the store's own step.
+const ROW_MEAN_STEPS: f32 = 10.0
+    / (ROW_MEAN_ORDER * harmonigraph_core::spectrogram::DB_STEP * std::f32::consts::LOG2_10);
+
+/// The weight a bucket carries in [`RowRead::Mean`], indexed by how many stored
+/// steps BELOW the loudest bucket of its row it sits.
+///
+/// Relative to the row's own loudest rather than absolute, which is what keeps
+/// the arithmetic in range: at order 4 an absolute weight spans `10^-48` across
+/// the stored dB range and flushes to zero in an `f32`, where relative weights
+/// run from exactly 1 downward and their sum can never fall below 1.
+static ROW_WEIGHT: std::sync::LazyLock<[f32; 256]> = std::sync::LazyLock::new(|| {
+    std::array::from_fn(|j| {
+        let db = j as f32 * harmonigraph_core::spectrogram::DB_STEP;
+        10f32.powf(-0.1 * ROW_MEAN_ORDER * db)
+    })
+});
+
 /// How one row reads the buckets under it.
 ///
-/// The same choice, for the same reason, that
-/// [`pitch_spectrum`](harmonigraph_core::spectrum::SpectrumAnalyzer::pitch_spectrum)
-/// makes one level down between FFT bins: MAX where the row is WIDER than what
-/// it reads (a peak must not be averaged away by its quiet neighbours), and a
-/// lerp where it is narrower (the grid is being asked for more than it holds, so
-/// read between its points instead of repeating them).
+/// Two readings, chosen by which of the row and the bucket grid is finer: a
+/// power mean where the row is WIDER than what it reads (see
+/// [`ROW_MEAN_ORDER`]), and a lerp where it is narrower — the grid is being
+/// asked for more than it holds, so read between its points instead of repeating
+/// them.
 ///
-/// Repeating was the old behaviour, and it is visible: at a three-semitone zoom
-/// a bucket is seven rows tall, and bilinear filtering cannot smooth a run of
-/// identical texels, so the pitch axis came out as plateaus with a step between
-/// them rather than as a ridge.
+/// Repeating was the old behaviour for the narrow case, and it is visible: at a
+/// three-semitone zoom a bucket is seven rows tall, and bilinear filtering
+/// cannot smooth a run of identical texels, so the pitch axis came out as
+/// plateaus with a step between them rather than as a ridge.
 #[derive(Clone, Copy, PartialEq)]
 enum RowRead {
-    /// The loudest of `from..to` (always at least one bucket wide).
-    Max { from: usize, to: usize },
+    /// A power mean over `from..to` (always at least one bucket wide).
+    Mean { from: usize, to: usize },
     /// Between `lo` and the bucket above it, `f` of the way up.
     Lerp { lo: usize, f: f32 },
 }
@@ -197,7 +245,23 @@ impl RowRead {
     /// interpolating exactly what will be drawn.
     fn of(self, db: &harmonigraph_core::spectrogram::ColumnDb) -> BucketDb {
         match self {
-            RowRead::Max { from, to } => db[from..to].iter().copied().max().unwrap_or(0),
+            RowRead::Mean { from, to } => {
+                let run = &db[from..to];
+                let top = run.iter().copied().max().unwrap_or(0);
+                // One bucket IS its own mean, and this is the zoomed-in case, so
+                // it is worth not paying a logarithm to be told so.
+                if run.len() < 2 {
+                    return top;
+                }
+                // Denominated against `top` (hence the subtraction, never
+                // negative), so the sum runs from 1 up to the run's length and
+                // the answer can only come DOWN from the loudest bucket.
+                let sum: f32 = run.iter().map(|&v| ROW_WEIGHT[usize::from(top - v)]).sum();
+                let steps = -(sum / run.len() as f32).log2() * ROW_MEAN_STEPS;
+                // A float cast saturates, so a run long enough to fall more than
+                // 255 steps lands on 0 rather than wrapping.
+                top.saturating_sub(steps.round() as u8)
+            }
             RowRead::Lerp { lo, f } => {
                 let (a, b) = (db[lo], db[(lo + 1).min(SPECTRUM_BINS - 1)]);
                 (f32::from(a) + (f32::from(b) - f32::from(a)) * f).round() as BucketDb
@@ -652,8 +716,8 @@ impl Plan {
 
 /// The image's rows for a plan of `rows` over `scale`.
 ///
-/// A row's pitch span maps back to the source buckets under it, read by MAX or
-/// by interpolation depending on which of the two is finer — see [`RowRead`]. A
+/// A row's pitch span maps back to the source buckets under it, read by a power
+/// mean or by interpolation depending on which is finer — see [`RowRead`]. A
 /// bucket of slack on each side lets the filtering carry the visible range
 /// cleanly to its edges.
 fn bins_for(rows: usize, scale: &PitchScale) -> Vec<Bin> {
@@ -675,7 +739,7 @@ fn bins_for(rows: usize, scale: &PitchScale) -> Vec<Bin> {
             let t = 0.5 * (t0 + t1);
             let midi = scale.min_midi + t * scale.span;
             let read = if last > idx {
-                RowRead::Max { from: idx, to: (last + 1).min(SPECTRUM_BINS) }
+                RowRead::Mean { from: idx, to: (last + 1).min(SPECTRUM_BINS) }
             } else {
                 // Narrower than a bucket: read between the two whose centers
                 // straddle this row's center. A bucket's center sits half a
@@ -962,13 +1026,18 @@ pub(super) fn draw_spectrogram(
 }
 
 /// Group `columns` (oldest first) into time-slabs of `bucket` seconds, taking
-/// the MAX over each slab AND over each output row's run of source buckets
-/// (`reads` gives how a row draws from them). Returns each slab's
-/// center time and a flat row-major power grid (`rows * nb`).
+/// the MAX over each slab of whatever each output row read from it (`reads`
+/// gives how a row draws from the source buckets). Returns each slab's center
+/// time and a flat row-major power grid (`rows * nb`).
 ///
-/// MAX on both axes for the same reason: a spectrogram cell answers "was there
-/// anything here", and averaging a bright thin partial with its silent
-/// neighbours answers "not much".
+/// The two axes aggregate DIFFERENTLY, and the asymmetry is the point. Time
+/// takes a plain max, because a spectrogram cell answers "was there anything
+/// here" and averaging a brief loud column with the silence either side answers
+/// "not much" — a slab spans a few columns of a stream that is already 95%
+/// overlapped, so the max is over near-copies of one measurement rather than
+/// over a distribution. Pitch takes a power mean instead ([`RowRead`]), because
+/// a row zoomed out spans a dozen INDEPENDENT buckets, and the max of a dozen
+/// samples of a noise floor is a function of how many were drawn.
 ///
 /// The slab a column lands in is `floor(time / bucket)` — a function of
 /// absolute time alone, so it doesn't move as columns scroll off the far end
@@ -1731,7 +1800,7 @@ fn bin_level(cfg: &SpectrumConfig, bucket: BucketDb, midi: f32) -> f32 {
 /// curve to a function no pixel is drawn from.
 #[cfg(test)]
 pub(crate) fn bin_level_for_test(cfg: &SpectrumConfig, bucket: BucketDb, midi: f32) -> f32 {
-    let bins = [Bin { read: RowRead::Max { from: 0, to: 1 }, midi, t: 0.0 }];
+    let bins = [Bin { read: RowRead::Mean { from: 0, to: 1 }, midi, t: 0.0 }];
     Shades::new(cfg, &bins).level(0, bucket)
 }
 
@@ -1825,6 +1894,57 @@ mod tests {
         harmonigraph_core::spectrogram::quantize(power)
     }
 
+    /// The picture's noise floor SETTLES as the pitch axis zooms out, instead of
+    /// climbing with the number of buckets a row happens to span.
+    ///
+    /// Read by MAX, a row asks "how large was the largest of N draws", whose
+    /// answer grows like the log of N and so has no limit: the floor between the
+    /// partials reads brighter the further out the zoom, which is a statement
+    /// about the layout rather than about the sound. Measured over the run
+    /// widths a row actually takes, 8 buckets to 64, a MAX lifts the floor
+    /// 2.7 dB where the power mean lifts it 1.0 — and past 64 the one keeps
+    /// going where the other has arrived. See [`ROW_MEAN_ORDER`].
+    ///
+    /// The comparison starts at 8 rather than at 1 because the step from ONE
+    /// bucket to several is inherent and belongs to neither rule: one bucket
+    /// reads a sample of the distribution, and any number of them reads a
+    /// statistic of it, which for a floor of this shape sits 2.3 dB higher. What
+    /// is at issue here is only the part that keeps climbing.
+    ///
+    /// The second assertion is what gives the first its teeth: it fails if the
+    /// noise is too flat, or the runs too short, for either rule to be tested.
+    #[test]
+    fn the_noise_floor_settles_as_the_pitch_axis_zooms_out() {
+        // Exponentially distributed power around -60 dB: the distribution a
+        // noise floor's buckets have, and the one whose maximum keeps growing.
+        let mut seed = 0x2545_F491_4F6C_DD1Du64;
+        let mut power = [0.0f32; SPECTRUM_BINS];
+        for p in power.iter_mut() {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let u = ((seed >> 11) as f64 / (1u64 << 53) as f64).clamp(1e-12, 1.0);
+            *p = (-u.ln() * 1e-6) as f32;
+        }
+        let column = crate::SpectrogramColumn::from_power(0.0, &power);
+        let floor = |run: usize, by_max: bool| {
+            let n = SPECTRUM_BINS / run;
+            (0..n)
+                .map(|r| {
+                    let (i, j) = (r * run, r * run + run);
+                    db_of(if by_max {
+                        column.db[i..j].iter().copied().max().unwrap()
+                    } else {
+                        RowRead::Mean { from: i, to: j }.of(&column.db)
+                    })
+                })
+                .sum::<f32>()
+                / n as f32
+        };
+        let climb = floor(64, false) - floor(8, false);
+        assert!(climb < 1.5, "the floor climbed {climb:.2} dB across a three-octave zoom");
+        let by_max = floor(64, true) - floor(8, true);
+        assert!(by_max > 2.2, "a plain MAX climbed only {by_max:.2} dB, so this proves nothing");
+    }
+
     #[test]
     fn a_short_loud_column_keeps_its_peak_through_aggregation() {
         // A brief loud note between two quiet columns, all in one slab. MAX
@@ -1835,7 +1955,7 @@ mod tests {
             col(0.02, &[(5, 1.0)]), // the short note
             col(0.04, &[(5, 0.002)]),
         ];
-        let (centers, power) = aggregate_rows(cols.iter(), &[RowRead::Max { from: 5, to: 6 }], 1.0);
+        let (centers, power) = aggregate_rows(cols.iter(), &[RowRead::Mean { from: 5, to: 6 }], 1.0);
         assert_eq!(centers.len(), 1, "one slab of width 1.0 s holds all three");
         assert_eq!(power[0], q(1.0), "the short note's peak survives");
     }
@@ -1852,7 +1972,7 @@ mod tests {
         // Two columns a second apart, in quarter-second slabs: four slabs of
         // silence between them.
         let cols = [col(0.0, &[(5, 1.0)]), col(1.0, &[(5, 0.5)])];
-        let (centers, power) = aggregate_rows(cols.iter(), &[RowRead::Max { from: 5, to: 6 }], 0.25);
+        let (centers, power) = aggregate_rows(cols.iter(), &[RowRead::Mean { from: 5, to: 6 }], 0.25);
         assert_eq!(centers.len(), 5, "one row per slab, silent ones included");
         assert_eq!(power[0], q(1.0), "the column before the gap");
         assert_eq!(&power[1..4], [0, 0, 0], "the gap reads as silence, not as a smear");
@@ -1871,7 +1991,7 @@ mod tests {
     fn a_single_missed_slab_holds_instead_of_going_black() {
         // Columns half a second apart in quarter-second slabs: one slab empty.
         let cols = [col(0.0, &[(5, 1.0)]), col(0.5, &[(5, 0.5)])];
-        let (centers, power) = aggregate_rows(cols.iter(), &[RowRead::Max { from: 5, to: 6 }], 0.25);
+        let (centers, power) = aggregate_rows(cols.iter(), &[RowRead::Mean { from: 5, to: 6 }], 0.25);
         assert_eq!(centers.len(), 3, "the empty slab still gets its row");
         assert_eq!(power[1], q(1.0), "and holds the column before it");
         assert_eq!(power[2], q(0.5));
@@ -1883,7 +2003,7 @@ mod tests {
     #[test]
     fn columns_going_back_in_time_still_get_a_row() {
         let cols = [col(10.0, &[(5, 1.0)]), col(1.0, &[(5, 0.5)])];
-        let (centers, power) = aggregate_rows(cols.iter(), &[RowRead::Max { from: 5, to: 6 }], 0.25);
+        let (centers, power) = aggregate_rows(cols.iter(), &[RowRead::Mean { from: 5, to: 6 }], 0.25);
         assert_eq!(centers.len(), 2);
         assert_eq!(power[1], q(0.5), "the rewound column landed in its own row");
     }
@@ -1894,9 +2014,9 @@ mod tests {
         // are present — otherwise scrolling would shift it and it would shimmer.
         // A note at t=2.6 sits in slab floor(2.6)=2.
         let with_old = [col(0.1, &[(0, 0.1)]), col(2.6, &[(0, 0.5)])];
-        let (c_full, _) = aggregate_rows(with_old.iter(), &[RowRead::Max { from: 0, to: 1 }], 1.0);
+        let (c_full, _) = aggregate_rows(with_old.iter(), &[RowRead::Mean { from: 0, to: 1 }], 1.0);
         let just_note = [col(2.6, &[(0, 0.5)])];
-        let (c_scrolled, _) = aggregate_rows(just_note.iter(), &[RowRead::Max { from: 0, to: 1 }], 1.0);
+        let (c_scrolled, _) = aggregate_rows(just_note.iter(), &[RowRead::Mean { from: 0, to: 1 }], 1.0);
         assert!(c_full.contains(&2.5), "slab center is 2.5 with old columns");
         assert!(c_scrolled.contains(&2.5), "and still 2.5 after they scroll off");
     }
@@ -1908,9 +2028,9 @@ mod tests {
         let cfg = SpectrumConfig::default();
         let w = 2;
         let bins = [
-            Bin { read: RowRead::Max { from: 10, to: 11 }, midi: 40.0, t: 0.1 },
-            Bin { read: RowRead::Max { from: 11, to: 12 }, midi: 41.0, t: 0.2 },
-            Bin { read: RowRead::Max { from: 12, to: 13 }, midi: 42.0, t: 0.3 },
+            Bin { read: RowRead::Mean { from: 10, to: 11 }, midi: 40.0, t: 0.1 },
+            Bin { read: RowRead::Mean { from: 11, to: 12 }, midi: 41.0, t: 0.2 },
+            Bin { read: RowRead::Mean { from: 12, to: 13 }, midi: 42.0, t: 0.3 },
         ];
         let mut power = vec![0; w * bins.len()]; // row-major [slab][bin]
         power[bins.len() + 2] = q(1.0); // slab 1, bin 2 loud
@@ -2123,8 +2243,8 @@ mod tests {
     #[test]
     fn incremental_aggregation_matches_batch_step_for_step() {
         let reads = [
-            RowRead::Max { from: 4, to: 6 },
-            RowRead::Max { from: 6, to: 10 },
+            RowRead::Mean { from: 4, to: 6 },
+            RowRead::Mean { from: 6, to: 10 },
             RowRead::Lerp { lo: 10, f: 0.25 },
         ];
         let bucket = 0.25;
@@ -2174,7 +2294,7 @@ mod tests {
     /// and slab `t + 1` empty.
     #[test]
     fn a_held_empty_slab_leaves_the_window_with_the_slab_it_copied() {
-        let reads = [RowRead::Max { from: 4, to: 6 }];
+        let reads = [RowRead::Mean { from: 4, to: 6 }];
         let bucket = 0.25;
         // Slab 0 holds three columns, slab 1 is EMPTY (a one-slab gap, so `fold`
         // holds the previous), slab 2 holds one.
@@ -2226,7 +2346,7 @@ mod tests {
     /// one-slab gap, and a retention the fixture outgrows.
     #[test]
     fn the_held_marks_are_trimmed_with_the_slabs_they_describe() {
-        let reads = [RowRead::Max { from: 4, to: 6 }];
+        let reads = [RowRead::Mean { from: 4, to: 6 }];
         let bucket = 0.25;
         // Three slabs — a retention the run below outgrows on its last column,
         // unlike [`KEEP`].
@@ -2280,7 +2400,7 @@ mod tests {
     /// the merged ones the store holds, so the comparison starts past it.
     #[test]
     fn incremental_aggregation_matches_the_raw_columns_across_a_tier_merge() {
-        let reads = [RowRead::Max { from: 4, to: 6 }, RowRead::Lerp { lo: 10, f: 0.5 }];
+        let reads = [RowRead::Mean { from: 4, to: 6 }, RowRead::Lerp { lo: 10, f: 0.5 }];
         let bucket = 0.25;
         let interval = 0.008; // SpectrumState::FFT_INTERVAL, the live column rate.
         // Long enough that nothing scrolls out: the whole run stays in window,
@@ -2334,7 +2454,7 @@ mod tests {
     /// after half a minute of playback and never coming back.
     #[test]
     fn a_long_window_keeps_the_fast_path_once_the_store_starts_merging() {
-        let reads = [RowRead::Max { from: 4, to: 6 }, RowRead::Lerp { lo: 10, f: 0.5 }];
+        let reads = [RowRead::Mean { from: 4, to: 6 }, RowRead::Lerp { lo: 10, f: 0.5 }];
         let interval = 0.008;
         // Past the finest tier's reach (FINE_COLUMNS * interval, ~16.4 s), which
         // is the line the old guard broke at, and out to a Span the pane really
@@ -2371,7 +2491,7 @@ mod tests {
     /// values would pass just the same with the optimization switched off.
     #[test]
     fn a_short_window_keeps_the_fast_path_across_merges() {
-        let reads = [RowRead::Max { from: 4, to: 6 }, RowRead::Lerp { lo: 10, f: 0.5 }];
+        let reads = [RowRead::Mean { from: 4, to: 6 }, RowRead::Lerp { lo: 10, f: 0.5 }];
         let bucket = 0.25;
         let interval = 0.008;
         // Two seconds against the finest tier's ~16, so the window stays well
@@ -2516,7 +2636,7 @@ mod tests {
     /// It is the two layers under it that must turn a miss into O(one column).
     #[test]
     fn no_cache_layer_falls_back_as_the_window_scrolls() {
-        let reads = [RowRead::Max { from: 4, to: 6 }, RowRead::Lerp { lo: 10, f: 0.5 }];
+        let reads = [RowRead::Mean { from: 4, to: 6 }, RowRead::Lerp { lo: 10, f: 0.5 }];
         let interval = crate::AudioSpectrum::FFT_INTERVAL;
 
         // Every FFT window the pane offers, by the lag it gives a column: a
@@ -2746,7 +2866,7 @@ mod tests {
     /// back to slabs the window did not want a frame ago.
     #[test]
     fn dragging_the_span_holds_the_grid_between_ladder_steps() {
-        let reads = [RowRead::Max { from: 4, to: 6 }, RowRead::Lerp { lo: 10, f: 0.5 }];
+        let reads = [RowRead::Mean { from: 4, to: 6 }, RowRead::Lerp { lo: 10, f: 0.5 }];
         let interval = crate::AudioSpectrum::FFT_INTERVAL;
         let lag = 0.5 * 8192.0 / 48000.0;
         let cols = LIVE_SLAB_CAP as usize;
@@ -3061,9 +3181,9 @@ mod tests {
     fn one_column_matches_the_whole_image_build() {
         let cfg = SpectrumConfig::default();
         let bins = [
-            Bin { read: RowRead::Max { from: 0, to: 1 }, midi: 40.0, t: 0.0 },
-            Bin { read: RowRead::Max { from: 1, to: 2 }, midi: 52.0, t: 0.5 },
-            Bin { read: RowRead::Max { from: 2, to: 3 }, midi: 64.0, t: 1.0 },
+            Bin { read: RowRead::Mean { from: 0, to: 1 }, midi: 40.0, t: 0.0 },
+            Bin { read: RowRead::Mean { from: 1, to: 2 }, midi: 52.0, t: 0.5 },
+            Bin { read: RowRead::Mean { from: 2, to: 3 }, midi: 64.0, t: 1.0 },
         ];
         let h = bins.len();
         // Two slabs of three bins, slab-major: [slab][bin].
@@ -3444,7 +3564,7 @@ mod tests {
         let bins: Vec<Bin> = (0..12)
             .map(|i| {
                 let midi = SPECTRUM_MIN_MIDI + i as f32 * 12.0;
-                Bin { read: RowRead::Max { from: 0, to: 1 }, midi, t: i as f32 / 11.0 }
+                Bin { read: RowRead::Mean { from: 0, to: 1 }, midi, t: i as f32 / 11.0 }
             })
             .collect();
         let (mut worst, mut differing, mut total) = (0i32, 0u64, 0u64);

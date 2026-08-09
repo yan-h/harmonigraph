@@ -59,6 +59,25 @@ pub fn hz_to_midi(hz: f32) -> f32 {
 /// precision at runtime.
 pub const DEFAULT_FFT_SIZE: usize = 8192;
 
+/// The bin below which a pitch bucket is narrower than the FFT's bin spacing, so
+/// the spectrum between the bins has to be reconstructed rather than sampled.
+///
+/// A fixed BIN INDEX whatever the sample rate and window length are, which is
+/// what makes it a constant at all: a bucket spans a constant RATIO of its own
+/// frequency (`ln 2 / (12 * BINS_PER_SEMITONE)` of it) while a bin spans a
+/// constant number of Hz, so the two are equal where `f / bin_hz =
+/// 12 * BINS_PER_SEMITONE / ln 2` — and `f / bin_hz` IS the bin coordinate, with
+/// `bin_hz` cancelling out of both sides. At 32 buckets to the semitone that is
+/// bin 554, which at 48 kHz is 3.2 kHz through an 8192-point window and 6.5 kHz
+/// through a 4096-point one.
+///
+/// It decides only how much of the spectrum is reduced to magnitudes up front,
+/// never which branch a bucket takes — that is still settled per bucket, by the
+/// bins that actually fall inside it. So the slack is there to cover the buckets
+/// straddling the crossover, and costs a few square roots.
+const INTERP_BIN_CEILING: usize =
+    ((12 * BINS_PER_SEMITONE) as f32 / std::f32::consts::LN_2) as usize + 8;
+
 /// Rolling analyzer: push mono samples as they arrive, ask for the
 /// spectrum whenever the display wants a fresh frame.
 pub struct SpectrumAnalyzer {
@@ -74,6 +93,12 @@ pub struct SpectrumAnalyzer {
     /// FFT scratch (allocated per configuration).
     re: Vec<f32>,
     im: Vec<f32>,
+    /// Magnitude per bin, filled by
+    /// [`pitch_spectrum`](SpectrumAnalyzer::pitch_spectrum) for the bins its
+    /// reconstructing branch reads — see [`INTERP_BIN_CEILING`]. Only the low
+    /// end is ever written; the rest is allocated once so the fill never has to
+    /// grow it.
+    bin_mag: Vec<f32>,
 }
 
 impl SpectrumAnalyzer {
@@ -87,6 +112,7 @@ impl SpectrumAnalyzer {
             window: Vec::new(),
             re: Vec::new(),
             im: Vec::new(),
+            bin_mag: Vec::new(),
         };
         analyzer.configure(DEFAULT_FFT_SIZE);
         analyzer
@@ -107,6 +133,7 @@ impl SpectrumAnalyzer {
             .collect();
         self.re = vec![0.0; fft_size];
         self.im = vec![0.0; fft_size];
+        self.bin_mag = vec![0.0; fft_size / 2];
     }
 
     /// Change the analysis window length (a power of two): longer =
@@ -174,11 +201,11 @@ impl SpectrumAnalyzer {
     /// spectrum onto the log-pitch axis, rather than depositing only the
     /// peaks. A bucket wider than the FFT's bin spacing takes the loudest
     /// bin inside it; a narrower one (which is most of the axis: buckets
-    /// and bins are equal width around 3.2 kHz, and below that the bucket
-    /// is finer) interpolates between the two bins either side. MAX and
-    /// not a sum, so the level a bucket reports doesn't grow with how many
-    /// bins happen to fall in it and 0 dB keeps meaning a full-scale sine
-    /// at every pitch.
+    /// and bins are equal width at [`INTERP_BIN_CEILING`], and below that
+    /// the bucket is finer) reconstructs the spectrum between the bins —
+    /// see [`reconstruct`]. MAX and not a sum, so the level a bucket
+    /// reports doesn't grow with how many bins happen to fall in it and
+    /// 0 dB keeps meaning a full-scale sine at every pitch.
     ///
     /// This replaced a peak-only fill, which deposited each local maximum
     /// at a parabolically refined frequency across the two nearest
@@ -210,14 +237,30 @@ impl SpectrumAnalyzer {
         let window_sum: f32 = self.window.iter().sum();
         let norm = 2.0 / window_sum;
 
+        // The buckets are POWER and every branch below produces `|X|^2` without
+        // ever taking a root, so the normalization is squared once here instead.
+        let norm_power = norm * norm;
+
         let bin_hz = self.sample_rate / self.fft_size as f32;
-        let mag = |k: usize| (self.re[k] * self.re[k] + self.im[k] * self.im[k]).sqrt();
+        let power = |re: &[f32], im: &[f32], k: usize| re[k] * re[k] + im[k] * im[k];
         // Usable bins: skip DC and bin 1 (where the window's own leakage
         // dominates) and stay clear of Nyquist. Anything the axis asks for
         // outside this reads as nothing, which is the truth — a 4096-point
         // window at 48 kHz cannot see 20 Hz at all.
         let (first, last) = (2usize, self.fft_size / 2 - 2);
         let half_bucket = 0.5 / BINS_PER_SEMITONE as f32;
+
+        // Magnitudes for the reconstructing branch alone (hence
+        // [`INTERP_BIN_CEILING`] rather than the whole spectrum). Once per BIN
+        // and not once per bucket: below the crossover the axis is finer than
+        // the FFT, by a hundredfold and more at the bottom of it, so a great
+        // many buckets read the same four bins and each would otherwise pay for
+        // the same four square roots.
+        let mag_to = (INTERP_BIN_CEILING + 1).min(last + 1);
+        for k in first..mag_to {
+            self.bin_mag[k] = power(&self.re, &self.im, k).sqrt();
+        }
+        let bin_mag = &self.bin_mag[..mag_to];
 
         let mut buckets = [0.0f32; SPECTRUM_BINS];
         for (b, out) in buckets.iter_mut().enumerate() {
@@ -226,26 +269,101 @@ impl SpectrumAnalyzer {
             let x0 = midi_to_hz(midi - half_bucket) / bin_hz;
             let x1 = midi_to_hz(midi + half_bucket) / bin_hz;
             let (k0, k1) = (x0.ceil(), x1.floor());
-            let m = if k1 >= k0 && k0 >= first as f32 && k1 <= last as f32 {
+            let p = if k1 >= k0 && k0 >= first as f32 && k1 <= last as f32 {
                 // Wider than the bin spacing: the loudest bin it contains.
                 let (k0, k1) = (k0 as usize, k1 as usize);
-                (k0..=k1).fold(0.0f32, |acc, k| acc.max(mag(k)))
+                (k0..=k1).fold(0.0f32, |acc, k| acc.max(power(&self.re, &self.im, k)))
             } else {
-                // Narrower: read the spectrum between the two bins either
-                // side of the bucket's center, so the log axis comes out
-                // smooth instead of combed where it outruns the FFT.
+                // Narrower: reconstruct the spectrum between the bins either
+                // side of the bucket's center, so the log axis comes out smooth
+                // instead of combed where it outruns the FFT.
                 let x = midi_to_hz(midi) / bin_hz;
                 let k = x.floor();
-                if k < first as f32 || k + 1.0 > last as f32 {
+                // The cubic reads a bin either side of that pair, so it needs
+                // one more at each end than a straight read between them would.
+                if k < (first + 1) as f32 || k + 2.0 > last as f32 {
                     continue;
                 }
-                let (k, frac) = (k as usize, x - k);
-                mag(k) * (1.0 - frac) + mag(k + 1) * frac
+                let k = k as usize;
+                let m = reconstruct(bin_mag, k, x - k as f32);
+                m * m
             };
-            *out = (m * norm) * (m * norm);
+            *out = p * norm_power;
         }
         Some(buckets)
     }
+}
+
+/// The spectrum's magnitude between bins `k` and `k + 1`, `t` of the way across:
+/// a SHAPE-PRESERVING cubic through the four bins `k - 1 ..= k + 2` of
+/// `bin_mag`.
+///
+/// A straight line between the two bins is the obvious form and reads visibly
+/// wrong, because it is the CHORD of a curve that is convex almost everywhere
+/// across a main lobe: it under-reads between every pair of bins and then snaps
+/// back onto the curve at each of them. That is a facet per bin along the whole
+/// stretch of the axis the FFT does not resolve — which is most of it — and it
+/// is worst exactly where the axis is finest.
+///
+/// **Monotone tangents** (Fritsch-Carlson: the harmonic mean of the secants
+/// either side, zeroed wherever they disagree in sign) are what make a cubic
+/// safe here, and they are not a refinement — an ordinary cubic is unusable. A
+/// main lobe's skirt drops steeply enough between adjacent bins that a form with
+/// negative weights rings: a Catmull-Rom through these same four bins draws a
+/// partial sitting ON a bin as a ring 1.42 dB ABOVE it with a notch at its true
+/// peak, which is a shape the sound does not have. Shape-preserving tangents
+/// bound every value inside the pair it sits between, so no reconstruction can
+/// invent a level neither bin holds.
+///
+/// Continuity across the knots is the other half, and rules out the textbook
+/// three-point parabola about the NEAREST bin: right for locating a peak, wrong
+/// for drawing a curve, being discontinuous wherever the nearest bin changes —
+/// it would trade a facet at every bin for a STEP at every half-bin. This passes
+/// through the bins and matches slope across them.
+///
+/// **In magnitude, and that is measured rather than assumed.** dB is the
+/// tempting domain, being the one the picture is drawn in and the one a main
+/// lobe is nearly parabolic in, and it is indeed slightly better ACROSS THE TOP
+/// of a ridge. It is catastrophic anywhere else: a windowed sinusoid's transform
+/// has true zeros between bins, and a zero in dB is a pole, so at a partial
+/// sitting exactly on a bin — where a Hann window nulls at every OTHER bin — the
+/// reconstruction of its skirt collapses. Against the exact windowed transform,
+/// over the buckets within 25 dB of the peak, RMS error in dB:
+///
+/// | partial's offset from a bin | 0 | 0.2 | 0.35 | 0.5 |
+/// |---|---|---|---|---|
+/// | straight line, in magnitude | 2.16 | 2.13 | 1.85 | 1.62 |
+/// | this, in magnitude | **0.54** | **1.30** | **1.38** | **1.39** |
+/// | this, in power | 2.64 | 2.25 | 1.94 | 1.84 |
+/// | this, in dB | 81.63 | 1.46 | 1.22 | 1.25 |
+///
+/// Magnitude is the only one of the three better than a straight line at every
+/// offset. `the_reconstruction_beats_a_straight_line_between_bins` is that table
+/// as an assertion.
+///
+/// What none of them do is undo the window's scalloping loss: a partial exactly
+/// between two bins reads up to 1.42 dB under its true height, because that is
+/// what the bins either side of it report and nothing between them says
+/// otherwise. Recovering it means reaching ABOVE the bins, which is the ringing
+/// above — and 1.42 dB is 2% of the display's default range, against a ring that
+/// is a feature the sound does not have.
+fn reconstruct(bin_mag: &[f32], k: usize, t: f32) -> f32 {
+    // The upper pair is clamped rather than guarded because the only caller
+    // reaching the end of the array is a bucket at the very top of the
+    // reconstructing range, where the two bins beyond it are its own neighbours
+    // to within far less than the picture resolves.
+    let mag = |i: usize| bin_mag[i.min(bin_mag.len() - 1)];
+    let (a, b, c, d) = (mag(k - 1), mag(k), mag(k + 1), mag(k + 2));
+    // Zero at a turning point, so an extremum stays where the bins put it.
+    let tangent = |p: f32, q: f32| if p * q > 0.0 { 2.0 * p * q / (p + q) } else { 0.0 };
+    let (m0, m1) = (tangent(b - a, c - b), tangent(c - b, d - c));
+    let (t2, t3) = (t * t, t * t * t);
+    debug_assert!((0.0..=1.0).contains(&t), "the cubic is only monotone on its own interval");
+    // Cubic Hermite on the unit interval: value and tangent at each end.
+    b * (2.0 * t3 - 3.0 * t2 + 1.0)
+        + m0 * (t3 - 2.0 * t2 + t)
+        + c * (3.0 * t2 - 2.0 * t3)
+        + m1 * (t3 - t2)
 }
 
 /// One [`SpectrumAnalyzer`] per input channel, combined into the single
@@ -491,6 +609,135 @@ mod tests {
             "amplitude 0.8 should read ~0.64 at its pitch, got {}",
             buckets[peak]
         );
+    }
+
+    /// The reconstruction is continuous where it changes which bins it reads,
+    /// and passes through them.
+    ///
+    /// The first rules out the textbook three-point parabola about the NEAREST
+    /// bin, which is discontinuous at every half-bin and would trade the facet
+    /// it was brought in to remove for a step of its own. The second is what
+    /// stops the first from being satisfied by a form that agrees with itself
+    /// and with nothing else.
+    #[test]
+    fn the_reconstruction_has_no_seam_at_a_bin() {
+        // Curvature and asymmetry either side of every knot, so a form with a
+        // seam in it has nowhere to hide.
+        let bins: Vec<f32> = (0..12).map(|k| ((k * k * 7 % 23) as f32) * 0.1).collect();
+        for k in 1..bins.len() - 3 {
+            let end = reconstruct(&bins, k, 1.0);
+            let start = reconstruct(&bins, k + 1, 0.0);
+            assert_eq!(end, start, "a seam at bin {}", k + 1);
+            assert!((end - bins[k + 1]).abs() <= 1e-6, "bin {} reads {end}", k + 1);
+        }
+    }
+
+    /// The reconstruction never invents a level neither of the bins it sits
+    /// between holds.
+    ///
+    /// The property that makes a cubic usable at all here, and the one an
+    /// ordinary cubic fails: through the same four bins, a Catmull-Rom draws a
+    /// partial sitting ON a bin as a ring 1.42 dB above it with a notch at its
+    /// true peak. Swept over every shape three steps can make, so a form that
+    /// only rings on steep ones is caught too.
+    #[test]
+    fn the_reconstruction_never_overshoots_the_bins_it_reads() {
+        // Every shape three steps can make, up and down, gentle and cliff-edged
+        // — so a form that only rings on the steep ones is caught too.
+        let steps = [0.0f32, 0.001, 0.05, 0.4, 1.0];
+        let signed = |v: f32, up: bool| if up { v } else { -v };
+        for &p in &steps {
+            for &q in &steps {
+                for &r in &steps {
+                    for dirs in 0..8u8 {
+                        let up = |i: u8| dirs & (1 << i) == 0;
+                        let mut bins = [1.0f32; 4];
+                        for (i, &d) in [p, q, r].iter().enumerate() {
+                            bins[i + 1] = bins[i] + signed(d, up(i as u8));
+                        }
+                        if bins.iter().any(|v| *v < 0.0) {
+                            continue; // magnitudes only
+                        }
+                        let (lo, hi) = (bins[1].min(bins[2]), bins[1].max(bins[2]));
+                        for i in 0..=20 {
+                            let v = reconstruct(&bins, 1, i as f32 / 20.0);
+                            assert!(
+                                v >= lo - 1e-5 && v <= hi + 1e-5,
+                                "{bins:?} reconstructed {v} outside {lo}..{hi}",
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// The reconstruction tracks the exact windowed transform BETTER THAN A
+    /// STRAIGHT LINE between the bins, at every offset a partial can sit at.
+    ///
+    /// This is the whole claim [`reconstruct`] makes, and the table in its docs
+    /// is this measurement written out. The reference is the analyzed window's
+    /// own transform evaluated at each bucket's exact frequency — the curve the
+    /// FFT sampled and the reconstruction is trying to put back — rather than a
+    /// second approximation of it.
+    ///
+    /// Judged over the buckets within `RIDGE_DB` of the peak, which is the ridge
+    /// as the picture draws it. Further down, the transform dives into nulls
+    /// that fall BETWEEN bins: nothing reading only the bins can reconstruct
+    /// those, so every candidate is equally wrong about a stretch that is drawn
+    /// as silence either way, and including it would compare noise.
+    #[test]
+    fn the_reconstruction_beats_a_straight_line_between_bins() {
+        const RIDGE_DB: f64 = -25.0;
+        let sr = 48_000.0f64;
+        let n = DEFAULT_FFT_SIZE;
+        let bin_hz = sr / n as f64;
+        let amp = 0.8f64;
+        for &off in &[0.0f64, 0.2, 0.35, 0.5] {
+            let f = (75.0 + off) * bin_hz;
+            let got = analyze(&[(f as f32, amp as f32)], sr as f32);
+            // The exact windowed transform at any bin coordinate, over the same
+            // 8192 samples the analyzer kept (`analyze` pushes 1234 past them).
+            let exact = |x: f64| -> f64 {
+                let (mut re, mut im) = (0.0, 0.0);
+                for i in 0..n {
+                    let w = 0.5 * (1.0 - (std::f64::consts::TAU * i as f64 / n as f64).cos());
+                    let s = amp * (std::f64::consts::TAU * f * (i + 1234) as f64 / sr).sin();
+                    let ang = -std::f64::consts::TAU * x * i as f64 / n as f64;
+                    re += w * s * ang.cos();
+                    im += w * s * ang.sin();
+                }
+                let norm = 4.0 / n as f64;
+                (re * re + im * im) * norm * norm
+            };
+            let (mut mine, mut chord_sq, mut count) = (0.0f64, 0.0f64, 0usize);
+            let peak = peak_bucket(&got);
+            let lowest = peak - 40;
+            for (i, &reading) in got[lowest..=peak + 40].iter().enumerate() {
+                let b = lowest + i;
+                let midi = SPECTRUM_MIN_MIDI + (b as f32 + 0.5) / BINS_PER_SEMITONE as f32;
+                let x = midi_to_hz(midi) as f64 / bin_hz;
+                let truth = exact(x);
+                if 10.0 * (truth / (amp * amp)).log10() < RIDGE_DB {
+                    continue;
+                }
+                let (k, frac) = (x.floor(), x - x.floor());
+                // What a straight line between the two bins would have said.
+                let chord = exact(k).sqrt() * (1.0 - frac) + exact(k + 1.0).sqrt() * frac;
+                let err_db = |v: f64| (10.0 * (v / truth).log10()).powi(2);
+                mine += err_db(reading as f64);
+                chord_sq += err_db(chord * chord);
+                count += 1;
+            }
+            let rms = |s: f64| (s / count as f64).sqrt();
+            assert!(
+                rms(mine) < rms(chord_sq),
+                "at offset {off} from a bin: {:.2} dB RMS over {count} buckets, \
+                 against a straight line's {:.2} dB",
+                rms(mine),
+                rms(chord_sq),
+            );
+        }
     }
 
     #[test]
