@@ -141,18 +141,23 @@ pub struct FontAtlas {
 ///
 /// `atlas` and `marks` are `None` on the frames where the sheet in question
 /// has not changed, which is nearly all of them.
+///
+/// `slide` is the axis this pane's text scrolls along, which the reconstruction
+/// filter follows — see [`SlideAxis`].
+#[allow(clippy::too_many_arguments)]
 pub fn text_paint_callback(
     rect: egui::Rect,
     glyphs: Vec<GlyphInstance>,
     rings: [TextRing; 2],
     atlas: Option<FontAtlas>,
     marks: Option<FontAtlas>,
+    slide: SlideAxis,
     target_format: wgpu::TextureFormat,
     pane_id: u64,
 ) -> egui::PaintCallback {
     egui_wgpu::Callback::new_paint_callback(
         rect,
-        TextCallback { glyphs, rings, atlas, marks, target_format, pane_id },
+        TextCallback { glyphs, rings, atlas, marks, slide, target_format, pane_id },
     )
 }
 
@@ -161,6 +166,7 @@ struct TextCallback {
     rings: [TextRing; 2],
     atlas: Option<FontAtlas>,
     marks: Option<FontAtlas>,
+    slide: SlideAxis,
     target_format: wgpu::TextureFormat,
     pane_id: u64,
 }
@@ -182,13 +188,64 @@ pub(crate) struct TextUniforms {
     /// sit together rather than each beside what it belongs to.
     pub(crate) atlas_size: [f32; 2],
     pub(crate) mark_atlas_size: [f32; 2],
+    /// The axis this surface's labels slide along — see [`SlideAxis`], and
+    /// `FILTER_TAP` in the shader for what is done with it.
+    pub(crate) filter_axis: [f32; 2],
     pub(crate) pixels_per_point: f32,
-    /// WGSL aligns a `vec4<f32>` to 16 bytes, so the rings start at 32 and
+    /// WGSL aligns a `vec4<f32>` to 16 bytes, so the rings start at 48 and
     /// this is the gap in front of them. Named rather than derived because
     /// the mismatch is a validation error at first paint, not a compile one.
-    pub(crate) _pad: f32,
+    pub(crate) _pad: [f32; 3],
     pub(crate) ring0: [f32; 4],
     pub(crate) ring1: [f32; 4],
+}
+
+/// Which screen axis a surface's labels TRAVEL along, for the two taps
+/// `coverage` reconstructs a glyph through.
+///
+/// A closed pair rather than a bare vector, and it is the `Default` that earns
+/// it: the filter's two taps sit at `±FILTER_TAP` ALONG this, so a zero here
+/// is not a neutral value but both taps in the same place — the single tap the
+/// pair exists to replace, restored silently and measurable only on a GPU
+/// probe. Nothing that derives `Default` can reach that.
+///
+/// Only the two axes, because only the two exist: type runs across the screen
+/// and its sheets' texels are square with it, so a label travels along one or
+/// the other. A diagonal would be the lattice's orbiting camera, and it wants
+/// a decision about cost rather than a value here (see `FILTER_TAP`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SlideAxis {
+    /// Across the screen — the default, and what every surface takes whose
+    /// text does not scroll.
+    #[default]
+    Across,
+    /// Up and down it: the analyzer with its now-line at the top or bottom,
+    /// where time runs down the pane and the names ride it.
+    Down,
+}
+
+impl SlideAxis {
+    /// `Down` when the surface's text scrolls vertically, `Across` otherwise.
+    pub fn vertical(down: bool) -> Self {
+        if down {
+            Self::Down
+        } else {
+            Self::Across
+        }
+    }
+
+    /// The unit vector, as the shader takes it.
+    ///
+    /// Public because it is the only reading of this type that cannot be
+    /// cancelled: a caller checking its own choice against
+    /// [`vertical`](Self::vertical) is checking a constructor against itself,
+    /// and passes whichever way that constructor maps its argument.
+    pub fn unit(self) -> [f32; 2] {
+        match self {
+            Self::Across => [1.0, 0.0],
+            Self::Down => [0.0, 1.0],
+        }
+    }
 }
 
 impl TextUniforms {
@@ -712,8 +769,9 @@ impl CallbackTrait for TextCallback {
             ],
             atlas_size: [sizes[0], sizes[1]],
             mark_atlas_size: [sizes[2], sizes[3]],
+            filter_axis: self.slide.unit(),
             pixels_per_point: ppp,
-            _pad: 0.0,
+            _pad: [0.0; 3],
             ring0: TextUniforms::ring(self.rings[0]),
             ring1: TextUniforms::ring(self.rings[1]),
         };
@@ -894,23 +952,26 @@ pub(crate) mod tests {
         glyph: GlyphInstance,
         rings: [TextRing; 2],
     ) -> Vec<u8> {
-        draw_from(device, queue, glyph, rings, atlas())
+        draw_from(device, queue, glyph, rings, atlas(), SlideAxis::default())
     }
 
-    /// The same, off a sheet the caller names — for a fixture whose ink has
-    /// to be a shape [`atlas`]'s opaque square is not.
+    /// The same, off a sheet the caller names and along the axis it names —
+    /// for a fixture whose ink has to be a shape [`atlas`]'s opaque square is
+    /// not, or whose travel is not the default one.
     fn draw_from(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         glyph: GlyphInstance,
         rings: [TextRing; 2],
         sheet: FontAtlas,
+        slide: SlideAxis,
     ) -> Vec<u8> {
         let cb = TextCallback {
             glyphs: vec![glyph],
             rings,
             atlas: Some(sheet),
             marks: None,
+            slide,
             target_format: FORMAT,
             pane_id: 0,
         };
@@ -1045,6 +1106,7 @@ pub(crate) mod tests {
             rings: bare,
             atlas: Some(atlas()),
             marks: Some(mark_sheet()),
+            slide: SlideAxis::default(),
             target_format: FORMAT,
             pane_id: 0,
         };
@@ -1132,6 +1194,7 @@ pub(crate) mod tests {
             ],
             atlas: Some(FontAtlas { image: std::sync::Arc::new(image), key: 1 }),
             marks: None,
+            slide: SlideAxis::default(),
             target_format: FORMAT,
             pane_id: 0,
         };
@@ -1238,6 +1301,7 @@ pub(crate) mod tests {
             rings: bare,
             atlas,
             marks: None,
+            slide: SlideAxis::default(),
             target_format: FORMAT,
             pane_id,
         };
@@ -1309,6 +1373,7 @@ pub(crate) mod tests {
                 rings: bare,
                 atlas: None,
                 marks: None,
+                slide: SlideAxis::default(),
                 target_format: FORMAT,
                 pane_id: 0,
             },
@@ -1447,6 +1512,23 @@ pub(crate) mod tests {
         FontAtlas { image: std::sync::Arc::new(image), key: 2 }
     }
 
+    /// The same hairline turned on its side: one opaque texel ROW, eight
+    /// across, in the same transparent surround.
+    ///
+    /// What a stroke reads as when the motion is vertical, and `♯` is the
+    /// mark it is drawn from — its two bars are horizontal, so they are to a
+    /// roll running time DOWN the pane what the uprights are to one running it
+    /// across. Sampling is separable, so nothing about the sideways reading
+    /// carries over to this one: the two axes pass or fail independently, and
+    /// that is the whole point of having both fixtures.
+    fn hairline_sheet_across() -> FontAtlas {
+        let mut image = egui::ColorImage::filled([32, 32], egui::Color32::TRANSPARENT);
+        for x in 8..16 {
+            image[(x, 8)] = egui::Color32::WHITE;
+        }
+        FontAtlas { image: std::sync::Arc::new(image), key: 3 }
+    }
+
     /// A stroke a pixel wide keeps its weight as it slides, instead of
     /// tightening and loosening once per pixel it crosses.
     ///
@@ -1481,42 +1563,75 @@ pub(crate) mod tests {
     /// [`a_glyph_paints_its_ink_and_the_rim_stands_outside_it`]. Read the two
     /// together before touching either: this one alone would go on passing
     /// with the rim back at a single tap.
+    ///
+    /// BOTH axes, because the filter is one-dimensional and separable, so a
+    /// pass on one says nothing at all about the other. A stroke sliding along
+    /// the axis the pane did NOT name reads the single tap's full swing — that
+    /// is the whole of what [`SlideAxis`] carries. Running the sideways case
+    /// alone leaves two of the analyzer's four orientations shimmering and
+    /// reports a pass, which is the reading this fixture exists to deny.
     #[test]
     fn a_sliding_hairline_keeps_its_weight() {
         let Some((device, queue)) = headless_device() else {
             return;
         };
         let rings = [TextRing::default(); 2];
-        let hairline = || GlyphInstance {
-            rect: [24.0, 24.0, 1.0, 8.0],
-            uv: [8.0, 8.0, 9.0, 16.0],
+        let ink = |rect: [f32; 4], uv: [f32; 4]| GlyphInstance {
+            rect,
+            uv,
             fill: [255, 255, 255, 255],
             rim: [0, 0, 0, 0],
             atlas: GlyphInstance::TYPE,
         };
         const STEPS: u32 = 16;
-        let smear: Vec<f32> = (0..STEPS)
-            .map(|step| {
-                let mut sliding = hairline();
-                sliding.rect[0] += step as f32 / STEPS as f32;
-                draw_from(&device, &queue, sliding, rings, hairline_sheet())
+        // Each case: which way the pane says its text travels, the fixture at
+        // rest, the sheet it is cut from, and which of `rect`'s two position
+        // components the walk moves.
+        let cases = [
+            (
+                SlideAxis::Across,
+                ink([24.0, 24.0, 1.0, 8.0], [8.0, 8.0, 9.0, 16.0]),
+                hairline_sheet(),
+                0,
+            ),
+            (
+                SlideAxis::Down,
+                ink([24.0, 24.0, 8.0, 1.0], [8.0, 8.0, 16.0, 9.0]),
+                hairline_sheet_across(),
+                1,
+            ),
+        ];
+        for (slide, hairline, sheet, axis) in cases {
+            let smear: Vec<f32> = (0..STEPS)
+                .map(|step| {
+                    let mut sliding = hairline;
+                    sliding.rect[axis] += step as f32 / STEPS as f32;
+                    draw_from(
+                        &device,
+                        &queue,
+                        sliding,
+                        rings,
+                        FontAtlas { image: sheet.image.clone(), key: sheet.key },
+                        slide,
+                    )
                     .chunks(4)
                     .map(|px| {
                         let a = px[3] as f32 / 255.0;
                         a * (1.0 - a)
                     })
                     .sum()
-            })
-            .collect();
-        let hi = smear.iter().copied().fold(0.0f32, f32::max);
-        let lo = smear.iter().copied().fold(f32::INFINITY, f32::min);
-        assert!(hi > 0.0, "the hairline drew nothing at any phase");
-        let swing = (hi - lo) / hi;
-        assert!(
-            swing <= 0.40,
-            "a hairline's partial coverage swings {:.1}% of itself across one pixel of \
-             travel ({lo:.2}..{hi:.2}): the stroke changes weight as it slides",
-            100.0 * swing,
-        );
+                })
+                .collect();
+            let hi = smear.iter().copied().fold(0.0f32, f32::max);
+            let lo = smear.iter().copied().fold(f32::INFINITY, f32::min);
+            assert!(hi > 0.0, "the {slide:?} hairline drew nothing at any phase");
+            let swing = (hi - lo) / hi;
+            assert!(
+                swing <= 0.40,
+                "a hairline's partial coverage swings {:.1}% of itself across one pixel of \
+                 travel ({lo:.2}..{hi:.2}) on {slide:?}: the stroke changes weight as it slides",
+                100.0 * swing,
+            );
+        }
     }
 }

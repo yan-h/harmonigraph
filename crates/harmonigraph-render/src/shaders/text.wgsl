@@ -32,10 +32,18 @@ struct Locals {
     atlas_size: vec2<f32>,
     /// And the drawn marks' own sheet, the same way.
     mark_atlas_size: vec2<f32>,
+    /// The screen axis this pane's labels TRAVEL along, as a unit vector —
+    /// where `coverage` puts its two taps. See `FILTER_TAP`, which is how far
+    /// along it they sit and why one axis rather than both.
+    filter_axis: vec2<f32>,
     /// Physical pixels per point: both sheets are rasterized at device scale,
     /// so this converts a rim radius in points into a texel offset.
     pixels_per_point: f32,
-    _pad: f32,
+    /// WGSL aligns a `vec4<f32>` to 16 bytes, so the rings start at 48 and
+    /// these three are the gap in front of them.
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
     /// The rim's two rings, as (radius in points, stamp alpha, samples, 0).
     /// Zero samples is a ring that isn't drawn.
     ring0: vec4<f32>,
@@ -194,21 +202,27 @@ const PATCH_MARGIN: f32 = 0.5;
 /// every letter, digit and lattice name keeps a peak of 1.00 and improves
 /// besides.
 ///
-/// ONE axis, and x specifically, which covers the roll as it is normally set
-/// rather than as it can be. Time runs ACROSS the pane in the two
-/// orientations either side of the default, and the names ride the time axis,
-/// so sideways is the whole of their motion: a name's pitch is where it sits,
-/// and it is time that scrolls. Turn the now-line to the top or the bottom and
-/// time runs DOWN the pane instead — bilinear is separable, so offsetting in x
-/// leaves the y response its full swing, and those two orientations shimmer as
-/// they did. Issue #311 holds that, along with the lattice's own names, which
-/// an orbiting camera moves both ways at once.
+/// ONE axis, and the caller's rather than x, because which way a label
+/// travels is a property of the pane and not of the filter. The roll's names
+/// ride the time axis: with the now-line at the left or the right, time runs
+/// ACROSS the pane and their whole motion is sideways; turn it to the top or
+/// the bottom and time runs DOWN it instead. Bilinear is separable —
+/// `B(x,y) = Bx(x)·By(y)` — so offsetting in x changes the x factor alone and
+/// leaves the y response its full swing, which is a filter that helps in two
+/// of the four orientations and does nothing in the other two. `filter_axis`
+/// is that choice, made once per pane in `Locals`.
 ///
-/// Not answered by taking a second pair of taps up and down. Isotropic is
-/// worth 0.2 of a point on the reading above and costs the flat 15% of its
-/// contrast and the count digits 14%, so it buys the orientations nobody is in
-/// by taxing the one they are — everywhere, including a 30pt lattice name that
-/// swings 0.6% and has nothing to fix.
+/// Not answered by taking a second pair of taps up and down instead. Isotropic
+/// is worth 0.2 of a point on the reading above and costs the flat 15% of its
+/// contrast and the count digits 14%, so it would buy the second axis by
+/// taxing the first — everywhere, including a 30pt lattice name that swings
+/// 0.6% and has nothing to fix.
+///
+/// The lattice takes x for want of an answer rather than as one: an orbiting
+/// camera moves a node name both ways at once, so it has no single travel
+/// axis, and at 30pt there is no measurable swing to spend a choice on. What
+/// that leaves open is the small end of its zoom, where the names are the roll
+/// mark's size and the motion is still diagonal — issue #311 holds it.
 ///
 /// A quarter texel, and no more, because [`PATCH_MARGIN`]'s bound is the
 /// wall — a filter reaching a whole texel out reads the glyph packed next
@@ -305,7 +319,10 @@ fn tap(in: VertexOut, texel: vec2<f32>) -> f32 {
 /// The bill is the rim's, and it is the honest cost of this: twenty stamps a
 /// fragment become forty taps. The fill's own second tap is free beside it.
 fn coverage(in: VertexOut, texel: vec2<f32>) -> f32 {
-    let off = vec2<f32>(FILTER_TAP, 0.0);
+    // Along the pane's own travel axis, which the sheets' texels are square
+    // with: a glyph's quad is axis-aligned and its atlas patch is upright, so
+    // a screen direction IS a texel direction and needs no rotating.
+    let off = FILTER_TAP * locals.filter_axis;
     return 0.5 * (tap(in, texel - off) + tap(in, texel + off));
 }
 

@@ -49,7 +49,7 @@ pub use roll::{roll_paint_callback, RollAxes, RollInstance};
 /// label costs is the rim, and the rim was the text drawn again once per
 /// stamp.
 mod text;
-pub use text::{text_paint_callback, FontAtlas, GlyphInstance, TextRing};
+pub use text::{text_paint_callback, FontAtlas, GlyphInstance, SlideAxis, TextRing};
 
 /// The lattice's own labels: the glyphs of every node name it wants drawn,
 /// and which node each of them belongs to.
@@ -89,6 +89,10 @@ pub struct LatticeLabels {
     pub atlas: Option<FontAtlas>,
     /// And the drawn marks' own sheet, on the frames it has moved.
     pub marks: Option<FontAtlas>,
+    /// The axis these names travel along, for the reconstruction filter — see
+    /// [`SlideAxis`]. `Across` here is the default for want of an answer: an
+    /// orbiting camera moves a node name both ways at once.
+    pub slide: SlideAxis,
 }
 
 /// One label: which node it names, and how many glyphs it is.
@@ -477,6 +481,8 @@ struct LatticeCallback {
     rings: [TextRing; 2],
     atlas: Option<FontAtlas>,
     marks: Option<FontAtlas>,
+    /// Which way these names travel, for the glyph shader's filter.
+    slide: SlideAxis,
     edges: Vec<GpuEdge>,
     uniforms: Uniforms,
     target_format: wgpu::TextureFormat,
@@ -732,6 +738,7 @@ impl LatticeCallback {
             rings: labels.rings,
             atlas: labels.atlas,
             marks: labels.marks,
+            slide: labels.slide,
             edges,
             uniforms: Uniforms {
                 view_proj: view_proj.to_cols_array(),
@@ -2005,8 +2012,9 @@ impl CallbackTrait for LatticeCallback {
                         screen_points: self.size_points,
                         atlas_size: [sheet_sizes[0], sheet_sizes[1]],
                         mark_atlas_size: [sheet_sizes[2], sheet_sizes[3]],
+                        filter_axis: self.slide.unit(),
                         pixels_per_point: screen_descriptor.pixels_per_point.max(f32::EPSILON),
-                        _pad: 0.0,
+                        _pad: [0.0; 3],
                         ring0: text::TextUniforms::ring(self.rings[0]),
                         ring1: text::TextUniforms::ring(self.rings[1]),
                     }),
