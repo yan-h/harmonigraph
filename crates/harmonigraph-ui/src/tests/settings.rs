@@ -266,6 +266,49 @@ fn the_video_pane_does_not_start_with_a_rule() {
     }
 }
 
+/// The standalone keeps the one render control it can act on, and neither shell
+/// grows a row the other should not have.
+///
+/// `render_controls` serves both shells out of one function, and which rows each
+/// gets is decided by where a single `if !supported { return }` sits: above the
+/// Spectrogram row the standalone loses it, below the row it keeps it. That is a
+/// line of ordering doing the work of a policy, and nothing else in the suite
+/// looks at it — hoisting that return two lines leaves all 439 tests green while
+/// the standalone silently loses its only say over what an offline render bakes,
+/// `RenderConfig::playhead` becoming unreachable from that shell entirely.
+///
+/// Both directions, because a gate is two claims: the Spectrogram row survives
+/// with no take support, and the rows that need a take to mean anything do not
+/// appear without one. `the_video_pane_does_not_start_with_a_rule` above is the
+/// only other test that draws this pane in the standalone, and it asks about the
+/// FIRST heading, so every row below it is unwatched.
+#[test]
+fn the_standalone_keeps_the_render_row_a_take_is_not_needed_for() {
+    // Shared by both shells: the section, the row, and the choice on it. The
+    // standalone has no transport to record with and still renders, so this is
+    // the one thing in Render it can act on.
+    for row in ["Render", "Spectrogram", "Live", "Playhead"] {
+        for supported in [true, false] {
+            let (shapes, _) = video_pane_shapes(supported);
+            assert!(
+                text_y(&shapes, row).is_some(),
+                "take.supported={supported}: the Video pane drew no {row:?}",
+            );
+        }
+    }
+    // Take-only, and gated on exactly the same flag: a shell that cannot record
+    // has nothing for these to describe.
+    for row in ["Finish", "Lead-in"] {
+        let (with, _) = video_pane_shapes(true);
+        assert!(text_y(&with, row).is_some(), "a recording shell drew no {row:?}");
+        let (without, _) = video_pane_shapes(false);
+        assert!(
+            text_y(&without, row).is_none(),
+            "the standalone drew {row:?}, which needs a take to mean anything",
+        );
+    }
+}
+
 /// The bar tracks a pane drew, by width.
 ///
 /// A `ValueBar`/`RangeBar` track is a `theme::ROW_HEIGHT`-tall rect in `well()`,
