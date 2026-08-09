@@ -65,8 +65,8 @@ break either, and both are easy to break by reflex.
 
 **Never run `cargo fmt`.** There is no `rustfmt.toml`, and the tree has
 never been through rustfmt, so rustfmt's idea of this code and the code
-have drifted a long way apart: `cargo fmt --check` currently wants 1346
-changes across 82 of the 89 files in `crates/`. Running it once would bury
+have drifted a long way apart: `cargo fmt --check` currently wants 1762
+changes across 83 of the 89 files in `crates/`. Running it once would bury
 whatever you actually changed under a whole-tree reformat that no reviewer
 can read past, which is why this is a ban rather than a preference. Match
 the surrounding style by hand, and wrap only the lines you write — about
@@ -98,8 +98,9 @@ with them most of what used to live here. What is left:
   `harmonigraph-plugin`'s `lib.rs` and `harmonigraph-take`'s `params.rs`),
   where the id is a live contract with the host's automation lane and the
   rename it outlived is the whole reason it looks wrong.
-- The note standing where the retired `node_style` key was, in `view.rs` —
-  the only surviving record of a set of seventeen, kept deliberately.
+- The note standing where the retired `node_style` key was, in
+  `harmonigraph-scene`'s `view.rs` — the only surviving record of a set of
+  seventeen, kept deliberately.
 - `DISPLAY_OVERSAMPLE` in `editor.rs`, which carries an explicit
   `HISTORICAL NOTE`: it exists to stop someone tightening the constant on
   reasoning that no longer holds.
@@ -114,12 +115,12 @@ in the exception; it is now the ordinary rot case, because no code reads an
 old blob differently. State what the value is and why, not which build wrote
 it.
 
-This matters more here than in most repos: comments are ~36% of the non-blank
-lines under `crates/`, a quarter of it doc comments, and the codebase is
-heavily rationale-driven, so a comment is often the only carrier of why the
-code is weird, and it acts as a tripwire against plausible-but-wrong
-"simplifications". New PRs keep regenerating the pattern, so this is a habit
-to maintain rather than a one-time cleanup.
+This matters more here than in most repos: comments are ~40% of the non-blank
+lines under `crates/` — doc comments alone are ~28% of every non-blank line —
+and the codebase is heavily rationale-driven, so a comment is often the only
+carrier of why the code is weird, and it acts as a tripwire against
+plausible-but-wrong "simplifications". New PRs keep regenerating the pattern,
+so this is a habit to maintain rather than a one-time cleanup.
 
 ## Backwards compatibility is not a constraint
 

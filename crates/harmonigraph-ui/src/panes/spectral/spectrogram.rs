@@ -370,7 +370,7 @@ struct ColumnColor {
 impl ColumnColor {
     fn new(cfg: &SpectrumConfig) -> ColumnColor {
         ColumnColor {
-            ramp: toneless_hues_folded(cfg.spectrogram_gradient.sanitized()),
+            ramp: what_decides_a_texel(cfg.spectrogram_gradient.sanitized()),
             floor_bits: cfg.floor_db.to_bits(),
             ceiling_bits: cfg.ceiling_db.to_bits(),
             tilt_bits: cfg.tilt.to_bits(),
@@ -378,16 +378,27 @@ impl ColumnColor {
     }
 }
 
-/// A gradient with its hue pair flattened when the gradient carries no chroma
-/// anywhere — the one case where two different keys name one picture.
+/// A gradient reduced to the knobs that actually decide a texel — the cases
+/// where two different gradients name one picture, and so have to be one key.
 ///
-/// At `chroma` and `chroma_ramp` both 0, `chroma_at` is 0 at every level, so the
-/// absolute chroma is 0 whatever the gamut holds, and Oklab's `a` and `b` are
-/// `c * cos(h)` and `c * sin(h)` — identically 0. Every texel is the same grey
-/// at every angle. That is the Mono preset, and the spectrum bar's track is a
-/// DRAG, so without this a gesture that changes not one byte re-blanks the whole
-/// ring on every frame of itself. `the_key_is_sensitive_to_every_input` holds
-/// both directions.
+/// There are two, one per axis, and each is an axis collapsing to a point:
+///
+/// - **No chroma anywhere.** At `chroma` and `chroma_ramp` both 0, `chroma_at`
+///   is 0 at every level, so the absolute chroma is 0 whatever the gamut holds,
+///   and Oklab's `a` and `b` are `c * cos(h)` and `c * sin(h)` — identically 0.
+///   Every texel is the same grey at every angle, and the HUE pair decides
+///   nothing. That is the Mono preset.
+/// - **A brightness pair closed on either end of the `L*` axis.** `HUE_FLOOR` is
+///   0 at both 0 and 100, so `chroma_of` answers 0 for every fraction and every
+///   hue, and `oklab_srgb` is black at 0 and white at 100 whichever way the arc
+///   runs. Here the CHROMA pair decides nothing either, so both fold.
+///
+/// Both are drags a reader is dialling their way OUT of, which is what makes
+/// them worth folding rather than curiosities: the bars that reach them are the
+/// bars that fix them. Every preset opens with silence at `L*` 0 and
+/// `Spread::snapped` rounds to whole units, so the second is landed on exactly
+/// and in one gesture rather than by luck.
+/// `the_key_is_sensitive_to_every_input` holds both directions of both.
 ///
 /// **Here and not in [`Gradient::sanitized`]**, which is the tempting place and
 /// the wrong one. Sanitize's answer is what the BARS read back and write, so
@@ -396,11 +407,20 @@ impl ColumnColor {
 /// chroma bar is next raised off 0. `SpectrogramPreset::Mono` writes one
 /// deliberately. The key's question is not "is this legal" but "does this decide
 /// a texel", and only the key may answer it.
-fn toneless_hues_folded(g: Gradient) -> Gradient {
-    if g.chroma == 0.0 && g.chroma_ramp == 0.0 {
-        Gradient { hue_start: 0.0, hue_span: 0.0, ..g }
-    } else {
-        g
+fn what_decides_a_texel(g: Gradient) -> Gradient {
+    let toneless = g.chroma == 0.0 && g.chroma_ramp == 0.0;
+    // The ends of the axis, and only the ends: a pair closed anywhere BETWEEN
+    // them still draws a colour, so the hues decide a texel there. `sanitized`
+    // is what makes the equality safe to write — it holds `lightness` inside
+    // 0..=100 and keeps a -0.0 out of the ramp, so a pair at the wall lands on
+    // exactly these two numbers.
+    let unlit = g.lightness_ramp == 0.0 && (g.lightness == 0.0 || g.lightness == 100.0);
+    match (toneless, unlit) {
+        (_, true) => {
+            Gradient { hue_start: 0.0, hue_span: 0.0, chroma: 0.0, chroma_ramp: 0.0, ..g }
+        }
+        (true, false) => Gradient { hue_start: 0.0, hue_span: 0.0, ..g },
+        (false, false) => g,
     }
 }
 
@@ -2945,6 +2965,47 @@ mod tests {
                  was still good",
             );
         }
+        // And the same fact reached along the OTHER axis: a Brightness pair
+        // closed on either end of the `L*` axis. `HUE_FLOOR` is 0 at both 0 and
+        // 100, so `chroma_of` answers 0 for every fraction and every hue, and
+        // `oklab_srgb` is black (white at 100) whichever way the arc runs — the
+        // whole heatmap is one colour, and neither the hue pair nor the chroma
+        // pair decides a texel of it.
+        //
+        // Reachable in one gesture and landed on exactly, not by luck:
+        // `Spread::snapped` rounds both handles to whole `L*`, and every preset
+        // already opens with silence at 0, so closing the pair down to the wall
+        // is where a reader ends up. Reaching for the hue track or the Chroma
+        // bar to get back OUT is then a drag that re-blanks the ring every frame
+        // while changing not one byte.
+        for l in [0.0f32, 100.0] {
+            let flat = SpectrumConfig {
+                spectrogram_gradient: Gradient {
+                    lightness: l,
+                    lightness_ramp: 0.0,
+                    chroma: 0.5,
+                    chroma_ramp: 0.0,
+                    hue_start: 40.0,
+                    hue_span: 120.0,
+                },
+                ..cfg
+            };
+            for edit in [
+                |g: &mut Gradient| g.hue_start = (g.hue_start + 90.0).rem_euclid(360.0),
+                |g: &mut Gradient| g.hue_span = -300.0,
+                |g: &mut Gradient| g.chroma = 0.9,
+                |g: &mut Gradient| g.chroma_ramp = 0.2,
+            ] {
+                let mut moved = flat;
+                edit(&mut moved.spectrogram_gradient);
+                assert_eq!(
+                    style(100, 0.1, 40.0, 48.0, &moved),
+                    style(100, 0.1, 40.0, 48.0, &flat),
+                    "at a Brightness pair closed on L* {l} the picture is one colour, and a \
+                     drag on the hue or the chroma re-blanks the whole texture every frame",
+                );
+            }
+        }
         // The converse, so the normalisation cannot be a blanket "ignore the
         // hues": a picture WITH chroma still watches them.
         let mut coloured = toneless;
@@ -2954,6 +3015,28 @@ mod tests {
         assert_ne!(
             style(100, 0.1, 40.0, 48.0, &turned),
             style(100, 0.1, 40.0, 48.0, &coloured),
+            "the ring would carry a stale texture forward",
+        );
+        // And the converse of the fold above: a brightness pair closed anywhere
+        // BETWEEN the ends still draws a colour, so the hues decide a texel
+        // there and the key has to watch them. Without this the fold could be a
+        // blanket "ignore a flat ramp".
+        let mid = SpectrumConfig {
+            spectrogram_gradient: Gradient {
+                lightness: 50.0,
+                lightness_ramp: 0.0,
+                chroma: 0.5,
+                chroma_ramp: 0.0,
+                hue_start: 40.0,
+                hue_span: 120.0,
+            },
+            ..cfg
+        };
+        let mut mid_turned = mid;
+        mid_turned.spectrogram_gradient.hue_start += 90.0;
+        assert_ne!(
+            style(100, 0.1, 40.0, 48.0, &mid_turned),
+            style(100, 0.1, 40.0, 48.0, &mid),
             "the ring would carry a stale texture forward",
         );
 

@@ -432,8 +432,8 @@ fn spectrum_group(ui: &mut egui::Ui, view: &mut ViewConfig) {
          carry the pitch alone.",
     );
     SpreadBar::chroma(&mut view.pitch_gradient).show(ui).on_hover_text(
-        "The stretch of color the pitch range spends, each end as a share of \
-         the most that note's own brightness and hue can hold — 100% is as \
+        "The stretch of color the pitch range spends, each end one \
+         colorfulness whatever hue that note lands on — 100% is as \
          vivid as the screen goes without distorting the color, 0 is grey. The \
          two numbers are the bottom of the pitch range and the top, in that \
          order, so a picture with its vivid end at the bottom reads out \

@@ -1956,9 +1956,10 @@ pub(crate) fn spectrum_track_width(column: f32, scale: f32) -> f32 {
 /// The far end from where the arc starts, so the button sits past the end of
 /// the reading rather than in front of it: the track is cut at the arc's own
 /// start and fills from the left, and the thing that reverses it belongs after
-/// what it reverses. The cost is the settings pane's scroll bar, which is drawn
-/// INSIDE the column over the right edge of every bar in it — so when the pane
-/// scrolls, the button's last couple of points sit under it.
+/// what it reverses. It costs the button nothing to sit there: the settings
+/// pane's scroll bar runs in the dock's own gutter, outside the content box,
+/// so the button ends where the bar's lane begins rather than under it —
+/// `nothing_is_drawn_under_a_settings_pane_scroll_bar` holds that lane empty.
 const FLIP_W: f32 = 18.0;
 
 /// The name a [`SpectrumBar`] writes along its own track.
@@ -2386,7 +2387,7 @@ impl<'a> SpectrumBar<'a> {
                         let origin = aimed_at(ui, p);
                         let grab = if !on_track(&origin) {
                             SpectrumGrab::Outside
-                        } else if (origin.x - handle_x).abs() <= GRAB_PX * scale {
+                        } else if (origin.x - handle_x).abs() <= GRAB_PX {
                             SpectrumGrab::Span
                         } else {
                             SpectrumGrab::Rotate { held: aimed.hue_start + offset_at(origin.x) }
@@ -2526,7 +2527,7 @@ impl<'a> SpectrumBar<'a> {
         // track turns the circle under it. Off the track it says neither,
         // because a press there starts nothing — see [`SpectrumGrab::Outside`].
         match pointing {
-            Some(p) if (p.x - handle_x).abs() <= GRAB_PX * scale => {
+            Some(p) if (p.x - handle_x).abs() <= GRAB_PX => {
                 response.on_hover_cursor(egui::CursorIcon::ResizeHorizontal)
             }
             Some(_) => response.on_hover_cursor(egui::CursorIcon::Grab),
@@ -2591,8 +2592,14 @@ const CORNER_SAMPLES: usize = 8;
 /// ramp there has nowhere to open.
 const L_STAR_AXIS: (f32, f32) = (0.0, 100.0);
 
-/// The axis a chroma pair stands on: the FRACTION of the color the gamut holds
-/// at that point of the curve, 0 grey and 1 as vivid as the screen goes there.
+/// The axis a chroma pair stands on: a FRACTION rather than a chroma, 0 grey
+/// and 1 as vivid as the screen goes there. Not a share of this hue's own
+/// ceiling — denominating in that ceiling is what made one setting read as
+/// three different colorfulnesses around the circle. It is denominated in the
+/// floor EVERY hue can hold and reaches this hue's own ceiling only at 1, so
+/// one number is one colorfulness wherever the arc passes. See
+/// [`Gradient::chroma`] for why the axis is a fraction rather than a chroma,
+/// and `chroma_of` in `harmonigraph-scene` for the curve joining the two ends.
 /// Both ends are settings and a pair on either is flat, exactly as a brightness
 /// pair parked on black is — see [`Gradient::chroma`] for why the axis is
 /// a fraction of what is available rather than a chroma.
@@ -2610,7 +2617,7 @@ const CHROMA_AXIS: (f32, f32) = (0.0, 1.0);
 enum Spread {
     /// `L*`, black to white.
     Brightness,
-    /// The share of the color the gamut holds, grey to as vivid as it goes.
+    /// One colorfulness whatever hue it lands on, grey to as vivid as it goes.
     Chroma,
 }
 
@@ -4677,6 +4684,10 @@ mod tests {
         /// alone — which is a caller naming no home, and a different code path
         /// from one naming the same gradient the default already is.
         home: Option<Gradient>,
+        /// The chrome scale the bar is drawn at, put back in force on every
+        /// frame because that is how a shell holds it — see
+        /// [`crate::theme::set_ui_scale`].
+        scale: f32,
     }
 
     impl Spectrum {
@@ -4692,6 +4703,15 @@ mod tests {
         /// gradient. 173pt is the narrowest column the dock gives a pane, so a
         /// sweep that reaches it has reached everything a reader can drag to.
         fn settled_at(g: &mut Gradient, width: f32) -> Spectrum {
+            Spectrum::settled_scaled(g, width, 1.0)
+        }
+
+        /// The same, with the chrome dialled somewhere other than the design
+        /// size — for the questions whose answer is a length that the scale
+        /// either does or does not multiply. A bare context reads 1.0, so
+        /// every other harness here asks the bar the same question at one
+        /// scale only.
+        fn settled_scaled(g: &mut Gradient, width: f32, scale: f32) -> Spectrum {
             let ctx = egui::Context::default();
             crate::theme::apply_theme(&ctx);
             let mut h = Spectrum {
@@ -4701,7 +4721,12 @@ mod tests {
                 preview: egui::Rect::NOTHING,
                 t: 0.0,
                 home: None,
+                scale,
             };
+            // Twice: `set_ui_scale` rebuilds the style, and a `Ui` built from
+            // the old one is a frame behind — so the pass that settles the
+            // rects has to be the second.
+            h.frame(g, vec![]);
             h.frame(g, vec![]);
             h
         }
@@ -4720,6 +4745,7 @@ mod tests {
 
         fn frame(&mut self, g: &mut Gradient, events: Vec<egui::Event>) -> Vec<egui::Shape> {
             self.t += 1.0 / 60.0;
+            crate::theme::set_ui_scale(&self.ctx, self.scale);
             let rect = std::cell::Cell::new(egui::Rect::NOTHING);
             let preview = std::cell::Cell::new(egui::Rect::NOTHING);
             let out = self.ctx.run_ui(
@@ -4756,7 +4782,7 @@ mod tests {
         /// carries its own tooltip — so the inset at either end is all that
         /// separates the two.
         fn track(&self) -> egui::Rect {
-            self.rect.shrink2(Vec2::new(HANDLE_INSET, 0.0))
+            self.rect.shrink2(Vec2::new(HANDLE_INSET * self.scale, 0.0))
         }
 
         /// The middle of the flip button, in the gutter past the track's right
@@ -5858,6 +5884,37 @@ mod tests {
                 );
                 assert_ne!(g.hue_span, before.hue_span, "{aimed}: the arc did not move");
             }
+        }
+    }
+
+    /// And that reach is the same length at every chrome scale, because it is
+    /// a reach rather than a drawn thing — [`GRAB_PX`]'s own contract, which
+    /// the `RangeBar` and the `SpreadBar` keep by reading the constant
+    /// unmultiplied.
+    ///
+    /// A bar dialled smaller is already a smaller target; shrinking what it
+    /// answers to as well makes the pane's smallest handle the one that is
+    /// also hardest to catch. The sweep runs the full [`theme::UI_SCALE_RANGE`]
+    /// because the two ends fail in opposite directions — a scaled reach is
+    /// short of the promise at 0.7 and past it at 1.5 — and every other
+    /// harness in this file draws on a bare context, which reads 1.0.
+    #[test]
+    fn the_handles_reach_is_the_same_at_every_chrome_scale() {
+        // Inside GRAB_PX, and outside what the smallest scale would leave of
+        // it: 14 * 0.7 is 9.8.
+        let offset = 12.0;
+        for scale in [1.0f32, 0.7, 1.5] {
+            let before = Gradient { hue_start: 40.0, hue_span: 180.0, ..Gradient::default() };
+            let mut g = before;
+            let mut h = Spectrum::settled_scaled(&mut g, 300.0, scale);
+            let from = h.at_span(before.hue_span) + Vec2::new(offset, 0.0);
+            h.drag(&mut g, from, from + Vec2::new(40.0, 0.0));
+            let aimed = format!("at chrome scale {scale}, pressed {offset} from the handle");
+            assert_eq!(
+                g.hue_start, before.hue_start,
+                "{aimed}: the circle turned under a press on the handle",
+            );
+            assert_ne!(g.hue_span, before.hue_span, "{aimed}: the arc did not move");
         }
     }
 

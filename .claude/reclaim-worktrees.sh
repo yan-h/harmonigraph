@@ -17,7 +17,7 @@
 # TIER 1 CANNOT BREAK THE HANDOVER CONTRACT, which is what makes it safe to
 # run on worktrees whose work is unfinished. CLAUDE.md's contract is that a
 # paused session leaves a build loadable via `./load-plugin.sh <branch>`, and
-# `load-plugin.sh` reads `target/release/libharmonigraph_plugin.dylib` — 11M, in
+# `load-plugin.sh` reads `target/release/libharmonigraph_plugin.dylib` — 13M, in
 # `release`, never in `debug`. `target/release` is therefore never pruned.
 # `debug` holds test and clippy output that only `ci.sh` consumes.
 #

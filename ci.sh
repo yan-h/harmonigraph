@@ -29,7 +29,7 @@ run cargo test --workspace
 run cargo test --manifest-path vendor/baseview/Cargo.toml --target-dir target/vendor-baseview
 
 # Doc links, which is the only mechanical check on comments this tree has.
-# Comments are ~38% of the non-blank lines under crates/ and carry the
+# Comments are ~40% of the non-blank lines under crates/ and carry the
 # rationale — measurements taken, alternatives rejected, host quirks worked
 # around — that the code cannot state for itself, so a reference that quietly
 # stops naming anything is a real defect and not a formatting nit.

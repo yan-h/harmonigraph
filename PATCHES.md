@@ -176,7 +176,7 @@ in the workspace `Cargo.toml`. Keep this file current when bumping either.
   rather than overwriting it, and schedule the next one from the instant a
   frame actually painted instead of leaving it unset (clearing it to `None`
   cost a whole tick, so every capped interval ran one tick long). Found while
-  adding the Panel pane's frame-rate cap, which is built on exactly this
+  adding the System pane's frame-rate cap, which is built on exactly this
   mechanism and did nothing at all without the fix.
 - **Patch 6** (`src/window.rs`): plumb the frame timer through, so the app
   can pace its own window. `EguiWindowSettings::frame_interval` sets the
