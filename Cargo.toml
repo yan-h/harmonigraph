@@ -87,7 +87,19 @@ egui-baseview = { path = "vendor/egui-baseview" }
 
 [profile.release]
 lto = "thin"
-strip = "symbols"
+# The symbol table stays, because a hang is the one failure that leaves nothing
+# to read. A panic writes itself into Bitwig's engine.log and a segfault leaves
+# a crash report, but a plug-in host that stops answering is SIGKILLed by the
+# host after about thirty seconds — no report, no log line — so the only account
+# of it is a `sample` taken while it is still stuck, and against a stripped
+# binary that is a column of `???`.
+#
+# Names only. `debug` is off here, so there is no debuginfo to keep and this
+# strips everything there is to strip; what it costs is the symbol table's own
+# bytes, and no build time. Line numbers would mean carrying DWARF through a
+# release build in every worktree, which is a real cost against a stack trace
+# that already names the function.
+strip = "debuginfo"
 
 # Plugin GUIs are unusable in unoptimized debug builds; opt-level 2 keeps
 # dev iteration usable while still compiling fast-ish.
