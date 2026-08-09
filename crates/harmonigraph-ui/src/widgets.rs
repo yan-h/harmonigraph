@@ -7,6 +7,7 @@
 
 use std::ops::RangeInclusive;
 
+use egui::emath::GuiRounding as _;
 use egui::{Color32, CornerRadius, Key, Response, Sense, TextEdit, TextStyle, Ui, Vec2};
 use harmonigraph_scene::{
     clamp_wheel, hue_circle, octave_layout, pitch_ramp_lut, Gradient, ViewConfig,
@@ -1169,19 +1170,17 @@ impl<'a> RangeBar<'a> {
             // **The two parts are drawn by different machinery, and the split
             // is what puts the rounded corner in the right hands.** Everything
             // left of `low` is one flat color, so it is a `rect_filled` like
-            // any other bar's fill — epaint curves and FEATHERS that corner.
-            // The ramp cannot be one: a rect is a single color, which is what
-            // makes a mesh the only way to carry a gradient at all. What the
-            // mesh gives up is the antialiasing — egui leaves a mesh edge hard,
-            // and the arc it fakes by pinching its columns (see CORNER_SAMPLES)
-            // undershoots the true circle by a pixel or so, which against the
-            // panel behind the bar reads as a stepped corner beside the smooth
-            // ones above it.
+            // any other bar's fill, and its corner comes out of the same call
+            // the well's own does — one shape, one radius, nothing to keep in
+            // step. The ramp cannot be a rect: a rect is a single color, which
+            // is what makes a mesh the only way to carry a gradient at all, and
+            // a mesh rounding this corner instead would put two roundings on
+            // the one arc of the one fill.
             //
             // So the mesh is handed the one stretch with no corner to draw. It
             // meets the head at `low` in exactly the head's own color and the
             // bare track at `high` in exactly the well's, so neither of its
-            // hard ends is a visible edge at all.
+            // square ends is a visible edge at all.
             if *self.high > min {
                 let mut fill = rect;
                 fill.max.x = hx;
@@ -2466,8 +2465,9 @@ fn flip_mark(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32, sc
 /// opens at puts them 6pt apart, wider than the radius, so a corner crosses
 /// fewer than ONE of them and is drawn from its two endpoints — a diagonal cut.
 /// The hue circle's 192 are 2pt apart and give a corner three steps, which is a
-/// chamfer. egui does not antialias a mesh edge, so how finely the arc is
-/// sampled is the only smoothness there is.
+/// chamfer. The feather [`gradient_strip`] carries softens the edge and not the
+/// SHAPE of it: a chamfer drawn smoothly is still a corner with a slice off it,
+/// so how finely the arc is sampled is the whole of whether the band is round.
 ///
 /// Both figures move with the column, and in the direction that makes the
 /// preview's case the one to size for: narrow the pane and every column narrows
@@ -3013,14 +3013,24 @@ impl<'a> SpreadBar<'a> {
 /// Pinching the columns to the corner circle instead lets the colors go edge to
 /// edge and round about like the fill of a [`ValueBar`] beside them.
 ///
-/// **About, and not exactly, which is why the two radii are separate.** egui
-/// antialiases the rounded rect a `ValueBar` fills with and leaves a mesh edge
-/// hard, and the arc pinched here is a chord polygon inscribed in the circle at
-/// [`CORNER_SAMPLES`] samples, so it undershoots by around a pixel where the
-/// circle is steepest. Both are invisible on a band that ends in the color
-/// behind it — which is every end a `SpectrumBar` draws, and the far end of a
-/// fade — and neither is on one ending in full color against the panel. An end
-/// like that is given a radius of 0 here and a `rect_filled` of its own.
+/// **The band softens its own edges, because the tessellator will not soften
+/// them for it.** epaint feathers every shape it builds itself — the rounded
+/// rect a `ValueBar` fills with fades out across one physical pixel at its edge,
+/// which is the whole of egui's antialiasing — and a mesh reaches it already
+/// triangulated, so it is drawn exactly as its vertices say and its edge lands
+/// on whole pixels. Against the panel that reads as a stair beside the smooth
+/// bars above it, which is the one thing a band drawn edge to edge cannot
+/// afford. So this builds the feather itself, the way
+/// `epaint::tessellator::Path::fill` does: the outline offset half a feather
+/// OUTWARD into a ring of transparent vertices, the colors pulled half a feather
+/// inward, and the fade between the two. Inward as well as outward is what keeps
+/// the band the size the caller asked for rather than half a pixel fatter than
+/// the well beneath it.
+///
+/// **The two radii are separate for a reason of its own**: an end that runs into
+/// another shape must not round. A fade's ramp continues the solid head it meets
+/// at `low`, so that end is given a radius of 0 and the head's own `rect_filled`
+/// draws the corner they share.
 fn gradient_strip(
     painter: &egui::Painter,
     rect: egui::Rect,
@@ -3028,6 +3038,14 @@ fn gradient_strip(
     radii: (f32, f32),
     color: impl Fn(f32) -> egui::Color32,
 ) {
+    // On the pixel grid, because a `rect_filled` is put there before it is
+    // tessellated (`TessellationOptions::round_rects_to_pixels`) and a mesh is
+    // not. Half a physical pixel of offset is all it takes for a band to fade
+    // out across two pixels where the well under it and the bars beside it fade
+    // across one, which is a blurred edge rather than a hard one and reads as
+    // the same wrongness. The bands share their rect with that well, so they
+    // land on the grid it does.
+    let rect = rect.round_to_pixels(painter.ctx().pixels_per_point());
     let cap = (rect.height() * 0.5).min(rect.width() * 0.5);
     let (left_r, right_r) = (radii.0.clamp(0.0, cap), radii.1.clamp(0.0, cap));
     let mut xs: Vec<f32> = (0..=segments)
@@ -3035,18 +3053,28 @@ fn gradient_strip(
         .collect();
     // A squared end has no arc to sample, and asking for one puts a whole run
     // of samples on the end itself for the loop below to throw away again.
+    //
+    // Spread around the ARC rather than along the axis. The profile is steepest
+    // where it meets the end, so samples spaced evenly in x put their widest
+    // chord exactly there — half a point of the corner cut off at the radius a
+    // bar rounds at, on the one part of the curve a reader is looking straight
+    // at. Spaced evenly in angle the widest chord anywhere is a twentieth of
+    // that, and the corner holds the circle to a tenth of a pixel all the way
+    // round.
     for k in 1..CORNER_SAMPLES {
-        let t = k as f32 / CORNER_SAMPLES as f32;
+        let along = 1.0 - (k as f32 / CORNER_SAMPLES as f32 * std::f32::consts::FRAC_PI_2).cos();
         if left_r > 0.0 {
-            xs.push(rect.left() + left_r * t);
+            xs.push(rect.left() + left_r * along);
         }
         if right_r > 0.0 {
-            xs.push(rect.right() - right_r * t);
+            xs.push(rect.right() - right_r * along);
         }
     }
     xs.sort_by(f32::total_cmp);
 
-    let mut mesh = egui::Mesh::default();
+    // One entry per column: where it stands, how far the nearer end pinches it
+    // in, and the color it carries.
+    let mut columns: Vec<(f32, f32, egui::Color32)> = Vec::with_capacity(xs.len());
     let mut drawn = f32::NEG_INFINITY;
     for x in xs {
         // Two samples landing on one column would build a triangle of no area,
@@ -3061,16 +3089,77 @@ fn gradient_strip(
         let inset = corner_inset(x - rect.left(), left_r)
             .max(corner_inset(rect.right() - x, right_r));
         let p = ((x - rect.left()) / rect.width().max(1.0)).clamp(0.0, 1.0);
-        let c = color(p);
+        columns.push((x, inset, color(p)));
+    }
+
+    let reach = 0.5 * feather_width(painter);
+    let top = |&(x, inset, _): &(f32, f32, egui::Color32)| egui::pos2(x, rect.top() + inset);
+    // Which way the top edge faces over the run between two columns: out of the
+    // band, so up, and tilted where the run is inside a corner.
+    let facing = |a: &(f32, f32, egui::Color32), b: &(f32, f32, egui::Color32)| {
+        let run = top(b) - top(a);
+        Vec2::new(run.y, -run.x).normalized()
+    };
+    let mut mesh = egui::Mesh::default();
+    for (i, column) in columns.iter().enumerate() {
+        // Both ends of the band are vertical runs, whatever their radius: a
+        // squared end is the bar's full height and a rounded one is what the
+        // two arcs leave between them, down to nothing at a semicircular cap.
+        // So the first and last columns face flat out along the axis.
+        let before = if i == 0 { Vec2::new(-1.0, 0.0) } else { facing(&columns[i - 1], column) };
+        let last = i + 1 == columns.len();
+        let after = if last { Vec2::new(1.0, 0.0) } else { facing(column, &columns[i + 1]) };
+        // A mitre, and not the average of the two: a corner offset along the
+        // mean of its edges is pulled IN by the cosine of the turn, which is
+        // what thins a feather to nothing at a sharp one. Dividing by the
+        // squared length is epaint's own extension, and holds the ring the same
+        // width all the way round.
+        let mean = (before + after) * 0.5;
+        let square = mean.length_sq();
+        let out = if square > 1e-6 { mean / square } else { after } * reach;
+        // The bottom edge faces the mirror of the top, the band's profile being
+        // the same at both.
+        let down = Vec2::new(out.x, -out.y);
+        let (upper, lower) = (top(column), egui::pos2(column.0, rect.bottom() - column.1));
         let v = mesh.vertices.len() as u32;
-        mesh.colored_vertex(egui::pos2(x, rect.top() + inset), c);
-        mesh.colored_vertex(egui::pos2(x, rect.bottom() - inset), c);
+        mesh.colored_vertex(upper + out, egui::Color32::TRANSPARENT);
+        mesh.colored_vertex(upper - out, column.2);
+        mesh.colored_vertex(lower - down, column.2);
+        mesh.colored_vertex(lower + down, egui::Color32::TRANSPARENT);
+        // A band of one column is a row of no width: it has no run to fill and
+        // no edge to soften, and the vertices above are left standing alone.
+        if columns.len() < 2 {
+            continue;
+        }
+        // The two ends are edges like any other and take the same ring.
+        if i == 0 || last {
+            mesh.add_triangle(v, v + 1, v + 2);
+            mesh.add_triangle(v, v + 2, v + 3);
+        }
         if v > 0 {
-            mesh.add_triangle(v - 2, v - 1, v);
-            mesh.add_triangle(v - 1, v + 1, v);
+            let w = v - 4;
+            // Three quads across the gap to the column before: the fill, and
+            // the feather above and below it.
+            for (a, b) in [(0, 1), (1, 2), (2, 3)] {
+                mesh.add_triangle(w + a, w + b, v + a);
+                mesh.add_triangle(w + b, v + b, v + a);
+            }
         }
     }
     painter.add(egui::Shape::mesh(mesh));
+}
+
+/// How wide the soft edge egui draws its own shapes with is, in points.
+///
+/// One physical pixel by default, and read from the context rather than assumed:
+/// a host that turns feathering off gets a mesh with none either, which is what
+/// makes the bands match whatever the bars beside them are doing.
+fn feather_width(painter: &egui::Painter) -> f32 {
+    let ctx = painter.ctx();
+    let pixel = 1.0 / ctx.pixels_per_point();
+    ctx.tessellation_options(
+        |o| if o.feathering { o.feathering_size_in_pixels * pixel } else { 0.0 },
+    )
 }
 
 /// How far a rounded band's edge is pinched in, top and bottom, at a column
@@ -3082,6 +3171,38 @@ fn corner_inset(from_end: f32, radius: f32) -> f32 {
     }
     let across = radius - from_end.max(0.0);
     radius - (radius * radius - across * across).max(0.0).sqrt()
+}
+
+/// The columns a [`gradient_strip`] stands on, read back out of the mesh it
+/// built: where the top and bottom of each one is, and the color between them.
+///
+/// Four vertices to a column — the feather's transparent pair outside the fill's
+/// own — and the boundary runs down the middle of each pair, so a midpoint gives
+/// back the point the band was laid out on and no test has to know how wide the
+/// feather is. Shared by the bars' own tests and the settings pane's, which is
+/// the other place that reads a preview out of a frame.
+#[cfg(test)]
+pub(crate) fn band_columns(mesh: &egui::Mesh) -> Vec<(egui::Pos2, egui::Pos2, Color32)> {
+    let middle = |a: egui::Pos2, b: egui::Pos2| a + (b - a) * 0.5;
+    mesh.vertices
+        .chunks(4)
+        .map(|c| (middle(c[0].pos, c[1].pos), middle(c[3].pos, c[2].pos), c[1].color))
+        .collect()
+}
+
+/// What a [`gradient_strip`] band covers, as the caller asked for it.
+///
+/// `Mesh::calc_bounds` answers half a feather wider on every side, that ring
+/// being transparent where it leaves the band — so it is the wrong reading for
+/// anything comparing a band against the rect it was handed.
+#[cfg(test)]
+pub(crate) fn band_bounds(mesh: &egui::Mesh) -> egui::Rect {
+    let mut bounds = egui::Rect::NOTHING;
+    for (top, bottom, _) in band_columns(mesh) {
+        bounds.extend_with(top);
+        bounds.extend_with(bottom);
+    }
+    bounds
 }
 
 /// A single-line text field a row high, for the one settings row that holds one
@@ -3314,15 +3435,14 @@ mod tests {
         filled_rects(shapes).into_iter().find(|(_, fill)| *fill == theme::accent_fill())
     }
 
-    /// The gradient fill's columns, left to right: where each one is and what
-    /// color it carries. A column's two vertices share a color, so reading the
-    /// first of each pair is the whole of it.
+    /// The gradient fill's columns, left to right: where each one stands and
+    /// what color it carries.
     fn fill_ramp(shapes: &[egui::Shape]) -> Vec<(f32, egui::Color32)> {
         let mut columns = Vec::new();
         for shape in shapes {
             if let egui::Shape::Mesh(mesh) = shape {
-                for pair in mesh.vertices.chunks(2) {
-                    columns.push((pair[0].pos.x, pair[0].color));
+                for (top, _, color) in band_columns(mesh) {
+                    columns.push((top.x, color));
                 }
             }
         }
@@ -4463,21 +4583,20 @@ mod tests {
             "a preview and a spectrum bar paint two bands, not {}",
             bands.len(),
         );
-        bands.sort_by(|a, b| a.calc_bounds().top().total_cmp(&b.calc_bounds().top()));
+        bands.sort_by(|a, b| band_bounds(a).top().total_cmp(&band_bounds(b).top()));
         let mut bands = bands.into_iter();
         let preview = bands.next().expect("checked just above");
         let circle = bands.next().expect("checked just above");
         assert!(
-            preview.calc_bounds().bottom() <= circle.calc_bounds().top(),
+            band_bounds(&preview).bottom() <= band_bounds(&circle).top(),
             "the two bands overlap, so neither is the picture above the other",
         );
         (preview, circle)
     }
 
-    /// The color each of a band's columns was painted in, left to right — the
-    /// two vertices of a column carry the same one.
+    /// The color each of a band's columns was painted in, left to right.
     fn band_colors(mesh: &egui::Mesh) -> Vec<egui::Color32> {
-        mesh.vertices.chunks(2).map(|column| column[0].color).collect()
+        band_columns(mesh).into_iter().map(|(_, _, color)| color).collect()
     }
 
     /// The track is hue and nothing else: the brightness and chroma bars move
@@ -4614,6 +4733,95 @@ mod tests {
         assert!(lit.is_empty(), "a span of nothing lit columns {lit:?} of {}", nothing.len());
     }
 
+    /// Both bands fade out at their edges, the way epaint fades the rounded
+    /// rect every bar beside them fills with.
+    ///
+    /// A mesh arrives at the tessellator already triangulated, so nothing there
+    /// softens it: without the ring [`gradient_strip`] builds, the two bands are
+    /// the only shapes in a settings pane with a hard edge, and a picture with a
+    /// stair along its top is what a reader sees. Nothing else in the suite
+    /// would notice, because every other reading goes through [`band_columns`],
+    /// which averages the ring away on purpose so what it reports is the
+    /// geometry the caller asked for.
+    ///
+    /// Three claims, and they fail apart. The ring stands OUTSIDE the band on
+    /// all four sides, which is what catches an end left square while the long
+    /// edges are softened. The colors stand inside it, which is what keeps the
+    /// band the size of the well beneath it rather than half a pixel fatter all
+    /// round. And along the straight run the two are a whole feather apart and
+    /// square to the edge, which is the fade itself and not just a ring of
+    /// something drawn near it.
+    #[test]
+    fn both_colour_bands_fade_out_at_their_edges() {
+        let mut g = ViewConfig::default().pitch_gradient;
+        let mut h = Spectrum::settled(&mut g);
+        let shapes = h.frame(&mut g, vec![]);
+        let (preview, circle) = spectrum_bands(&shapes);
+        // What egui feathers with at the one pixel per point a test context
+        // runs at — `TessellationOptions::feathering_size_in_pixels`.
+        let feather = 1.0_f32;
+        for (which, mesh) in [("preview", &preview), ("circle", &circle)] {
+            let band = band_bounds(mesh);
+            let ring = mesh.calc_bounds();
+            // Signed so the far sides read the same way round as the near ones.
+            for (side, reach, edge) in [
+                ("left", ring.left(), band.left()),
+                ("right", -ring.right(), -band.right()),
+                ("top", ring.top(), band.top()),
+                ("bottom", -ring.bottom(), -band.bottom()),
+            ] {
+                assert!(
+                    reach <= edge - feather * 0.5 + 1e-3,
+                    "{which}: the {side} edge stops at the band's own — nothing outside it fades",
+                );
+            }
+            for vertex in &mesh.vertices {
+                assert!(
+                    vertex.color == Color32::TRANSPARENT
+                        || band.expand(1e-3).contains(vertex.pos),
+                    "{which}: color at {:?} stands outside the band {band:?}",
+                    vertex.pos,
+                );
+            }
+            let outline = band_columns(mesh);
+            // A column standing on the flat top of the band, corner behind it.
+            let flat = |i: usize| (outline[i].0.y - band.top()).abs() < 1e-3;
+            let mut straight = 0;
+            for (i, column) in mesh.vertices.chunks(4).enumerate() {
+                let [out_top, in_top, in_bottom, out_bottom] = column else {
+                    panic!("{which}: {} vertices is not whole columns", mesh.vertices.len());
+                };
+                assert_eq!(out_top.color, Color32::TRANSPARENT, "{which}: an outer vertex is lit");
+                assert_eq!(
+                    out_bottom.color, Color32::TRANSPARENT,
+                    "{which}: an outer vertex is lit",
+                );
+                assert_eq!(in_top.color, in_bottom.color, "{which}: a column is two colors");
+                assert!(in_top.color.a() > 0, "{which}: a column carries no color at all");
+                // Well past the corners: a column whose NEIGHBOURS are flat too,
+                // so the two edges its offset splits face the same way and the
+                // direction is not a mitre's answer to a turn. The column where
+                // the arc lands on the straight run is flat itself and tilts,
+                // which is epaint's own behaviour at a corner and not a claim to
+                // make here.
+                if i > 0 && i + 1 < outline.len() && flat(i - 1) && flat(i) && flat(i + 1) {
+                    straight += 1;
+                    for (end, outer, inner, away) in [
+                        ("top", out_top, in_top, -feather),
+                        ("bottom", out_bottom, in_bottom, feather),
+                    ] {
+                        let across = outer.pos - inner.pos;
+                        assert!(
+                            across.x.abs() < 1e-3 && (across.y - away).abs() < 1e-3,
+                            "{which}: the {end} edge fades by {across:?}, not {away} straight out",
+                        );
+                    }
+                }
+            }
+            assert!(straight > 0, "{which}: the corners ate the band, so no edge was read");
+        }
+    }
+
     /// Both bands are rounded by their own mesh, on the corner circle, and
     /// sampled through the arc rather than chamfered across it.
     ///
@@ -4643,11 +4851,9 @@ mod tests {
             // is a shape, not a limit — what the radius may not do is eat the
             // band's LENGTH, which the straight-run count below is what
             // catches.
-            let box_ = mesh.calc_bounds();
+            let box_ = band_bounds(mesh);
             let (mut near, mut far, mut full_height) = (0, 0, 0);
-            // Two vertices per column, top then bottom, left to right.
-            for column in mesh.vertices.chunks(2) {
-                let (top, bottom) = (column[0].pos, column[1].pos);
+            for (top, bottom, _) in band_columns(mesh) {
                 assert!((top.x - bottom.x).abs() < 1e-3, "{which}: a column is not vertical");
                 let from_end = (top.x - box_.left()).min(box_.right() - top.x);
                 if from_end >= radius - 1e-3 {
@@ -4878,7 +5084,7 @@ mod tests {
                 );
             }
             // The circle end to end under it, no gutter anywhere.
-            let circle = spectrum_bands(&shapes).1.calc_bounds();
+            let circle = band_bounds(&spectrum_bands(&shapes).1);
             assert!(
                 (circle.left() - h.rect.left()).abs() < 0.01
                     && (circle.right() - h.rect.right()).abs() < 0.01,
