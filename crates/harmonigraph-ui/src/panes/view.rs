@@ -1,8 +1,8 @@
 //! The Display tab's View section: how you look at the lattice (projection,
 //! camera angle, saved angles) and how much of it shows (per-axis extents and
-//! window center). Purely what's framed — the note styling lives in
-//! [`super::nodes`] and [`super::scene`], the render/workspace knobs in
-//! [`super::system`].
+//! window center). Purely what's framed — a note's own layers live in
+//! [`super::nodes`], the colors everything is painted with in
+//! [`super::color`], the render/workspace knobs in [`super::system`].
 //!
 //! A section of [`super::display`] rather than of [`super::tuning`], though
 //! view and tuning answer halves of one question — where the nodes sit in
@@ -42,8 +42,8 @@ const PRESET_NAME_WIDTH: f32 = 110.0;
 pub(super) fn view_pane(ui: &mut egui::Ui, state: &mut SharedState) {
     // A plain heading rather than `section`: this is the top of the section
     // body, and the leading rule `section` draws would sit directly under the
-    // Display pane's own View header. Matches the Nodes, Scene and Analyzer
-    // section bodies, and the Tuning and System panes.
+    // Display pane's own View header. Matches the Nodes and Analyzer section
+    // bodies, and the Tuning and System panes.
     ui.heading("Camera");
     // Projection: perspective converges with depth; orthographic keeps
     // equal intervals at equal screen offsets everywhere (isometric-style

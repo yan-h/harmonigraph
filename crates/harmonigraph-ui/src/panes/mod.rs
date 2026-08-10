@@ -2,13 +2,15 @@
 //! a body function in the matching submodule; it immediately participates
 //! in docking, and gets the shared state (hover, console, tracker) for free.
 //!
-//! The lattice's settings read outward from the picture: [`tuning`] is how it
-//! is tuned, and [`display`] is how everything is drawn — [`view`] (which of
-//! it you are looking at and from where), [`nodes`] (how a played note is
-//! drawn), [`scene`] (everything around the notes) and the analyzer settings,
-//! one collapsible section each. [`system`] is the plugin's own render/layout
-//! knobs. Alongside are the [`spectral`] display, [`render`] (the Video tab),
-//! and [`notes`] (Console + Notes). This file holds the `Tab` enum, the
+//! [`tuning`] is how the lattice is tuned, and [`display`] is how everything
+//! is drawn, one collapsible section each and widest scope first (the rule is
+//! written out in [`display`]): [`color`] (the table every pitch-colored shape
+//! is painted through, and the bloom over it), [`view`] (which of the lattice
+//! you are looking at and from where), [`nodes`] (a played note's own layers),
+//! [`labels`] (the text on them), [`grid`] (the lines between them) and the
+//! analyzer settings. [`system`] is the plugin's own render/layout knobs.
+//! Alongside are the [`spectral`] display, [`render`] (the Video tab), and
+//! [`notes`] (Console + Notes). This file holds the `Tab` enum, the
 //! `TabViewer` that dispatches to them, and the small helpers more than one
 //! pane needs.
 //!
@@ -19,14 +21,16 @@ use crate::params::{ParamBackend, ParamKey};
 use crate::widgets::{RangeBar, ValueBar};
 use crate::SharedState;
 
+pub mod color;
 pub mod display;
+pub mod grid;
+pub mod labels;
 pub mod lattice;
 pub mod nodes;
 pub mod notes;
 /// The offline video frame, composed live so you can preview and adjust it
 /// before rendering. The "Video" tab.
 pub mod render;
-pub mod scene;
 pub mod spectral;
 pub mod system;
 pub mod tuning;
@@ -47,12 +51,29 @@ pub(super) fn normalize_deg(deg: f32) -> f32 {
 }
 
 /// 12-TET key spellings for MIDI-note readouts (the Notes pane's rows, the
-/// color range's ends in `nodes`). Octave numbers next to these use
+/// color range's ends in [`color`]). Octave numbers next to these use
 /// Bitwig's convention (middle C = C3).
 pub(super) const KEY_NAMES: [&str; 12] = [
     "C", "C\u{266F}", "D", "D\u{266F}", "E", "F",
     "F\u{266F}", "G", "G\u{266F}", "A", "A\u{266F}", "B",
 ];
+
+/// A MIDI note as a key name and octave — "C1", "C8" — so a range's ends read
+/// as pitches rather than bare numbers. Shared by the Nodes section's octave
+/// Center and Color & light's color range, which is why it is here rather than
+/// in either.
+///
+/// It ROUNDS, which is exact for the octave Center (its bar lands on whole
+/// semitones) and a reading for the color range (whose ends are a continuous
+/// gradient, where a tenth of a semitone changes nothing anyone can see). A
+/// caller wanting finer steps than a semitone needs its own readout, not a
+/// looser one here: this one would then name two visibly different settings
+/// the same note.
+pub(super) fn pitch_readout(midi: f32) -> String {
+    let n = midi.round() as i32;
+    let name = KEY_NAMES[n.rem_euclid(12) as usize];
+    format!("{name}{}", harmonigraph_core::notes::display_octave_of(n))
+}
 
 /// The variant names are a persistence contract: a saved layout names its
 /// tabs by these spellings, so renaming one orphans the dock in every project
@@ -67,9 +88,10 @@ pub enum Tab {
     /// Where the lattice's nodes sit in pitch: the prime bars, and the commas
     /// it tempers out.
     Tuning,
-    /// How everything on screen is drawn: the View, Nodes, Scene and Analyzer
-    /// settings, one collapsible section each — see [`display`] for why one
-    /// tab carries all four.
+    /// How everything on screen is drawn: the Color & light, View, Nodes,
+    /// Labels, Grid and Analyzer settings, one collapsible section each — see
+    /// [`display`] for why one tab carries all six, and for the rule that says
+    /// which section a setting lands in.
     Display,
     Console,
     /// The Spectral display: FFT curve, voices, and piano roll. Titled
@@ -309,8 +331,8 @@ pub(super) fn param_bar(
 }
 
 /// A two-handle [`RangeBar`] over a PAIR of parameters — one control for a
-/// range whose ends are both automatable params (the Nodes section's color
-/// range). `label` names the bar and `display` formats each end's readout.
+/// range whose ends are both automatable params (Color & light's color range).
+/// `label` names the bar and `display` formats each end's readout.
 ///
 /// Both params are bracketed for the whole drag and written every changed
 /// frame, so a drag on either handle records as one gesture on each. A
@@ -406,8 +428,10 @@ pub(super) fn edge_bar(
 pub(super) fn section(ui: &mut egui::Ui, title: &str) {
     // The rule separates a section from the one above it, so the FIRST section
     // in a pane has nothing to separate from and takes a bare heading. The
-    // Nodes and Scene bodies write that case out by hand — they are built from
-    // section functions in a fixed order, so each knows whether it leads.
+    // Nodes and View bodies write that case out by hand — they are built from
+    // section functions in a fixed order, so each knows whether it leads (and
+    // the Display sections that are one group apiece take no heading at all,
+    // the fold-out header above them being the name it would carry).
     //
     // A pane whose first section depends on the shell cannot know: the Video
     // pane leads with Record under a host and with Frame in the standalone,

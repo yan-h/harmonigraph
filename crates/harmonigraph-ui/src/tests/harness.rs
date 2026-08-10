@@ -160,7 +160,7 @@ pub(super) use crate::panes::display::Section;
 /// One pane of the settings column as a sweep drives it: a tab of its own, or
 /// one of the Display tab's sections, reached through Display's dispatch and
 /// opened ALONE — so every per-section count (short bars, gradient previews)
-/// counts one section's, not four, and each body is measured at the column's
+/// counts one section's, not six, and each body is measured at the column's
 /// full width.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum SettingsPane {
@@ -171,7 +171,7 @@ pub(super) enum SettingsPane {
 impl SettingsPane {
     /// The tab that carries this pane — with the section that shows it opened,
     /// which for a `Section` is the whole difference between measuring the
-    /// pane and measuring four collapsed headers.
+    /// pane and measuring six collapsed headers.
     pub(super) fn install(self, state: &mut SharedState) -> panes::Tab {
         match self {
             SettingsPane::Tab(tab) => tab,
@@ -184,11 +184,13 @@ impl SettingsPane {
 }
 
 /// Every settings pane, and the tabs that share the column with them.
-pub(super) const SETTINGS_PANES: [SettingsPane; 9] = [
+pub(super) const SETTINGS_PANES: [SettingsPane; 11] = [
     SettingsPane::Tab(panes::Tab::Tuning),
+    SettingsPane::Section(Section::Color),
     SettingsPane::Section(Section::View),
     SettingsPane::Section(Section::Nodes),
-    SettingsPane::Section(Section::Scene),
+    SettingsPane::Section(Section::Labels),
+    SettingsPane::Section(Section::Grid),
     SettingsPane::Section(Section::Analyzer),
     SettingsPane::Tab(panes::Tab::Video),
     SettingsPane::Tab(panes::Tab::System),

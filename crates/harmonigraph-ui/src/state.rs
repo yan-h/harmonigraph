@@ -804,7 +804,7 @@ impl SharedState {
     /// Named as a set because the Video pane's "Clear everything" clears it
     /// before a take, and a fourth accumulation would have to join it here or
     /// that button quietly stops living up to its name. Each pane still clears
-    /// what it draws — Scene the trail, the Analyzer its roll and spectrogram
+    /// what it draws — Labels the trail, the Analyzer its roll and spectrogram
     /// together — so this is not a replacement for those buttons, it is the
     /// case where all three are wanted at one moment.
     ///

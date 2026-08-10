@@ -1282,8 +1282,8 @@ fn a_view_missing_any_one_key_reloads_at_the_fresh_value() {
 fn a_display_section_left_open_survives_an_editor_reopen() {
     use super::harness::{press, DockHarness};
 
-    // A text only an OPEN section body draws — View's projection row, Scene's
-    // leading heading — scoped to the settings leaf.
+    // A text only an OPEN section body draws — View's projection row, Labels'
+    // leading checkbox — scoped to the settings leaf.
     let drawn = |out: &egui::FullOutput, leaf: egui::Rect, needle: &str| {
         out.shapes.iter().any(|cs| match &cs.shape {
             egui::Shape::Text(t) => t.galley.text() == needle && leaf.contains(t.pos),
@@ -1336,10 +1336,10 @@ fn a_display_section_left_open_survives_an_editor_reopen() {
         drawn(&out, leaf, "Projection"),
         "the View section sprang shut across the reopen — is its state in egui memory?",
     );
-    // And one open section is ONE open section: Scene stays collapsed.
+    // And one open section is ONE open section: Labels stays collapsed.
     assert!(
-        !drawn(&out, leaf, "Home grid"),
-        "the Scene section opened without ever being clicked",
+        !drawn(&out, leaf, "Note names"),
+        "the Labels section opened without ever being clicked",
     );
 }
 

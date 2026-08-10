@@ -100,11 +100,11 @@ fn wheel_over_settings_pane(pane: SettingsPane, screen_h: f32) -> f32 {
 }
 
 /// Every settings pane scrolls to the wheel once its content is taller than
-/// the pane. All seven reach the wheel through the `ScrollArea` egui_dock wraps
+/// the pane. All nine reach the wheel through the `ScrollArea` egui_dock wraps
 /// each tab body in, which is what leaves the bar the pane's right margin to
 /// stand in (see [`nothing_is_drawn_under_a_settings_pane_scroll_bar`]).
-/// Display is swept once per section, opened alone: a section's content is
-/// what overflows, four collapsed headers being shorter than any window.
+/// Display is swept once per section, opened alone: a section's content plus
+/// the five headers standing over it is what overflows.
 ///
 /// The two readout panes build an area of their own and are not swept here: the
 /// Console sticks to the bottom, where a wheel DOWN is a no-op, so it answers
@@ -116,9 +116,11 @@ fn every_settings_pane_scrolls_when_its_content_overflows() {
     // the shortest list of the set.
     for pane in [
         SettingsPane::Tab(panes::Tab::Tuning),
+        SettingsPane::Section(Section::Color),
         SettingsPane::Section(Section::View),
         SettingsPane::Section(Section::Nodes),
-        SettingsPane::Section(Section::Scene),
+        SettingsPane::Section(Section::Labels),
+        SettingsPane::Section(Section::Grid),
         SettingsPane::Section(Section::Analyzer),
         SettingsPane::Tab(panes::Tab::Video),
         SettingsPane::Tab(panes::Tab::System),
@@ -390,9 +392,9 @@ fn every_bar_in_a_settings_pane_is_the_width_of_the_pane() {
                 // column's own length and passes on the first alternative,
                 // with the button painted over its left end. So the short
                 // length is allowed exactly once per pane that holds one, and
-                // two do: the Nodes section dials the lattice's pitch gradient
-                // and the Analyzer section the heatmap's level gradient, on
-                // the same three bars over the same type.
+                // two do: the Color & light section dials the lattice's pitch
+                // gradient and the Analyzer section the heatmap's level
+                // gradient, on the same three bars over the same type.
                 let track = crate::widgets::spectrum_track_width(width, 1.0);
                 let mut short = 0;
                 for bar in &widths {
@@ -409,7 +411,7 @@ fn every_bar_in_a_settings_pane_is_the_width_of_the_pane() {
                 }
                 let want = usize::from(matches!(
                     pane,
-                    SettingsPane::Section(Section::Nodes | Section::Analyzer)
+                    SettingsPane::Section(Section::Color | Section::Analyzer)
                 ));
                 assert_eq!(
                     short, want,
@@ -421,9 +423,18 @@ fn every_bar_in_a_settings_pane_is_the_width_of_the_pane() {
     }
     // The sniffing above finds nothing if the bars stop being painted this way,
     // and a test that measures nothing passes. The Nodes section is the deepest
-    // stack of bars in the dock — every layer of the note contributes one or
-    // more, and the gated ones still paint, greyed — so it is the pane to ask
-    // whether bars are still being painted at all.
+    // stack of bars in the dock — 17 against the Analyzer's 12 and the View's
+    // 8, every layer of the note contributing one or more — so it is the pane
+    // to ask whether bars are still being painted at all.
+    //
+    // Those three are counts of the bars a fresh view draws LIVE, and a gated
+    // bar is in none of them: [`bar_track_widths`] finds a track by the well's
+    // own fill, and a disabled `Ui` fades its painter, so a greyed track is no
+    // longer that color. Hence the View's 8 rather than 9 — Sevenths size is
+    // inert at the fresh sevenths extent of 0, and counting it needs an extent
+    // set — and hence a floor well under 17. What the floor watches for is the
+    // paint going away, which takes every bar at once; a control coming, going
+    // or greying is not what it is asking about.
     let bars = bar_track_widths(&settings_pane_at_width(
         SettingsPane::Section(Section::Nodes),
         400.0,
@@ -431,9 +442,86 @@ fn every_bar_in_a_settings_pane_is_the_width_of_the_pane() {
     ))
     .len();
     assert!(
-        bars >= 15,
+        bars >= 12,
         "only found {bars} bar tracks in the Nodes section; has the paint changed?"
     );
+}
+
+/// The bool named for a section opens that section's body, and only that one.
+///
+/// [`DisplaySections`] is one field per section and `open_mut` is the map from
+/// a section to its own, so a section wired to a neighbour's field draws the
+/// wrong body under the right header. Nothing else here would notice: the
+/// sweeps ask each body for properties — a bar is the column's width, a bar is
+/// one row high, the pane scrolls — that hold whatever the body contains, so
+/// two sections could trade bodies with the suite green. Labels and Grid are
+/// the pair that would go longest unnoticed, being two bars each and named in
+/// no other test.
+///
+/// **The field is set by NAME, never through `open_mut`**, and that is the
+/// whole reach of this test. A fixture that opens a section the way
+/// [`SettingsPane::install`] does reads the map to write the flag and reads it
+/// again to draw, so a wrong arm cancels itself out and the fixture passes on
+/// exactly the defect it was written for.
+///
+/// A text out of each BODY rather than the header over it. The six headers are
+/// drawn whatever is open — that is what a collapsed section is — so they say
+/// nothing about which body a flag reached. Each needle is a string only its
+/// own section draws: "Name size" would be the natural one for Labels and is
+/// not, the Analyzer's piano-roll group having a bar of that name too.
+#[test]
+fn the_field_named_for_a_section_opens_that_sections_body() {
+    let draw = |sections: crate::panes::display::DisplaySections| {
+        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        state.display_sections = sections;
+        let backend = RecordingBackend::default();
+        let ctx = egui::Context::default();
+        crate::theme::apply_theme(&ctx);
+        let margin = crate::theme::PANE_INNER_MARGIN;
+        let body =
+            egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0 + 2.0 * margin, 2400.0));
+        ctx.run_ui(
+            egui::RawInput { screen_rect: Some(body), time: Some(0.0), ..Default::default() },
+            |ui| {
+                let mut body_ui =
+                    ui.new_child(egui::UiBuilder::new().max_rect(body.shrink(margin)));
+                let mut tab = panes::Tab::Display;
+                let mut viewer = panes::Viewer { state: &mut state, params: &backend, now: 0.0 };
+                egui_dock::TabViewer::ui(&mut viewer, &mut body_ui, &mut tab);
+            },
+        )
+        .shapes
+    };
+    type Open = fn(&mut crate::panes::display::DisplaySections);
+    const CASES: [(Open, &str, &str); 6] = [
+        (|d| d.color = true, "color", "Bloom"),
+        (|d| d.view = true, "view", "Projection"),
+        (|d| d.nodes = true, "nodes", "Solidity"),
+        (|d| d.labels = true, "labels", "Keep note names"),
+        (|d| d.grid = true, "grid", "Line width"),
+        (|d| d.analyzer = true, "analyzer", "Smoothing"),
+    ];
+    for (open, field, needle) in CASES {
+        let mut sections = crate::panes::display::DisplaySections::default();
+        open(&mut sections);
+        let shapes = draw(sections);
+        let drawn = |text: &str| {
+            shapes.iter().any(|cs| match &cs.shape {
+                egui::Shape::Text(t) => t.galley.text() == text,
+                _ => false,
+            })
+        };
+        assert!(drawn(needle), "`{field}` set drew no {needle:?} — it opened no body");
+        for (_, other, stranger) in CASES {
+            if other != field {
+                assert!(
+                    !drawn(stranger),
+                    "`{field}` set drew {stranger:?}, which is `{other}`'s — \
+                     are the two wired to each other's fields?",
+                );
+            }
+        }
+    }
 }
 
 /// Each gradient group opens with its preview: one band of color the width of
@@ -449,7 +537,7 @@ fn every_bar_in_a_settings_pane_is_the_width_of_the_pane() {
 #[test]
 fn every_gradient_group_previews_itself_above_its_bars() {
     const WIDTH: f32 = 400.0;
-    for section in [Section::Nodes, Section::Analyzer] {
+    for section in [Section::Color, Section::Analyzer] {
         let shapes = settings_pane_at_width(SettingsPane::Section(section), WIDTH, PROJECTIONS[0]);
         // A preview is the one full-column band of color in a settings pane: a
         // spectrum's circle is the track's width and a fade ramp is a row high,
@@ -477,7 +565,7 @@ fn every_gradient_group_previews_itself_above_its_bars() {
         // where the ramp is the table's own first and last entry and no
         // interpolation stands between the mesh and the value.
         let gradient = match section {
-            Section::Nodes => harmonigraph_scene::ViewConfig::default().pitch_gradient,
+            Section::Color => harmonigraph_scene::ViewConfig::default().pitch_gradient,
             _ => SpectrumConfig::default().spectrogram_gradient,
         };
         let lut = harmonigraph_scene::color::pitch_ramp_lut(gradient.sanitized());
@@ -692,7 +780,10 @@ fn scroll_settings_after_lost_drag(grab: Grab, lose: Lose) -> f32 {
     state.dock.set_active_tab(path).expect("selecting the tab");
     let backend = RecordingBackend::default();
     let ctx = egui::Context::default();
-    let screen_h = 500.0;
+    // Tall enough that the Analyzer's first bars are inside the settings leaf:
+    // the section opens under the five headers stacked above it, and a bar
+    // this fixture presses on outside the leaf is a press on the pane below.
+    let screen_h = 640.0;
     let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1000.0, screen_h));
     let body =
         egui::Rect::from_min_max(egui::pos2(700.0, 20.0), egui::pos2(1000.0, screen_h * 0.55 + 2.0));
@@ -811,11 +902,14 @@ fn a_bar_dragged_past_the_window_edge_keeps_tracking_the_pointer() {
     state.dock.set_active_tab(path).expect("selecting the tab");
     let backend = RecordingBackend::default();
     let ctx = egui::Context::default();
-    // Tall enough that the Smoothing bar is on screen below the Display
-    // pane's section headers and the whole Plot section above it.
-    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1000.0, 700.0));
-    // The settings leaf, whose bars run the width of the column at x ~700..1000.
-    let body = egui::Rect::from_min_max(egui::pos2(700.0, 20.0), egui::pos2(1000.0, 387.0));
+    // Tall enough that the Smoothing bar is on screen below the Display pane's
+    // five section headers and the whole Plot section above it.
+    let screen_h = 880.0;
+    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1000.0, screen_h));
+    // The settings leaf, whose bars run the width of the column at x ~700..1000:
+    // from under its tab bar down to the 0.55 split.
+    let body =
+        egui::Rect::from_min_max(egui::pos2(700.0, 20.0), egui::pos2(1000.0, screen_h * 0.55 + 2.0));
     // Where a named bar was drawn, so the gesture takes hold of a bar this test
     // can name rather than of whatever a fixed coordinate lands on. A bar draws
     // its name inside its own rectangle, at the left end.
