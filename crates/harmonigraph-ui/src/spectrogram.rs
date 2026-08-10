@@ -1,10 +1,10 @@
 //! The spectrogram heatmap's texture-ring/cache machinery: the slab grid an
 //! incoming column folds into, the ring that tracks which slabs an uploaded
 //! texture's columns hold, and the colour pipeline that turns a slab of
-//! stored dB bytes into pixels. Split out of
-//! [`panes::spectral::spectrogram`](crate::panes::spectral::spectrogram),
-//! which keeps only the pane: the mesh built over this module's texture, the
-//! draw call, and the cell colour the spectrum curve shares with it.
+//! stored dB bytes into pixels.
+//! [`panes::spectral::spectrogram`](crate::panes::spectral::spectrogram) is
+//! the pane above it: the mesh built over this module's texture, the draw
+//! call, and the cell colour the spectrum curve shares with it.
 //!
 //! This is the drawing-vs-cache cut, not a time/pitch split — the pane side
 //! is geometry and a draw call regardless of how the image was built, and

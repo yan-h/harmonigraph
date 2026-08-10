@@ -18,9 +18,9 @@ mod fold;
 mod config;
 /// The analyzer and its heatmap caches, none of it persisted.
 mod spectrum;
-/// The spectrogram heatmap's texture-ring/cache machinery, split out of
-/// `panes::spectral::spectrogram` — which keeps only the pane's mesh and draw
-/// call.
+/// The spectrogram heatmap's texture-ring/cache machinery. The pane that
+/// draws it, `panes::spectral::spectrogram`, holds only the mesh and the
+/// draw call.
 mod spectrogram;
 /// [`SharedState`] and the blob it saves itself into.
 mod state;
