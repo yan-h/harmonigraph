@@ -144,14 +144,6 @@ pub(crate) fn live_slab(window: f64, target_cols: usize) -> f64 {
 /// and genuinely was silence as far as the analyzer is concerned.
 const JITTER_SLABS: i64 = 1;
 
-/// Draw the spectrogram across the roll's depth region (`split..1`), sharing
-/// the roll's `depth_of` time mapping so its columns register with the notes.
-///
-/// Builds the heatmap into a `[time slab x pitch bin]` image, (re)uploads it
-/// to the surface's texture, then stretches it over the region as a
-/// single bilinear-filtered quad — smooth in both axes, and opaque (silence is
-/// the ramp's dark end, not transparent) so the plane is a filled image rather
-/// than bright patches floating on the background.
 /// One row of the heatmap image: how it reads the source buckets, its center
 /// MIDI pitch, and that pitch's fraction `t` up the pitch axis.
 ///
