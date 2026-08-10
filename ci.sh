@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Local mirror of .github/workflows/ci.yml: the exact five gates the cloud CI
+# Local mirror of .github/workflows/ci.yml: the exact six gates the cloud CI
 # runs — clippy across all targets with warnings denied, the full test suite,
-# baseview's own tests, the doc-link check, then the harmonigraph-core
-# dependency guard. Nothing more, nothing less, on the toolchain pinned by
-# rust-toolchain.toml — so a green run here means a green run there.
+# the plugin package check, baseview's own tests, the doc-link check, then
+# the harmonigraph-core dependency guard. Nothing more, nothing less, on the
+# toolchain pinned by rust-toolchain.toml — so a green run here means a green
+# run there.
 #
 # Run it directly:              ./ci.sh
 # Or gate every push on it:     git config core.hooksPath .githooks
@@ -15,6 +16,15 @@ run() { echo; echo "▶ $*"; "$@"; }
 
 run cargo clippy --workspace --all-targets -- -D warnings
 run cargo test --workspace
+
+# The standalone harness enables harmonigraph-render's `hot-reload` feature,
+# and cargo unifies features across a --workspace build, so every check
+# above compiles harmonigraph-plugin with hot-reload on — a configuration
+# the release bundle never ships. A `#[cfg(feature = "hot-reload")]`-only
+# borrow could pass every gate above and still fail the plugin's own build.
+# Checking the plugin package on its own resolves features from only its
+# dependency edge, so it builds the same configuration the bundle does.
+run cargo check -p harmonigraph-plugin
 
 # The vendored crates are `exclude`d from the workspace (the `[workspace]`
 # table's own key, in Cargo.toml), so `--workspace` compiles them as
@@ -64,4 +74,4 @@ fi
 echo "  ok — no dependencies"
 
 echo
-echo "✅ local CI passed (clippy + tests + baseview + doc links + harmonigraph-core dep guard)"
+echo "✅ local CI passed (clippy + tests + plugin check + baseview + doc links + harmonigraph-core dep guard)"

@@ -104,7 +104,7 @@ It is not a recording source. Audio comes from a DAW bounce, muxed after.
   comment states the project's stance: the app captures its own swapchain
   "so macOS screen-recording permissions never get in the way."
 - **An offline render-and-readback harness.**
-  `crates/harmonigraph-render/src/tests.rs` already creates a headless
+  `crates/harmonigraph-render/src/gpu_harness.rs` already creates a headless
   device (`headless_device`), renders to a `COPY_SRC` texture and maps the
   result back (`parity_target` and the pass around it). That is most of an
   offline renderer. Named rather than cited by line: the helpers move
@@ -164,7 +164,7 @@ standalone to accept real audio input first.
 sidesteps pacing entirely: log `NoteEvent`s plus tuning/camera/view during
 a DAW pass, then replay them offline against a headless device at exactly
 1/60 s per step, at any resolution. Everything needed is in
-`tests.rs`'s `headless_device` / `parity_target` plus `derive_scene`. The
+`gpu_harness.rs`'s `headless_device` / `parity_target` plus `derive_scene`. The
 missing piece is egui itself —
 you'd need an offscreen `egui_wgpu::Renderer` to get the labels and pane
 chrome, or accept lattice-only frames.

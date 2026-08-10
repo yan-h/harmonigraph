@@ -28,7 +28,8 @@
 //! trap with it: a note crossing the window's oldest edge is TRUNCATED
 //! (as is, at the other end, one whose tail the Gap setting is shaving)
 //! there, rewriting its geometry every frame while it leaves (see
-//! `panes/roll.rs`), so any cache has to retire chunks before they reach it.
+//! `panes/spectral/roll.rs`), so any cache has to retire chunks before they
+//! reach it.
 //! Rebuilding per frame keeps the geometry a pure function of `now` — which
 //! is also what keeps the offline render deterministic.
 
@@ -855,7 +856,7 @@ impl CallbackTrait for RollCallback {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tests::{headless_device, readback, render_to_texture};
+    use crate::gpu_harness::{headless_device, readback, render_to_texture};
 
     /// A 256x256 test surface at one point per pixel, so a distance in
     /// points is a distance in pixels and the band arithmetic below reads

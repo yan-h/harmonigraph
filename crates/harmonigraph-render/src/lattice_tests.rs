@@ -1,7 +1,10 @@
 //! Unit tests for the lattice renderer. The GPU-backed ones no-op when
-//! no headless adapter is available (CI without a GPU).
+//! no headless adapter is available (CI without a GPU); the headless
+//! device and the render/readback round trip they share with `roll` and
+//! `text` live in [`crate::gpu_harness`].
 
 use super::*;
+use crate::gpu_harness::{headless_device, readback, render_to_texture};
 
 #[test]
 fn baked_shader_validates() {
@@ -32,6 +35,68 @@ fn the_shaders_pitch_lut_is_the_length_the_scene_says() {
              ({n}); the CPU uploads that many entries and the GPU would index a different table",
         );
     }
+}
+
+/// The field names `struct {name} { ... }` declares in `src`, in order — a
+/// `//` or `///` comment line is skipped, and each remaining non-blank line
+/// contributes the identifier before its first `:`. Neither language's
+/// struct is parsed for real; this reads both the same shallow way the
+/// [`the_shaders_pitch_lut_is_the_length_the_scene_says`] needle check
+/// does, which is enough to catch the two lists disagreeing.
+///
+/// Assumes one field per line, which every field in both of today's structs
+/// is short enough to be. A field whose type needs wrapping to a second line
+/// panics here instead of parsing wrong — loud, but a confusing place to
+/// land for whoever adds it, since the message names no field and no line.
+fn struct_field_names(src: &str, name: &str) -> Vec<String> {
+    let after_kw = src.split_once(&format!("struct {name}")).expect("struct not found").1;
+    let body_start = after_kw.find('{').expect("struct has no body") + 1;
+    let mut depth = 1u32;
+    let mut end = body_start;
+    for (i, c) in after_kw[body_start..].char_indices() {
+        match c {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    end = body_start + i;
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    after_kw[body_start..end]
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with("//"))
+        .map(|l| l.split_once(':').expect("field line has no `:`").0.trim().to_string())
+        .collect()
+}
+
+/// `misc`..`misc8` carry the picture's knobs packed several to a vec4 (see
+/// the doc comments on [`Uniforms`] and its WGSL twin), and nothing checks
+/// the two structs against each other: naga validates the WGSL side against
+/// itself, rustc the Rust side against itself, and a slot added, dropped,
+/// renamed, or reordered on only one side still compiles and validates —
+/// only the byte offsets downstream of it drift, so every read after the
+/// mismatch lands on the wrong vec4's `.x`/`.y`/`.z`/`.w`. Comparing the
+/// field-name lists is the cheap half of the guard; the doc comments above
+/// each field are the other half; a `.w` typo'd for a `.z` within an
+/// otherwise-correctly-paired slot is neither this test's job nor the
+/// PITCH_LUT_N one's — see their doc comments.
+#[test]
+fn the_uniforms_slots_pair_up_between_rust_and_wgsl() {
+    let rust_fields = struct_field_names(include_str!("lib.rs"), "Uniforms");
+    let wgsl_fields = struct_field_names(SHADER_SRC, "Uniforms");
+    assert_eq!(
+        rust_fields, wgsl_fields,
+        "lib.rs's Uniforms and lattice.wgsl's Uniforms must declare the same fields in the \
+         same order — they describe one GPU buffer from two ends, and every field here is a \
+         multiple of 16 bytes, which is what lets Rust's #[repr(C)] layout match WGSL's without \
+         either side spelling out padding; a name added, dropped, renamed, or reordered on only \
+         one side is exactly what desyncs the offsets.",
+    );
 }
 
 /// blit.wgsl has no hot-reload path, so a broken edit would otherwise
@@ -93,19 +158,6 @@ fn pipelines_build_against_a_headless_device() {
     };
     let _resources =
         LatticeResources::new(&device, &queue, wgpu::TextureFormat::Bgra8Unorm);
-}
-
-pub(crate) fn headless_device() -> Option<(wgpu::Device, wgpu::Queue)> {
-    let instance = wgpu::Instance::default();
-    let Ok(adapter) =
-        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-    else {
-        eprintln!("no GPU adapter available; skipping");
-        return None;
-    };
-    let pair = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
-        .expect("headless device");
-    Some(pair)
 }
 
 /// A device that actually granted `TIMESTAMP_QUERY`, so `GpuTimer::new`
@@ -328,9 +380,9 @@ fn parity_scene() -> Scene {
     }
 }
 
-/// The GPU harness the pixel tests share: a headless device, the callback
-/// resources one lattice pass keeps between frames, and the offscreen target
-/// a scene is drawn into.
+/// What the lattice pixel tests share on top of [`crate::gpu_harness`]: the
+/// callback resources one lattice pass keeps between frames, and the
+/// offscreen target a scene is drawn into.
 ///
 /// It exists because the alternative had spread. Turning a `Scene` into a
 /// buffer of pixels is twenty-seven lines that never vary — build the
@@ -361,8 +413,7 @@ struct Shooter {
 
 impl Shooter {
     /// `None` where the machine has no usable GPU — CI containers, mostly.
-    /// Every caller returns on it, which is what each did with
-    /// `headless_device` before.
+    /// Every caller returns on it.
     fn new(size: [u32; 2]) -> Option<Shooter> {
         let (device, queue) = headless_device()?;
         Some(Shooter {
@@ -433,95 +484,6 @@ fn brightness(px: &[u8]) -> i64 {
 /// All the light in one shot (see [`brightness`]).
 fn total_light(px: &[u8]) -> i64 {
     px.chunks(4).map(brightness).sum()
-}
-
-/// Render into a fresh texture cleared to `clear`, handing the pass to
-/// `draw`, and return the texture for readback.
-pub(crate) fn render_to_texture(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    size: [u32; 2],
-    format: wgpu::TextureFormat,
-    clear: wgpu::Color,
-    draw: impl FnOnce(&mut wgpu::RenderPass<'static>),
-) -> wgpu::Texture {
-    let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("parity_target"),
-        size: wgpu::Extent3d {
-            width: size[0],
-            height: size[1],
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-        view_formats: &[],
-    });
-    let view = texture.create_view(&Default::default());
-    let mut encoder = device.create_command_encoder(&Default::default());
-    {
-        let mut pass = encoder
-            .begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("parity_pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(clear),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            })
-            .forget_lifetime();
-        draw(&mut pass);
-    }
-    queue.submit([encoder.finish()]);
-    texture
-}
-
-pub(crate) fn readback(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    texture: &wgpu::Texture,
-    size: [u32; 2],
-) -> Vec<u8> {
-    let bytes_per_row = size[0] * 4; // 256-wide RGBA rows are aligned
-    assert_eq!(bytes_per_row % 256, 0, "test sizes keep rows aligned");
-    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("parity_readback"),
-        size: (bytes_per_row * size[1]) as u64,
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
-    let mut encoder = device.create_command_encoder(&Default::default());
-    encoder.copy_texture_to_buffer(
-        texture.as_image_copy(),
-        wgpu::TexelCopyBufferInfo {
-            buffer: &buffer,
-            layout: wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(bytes_per_row),
-                rows_per_image: None,
-            },
-        },
-        wgpu::Extent3d {
-            width: size[0],
-            height: size[1],
-            depth_or_array_layers: 1,
-        },
-    );
-    queue.submit([encoder.finish()]);
-    let slice = buffer.slice(..);
-    slice.map_async(wgpu::MapMode::Read, |r| r.expect("map readback buffer"));
-    device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
-    slice.get_mapped_range().to_vec()
 }
 
 /// The refactor's core claim: rendering offscreen (with the depth
