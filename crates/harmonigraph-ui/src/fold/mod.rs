@@ -46,7 +46,14 @@
 //!
 //! Resizing the window is the shell's, not ours: [`Folds::apply`] returns the
 //! points to lose or regain and the plugin asks its host for them (see
-//! `SharedState::take_window_width_change`).
+//! `Workspace::take_window_width_change`).
+//!
+//! Everything this module reads across frames — the tree, the [`Folds`], the
+//! [`Dial`], the floor, and the points owed to the window — is the one struct
+//! `Workspace`, and this module plus the dock block of `root_ui` are its only
+//! readers. A pane is handed the state the workspace hangs off and is expected
+//! to ignore all of it: the layout a pane is being drawn by is not a layout it
+//! can be rearranging mid-pass.
 //!
 //! A window that will not go where a fold asked — a host that refused, the
 //! floor it will not go under — leaves the layout dialled for a window that is
@@ -275,7 +282,7 @@ impl Folds {
     /// it can come from.
     ///
     /// Returns the points the window has to gain (negative: lose), which the
-    /// shell asks its host for (see `SharedState::take_window_width_change`).
+    /// shell asks its host for (see `Workspace::take_window_width_change`).
     ///
     /// `floor` is the narrowest the shell will let the window become. At the
     /// floor the window is no longer a free variable, so the layout stops

@@ -96,15 +96,15 @@ fn the_perf_overlay_follows_the_analyzer_pane() {
 
     // Its leaf holds Spectral alone, so collapsing it is what takes it off
     // screen; the overlay then falls back to the OTHER picture pane.
-    let path = state.dock.find_tab(&panes::Tab::Spectral).expect("Spectral is docked");
-    let egui_dock::Node::Leaf(leaf) = &mut state.dock[path.surface][path.node] else {
+    let path = state.workspace.dock.find_tab(&panes::Tab::Spectral).expect("Spectral is docked");
+    let egui_dock::Node::Leaf(leaf) = &mut state.workspace.dock[path.surface][path.node] else {
         panic!("Spectral should live in a leaf");
     };
     leaf.collapsed = true;
     frame(&mut state);
     let output = frame(&mut state);
-    let lattice = state.dock.find_tab(&panes::Tab::Lattice).expect("Lattice is docked");
-    let egui_dock::Node::Leaf(lattice) = &state.dock[lattice.surface][lattice.node] else {
+    let lattice = state.workspace.dock.find_tab(&panes::Tab::Lattice).expect("Lattice is docked");
+    let egui_dock::Node::Leaf(lattice) = &state.workspace.dock[lattice.surface][lattice.node] else {
         panic!("Lattice should live in a leaf");
     };
     assert_eq!(
@@ -131,7 +131,7 @@ fn the_perf_overlay_follows_the_analyzer_pane() {
             .expect("the overlay should paint its backing plate")
     }
     fn clear_of_every_tab_bar(state: &SharedState, hud: egui::Rect, what: &str) {
-        for node in state.dock.main_surface().iter() {
+        for node in state.workspace.dock.main_surface().iter() {
             let egui_dock::Node::Leaf(leaf) = node else {
                 continue;
             };
@@ -150,8 +150,8 @@ fn the_perf_overlay_follows_the_analyzer_pane() {
     // rect pushed down past the tab bar — and the arithmetic is the whole of
     // what keeps the HUD off the collapse arrows in the one state where those
     // arrows are the only way back.
-    let path = state.dock.find_tab(&panes::Tab::Lattice).expect("Lattice is docked");
-    let egui_dock::Node::Leaf(leaf) = &mut state.dock[path.surface][path.node] else {
+    let path = state.workspace.dock.find_tab(&panes::Tab::Lattice).expect("Lattice is docked");
+    let egui_dock::Node::Leaf(leaf) = &mut state.workspace.dock[path.surface][path.node] else {
         panic!("Lattice should live in a leaf");
     };
     leaf.collapsed = true;

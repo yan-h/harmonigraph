@@ -168,49 +168,14 @@ pub struct SharedState {
     /// window. `Some` only in the offline renderer. Runtime-only, never
     /// persisted (mirrors `learn_active`).
     pub whole_song: Option<WholeSong>,
-    /// Set by the System pane's "Reset layout" button; consumed by root_ui
-    /// AFTER the frame's DockArea writes the dock back (panes run inside
-    /// that pass, so a direct write from one would be overwritten).
-    pub(crate) reset_layout: bool,
-    pub(crate) dock: DockState<panes::Tab>,
+    /// The pane arrangement and what the window is doing to it — see
+    /// [`Workspace`], which is also where the reason these are not six more
+    /// flat fields lives.
+    pub workspace: Workspace,
     /// Which of the Display tab's sections stand open (persisted — see
     /// [`panes::display::DisplaySections`] for why egui `Context` memory
     /// cannot hold this).
     pub display_sections: panes::display::DisplaySections,
-    /// What each sideways fold is holding — the width the window owes a folded
-    /// pane when it opens again, which is the one part of the layout that
-    /// cannot be read back off the dock (see [`fold`]).
-    pub(crate) folds: fold::Folds,
-    /// Points the window has to gain (or lose, if negative) before the next
-    /// frame, because a pane folded sideways or came back and every other pane
-    /// is keeping its width.
-    ///
-    /// The UI cannot resize the window itself — the plugin has to ask its
-    /// host, the standalone harness its windowing system — so it says how many
-    /// points and the shell spends them. Logical points, which is what both
-    /// shells size their windows in.
-    ///
-    /// Runtime-only, and TAKEN rather than read (see
-    /// [`take_window_width_change`](Self::take_window_width_change)), so a
-    /// shell that never asks — the offline renderer, which never reaches
-    /// `root_ui` at all — simply never resizes.
-    pub(crate) window_width_change: f32,
-    /// The narrowest the shell will let its window become, in the same points
-    /// [`take_window_width_change`](Self::take_window_width_change) is answered
-    /// in. At the floor a window has stopped answering, and the pane layout
-    /// stops following it (see [`fold`]) — otherwise a fold the window will not
-    /// shrink far enough for would re-dial the layout to the window it got
-    /// rather than the one it asked for, and hand the difference back on the
-    /// way out.
-    ///
-    /// Set by the shell. Zero — the default, and what a shell that never
-    /// resizes leaves it at — means no floor.
-    pub min_window_width: f32,
-    /// The pane layout itself: a width per pane in points, and what the window
-    /// is doing to it (see [`fold::Dial`]). Runtime-only — a layout loaded into
-    /// a window it was not saved at is seeded from the fractions it finds in
-    /// the dock.
-    pub(crate) dial: fold::Dial,
     /// What the frame measures and publishes about itself — see
     /// [`Instruments`], which is also where the reason these are not five more
     /// flat fields lives.
@@ -246,6 +211,124 @@ pub struct SharedState {
     /// only thing that reads it, and the offline renderer never reaches
     /// there.
     pub ui_scale: f32,
+}
+
+/// The pane layout: the arrangement itself, what each sideways fold is holding,
+/// what the window is doing to both, and the two numbers the shell and the
+/// layout trade width through.
+///
+/// Grouped because the audience is one subsystem and it is not the panes.
+/// Everything here is read by [`fold`] and by the dock block at the top of
+/// [`root_ui`](crate::root_ui), and by nothing else — the dock is built,
+/// folded, painted and written back inside one stretch of one function, and the
+/// rest of the frame never looks at it. Spread flat among the settings and the
+/// tracker they read as things a pane might act on, which is exactly what a
+/// pane must not do: the pass a pane runs in is the pass walking the tree it
+/// would be writing.
+///
+/// One pane does touch it, and the shape of that is the reason the grouping is
+/// worth naming rather than an exception to it. The System pane's "Reset
+/// layout" button sets [`reset_layout`](Self::reset_layout) — one bool, write
+/// only, consumed after the pass that pane drew in — and reads nothing at all.
+/// A pane wanting more than a flag from here is a pane rearranging the dock it
+/// is being drawn by.
+///
+/// [`dock`](Self::dock) and [`folds`](Self::folds) persist and the other four
+/// do not, which is a split this cannot express and does not try to:
+/// `save_persist` builds [`UiPersist`] field by field, so what is grouped here
+/// reaches the blob only where that function names it. The blob's shape is
+/// therefore independent of this one, and
+/// `the_persist_blob_carries_exactly_these_top_level_keys` is what says so.
+///
+/// What the grouping does NOT buy is the dock's borrow. `root_ui` still moves
+/// the tree out for the duration of the pane pass, because the panes hold
+/// `&mut SharedState` and this is inside it — see the `mem::replace` there,
+/// which explains why the whole group cannot travel instead.
+pub struct Workspace {
+    /// The arrangement itself: which panes are where, which tab of a leaf is
+    /// selected, and which leaves are collapsed. egui_dock owns everything in
+    /// it — the collapsed flags a fold reads are its own (see [`fold`]) — and
+    /// it is the one thing here that persists as itself.
+    pub(crate) dock: DockState<panes::Tab>,
+    /// What each sideways fold is holding — the width the window owes a folded
+    /// pane when it opens again, which is the one part of the layout that
+    /// cannot be read back off the dock (see [`fold`]).
+    pub(crate) folds: fold::Folds,
+    /// The pane layout itself: a width per pane in points, and what the window
+    /// is doing to it (see [`fold::Dial`]). Runtime-only — a layout loaded into
+    /// a window it was not saved at is seeded from the fractions it finds in
+    /// the dock.
+    pub(crate) dial: fold::Dial,
+    /// Points the window has to gain (or lose, if negative) before the next
+    /// frame, because a pane folded sideways or came back and every other pane
+    /// is keeping its width.
+    ///
+    /// The UI cannot resize the window itself — the plugin has to ask its
+    /// host, the standalone harness its windowing system — so it says how many
+    /// points and the shell spends them. Logical points, which is what both
+    /// shells size their windows in.
+    ///
+    /// Runtime-only, and TAKEN rather than read (see
+    /// [`take_window_width_change`](Self::take_window_width_change)), so a
+    /// shell that never asks — the offline renderer, which never reaches
+    /// `root_ui` at all — simply never resizes.
+    pub(crate) window_width_change: f32,
+    /// The narrowest the shell will let its window become, in the same points
+    /// [`take_window_width_change`](Self::take_window_width_change) is answered
+    /// in. At the floor a window has stopped answering, and the pane layout
+    /// stops following it (see [`fold`]) — otherwise a fold the window will not
+    /// shrink far enough for would re-dial the layout to the window it got
+    /// rather than the one it asked for, and hand the difference back on the
+    /// way out.
+    ///
+    /// Set by the shell. Zero — the default, and what a shell that never
+    /// resizes leaves it at — means no floor.
+    pub min_window_width: f32,
+    /// Set by the System pane's "Reset layout" button; consumed by root_ui
+    /// AFTER the frame's DockArea writes the dock back (panes run inside
+    /// that pass, so a direct write from one would be overwritten).
+    pub(crate) reset_layout: bool,
+}
+
+impl Default for Workspace {
+    fn default() -> Self {
+        Workspace {
+            dock: default_dock(),
+            folds: fold::Folds::default(),
+            dial: fold::Dial::default(),
+            window_width_change: 0.0,
+            min_window_width: 0.0,
+            reset_layout: false,
+        }
+    }
+}
+
+impl Workspace {
+    /// How much wider (or, negative, narrower) the window has to be for the
+    /// sideways folds the last frame settled — `None` when it can stay as it
+    /// is, which is nearly every frame.
+    ///
+    /// Shells call this once per frame, AFTER [`root_ui`](crate::root_ui), and
+    /// resize by the points they are given. Taking it rather than reading it
+    /// is what keeps one fold to one resize: a shell whose host refuses the
+    /// new size is not asked again on the next frame, since asking forever
+    /// would fight the host over every frame for as long as the pane stays
+    /// folded.
+    ///
+    /// Changes under half a point are dropped rather than passed on, which is
+    /// where rounding to whole pixels stops moving a window at all: below it a
+    /// shell would ask for the size it already has, and never be satisfied.
+    pub fn take_window_width_change(&mut self) -> Option<f32> {
+        let change = std::mem::take(&mut self.window_width_change);
+        (change.abs() >= 0.5).then_some(change)
+    }
+
+    /// Discard the (persisted) dock arrangement and return to the default
+    /// layout. Camera, view settings, and presets are untouched. Takes
+    /// effect at the end of the frame (see the `reset_layout` field).
+    pub fn reset_dock_layout(&mut self) {
+        self.reset_layout = true;
+    }
 }
 
 /// What the frame publishes about ITSELF: the measurements the performance
@@ -478,8 +561,6 @@ pub(crate) fn default_dock() -> DockState<panes::Tab> {
 
 impl SharedState {
     pub fn new(target_format: TextureFormat) -> Self {
-        let dock = default_dock();
-
         SharedState {
             tracker: NoteTracker::new(),
             tuning: Tuning::default(),
@@ -499,13 +580,8 @@ impl SharedState {
             spectrum: AudioSpectrum::default(),
             spectrum_config: SpectrumConfig::default(),
             whole_song: None,
-            reset_layout: false,
-            dock,
+            workspace: Workspace::default(),
             display_sections: panes::display::DisplaySections::default(),
-            folds: fold::Folds::default(),
-            window_width_change: 0.0,
-            min_window_width: 0.0,
-            dial: fold::Dial::default(),
             instruments: Instruments::default(),
             fps_cap: None,
             ui_scale: default_ui_scale(),
@@ -514,32 +590,6 @@ impl SharedState {
 
     pub fn log(&mut self, line: impl Into<String>) {
         self.console.log(line);
-    }
-
-    /// How much wider (or, negative, narrower) the window has to be for the
-    /// sideways folds the last frame settled — `None` when it can stay as it
-    /// is, which is nearly every frame.
-    ///
-    /// Shells call this once per frame, AFTER [`root_ui`](crate::root_ui), and
-    /// resize by the points they are given. Taking it rather than reading it
-    /// is what keeps one fold to one resize: a shell whose host refuses the
-    /// new size is not asked again on the next frame, since asking forever
-    /// would fight the host over every frame for as long as the pane stays
-    /// folded.
-    ///
-    /// Changes under half a point are dropped rather than passed on, which is
-    /// where rounding to whole pixels stops moving a window at all: below it a
-    /// shell would ask for the size it already has, and never be satisfied.
-    pub fn take_window_width_change(&mut self) -> Option<f32> {
-        let change = std::mem::take(&mut self.window_width_change);
-        (change.abs() >= 0.5).then_some(change)
-    }
-
-    /// Discard the (persisted) dock arrangement and return to the default
-    /// layout. Camera, view settings, and presets are untouched. Takes
-    /// effect at the end of the frame (see the `reset_layout` field).
-    pub fn reset_dock_layout(&mut self) {
-        self.reset_layout = true;
     }
 
     /// Serialize the parts of the UI worth restoring across sessions
@@ -560,8 +610,8 @@ impl SharedState {
         // layout), which JSON cannot round-trip.
         ron::to_string(&UiPersist {
             version: UI_PERSIST_VERSION,
-            dock: self.dock.clone(),
-            folds: self.folds.clone(),
+            dock: self.workspace.dock.clone(),
+            folds: self.workspace.folds.clone(),
             display_sections: self.display_sections,
             camera: self.camera,
             view: self.view.clone(),
@@ -678,9 +728,9 @@ impl SharedState {
         // [`fold::Dial::forget`]) — so the load has to. What the incoming
         // layout is dialled to is the fractions in the blob's own dock,
         // plus the widths its folds carry.
-        self.dial.forget();
-        self.folds = persist.folds;
-        self.dock = persist.dock;
+        self.workspace.dial.forget();
+        self.workspace.folds = persist.folds;
+        self.workspace.dock = persist.dock;
         self.display_sections = persist.display_sections;
         self.camera = persist.camera;
         self.view = persist.view;

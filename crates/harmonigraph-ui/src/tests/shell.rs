@@ -127,8 +127,8 @@ fn every_settings_tab_fits_on_its_tab_bar() {
     // the same name, that pane is a leaf of its own with one tab and room to
     // spare, and an unscoped search would find ITS unclipped copy and pass no
     // matter what the settings column did.
-    let path = state.dock.find_tab(&panes::Tab::Tuning).expect("Tuning is docked");
-    let leaf = state.dock[path.surface][path.node].rect().expect("the leaf is laid out");
+    let path = state.workspace.dock.find_tab(&panes::Tab::Tuning).expect("Tuning is docked");
+    let leaf = state.workspace.dock[path.surface][path.node].rect().expect("the leaf is laid out");
     for tab in column {
         let title = panes::tab_title(&tab);
         // The bar paints the title of every tab in the leaf, not just the

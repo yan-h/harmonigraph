@@ -18,8 +18,8 @@ use super::harness::*;
 /// wrong pane to ask these questions of: both tests need content that
 /// OVERFLOWS, and the short window they pick is short relative to this box.
 fn unfold_the_readout_panes(state: &mut SharedState) {
-    let path = state.dock.find_tab(&panes::Tab::Notes).expect("Notes is docked");
-    state.dock[path.surface][path.node].set_collapsed(false);
+    let path = state.workspace.dock.find_tab(&panes::Tab::Notes).expect("Notes is docked");
+    state.workspace.dock[path.surface][path.node].set_collapsed(false);
 }
 
 /// Drive the REAL dock (root_ui, egui_dock, the tab body's ScrollArea and
@@ -36,8 +36,8 @@ fn wheel_over_settings_pane(pane: SettingsPane, screen_h: f32) -> f32 {
     // The settings leaf opens on Tuning; every other settings pane is a tab
     // behind it (a Section is the Display tab with that section open).
     let tab = pane.install(&mut state);
-    let path = state.dock.find_tab(&tab).expect("{tab:?} is not in the default dock");
-    state.dock.set_active_tab(path).expect("selecting the tab");
+    let path = state.workspace.dock.find_tab(&tab).expect("{tab:?} is not in the default dock");
+    state.workspace.dock.set_active_tab(path).expect("selecting the tab");
     let backend = RecordingBackend::default();
     let ctx = egui::Context::default();
     let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1000.0, screen_h));
@@ -209,7 +209,7 @@ fn video_pane_shapes(supported: bool) -> (Vec<egui::epaint::ClippedShape>, egui:
     state.take.supported = supported;
     // Soloed so the Video pane's body is the only settings body on screen and
     // the first heading found is unambiguously its own.
-    state.dock = egui_dock::DockState::new(vec![panes::Tab::Video]);
+    state.workspace.dock = egui_dock::DockState::new(vec![panes::Tab::Video]);
     let backend = RecordingBackend::default();
     let ctx = egui::Context::default();
     crate::theme::apply_theme(&ctx);
@@ -777,8 +777,8 @@ fn scroll_settings_after_lost_drag(grab: Grab, lose: Lose) -> f32 {
     unfold_the_readout_panes(&mut state);
     // The Analyzer settings, open in the Display tab.
     let tab = SettingsPane::Section(Section::Analyzer).install(&mut state);
-    let path = state.dock.find_tab(&tab).expect("the Display tab");
-    state.dock.set_active_tab(path).expect("selecting the tab");
+    let path = state.workspace.dock.find_tab(&tab).expect("the Display tab");
+    state.workspace.dock.set_active_tab(path).expect("selecting the tab");
     let backend = RecordingBackend::default();
     let ctx = egui::Context::default();
     // Tall enough that the Analyzer's first bars are inside the settings leaf:
@@ -899,8 +899,8 @@ fn a_bar_dragged_past_the_window_edge_keeps_tracking_the_pointer() {
     unfold_the_readout_panes(&mut state);
     // The Analyzer settings, open in the Display tab.
     let tab = SettingsPane::Section(Section::Analyzer).install(&mut state);
-    let path = state.dock.find_tab(&tab).expect("the Display tab");
-    state.dock.set_active_tab(path).expect("selecting the tab");
+    let path = state.workspace.dock.find_tab(&tab).expect("the Display tab");
+    state.workspace.dock.set_active_tab(path).expect("selecting the tab");
     let backend = RecordingBackend::default();
     let ctx = egui::Context::default();
     // Tall enough that the Smoothing bar is on screen below the Display pane's
@@ -1072,7 +1072,7 @@ fn scrolling_settings_pane(pane: SettingsPane, scale: f32) -> Vec<egui::epaint::
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
     state.ui_scale = scale;
     let tab = pane.install(&mut state);
-    state.dock = egui_dock::DockState::new(vec![tab]);
+    state.workspace.dock = egui_dock::DockState::new(vec![tab]);
     // The same shell [`settings_pane_at_width`] draws for, so the Video pane
     // brings its record row and its progress bar — the two controls
     // `widgets::bar_width` calls out as having nowhere to wrap to, and so the
@@ -1268,7 +1268,7 @@ fn nothing_is_drawn_under_a_settings_pane_scroll_bar() {
 #[test]
 fn the_comma_tables_sideways_bar_runs_under_its_cells() {
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
-    state.dock = egui_dock::DockState::new(vec![panes::Tab::Tuning]);
+    state.workspace.dock = egui_dock::DockState::new(vec![panes::Tab::Tuning]);
     let backend = RecordingBackend::default();
     let ctx = egui::Context::default();
     crate::theme::apply_theme(&ctx);

@@ -102,7 +102,7 @@ pub(super) fn system_pane(ui: &mut egui::Ui, state: &mut SharedState) {
             .on_hover_text("Restore the default pane arrangement")
             .clicked()
         {
-            state.reset_dock_layout();
+            state.workspace.reset_dock_layout();
         }
     });
 }

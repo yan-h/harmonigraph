@@ -68,8 +68,8 @@ impl DockHarness {
     /// the harness is a host that refuses every resize, which is a state the
     /// fold layout has its own handling for.
     pub(super) fn resize(&mut self, state: &mut SharedState) {
-        if let Some(change) = state.take_window_width_change() {
-            let width = (self.screen.width() + change).max(state.min_window_width);
+        if let Some(change) = state.workspace.take_window_width_change() {
+            let width = (self.screen.width() + change).max(state.workspace.min_window_width);
             self.screen.max.x = self.screen.min.x + width;
         }
     }
@@ -92,8 +92,9 @@ impl DockHarness {
     /// own square at the left end of the tab bar, and clicking the title only
     /// selects a tab.
     pub(super) fn collapse_click(&mut self, state: &mut SharedState, tab: panes::Tab) -> egui::FullOutput {
-        let path = state.dock.find_tab(&tab).expect("tab is in the dock");
-        let rect = state.dock[path.surface][path.node].rect().expect("the leaf is laid out");
+        let path = state.workspace.dock.find_tab(&tab).expect("tab is in the dock");
+        let leaf = &state.workspace.dock[path.surface][path.node];
+        let rect = leaf.rect().expect("the leaf is laid out");
         let at = rect.left_top() + egui::vec2(12.0, crate::theme::TAB_BAR_HEIGHT * 0.5);
         self.frame(state, vec![egui::Event::PointerMoved(at)]);
         self.frame(state, vec![egui::Event::PointerMoved(at), press(at, true)]);
@@ -269,6 +270,6 @@ pub(super) const FIXTURE_RENDER: RenderProgress = RenderProgress { done: 120, to
 
 /// Whether the leaf holding `tab` is folded away.
 pub(super) fn collapsed(state: &SharedState, tab: panes::Tab) -> bool {
-    let path = state.dock.find_tab(&tab).expect("tab is in the dock");
-    state.dock[path.surface][path.node].is_collapsed()
+    let path = state.workspace.dock.find_tab(&tab).expect("tab is in the dock");
+    state.workspace.dock[path.surface][path.node].is_collapsed()
 }

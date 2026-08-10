@@ -217,7 +217,17 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     }
 
     // DockState has to be moved out while panes borrow the rest of `state`.
-    let mut dock = std::mem::replace(&mut state.dock, DockState::new(vec![]));
+    //
+    // Grouping the layout into `Workspace` does not lift this and cannot: a
+    // pane is handed `&mut SharedState`, which is the whole of it, so no field
+    // reachable from there is free while the pass runs — one struct deeper is
+    // still inside the borrow. Nor can the group travel out together in the
+    // dock's place, because the pass WRITES one of its fields: the System
+    // pane's "Reset layout" sets `reset_layout`, and a workspace lifted out
+    // for the pass would be handed that flag back into a copy about to be
+    // overwritten. Only the dock is both untouched by every pane and needed by
+    // the code around them, which is what makes it the one field worth moving.
+    let mut dock = std::mem::replace(&mut state.workspace.dock, DockState::new(vec![]));
     // Before the dock lays out: a pane collapsed inside a horizontal split
     // folds sideways to a rail, which is a split fraction, which is layout's
     // input. egui_dock's own vertical folds need nothing from us.
@@ -243,10 +253,15 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
             i.pointer.latest_pos().map(|at| at.x),
         )
     });
-    state.dial.watch_pointer(gesturing && kept_focus(ui.ctx()), at);
+    state.workspace.dial.watch_pointer(gesturing && kept_focus(ui.ctx()), at);
     let area = fold::area_width(ui, &dock_style);
-    state.window_width_change +=
-        state.folds.apply(&mut dock, &dock_style, area, state.min_window_width, &mut state.dial);
+    state.workspace.window_width_change += state.workspace.folds.apply(
+        &mut dock,
+        &dock_style,
+        area,
+        state.workspace.min_window_width,
+        &mut state.workspace.dial,
+    );
     // Time the whole dock build — every pane's layout and the scene
     // derivation — as the GUI thread's own per-frame CPU cost. The wgpu draw
     // is submitted inside and finishes off-thread, so this is CPU, not GPU.
@@ -265,19 +280,23 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     // After it: the rails the folds left behind, which only this frame's
     // rectangles can place — and the separators those folds pinned, which
     // resize the panes a user sees them dividing (see `fold::shove_target`).
-    fold::paint(ui, &mut dock, &dock_style, &state.dial);
-    state.dock = dock;
+    fold::paint(ui, &mut dock, &dock_style, &state.workspace.dial);
+    state.workspace.dock = dock;
     // Deferred from the System pane's button: replacing the dock BEFORE the
     // write-back above would be silently undone.
-    if std::mem::take(&mut state.reset_layout) {
+    if std::mem::take(&mut state.workspace.reset_layout) {
         // The default layout has every pane open, so the window gets back
         // whatever the folds being thrown away were holding — priced off the
         // dock they are in, so before it is replaced.
-        state.window_width_change +=
-            state.folds.clear(&state.dock, &dock_style, &state.dial, area);
-        state.dock = default_dock();
+        state.workspace.window_width_change += state.workspace.folds.clear(
+            &state.workspace.dock,
+            &dock_style,
+            &state.workspace.dial,
+            area,
+        );
+        state.workspace.dock = default_dock();
         // The flags describe the tree being thrown away (see [`fold::Dial::forget`]).
-        state.dial.forget();
+        state.workspace.dial.forget();
     }
 
     // Render continuously only while something is animating (sounding or
@@ -368,8 +387,8 @@ fn perf_overlay_area(state: &SharedState, editor: egui::Rect, scale: f32) -> egu
 
 /// A docked tab's drawn surface, or `None` when it is not on screen.
 fn pane_body(state: &SharedState, tab: &panes::Tab) -> Option<egui::Rect> {
-    let path = state.dock.find_tab(tab)?;
-    let egui_dock::Node::Leaf(leaf) = &state.dock[path.surface][path.node] else {
+    let path = state.workspace.dock.find_tab(tab)?;
+    let egui_dock::Node::Leaf(leaf) = &state.workspace.dock[path.surface][path.node] else {
         return None;
     };
     // `viewport` is the tab BODY; the picture panes drop their margin, so it
