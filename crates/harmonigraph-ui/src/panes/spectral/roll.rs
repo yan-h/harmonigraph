@@ -254,13 +254,7 @@ pub(super) fn note_instances(
     // has to be TOTAL or the sort is free to vary between runs: a retrigger
     // with no intervening note-off puts two entries at the same start, which
     // is what the channel and note tails settle.
-    // Whole-song (offline playhead): the render lays the whole take out at once
-    // from a full roll built up front. Live: the causal tracker's rolling
-    // window, filling in as notes arrive.
-    let roll = match state.whole_song.as_ref() {
-        Some(ws) => &ws.roll,
-        None => state.tracker.roll(),
-    };
+    let roll = state.roll();
     // The whole look of a note, decided once for the roll rather than per
     // note: the outline standing outside it. The note itself is a solid
     // rectangle of its own color and has nothing else to decide.

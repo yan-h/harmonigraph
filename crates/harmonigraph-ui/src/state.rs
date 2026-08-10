@@ -840,4 +840,14 @@ impl SharedState {
         self.tracker.clear_roll();
         self.spectrum.clear_history();
     }
+
+    /// The roll currently on screen: the take's own, laid out statically, in
+    /// offline playhead mode; the causal tracker's rolling window, filling in
+    /// as notes arrive, live.
+    pub fn roll(&self) -> &harmonigraph_core::NoteRoll {
+        match self.whole_song.as_ref() {
+            Some(ws) => &ws.roll,
+            None => self.tracker.roll(),
+        }
+    }
 }
