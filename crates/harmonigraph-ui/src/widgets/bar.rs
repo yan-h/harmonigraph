@@ -31,6 +31,35 @@ pub(super) const BAR_TEXT_PAD: f32 = 8.0;
 /// number rather than touching it.
 pub(super) const BAR_LABEL_GAP: f32 = 6.0;
 
+/// A bar's NAME, laid out into what its readout leaves it: one row, ellipsised,
+/// against `width` less the inset at each end, the gap held clear of the number,
+/// and the `reserve` the number itself is owed.
+///
+/// The job arrives already carrying its sections, because what a name is MADE OF
+/// differs per bar — a badge at the front, a colour the ground behind it decides
+/// — while the room it is allowed is the same arithmetic in all six. Handing the
+/// job in is what puts that arithmetic in one place without this having to know
+/// what a badge is.
+///
+/// `width` rather than the bar's own rect, because one bar's name is not elided
+/// against its row: a [`SpectrumBar`] elides against its TRACK, the flip button
+/// beside it having taken the rest.
+///
+/// [`SpectrumBar`]: super::gradient::SpectrumBar
+pub(super) fn elided_name(
+    painter: &egui::Painter,
+    mut job: egui::text::LayoutJob,
+    width: f32,
+    scale: f32,
+    reserve: f32,
+) -> std::sync::Arc<egui::Galley> {
+    job.wrap.max_width =
+        (width - 2.0 * BAR_TEXT_PAD * scale - BAR_LABEL_GAP * scale - reserve).max(0.0);
+    job.wrap.max_rows = 1;
+    job.wrap.overflow_character = Some('\u{2026}');
+    painter.layout_job(job)
+}
+
 /// How wide a bar draws: the width the layout offers, but never past the
 /// visible edge of the pane. Shared by [`ValueBar`] and [`RangeBar`], so every
 /// bar in a settings column comes out the same length and they all narrow
