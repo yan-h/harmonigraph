@@ -749,7 +749,7 @@ impl<'a> RangeBar<'a> {
 mod tests {
     use super::*;
     use crate::widgets::mesh::{band_columns, bands, fades_out_at_its_edges};
-    use crate::widgets::probe::{filled_rects, handles, knockouts, text_boxes};
+    use crate::widgets::probe::{filled_rects, handles, knockouts, painted, shapes, text_boxes};
 
     /// The analyzer's axis, the range bar's real caller.
     const AXIS: (f32, f32) = (12.0, 132.0);
@@ -773,17 +773,10 @@ mod tests {
         low: f32,
         high: f32,
     ) -> Vec<egui::epaint::ClippedShape> {
-        let ctx = egui::Context::default();
-        crate::theme::apply_theme(&ctx);
-        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(width, 100.0));
         let (mut lo, mut hi) = (low, high);
-        let out = ctx.run_ui(
-            egui::RawInput { screen_rect: Some(screen), ..Default::default() },
-            |ui| {
-                RangeBar::new(&mut lo, &mut hi, AXIS.0..=AXIS.1, NAME).min_span(OCTAVE).show(ui);
-            },
-        );
-        out.shapes
+        painted(width, |ui| {
+            RangeBar::new(&mut lo, &mut hi, AXIS.0..=AXIS.1, NAME).min_span(OCTAVE).show(ui);
+        })
     }
 
     /// Paint one range bar across a `width`-point row and return what it
@@ -801,17 +794,10 @@ mod tests {
     /// still carrying the rect it is clipped to. No `min_span`, as the bars
     /// that ask for this paint have none: their span closes for a hard edge.
     fn paint_fade_bar_clipped(low: f32, high: f32) -> Vec<egui::epaint::ClippedShape> {
-        let ctx = egui::Context::default();
-        crate::theme::apply_theme(&ctx);
-        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(300.0, 100.0));
         let (mut lo, mut hi) = (low, high);
-        let out = ctx.run_ui(
-            egui::RawInput { screen_rect: Some(screen), ..Default::default() },
-            |ui| {
-                RangeBar::new(&mut lo, &mut hi, AXIS.0..=AXIS.1, NAME).fade_span().show(ui);
-            },
-        );
-        out.shapes
+        painted(300.0, |ui| {
+            RangeBar::new(&mut lo, &mut hi, AXIS.0..=AXIS.1, NAME).fade_span().show(ui);
+        })
     }
 
     /// The same, as bare shapes — what every reading but the clip wants.
@@ -1077,23 +1063,17 @@ mod tests {
     /// knockout happens, on the thumb, in the panel colour.
     #[test]
     fn a_fade_span_bars_name_is_knocked_out_where_its_thumb_rests_on_it() {
-        let ctx = egui::Context::default();
-        crate::theme::apply_theme(&ctx);
-        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(300.0, 100.0));
         // A low end just inside the name, the way a fresh Gutter opens.
         let (mut lo, mut hi) = (AXIS.0 + 3.0, AXIS.0 + 20.0);
-        let out = ctx.run_ui(
-            egui::RawInput { screen_rect: Some(screen), ..Default::default() },
-            |ui| {
-                RangeBar::new(&mut lo, &mut hi, AXIS.0..=AXIS.1, NAME)
-                    .min_span(OCTAVE)
-                    .fade_span()
-                    .show(ui);
-            },
-        );
-        let flat: Vec<_> = out.shapes.iter().map(|s| s.shape.clone()).collect();
+        let out = painted(300.0, |ui| {
+            RangeBar::new(&mut lo, &mut hi, AXIS.0..=AXIS.1, NAME)
+                .min_span(OCTAVE)
+                .fade_span()
+                .show(ui);
+        });
+        let flat: Vec<_> = out.iter().map(|s| s.shape.clone()).collect();
         let (grips, name) = (handles(&flat), text_boxes(&flat)[0].0);
-        let knocked = knockouts(&out.shapes);
+        let knocked = knockouts(&out);
         let crossing: Vec<_> = grips.iter().copied().filter(|g| g.intersects(name)).collect();
         assert!(!crossing.is_empty(), "this fixture no longer rests a thumb on the name");
         assert_eq!(
@@ -1288,20 +1268,13 @@ mod tests {
     /// values reach the ends this arithmetic is about.
     #[test]
     fn a_row_of_no_width_paints_rather_than_panicking() {
-        let ctx = egui::Context::default();
-        crate::theme::apply_theme(&ctx);
-        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(0.0, 100.0));
         for fade in [false, true] {
             let (mut lo, mut hi) = (AXIS.0, AXIS.1);
-            let out = ctx.run_ui(
-                egui::RawInput { screen_rect: Some(screen), ..Default::default() },
-                |ui| {
-                    let bar = RangeBar::new(&mut lo, &mut hi, AXIS.0..=AXIS.1, NAME);
-                    if fade { bar.fade_span().show(ui) } else { bar.show(ui) };
-                },
-            );
-            let shapes: Vec<egui::Shape> = out.shapes.into_iter().map(|s| s.shape).collect();
-            assert!(!filled_rects(&shapes).is_empty(), "fade={fade}: the well was not painted");
+            let drawn = shapes(0.0, |ui| {
+                let bar = RangeBar::new(&mut lo, &mut hi, AXIS.0..=AXIS.1, NAME);
+                if fade { bar.fade_span().show(ui) } else { bar.show(ui) };
+            });
+            assert!(!filled_rects(&drawn).is_empty(), "fade={fade}: the well was not painted");
         }
     }
 

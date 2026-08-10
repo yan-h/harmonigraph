@@ -313,19 +313,13 @@ pub fn choice_row<T: Copy + PartialEq>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::widgets::probe::{painted, painted_in};
 
     /// Every text run a `choice_row` of these options paints, as
     /// `text -> (family, size)`.
     fn choice_row_fonts(options: &[(u32, &str, &str)]) -> Vec<(String, egui::FontId)> {
-        let ctx = egui::Context::default();
-        crate::theme::apply_theme(&ctx);
-        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 100.0));
         let mut value = 0u32;
-        let out = ctx.run_ui(
-            egui::RawInput { screen_rect: Some(screen), ..Default::default() },
-            |ui| choice_row(ui, "Row", &mut value, options),
-        );
-        out.shapes
+        painted(400.0, |ui| choice_row(ui, "Row", &mut value, options))
             .iter()
             .filter_map(|cs| match &cs.shape {
                 egui::Shape::Text(t) => Some((
@@ -433,21 +427,15 @@ mod tests {
     #[test]
     fn a_row_too_wide_for_its_column_wraps_inside_it() {
         const COLUMN: f32 = 90.0;
-        let ctx = egui::Context::default();
-        crate::theme::apply_theme(&ctx);
-        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(COLUMN, 400.0));
         let mut rects = Vec::new();
-        let _ = ctx.run_ui(
-            egui::RawInput { screen_rect: Some(screen), ..Default::default() },
-            |ui| {
-                button_row(ui, |ui| {
-                    ui.label("Projection");
-                    for label in ["Perspective", "Orthographic", "Cabinet"] {
-                        rects.push(ui.button(label).rect);
-                    }
-                });
-            },
-        );
+        let _ = painted_in(egui::vec2(COLUMN, 400.0), |ui| {
+            button_row(ui, |ui| {
+                ui.label("Projection");
+                for label in ["Perspective", "Orthographic", "Cabinet"] {
+                    rects.push(ui.button(label).rect);
+                }
+            });
+        });
         for (label, rect) in ["Perspective", "Orthographic", "Cabinet"].iter().zip(&rects) {
             assert!(
                 rect.right() <= COLUMN + 1.0,
