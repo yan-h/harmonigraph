@@ -573,19 +573,29 @@ fn reset_layout_puts_the_dialled_pane_widths_back() {
 /// Where a label is drawn, so a test can press the control a user presses
 /// rather than the flag behind it. The middle of the galley, which for a
 /// button's text is inside the button.
+///
+/// Only a label inside its own clip rect answers. A `ScrollArea` lays out and
+/// emits shapes for content it has scrolled out of sight, so a settings pane
+/// grown past its leaf would otherwise hand back a point outside the pane
+/// entirely — and the press would land on whatever is drawn there instead,
+/// failing as a claim about the layout rather than about the button. Rejected
+/// here, the `expect` at the call site names what actually went wrong.
 fn label_center(output: &egui::FullOutput, label: &str) -> Option<egui::Pos2> {
-    fn walk(shape: &egui::Shape, label: &str, found: &mut Option<egui::Pos2>) {
+    fn walk(shape: &egui::Shape, label: &str, clip: egui::Rect, found: &mut Option<egui::Pos2>) {
         match shape {
             egui::Shape::Text(text) if text.galley.text() == label => {
-                *found = Some(text.pos + text.galley.size() * 0.5);
+                let center = text.pos + text.galley.size() * 0.5;
+                if clip.contains(center) {
+                    *found = Some(center);
+                }
             }
-            egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| walk(s, label, found)),
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| walk(s, label, clip, found)),
             _ => {}
         }
     }
     let mut found = None;
     for clipped in &output.shapes {
-        walk(&clipped.shape, label, &mut found);
+        walk(&clipped.shape, label, clipped.clip_rect, &mut found);
     }
     found
 }

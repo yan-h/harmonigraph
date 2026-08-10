@@ -255,7 +255,9 @@ pub struct Workspace {
     /// The arrangement itself: which panes are where, which tab of a leaf is
     /// selected, and which leaves are collapsed. egui_dock owns everything in
     /// it — the collapsed flags a fold reads are its own (see [`fold`]) — and
-    /// it is the one thing here that persists as itself.
+    /// it is the one member here with no default to fall back on, which is why
+    /// a blob missing it costs the whole document rather than this field alone
+    /// (see [`UiPersist`]).
     pub(crate) dock: DockState<panes::Tab>,
     /// What each sideways fold is holding — the width the window owes a folded
     /// pane when it opens again, which is the one part of the layout that

@@ -32,11 +32,11 @@ use crate::SharedState;
 ///
 /// One number rather than one per shell because it has to be two things at
 /// once: the floor a window is actually held to, and the floor the pane layout
-/// is TOLD about ([`Workspace::min_window_width`](crate::state::Workspace::min_window_width)).
-/// Split the two and the
-/// layout dials to a width the window will not give — it banks the difference
-/// the window refused and hands it back on the way out, which is a fold
-/// resizing a pane nobody folded.
+/// is TOLD about
+/// ([`Workspace::min_window_width`](crate::state::Workspace::min_window_width)).
+/// Split the two and the layout dials to a width the window will not give — it
+/// banks the difference the window refused and hands it back on the way out,
+/// which is a fold resizing a pane nobody folded.
 pub const MIN_WINDOW_WIDTH: f32 = 400.0;
 
 /// What a shell hands over once it has built an egui `Context`.
