@@ -166,12 +166,7 @@ pub(super) fn display_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &
 /// indent has narrowed — the sweeps in `tests::settings` hold each section to
 /// the pane's own width.
 fn fold_out(ui: &mut egui::Ui, open: &mut bool, title: &str, body: impl FnOnce(&mut egui::Ui)) {
-    // The rule between sections, as [`super::section`] draws it, decided by
-    // the same cursor question — so the first header leads the pane bare.
-    if ui.cursor().top() > ui.max_rect().top() + 0.5 {
-        ui.add_space(4.0);
-        ui.separator();
-    }
+    super::section_separator(ui);
     let header = egui::CollapsingHeader::new(egui::RichText::new(title).heading())
         .open(Some(*open))
         .show_unindented(ui, body);

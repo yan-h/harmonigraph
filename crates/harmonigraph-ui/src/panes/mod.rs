@@ -443,34 +443,42 @@ pub(super) fn edge_bar(
     response
 }
 
-/// A section header inside a settings pane: a little breathing room, a thin
-/// rule, then the group's name in the heading (bold) face — so each block
-/// of related controls is easy to pick out at a glance.
-pub(super) fn section(ui: &mut egui::Ui, title: &str) {
-    // The rule separates a section from the one above it, so the FIRST section
-    // in a pane has nothing to separate from and takes a bare heading. The
-    // Nodes and View bodies write that case out by hand — they are built from
-    // section functions in a fixed order, so each knows whether it leads (and
-    // the Display sections that are one group apiece take no heading at all,
-    // the fold-out header above them being the name it would carry).
-    //
-    // A pane whose first section depends on the shell cannot know: the Video
-    // pane leads with Record under a host and with Frame in the standalone,
-    // which has no transport to record. The CURSOR is what answers it without
-    // asking the caller — it starts at the top of the ui and only moves down
-    // once something is laid out, so still being there means this heading is
-    // the pane's first.
-    //
-    // `min_rect` is the tempting reading of "has anything been drawn" and it
-    // is the wrong one here: egui_dock wraps every pane body in a `ScrollArea`
-    // whose ui arrives with `min_rect` already equal to `max_rect`, so it is a
-    // full-height rect before the pane draws a thing. A fixture that builds
-    // the pane ui directly sees an empty `min_rect` instead and cannot tell
-    // the two apart — which is why `the_video_pane_does_not_start_with_a_rule`
-    // goes through the real dock.
+/// The rule that separates a section from the one above it, so the FIRST
+/// section in a pane has nothing to separate from and takes a bare heading.
+/// The Nodes and View bodies write that case out by hand — they are built
+/// from section functions in a fixed order, so each knows whether it leads
+/// (and the Display sections that are one group apiece take no heading at
+/// all, the fold-out header above them being the name it would carry).
+///
+/// A pane whose first section depends on the shell cannot know: the Video
+/// pane leads with Record under a host and with Frame in the standalone,
+/// which has no transport to record. The CURSOR is what answers it without
+/// asking the caller — it starts at the top of the ui and only moves down
+/// once something is laid out, so still being there means this heading is
+/// the pane's first.
+///
+/// `min_rect` is the tempting reading of "has anything been drawn" and it
+/// is the wrong one here: egui_dock wraps every pane body in a `ScrollArea`
+/// whose ui arrives with `min_rect` already equal to `max_rect`, so it is a
+/// full-height rect before the pane draws a thing. A fixture that builds
+/// the pane ui directly sees an empty `min_rect` instead and cannot tell
+/// the two apart — which is why `the_video_pane_does_not_start_with_a_rule`
+/// goes through the real dock.
+///
+/// Shared by `section`'s plain heading and `display::fold_out`'s
+/// collapsible one — a settings pane's header and Display's fold-out draw
+/// the same rule the same way.
+pub(super) fn section_separator(ui: &mut egui::Ui) {
     if ui.cursor().top() > ui.max_rect().top() + 0.5 {
         ui.add_space(4.0);
         ui.separator();
     }
+}
+
+/// A section header inside a settings pane: a little breathing room, a thin
+/// rule, then the group's name in the heading (bold) face — so each block
+/// of related controls is easy to pick out at a glance.
+pub(super) fn section(ui: &mut egui::Ui, title: &str) {
+    section_separator(ui);
     ui.heading(title);
 }
