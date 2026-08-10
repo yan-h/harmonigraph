@@ -1293,11 +1293,11 @@ fn a_display_section_left_open_survives_an_editor_reopen() {
     };
 
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
-    let path = state.dock.find_tab(&panes::Tab::Display).expect("Display is docked");
-    state.dock.set_active_tab(path).expect("selecting the tab");
+    let path = state.workspace.dock.find_tab(&panes::Tab::Display).expect("Display is docked");
+    state.workspace.dock.set_active_tab(path).expect("selecting the tab");
     let mut window = DockHarness::new();
     window.settle(&mut state);
-    let leaf = state.dock[path.surface][path.node].rect().expect("the leaf is laid out");
+    let leaf = state.workspace.dock[path.surface][path.node].rect().expect("the leaf is laid out");
     let out = window.frame(&mut state, vec![]);
     assert!(!drawn(&out, leaf, "Projection"), "the View section must open collapsed");
 
@@ -1331,8 +1331,10 @@ fn a_display_section_left_open_survives_an_editor_reopen() {
     let mut fresh_window = DockHarness::new();
     fresh_window.settle(&mut reopened);
     let out = fresh_window.frame(&mut reopened, vec![]);
-    let path = reopened.dock.find_tab(&panes::Tab::Display).expect("Display survives the blob");
-    let leaf = reopened.dock[path.surface][path.node].rect().expect("the leaf is laid out");
+    let path =
+        reopened.workspace.dock.find_tab(&panes::Tab::Display).expect("Display survives the blob");
+    let leaf =
+        reopened.workspace.dock[path.surface][path.node].rect().expect("the leaf is laid out");
     assert!(
         drawn(&out, leaf, "Projection"),
         "the View section sprang shut across the reopen — is its state in egui memory?",

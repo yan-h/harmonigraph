@@ -32,10 +32,11 @@ use crate::SharedState;
 ///
 /// One number rather than one per shell because it has to be two things at
 /// once: the floor a window is actually held to, and the floor the pane layout
-/// is TOLD about ([`SharedState::min_window_width`]). Split the two and the
-/// layout dials to a width the window will not give — it banks the difference
-/// the window refused and hands it back on the way out, which is a fold
-/// resizing a pane nobody folded.
+/// is TOLD about
+/// ([`Workspace::min_window_width`](crate::state::Workspace::min_window_width)).
+/// Split the two and the layout dials to a width the window will not give — it
+/// banks the difference the window refused and hands it back on the way out,
+/// which is a fold resizing a pane nobody folded.
 pub const MIN_WINDOW_WIDTH: f32 = 400.0;
 
 /// What a shell hands over once it has built an egui `Context`.
@@ -79,7 +80,7 @@ impl Opening<'_> {
     pub fn open(self) {
         crate::theme::apply_theme(self.ctx);
         self.state.release_context_resources();
-        self.state.min_window_width = MIN_WINDOW_WIDTH;
+        self.state.workspace.min_window_width = MIN_WINDOW_WIDTH;
         if let Some(persist) = self.persist.filter(|blob| !blob.is_empty()) {
             self.state.load_persist(persist);
         }
@@ -127,12 +128,13 @@ impl Frame<'_> {
     ///
     /// Taken from the state rather than read out of it, so one fold is one
     /// ask: a host that refuses the size is not asked again on the next frame
-    /// (see [`SharedState::take_window_width_change`]).
+    /// (see
+    /// [`Workspace::take_window_width_change`](crate::state::Workspace::take_window_width_change)).
     #[must_use = "a fold is spent by resizing the window; dropping this leaves the layout waiting"]
     pub fn draw(self) -> Option<f32> {
         crate::root_ui(self.ui, self.state, self.params, self.now);
-        let change = self.state.take_window_width_change()?;
-        Some((self.window_width + change).max(self.state.min_window_width))
+        let change = self.state.workspace.take_window_width_change()?;
+        Some((self.window_width + change).max(self.state.workspace.min_window_width))
     }
 }
 
@@ -209,9 +211,9 @@ mod tests {
     fn opening_tells_the_layout_the_floor_the_shell_holds() {
         let ctx = egui::Context::default();
         let mut state = fresh();
-        assert_eq!(state.min_window_width, 0.0, "a state no shell opened has no floor");
+        assert_eq!(state.workspace.min_window_width, 0.0, "a state no shell opened has no floor");
         Opening { ctx: &ctx, state: &mut state, persist: None }.open();
-        assert_eq!(state.min_window_width, MIN_WINDOW_WIDTH);
+        assert_eq!(state.workspace.min_window_width, MIN_WINDOW_WIDTH);
     }
 
     #[test]
@@ -230,12 +232,12 @@ mod tests {
         let mut state = fresh();
         Opening { ctx: &ctx, state: &mut state, persist: None }.open();
 
-        state.window_width_change = -120.0;
+        state.workspace.window_width_change = -120.0;
         assert_eq!(frame(&ctx, &mut state, 1000.0), Some(880.0));
 
         // A fold asking for more than the window has to give stops at the
         // floor rather than following it down.
-        state.window_width_change = -1000.0;
+        state.workspace.window_width_change = -1000.0;
         assert_eq!(frame(&ctx, &mut state, 1000.0), Some(MIN_WINDOW_WIDTH));
     }
 
@@ -260,10 +262,11 @@ mod tests {
         // The Spectral pane shares a horizontal split with the lattice, so
         // folding it sideways takes its width off the window.
         let path = state
+            .workspace
             .dock
             .find_tab(&crate::panes::Tab::Spectral)
             .expect("the analyzer is docked");
-        state.dock[path.surface][path.node].set_collapsed(true);
+        state.workspace.dock[path.surface][path.node].set_collapsed(true);
 
         let ask = frame(&ctx, &mut state, 1000.0).expect("the fold asks for a narrower window");
         assert!(ask < 1000.0, "a folded pane gives width back, asked for {ask}");
@@ -299,6 +302,10 @@ mod tests {
         let mut reopened = fresh();
         Opening { ctx: &ctx, state: &mut reopened, persist: Some(&saved) }.open();
         assert_eq!(reopened.ui_scale, 1.25);
-        assert_eq!(reopened.min_window_width, MIN_WINDOW_WIDTH, "and the floor survives a load");
+        assert_eq!(
+            reopened.workspace.min_window_width,
+            MIN_WINDOW_WIDTH,
+            "and the floor survives a load",
+        );
     }
 }

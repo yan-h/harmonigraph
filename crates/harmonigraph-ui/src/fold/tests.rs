@@ -86,7 +86,7 @@ fn lay_out(dock: &mut DockState<Tab>, width: f32) {
 /// editor: one that decides what to ask the window for, and one at the
 /// size it was given.
 /// The one number a shell carries between frames for the fold layout (see
-/// `SharedState::take_window_width_change`). Tests thread it the same way.
+/// `Workspace::take_window_width_change`). Tests thread it the same way.
 #[must_use]
 fn frame_within(
     folds: &mut Folds,

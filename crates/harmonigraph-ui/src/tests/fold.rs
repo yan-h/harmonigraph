@@ -44,23 +44,24 @@ fn collapsing_a_pane_banks_the_width_it_gave_up() {
     let mut h = DockHarness::new();
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
     h.settle(&mut state);
-    assert_eq!(state.take_window_width_change(), None, "an idle frame asks for nothing");
+    assert_eq!(state.workspace.take_window_width_change(), None, "an idle frame asks for nothing");
 
-    let path = state.dock.find_tab(&panes::Tab::Lattice).expect("the lattice is docked");
-    let pane = state.dock[path.surface][path.node].rect().expect("laid out").width();
-    state.dock[path.surface][path.node].set_collapsed(true);
+    let path = state.workspace.dock.find_tab(&panes::Tab::Lattice).expect("the lattice is docked");
+    let pane = state.workspace.dock[path.surface][path.node].rect().expect("laid out").width();
+    state.workspace.dock[path.surface][path.node].set_collapsed(true);
     h.frame(&mut state, vec![]);
 
     // A rail's worth of the pane stays behind; the rest comes off the window.
     let rail = theme::dock_style(&egui::Style::default(), 1.0).tab_bar.height;
-    let change = state.take_window_width_change().expect("the fold asks for a narrower window");
+    let change =
+        state.workspace.take_window_width_change().expect("the fold asks for a narrower window");
     assert!(
         (change + (pane - rail)).abs() < 1.0,
         "a {pane}pt pane leaving a {rail}pt rail should ask for {}, asked {change}",
         rail - pane,
     );
     h.frame(&mut state, vec![]);
-    assert_eq!(state.take_window_width_change(), None, "and asks exactly once");
+    assert_eq!(state.workspace.take_window_width_change(), None, "and asks exactly once");
 }
 
 /// Every separator a fold has pinned resizes the two nearest open panes across
@@ -94,7 +95,7 @@ fn every_separator_a_fold_has_pinned_resizes_the_open_panes_across_it() {
             for delta in [45.0f32, -45.0] {
                 let mut h = DockHarness::new();
                 let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
-                state.dock = a_row_of(row);
+                state.workspace.dock = a_row_of(row);
                 h.settle(&mut state);
                 for tab in &row[1..=rails] {
                     let _ = h.collapse_click(&mut state, *tab);
@@ -419,7 +420,7 @@ fn the_separator_inside_a_folded_pair_resizes_the_open_panes_around_it() {
         let [pair, _] = surface.split_right(right, 0.5, vec![panes::Tab::Notes]);
         surface.split_right(pair, 0.5, vec![panes::Tab::Tuning]);
     }
-    state.dock = dock;
+    state.workspace.dock = dock;
     h.settle(&mut state);
     let _ = h.collapse_click(&mut state, panes::Tab::Spectral);
     let _ = h.collapse_click(&mut state, panes::Tab::Tuning);
@@ -474,12 +475,13 @@ fn the_handle_beside_an_outermost_rail_does_nothing() {
     let _ = h.collapse_click(&mut state, panes::Tab::Tuning);
     let _ = h.settle_folds(&mut state);
     let column = state
+        .workspace
         .dock
         .find_tab(&panes::Tab::Tuning)
         .and_then(|path| path.node.parent())
         .expect("the settings leaf shares a column with the readouts");
     let main = egui_dock::SurfaceIndex::main();
-    let rail = state.dock[main][column].rect().expect("the rail is laid out");
+    let rail = state.workspace.dock[main][column].rect().expect("the rail is laid out");
     let separator = theme::dock_style(&egui::Style::default(), 1.0).separator.width;
     let at = egui::pos2(rail.left() - separator * 0.5, rail.top() + 40.0);
     let lattice = pane_width(&state, panes::Tab::Lattice);
@@ -556,7 +558,7 @@ fn reset_layout_puts_the_dialled_pane_widths_back() {
          {fresh:?} -> {dragged:?}"
     );
 
-    state.reset_layout = true;
+    state.workspace.reset_layout = true;
     h.settle_folds(&mut state);
     let reset: Vec<f32> = LAID_OUT_TABS.iter().map(|tab| pane_width(&state, *tab)).collect();
     for (index, tab) in LAID_OUT_TABS.iter().enumerate() {
@@ -564,6 +566,92 @@ fn reset_layout_puts_the_dialled_pane_widths_back() {
             (reset[index] - fresh[index]).abs() < 1.0,
             "{tab:?} should be back at the width a fresh dock draws it at: \
              fresh {fresh:?}, dragged {dragged:?}, after the reset {reset:?}"
+        );
+    }
+}
+
+/// Where a label is drawn, so a test can press the control a user presses
+/// rather than the flag behind it. The middle of the galley, which for a
+/// button's text is inside the button.
+///
+/// Only a label inside its own clip rect answers. A `ScrollArea` lays out and
+/// emits shapes for content it has scrolled out of sight, so a settings pane
+/// grown past its leaf would otherwise hand back a point outside the pane
+/// entirely — and the press would land on whatever is drawn there instead,
+/// failing as a claim about the layout rather than about the button. Rejected
+/// here, the `expect` at the call site names what actually went wrong.
+fn label_center(output: &egui::FullOutput, label: &str) -> Option<egui::Pos2> {
+    fn walk(shape: &egui::Shape, label: &str, clip: egui::Rect, found: &mut Option<egui::Pos2>) {
+        match shape {
+            egui::Shape::Text(text) if text.galley.text() == label => {
+                let center = text.pos + text.galley.size() * 0.5;
+                if clip.contains(center) {
+                    *found = Some(center);
+                }
+            }
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| walk(s, label, clip, found)),
+            _ => {}
+        }
+    }
+    let mut found = None;
+    for clipped in &output.shapes {
+        walk(&clipped.shape, label, clipped.clip_rect, &mut found);
+    }
+    found
+}
+
+/// "Reset layout" resets the layout when it is CLICKED, which is the only way
+/// a user reaches it.
+///
+/// Its sibling above writes `reset_layout` straight into the state, so it holds
+/// what the flag DOES and nothing about how it gets there. How it gets there is
+/// the one interesting thing about it: a pane writes it, from inside the
+/// `DockArea` pass, into the state every pane holds `&mut` to — while `root_ui`
+/// has the dock itself moved out of that state for the duration (see the
+/// `mem::replace` there). The flag has to stay behind for the pane to reach,
+/// and a change that moves more out — the whole `Workspace`, say, which is one
+/// `mem::take` and reads as the tidier version — hands the pane a copy that is
+/// dropped on the write-back.
+///
+/// That failure is silent in every direction that is usually checked: it
+/// compiles, the button still draws, the click still registers, `reset_layout`
+/// is still set and still read, and the layout simply never resets. Nothing
+/// else in the suite presses this button, so nothing else would notice.
+#[test]
+fn the_reset_layout_button_resets_the_layout_when_it_is_clicked() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let style = theme::dock_style(&egui::Style::default(), 1.0);
+    let mut h = DockHarness::new();
+    // The button lives on the System pane, which shares its leaf with the other
+    // settings tabs and is not the one that opens selected.
+    let path = state.workspace.dock.find_tab(&panes::Tab::System).expect("System is docked");
+    state.workspace.dock.set_active_tab(path).expect("selecting the tab");
+    h.settle_folds(&mut state);
+    let fresh: Vec<f32> = LAID_OUT_TABS.iter().map(|tab| pane_width(&state, *tab)).collect();
+
+    let target = start_dragging_the_settings_boundary(&mut h, &mut state, &style);
+    h.frame(&mut state, vec![press(target, false)]);
+    let out = h.settle_folds(&mut state);
+    let dragged: Vec<f32> = LAID_OUT_TABS.iter().map(|tab| pane_width(&state, *tab)).collect();
+    assert!(
+        (dragged[1] - fresh[1]).abs() > 10.0,
+        "the drag has to actually move a boundary for the reset to have something to undo: \
+         {fresh:?} -> {dragged:?}"
+    );
+
+    let at =
+        label_center(&out, "Reset layout").expect("the System pane draws its Reset layout button");
+    h.frame(&mut state, vec![egui::Event::PointerMoved(at)]);
+    h.frame(&mut state, vec![egui::Event::PointerMoved(at), press(at, true)]);
+    h.frame(&mut state, vec![press(at, false)]);
+    h.settle_folds(&mut state);
+
+    let reset: Vec<f32> = LAID_OUT_TABS.iter().map(|tab| pane_width(&state, *tab)).collect();
+    for (index, tab) in LAID_OUT_TABS.iter().enumerate() {
+        assert!(
+            (reset[index] - fresh[index]).abs() < 1.0,
+            "{tab:?} should be back at the width a fresh dock draws it at: \
+             fresh {fresh:?}, dragged {dragged:?}, after the click {reset:?}"
         );
     }
 }
@@ -609,8 +697,8 @@ const LAID_OUT_TABS: [panes::Tab; 3] =
     [panes::Tab::Lattice, panes::Tab::Spectral, panes::Tab::Tuning];
 
 fn pane_rect(state: &SharedState, tab: panes::Tab) -> egui::Rect {
-    let path = state.dock.find_tab(&tab).expect("the tab is docked");
-    state.dock[path.surface][path.node].rect().expect("the pane is laid out")
+    let path = state.workspace.dock.find_tab(&tab).expect("the tab is docked");
+    state.workspace.dock[path.surface][path.node].rect().expect("the pane is laid out")
 }
 
 fn pane_width(state: &SharedState, tab: panes::Tab) -> f32 {
@@ -648,8 +736,9 @@ fn rail_labels(output: &egui::FullOutput, rail: egui::Rect) -> Vec<(String, f32)
 /// the rail's own once they have nothing else in them.
 fn rail_rect(state: &SharedState, tabs: &[panes::Tab]) -> egui::Rect {
     tabs.iter().fold(egui::Rect::NOTHING, |rail, tab| {
-        let path = state.dock.find_tab(tab).expect("tab is in the dock");
-        rail.union(state.dock[path.surface][path.node].rect().expect("the leaf is laid out"))
+        let path = state.workspace.dock.find_tab(tab).expect("tab is in the dock");
+        let leaf = &state.workspace.dock[path.surface][path.node];
+        rail.union(leaf.rect().expect("the leaf is laid out"))
     })
 }
 
@@ -663,7 +752,7 @@ fn rail_rect(state: &SharedState, tabs: &[panes::Tab]) -> egui::Rect {
 #[test]
 fn a_folded_column_names_every_pane_in_it() {
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
-    state.min_window_width = 400.0;
+    state.workspace.min_window_width = 400.0;
     let mut h = DockHarness::new();
     h.settle(&mut state);
     // Notes/Console is folded in the default layout, so collapsing the
@@ -705,7 +794,7 @@ fn a_folded_column_names_every_pane_in_it() {
 #[test]
 fn a_folded_pair_names_each_rail_under_its_own_arrow() {
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
-    state.min_window_width = 400.0;
+    state.workspace.min_window_width = 400.0;
     let mut h = DockHarness::new();
     h.settle(&mut state);
     // The picture pair: collapsing both leaves the split itself collapsed, so
@@ -741,7 +830,7 @@ fn a_folded_pair_names_each_rail_under_its_own_arrow() {
 #[test]
 fn a_folded_columns_lower_arrow_opens_its_own_pane() {
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
-    state.min_window_width = 400.0;
+    state.workspace.min_window_width = 400.0;
     let mut h = DockHarness::new();
     h.settle(&mut state);
     h.collapse_click(&mut state, panes::Tab::Tuning);
@@ -767,8 +856,8 @@ fn a_folded_columns_lower_arrow_opens_its_own_pane() {
     // tall. That last one is where a botched collapsed-leaf count shows up:
     // not as a pane that fails to open, but as a bar drawn some multiple of a
     // tab bar thick afterwards (see `fold::uncollapse`).
-    let path = state.dock.find_tab(&panes::Tab::Tuning).expect("tab is in the dock");
-    let folded = state.dock[path.surface][path.node].rect().expect("laid out");
+    let path = state.workspace.dock.find_tab(&panes::Tab::Tuning).expect("tab is in the dock");
+    let folded = state.workspace.dock[path.surface][path.node].rect().expect("laid out");
     assert!(folded.width() > 100.0, "the rail should be a column again: {folded:?}");
     assert!(
         (folded.height() - crate::theme::TAB_BAR_HEIGHT).abs() < 4.0,
@@ -783,7 +872,7 @@ fn a_folded_columns_lower_arrow_opens_its_own_pane() {
 #[test]
 fn a_folded_columns_stacked_arrow_is_inert() {
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
-    state.min_window_width = 400.0;
+    state.workspace.min_window_width = 400.0;
     let mut h = DockHarness::new();
     h.settle(&mut state);
     h.collapse_click(&mut state, panes::Tab::Tuning);
@@ -791,8 +880,8 @@ fn a_folded_columns_stacked_arrow_is_inert() {
 
     // Where egui_dock puts the log leaf's button: directly under the settings
     // leaf's, one tab bar down from the top of the rail.
-    let path = state.dock.find_tab(&panes::Tab::Notes).expect("tab is in the dock");
-    let stacked = state.dock[path.surface][path.node].rect().expect("laid out");
+    let path = state.workspace.dock.find_tab(&panes::Tab::Notes).expect("tab is in the dock");
+    let stacked = state.workspace.dock[path.surface][path.node].rect().expect("laid out");
     let at = stacked.left_top() + egui::vec2(12.0, crate::theme::TAB_BAR_HEIGHT * 0.5);
     assert!(
         at.y < rail.top() + rail.height() * 0.5,
@@ -894,7 +983,7 @@ fn a_dock_folded_whole_is_a_strip_of_named_rails() {
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
     // The strip is worth about three tab bars, and the shell's own floor would
     // otherwise stop the window well above it.
-    state.min_window_width = 50.0;
+    state.workspace.min_window_width = 50.0;
     let mut h = DockHarness::new();
     h.settle(&mut state);
     let opened = h.screen.width();
