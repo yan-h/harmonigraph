@@ -5,6 +5,7 @@
 use crate::*;
 use crate::state::UI_PERSIST_VERSION;
 use harmonigraph_render::wgpu::TextureFormat;
+use harmonigraph_scene::Camera;
 
 #[test]
 fn persist_round_trips_camera_and_view() {
@@ -1366,4 +1367,146 @@ fn top_level_pairs(blob: &str) -> Vec<(String, String)> {
     out.into_iter()
         .map(|text| (text[..text.find(':').expect("a pair has a colon")].to_string(), text))
         .collect()
+}
+
+/// Replace one `key:value` pair in a serialized blob. RON has no trailing
+/// comma on a struct's last field, so `key` closing its struct (`)`) needs a
+/// different pattern than one with a sibling after it (`,`) — tried in that
+/// order, comma first since most fields have one.
+fn replace_pair(blob: &str, key: &str, was: &str, value: &str) -> String {
+    let with_comma = blob.replacen(&format!("{key}:{was},"), &format!("{key}:{value},"), 1);
+    if with_comma != blob {
+        return with_comma;
+    }
+    blob.replacen(&format!("{key}:{was})"), &format!("{key}:{value})"), 1)
+}
+
+/// A hand-edited camera comes back one `view_proj` can draw, on the same
+/// footing as the pitch range and the soft-edge pair above:
+/// `screen_scale` already guards `distance`/`fov_y` locally for the
+/// font-size math it does, but nothing stood between a hand-edited blob and
+/// `ortho`'s `tan`, or `eye`'s trig, which read the fields directly on every
+/// frame the camera is drawn. A non-finite value and a finite one past what
+/// the field's own bar can reach are swept together: both repair to the same
+/// place, since a NaN and an out-of-range value fall back through the same
+/// `finite_or(..).clamp(..)`.
+#[test]
+fn a_blob_naming_a_nonsense_camera_opens_on_what_it_can_reach() {
+    let cases: [(&str, &str, &str, Option<(f32, f32)>); 11] = [
+        ("yaw", "NaN", "a NaN yaw", None),
+        ("pitch", "NaN", "a NaN pitch", Some((-Camera::PITCH_LIMIT, Camera::PITCH_LIMIT))),
+        ("pitch", "10.0", "a pitch past `orbit`'s limit", Some((-Camera::PITCH_LIMIT, Camera::PITCH_LIMIT))),
+        ("distance", "NaN", "a NaN distance", Some((Camera::MIN_DISTANCE, Camera::MAX_DISTANCE))),
+        (
+            "distance",
+            "999.0",
+            "a distance past the zoom range",
+            Some((Camera::MIN_DISTANCE, Camera::MAX_DISTANCE)),
+        ),
+        ("fov_y", "NaN", "a NaN field of view", Some((0.2, 2.0))),
+        ("fov_y", "100.0", "a field of view `ortho`'s `tan` cannot take", Some((0.2, 2.0))),
+        (
+            "cabinet_angle",
+            "NaN",
+            "a NaN cabinet angle",
+            Some((0.0, std::f32::consts::FRAC_PI_2)),
+        ),
+        (
+            "cabinet_angle",
+            "10.0",
+            "a cabinet angle past its bar's 0..=90 degrees",
+            Some((0.0, std::f32::consts::FRAC_PI_2)),
+        ),
+        ("cabinet_scale", "inf", "an infinite cabinet scale", Some((0.1, 1.0))),
+        ("cabinet_scale", "5.0", "a cabinet scale past its bar", Some((0.1, 1.0))),
+    ];
+    for (key, value, hint, range) in cases {
+        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        state.view.extent_sevens = 3;
+        let saved = state.save_persist();
+        let was = match key {
+            "yaw" => state.camera.yaw,
+            "pitch" => state.camera.pitch,
+            "distance" => state.camera.distance,
+            "fov_y" => state.camera.fov_y,
+            "cabinet_angle" => state.camera.cabinet_angle,
+            _ => state.camera.cabinet_scale,
+        };
+        let edited = replace_pair(&saved, key, &format!("{was:?}"), value);
+        assert_ne!(edited, saved, "{hint}: `{key}` is not in the blob to edit");
+
+        let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+        restored.load_persist(&edited);
+        let got = match key {
+            "yaw" => restored.camera.yaw,
+            "pitch" => restored.camera.pitch,
+            "distance" => restored.camera.distance,
+            "fov_y" => restored.camera.fov_y,
+            "cabinet_angle" => restored.camera.cabinet_angle,
+            _ => restored.camera.cabinet_scale,
+        };
+        assert!(got.is_finite(), "{hint}: `{key}` opened at {got}");
+        if let Some((lo, hi)) = range {
+            assert!(got >= lo && got <= hi, "{hint}: `{key}` opened at {got}, outside {lo}..={hi}");
+        }
+        assert_eq!(restored.view.extent_sevens, 3, "{hint}: the rest of the blob still restores");
+    }
+}
+
+/// The target has no bar and no natural bound — the camera can look
+/// anywhere — so unlike its five neighbours above it is repaired rather than
+/// clamped, and as a whole vector: `eye()` reads all three components
+/// together, and one bad component would otherwise NaN the other two
+/// through it.
+#[test]
+fn a_blob_naming_a_nonsense_camera_target_opens_on_a_drawable_one() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    state.view.extent_sevens = 3;
+    let saved = state.save_persist();
+    let edited = saved.replace("target:(0.0,0.0,0.0),", "target:(NaN,0.0,0.0),");
+    assert_ne!(edited, saved, "`target` is not in the blob to edit");
+
+    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+    restored.load_persist(&edited);
+    assert!(
+        restored.camera.target.is_finite(),
+        "a NaN component opened at {:?}",
+        restored.camera.target,
+    );
+    assert_eq!(restored.view.extent_sevens, 3, "the rest of the blob still restores");
+}
+
+/// The Video pane's two numeric dials, on the same footing: `lead_in` feeds
+/// the offline renderer's frame count and `split` feeds `Layout::split`,
+/// whose own clamp cannot repair a NaN (it loses every comparison a clamp
+/// makes), only hold a finite value inside a literal range.
+#[test]
+fn a_blob_naming_a_nonsense_render_config_opens_on_what_it_can_reach() {
+    let cases: [(&str, &str, &str, (f32, f32)); 4] = [
+        ("lead_in", "NaN", "a NaN lead-in", (0.0, 5.0)),
+        ("lead_in", "999.0", "a lead-in past its bar", (0.0, 5.0)),
+        ("split", "NaN", "a NaN split", (0.05, 0.95)),
+        ("split", "inf", "an infinite split", (0.05, 0.95)),
+    ];
+    for (key, value, hint, (lo, hi)) in cases {
+        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        state.view.extent_sevens = 3;
+        let saved = state.save_persist();
+        let was = match key {
+            "lead_in" => state.take.render_config.lead_in,
+            _ => state.take.render_config.frame.split,
+        };
+        let edited = replace_pair(&saved, key, &format!("{was:?}"), value);
+        assert_ne!(edited, saved, "{hint}: `{key}` is not in the blob to edit");
+
+        let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+        restored.load_persist(&edited);
+        let got = match key {
+            "lead_in" => restored.take.render_config.lead_in,
+            _ => restored.take.render_config.frame.split,
+        };
+        assert!(got.is_finite(), "{hint}: `{key}` opened at {got}");
+        assert!(got >= lo && got <= hi, "{hint}: `{key}` opened at {got}, outside {lo}..={hi}");
+        assert_eq!(restored.view.extent_sevens, 3, "{hint}: the rest of the blob still restores");
+    }
 }

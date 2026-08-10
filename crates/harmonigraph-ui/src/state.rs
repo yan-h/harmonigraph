@@ -658,13 +658,15 @@ impl SharedState {
         // never look (see `temper_judged`); a host pushing state into a
         // live editor, on undo or a preset change, is exactly that case.
         self.temper_judged = [None; Comma::COUNT];
-        // Both fit a deserialized blob to what its controls can produce,
-        // which a hand-edited RON need not have.
+        // All four fit a deserialized blob to what its own controls can
+        // produce, which a hand-edited RON need not have.
+        self.camera.sanitize();
         self.view.sanitize();
         self.camera_presets = persist.camera_presets;
         self.spectrum_config = persist.spectrum;
         self.spectrum_config.sanitize();
         self.take.render_config = persist.render;
+        self.take.render_config.sanitize();
         self.fps_cap = persist.fps_cap;
         // Clamped here rather than only where it is drawn, so the control
         // cannot read out a number the chrome is not at: `set_ui_scale`
