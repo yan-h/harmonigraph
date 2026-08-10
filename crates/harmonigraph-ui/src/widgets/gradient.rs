@@ -12,8 +12,7 @@ use harmonigraph_scene::{
 };
 
 use super::bar::{
-    aimed_at, bar_radius, bar_width, elided_name, grabbed, grip_over_text, release_grab,
-    track_fill,
+    aimed_at, bar_radius, bar_width, elided_name, grabbed, grip_over_text, release_grab, track_fill,
     BAR_LABEL_GAP, BAR_TEXT_PAD, GRAB_PX, HANDLE_INSET, HANDLE_REACH_SHARE, HANDLE_W, TEXT_GAP,
 };
 use super::mesh::gradient_strip;
@@ -1778,6 +1777,9 @@ mod tests {
     /// circle, but not a corner drawn from its two endpoints alone — the
     /// endpoints are ON the arc. The sample count catches that. And the
     /// straight run catches a radius that has grown to swallow the band.
+    ///
+    /// [`corner_inset`]: super::mesh::corner_inset
+    /// [`CORNER_SAMPLES`]: super::mesh::CORNER_SAMPLES
     #[test]
     fn both_colour_bands_are_rounded_by_their_own_mesh() {
         let mut g = ViewConfig::default().pitch_gradient;

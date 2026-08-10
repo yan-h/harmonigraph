@@ -33,7 +33,7 @@ use egui::Color32;
 /// Both figures move with the column, and in the direction that makes the
 /// preview's case the one to size for: narrow the pane and every column narrows
 /// while the radius holds, so the samples matter most where the pane is widest.
-const CORNER_SAMPLES: usize = 8;
+pub(super) const CORNER_SAMPLES: usize = 8;
 
 /// A band of `segments + 1` colored columns across `rect`, each column's color
 /// taken from `color` at its position along the band (0 at the left edge, 1 at
@@ -214,7 +214,7 @@ fn feather_width(painter: &egui::Painter) -> f32 {
 /// How far a rounded band's edge is pinched in, top and bottom, at a column
 /// `from_end` points from its nearer end: nothing along the straight run, and
 /// the corner circle's own profile inside the last `radius`.
-fn corner_inset(from_end: f32, radius: f32) -> f32 {
+pub(super) fn corner_inset(from_end: f32, radius: f32) -> f32 {
     if from_end >= radius {
         return 0.0;
     }

@@ -65,6 +65,8 @@ pub(super) fn filled_rects(shapes: &[egui::Shape]) -> Vec<(egui::Rect, egui::Col
 /// names — and a test asking for "the last run" would get a fragment of one
 /// clipped to 6pt. An override colour is what marks a knockout, and nothing
 /// else in this module sets one.
+///
+/// [`grip_over_text`]: super::bar::grip_over_text
 pub(super) fn text_boxes(shapes: &[egui::Shape]) -> Vec<(egui::Rect, String)> {
     shapes
         .iter()
@@ -85,6 +87,8 @@ pub(super) fn text_boxes(shapes: &[egui::Shape]) -> Vec<(egui::Rect, String)> {
 /// knockout repeats its run's own galley at its own origin, so string, box
 /// and position are all shared with the pass it doubles and only the clip
 /// says it is confined to a thumb rather than painted over the whole run.
+///
+/// [`grip_over_text`]: super::bar::grip_over_text
 pub(super) fn knockouts(
     shapes: &[egui::epaint::ClippedShape],
 ) -> Vec<(egui::Rect, egui::Rect, String, Option<egui::Color32>)> {

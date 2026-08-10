@@ -15,6 +15,11 @@ use crate::theme;
 /// a dozen of them on its knee.
 const CURVE_SEGMENTS: usize = 64;
 
+// Both lengths below are the bars' own geometry, written at the design size and
+// multiplied by `theme::ui_scale` where they are drawn — the contract
+// `super::bar` states for the lengths it holds. The segment count above is not
+// one of them: how finely the line is sampled is the same at every size.
+
 /// How far a [`ValueBar::curve`] preview is held off the top and bottom of the
 /// track, so the flat ends of the curve read as a line rather than as the
 /// track's own rim.
