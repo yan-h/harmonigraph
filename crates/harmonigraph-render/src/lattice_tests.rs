@@ -43,6 +43,11 @@ fn the_shaders_pitch_lut_is_the_length_the_scene_says() {
 /// struct is parsed for real; this reads both the same shallow way the
 /// [`the_shaders_pitch_lut_is_the_length_the_scene_says`] needle check
 /// does, which is enough to catch the two lists disagreeing.
+///
+/// Assumes one field per line, which every field in both of today's structs
+/// is short enough to be. A field whose type needs wrapping to a second line
+/// panics here instead of parsing wrong — loud, but a confusing place to
+/// land for whoever adds it, since the message names no field and no line.
 fn struct_field_names(src: &str, name: &str) -> Vec<String> {
     let after_kw = src.split_once(&format!("struct {name}")).expect("struct not found").1;
     let body_start = after_kw.find('{').expect("struct has no body") + 1;
