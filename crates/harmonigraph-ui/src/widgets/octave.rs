@@ -6,7 +6,9 @@ use harmonigraph_scene::{
     clamp_wheel, octave_layout, ViewConfig, DEFAULT_CENTER, DEFAULT_COUNT, MAX_SPAN, MIN_SPAN,
 };
 
-use super::bar::{aimed_at, bar_radius, bar_width, elided_name, BAR_TEXT_PAD};
+use super::bar::{
+    aimed_at, bar_radius, bar_width, elided_name, grabbed, release_grab, BAR_TEXT_PAD,
+};
 use crate::theme;
 
 /// Gap between two of the octave strip's cells, so a wheel reads as a row of
@@ -177,28 +179,18 @@ impl<'a> OctaveStrip<'a> {
         if response.dragged() {
             if let Some(p) = response.interact_pointer_pos() {
                 let reach = out(p.x);
-                // Read and write are separate statements on purpose: nesting a
-                // `data_mut` inside a `data` closure takes the context lock
-                // twice, and nothing here is worth risking that on a path only
-                // a real pointer reaches.
-                let stored = ui.data(|d| d.get_temp::<StripGrab>(grab_id));
-                let grab = match stored {
-                    Some(grab) => grab,
-                    None => {
-                        // From where the press LANDED (see `aimed_at`), which
-                        // this control needs more than the bars with handles do
-                        // and not differently: it splits its two gestures on a
-                        // hard line rather than on a reach, and half of the
-                        // drawn handle sits inside the six points egui spends
-                        // deciding a press is a drag — so the live position
-                        // hands "grab the handle, pull it outward", which is the
-                        // count, to the fringe.
-                        let start = out(aimed_at(ui, p).x);
-                        let grab = StripGrab::at(start, *self.count, *self.extras);
-                        ui.data_mut(|d| d.insert_temp(grab_id, grab));
-                        grab
-                    }
-                };
+                let grab = grabbed(ui, grab_id, |ui| {
+                    // From where the press LANDED (see `aimed_at`), which
+                    // this control needs more than the bars with handles do
+                    // and not differently: it splits its two gestures on a
+                    // hard line rather than on a reach, and half of the
+                    // drawn handle sits inside the six points egui spends
+                    // deciding a press is a drag — so the live position
+                    // hands "grab the handle, pull it outward", which is the
+                    // count, to the fringe.
+                    let start = out(aimed_at(ui, p).x);
+                    StripGrab::at(start, *self.count, *self.extras)
+                });
                 let (count, extras) = grab.apply(reach);
                 if (count, extras) != (*self.count, *self.extras) {
                     (*self.count, *self.extras) = (count, extras);
@@ -207,7 +199,7 @@ impl<'a> OctaveStrip<'a> {
             }
         }
         if response.drag_stopped() {
-            ui.data_mut(|d| d.remove_temp::<StripGrab>(grab_id));
+            release_grab::<StripGrab>(ui, grab_id);
         }
 
         // ---- Paint ----------------------------------------------------------

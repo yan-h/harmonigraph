@@ -6,8 +6,8 @@ use std::ops::RangeInclusive;
 use egui::{CornerRadius, Response, Sense, TextStyle, Ui, Vec2};
 
 use super::bar::{
-    aimed_at, bar_radius, bar_width, elided_name, grip_over_text, BAR_LABEL_GAP, BAR_TEXT_PAD,
-    GRAB_PX, HANDLE_INSET, HANDLE_REACH_SHARE, HANDLE_W, TEXT_GAP,
+    aimed_at, bar_radius, bar_width, elided_name, grabbed, grip_over_text, release_grab,
+    BAR_LABEL_GAP, BAR_TEXT_PAD, GRAB_PX, HANDLE_INSET, HANDLE_REACH_SHARE, HANDLE_W, TEXT_GAP,
 };
 use super::mesh::gradient_strip;
 use crate::theme;
@@ -374,26 +374,16 @@ impl<'a> RangeBar<'a> {
                 // hand the drag to whichever handle is nearest now. Decided
                 // HERE rather than under `drag_started` so a gesture whose
                 // start frame was missed still does something.
-                // Read and write are separate statements on purpose: nesting a
-                // `data_mut` inside a `data` closure takes the context lock
-                // twice, and nothing here is worth risking that on a path only
-                // a real pointer reaches.
-                let stored = ui.data(|d| d.get_temp::<Grab>(grab_id));
-                let grab = match stored {
-                    Some(grab) => grab,
-                    None => {
-                        // From where the press LANDED (see `aimed_at`), snapped
-                        // the same way the live value is: the span grab reads
-                        // its own offset off this, so an unsnapped one would
-                        // leave a fraction of a value inside a gesture whose
-                        // whole point is whole ones.
-                        let aim = value_at(aimed_at(ui, p).x);
-                        let aim = if self.integer { aim.round() } else { aim };
-                        let grab = Grab::at(aim, (*self.low, *self.high), (min, max), near);
-                        ui.data_mut(|d| d.insert_temp(grab_id, grab));
-                        grab
-                    }
-                };
+                let grab = grabbed(ui, grab_id, |ui| {
+                    // From where the press LANDED (see `aimed_at`), snapped
+                    // the same way the live value is: the span grab reads
+                    // its own offset off this, so an unsnapped one would
+                    // leave a fraction of a value inside a gesture whose
+                    // whole point is whole ones.
+                    let aim = value_at(aimed_at(ui, p).x);
+                    let aim = if self.integer { aim.round() } else { aim };
+                    Grab::at(aim, (*self.low, *self.high), (min, max), near)
+                });
                 let (lo, hi) = grab.apply(v, (*self.low, *self.high), (min, max), self.min_span);
                 if lo != *self.low || hi != *self.high {
                     (*self.low, *self.high) = (lo, hi);
@@ -402,7 +392,7 @@ impl<'a> RangeBar<'a> {
             }
         }
         if response.drag_stopped() {
-            ui.data_mut(|d| d.remove_temp::<Grab>(grab_id));
+            release_grab::<Grab>(ui, grab_id);
         }
 
         // ---- Paint ----------------------------------------------------------

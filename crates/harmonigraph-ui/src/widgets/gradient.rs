@@ -12,8 +12,8 @@ use harmonigraph_scene::{
 };
 
 use super::bar::{
-    aimed_at, bar_radius, bar_width, elided_name, grip_over_text, BAR_LABEL_GAP, BAR_TEXT_PAD,
-    GRAB_PX, HANDLE_INSET, HANDLE_REACH_SHARE, HANDLE_W, TEXT_GAP,
+    aimed_at, bar_radius, bar_width, elided_name, grabbed, grip_over_text, release_grab,
+    BAR_LABEL_GAP, BAR_TEXT_PAD, GRAB_PX, HANDLE_INSET, HANDLE_REACH_SHARE, HANDLE_W, TEXT_GAP,
 };
 use super::mesh::gradient_strip;
 use crate::panes::scene_color;
@@ -520,35 +520,27 @@ impl<'a> SpectrumBar<'a> {
         }
         if response.dragged() {
             if let Some(p) = response.interact_pointer_pos() {
-                // Read and write as separate statements: nesting a `data_mut`
-                // inside a `data` closure takes the context lock twice.
-                let stored = ui.data(|d| d.get_temp::<SpectrumGrab>(grab_id));
-                let grab = match stored {
-                    Some(grab) => grab,
-                    None => {
-                        // All three of these are asked of where the press
-                        // LANDED — see [`aimed_at`] — and none of them of where
-                        // the pointer has since got to. Whether the gesture is
-                        // ours, because a press that began on the preview is
-                        // already over the track by the first live frame;
-                        // handle or track, because a press inside the handle's
-                        // reach is already clear of it; and the hue a turn
-                        // holds, because the gesture begins where the hand put
-                        // it down and turning the circle by less than the
-                        // pointer has travelled is a gesture that starts behind
-                        // and stays there.
-                        let origin = aimed_at(ui, p);
-                        let grab = if !on_track(&origin) {
-                            SpectrumGrab::Outside
-                        } else if (origin.x - handle_x).abs() <= GRAB_PX {
-                            SpectrumGrab::Span
-                        } else {
-                            SpectrumGrab::Rotate { held: aimed.hue_start + offset_at(origin.x) }
-                        };
-                        ui.data_mut(|d| d.insert_temp(grab_id, grab));
-                        grab
+                let grab = grabbed(ui, grab_id, |ui| {
+                    // All three of these are asked of where the press
+                    // LANDED — see [`aimed_at`] — and none of them of where
+                    // the pointer has since got to. Whether the gesture is
+                    // ours, because a press that began on the preview is
+                    // already over the track by the first live frame;
+                    // handle or track, because a press inside the handle's
+                    // reach is already clear of it; and the hue a turn
+                    // holds, because the gesture begins where the hand put
+                    // it down and turning the circle by less than the
+                    // pointer has travelled is a gesture that starts behind
+                    // and stays there.
+                    let origin = aimed_at(ui, p);
+                    if !on_track(&origin) {
+                        SpectrumGrab::Outside
+                    } else if (origin.x - handle_x).abs() <= GRAB_PX {
+                        SpectrumGrab::Span
+                    } else {
+                        SpectrumGrab::Rotate { held: aimed.hue_start + offset_at(origin.x) }
                     }
-                };
+                });
                 let next = match grab {
                     // The magnitude only. Its SIGN is the flip button's, and
                     // leaving it there is what lets the handle reach zero
@@ -570,7 +562,7 @@ impl<'a> SpectrumBar<'a> {
             }
         }
         if response.drag_stopped() {
-            ui.data_mut(|d| d.remove_temp::<SpectrumGrab>(grab_id));
+            release_grab::<SpectrumGrab>(ui, grab_id);
         }
 
         // ---- Paint ----------------------------------------------------------
@@ -1153,18 +1145,10 @@ impl<'a> SpreadBar<'a> {
             if let Some(p) = response.interact_pointer_pos() {
                 let v = value_at(p.x);
                 let aimed = pair(self.gradient.sanitized());
-                // Read and write as separate statements: nesting a `data_mut`
-                // inside a `data` closure takes the context lock twice.
-                let stored = ui.data(|d| d.get_temp::<SpreadGrab>(grab_id));
-                let grab = match stored {
-                    Some(grab) => grab,
-                    None => {
-                        // From where the press LANDED; see [`aimed_at`].
-                        let grab = SpreadGrab::at(value_at(aimed_at(ui, p).x), aimed, near);
-                        ui.data_mut(|d| d.insert_temp(grab_id, grab));
-                        grab
-                    }
-                };
+                let grab = grabbed(ui, grab_id, |ui| {
+                    // From where the press LANDED; see [`aimed_at`].
+                    SpreadGrab::at(value_at(aimed_at(ui, p).x), aimed, near)
+                });
                 let next = self.spread.legal(self.spread.snapped(grab.apply(v, aimed, axis)));
                 if next != pair(*self.gradient) {
                     self.spread.set(self.gradient, next);
@@ -1173,7 +1157,7 @@ impl<'a> SpreadBar<'a> {
             }
         }
         if response.drag_stopped() {
-            ui.data_mut(|d| d.remove_temp::<SpreadGrab>(grab_id));
+            release_grab::<SpreadGrab>(ui, grab_id);
         }
 
         // ---- Paint ----------------------------------------------------------
