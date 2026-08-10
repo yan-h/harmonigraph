@@ -13,6 +13,7 @@ use harmonigraph_scene::{
 
 use super::bar::{
     aimed_at, bar_radius, bar_width, elided_name, grabbed, grip_over_text, release_grab,
+    track_fill,
     BAR_LABEL_GAP, BAR_TEXT_PAD, GRAB_PX, HANDLE_INSET, HANDLE_REACH_SHARE, HANDLE_W, TEXT_GAP,
 };
 use super::mesh::gradient_strip;
@@ -1171,13 +1172,7 @@ impl<'a> SpreadBar<'a> {
         let painter = ui.painter();
         painter.rect_filled(rect, radius, theme::well());
 
-        let fill_color = if response.dragged() {
-            theme::accent_fill_drag()
-        } else if response.hovered() {
-            theme::accent_fill_hover()
-        } else {
-            theme::accent_fill()
-        };
+        let fill_color = track_fill(&response);
         // The stretch of the axis the picture spends, which is what the pair
         // MEANS: a flat ramp fills nothing, and that is the honest drawing of a
         // gradient that spends none of this axis on pitch.
