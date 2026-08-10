@@ -361,10 +361,13 @@ impl Stage {
     /// from the enum rather than from a number someone has to remember to
     /// bump.
     ///
-    /// Checked exhaustively against the enum rather than taken off the last
-    /// variant: a variant added anywhere, not only after `Gpu`, fails to
-    /// compile here until it is also added to the list below, instead of
-    /// silently sizing the table one short.
+    /// The match below is exhaustive, so a variant added ANYWHERE — not only
+    /// after `Gpu` — fails to compile until it is named there, which is what
+    /// `Gpu as usize + 1` could never promise. What the match alone does not
+    /// enforce is the array on the last line staying in step with it; that
+    /// still wants the same per-variant care [`STAGES`] below already asks
+    /// for, and a variant named in one but not the other is what STAGES's
+    /// own array-length check catches, not this one.
     const COUNT: usize = {
         use Stage::*;
         // Exhaustive, and the compiler checks it. The arms are `()` because
