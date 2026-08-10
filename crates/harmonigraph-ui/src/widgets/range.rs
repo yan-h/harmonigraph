@@ -75,7 +75,7 @@ impl Grab {
     /// partner, the way the span branch squishes against a wall. That is a
     /// change to what `Low` and `High` MEAN rather than to this rule, and it is
     /// not made here.
-    fn at(v: f32, (lo, hi): (f32, f32), _range: (f32, f32), near: f32) -> Grab {
+    fn at(v: f32, (lo, hi): (f32, f32), near: f32) -> Grab {
         // A CLOSED span has no middle to take hold of and no side to either
         // handle: both ends stand on one point, so which gesture a press
         // starts is a rule rather than a measurement. Below it the LOW end,
@@ -383,7 +383,7 @@ impl<'a> RangeBar<'a> {
                     // whole point is whole ones.
                     let aim = value_at(aimed_at(ui, p).x);
                     let aim = if self.integer { aim.round() } else { aim };
-                    Grab::at(aim, (*self.low, *self.high), (min, max), near)
+                    Grab::at(aim, (*self.low, *self.high), near)
                 });
                 let (lo, hi) = grab.apply(v, (*self.low, *self.high), (min, max), self.min_span);
                 if lo != *self.low || hi != *self.high {
@@ -717,7 +717,7 @@ impl<'a> RangeBar<'a> {
         // the middle picks the whole range up and slides it.
         let would_start = response
             .hover_pos()
-            .map(|p| Grab::at(value_at(p.x), (*self.low, *self.high), (min, max), near));
+            .map(|p| Grab::at(value_at(p.x), (*self.low, *self.high), near));
         match would_start {
             Some(Grab::Span { .. }) => response.on_hover_cursor(egui::CursorIcon::Grab),
             Some(_) => response.on_hover_cursor(egui::CursorIcon::ResizeHorizontal),
@@ -1294,7 +1294,7 @@ mod tests {
     fn a_range_filling_the_axis_still_drags_from_the_middle() {
         let full = (AXIS.0, AXIS.1);
         for v in [20.0, 60.0, 90.0, 125.0] {
-            let grab = Grab::at(v, full, AXIS, 1.0);
+            let grab = Grab::at(v, full, 1.0);
             let moved = grab.apply(v - 10.0, full, AXIS, OCTAVE);
             assert!(moved != full, "dragging at {v} moved nothing");
         }
@@ -1305,7 +1305,7 @@ mod tests {
     #[test]
     fn a_middle_drag_takes_the_whole_span() {
         assert!(matches!(
-            Grab::at(40.0, (24.0, 60.0), AXIS, 1.0),
+            Grab::at(40.0, (24.0, 60.0), 1.0),
             Grab::Span { offset, width } if offset == 16.0 && width == 36.0
         ));
     }
@@ -1315,10 +1315,10 @@ mod tests {
     /// that mistake moves both values instead of the one you aimed at.
     #[test]
     fn a_drag_near_an_end_takes_that_end() {
-        assert!(matches!(Grab::at(25.0, (24.0, 60.0), AXIS, 2.0), Grab::Low));
-        assert!(matches!(Grab::at(59.0, (24.0, 60.0), AXIS, 2.0), Grab::High));
+        assert!(matches!(Grab::at(25.0, (24.0, 60.0), 2.0), Grab::Low));
+        assert!(matches!(Grab::at(59.0, (24.0, 60.0), 2.0), Grab::High));
         // Well inside the span, but still nearer the end than the reach.
-        assert!(matches!(Grab::at(31.0, (24.0, 60.0), AXIS, 8.0), Grab::Low));
+        assert!(matches!(Grab::at(31.0, (24.0, 60.0), 8.0), Grab::Low));
     }
 
     /// And through a real pointer: a press within an end's reach takes THAT
@@ -1385,7 +1385,7 @@ mod tests {
     fn the_handle_reach_leaves_a_narrow_span_pannable() {
         let narrow = (60.0, 60.0 + OCTAVE);
         let middle = 60.0 + OCTAVE / 2.0;
-        assert!(matches!(Grab::at(middle, narrow, AXIS, 1_000.0), Grab::Span { .. }));
+        assert!(matches!(Grab::at(middle, narrow, 1_000.0), Grab::Span { .. }));
     }
 
     /// A `fade_span` bar paints the pair as the edge it describes: solid from
@@ -1659,11 +1659,11 @@ mod tests {
         let closed = (60.0, 60.0);
         // Above it: the span slides, so the edge widens at the same (zero)
         // fade rather than softening.
-        let grab = Grab::at(80.0, closed, AXIS, 8.0);
+        let grab = Grab::at(80.0, closed, 8.0);
         assert!(matches!(grab, Grab::Span { .. }), "a press above a closed span took {grab:?}");
         assert_eq!(grab.apply(90.0, closed, AXIS, 0.0), (70.0, 70.0));
         // Below it: the low end, which is the only one that can open it.
-        let grab = Grab::at(40.0, closed, AXIS, 8.0);
+        let grab = Grab::at(40.0, closed, 8.0);
         assert!(matches!(grab, Grab::Low), "a press below a closed span took {grab:?}");
         assert_eq!(grab.apply(40.0, closed, AXIS, 0.0), (40.0, 60.0));
     }
@@ -1686,7 +1686,7 @@ mod tests {
             [((60.0, 60.0), "a closed pair"), ((100.0, 40.0), "an inverted pair")];
         for (pair, hint) in cases {
             let press = pair.0.max(pair.1) + 5.0;
-            let (lo, hi) = Grab::at(press, pair, AXIS, 8.0).apply(press + 10.0, pair, AXIS, OCTAVE);
+            let (lo, hi) = Grab::at(press, pair, 8.0).apply(press + 10.0, pair, AXIS, OCTAVE);
             assert!(
                 hi - lo >= OCTAVE - 1e-3,
                 "{hint}: dragging it left a span of {} ({lo}..{hi})",
@@ -1703,7 +1703,7 @@ mod tests {
     fn a_closed_span_at_the_floor_still_opens() {
         let off = (AXIS.0, AXIS.0);
         for v in [AXIS.0, 30.0, 60.0, 120.0] {
-            let grab = Grab::at(v, off, AXIS, 8.0);
+            let grab = Grab::at(v, off, 8.0);
             let moved = grab.apply(v + 10.0, off, AXIS, 0.0);
             assert!(moved != off, "a press at {v} left the bar dead");
             assert_eq!(moved.1 - moved.0, 0.0, "a press at {v} softened the edge as it widened");
