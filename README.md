@@ -104,9 +104,11 @@ harmonigraph-scene       per-frame view model: derive_scene() turns
 harmonigraph-render      wgpu renderer as an egui paint callback: instanced
                          billboard nodes, WGSL in src/shaders/lattice.wgsl.
                          *** Skins/effects/shaders iterate here. ***
-harmonigraph-ui          egui_dock pane shell: Lattice / Tuning / View /
-                         Nodes / Scene / Console / Spectral / Analyzer /
-                         Notes / Video / System tabs under src/panes/. SharedState
+harmonigraph-ui          egui_dock pane shell: Lattice / Tuning / Display /
+                         Console / Spectral / Notes / Video / System tabs under
+                         src/panes/, where Display carries the Color & light,
+                         View, Nodes, Labels, Grid and Analyzer settings as
+                         collapsible sections rather than tabs. SharedState
                          (the lattice's hovered node), ParamBackend trait
                          abstracting "where params live".
 harmonigraph-take        the recorded input to a visualization: note events and

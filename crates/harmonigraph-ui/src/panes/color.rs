@@ -105,8 +105,8 @@ fn spectrum_group(ui: &mut egui::Ui, view: &mut ViewConfig) {
         "The pitch->color spectrum: how far round the color circle the pitch \
          range walks, out of the whole turn the bar stands for. The hues it \
          takes fill from the left, low note first; the ones it does not are \
-         dimmed. The track is hue alone — the brightness and chroma bars below \
-         move the picture above, not the arc. Drag the handle to widen or \
+         dimmed. The track is hue alone — the Brightness and Saturation bars \
+         below move the picture above, not the arc. Drag the handle to widen or \
          narrow it, drag the track to turn the circle under it, double-click \
          to reset. The button past the right end runs the whole thing the \
          other way round the circle.",
