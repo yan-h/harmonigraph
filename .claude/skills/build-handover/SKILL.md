@@ -35,7 +35,7 @@ the running host has not faulted in yet.
 The performance overlay's bottom line reads `build  <branch> @<sha>` — the
 branch with its `worktree-` prefix stripped, so it is exactly the argument
 `./load-plugin.sh <branch>` takes. It is stamped at compile time by
-`crates/harmonigraph-ui/build.rs`. The overlay carrying it ships OFF, so reading
+`crates/harmonigraph-perf/build.rs`. The overlay carrying it ships OFF, so reading
 the tag takes one tick first: **System pane → Performance → Performance overlay**.
 Then it is in the corner of the Analyzer pane — or of the Lattice, which is where
 the overlay goes when the Analyzer is folded or off screen.
