@@ -1712,3 +1712,39 @@ fn the_rolls_ink_stops_at_the_now_line() {
         }
     }
 }
+
+/// Binds `RollAxes`' four hardcoded orientation pairs — the `TOP`, `BOTTOM`,
+/// `LEFT` and `RIGHT` constants in harmonigraph-render's `roll.rs` — to what
+/// [`Axes`] derives for the matching [`SpectralOrientation`], the same way
+/// [`the_names_filter_follows_the_axis_time_runs_along`] binds the text
+/// filter's axis to it.
+///
+/// The roll shader is handed its axis directions once per orientation change
+/// rather than deriving them per vertex, so those four pairs are typed out by
+/// hand on the render side, disconnected from the `Axes` this pane actually
+/// lays out its plane with. Nothing before this compared the two: an
+/// orientation whose roll drew turned or mirrored against its own spectrum
+/// and spectrogram would ship exactly as green as one that agreed with them.
+#[test]
+fn roll_axes_match_what_axes_derives_for_the_same_orientation() {
+    use harmonigraph_render::RollAxes;
+    let cases = [
+        (SpectralOrientation::Top, RollAxes { pitch_dir: [1.0, 0.0], depth_dir: [0.0, 1.0] }),
+        (SpectralOrientation::Bottom, RollAxes { pitch_dir: [1.0, 0.0], depth_dir: [0.0, -1.0] }),
+        (SpectralOrientation::Left, RollAxes { pitch_dir: [0.0, -1.0], depth_dir: [1.0, 0.0] }),
+        (SpectralOrientation::Right, RollAxes { pitch_dir: [0.0, -1.0], depth_dir: [-1.0, 0.0] }),
+    ];
+    for (orientation, roll) in cases {
+        let a = axes(WIDE, orientation);
+        assert_eq!(
+            [a.dir_pitch().x, a.dir_pitch().y],
+            roll.pitch_dir,
+            "{orientation:?}: Axes::dir_pitch disagrees with roll.rs's RollAxes::pitch_dir",
+        );
+        assert_eq!(
+            [a.dir_depth().x, a.dir_depth().y],
+            roll.depth_dir,
+            "{orientation:?}: Axes::dir_depth disagrees with roll.rs's RollAxes::depth_dir",
+        );
+    }
+}
