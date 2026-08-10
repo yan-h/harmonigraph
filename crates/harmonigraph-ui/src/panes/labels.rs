@@ -17,9 +17,11 @@ use harmonigraph_scene::ViewConfig;
 
 /// What a label says and how big it draws, then how long it stays.
 ///
-/// No leading heading, unlike the Nodes and View bodies: the group at the top
-/// is the section, and the only name it could take is the fold-out header's
-/// own.
+/// The leading group takes no heading, unlike the Nodes and View bodies: the
+/// only name it could carry is "Labels", which the fold-out header directly
+/// above it already draws. Trail below it does take one — it names something
+/// narrower than the section, which is the whole of when a heading earns its
+/// row here.
 pub(super) fn labels_pane(ui: &mut egui::Ui, state: &mut SharedState) {
     ui.checkbox(&mut state.view.show_labels, "Note names");
     // Cents ride on the labels, so the toggle grays out with them off.
