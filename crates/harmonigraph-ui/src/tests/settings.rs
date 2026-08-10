@@ -10,7 +10,8 @@ use super::harness::*;
 /// harnesses below are written against: they read the settings leaf as the box
 /// from the tab bar down to the 0.55 split, and the default layout opens that
 /// leaf folded (see
-/// [`the_default_layout_opens_with_the_two_readout_panes_folded`]) so the
+/// `the_default_layout_opens_with_the_two_readout_panes_folded`, in
+/// `tests/fold.rs`) so the
 /// settings column runs the whole height instead.
 ///
 /// Unfolded rather than measured where it now is, because a taller pane is the

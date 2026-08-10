@@ -1,4 +1,4 @@
-//! What survives a session: round-trips through [`UiPersist`], the version
+//! What survives a session: round-trips through [`crate::state::UiPersist`], the version
 //! floor under it, and what a blob costs when a key it carries — or one it is
 //! missing — is not the shape this build expects.
 
