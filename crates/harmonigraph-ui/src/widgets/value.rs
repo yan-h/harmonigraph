@@ -4,7 +4,7 @@ use std::ops::RangeInclusive;
 
 use egui::{Color32, CornerRadius, Key, Response, Sense, TextEdit, TextStyle, Ui, Vec2};
 
-use super::bar::{bar_radius, bar_width, BAR_LABEL_GAP, BAR_TEXT_PAD};
+use super::bar::{bar_radius, bar_width, elided_name, BAR_TEXT_PAD};
 use crate::theme;
 
 /// How many segments a [`ValueBar::curve`] preview is drawn in.
@@ -391,11 +391,7 @@ impl<'a> ValueBar<'a> {
         }
         job.append(self.label, 0.0, egui::TextFormat::simple(body, text_color));
         let text_pad = BAR_TEXT_PAD * scale;
-        job.wrap.max_width =
-            (rect.width() - 2.0 * text_pad - BAR_LABEL_GAP * scale - reserve).max(0.0);
-        job.wrap.max_rows = 1;
-        job.wrap.overflow_character = Some('\u{2026}');
-        let label = painter.layout_job(job);
+        let label = elided_name(painter, job, rect.width(), scale, reserve);
         let centered = |galley: &egui::Galley, x: f32| {
             egui::pos2(x, rect.center().y - galley.size().y * 0.5)
         };
@@ -449,17 +445,13 @@ pub fn progress_bar(ui: &mut Ui, fraction: Option<f32>, label: &str, value: &str
         TextStyle::Monospace.resolve(ui.style()),
         theme::text(),
     );
-    let mut job = egui::text::LayoutJob::simple_singleline(
+    let job = egui::text::LayoutJob::simple_singleline(
         label.to_owned(),
         TextStyle::Body.resolve(ui.style()),
         theme::text_dim(),
     );
     let text_pad = BAR_TEXT_PAD * scale;
-    job.wrap.max_width =
-        (rect.width() - 2.0 * text_pad - BAR_LABEL_GAP * scale - value.size().x).max(0.0);
-    job.wrap.max_rows = 1;
-    job.wrap.overflow_character = Some('\u{2026}');
-    let label = painter.layout_job(job);
+    let label = elided_name(painter, job, rect.width(), scale, value.size().x);
     let centered =
         |galley: &egui::Galley, x: f32| egui::pos2(x, rect.center().y - galley.size().y * 0.5);
     painter.galley(centered(&label, rect.left() + text_pad), label, theme::text_dim());

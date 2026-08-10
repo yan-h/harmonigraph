@@ -12,8 +12,8 @@ use harmonigraph_scene::{
 };
 
 use super::bar::{
-    aimed_at, bar_radius, bar_width, grip_over_text, BAR_LABEL_GAP, BAR_TEXT_PAD, GRAB_PX,
-    HANDLE_INSET, HANDLE_REACH_SHARE, HANDLE_W, TEXT_GAP,
+    aimed_at, bar_radius, bar_width, elided_name, grip_over_text, BAR_LABEL_GAP, BAR_TEXT_PAD,
+    GRAB_PX, HANDLE_INSET, HANDLE_REACH_SHARE, HANDLE_W, TEXT_GAP,
 };
 use super::mesh::gradient_strip;
 use crate::panes::scene_color;
@@ -454,17 +454,13 @@ impl<'a> SpectrumBar<'a> {
             .layout_no_wrap(format!("{:+.0}°", -FULL_TURN), mono.clone(), theme::text())
             .size()
             .x;
-        let mut job = egui::text::LayoutJob::simple_singleline(
+        let job = egui::text::LayoutJob::simple_singleline(
             SPAN_LABEL.to_owned(),
             TextStyle::Body.resolve(ui.style()),
             span_name_color(),
         );
         let text_pad = BAR_TEXT_PAD * scale;
-        job.wrap.max_width =
-            (track_rect.width() - 2.0 * text_pad - BAR_LABEL_GAP * scale - reserve).max(0.0);
-        job.wrap.max_rows = 1;
-        job.wrap.overflow_character = Some('\u{2026}');
-        let label = painter.layout_job(job);
+        let label = elided_name(painter, job, track_rect.width(), scale, reserve);
         // Where the name ends, and so the only part of the track the readout is
         // allowed into. The name was laid out against a width with the widest
         // readout already subtracted, so what is left here holds it: the name
@@ -1228,17 +1224,13 @@ impl<'a> SpreadBar<'a> {
             .size()
             .x;
         let body = TextStyle::Body.resolve(ui.style());
-        let mut job = egui::text::LayoutJob::simple_singleline(
+        let job = egui::text::LayoutJob::simple_singleline(
             self.spread.label().to_owned(),
             body,
             text_color,
         );
         let text_pad = BAR_TEXT_PAD * scale;
-        job.wrap.max_width =
-            (rect.width() - 2.0 * text_pad - BAR_LABEL_GAP * scale - reserve).max(0.0);
-        job.wrap.max_rows = 1;
-        job.wrap.overflow_character = Some('\u{2026}');
-        let label = painter.layout_job(job);
+        let label = elided_name(painter, job, rect.width(), scale, reserve);
         let centered =
             |galley: &egui::Galley, x: f32| egui::pos2(x, rect.center().y - galley.size().y * 0.5);
         let label_pos = centered(&label, rect.left() + text_pad);
