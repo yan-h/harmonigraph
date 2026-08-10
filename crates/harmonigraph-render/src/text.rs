@@ -83,7 +83,7 @@ pub struct GlyphInstance {
     /// radius in POINTS and steps it in TEXELS at `pixels_per_point`, which
     /// holds only while an atlas's texels are device pixels. Both are today,
     /// and a mark rasterized finer than the display (the lever
-    /// `harmonigraph_ui::panes::lattice::mark_key` leaves open) would break
+    /// `harmonigraph_ui::marks::mark_key` leaves open) would break
     /// that identity for every letter sharing the sheet. Per texture it stays
     /// uniform, at the price of this selector.
     pub atlas: u32,
@@ -1544,7 +1544,7 @@ pub(crate) mod tests {
     /// the mark getting heavier and lighter but its weight moving between
     /// being IN a pixel and being spread across two, which is the same
     /// quantity the mark bitmaps are tuned against
-    /// (`harmonigraph_ui::panes::lattice`'s `Grid::breathing`).
+    /// (`harmonigraph_ui::marks`'s `Grid::breathing`).
     ///
     /// The fixture is the worst case the app can present: an opaque hairline,
     /// where one phase puts the whole stroke inside a single pixel and the

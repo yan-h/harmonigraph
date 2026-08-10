@@ -28,8 +28,8 @@
 //! it, which nothing drawn over the finished picture can reproduce.
 //!
 //! A label's DRAWN marks — the accidentals, the syntonic `+`/`−`, the
-//! septimal chevron — are glyphs here too. They are rasterized by
-//! `panes::lattice` rather than by egui and packed into a sheet of their own
+//! septimal chevron — are glyphs here too. They are rasterized by `marks`
+//! rather than by egui and packed into a sheet of their own
 //! ([`MarkAtlas`]), and from there everything is shared: one quad apiece, the
 //! rim from `fs_rim`'s arithmetic rather than a second bitmap, and a place in
 //! whichever run of letters they were collected with. That last is what the
@@ -99,7 +99,7 @@ fn ring_radius(radius: f32, ppp: f32) -> f32 {
 ///     of pixels the rungs fall closer together than that, and two sizes
 ///     inside one pixel are the same picture of the same letter twice. It is
 ///     also the grain the DRAWN marks' bitmaps are built on
-///     (`panes::lattice::mark_key`), which is what makes a name and the `+`
+///     (`marks::mark_key`), which is what makes a name and the `+`
 ///     beside it step together as the camera moves rather than one at a time.
 ///
 /// A `base` that is not itself a whole number of pixels moves by up to half of
@@ -479,7 +479,7 @@ impl TextBatch {
     /// the uv is that bitmap's whole patch. The two are the same box in two
     /// spaces, exactly as a glyph's screen rect and atlas patch are, which is
     /// what keeps the mark's own ink interior to the quad that carries it
-    /// (see `panes::lattice::mark_geometry`) once the shader grows both by the
+    /// (see `marks::mark_geometry`) once the shader grows both by the
     /// rim's reach.
     ///
     /// Returns the bitmap's size in texels, which is what the caller needs to
@@ -488,7 +488,7 @@ impl TextBatch {
     pub(crate) fn mark(
         &mut self,
         ctx: &egui::Context,
-        key: crate::panes::lattice::MarkKey,
+        key: crate::marks::MarkKey,
         center: egui::Pos2,
         ppp: f32,
         color: egui::Color32,
@@ -834,7 +834,7 @@ pub(crate) struct MarkPatch {
     pub(crate) at: [u32; 2],
     /// The bitmap's own size in texels, which is also the mark's quad in
     /// device pixels — the clear margin
-    /// ([`MARK_BITMAP_PAD`](crate::panes::lattice::MARK_BITMAP_PAD)) is part
+    /// ([`MARK_BITMAP_PAD`](crate::marks::MARK_BITMAP_PAD)) is part
     /// of both.
     pub(crate) size: [u32; 2],
 }
@@ -867,7 +867,7 @@ pub(crate) struct MarkAtlas {
     /// renderer: a mutation while one is still held clones (`Arc::make_mut`),
     /// and the ordinary case — nobody holding it — mutates in place.
     image: std::sync::Arc<egui::ColorImage>,
-    at: std::collections::HashMap<crate::panes::lattice::MarkKey, MarkPatch>,
+    at: std::collections::HashMap<crate::marks::MarkKey, MarkPatch>,
     /// The shelf being filled: the row it starts on, how tall it is, and how
     /// far along it the next patch goes.
     shelf: (u32, u32, u32),
@@ -879,7 +879,7 @@ pub(crate) struct MarkAtlas {
     /// the set a repack keeps. Read at the pass boundary, which is the only
     /// place the packing may move.
     pass: u64,
-    used: std::collections::HashSet<crate::panes::lattice::MarkKey>,
+    used: std::collections::HashSet<crate::marks::MarkKey>,
 }
 
 /// How wide the sheet is, in texels.
@@ -889,7 +889,7 @@ pub(crate) struct MarkAtlas {
 /// bounded at [`MAX_GLYPH_PX`] and every mark sets at a fixed fraction of it,
 /// so the widest bitmap the app can ask for is a constant —
 /// `a_mark_is_never_wider_than_the_sheet_it_is_packed_into` in
-/// `panes::lattice` measures it. Four of those to a shelf at the ceiling, and
+/// `marks` measures it. Four of those to a shelf at the ceiling, and
 /// dozens at the sizes a label is really drawn at.
 pub(crate) const MARK_SHEET_WIDTH: u32 = 512;
 
@@ -929,7 +929,7 @@ fn next_sheet_key() -> u64 {
 impl MarkAtlas {
     /// Where `key`'s bitmap sits, rasterizing and packing it if this is the
     /// first time this pass has been asked.
-    fn patch(&mut self, key: crate::panes::lattice::MarkKey, pass: u64) -> MarkPatch {
+    fn patch(&mut self, key: crate::marks::MarkKey, pass: u64) -> MarkPatch {
         if pass != self.pass {
             self.retire();
             self.pass = pass;
@@ -939,7 +939,7 @@ impl MarkAtlas {
         if let Some(&patch) = self.at.get(&key) {
             return patch;
         }
-        let image = crate::panes::lattice::rasterize_mark(key);
+        let image = crate::marks::rasterize_mark(key);
         let size = [image.size[0] as u32, image.size[1] as u32];
         let at = self.claim(size);
         self.blit(&image, at);
@@ -1056,18 +1056,18 @@ impl MarkAtlas {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::panes::lattice::{mark_key, MarkKind, MARK_WEIGHT};
+    use crate::marks::{mark_key, MarkKind, MARK_WEIGHT};
 
     /// A mark at a size in physical pixels, which is the axis a zoom walks:
     /// every rung of the size ladder is one more of these.
-    fn mark_at(kind: MarkKind, size_px: f32) -> crate::panes::lattice::MarkKey {
+    fn mark_at(kind: MarkKind, size_px: f32) -> crate::marks::MarkKey {
         mark_key(kind, size_px, MARK_WEIGHT, 1.0)
     }
 
     /// A walk of `count` distinct sizes, tall enough that a few dozen of them
     /// fill the sheet past [`MARK_SHEET_SOFT_HEIGHT`] — which is what a zoom
     /// drag does, a rung at a time.
-    fn a_zooms_worth(count: usize) -> Vec<crate::panes::lattice::MarkKey> {
+    fn a_zooms_worth(count: usize) -> Vec<crate::marks::MarkKey> {
         (0..count).map(|step| mark_at(MarkKind::Sharp, 60.0 + step as f32)).collect()
     }
 
@@ -1140,7 +1140,7 @@ mod tests {
         for (i, (key, patch)) in packed.iter().enumerate() {
             assert_eq!(
                 patched(&sheet, *patch).pixels,
-                crate::panes::lattice::rasterize_mark(*key).pixels,
+                crate::marks::rasterize_mark(*key).pixels,
                 "patch {i} does not hold the mark it was handed out for",
             );
         }
@@ -1175,7 +1175,7 @@ mod tests {
         assert_eq!(sheet.patch(first, 0), early, "a patch moved under the pass that was handed it");
         assert_eq!(
             patched(&sheet, early).pixels,
-            crate::panes::lattice::rasterize_mark(first).pixels,
+            crate::marks::rasterize_mark(first).pixels,
             "the first mark's texels are not its own any more",
         );
     }
@@ -1231,7 +1231,7 @@ mod tests {
         for (key, patch) in live.iter().zip(&patches) {
             assert_eq!(
                 patched(&sheet, *patch).pixels,
-                crate::panes::lattice::rasterize_mark(*key).pixels,
+                crate::marks::rasterize_mark(*key).pixels,
                 "a repacked mark does not hold its own bitmap",
             );
         }

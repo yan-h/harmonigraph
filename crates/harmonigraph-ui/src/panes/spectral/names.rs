@@ -24,7 +24,7 @@
 //! thing it names is already drawn underneath it.
 //!
 //! The name is the LATTICE's: the same [`NoteName`] the node carries, drawn by
-//! the same [`draw_stacked_name`](crate::panes::lattice::draw_stacked_name) — letter
+//! the same [`draw_stacked_name`](crate::marks::draw_stacked_name) — letter
 //! at full size, accidental riding high, syntonic-comma mark low, septimal
 //! mark in a column of its own past them, all counted rather than repeated. Not a resemblance but the same function, so the two
 //! cannot drift apart. That is the errand: a name here is read against the
@@ -42,7 +42,7 @@ use std::collections::HashMap;
 use harmonigraph_core::{LatticePos, NoteName, PitchClass, RollNote, Tuning};
 use harmonigraph_scene::ViewConfig;
 
-use crate::panes::lattice;
+use crate::marks;
 use super::axes::{Axes, PitchScale, TimeAxis};
 use crate::{theme, SharedState};
 
@@ -274,7 +274,7 @@ const WIDEST_NAME: NoteName =
 pub(super) struct NoteLabel {
     pub name: NoteName,
     /// Screen box the name covers, padded. Its centre is where the name is
-    /// drawn — [`lattice::draw_stacked_name`] centres on its anchor, while the
+    /// drawn — [`marks::draw_stacked_name`] centres on its anchor, while the
     /// placement here works in boxes that grow away from theirs.
     pub rect: egui::Rect,
     /// Test-only: the take time this name was placed at. Which NOTE a name
@@ -582,7 +582,7 @@ fn leading_edge(time: &TimeAxis, note: &RollNote, now: f64) -> Edge {
 /// out; this comment exists so the spill reads as a known price rather than as a
 /// bug nobody noticed.
 ///
-/// [`draw_stacked_name`]: crate::panes::lattice::draw_stacked_name
+/// [`draw_stacked_name`]: crate::marks::draw_stacked_name
 fn label_rect(
     axes: &Axes,
     p: f32,
@@ -620,12 +620,12 @@ fn label_rect(
 /// What a name covers, estimated from the sizes its pieces are laid out at.
 ///
 /// A stacked name is a letter with a column of marks after it — see
-/// [`lattice::draw_stacked_name`] — so its width is the letter plus the wider
+/// [`marks::draw_stacked_name`] — so its width is the letter plus the wider
 /// mark, and its height is the letter's line box, which the marks are sized to
 /// stay inside.
 ///
 /// A counted mark is measured here at two full cells, which the draw path no
-/// longer spends: `lattice::MARK_TRACK` sets a count into its sign's cell, so
+/// longer spends: `marks::MARK_TRACK` sets a count into its sign's cell, so
 /// this reads `0.06 · mark_size` wide per counted column. Deliberately not
 /// mirrored. This estimate drives the thinning and the label boxes, where too
 /// wide only spaces labels further apart than their ink needs and too narrow
@@ -637,13 +637,13 @@ fn name_extent(name: &NoteName, size: f32) -> egui::Vec2 {
         .chars()
         .count()
         .max(name.comma_mark().chars().count());
-    let mark_size = size * lattice::MARK_SIZE / lattice::NAME_SIZE;
+    let mark_size = size * marks::MARK_SIZE / marks::NAME_SIZE;
     // The septimal mark takes a column PAST those two, with air before it,
     // so a name carrying one is wider than its accidental stack suggests —
-    // see `lattice::draw_stacked_name`. Missing it here would let a `B♭↓`
+    // see `marks::draw_stacked_name`. Missing it here would let a `B♭↓`
     // overlap whatever the thinning decided it cleared.
     let septimal = name.septimal_mark().chars().count();
-    let gap = if septimal == 0 { 0.0 } else { lattice::SEPTIMAL_GAP * mark_size };
+    let gap = if septimal == 0 { 0.0 } else { marks::SEPTIMAL_GAP * mark_size };
     egui::vec2(
         (size + (marks + septimal) as f32 * mark_size) * GLYPH_ADVANCE + gap,
         size * LINE_HEIGHT,
@@ -765,7 +765,7 @@ fn equal_tempered_name(midi: f32) -> NoteName {
 
 /// The names, into whichever batch the pane is drawing its labels from.
 ///
-/// Drawn by [`lattice::draw_stacked_name`] — the lattice's own label code, not
+/// Drawn by [`marks::draw_stacked_name`] — the lattice's own label code, not
 /// a copy of it — so a note's name is the same glyphs in the same arrangement
 /// as the node it lights up. Sharing the function rather than the look is what
 /// keeps them from drifting apart the next time either is touched, and it is
@@ -801,9 +801,9 @@ pub(super) fn draw(
     let (raster, magnify) = crate::text::ladder(label_scale, LABEL_PT, ppp);
     // `draw_stacked_name` sizes everything off the lattice's letter, so the
     // rung crosses back into its terms here — a conversion, not a second snap.
-    let scale = LABEL_PT * raster / lattice::NAME_SIZE;
+    let scale = LABEL_PT * raster / marks::NAME_SIZE;
     for label in labels {
-        lattice::draw_stacked_name(
+        marks::draw_stacked_name(
             batch,
             painter,
             label.rect.center(),
@@ -1091,7 +1091,7 @@ mod tests {
     /// [`a_name_sits_on_its_ribbon_at_the_leading_edge`]), so that is what has
     /// to agree between a plain letter and one carrying a mark.
     ///
-    /// [`draw_stacked_name`]: crate::panes::lattice::draw_stacked_name
+    /// [`draw_stacked_name`]: crate::marks::draw_stacked_name
     #[test]
     fn the_letter_lines_up_with_or_without_an_accidental() {
         let plain = NoteName { letter: 'C', sharps: 0, syntonic_commas: 0, septimal_commas: 0 };
@@ -1657,10 +1657,10 @@ mod tests {
         let (plain_box, marked_box) = (name_extent(&plain, size), name_extent(&marked, size));
 
         // A whole column plus the gap wider, not a rounding's worth.
-        let mark_size = size * lattice::MARK_SIZE / lattice::NAME_SIZE;
+        let mark_size = size * marks::MARK_SIZE / marks::NAME_SIZE;
         let grew = marked_box.x - plain_box.x;
         assert!(
-            grew > lattice::SEPTIMAL_GAP * mark_size,
+            grew > marks::SEPTIMAL_GAP * mark_size,
             "a septimal mark widened the name by only {grew}"
         );
         // The mark sits inside the line it shares, so nothing grows taller.
