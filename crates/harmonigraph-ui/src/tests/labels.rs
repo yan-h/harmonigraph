@@ -16,7 +16,7 @@ fn text_box(texts: &[(egui::Rect, String)], want: &str) -> egui::Rect {
 /// A label's text pieces AND the quads of its drawn marks.
 ///
 /// EVERY sign is geometry rather than type -- accidental and comma alike (see
-/// [`panes::lattice::draw_stacked_name`]) -- so a text-only view of a label
+/// [`marks::draw_stacked_name`]) -- so a text-only view of a label
 /// sees only the letter and the counts, and is blind to exactly the marks
 /// these tests are about. A mark is one quad, cut from a sheet of its own and
 /// haloed by the same shader that haloes the letters, so there is nothing to
@@ -34,14 +34,14 @@ fn drawn_label(
 /// carries.
 ///
 /// A mark's QUAD is a pixel wider than the mark on every side
-/// ([`MARK_BITMAP_PAD`](panes::lattice::MARK_BITMAP_PAD), which is there so a
+/// ([`MARK_BITMAP_PAD`](marks::MARK_BITMAP_PAD), which is there so a
 /// sliding mark's edge fades instead of snapping), and every question asked
 /// here -- which column a mark sits in, whether two rows clear each other --
 /// is about where the mark IS. Shrinking once here is what keeps those
 /// readings about the mark rather than about its margin. A point per side
 /// exactly, because every fixture in this file draws at ppp 1 and magnify 1.
 fn mark_fills(marks: &[egui::Rect]) -> Vec<egui::Rect> {
-    let pad = panes::lattice::MARK_BITMAP_PAD as f32;
+    let pad = marks::MARK_BITMAP_PAD as f32;
     marks.iter().map(|mark| mark.shrink(pad)).collect()
 }
 
@@ -81,7 +81,7 @@ fn label_ink_at(
     let _ = ctx.run_ui(
         egui::RawInput { screen_rect: Some(screen), ..Default::default() },
         |ui| {
-            panes::lattice::draw_stacked_name(
+            marks::draw_stacked_name(
                 &mut batch,
                 ui.painter(),
                 anchor,
@@ -127,7 +127,7 @@ fn label_pieces(
     let _ = ctx.run_ui(
         egui::RawInput { screen_rect: Some(screen), ..Default::default() },
         |ui| {
-            reach = panes::lattice::draw_stacked_name(
+            reach = marks::draw_stacked_name(
                 &mut batch,
                 ui.painter(),
                 anchor,
@@ -185,9 +185,9 @@ fn note_label_stacks_the_marks_and_stays_centered_on_the_node() {
     // it is tracked in by MARK_TRACK instead of taking a clear cell after it.
     // Both rows pin against the same number off the same cell, because both
     // set at MARK_SIZE and each drawn sign is centered in one cell.
-    let mark_size = panes::lattice::MARK_SIZE;
-    let cell = panes::lattice::MARK_ADVANCE * mark_size;
-    let track = panes::lattice::MARK_TRACK * mark_size;
+    let mark_size = marks::MARK_SIZE;
+    let cell = marks::MARK_ADVANCE * mark_size;
+    let track = marks::MARK_TRACK * mark_size;
     assert!(
         (accidental_count.left() - count.left()).abs() < 0.01,
         "the two counts should share a left edge ({accidental_count:?} vs {count:?})"
@@ -208,7 +208,7 @@ fn note_label_stacks_the_marks_and_stays_centered_on_the_node() {
     // MARK_INK_W is the `♯`'s width as much as the `+`'s -- the face gives
     // both 372/1000 em -- so one bound covers the pair. The `♭` is narrower
     // and only ever clears by more.
-    let sign_ink_right = cell_left + cell / 2.0 + panes::lattice::MARK_INK_W * mark_size / 2.0;
+    let sign_ink_right = cell_left + cell / 2.0 + marks::MARK_INK_W * mark_size / 2.0;
     let count_ink = text_box(&drawn_label_ink(name, anchor), "4");
     assert!(
         count_ink.left() >= sign_ink_right,
@@ -405,7 +405,7 @@ fn a_mark_is_one_quad_in_the_batch_and_nothing_on_the_painter() {
     let out = ctx.run_ui(
         egui::RawInput { screen_rect: Some(screen), ..Default::default() },
         |ui| {
-            panes::lattice::draw_stacked_name(
+            marks::draw_stacked_name(
                 &mut batch,
                 ui.painter(),
                 anchor,
@@ -726,7 +726,7 @@ fn a_drawn_mark_holds_its_size_in_points_at_every_pixel_density() {
 /// `h / ppp` from opposite ends, and nothing else in the label compares them.
 ///
 /// They agree on the INK, which is the quad less the clear margin every mark
-/// bitmap carries ([`MARK_BITMAP_PAD`](panes::lattice::MARK_BITMAP_PAD)). The
+/// bitmap carries ([`MARK_BITMAP_PAD`](marks::MARK_BITMAP_PAD)). The
 /// readout is placed to clear the mark, and a margin is not something to
 /// clear: reported off the quad instead, every cents line in the app would
 /// hang a pixel lower than the ink it is getting out of the way of.
@@ -748,7 +748,7 @@ fn the_reach_a_label_reports_is_where_its_drawn_mark_ends() {
         // around it reaches further and is one the readout is meant to overlap,
         // the way it overlaps a glyph's.
         let [mark] = marks[..] else { panic!("one mark at ppp {ppp}: {marks:?}") };
-        let ink_bottom = mark.bottom() - panes::lattice::MARK_BITMAP_PAD as f32 / ppp;
+        let ink_bottom = mark.bottom() - marks::MARK_BITMAP_PAD as f32 / ppp;
         assert!(
             (anchor.y + reach - ink_bottom).abs() < 0.01,
             "at ppp {ppp} the label reports reaching {:.3} where its mark ends at {:.3}",
@@ -814,11 +814,11 @@ fn the_cents_readout_sits_right_under_the_note_name() {
     // that scale off the biggest piece drawn rather than assuming the pane is
     // the one the constants are quoted at.
     let scale = batch.pieces().iter().map(|p| p.font_size).fold(0.0, f32::max)
-        / panes::lattice::NAME_SIZE;
+        / marks::NAME_SIZE;
     // Letter and marks together: the readout has to clear the comma, which
     // hangs lower than the letter does.
-    let names = ink_of(&[panes::lattice::NAME_SIZE * scale, panes::lattice::MARK_SIZE * scale]);
-    let cents = ink_of(&[panes::lattice::CENTS_SIZE * scale]);
+    let names = ink_of(&[marks::NAME_SIZE * scale, marks::MARK_SIZE * scale]);
+    let cents = ink_of(&[marks::CENTS_SIZE * scale]);
     assert!(!names.is_empty() && !cents.is_empty(), "the held C should be labeled");
 
     // Every readout belongs to the name directly above it, and sits the
@@ -842,7 +842,7 @@ fn the_cents_readout_sits_right_under_the_note_name() {
         // the gap rather than in absolute points — the regression this is
         // watching for, hanging the readout off the galley box instead of the
         // ink, is worth twice the gap and clears any of this.
-        let want = panes::lattice::CENTS_GAP * scale;
+        let want = marks::CENTS_GAP * scale;
         let slack = want / 3.0;
         assert!(
             (gap - want).abs() <= slack,

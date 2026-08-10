@@ -7,6 +7,7 @@ pub mod params;
 pub mod theme;
 pub(crate) mod text;
 pub mod widgets;
+mod marks;
 mod panes;
 mod perf;
 
