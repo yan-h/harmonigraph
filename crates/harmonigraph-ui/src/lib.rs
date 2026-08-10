@@ -31,9 +31,12 @@ mod state;
 
 pub use layout::{Layout, Placement, PRESETS};
 
-// The three modules above are an arrangement of this file's insides, not a
-// change to what the crate exports: everything that was `pub` here is
-// re-exported here, so no path outside this crate moves.
+// `config`, `spectrum` and `state` are an arrangement of this file's insides,
+// not a change to what the crate exports: everything that was `pub` here is
+// re-exported here, so no path outside this crate moves. They are named rather
+// than counted because `spectrogram` sits among them and is NOT one of them:
+// it came out of `panes::spectral` rather than out of this file, was never
+// `pub` here, and is re-exported nowhere.
 //
 // Four crate-internal names are the exception, and are reached by their own
 // path rather than through here: `UI_PERSIST_VERSION` and `TextureFormat`,
