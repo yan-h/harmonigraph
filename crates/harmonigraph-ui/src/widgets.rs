@@ -1968,7 +1968,7 @@ const FLIP_W: f32 = 18.0;
 /// is: a bar over a gradient is a bar over the hue pair whichever gradient it
 /// is, and a name passed separately is a way for one pane to call it something
 /// the next pane does not.
-const SPAN_LABEL: &str = "Color span";
+const SPAN_LABEL: &str = "Hue";
 
 /// The color a [`SpectrumBar`] writes its own name in: the ground the bar sits
 /// on, which is the one text run in the dock not drawn in the theme's text.
@@ -2628,7 +2628,7 @@ impl Spread {
     fn label(self) -> &'static str {
         match self {
             Spread::Brightness => "Brightness",
-            Spread::Chroma => "Chroma",
+            Spread::Chroma => "Saturation",
         }
     }
 
@@ -7436,7 +7436,7 @@ mod tests {
         let readouts = hit.iter().filter(|s| s.contains('\u{2192}')).count();
         assert!(readouts >= 2, "the fixtures stopped standing a thumb in a readout: {hit:?}");
         assert!(
-            hit.iter().any(|s| s == "Brightness" || s == "Chroma"),
+            hit.iter().any(|s| s == "Brightness" || s == "Saturation"),
             "the fixtures stopped standing a thumb in a name: {hit:?}",
         );
     }
@@ -7670,7 +7670,7 @@ mod tests {
             "an inverted ramp draws the same two handles, so the readout is what says so",
         );
         let color = texts(Spread::Chroma, (0.64, 0.44));
-        assert_eq!(color[0], "Chroma");
+        assert_eq!(color[0], "Saturation");
         assert_eq!(color[1], "42% \u{2192} 86%", "a share of the color reads out as one");
         assert_eq!(texts(Spread::Chroma, (0.64, -0.44))[1], "86% \u{2192} 42%");
     }
