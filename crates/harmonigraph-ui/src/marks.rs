@@ -486,16 +486,25 @@ fn mark_geometry(key: MarkKey) -> (Vec<MarkPiece>, [usize; 2]) {
     // a design and its mirror rasterize to mirror images, and it carries a
     // clear pixel on every side.
     //
-    // That margin is what keeps a sliding mark from stepping. `paint_mark`
-    // draws the bitmap into a quad of its own size and the GPU samples that
-    // quad at pixel CENTRES, so a centre a hair outside it takes nothing at
-    // all: ink reaching the bitmap's own edge has its outermost column
-    // dropped and picked up again once per pixel of travel. `ceil` alone
-    // leaves under half a pixel there, which is not enough for the coverage
-    // to have fallen to zero by the bound. Padded, the ink is interior at
-    // every phase and the edge fades rather than snapping -- the bargain
-    // epaint strikes by padding every glyph in its atlas, and the one
-    // `crate::text`'s shader keeps by growing a glyph's quad past its ink.
+    // That margin is what keeps a sliding mark from stepping, and it is the
+    // shader that spends it. `paint_mark` hands the mark to the same batch
+    // the type goes through, so a mark is a glyph of the mark sheet:
+    // `vs_glyph` grows the quad past the ink, and `tap` reads up to
+    // `PATCH_MARGIN` -- half a texel -- outside the patch. The coverage
+    // therefore falls to zero across a texel that exists rather than stopping
+    // dead at the bound, and the ink is interior at every phase. `ceil` alone
+    // leaves under half a pixel of clearance, which is not enough for it to
+    // have fallen to zero by then. It is the bargain epaint strikes by
+    // padding every glyph in its atlas, bought here by hand.
+    //
+    // ONE texel is the whole of what the pad may be, and the PACKING is what
+    // decides it rather than the ink: `MarkAtlas::claim` starts the next
+    // patch at `x + w`, so marks sit touching on a shelf with no gutter, and
+    // the clear texel each carries is the only thing that half-texel tap can
+    // find out there. Take it away and the tap reaches the neighbour's
+    // outermost column instead, so an accidental draws a ghost of whatever
+    // was packed beside it, changing as a zoom repacks the shelf.
+    // `text.wgsl` argues the same bound from the other side.
     //
     // The accidentals are where it shows, because they are the marks with a
     // full-height stroke standing at the edge of the box. Walking a name at

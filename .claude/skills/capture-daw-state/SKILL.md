@@ -7,8 +7,10 @@ description: Recover the plugin's live settings out of a Bitwig project — came
 
 When Yan has dialed in a look in the DAW and wants it captured (new
 `ViewConfig::default()`, a bug reproduced against real state), don't guess
-and don't read numbers off a screenshot — the settings are spread across seven
-tabs and bar positions don't give you floats. The exact values are recoverable:
+and don't read numbers off a screenshot — the settings are spread across four
+tabs (Tuning, Display, Video, System), one of which folds six more sections
+inside it, and bar positions don't give you floats. The exact values are
+recoverable:
 
 ```sh
 ./read-plugin-state.py            # newest project: params, camera, view

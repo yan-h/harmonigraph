@@ -109,8 +109,8 @@ fn spectrogram_gradient_group(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig
         "The level->color spectrum: how far round the color circle the level \
          range walks, out of the whole turn the bar stands for. The hues it \
          takes fill from the left, silence first; the ones it does not are \
-         dimmed. The track is hue alone — the brightness and chroma bars below \
-         move the picture above, not the circle, which is what leaves the hues \
+         dimmed. The track is hue alone — the Brightness and Saturation bars \
+         below move the picture above, not the circle, which is what leaves the hues \
          showing at Mono, where the arc itself has no width. Drag the handle \
          to widen or narrow it, drag the track to turn the circle under it, \
          double-click to reset. The button past the right end runs the whole \

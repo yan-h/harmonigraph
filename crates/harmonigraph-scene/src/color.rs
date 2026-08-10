@@ -687,8 +687,9 @@ pub const HUE_CIRCLE_N: usize = 96;
 /// key is the two knobs the circle depends on rather than a whole gradient, and
 /// a bar's track hands it a FIXED reference pair (`TRACK_LIGHTNESS`, in
 /// `harmonigraph-ui`'s `widgets`) rather than the gradient's own: two bars open
-/// side by side — the Nodes tab and the Analyzer tab — therefore share the one
-/// entry, and no drag of any knob moves this table at all. A second caller
+/// at once — the Display tab's Color & light and Analyzer sections, which
+/// unfold independently and so can both be on screen in one column — therefore
+/// share the one entry, and no drag of any knob moves this table at all. A second caller
 /// wanting a pair of its own is what would make this want [`LUT_SLOTS`]-style
 /// slots, and it would be worth giving them rather than rebuilding on every
 /// alternation: a rebuild is `HUE_CIRCLE_N` x [`GAMUT_BISECTIONS`] gamut

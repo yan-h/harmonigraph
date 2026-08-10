@@ -18,7 +18,10 @@ pause and do NOT swap the shared slot. This file is the mechanics.
 
 It copies only, never builds; a build must already exist in the worktree.
 Stale builds (dylib older than the branch's HEAD) are flagged but still
-loadable. After a swap, rescan/restart the plugin in Bitwig to pick it up.
+loadable. After a swap, deactivate + reactivate the plugin in Bitwig to pick
+it up — a rescan does not reload one that is already loaded. Deactivate it
+BEFORE the swap when a session is worth protecting: the copy rewrites code
+the running host has not faulted in yet.
 
 - Both `load-plugin.sh` and `update-plugin.sh` record the live build in
   `target/bundled/.loaded`, so "what's loaded?" is answerable without guessing.
@@ -41,7 +44,7 @@ A session handing over a build should say so rather than say "look at the
 corner", because an empty corner is exactly what a swap that did not happen also
 looks like.
 
-This exists because a swap can silently not have happened: no rescan, a build
+This exists because a swap can silently not have happened: no reactivate, a build
 that landed in a different worktree, the wrong branch named, or a build that
 never finished. Two builds are otherwise indistinguishable from inside the
 DAW, and a look that is judged against the wrong binary costs a whole round

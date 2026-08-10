@@ -5,8 +5,8 @@
 //! own worktree, so "which build am I actually looking at?" is a real question
 //! with a wrong answer available — `load-plugin.sh` swaps binaries that look
 //! identical from inside the DAW. The overlay answering it in the picture is
-//! the only check that cannot be fooled by a swap that didn't take, a rescan
-//! that didn't happen, or a build that went to a different worktree.
+//! the only check that cannot be fooled by a swap that didn't take, a
+//! reactivate that didn't happen, or a build that went to a different worktree.
 //!
 //! The tag names the last COMMIT, not the working tree: a build made with
 //! uncommitted edits carries the commit it sits on. That is the same thing

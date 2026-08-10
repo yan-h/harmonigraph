@@ -48,3 +48,8 @@ jobs:
             exit 1
           fi
           echo "ok — no dependencies"
+      # Which worktree locks count as live — the one decision in the tree that
+      # deletes a directory, and the only one no cargo test can reach, since
+      # its inputs are a pid, its argv and the spare pool's sockets. See ci.sh.
+      - name: Worktree reclaim lock cases
+        run: .claude/tests/reclaim-locks.sh

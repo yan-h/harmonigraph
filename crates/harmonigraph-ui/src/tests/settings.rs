@@ -130,7 +130,7 @@ fn every_settings_pane_scrolls_when_its_content_overflows() {
     }
 }
 
-/// The Nodes pane's Shape bar draws the curve the NOTES run on, not a second
+/// The Nodes section's Shape bar draws the curve the NOTES run on, not a second
 /// copy of the formula that happens to look like it.
 ///
 /// The whole value of a preview is that it cannot disagree with what it
@@ -162,7 +162,7 @@ fn the_shape_bars_preview_is_the_curve_the_notes_run_on() {
     .map(|cs| cs.shape)
     .collect();
     let points = crate::widgets::curve_points(&shapes);
-    assert!(points.len() > 8, "the Nodes pane drew {} preview points", points.len());
+    assert!(points.len() > 8, "the Nodes section drew {} preview points", points.len());
 
     // A unit-length arrival, which is the whole curve: the shape lives in the
     // fraction and not in the seconds, so any positive duration draws it.
@@ -945,7 +945,7 @@ fn a_bar_dragged_past_the_window_edge_keeps_tracking_the_pointer() {
     // to the right must arrive at.
     let out = frame(&mut state, vec![]);
     let name =
-        bar_named(&out, "Smoothing").expect("the Smoothing bar is drawn in the Analyzer tab");
+        bar_named(&out, "Smoothing").expect("the Smoothing bar is drawn in the Analyzer section");
     let on_the_bar = name + egui::vec2(2.0, 4.0);
     let before = state.spectrum_config.smoothing;
     frame(&mut state, vec![egui::Event::PointerMoved(on_the_bar)]);

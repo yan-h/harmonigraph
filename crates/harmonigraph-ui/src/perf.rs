@@ -806,7 +806,7 @@ fn memory_readout(rss_bytes: u64) -> String {
 ///
 /// Bitwig loads one bundle and every session builds into its own worktree, so
 /// two builds are indistinguishable from inside the DAW — and swapping the
-/// slot is a step that can silently not have happened (no rescan, a build that
+/// slot is a step that can silently not have happened (no reactivate, a build that
 /// landed in a different worktree, the wrong branch named). The overlay saying
 /// it in the picture is the one check that a reload cannot fool.
 ///

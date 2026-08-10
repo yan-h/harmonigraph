@@ -762,7 +762,7 @@ const TEXT_GAP: f32 = 5.0;
 /// `A ∩ B ∩ run`; that region lies in `run`, so `B` intersects `run` too and
 /// emits its own knockout over the same ground. Painting every fill and then
 /// every knockout is equally correct. A flat ramp puts a [`SpreadBar`]'s two
-/// grips at exactly the same x — the state the nodes pane's chroma bar opens
+/// grips at exactly the same x — the state the Nodes section's chroma bar opens
 /// in, since `chroma_ramp` defaults to 0 — so this is a case that ships, not a
 /// corner.
 ///
@@ -2946,7 +2946,7 @@ impl SpreadGrab {
 /// `the_bars_the_panes_build_are_knocked_out_wherever_they_rest_under_a_thumb`:
 /// the spectrogram's two rest under their readout on a 300pt row — Aurora
 /// opens them past four fifths of their axes — and stand clear of it by the
-/// ~423pt the settings column opens at. The nodes pane's two rest clear at
+/// ~423pt the settings column opens at. The Nodes section's two rest clear at
 /// every width. So at rest this is a narrow-column problem; at a normal width
 /// it is reached by dragging, which is the ordinary use of the control.
 pub struct SpreadBar<'a> {
@@ -7387,7 +7387,7 @@ mod tests {
                 // and only a second knockout over the same ground repairs it.
                 // Not a contrived pair — `chroma_ramp` is 0.0 in both
                 // `Gradient::default()` and `ViewConfig::default()`, so the
-                // nodes pane opens its chroma bar with coincident thumbs.
+                // Nodes section opens its chroma bar with coincident thumbs.
                 ((of(0.9), 0.0), "a flat ramp parked under the readout"),
             ] {
                 let shapes = paint_bar_clipped(spread, pair);
@@ -7452,7 +7452,7 @@ mod tests {
     ///
     /// What it finds is narrower than "you see it the moment you open the
     /// pane", and the numbers are worth keeping because the temptation is to
-    /// state it wider. Measured at 300, 423 and 680pt: the nodes pane's two
+    /// state it wider. Measured at 300, 423 and 680pt: the Nodes section's two
     /// bars rest clear of both runs at every width — brightness at `L*`
     /// 37.5→68.5, and chroma FLAT at 60.2%, both thumbs at one x. The
     /// spectrogram's two rest under their readout at 300pt only — Aurora opens

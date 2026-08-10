@@ -561,7 +561,7 @@ impl ViewConfig {
     /// hand-edited blob can hold anything, and `sanitize` only repairs the
     /// non-finite (a finite 40 would be a curve no bar can undo).
     ///
-    /// The Nodes pane's Shape bar builds one of its own, and it is the single
+    /// The Nodes section's Shape bar builds one of its own, and it is the single
     /// exception rather than a second assembly point: it is drawing a PICTURE
     /// of the curve, over a unit duration that is nothing a note ever fades
     /// on, so it has no note's seconds to pair with and could not reach for
@@ -761,7 +761,7 @@ impl ViewConfig {
         // has no door here to need.
         self.fade_shape = finite_or(self.fade_shape, 0.0);
 
-        // The gutter and its fade, which are ONE control (the Nodes tab's
+        // The gutter and its fade, which are ONE control (the Nodes section's
         // Gutter bar) over two numbers: the fade is a distance measured back
         // from the reach, so a fade wider than the reach is a low end off the
         // bottom of the axis. It draws as a fade over the whole reach either
