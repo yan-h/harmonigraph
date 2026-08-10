@@ -441,6 +441,83 @@ fn every_bar_in_a_settings_pane_is_the_width_of_the_pane() {
     );
 }
 
+/// The bool named for a section opens that section's body, and only that one.
+///
+/// [`DisplaySections`] is one field per section and `open_mut` is the map from
+/// a section to its own, so a section wired to a neighbour's field draws the
+/// wrong body under the right header. Nothing else here would notice: the
+/// sweeps ask each body for properties — a bar is the column's width, a bar is
+/// one row high, the pane scrolls — that hold whatever the body contains, so
+/// two sections could trade bodies with the suite green. Labels and Grid are
+/// the pair that would go longest unnoticed, being two bars each and named in
+/// no other test.
+///
+/// **The field is set by NAME, never through `open_mut`**, and that is the
+/// whole reach of this test. A fixture that opens a section the way
+/// [`SettingsPane::install`] does reads the map to write the flag and reads it
+/// again to draw, so a wrong arm cancels itself out and the fixture passes on
+/// exactly the defect it was written for.
+///
+/// A text out of each BODY rather than the header over it. The six headers are
+/// drawn whatever is open — that is what a collapsed section is — so they say
+/// nothing about which body a flag reached. Each needle is a string only its
+/// own section draws: "Name size" would be the natural one for Labels and is
+/// not, the Analyzer's piano-roll group having a bar of that name too.
+#[test]
+fn the_field_named_for_a_section_opens_that_sections_body() {
+    let draw = |sections: crate::panes::display::DisplaySections| {
+        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        state.display_sections = sections;
+        let backend = RecordingBackend::default();
+        let ctx = egui::Context::default();
+        crate::theme::apply_theme(&ctx);
+        let margin = crate::theme::PANE_INNER_MARGIN;
+        let body =
+            egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0 + 2.0 * margin, 2400.0));
+        ctx.run_ui(
+            egui::RawInput { screen_rect: Some(body), time: Some(0.0), ..Default::default() },
+            |ui| {
+                let mut body_ui =
+                    ui.new_child(egui::UiBuilder::new().max_rect(body.shrink(margin)));
+                let mut tab = panes::Tab::Display;
+                let mut viewer = panes::Viewer { state: &mut state, params: &backend, now: 0.0 };
+                egui_dock::TabViewer::ui(&mut viewer, &mut body_ui, &mut tab);
+            },
+        )
+        .shapes
+    };
+    type Open = fn(&mut crate::panes::display::DisplaySections);
+    const CASES: [(Open, &str, &str); 6] = [
+        (|d| d.color = true, "color", "Bloom"),
+        (|d| d.view = true, "view", "Projection"),
+        (|d| d.nodes = true, "nodes", "Solidity"),
+        (|d| d.labels = true, "labels", "Keep note names"),
+        (|d| d.grid = true, "grid", "Line width"),
+        (|d| d.analyzer = true, "analyzer", "Smoothing"),
+    ];
+    for (open, field, needle) in CASES {
+        let mut sections = crate::panes::display::DisplaySections::default();
+        open(&mut sections);
+        let shapes = draw(sections);
+        let drawn = |text: &str| {
+            shapes.iter().any(|cs| match &cs.shape {
+                egui::Shape::Text(t) => t.galley.text() == text,
+                _ => false,
+            })
+        };
+        assert!(drawn(needle), "`{field}` set drew no {needle:?} — it opened no body");
+        for (_, other, stranger) in CASES {
+            if other != field {
+                assert!(
+                    !drawn(stranger),
+                    "`{field}` set drew {stranger:?}, which is `{other}`'s — \
+                     are the two wired to each other's fields?",
+                );
+            }
+        }
+    }
+}
+
 /// Each gradient group opens with its preview: one band of color the width of
 /// the column, standing ABOVE the spectrum track that is the first of the three
 /// bars writing it.
