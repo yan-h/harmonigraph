@@ -177,7 +177,7 @@ fn frame_controls(ui: &mut egui::Ui, state: &mut SharedState) {
 /// Empty the three things that accumulate, in one press, next to the button
 /// that starts a take.
 ///
-/// Each pane that owns an accumulation already clears its own — Scene's "Clear
+/// Each pane that owns an accumulation already clears its own — Labels' "Clear
 /// trail", the Analyzer's "Clear roll and spectrogram" — and those stay, since
 /// clearing what one pane draws is a real thing to want while dialing that pane
 /// in. This is for the other moment, when all three are wanted together and
