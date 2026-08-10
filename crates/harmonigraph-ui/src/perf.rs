@@ -357,11 +357,33 @@ enum Stage {
 }
 
 impl Stage {
-    /// How many there are. Taken off the last variant, so the table and the
-    /// window array size themselves from the enum rather than from a number
-    /// someone has to remember to bump — which does mean `Gpu` has to STAY
-    /// last: a variant added after it sizes nothing and indexes past both.
-    const COUNT: usize = Stage::Gpu as usize + 1;
+    /// How many there are, so the table and the window array size themselves
+    /// from the enum rather than from a number someone has to remember to
+    /// bump.
+    ///
+    /// Checked exhaustively against the enum rather than taken off the last
+    /// variant: a variant added anywhere, not only after `Gpu`, fails to
+    /// compile here until it is also added to the list below, instead of
+    /// silently sizing the table one short.
+    const COUNT: usize = {
+        use Stage::*;
+        // Exhaustive, and the compiler checks it. The arms are `()` because
+        // what is wanted is the coverage error, not the value — a const fn
+        // cannot build the array itself.
+        const fn covered(s: Stage) {
+            match s {
+                Frame | Tick | Egui | Shell | Ui | Render | Tess | Texture | BufUp | Ubuf
+                | Prepare | Poll | Write | Scene | Around | Acquire | Encode | Submit
+                | EguiGpu | Gpu => (),
+            }
+        }
+        covered(Gpu);
+        [
+            Frame, Tick, Egui, Shell, Ui, Render, Tess, Texture, BufUp, Ubuf, Prepare, Poll,
+            Write, Scene, Around, Acquire, Encode, Submit, EguiGpu, Gpu,
+        ]
+        .len()
+    };
 }
 
 /// What the overlay needs to know about one [`Stage`]: where it sits in the
