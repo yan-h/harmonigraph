@@ -474,7 +474,7 @@ pub fn progress_bar(ui: &mut Ui, fraction: Option<f32>, label: &str, value: &str
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::widgets::probe::painted_text;
+    use crate::widgets::probe::{painted, painted_text, shapes};
 
     /// Paint one value bar across a `width`-point row and return what it
     /// emitted, with or without a preview curve.
@@ -483,21 +483,14 @@ mod tests {
         value: f32,
         curve: Option<fn(f32, f32) -> f32>,
     ) -> Vec<egui::Shape> {
-        let ctx = egui::Context::default();
-        crate::theme::apply_theme(&ctx);
-        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(width, 100.0));
         let mut value = value;
-        let out = ctx.run_ui(
-            egui::RawInput { screen_rect: Some(screen), ..Default::default() },
-            |ui| {
-                let mut bar = ValueBar::new(&mut value, 0.0..=1.0, "Shape");
-                if let Some(curve) = curve {
-                    bar = bar.curve(curve);
-                }
-                bar.show(ui);
-            },
-        );
-        out.shapes.into_iter().map(|cs| cs.shape).collect()
+        shapes(width, |ui| {
+            let mut bar = ValueBar::new(&mut value, 0.0..=1.0, "Shape");
+            if let Some(curve) = curve {
+                bar = bar.curve(curve);
+            }
+            bar.show(ui);
+        })
     }
 
     /// A straight line, which is what a preview of nothing in particular looks
@@ -705,19 +698,11 @@ mod tests {
         ];
         for width in [400.0f32, 240.0, 180.0, 157.0, 120.0] {
             for (label, value, range) in cases.clone() {
-                let ctx = egui::Context::default();
-                crate::theme::apply_theme(&ctx);
-                let screen =
-                    egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(width, 100.0));
                 let mut value = value;
-                let out = ctx.run_ui(
-                    egui::RawInput { screen_rect: Some(screen), ..Default::default() },
-                    |ui| {
-                        ValueBar::new(&mut value, range.clone(), label).show(ui);
-                    },
-                );
+                let out = painted(width, |ui| {
+                    ValueBar::new(&mut value, range.clone(), label).show(ui);
+                });
                 let mut runs: Vec<egui::Rect> = out
-                    .shapes
                     .iter()
                     .filter_map(|cs| match &cs.shape {
                         egui::Shape::Text(t) => Some(t.visual_bounding_rect()),
@@ -727,7 +712,6 @@ mod tests {
                 runs.sort_by(|a, b| a.left().total_cmp(&b.left()));
                 assert_eq!(runs.len(), 2, "{label} at {width}pt painted {} runs", runs.len());
                 let track = out
-                    .shapes
                     .iter()
                     .find_map(|cs| match &cs.shape {
                         egui::Shape::Rect(r) if r.fill == crate::theme::well() => Some(r.rect),
@@ -767,20 +751,13 @@ mod tests {
     #[test]
     fn a_badged_bar_says_so_even_when_its_name_is_elided() {
         for width in [157.0f32, 180.0, 200.0, 400.0] {
-            let ctx = egui::Context::default();
-            crate::theme::apply_theme(&ctx);
-            let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(width, 100.0));
             let mut value = 386.31;
-            let out = ctx.run_ui(
-                egui::RawInput { screen_rect: Some(screen), ..Default::default() },
-                |ui| {
-                    ValueBar::new(&mut value, 380.0..=420.0, "Major third (¢)")
-                        .badge("Meantone")
-                        .show(ui);
-                },
-            );
+            let out = painted(width, |ui| {
+                ValueBar::new(&mut value, 380.0..=420.0, "Major third (¢)")
+                    .badge("Meantone")
+                    .show(ui);
+            });
             let name = out
-                .shapes
                 .iter()
                 .filter_map(|cs| match &cs.shape {
                     egui::Shape::Text(t) => Some((t.pos.x, painted_text(&t.galley))),
@@ -800,18 +777,11 @@ mod tests {
     /// (post-elision) width. The name is the left-hand run; the readout is
     /// right-aligned, so smallest x picks the name out.
     fn painted_name_width(width: f32, value: f32) -> f32 {
-        let ctx = egui::Context::default();
-        crate::theme::apply_theme(&ctx);
-        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(width, 100.0));
         let mut value = value;
-        let out = ctx.run_ui(
-            egui::RawInput { screen_rect: Some(screen), ..Default::default() },
-            |ui| {
-                ValueBar::new(&mut value, SEVENTH_RANGE, "Harmonic seventh (¢)").show(ui);
-            },
-        );
-        out.shapes
-            .iter()
+        let out = painted(width, |ui| {
+            ValueBar::new(&mut value, SEVENTH_RANGE, "Harmonic seventh (¢)").show(ui);
+        });
+        out.iter()
             .filter_map(|cs| match &cs.shape {
                 egui::Shape::Text(t) => Some((t.pos.x, t.galley.size().x)),
                 _ => None,

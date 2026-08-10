@@ -7,8 +7,41 @@
 //! because a second copy of a reader is a second answer to those questions the
 //! day one of the two is taught something.
 
+use egui::Ui;
+
 use super::bar::HANDLE_W;
 use crate::theme;
+
+/// Paint `add` into a themed context of `size`, and answer the shapes it
+/// emitted, each still carrying the clip rect it was painted through.
+///
+/// A context of its own per call rather than one held across a sweep: egui's
+/// temp store has no expiry and a widget remembers what a drag had hold of in
+/// it, so a shared context is one fixture reading the frame before it.
+///
+/// A bare context is the design scale, 1.0, which is why the geometry in these
+/// tests reads the constants unmultiplied.
+pub(super) fn painted_in(
+    size: egui::Vec2,
+    add: impl FnMut(&mut Ui),
+) -> Vec<egui::epaint::ClippedShape> {
+    let ctx = egui::Context::default();
+    theme::apply_theme(&ctx);
+    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), size);
+    ctx.run_ui(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, add).shapes
+}
+
+/// The same in a row `width` points across, which is the shape of nearly every
+/// question here: a settings pane hands a bar the width of its column, and the
+/// height is only ever room for the row it stands in.
+pub(super) fn painted(width: f32, add: impl FnMut(&mut Ui)) -> Vec<egui::epaint::ClippedShape> {
+    painted_in(egui::vec2(width, 100.0), add)
+}
+
+/// The same, as bare shapes — what every reading but the clip wants.
+pub(super) fn shapes(width: f32, add: impl FnMut(&mut Ui)) -> Vec<egui::Shape> {
+    painted(width, add).into_iter().map(|s| s.shape).collect()
+}
 
 /// The filled rects, in paint order.
 pub(super) fn filled_rects(shapes: &[egui::Shape]) -> Vec<(egui::Rect, egui::Color32)> {

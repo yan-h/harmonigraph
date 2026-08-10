@@ -320,7 +320,7 @@ mod tests {
     use harmonigraph_scene::{DEFAULT_EXTRA_SIZE, MIN_EXTRA_SIZE};
 
     use super::*;
-    use crate::widgets::probe::{filled_rects, handles, text_boxes};
+    use crate::widgets::probe::{filled_rects, handles, shapes, text_boxes};
 
     /// Double-clicking the strip is the only way back to the stock wheel, so
     /// where it lands has to BE the stock wheel — not a pair that was the
@@ -342,17 +342,10 @@ mod tests {
 
     /// Paint one octave strip across a 300pt row and return what it emitted.
     fn paint_octave_strip(count: u32, extras: u32, size: f32, blend: f32) -> Vec<egui::Shape> {
-        let ctx = egui::Context::default();
-        crate::theme::apply_theme(&ctx);
-        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(300.0, 100.0));
         let (mut c, mut e) = (count, extras);
-        let out = ctx.run_ui(
-            egui::RawInput { screen_rect: Some(screen), ..Default::default() },
-            |ui| {
-                OctaveStrip::new(&mut c, &mut e, size, blend).show(ui);
-            },
-        );
-        out.shapes.into_iter().map(|s| s.shape).collect()
+        shapes(300.0, |ui| {
+            OctaveStrip::new(&mut c, &mut e, size, blend).show(ui);
+        })
     }
 
     /// The strip's cells, left to right: the accent-filled rects, which the

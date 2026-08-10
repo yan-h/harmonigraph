@@ -1289,7 +1289,9 @@ mod tests {
     use crate::widgets::mesh::{
         band_bounds, band_colors, band_columns, bands, fades_out_at_its_edges,
     };
-    use crate::widgets::probe::{filled_rects, handles, knockouts, painted_text, press, text_boxes};
+    use crate::widgets::probe::{
+        filled_rects, handles, knockouts, painted, painted_in, painted_text, press, text_boxes,
+    };
 
     /// A [`SpectrumBar`] under a [`GradientPreview`] in a 300pt context,
     /// driven one frame at a time.
@@ -1877,22 +1879,13 @@ mod tests {
     #[test]
     fn a_column_too_narrow_for_both_gives_the_row_to_the_button() {
         for column in [FLIP_W + FLIP_GAP + 30.0, FLIP_W + FLIP_GAP, FLIP_W, 6.0, 1.0] {
-            let ctx = egui::Context::default();
-            crate::theme::apply_theme(&ctx);
             let mut g = ViewConfig::default().pitch_gradient;
             let seen = std::cell::Cell::new(egui::Rect::NOTHING);
-            let out = ctx.run_ui(
-                egui::RawInput {
-                    screen_rect: Some(egui::Rect::from_min_size(
-                        egui::pos2(0.0, 0.0),
-                        egui::vec2(column, 80.0),
-                    )),
-                    ..Default::default()
-                },
-                |ui| seen.set(SpectrumBar::new(&mut g).show(ui).rect),
-            );
+            let out = painted_in(egui::vec2(column, 80.0), |ui| {
+                seen.set(SpectrumBar::new(&mut g).show(ui).rect)
+            });
             let track = seen.get();
-            let shapes: Vec<egui::Shape> = out.shapes.into_iter().map(|s| s.shape).collect();
+            let shapes: Vec<egui::Shape> = out.into_iter().map(|s| s.shape).collect();
             // The button is the one thing painted in the theme's resting widget
             // fill; the well under the track is `well()` and the handle is
             // `text()`. Finding none would mean the paint no longer reads that
@@ -2901,17 +2894,10 @@ mod tests {
         spread: Spread,
         pair: (f32, f32),
     ) -> Vec<egui::epaint::ClippedShape> {
-        let ctx = egui::Context::default();
-        crate::theme::apply_theme(&ctx);
-        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(width, 100.0));
         let mut g = holding(spread, pair);
-        let out = ctx.run_ui(
-            egui::RawInput { screen_rect: Some(screen), ..Default::default() },
-            |ui| {
-                spread_bar(spread, &mut g, ui);
-            },
-        );
-        out.shapes
+        painted(width, |ui| {
+            spread_bar(spread, &mut g, ui);
+        })
     }
 
     /// Paint one bar across a 300pt row and return what it emitted.
