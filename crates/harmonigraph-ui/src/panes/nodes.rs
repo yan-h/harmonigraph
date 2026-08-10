@@ -3,9 +3,12 @@
 //! notes, and the fade and cleared gutter the whole node wears. Everything
 //! here is a layer of the *played note*, or the whole of one.
 //!
-//! The two settings that used to stretch that name — the pitch gradient and
-//! Bloom, both of which the Analyzer reads as well — are [`super::color`], and
-//! the text a node carries is [`super::labels`].
+//! The pitch gradient and Bloom are NOT here, though a node wears both: the
+//! Analyzer's ribbons read the one and its piano roll blooms off the other, so
+//! filing them under a node's own layers would name them for the narrower of
+//! the two pictures they paint. They are [`super::color`]. The text a node
+//! carries is [`super::labels`], kept out for the same reason in miniature — a
+//! label rides a hovered and a remembered node as readily as a sounding one.
 
 use super::{edge_bar, param_bar, section};
 use crate::params::{seconds, ParamBackend, ParamKey};
