@@ -213,6 +213,55 @@ pub(super) fn grip_over_text(
     }
 }
 
+/// What a drag has hold of: the grab this gesture already settled on, or
+/// `decide` on the first frame it is asked, remembered under `id` for the rest
+/// of the gesture.
+///
+/// Deciding ONCE is the whole point, and each of the four bars that ask needs it
+/// for a reason of its own — a range whose ends can be dragged past each other
+/// would hand the gesture to whichever handle is nearest now, a strip that
+/// splits its two gestures on a hard line would change its mind as the pointer
+/// crossed it, and an arc dragged down to nothing would fall into the rotate
+/// branch the moment the handle reached the left edge.
+///
+/// Asked from inside the drag rather than under `drag_started`, so a gesture
+/// whose start frame was missed still does something.
+///
+/// Read and write are separate statements on purpose: nesting a `data_mut`
+/// inside a `data` closure takes the context lock twice, and nothing here is
+/// worth risking that on a path only a real pointer reaches.
+///
+/// `decide` is handed the `Ui` rather than closing over it, since all four
+/// answers are asked of [`aimed_at`] and a closure borrowing the same `Ui` this
+/// is reading through has nothing to gain by saying so twice.
+pub(super) fn grabbed<G>(ui: &Ui, id: egui::Id, decide: impl FnOnce(&Ui) -> G) -> G
+where
+    G: Clone + Send + Sync + 'static,
+{
+    let stored = ui.data(|d| d.get_temp::<G>(id));
+    match stored {
+        Some(grab) => grab,
+        None => {
+            let grab = decide(ui);
+            ui.data_mut(|d| d.insert_temp(id, grab.clone()));
+            grab
+        }
+    }
+}
+
+/// Forget it, which is what letting go does: egui's temp store has no expiry, so
+/// a grab left behind is inherited by the next press
+/// (`a_second_gesture_on_the_strip_chooses_for_itself`).
+///
+/// The `Default` bound is egui's, asked of anything `remove_temp` can remove,
+/// and is the whole reason each of the four grabs derives one.
+pub(super) fn release_grab<G>(ui: &Ui, id: egui::Id)
+where
+    G: Clone + Send + Sync + Default + 'static,
+{
+    ui.data_mut(|d| d.remove_temp::<G>(id));
+}
+
 /// Where a gesture was AIMED, as against where it has since got to: the point
 /// the press landed on, falling back to the live position when there is no
 /// press on record.
