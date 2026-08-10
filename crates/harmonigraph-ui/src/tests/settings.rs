@@ -423,12 +423,18 @@ fn every_bar_in_a_settings_pane_is_the_width_of_the_pane() {
     }
     // The sniffing above finds nothing if the bars stop being painted this way,
     // and a test that measures nothing passes. The Nodes section is the deepest
-    // stack of bars in the dock — 17 of them against the Analyzer's 12 and the
-    // View's 8, every layer of the note contributing one or more and the gated
-    // ones still painting, greyed — so it is the pane to ask whether bars are
-    // still being painted at all. The floor is well under that count: what it
-    // is watching for is the paint going away, which takes every one of them
-    // at once, not a control coming or going.
+    // stack of bars in the dock — 17 against the Analyzer's 12 and the View's
+    // 8, every layer of the note contributing one or more — so it is the pane
+    // to ask whether bars are still being painted at all.
+    //
+    // Those three are counts of the bars a fresh view draws LIVE, and a gated
+    // bar is in none of them: [`bar_track_widths`] finds a track by the well's
+    // own fill, and a disabled `Ui` fades its painter, so a greyed track is no
+    // longer that color. Hence the View's 8 rather than 9 — Sevenths size is
+    // inert at the fresh sevenths extent of 0, and counting it needs an extent
+    // set — and hence a floor well under 17. What the floor watches for is the
+    // paint going away, which takes every bar at once; a control coming, going
+    // or greying is not what it is asking about.
     let bars = bar_track_widths(&settings_pane_at_width(
         SettingsPane::Section(Section::Nodes),
         400.0,
