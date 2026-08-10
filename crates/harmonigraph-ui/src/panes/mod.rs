@@ -254,7 +254,9 @@ impl egui_dock::TabViewer for Viewer<'_> {
 /// vector's own: scene colors are opaque, and every 2D use of them wants
 /// its own transparency.
 pub(super) fn scene_color(c: glam::Vec4, alpha: f32) -> egui::Color32 {
-    let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0) as u8;
+    // ROUND and not truncate: `as u8` floors, which drops up to a whole level
+    // of every non-integral channel — a systematic darkening.
+    let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
     egui::Color32::from_rgba_unmultiplied(byte(c.x), byte(c.y), byte(c.z), byte(alpha))
 }
 
