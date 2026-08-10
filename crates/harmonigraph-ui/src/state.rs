@@ -368,6 +368,29 @@ pub struct CameraPreset {
     pub pitch: f32,
 }
 
+impl CameraPreset {
+    /// Fit a deserialized preset to what the camera's own controls can
+    /// produce, the same way [`Camera::sanitize`] fits the live camera and for
+    /// the same reason — with one more door to cover.
+    ///
+    /// A preset button assigns these two STRAIGHT into `camera.yaw` and
+    /// `camera.pitch`, so applying one is neither `orbit`, which clamps the
+    /// pitch on every drag, nor the load-time repair, which clamps it once.
+    /// Left unfitted this is the only remaining path by which a hand-edited
+    /// blob reaches those fields, and it reaches them one click later than the
+    /// load that would have repaired them — which is what makes it quiet: the
+    /// lattice opens drawing correctly and breaks when a button is pressed.
+    fn sanitize(&mut self) {
+        let fresh = Camera::default();
+        // Periodic, so any finite yaw draws; a NaN one NaNs `eye()` and with it
+        // the whole view matrix, and `orbit`'s `yaw -= delta` cannot walk back
+        // out of NaN.
+        self.yaw = if self.yaw.is_finite() { self.yaw } else { fresh.yaw };
+        self.pitch = if self.pitch.is_finite() { self.pitch } else { fresh.pitch }
+            .clamp(-Camera::PITCH_LIMIT, Camera::PITCH_LIMIT);
+    }
+}
+
 /// Where the pictures end and the settings column begins, as a fraction of
 /// the window's width. The settings column gets what is left.
 ///
@@ -668,11 +691,17 @@ impl SharedState {
         // never look (see `temper_judged`); a host pushing state into a
         // live editor, on undo or a preset change, is exactly that case.
         self.temper_judged = [None; Comma::COUNT];
-        // All four fit a deserialized blob to what its own controls can
-        // produce, which a hand-edited RON need not have.
+        // All of these fit a deserialized blob to what its own controls can
+        // produce, which a hand-edited RON need not have. The presets are in
+        // the list because a preset button writes its two fields straight into
+        // the camera, so they are a second way into fields `camera.sanitize()`
+        // has already repaired once.
         self.camera.sanitize();
         self.view.sanitize();
         self.camera_presets = persist.camera_presets;
+        for preset in &mut self.camera_presets {
+            preset.sanitize();
+        }
         self.spectrum_config = persist.spectrum;
         self.spectrum_config.sanitize();
         self.take.render_config = persist.render;
