@@ -446,19 +446,27 @@ fn frame(
     };
     // Last frame's costs that the shell measures and the UI cannot: they
     // happen after `root_ui` returns.
-    shared.ui.instruments.timings.tess_ms = queue.tess_ms();
-    shared.ui.instruments.timings.egui_gpu_ms = queue.egui_gpu_ms();
-    shared.ui.instruments.timings.acquire_ms = queue.acquire_ms();
-    shared.ui.instruments.timings.tick_ms = queue.tick_ms();
-    shared.ui.instruments.timings.render_ms = queue.render_ms();
-    shared.ui.instruments.timings.upload_ms = queue.upload_ms();
-    shared.ui.instruments.timings.ubuf_ms = queue.ubuf_ms();
-    shared.ui.instruments.timings.texture_ms = queue.texture_ms();
-    shared.ui.instruments.timings.prims = queue.prims();
-    shared.ui.instruments.timings.verts = queue.verts();
-    shared.ui.instruments.timings.encode_ms = queue.encode_ms();
-    shared.ui.instruments.timings.submit_ms = queue.submit_ms();
-    shared.ui.instruments.timings.shell_ms = shell_start.elapsed().as_secs_f32() * 1000.0;
+    //
+    // One literal rather than a field at a time, so a reading the window
+    // starts publishing and this forgets to copy is a missing field the
+    // compiler names, not a line nobody misses — the overlay would otherwise
+    // show it as a steady zero, which reads as a cost that isn't there.
+    // `shell_ms` comes last because it measures everything above it.
+    shared.ui.instruments.timings = harmonigraph_ui::ShellTimings {
+        tess_ms: queue.tess_ms(),
+        egui_gpu_ms: queue.egui_gpu_ms(),
+        acquire_ms: queue.acquire_ms(),
+        tick_ms: queue.tick_ms(),
+        render_ms: queue.render_ms(),
+        upload_ms: queue.upload_ms(),
+        ubuf_ms: queue.ubuf_ms(),
+        texture_ms: queue.texture_ms(),
+        prims: queue.prims(),
+        verts: queue.verts(),
+        encode_ms: queue.encode_ms(),
+        submit_ms: queue.submit_ms(),
+        shell_ms: shell_start.elapsed().as_secs_f32() * 1000.0,
+    };
     // A fold is priced against `egui_state.size`, which is the size the window
     // actually has: `requested_size` is empty by now whatever happened above,
     // since the window's size source clears it on refusal as well as on
