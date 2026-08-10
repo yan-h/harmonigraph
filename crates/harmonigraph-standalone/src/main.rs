@@ -21,15 +21,6 @@ use harmonigraph_ui::SharedState;
 // inside it is the old one too.
 const UI_STATE_STORAGE_KEY: &str = "harmonigraph-ui-state";
 
-/// The narrowest a sideways fold may leave this window, mirroring the plugin
-/// editor's own floor (`MIN_SIZE.0`) so a fold behaves the same in both shells.
-///
-/// The fold layout is told this number too (`SharedState::min_window_width`),
-/// because a window that stops short of what a fold asked for is a window that
-/// has stopped answering, and a layout that kept following it there would bank
-/// the difference and hand it back on the way out.
-const MIN_WINDOW_WIDTH: f32 = 400.0;
-
 fn main() -> eframe::Result {
     // Ask for timestamp queries where the adapter has them, so the
     // performance overlay can report GPU time. Only where advertised:
@@ -58,27 +49,25 @@ fn main() -> eframe::Result {
         "Harmonigraph — dev harness",
         options,
         Box::new(|cc| {
-            harmonigraph_ui::theme::apply_theme(&cc.egui_ctx);
             let render_state = cc
                 .wgpu_render_state
                 .as_ref()
                 .expect("eframe was built with the wgpu backend");
             let mut app = App::new(render_state.target_format);
-            // The floor this window is held to, which a sideways fold has to
-            // know before it asks for width the window cannot give (see
-            // `SharedState::min_window_width`).
-            app.state.min_window_width = MIN_WINDOW_WIDTH;
-            // A no-op here — this state is built alongside the context it will
-            // use — but every shell owes it on context creation, and the day
-            // this harness gains a second window it would stop being one.
-            app.state.release_context_resources();
-            // Restore dock layout / camera / view settings from eframe's
-            // storage (mirrors the plugin's persist blob).
-            if let Some(serialized) =
-                cc.storage.and_then(|s| s.get_string(UI_STATE_STORAGE_KEY))
-            {
-                app.state.load_persist(&serialized);
+            // Everything a shell owes a context it has just built: theme, the
+            // release of the previous context's textures, the fold floor, and
+            // the layout saved last run (eframe's storage, where the plugin
+            // has the host's project). The release is a no-op in this harness,
+            // whose state is built alongside the one context it will ever use
+            // — but the day it grows a second window it stops being one, and
+            // it is not this shell's call to make.
+            let persist = cc.storage.and_then(|s| s.get_string(UI_STATE_STORAGE_KEY));
+            harmonigraph_ui::shell::Opening {
+                ctx: &cc.egui_ctx,
+                state: &mut app.state,
+                persist: persist.as_deref(),
             }
+            .open();
             app.recorder = Recorder::from_env(&app.state);
             Ok(Box::new(app))
         }),
@@ -562,18 +551,24 @@ impl eframe::App for App {
             .spectrum
             .push_samples(&self.synth_buf, 1, SYNTH_RATE as f32, now, &config);
 
-        harmonigraph_ui::root_ui(ui, &mut self.state, &self.params, now);
+        // `viewport_rect` is eframe's window in the same points the fold
+        // measures in, which is what a fold has to be priced against.
+        let window = ui.ctx().viewport_rect().size();
+        let ask = harmonigraph_ui::shell::Frame {
+            ui,
+            state: &mut self.state,
+            params: &self.params,
+            now,
+            window_width: window.x,
+        }
+        .draw();
 
         // A pane folded sideways (or came back) leaves every other pane its
         // width and asks the window for the difference. The plugin has to
-        // negotiate this with its host; here it is one command, off the
-        // window's current size — `viewport_rect` is eframe's window in the
-        // same points the fold measured.
-        if let Some(change) = self.state.take_window_width_change() {
-            let size = ui.ctx().viewport_rect().size();
-            let width = (size.x + change).max(MIN_WINDOW_WIDTH);
+        // negotiate this with its host; here it is one command.
+        if let Some(width) = ask {
             ui.ctx()
-                .send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(width, size.y)));
+                .send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(width, window.y)));
         }
 
         if let Some(shot) = &mut self.self_shot {
@@ -582,7 +577,7 @@ impl eframe::App for App {
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
-        storage.set_string(UI_STATE_STORAGE_KEY, self.state.save_persist());
+        storage.set_string(UI_STATE_STORAGE_KEY, harmonigraph_ui::shell::close(&self.state));
     }
 }
 
