@@ -1,7 +1,7 @@
 //! The 3D lattice view pane: orbit camera on drag, zoom on scroll, node
 //! labels, and the tuning-learn overlay.
 
-use super::{display_note_name, learn_pulse};
+use super::{display_note_name, learn_pulse, zoom_gesture};
 use crate::{theme, SharedState};
 use egui::Sense;
 use harmonigraph_render::lattice_paint_callback;
@@ -32,15 +32,8 @@ pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64)
         let delta = response.drag_delta();
         state.camera.orbit(glam::Vec2::new(delta.x, delta.y));
     }
-    // Zoom when the pointer is over the view. Gate on contains_pointer (pure
-    // geometry) rather than hovered(): the lattice sits under a wgpu paint
-    // callback, and hovered() can be suppressed by the callback layer or a
-    // transient focus/interaction elsewhere, silently killing the scroll. Honor
-    // BOTH the scroll delta (mouse wheel) and egui's zoom_delta — trackpad
-    // pinches and modifier+scroll arrive as a zoom factor, not a scroll delta,
-    // and those would otherwise do nothing over the lattice.
-    if response.contains_pointer() {
-        let (scroll, zoom) = ui.input(|i| (i.smooth_scroll_delta.y, i.zoom_delta()));
+    // Zoom when the pointer is over the view.
+    if let Some((scroll, zoom)) = zoom_gesture(ui, &response) {
         if scroll != 0.0 {
             state.camera.zoom(scroll);
         }
