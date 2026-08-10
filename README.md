@@ -71,7 +71,7 @@ The DAW scans exactly one place: the **main checkout's** `target/bundled/`. Two 
 - Each worktree has its own `target/`. The DAW never looks there.
 - `cargo xtask bundle` run from a worktree bundles the *main* sources, not the branch's. It walks up to the topmost `Cargo.toml`, which for a nested worktree is the main repo. The bundle looks fresh and holds none of your changes.
 
-Two scripts sidestep both. Each copies the binary into the bundles the DAW loads, then re-signs it ad-hoc — Apple Silicon requires that. Rescan or restart the plugin afterwards.
+Two scripts sidestep both. Each copies the binary into the bundles the DAW loads, then re-signs it ad-hoc — Apple Silicon requires that. Deactivate and reactivate the plugin afterwards: the copy writes through the bundle's own inode, which is the only swap a running host can see, and a rescan does not reload a plugin that is already loaded.
 
 ```sh
 # Build the current checkout — branch or main — and load it. One shot.
