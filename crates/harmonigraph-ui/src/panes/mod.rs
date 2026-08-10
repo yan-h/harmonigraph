@@ -297,6 +297,25 @@ pub(super) fn nearest_visible_node(
         .min_by_key(|&pos| pc.distance_to(tuning.pitch_class(pos)))
 }
 
+/// The wheel/pinch zoom under the pointer — `(scroll, zoom)` — for a caller
+/// to turn into a zoom in whatever unit its scene uses. `None` when the
+/// pointer is elsewhere.
+///
+/// Gated on `contains_pointer` rather than `hovered()`: `hovered()` can be
+/// suppressed by whatever draws over the gesture surface — a wgpu paint
+/// callback under the lattice, or the spectral pane's split divider sitting
+/// on top of it — or by a transient focus/interaction elsewhere, silently
+/// killing the gesture. `contains_pointer` is pure geometry and answers
+/// regardless.
+///
+/// Both the scroll delta (mouse wheel) and egui's `zoom_delta` are read and
+/// handed back raw: a trackpad pinch or a ctrl+wheel arrives as a zoom
+/// factor, not a scroll delta (egui zeroes the scroll for those), so a
+/// caller that read only one would miss whichever gesture didn't use it.
+pub(super) fn zoom_gesture(ui: &egui::Ui, response: &egui::Response) -> Option<(f32, f32)> {
+    response.contains_pointer().then(|| ui.input(|i| (i.smooth_scroll_delta.y, i.zoom_delta())))
+}
+
 /// Attention pulse for armed-mode indicators: a slow, shallow breathe
 /// (calm "armed", not "alarmed").
 pub(super) fn learn_pulse(now: f64) -> f32 {

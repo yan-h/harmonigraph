@@ -5,6 +5,7 @@
 //! CONFIG — it is the only part of the pane that runs backwards, from a
 //! screen position to the setting that would put something there.
 
+use crate::panes::zoom_gesture;
 use crate::SharedState;
 use super::axes::{spectrum_share, widest_span, Axes};
 use egui::Sense;
@@ -159,14 +160,8 @@ pub(super) fn drag_zoom(
     let mut moved = false;
 
     // Zoom about the pitch under the pointer, so the note being looked at
-    // stays put while the range closes in on it. `contains_pointer` rather
-    // than `hovered()`: the divider sits on top of the pane, and the wheel
-    // should keep zooming while the pointer crosses it.
-    if response.contains_pointer() {
-        // Wheel and trackpad pinch both zoom. egui routes ctrl+wheel and pinch
-        // into `zoom_delta` and zeroes the scroll for them, so the two can't
-        // double up here.
-        let (scroll, pinch) = ui.ctx().input(|i| (i.smooth_scroll_delta.y, i.zoom_delta()));
+    // stays put while the range closes in on it.
+    if let Some((scroll, pinch)) = zoom_gesture(ui, response) {
         let factor = (scroll * ZOOM_PER_SCROLL_POINT).exp() * pinch;
         if (factor - 1.0).abs() > 1e-4 {
             let anchor = ui
