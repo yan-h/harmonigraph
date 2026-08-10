@@ -305,12 +305,7 @@ pub(super) fn plan(
         return Vec::new();
     }
     let time = TimeAxis::new(state, split, now);
-    // Whole-song (offline playhead) reads the take's own roll, laid out
-    // statically; live reads the causal tracker's scrolling one.
-    let roll = match state.whole_song.as_ref() {
-        Some(ws) => &ws.roll,
-        None => state.tracker.roll(),
-    };
+    let roll = state.roll();
 
     let size = LABEL_PT * label_scale;
     // One point of the depth axis, in seconds of take. A name's reach is a
