@@ -41,11 +41,7 @@ pub(super) fn drag_split(
     let band = axes.depth_band(spectrum_share(&state.spectrum_config), SPLIT_GRAB_HALF);
     let response = ui
         .interact(band, egui::Id::new(("spectral-split", surface)), Sense::drag())
-        .on_hover_cursor(if axes.time_vertical {
-            egui::CursorIcon::ResizeVertical
-        } else {
-            egui::CursorIcon::ResizeHorizontal
-        });
+        .on_hover_cursor(axes.resize_cursor());
     if let Some(pointer) = response.dragged().then(|| response.interact_pointer_pos()).flatten() {
         // Track the pointer absolutely rather than accumulating deltas: pushed
         // against either limit, an accumulated split drifts out of sync and
@@ -252,11 +248,7 @@ pub(super) fn drag_zoom(
                     // pitch drag already pays each frame through `scale_min_bits`.
                 }
             }
-            ui.ctx().set_cursor_icon(if axes.time_vertical {
-                egui::CursorIcon::ResizeVertical
-            } else {
-                egui::CursorIcon::ResizeHorizontal
-            });
+            ui.ctx().set_cursor_icon(axes.resize_cursor());
         } else {
             // The pitch under the pointer travels with it, so the range moves
             // the opposite way.

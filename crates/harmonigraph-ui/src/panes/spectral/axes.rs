@@ -317,6 +317,16 @@ impl Axes {
         band.intersect(self.rect)
     }
 
+    /// The cursor a drag along the depth axis shows while resizing something
+    /// — vertical or horizontal, whichever way the depth axis currently runs.
+    pub(super) fn resize_cursor(&self) -> egui::CursorIcon {
+        if self.time_vertical {
+            egui::CursorIcon::ResizeVertical
+        } else {
+            egui::CursorIcon::ResizeHorizontal
+        }
+    }
+
     /// Anchor and alignment for a text label at `(p, d)`, offset `along`
     /// pixels up the pitch axis and `into` pixels up the depth axis, and
     /// growing in those same directions. One helper covers both
