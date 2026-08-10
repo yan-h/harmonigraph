@@ -37,6 +37,63 @@ fn the_shaders_pitch_lut_is_the_length_the_scene_says() {
     }
 }
 
+/// The field names `struct {name} { ... }` declares in `src`, in order — a
+/// `//` or `///` comment line is skipped, and each remaining non-blank line
+/// contributes the identifier before its first `:`. Neither language's
+/// struct is parsed for real; this reads both the same shallow way the
+/// [`the_shaders_pitch_lut_is_the_length_the_scene_says`] needle check
+/// does, which is enough to catch the two lists disagreeing.
+fn struct_field_names(src: &str, name: &str) -> Vec<String> {
+    let after_kw = src.split_once(&format!("struct {name}")).expect("struct not found").1;
+    let body_start = after_kw.find('{').expect("struct has no body") + 1;
+    let mut depth = 1u32;
+    let mut end = body_start;
+    for (i, c) in after_kw[body_start..].char_indices() {
+        match c {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    end = body_start + i;
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    after_kw[body_start..end]
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with("//"))
+        .map(|l| l.split_once(':').expect("field line has no `:`").0.trim().to_string())
+        .collect()
+}
+
+/// `misc`..`misc8` carry the picture's knobs packed several to a vec4 (see
+/// the doc comments on [`Uniforms`] and its WGSL twin), and nothing checks
+/// the two structs against each other: naga validates the WGSL side against
+/// itself, rustc the Rust side against itself, and a slot added, dropped,
+/// renamed, or reordered on only one side still compiles and validates —
+/// only the byte offsets downstream of it drift, so every read after the
+/// mismatch lands on the wrong vec4's `.x`/`.y`/`.z`/`.w`. Comparing the
+/// field-name lists is the cheap half of the guard; the doc comments above
+/// each field are the other half; a `.w` typo'd for a `.z` within an
+/// otherwise-correctly-paired slot is neither this test's job nor the
+/// PITCH_LUT_N one's — see their doc comments.
+#[test]
+fn the_uniforms_slots_pair_up_between_rust_and_wgsl() {
+    let rust_fields = struct_field_names(include_str!("lib.rs"), "Uniforms");
+    let wgsl_fields = struct_field_names(SHADER_SRC, "Uniforms");
+    assert_eq!(
+        rust_fields, wgsl_fields,
+        "lib.rs's Uniforms and lattice.wgsl's Uniforms must declare the same fields in the \
+         same order — they describe one GPU buffer from two ends, and every field here is a \
+         multiple of 16 bytes, which is what lets Rust's #[repr(C)] layout match WGSL's without \
+         either side spelling out padding; a name added, dropped, renamed, or reordered on only \
+         one side is exactly what desyncs the offsets.",
+    );
+}
+
 /// blit.wgsl has no hot-reload path, so a broken edit would otherwise
 /// first surface as a pipeline panic inside a DAW.
 #[test]
