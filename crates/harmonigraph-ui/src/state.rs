@@ -6,10 +6,10 @@ use std::collections::VecDeque;
 
 use egui_dock::{DockState, NodeIndex};
 use harmonigraph_core::{Comma, LatticePos, NoteTracker, PitchClass, Tuning};
+use harmonigraph_perf::{PerfStats, ShellTimings};
 use harmonigraph_render::wgpu::TextureFormat;
 use harmonigraph_scene::{Camera, FrameParams, ViewConfig};
 
-use harmonigraph_perf::{PerfStats, ShellTimings};
 use crate::{fold, panes, text};
 use crate::{AudioSpectrum, RenderConfig, RenderProgress, SpectrumConfig, WholeSong};
 

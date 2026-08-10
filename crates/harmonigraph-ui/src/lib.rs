@@ -68,11 +68,10 @@ pub use state::{render_config_from_persist, CameraPreset, Console, SharedState, 
 pub(crate) use state::default_dock;
 
 use harmonigraph_core::{Comma, PitchClass, Tuning};
-// The overlay's model, which a windowed shell also writes: it fills in
-// `ShellTimings` for what it measures around `root_ui`. Named from
-// `harmonigraph-perf` at both ends rather than re-exported here, so the
-// contract between the shell and the readout does not run through the crate
-// that only passes it along.
+// The overlay's model. `ShellTimings` — the one piece of it a windowed shell
+// writes — is deliberately not re-exported from here: the contract runs from
+// the shell to the model, and routing it through the crate that only passes it
+// along is what made the UI look like its owner.
 use harmonigraph_perf::{FrameCosts, Workload};
 use harmonigraph_scene::FrameParams;
 use params::ParamBackend;
