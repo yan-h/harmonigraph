@@ -570,6 +570,82 @@ fn reset_layout_puts_the_dialled_pane_widths_back() {
     }
 }
 
+/// Where a label is drawn, so a test can press the control a user presses
+/// rather than the flag behind it. The middle of the galley, which for a
+/// button's text is inside the button.
+fn label_center(output: &egui::FullOutput, label: &str) -> Option<egui::Pos2> {
+    fn walk(shape: &egui::Shape, label: &str, found: &mut Option<egui::Pos2>) {
+        match shape {
+            egui::Shape::Text(text) if text.galley.text() == label => {
+                *found = Some(text.pos + text.galley.size() * 0.5);
+            }
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| walk(s, label, found)),
+            _ => {}
+        }
+    }
+    let mut found = None;
+    for clipped in &output.shapes {
+        walk(&clipped.shape, label, &mut found);
+    }
+    found
+}
+
+/// "Reset layout" resets the layout when it is CLICKED, which is the only way
+/// a user reaches it.
+///
+/// Its sibling above writes `reset_layout` straight into the state, so it holds
+/// what the flag DOES and nothing about how it gets there. How it gets there is
+/// the one interesting thing about it: a pane writes it, from inside the
+/// `DockArea` pass, into the state every pane holds `&mut` to — while `root_ui`
+/// has the dock itself moved out of that state for the duration (see the
+/// `mem::replace` there). The flag has to stay behind for the pane to reach,
+/// and a change that moves more out — the whole `Workspace`, say, which is one
+/// `mem::take` and reads as the tidier version — hands the pane a copy that is
+/// dropped on the write-back.
+///
+/// That failure is silent in every direction that is usually checked: it
+/// compiles, the button still draws, the click still registers, `reset_layout`
+/// is still set and still read, and the layout simply never resets. Nothing
+/// else in the suite presses this button, so nothing else would notice.
+#[test]
+fn the_reset_layout_button_resets_the_layout_when_it_is_clicked() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let style = theme::dock_style(&egui::Style::default(), 1.0);
+    let mut h = DockHarness::new();
+    // The button lives on the System pane, which shares its leaf with the other
+    // settings tabs and is not the one that opens selected.
+    let path = state.workspace.dock.find_tab(&panes::Tab::System).expect("System is docked");
+    state.workspace.dock.set_active_tab(path).expect("selecting the tab");
+    h.settle_folds(&mut state);
+    let fresh: Vec<f32> = LAID_OUT_TABS.iter().map(|tab| pane_width(&state, *tab)).collect();
+
+    let target = start_dragging_the_settings_boundary(&mut h, &mut state, &style);
+    h.frame(&mut state, vec![press(target, false)]);
+    let out = h.settle_folds(&mut state);
+    let dragged: Vec<f32> = LAID_OUT_TABS.iter().map(|tab| pane_width(&state, *tab)).collect();
+    assert!(
+        (dragged[1] - fresh[1]).abs() > 10.0,
+        "the drag has to actually move a boundary for the reset to have something to undo: \
+         {fresh:?} -> {dragged:?}"
+    );
+
+    let at =
+        label_center(&out, "Reset layout").expect("the System pane draws its Reset layout button");
+    h.frame(&mut state, vec![egui::Event::PointerMoved(at)]);
+    h.frame(&mut state, vec![egui::Event::PointerMoved(at), press(at, true)]);
+    h.frame(&mut state, vec![press(at, false)]);
+    h.settle_folds(&mut state);
+
+    let reset: Vec<f32> = LAID_OUT_TABS.iter().map(|tab| pane_width(&state, *tab)).collect();
+    for (index, tab) in LAID_OUT_TABS.iter().enumerate() {
+        assert!(
+            (reset[index] - fresh[index]).abs() < 1.0,
+            "{tab:?} should be back at the width a fresh dock draws it at: \
+             fresh {fresh:?}, dragged {dragged:?}, after the click {reset:?}"
+        );
+    }
+}
+
 /// Loading a saved layout over a dialled one brings the SAVED widths, not the
 /// ones the window is currently dragged to.
 ///
