@@ -79,20 +79,20 @@ pub(crate) struct SpectrogramSurface {
     pub(crate) cache: Option<SpectrogramCache>,
     /// Live-only incremental aggregator: keeps the slab grid across frames so a
     /// rebuild folds only new columns instead of rescanning the whole window.
-    /// See `panes::spectral::spectrogram::SpectrogramAgg`.
-    pub(crate) agg: Option<crate::panes::spectral::spectrogram::SpectrogramAgg>,
+    /// See `spectrogram::SpectrogramAgg`.
+    pub(crate) agg: Option<crate::spectrogram::SpectrogramAgg>,
     /// Which slabs [`Self::tex`]'s columns currently hold, so a new one can be
     /// written on its own instead of repainting the whole heatmap. `None`
     /// whenever the texture was built the full-width way, which now means only
     /// the offline whole-song render.
-    pub(crate) ring: Option<crate::panes::spectral::spectrogram::SpectrogramRing>,
+    pub(crate) ring: Option<crate::spectrogram::SpectrogramRing>,
     /// Times the ring has been restarted — re-blanked and every column
-    /// repainted — by [`Restart`](crate::panes::spectral::spectrogram::Restart) reason.
+    /// repainted — by [`Restart`](crate::spectrogram::Restart) reason.
     /// Kept HERE rather than on the ring, which does not survive its own
     /// restart. Read out by the performance overlay beside the aggregator's
     /// rebuild count; see
-    /// [`SpectrogramAgg::rebuilds`](crate::panes::spectral::spectrogram::SpectrogramAgg::rebuilds).
-    pub(crate) restarts: [u32; crate::panes::spectral::spectrogram::Restart::COUNT],
+    /// [`SpectrogramAgg::rebuilds`](crate::spectrogram::SpectrogramAgg::rebuilds).
+    pub(crate) restarts: [u32; crate::spectrogram::Restart::COUNT],
 }
 
 impl SpectrogramSurface {
@@ -135,8 +135,8 @@ pub use harmonigraph_core::spectrogram::{SpectrogramColumn, SpectrumHistory};
 pub(crate) struct SpectrogramKey {
     /// Everything that decides a column's PIXELS, shared with the ring — which
     /// asks the same question about the same columns, one scroll at a time. See
-    /// [`ColumnStyle`](crate::panes::spectral::spectrogram::ColumnStyle).
-    pub(crate) style: crate::panes::spectral::spectrogram::ColumnStyle,
+    /// [`ColumnStyle`](crate::spectrogram::ColumnStyle).
+    pub(crate) style: crate::spectrogram::ColumnStyle,
     /// ...and which columns are in the WINDOW, which is what a scroll changes
     /// and the ring survives.
     pub(crate) first: usize,
@@ -153,7 +153,7 @@ pub(crate) struct SpectrogramCache {
     pub(crate) key: SpectrogramKey,
     /// Where the build put its slabs in the texture, kept exactly as it
     /// computed them — a hit hands this straight back to the quad.
-    pub(crate) layout: crate::panes::spectral::spectrogram::TexLayout,
+    pub(crate) layout: crate::spectrogram::TexLayout,
 }
 
 impl SpectrogramKey {
@@ -161,7 +161,7 @@ impl SpectrogramKey {
     /// which columns this build drew. `newest` is stored as a bit pattern so
     /// equality is exact.
     pub(crate) fn new(
-        style: crate::panes::spectral::spectrogram::ColumnStyle,
+        style: crate::spectrogram::ColumnStyle,
         first: usize,
         cols_len: usize,
         newest: f64,
@@ -171,7 +171,7 @@ impl SpectrogramKey {
     }
 
     /// What the ring compares — the part of this key a scroll leaves alone.
-    pub(crate) fn style(&self) -> &crate::panes::spectral::spectrogram::ColumnStyle {
+    pub(crate) fn style(&self) -> &crate::spectrogram::ColumnStyle {
         &self.style
     }
 }
@@ -179,7 +179,7 @@ impl SpectrogramKey {
 impl SpectrogramCache {
     pub(crate) fn new(
         key: SpectrogramKey,
-        layout: crate::panes::spectral::spectrogram::TexLayout,
+        layout: crate::spectrogram::TexLayout,
     ) -> Self {
         SpectrogramCache { key, layout }
     }
@@ -191,7 +191,7 @@ impl SpectrogramCache {
     }
 
     /// The scalars the scrolling quad needs.
-    pub(crate) fn geometry(&self) -> crate::panes::spectral::spectrogram::TexLayout {
+    pub(crate) fn geometry(&self) -> crate::spectrogram::TexLayout {
         self.layout
     }
 }
@@ -231,7 +231,7 @@ impl WholeSong {
     /// than that are aggregated away by the MAX the moment they are drawn. A
     /// three-minute take at the live rate would hold 22 500 columns (86 MB) to
     /// display 4096 of them. Scaling the hop to the slab keeps the same
-    /// [`COLUMNS_PER_SLAB`](crate::panes::spectral::spectrogram::COLUMNS_PER_SLAB) margin
+    /// [`COLUMNS_PER_SLAB`](crate::spectrogram::COLUMNS_PER_SLAB) margin
     /// the live path has — every slab still gets a column, none goes empty — for
     /// a quarter of the memory.
     ///
@@ -258,8 +258,8 @@ impl WholeSong {
         analyzer.set_fft_size(config.window.samples());
         let channels = analyzer.channels();
         let sr = (sample_rate as f64).max(1.0);
-        let hop = (span / crate::panes::spectral::spectrogram::WHOLE_SONG_SLAB_CAP as f64
-            / crate::panes::spectral::spectrogram::COLUMNS_PER_SLAB)
+        let hop = (span / crate::spectrogram::WHOLE_SONG_SLAB_CAP as f64
+            / crate::spectrogram::COLUMNS_PER_SLAB)
             .max(AudioSpectrum::FFT_INTERVAL);
         let total = samples.len() / channels; // frames
         let mut columns = Vec::new();
@@ -332,7 +332,7 @@ impl AudioSpectrum {
     /// is untouched, so what a column RESOLVES is unchanged, and overlapping
     /// that same window more finely just draws the time axis at 2.5x the
     /// resolution 20 ms reaches (via
-    /// [`live_slab`](crate::panes::spectral::spectrogram::live_slab), whose ladder is
+    /// [`live_slab`](crate::spectrogram::live_slab), whose ladder is
     /// rungs of THIS interval, so the picture's grid tracks it).
     /// It costs 0.37 ms of FFT per column — 4.7% of a core, against 1.9% at
     /// 20 ms — and one more [`SpectrumHistory`] tier to hold the same reach.
@@ -521,9 +521,9 @@ impl AudioSpectrum {
     /// overlay turns them into a rate, where "climbing" is the entire diagnosis.
     pub(crate) fn spectrogram_fallbacks(
         &self,
-    ) -> (u32, [u32; crate::panes::spectral::spectrogram::Restart::COUNT]) {
+    ) -> (u32, [u32; crate::spectrogram::Restart::COUNT]) {
         self.spectrogram.iter().fold(
-            (0, [0; crate::panes::spectral::spectrogram::Restart::COUNT]),
+            (0, [0; crate::spectrogram::Restart::COUNT]),
             |(rebuilds, mut restarts), s| {
                 for (total, surface) in restarts.iter_mut().zip(s.restarts) {
                     *total += surface;

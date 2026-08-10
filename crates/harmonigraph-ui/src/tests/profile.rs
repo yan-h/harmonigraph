@@ -287,7 +287,7 @@ fn profile_allocations() {
 
     let mut phase = 0.0f64;
     let mut phases = [(0usize, 0usize); 3];
-    let mut at_warmup = (0, [0; crate::panes::spectral::spectrogram::Restart::COUNT]);
+    let mut at_warmup = (0, [0; crate::spectrogram::Restart::COUNT]);
 
     for i in 0..(WARMUP + FRAMES) {
         let t = i as f64 / 60.0;

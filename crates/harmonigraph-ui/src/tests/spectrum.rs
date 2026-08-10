@@ -165,7 +165,7 @@ fn a_live_column_is_stamped_at_the_middle_of_its_window() {
 /// `MIN_BUCKET` means no slab is ever empty, at any frame rate or cap.
 #[test]
 fn columns_are_evenly_spaced_however_the_shell_batches_them() {
-    use crate::panes::spectral::spectrogram::MIN_BUCKET;
+    use crate::spectrogram::MIN_BUCKET;
     let sr = 48_000.0f32;
     let config = SpectrumConfig::default();
     let mut spectrum = AudioSpectrum::default();
@@ -360,7 +360,7 @@ fn spectrum_history_reaches_the_retention_cap() {
 /// one, so it is still worth stating against the real function.
 #[test]
 fn stored_columns_stay_finer_than_the_slabs_they_are_drawn_into() {
-    use crate::panes::spectral::spectrogram::{live_slab, LIVE_SLAB_CAP};
+    use crate::spectrogram::{live_slab, LIVE_SLAB_CAP};
     let mut age = 0.0f64; // youngest age the tier holds
     let mut spacing = AudioSpectrum::FFT_INTERVAL;
     for tier in 0..SpectrumHistory::TIERS {
@@ -455,7 +455,7 @@ fn the_heatmap_reads_the_curve_s_own_level_scale() {
         let tolerance =
             0.5 * harmonigraph_core::spectrogram::DB_STEP / (cfg.ceiling_db - cfg.floor_db) + 1e-6;
         let curve = loudness(cfg, power, midi);
-        let heatmap = crate::panes::spectral::spectrogram::bin_level_for_test(
+        let heatmap = crate::spectrogram::bin_level_for_test(
             cfg,
             harmonigraph_core::spectrogram::quantize(power),
             midi,
@@ -483,7 +483,7 @@ fn the_heatmap_reads_the_curve_s_own_level_scale() {
         let tolerance =
             0.5 * harmonigraph_core::spectrogram::DB_STEP / (cfg.ceiling_db - cfg.floor_db) + 1e-6;
         let curve = loudness(&cfg, 1e-5, midi);
-        let heatmap = crate::panes::spectral::spectrogram::bin_level_for_test(
+        let heatmap = crate::spectrogram::bin_level_for_test(
             &cfg,
             harmonigraph_core::spectrogram::quantize(1e-5),
             midi,

@@ -213,7 +213,7 @@ pub(crate) fn loudness_raw(cfg: &crate::SpectrumConfig, power_db: f32, midi: f32
 /// along time), **Top** (time top->bottom, pitch left->right) and **Bottom**.
 /// In all four the spectrum sits at the now-line end.
 #[derive(Clone, Copy)]
-pub(super) struct Axes {
+pub(crate) struct Axes {
     pub rect: egui::Rect,
     /// Time (the depth axis) runs down the pane rather than along it, with
     /// pitch across. See [`SpectralOrientation`](crate::SpectralOrientation).
@@ -368,7 +368,7 @@ pub(super) fn widest_span() -> f32 {
 
 /// Where a pitch sits on the pane's axis: the pitch range, as a mapping.
 #[derive(Clone, Copy)]
-pub(super) struct PitchScale {
+pub(crate) struct PitchScale {
     pub min_midi: f32,
     pub max_midi: f32,
     pub span: f32,
