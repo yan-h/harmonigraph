@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Local mirror of .github/workflows/ci.yml: the exact six gates the cloud CI
+# Local mirror of .github/workflows/ci.yml: the exact seven gates the cloud CI
 # runs — clippy across all targets with warnings denied, the full test suite,
-# the plugin package check, baseview's own tests, the doc-link check, then
-# the harmonigraph-core dependency guard. Nothing more, nothing less, on the
-# toolchain pinned by rust-toolchain.toml — so a green run here means a green
-# run there.
+# the plugin package check, baseview's own tests, the doc-link check, the
+# harmonigraph-core dependency guard, then the worktree-reclaim lock cases.
+# Nothing more, nothing less, on the toolchain pinned by rust-toolchain.toml —
+# so a green run here means a green run there.
 #
 # Run it directly:              ./ci.sh
 # Or gate every push on it:     git config core.hooksPath .githooks
@@ -73,5 +73,13 @@ if [ -n "$deps" ]; then
 fi
 echo "  ok — no dependencies"
 
+# The only gate here that guards a script rather than the crates. Its subject
+# — which worktree locks are live — is the one decision in the tree that
+# deletes a directory, and its inputs (a pid, its argv, the spare pool's
+# sockets) are all outside the repo, so no cargo test can reach it. It has
+# been wrong in both directions, most recently eagerly enough to make a live
+# session's worktree removable, which is why it is a gate and not a habit.
+run .claude/tests/reclaim-locks.sh
+
 echo
-echo "✅ local CI passed (clippy + tests + plugin check + baseview + doc links + harmonigraph-core dep guard)"
+echo "✅ local CI passed (clippy + tests + plugin check + baseview + doc links + harmonigraph-core dep guard + reclaim locks)"
