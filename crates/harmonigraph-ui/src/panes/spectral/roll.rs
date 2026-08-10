@@ -206,7 +206,7 @@ pub(super) fn draw_roll(
         // direction.
         harmonigraph_render::bloom_strength(state.view.bloom_strength),
         state.target_format,
-        surface as u64,
+        crate::panes::lattice::pane_id(surface),
     ));
 }
 

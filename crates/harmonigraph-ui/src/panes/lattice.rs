@@ -57,31 +57,68 @@ pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64)
         };
     }
 
+    let background = state.background;
+    let stats = Some(state.instruments.lattice_stats.clone());
+    draw_lattice(ui, rect, state, now, 0, background, Some(&response), stats);
+}
+
+/// The lattice's shared draw sequence: derive the scene, pick when this is
+/// the interactive copy, lay out and draw the node labels, and hand the
+/// frame to its paint callback. Both [`lattice_pane`] and the Render
+/// preview's second live copy of the lattice
+/// (`panes::render::preview_lattice`) run this — they differ only in which
+/// GPU pane id this copy claims (`surface`, see [`pane_id`]), what the
+/// sevens knockout clears to (`background`), and where the frame's GPU stats
+/// land (`stats`).
+///
+/// `response` is `None` for a non-interactive copy: showing a hover,
+/// picking, and the learn badge all answer to a pointer, and the preview
+/// has none of its own — its camera is framed in the Lattice tab, not here
+/// — so all three are skipped together rather than by three flags that
+/// could disagree.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn draw_lattice(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    state: &mut SharedState,
+    now: f64,
+    surface: usize,
+    background: glam::Vec4,
+    response: Option<&egui::Response>,
+    stats: Option<std::sync::Arc<harmonigraph_render::LatticeStats>>,
+) {
     let mut scene = derive_scene(
         &state.tracker,
         &state.tuning,
         &state.view,
         &state.frame_params,
         state.camera,
-        state.hovered,
+        // Only the interactive copy has a hover to show: the preview's
+        // camera is framed in the Lattice tab, not here, and a hover picked
+        // up while working there is that view's business, not a picture of
+        // the render's.
+        response.and(state.hovered),
         now,
     );
     // The ground the sevens knockout clears to. Only the shell knows what
     // this pass is composited over -- the dock's tab body here, the render
-    // layout's own background offline -- so it is carried on SharedState
+    // layout's own background offline -- so it is carried in by the caller
     // rather than assumed by the scene.
-    scene.background = state.background;
+    scene.background = background;
 
     // Picking updates the *shared* hover state, one frame behind the scene
-    // it was derived from (imperceptible, standard for immediate mode).
-    if let Some(pointer) = response.hover_pos() {
-        state.hovered = scene.pick(
-            glam::Vec2::new(rect.width(), rect.height()),
-            glam::Vec2::new(pointer.x - rect.min.x, pointer.y - rect.min.y),
-            24.0,
-        );
-    } else if !response.dragged() {
-        state.hovered = None;
+    // it was derived from (imperceptible, standard for immediate mode). Only
+    // the interactive copy has a pointer to read.
+    if let Some(response) = response {
+        if let Some(pointer) = response.hover_pos() {
+            state.hovered = scene.pick(
+                glam::Vec2::new(rect.width(), rect.height()),
+                glam::Vec2::new(pointer.x - rect.min.x, pointer.y - rect.min.y),
+                24.0,
+            );
+        } else if !response.dragged() {
+            state.hovered = None;
+        }
     }
 
     // The lattice's own place in the shape list, claimed before the labels are
@@ -108,7 +145,11 @@ pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64)
     // A saving now, not a correctness requirement: each renderer holds a
     // mirror of its own (see `crate::text::AtlasMirror`), and each is handed
     // the atlas on the frame its own glyphs move.
-    let badge = state.learn_active.then(|| learn_badge(ui, rect, now));
+    //
+    // Only the interactive copy shows it at all: the badge is chrome about
+    // the working view being in learn mode, and the preview is a picture of
+    // the render, not a place to work.
+    let badge = (response.is_some() && state.learn_active).then(|| learn_badge(ui, rect, now));
     ui.painter().set(
         lattice,
         lattice_paint_callback(
@@ -116,13 +157,28 @@ pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64)
             &scene,
             batch.lattice_labels(ui.painter(), rect.min, state),
             state.target_format,
-            0,
-            Some(state.instruments.lattice_stats.clone()),
+            pane_id(surface),
+            stats,
         ),
     );
     if let Some(mut badge) = badge {
         draw_learn_overlay(ui, rect, state, now, &mut badge);
     }
+}
+
+/// The GPU pane id a live copy of a lattice paint callback claims, so two
+/// live copies never overwrite each other's buffers within a frame — the
+/// docked pane's own id and the Render preview's second copy.
+///
+/// One id space per callback type
+/// (`lattice_paint_callback`, `harmonigraph_render::roll_paint_callback`),
+/// not one shared across all of them: the lattice's 0/1 and the roll's do
+/// not have to, and do not, mean the same live copy. `crate::text`'s
+/// `spectral_labels` is a THIRD, unrelated space — a text batch's flush id,
+/// not a GPU pane id — offset by one to leave room for its own
+/// `LATTICE_LEARN`.
+pub(crate) fn pane_id(surface: usize) -> u64 {
+    surface as u64
 }
 
 /// Learn mode is armed: show it ON the lattice too, so the mode is obvious

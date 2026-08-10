@@ -15,17 +15,10 @@
 //! exposed" (a wider frame shows more horizontally).
 
 use egui::Sense;
-use harmonigraph_render::lattice_paint_callback;
-use harmonigraph_scene::derive_scene;
 
 use super::section;
 use crate::widgets::{button_row, choice_row, option_label, record_button, ValueBar};
 use crate::{theme, LatticeSide, Layout, Pane, SharedState};
-
-/// The preview's lattice is a second live view, so it needs its own GPU id —
-/// the docked Lattice tab owns 0, and two views sharing an id overwrite each
-/// other's buffers within a frame.
-const PREVIEW_PANE_ID: u64 = 1;
 
 /// Points of breathing room between the render frame and the pane edge, so
 /// the frame's boundary chrome always has somewhere to sit outside the
@@ -396,56 +389,24 @@ fn letterbox(outer: egui::Rect, aspect: f32) -> egui::Rect {
 /// from `rect` inside the render callback, so this frames exactly as the render
 /// will. Non-interactive: `hovered` is left `None`, and the camera is framed in
 /// the Lattice tab (shared state), not here.
-fn preview_lattice(ui: &mut egui::Ui, rect: egui::Rect, state: &SharedState, now: f64) {
+///
+/// Runs the same draw sequence the docked Lattice tab does (see
+/// [`super::lattice::lattice_pane`]) with its own GPU pane id, so a second
+/// live copy never overwrites the docked pane's buffers within a frame — and
+/// with no GPU-time slot, since the Video pane's preview is a second lattice
+/// on screen, and reporting its cost as THE lattice cost would be wrong.
+fn preview_lattice(ui: &mut egui::Ui, rect: egui::Rect, state: &mut SharedState, now: f64) {
     if rect.width() < 1.0 || rect.height() < 1.0 {
         return;
     }
-    let mut scene = derive_scene(
-        &state.tracker,
-        &state.tuning,
-        &state.view,
-        &state.frame_params,
-        state.camera,
-        None,
-        now,
-    );
     // The preview is a picture of the RENDER, so its knockouts clear to the
     // render layout's background rather than to the panel this preview
     // happens to sit on — the same color `harmonigraph-offline` will clear to.
-    scene.background = harmonigraph_scene::skin::ground_color(
+    let background = harmonigraph_scene::skin::ground_color(
         Layout::split(state.take.render_config.frame.lattice, state.take.render_config.frame.split)
             .background,
     );
-    // The lattice's place in the shape list, claimed now and filled in below:
-    // the node names are drawn inside its own pass, and are not known until
-    // they have been laid out. Nothing is added to this painter after it, so
-    // the slot orders nothing — it is here for the claim-then-fill alone,
-    // which is the same shape the Lattice pane uses (there it also has a badge
-    // to order against).
-    let lattice = ui.painter().add(egui::Shape::Noop);
-    // Node names/cents, exactly as the Lattice pane and the render draw them:
-    // sized off this rect, so a preview a third of the render's size draws
-    // them a third of the size, which is what makes it a preview. Nothing here
-    // needs clipping to the lattice rect — a label puts nothing on the painter,
-    // marks included, and everything it collects is drawn into the lattice's
-    // own target, which IS the rect.
-    let mut batch = crate::text::TextBatch::default();
-    if state.view.show_labels {
-        super::lattice::draw_node_labels(ui, rect, &scene, &state.view, &mut batch);
-    }
-    // No GPU-time slot: the Video pane's preview is a second lattice on
-    // screen, and reporting its cost as THE lattice cost would be wrong.
-    ui.painter().set(
-        lattice,
-        lattice_paint_callback(
-            rect,
-            &scene,
-            batch.lattice_labels(ui.painter(), rect.min, state),
-            state.target_format,
-            PREVIEW_PANE_ID,
-            None,
-        ),
-    );
+    super::lattice::draw_lattice(ui, rect, state, now, 1, background, None, None);
 }
 
 /// Capturing a take: the switch, what it is doing, and the clear that gives it
