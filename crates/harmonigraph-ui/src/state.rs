@@ -523,11 +523,15 @@ impl SharedState {
     /// (dock layout, camera, view settings). Parameters are NOT included —
     /// they live in the host's plugin state.
     ///
-    /// The plugin calls this exactly once per editor open, from
-    /// `LatticeEditorHandle`'s `Drop`, into `params.ui_state` — nowhere on
-    /// the frame path calls it, so `params.ui_state` reads the CLOSE of the
-    /// last session that had the editor open, not whatever the current one
-    /// is doing.
+    /// Called from more than one place — `sync_take` rides a fresh
+    /// serialization along with a take, on every start-recording and
+    /// Re-render, so a render reproduces the look it was dialed in at rather
+    /// than whatever the editor happens to show by the time it runs. But
+    /// only ONE caller writes the result into `params.ui_state`, the field
+    /// the host actually persists with the project: `LatticeEditorHandle`'s
+    /// `Drop`. So `params.ui_state` reads the CLOSE of the last session that
+    /// had the editor open, not whatever the current one — or a take in
+    /// flight — is doing.
     pub fn save_persist(&self) -> String {
         // RON rather than JSON: dock layout rects can be NaN (before first
         // layout), which JSON cannot round-trip.
