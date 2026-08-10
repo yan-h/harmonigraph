@@ -88,7 +88,8 @@ impl ParamKey {
         ParamKey::Tolerance,
     ];
 
-    /// Pitch->color gradient endpoints (Color group of the Appearance UI).
+    /// Pitch->color gradient endpoints (the Color range in Display's
+    /// Color & light section).
     pub const COLOR: [ParamKey; 2] = [ParamKey::DarkestPitch, ParamKey::BrightestPitch];
 
     pub fn label(self) -> &'static str {
