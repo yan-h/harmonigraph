@@ -28,7 +28,8 @@
 //! trap with it: a note crossing the window's oldest edge is TRUNCATED
 //! (as is, at the other end, one whose tail the Gap setting is shaving)
 //! there, rewriting its geometry every frame while it leaves (see
-//! `panes/roll.rs`), so any cache has to retire chunks before they reach it.
+//! `panes/spectral/roll.rs`), so any cache has to retire chunks before they
+//! reach it.
 //! Rebuilding per frame keeps the geometry a pure function of `now` — which
 //! is also what keeps the offline render deterministic.
 
