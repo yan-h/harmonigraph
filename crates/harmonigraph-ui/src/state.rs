@@ -522,6 +522,12 @@ impl SharedState {
     /// Serialize the parts of the UI worth restoring across sessions
     /// (dock layout, camera, view settings). Parameters are NOT included —
     /// they live in the host's plugin state.
+    ///
+    /// The plugin calls this exactly once per editor open, from
+    /// `LatticeEditorHandle`'s `Drop`, into `params.ui_state` — nowhere on
+    /// the frame path calls it, so `params.ui_state` reads the CLOSE of the
+    /// last session that had the editor open, not whatever the current one
+    /// is doing.
     pub fn save_persist(&self) -> String {
         // RON rather than JSON: dock layout rects can be NaN (before first
         // layout), which JSON cannot round-trip.
