@@ -6,8 +6,8 @@
 //! Two settings, and the grid's COLOR is deliberately not one of them: the
 //! lines draw in the skin's hairline grey, the same one this pane's own rules
 //! are drawn in. The structural layer is chrome that happens to be in the
-//! picture, and every color control in the panel is for the music — which is
-//! [`super::color`], the section that holds all of them.
+//! picture, and every color control in the panel is for the music — the notes'
+//! own in [`super::color`], the heatmap's with the analyzer that reads it.
 
 use crate::widgets::ValueBar;
 use crate::SharedState;
