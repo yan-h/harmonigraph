@@ -217,14 +217,21 @@ pub struct SharedState {
 /// what the window is doing to both, and the two numbers the shell and the
 /// layout trade width through.
 ///
-/// Grouped because the audience is one subsystem and it is not the panes.
-/// Everything here is read by [`fold`] and by the dock block at the top of
-/// [`root_ui`](crate::root_ui), and by nothing else — the dock is built,
-/// folded, painted and written back inside one stretch of one function, and the
-/// rest of the frame never looks at it. Spread flat among the settings and the
-/// tracker they read as things a pane might act on, which is exactly what a
-/// pane must not do: the pass a pane runs in is the pass walking the tree it
-/// would be writing.
+/// Grouped by who reads it, and the answer is never a pane. The whole of it is
+/// read in one stretch of [`root_ui`](crate::root_ui) — the block that moves
+/// the dock out, hands the fields to [`fold`] as arguments, draws, paints the
+/// rails and writes the dock back — and everything else that touches it takes
+/// one or two members for a stated reason: `pane_body` reads the dock to find
+/// which pane the performance overlay may hang on, `save_persist` and
+/// `load_persist` carry [`dock`](Self::dock) and [`folds`](Self::folds) because
+/// those two are the members that survive a session, and [`crate::shell`] sets
+/// [`min_window_width`](Self::min_window_width) on the way in and spends
+/// [`window_width_change`](Self::window_width_change) on the way out, which is
+/// the whole of what a shell owes the layout.
+///
+/// Spread flat among the settings and the tracker they read as things a pane
+/// might act on, which is exactly what a pane must not do: the pass a pane runs
+/// in is the pass walking the tree it would be writing.
 ///
 /// One pane does touch it, and the shape of that is the reason the grouping is
 /// worth naming rather than an exception to it. The System pane's "Reset

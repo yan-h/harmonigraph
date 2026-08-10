@@ -218,15 +218,21 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
 
     // DockState has to be moved out while panes borrow the rest of `state`.
     //
-    // Grouping the layout into `Workspace` does not lift this and cannot: a
-    // pane is handed `&mut SharedState`, which is the whole of it, so no field
-    // reachable from there is free while the pass runs — one struct deeper is
-    // still inside the borrow. Nor can the group travel out together in the
-    // dock's place, because the pass WRITES one of its fields: the System
-    // pane's "Reset layout" sets `reset_layout`, and a workspace lifted out
-    // for the pass would be handed that flag back into a copy about to be
-    // overwritten. Only the dock is both untouched by every pane and needed by
-    // the code around them, which is what makes it the one field worth moving.
+    // Grouping the layout into `Workspace` does not lift this and cannot. The
+    // borrow is the whole state — a pane is handed `&mut SharedState`, so a
+    // field one struct deeper is no freer than a field at the top level — and
+    // the tree is wanted for exactly as long as the panes are drawing into it.
+    // That is what singles the dock out: every other member of the group is
+    // read before the pass or after it, and this one is read DURING.
+    //
+    // Moving the whole `Workspace` out in its place is the tidier-looking
+    // version and is wrong, because the pass writes back into the group. The
+    // System pane's "Reset layout" sets `reset_layout` on the state, which
+    // would be the emptied default left standing here, and restoring the
+    // lifted copy afterwards would drop that write — the button going quiet
+    // with everything still compiling and every other test green. See
+    // `the_reset_layout_button_resets_the_layout_when_it_is_clicked`, which is
+    // what says so out loud.
     let mut dock = std::mem::replace(&mut state.workspace.dock, DockState::new(vec![]));
     // Before the dock lays out: a pane collapsed inside a horizontal split
     // folds sideways to a rail, which is a split fraction, which is layout's

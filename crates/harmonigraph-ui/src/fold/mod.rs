@@ -48,12 +48,11 @@
 //! points to lose or regain and the plugin asks its host for them (see
 //! `Workspace::take_window_width_change`).
 //!
-//! Everything this module reads across frames — the tree, the [`Folds`], the
-//! [`Dial`], the floor, and the points owed to the window — is the one struct
-//! `Workspace`, and this module plus the dock block of `root_ui` are its only
-//! readers. A pane is handed the state the workspace hangs off and is expected
-//! to ignore all of it: the layout a pane is being drawn by is not a layout it
-//! can be rearranging mid-pass.
+//! Nothing here owns any of that across frames. The tree, the [`Folds`], the
+//! [`Dial`] and the window's floor all live together in `Workspace`, on the
+//! shared state, and reach this module as arguments — so what a fold is priced
+//! against is whatever `root_ui` hands over, and this module keeps no second
+//! copy of the layout to fall out of step with it.
 //!
 //! A window that will not go where a fold asked — a host that refused, the
 //! floor it will not go under — leaves the layout dialled for a window that is
