@@ -22,18 +22,20 @@ On macOS the plugin editor is egui 0.35 → egui-wgpu 0.35 → wgpu 29 →
 **Metal**. No OpenGL path is compiled in (`Cargo.toml` builds
 egui-baseview with `default-features = false, features = ["wgpu"]`).
 
-`EguiWindow::open_parented` (`crates/harmonigraph-plugin/src/editor.rs:391`)
+`EguiWindow::open_parented` (in `crates/harmonigraph-plugin/src/editor.rs`)
 parents onto the host's `NSView`, and
 `vendor/egui-baseview/src/renderer/wgpu/renderer.rs:59-83` creates a wgpu
 surface on it — a `CAMetalLayer` swapchain, presented Fifo (vsync).
 
 MSAA is off, so egui renders **straight into the swapchain texture**
 (`renderer.rs:264-321`). The lattice is an `egui_wgpu` paint callback: its
-`prepare()` (`crates/harmonigraph-render/src/lib.rs:941-1085`) runs the scene
+`prepare()` (in `crates/harmonigraph-render/src/lib.rs`) runs the scene
 and bloom passes into a pane-sized offscreen texture on egui's own
-encoder, and its `paint()` (`lib.rs:1087-1110`) blits a single quad inside
-egui's render pass. Node labels and the learn overlay are ordinary egui
-shapes painted after (`crates/harmonigraph-ui/src/panes/lattice.rs:82-87`).
+encoder, and its `paint()` blits a single quad inside
+egui's render pass. Node labels and the learn overlay are laid out by
+`draw_lattice` (`crates/harmonigraph-ui/src/panes/lattice.rs`), which puts the
+names INTO the paint callback rather than painting them after, so a node in
+front covers them.
 
 **So the composited "what you see" image exists in exactly one place: the
 swapchain texture.** That single fact drives everything below.
@@ -59,7 +61,7 @@ Two things block a readback from where you'd want to put it:
   accessor that forces the `ASSUMED_SURFACE_FORMAT` hack.
 
 A paint callback *can* see a `Device` and `Queue`
-(`harmonigraph-render/src/lib.rs:941`) and they're cheap clonable handles, so a
+(`prepare()`'s arguments, `harmonigraph-render/src/lib.rs`) and they're cheap clonable handles, so a
 callback could stash them. But a callback's `paint()` gets only a
 `&mut RenderPass` — you can't copy inside a render pass, and the
 `SurfaceTexture` is never handed to callbacks. **Full-window capture has
@@ -77,11 +79,11 @@ standalone's self-screenshot trick is a silent no-op in the plugin.
 
 Frame pacing. The plugin repaints **on demand**, not at a fixed rate:
 continuously only while voices are sounding or decaying, otherwise a
-50 ms poll (`crates/harmonigraph-ui/src/lib.rs:463-472`), on top of baseview's
+50 ms poll (`IDLE_REPAINT_INTERVAL` in `crates/harmonigraph-ui/src/lib.rs`), on top of baseview's
 15 ms macOS frame timer (`vendor/baseview/src/platform/macos/view.rs:105`)
 and a Fifo swapchain. Presents are also skipped outright on
 Occluded/Outdated/Lost (`renderer.rs:214-262`) — the editor already logs
-these stalls (`editor.rs:126-134`).
+these stalls (`note_frame` in `editor.rs`).
 
 A recorder that counts frames will therefore produce video that drifts
 against the music. Any live-capture route **must** force continuous
@@ -89,17 +91,18 @@ repaint while recording, stamp each frame with a real timestamp, and let
 the encoder normalize to constant frame rate. Related: the window is
 HiDPI and resizable mid-recording, and H.264 wants even dimensions — the
 size has to be locked (the editor can even ask the host for an exact
-physical size via `requested_size` + `request_resize()`,
-`editor.rs:451-463`).
+physical size via `requested_size` + `request_resize()`, both in
+`editor.rs`).
 
 And audio: the mono ring feeding the spectrum analyzer **drops samples
-under backpressure by design** (`crates/harmonigraph-plugin/src/lib.rs:283`).
+under backpressure by design** (`AUDIO_RING_CAPACITY` and the `audio_producer`
+writes in `crates/harmonigraph-plugin/src/lib.rs`).
 It is not a recording source. Audio comes from a DAW bounce, muxed after.
 
 ## 4. What is already built that helps
 
 - **A self-capture recorder, 50 lines from done.**
-  `crates/harmonigraph-standalone/src/main.rs:80-131` (`SelfShot`) already does
+  `SelfShot` in `crates/harmonigraph-standalone/src/main.rs` already does
   `ViewportCommand::Screenshot` → `image::save_buffer`. Its own doc
   comment states the project's stance: the app captures its own swapchain
   "so macOS screen-recording permissions never get in the way."
@@ -111,14 +114,16 @@ It is not a recording source. Audio comes from a DAW bounce, muxed after.
   whenever a test is added above them.
 - **`derive_scene` is a pure function** of
   `(tracker, tuning, view, params, camera, now)`
-  (`crates/harmonigraph-ui/src/panes/lattice.rs:57-65`). Step `now` by exactly
+  (`harmonigraph_scene::derive_scene`, called from `draw_lattice` in
+  `crates/harmonigraph-ui/src/panes/lattice.rs`). Step `now` by exactly
   1/60 s and you get a perfect constant-frame-rate sequence with no vsync
   coupling at all.
-- **Frameless mode** (`harmonigraph-ui/src/lib.rs:430`) exists specifically to
+- **Frameless mode** (`view.frameless`, the checkbox in
+  `crates/harmonigraph-ui/src/panes/system.rs`) exists specifically to
   make adjacent panes record as one clean surface.
 - **The host transport is available and unused.** `nice-plug-core` exposes
   `playing`/`pos_seconds`/`tempo`; `process()`
-  (`crates/harmonigraph-plugin/src/lib.rs:244-303`) never asks for it. That's
+  (in `crates/harmonigraph-plugin/src/lib.rs`) never asks for it. That's
   the natural thing to gate and stamp a recording against.
 
 Against that: **there is no video encoder anywhere in the tree**, and no
@@ -183,7 +188,8 @@ one more entry in `PATCHES.md`, paying for two things.
 
 **Route 4, ScreenCaptureKit/AVFoundation in-process, rejects itself.** The
 TCC screen-recording prompt would be attributed to the *host* — precisely
-what `harmonigraph-standalone/src/main.rs:84` says the project avoids — you'd
+what `SelfShot`'s own doc in `harmonigraph-standalone/src/main.rs` says the
+project avoids — you'd
 capture host chrome around a host-owned window, and you'd still be stuck
 at screen resolution and compositor pacing. Strictly worse than OBS, with
 code.
