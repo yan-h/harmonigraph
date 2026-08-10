@@ -1766,18 +1766,20 @@ fn the_rolls_ink_stops_at_the_now_line() {
     }
 }
 
-/// Binds `RollAxes`' four hardcoded orientation pairs — the `TOP`, `BOTTOM`,
-/// `LEFT` and `RIGHT` constants in harmonigraph-render's `roll.rs` — to what
-/// [`Axes`] derives for the matching [`SpectralOrientation`], the same way
+/// Pins what [`Axes`] derives for each [`SpectralOrientation`] against the
+/// four direction pairs the roll shader is drawn with, the same way
 /// [`the_names_filter_follows_the_axis_time_runs_along`] binds the text
-/// filter's axis to it.
+/// filter's axis to it. An orientation whose roll drew turned or mirrored
+/// against its own spectrum and spectrogram would otherwise ship exactly as
+/// green as one that agreed with them.
 ///
-/// The roll shader is handed its axis directions once per orientation change
-/// rather than deriving them per vertex, so those four pairs are typed out by
-/// hand on the render side, disconnected from the `Axes` this pane actually
-/// lays out its plane with. Nothing before this compared the two: an
-/// orientation whose roll drew turned or mirrored against its own spectrum
-/// and spectrogram would ship exactly as green as one that agreed with them.
+/// The four pairs are typed out here rather than imported: harmonigraph-render
+/// spells the same table as `TOP`/`BOTTOM`/`LEFT`/`RIGHT` in its own `roll.rs`,
+/// but those are `#[cfg(test)]` constants and no `#[cfg(test)]` item is
+/// reachable from another crate. So this is a hand copy, and what it holds is
+/// THIS side — that `Axes` keeps deriving the directions the shader is known
+/// to want. A change to the render side's own convention would not fail here;
+/// render's orientation tests are what cover that half.
 #[test]
 fn roll_axes_match_what_axes_derives_for_the_same_orientation() {
     use harmonigraph_render::RollAxes;
