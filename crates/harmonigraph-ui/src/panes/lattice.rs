@@ -805,4 +805,69 @@ mod tests {
             "a departing name stopped reserving the level its trail record takes over at",
         );
     }
+
+    /// The learn badge is chrome about the WORKING view, not the picture —
+    /// see [`lattice_pane`]'s own doc comment — so only the interactive copy
+    /// draws it. [`draw_lattice`] gates it on `response` alone: the Render
+    /// preview's second live copy has none, and must show none of it.
+    #[test]
+    fn only_the_interactive_copy_draws_the_learn_badge() {
+        let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
+        state.learn_active = true;
+        state.view.show_labels = false;
+        let ctx = egui::Context::default();
+        crate::theme::apply_theme(&ctx);
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 400.0));
+        let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(300.0, 300.0));
+
+        let without = ctx
+            .run_ui(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ui| {
+                draw_lattice(ui, rect, &mut state, 0.0, 0, glam::Vec4::ZERO, None, None);
+            })
+            .shapes
+            .len();
+        let with = ctx
+            .run_ui(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ui| {
+                let (_, response) = ui.allocate_exact_size(rect.size(), egui::Sense::hover());
+                draw_lattice(ui, rect, &mut state, 0.0, 0, glam::Vec4::ZERO, Some(&response), None);
+            })
+            .shapes
+            .len();
+        assert!(
+            with > without,
+            "learn mode should draw the badge for the interactive copy ({with} shapes) but not \
+             the non-interactive one ({without} shapes)",
+        );
+    }
+
+    /// Picking only touches `state.hovered` for the interactive copy: the
+    /// preview has no pointer of its own (see [`lattice_pane`]'s own doc
+    /// comment), so a non-interactive [`draw_lattice`] call must leave
+    /// whatever the docked pane last picked alone rather than clearing it
+    /// out from under it.
+    #[test]
+    fn only_the_interactive_copy_lets_picking_touch_the_hover() {
+        let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
+        let home = harmonigraph_core::LatticePos::new(0, 0, 0);
+        state.hovered = Some(home);
+        let ctx = egui::Context::default();
+        crate::theme::apply_theme(&ctx);
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 400.0));
+        let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(300.0, 300.0));
+
+        // No response: nothing picks, so the docked pane's last hover must
+        // survive a preview frame drawn in between.
+        let _ = ctx.run_ui(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ui| {
+            draw_lattice(ui, rect, &mut state, 0.0, 0, glam::Vec4::ZERO, None, None);
+        });
+        assert_eq!(state.hovered, Some(home), "a non-interactive copy must not touch the hover");
+
+        // A response with no simulated pointer over it: picking runs and
+        // reads "not hovering, not dragging", which clears it.
+        let _ = ctx.run_ui(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ui| {
+            let (_, response) = ui.allocate_exact_size(rect.size(), egui::Sense::hover());
+            draw_lattice(ui, rect, &mut state, 0.0, 0, glam::Vec4::ZERO, Some(&response), None);
+        });
+        assert_eq!(state.hovered, None, "the interactive copy should pick, and clear a stale hover");
+    }
 }
