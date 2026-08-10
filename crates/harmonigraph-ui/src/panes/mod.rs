@@ -88,9 +88,10 @@ pub enum Tab {
     /// Where the lattice's nodes sit in pitch: the prime bars, and the commas
     /// it tempers out.
     Tuning,
-    /// How everything on screen is drawn: the View, Nodes, Scene and Analyzer
-    /// settings, one collapsible section each — see [`display`] for why one
-    /// tab carries all four.
+    /// How everything on screen is drawn: the Color & light, View, Nodes,
+    /// Labels, Grid and Analyzer settings, one collapsible section each — see
+    /// [`display`] for why one tab carries all six, and for the rule that says
+    /// which section a setting lands in.
     Display,
     Console,
     /// The Spectral display: FFT curve, voices, and piano roll. Titled
