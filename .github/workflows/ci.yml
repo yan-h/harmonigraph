@@ -18,6 +18,12 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Tests
         run: cargo test --workspace
+      # The standalone harness enables harmonigraph-render's hot-reload
+      # feature, and cargo unifies features across --workspace, so the
+      # gates above never compile the configuration the release bundle
+      # ships. See ci.sh.
+      - name: Plugin package check
+        run: cargo check -p harmonigraph-plugin
       # The vendored crates are excluded from the workspace, so --workspace
       # compiles them and runs none of their tests. baseview's decide when a
       # gesture is over. See ci.sh.
