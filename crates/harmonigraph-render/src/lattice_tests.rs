@@ -1,7 +1,10 @@
 //! Unit tests for the lattice renderer. The GPU-backed ones no-op when
-//! no headless adapter is available (CI without a GPU).
+//! no headless adapter is available (CI without a GPU); the headless
+//! device and the render/readback round trip they share with `roll` and
+//! `text` live in [`crate::gpu_harness`].
 
 use super::*;
+use crate::gpu_harness::{headless_device, readback, render_to_texture};
 
 #[test]
 fn baked_shader_validates() {
@@ -93,19 +96,6 @@ fn pipelines_build_against_a_headless_device() {
     };
     let _resources =
         LatticeResources::new(&device, &queue, wgpu::TextureFormat::Bgra8Unorm);
-}
-
-pub(crate) fn headless_device() -> Option<(wgpu::Device, wgpu::Queue)> {
-    let instance = wgpu::Instance::default();
-    let Ok(adapter) =
-        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-    else {
-        eprintln!("no GPU adapter available; skipping");
-        return None;
-    };
-    let pair = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
-        .expect("headless device");
-    Some(pair)
 }
 
 /// A device that actually granted `TIMESTAMP_QUERY`, so `GpuTimer::new`
@@ -328,9 +318,9 @@ fn parity_scene() -> Scene {
     }
 }
 
-/// The GPU harness the pixel tests share: a headless device, the callback
-/// resources one lattice pass keeps between frames, and the offscreen target
-/// a scene is drawn into.
+/// What the lattice pixel tests share on top of [`crate::gpu_harness`]: the
+/// callback resources one lattice pass keeps between frames, and the
+/// offscreen target a scene is drawn into.
 ///
 /// It exists because the alternative had spread. Turning a `Scene` into a
 /// buffer of pixels is twenty-seven lines that never vary — build the
@@ -361,8 +351,7 @@ struct Shooter {
 
 impl Shooter {
     /// `None` where the machine has no usable GPU — CI containers, mostly.
-    /// Every caller returns on it, which is what each did with
-    /// `headless_device` before.
+    /// Every caller returns on it.
     fn new(size: [u32; 2]) -> Option<Shooter> {
         let (device, queue) = headless_device()?;
         Some(Shooter {
@@ -433,95 +422,6 @@ fn brightness(px: &[u8]) -> i64 {
 /// All the light in one shot (see [`brightness`]).
 fn total_light(px: &[u8]) -> i64 {
     px.chunks(4).map(brightness).sum()
-}
-
-/// Render into a fresh texture cleared to `clear`, handing the pass to
-/// `draw`, and return the texture for readback.
-pub(crate) fn render_to_texture(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    size: [u32; 2],
-    format: wgpu::TextureFormat,
-    clear: wgpu::Color,
-    draw: impl FnOnce(&mut wgpu::RenderPass<'static>),
-) -> wgpu::Texture {
-    let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("parity_target"),
-        size: wgpu::Extent3d {
-            width: size[0],
-            height: size[1],
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-        view_formats: &[],
-    });
-    let view = texture.create_view(&Default::default());
-    let mut encoder = device.create_command_encoder(&Default::default());
-    {
-        let mut pass = encoder
-            .begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("parity_pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(clear),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            })
-            .forget_lifetime();
-        draw(&mut pass);
-    }
-    queue.submit([encoder.finish()]);
-    texture
-}
-
-pub(crate) fn readback(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    texture: &wgpu::Texture,
-    size: [u32; 2],
-) -> Vec<u8> {
-    let bytes_per_row = size[0] * 4; // 256-wide RGBA rows are aligned
-    assert_eq!(bytes_per_row % 256, 0, "test sizes keep rows aligned");
-    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("parity_readback"),
-        size: (bytes_per_row * size[1]) as u64,
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
-    let mut encoder = device.create_command_encoder(&Default::default());
-    encoder.copy_texture_to_buffer(
-        texture.as_image_copy(),
-        wgpu::TexelCopyBufferInfo {
-            buffer: &buffer,
-            layout: wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(bytes_per_row),
-                rows_per_image: None,
-            },
-        },
-        wgpu::Extent3d {
-            width: size[0],
-            height: size[1],
-            depth_or_array_layers: 1,
-        },
-    );
-    queue.submit([encoder.finish()]);
-    let slice = buffer.slice(..);
-    slice.map_async(wgpu::MapMode::Read, |r| r.expect("map readback buffer"));
-    device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
-    slice.get_mapped_range().to_vec()
 }
 
 /// The refactor's core claim: rendering offscreen (with the depth

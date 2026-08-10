@@ -856,7 +856,7 @@ impl CallbackTrait for RollCallback {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tests::{headless_device, readback, render_to_texture};
+    use crate::gpu_harness::{headless_device, readback, render_to_texture};
 
     /// A 256x256 test surface at one point per pixel, so a distance in
     /// points is a distance in pixels and the band arithmetic below reads

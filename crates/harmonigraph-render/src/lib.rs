@@ -2244,4 +2244,6 @@ impl CallbackTrait for LatticeCallback {
 }
 
 #[cfg(test)]
-mod tests;
+mod gpu_harness;
+#[cfg(test)]
+mod lattice_tests;

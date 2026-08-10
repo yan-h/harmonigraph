@@ -865,7 +865,7 @@ impl CallbackTrait for TextCallback {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::tests::{headless_device, readback, render_to_texture};
+    use crate::gpu_harness::{headless_device, readback, render_to_texture};
 
     const SIZE: [u32; 2] = [64, 64];
     const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
