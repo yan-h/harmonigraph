@@ -1012,7 +1012,7 @@ mod tests {
     /// column_opens_at` is what holds that placement honest. A [`SpreadBar`]
     /// has no such placement and knocks out both of its runs.
     ///
-    /// [`SpreadBar`]: super::gradient::SpreadBar
+    /// [`SpreadBar`]: crate::widgets::gradient::SpreadBar
     #[test]
     fn the_name_is_knocked_out_where_a_thumb_stands_in_it() {
         // Two minimum spans down at the bottom of the axis, chosen to reach
@@ -1291,7 +1291,7 @@ mod tests {
     /// narrower than the two numbers it carries has no run of clear bar left
     /// that holds them, and something has to give.
     ///
-    /// [`SpreadBar`]: super::gradient::SpreadBar
+    /// [`SpreadBar`]: crate::widgets::gradient::SpreadBar
     #[test]
     fn no_thumb_ever_stands_in_a_number_at_the_widths_the_column_opens_at() {
         for width in [680.0f32, 423.0, 400.0, 300.0] {

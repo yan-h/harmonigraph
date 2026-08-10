@@ -1778,8 +1778,8 @@ mod tests {
     /// endpoints are ON the arc. The sample count catches that. And the
     /// straight run catches a radius that has grown to swallow the band.
     ///
-    /// [`corner_inset`]: super::mesh::corner_inset
-    /// [`CORNER_SAMPLES`]: super::mesh::CORNER_SAMPLES
+    /// [`corner_inset`]: crate::widgets::mesh::corner_inset
+    /// [`CORNER_SAMPLES`]: crate::widgets::mesh::CORNER_SAMPLES
     #[test]
     fn both_colour_bands_are_rounded_by_their_own_mesh() {
         let mut g = ViewConfig::default().pitch_gradient;
@@ -2232,7 +2232,7 @@ mod tests {
     /// somewhere the plugin has never opened, and the bar has no text entry
     /// to dial it back with.
     ///
-    /// [`reset_wheel`]: super::octave::reset_wheel
+    /// [`reset_wheel`]: crate::widgets::octave::reset_wheel
     #[test]
     fn a_double_click_on_the_spectrum_goes_home_to_the_arc_a_fresh_view_opens_on() {
         let fresh = ViewConfig::default().pitch_gradient;
@@ -2504,7 +2504,7 @@ mod tests {
     /// `a_dragged_end_stops_at_the_minimum_span` — and is right to: its ends
     /// bound a pitch axis, which inverted maps every pitch on it backwards.
     ///
-    /// [`RangeBar`]: super::range::RangeBar
+    /// [`RangeBar`]: crate::widgets::range::RangeBar
     #[test]
     fn an_end_dragged_past_its_partner_inverts_the_ramp() {
         // The low end walking up through its partner at 70.
@@ -2552,7 +2552,7 @@ mod tests {
     /// because it reads the width its own gesture began at and never the
     /// squished pair it just wrote — a [`Grab::Span`]'s bargain, both halves.
     ///
-    /// [`Grab::Span`]: super::range::Grab::Span
+    /// [`Grab::Span`]: crate::widgets::range::Grab::Span
     #[test]
     fn a_slid_ramp_squishes_against_the_end_it_meets() {
         // Grabbed dead centre of a 40-point ramp at L* 50, so 30..70.
@@ -2629,7 +2629,7 @@ mod tests {
     /// a handle cannot land on the slide, which would move both ends instead of
     /// the one aimed at.
     ///
-    /// [`RangeBar`]: super::range::RangeBar
+    /// [`RangeBar`]: crate::widgets::range::RangeBar
     #[test]
     fn a_wide_ramp_leaves_both_the_handles_and_the_slide_reachable() {
         let wide = (50.0f32, 80.0);
@@ -2892,7 +2892,7 @@ mod tests {
     /// `the_bars_the_panes_build_are_knocked_out_wherever_they_rest_under_a_thumb`,
     /// which reads the real defaults and is the one a retune can move.
     ///
-    /// [`RangeBar`]: super::range::RangeBar
+    /// [`RangeBar`]: crate::widgets::range::RangeBar
     #[test]
     fn a_spread_bar_knocks_out_both_its_runs_under_a_thumb() {
         let mut hit = Vec::new();
