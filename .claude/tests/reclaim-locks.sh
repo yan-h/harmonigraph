@@ -20,6 +20,16 @@
 # Written for bash 3.2 (macOS system bash), like the script it tests.
 set -uo pipefail
 
+# git exports GIT_DIR, GIT_INDEX_FILE and the rest to its hooks, and ci.sh runs
+# from .githooks/pre-push — so inherited, they point every git call below at the
+# repo being PUSHED instead of the throwaway one. That is not a near miss:
+# `git init` with GIT_DIR set and no work tree sets `core.bare=true` on the real
+# repo, `git commit` lands on the real branch, and `git worktree add` registers
+# a worktree in a temp directory this script then deletes.
+for v in $(env | sed -n 's/^\(GIT_[A-Z_]*\)=.*/\1/p'); do
+  unset "$v"
+done
+
 SCRIPT=$(cd "$(dirname "$0")/../.." && pwd)/.claude/reclaim-worktrees.sh
 [ -x "$SCRIPT" ] || { echo "✗ not executable: $SCRIPT" >&2; exit 1; }
 
@@ -57,6 +67,17 @@ SHIM
   (
     cd "$work/main" || exit 1
     git init -q . 2>/dev/null
+    # Belt and braces over the unset above, and the guard that matters: prove
+    # git resolves INSIDE this throwaway repo before committing to it or
+    # adding worktrees to it. Both paths are physical (`pwd -P` and
+    # `--absolute-git-dir`), which is what makes the prefix test hold under
+    # macOS's /var -> /private/var symlink.
+    real=$(pwd -P)
+    here=$(git rev-parse --absolute-git-dir 2>/dev/null)
+    case "$here" in
+      "$real"/*) ;;
+      *) echo "refusing: git resolves to ${here:-nothing}, not $real" >&2; exit 1 ;;
+    esac
     git config user.email t@t; git config user.name t
     git commit -q --allow-empty -m base
     # The branch sits ON main's commit, so the ancestor test reads it as
