@@ -522,6 +522,16 @@ impl SharedState {
     /// Serialize the parts of the UI worth restoring across sessions
     /// (dock layout, camera, view settings). Parameters are NOT included —
     /// they live in the host's plugin state.
+    ///
+    /// Called from more than one place — `sync_take` rides a fresh
+    /// serialization along with a take, on every start-recording and
+    /// Re-render, so a render reproduces the look it was dialed in at rather
+    /// than whatever the editor happens to show by the time it runs. But
+    /// only ONE caller writes the result into `params.ui_state`, the field
+    /// the host actually persists with the project: `LatticeEditorHandle`'s
+    /// `Drop`. So `params.ui_state` reads the CLOSE of the last session that
+    /// had the editor open, not whatever the current one — or a take in
+    /// flight — is doing.
     pub fn save_persist(&self) -> String {
         // RON rather than JSON: dock layout rects can be NaN (before first
         // layout), which JSON cannot round-trip.
@@ -658,13 +668,15 @@ impl SharedState {
         // never look (see `temper_judged`); a host pushing state into a
         // live editor, on undo or a preset change, is exactly that case.
         self.temper_judged = [None; Comma::COUNT];
-        // Both fit a deserialized blob to what its controls can produce,
-        // which a hand-edited RON need not have.
+        // All four fit a deserialized blob to what its own controls can
+        // produce, which a hand-edited RON need not have.
+        self.camera.sanitize();
         self.view.sanitize();
         self.camera_presets = persist.camera_presets;
         self.spectrum_config = persist.spectrum;
         self.spectrum_config.sanitize();
         self.take.render_config = persist.render;
+        self.take.render_config.sanitize();
         self.fps_cap = persist.fps_cap;
         // Clamped here rather than only where it is drawn, so the control
         // cannot read out a number the chrome is not at: `set_ui_scale`
@@ -782,11 +794,21 @@ pub(crate) struct UiPersist {
 /// at its recorded size and aspect around a scene nobody dialled in, which
 /// reads as a working render rather than a refused blob. Refusing here instead
 /// leaves `main`'s `unwrap_or_default` composing at a frame it can see.
+///
+/// Sanitized like `load_persist` too, and for the same reason: this is the
+/// door a hand-edited or corrupted `--ui-state` file comes through, and
+/// `frame.split` feeds `Layout::split` straight into `main`'s default layout,
+/// whose own clamp cannot repair a NaN — see
+/// [`RenderFrame::sanitize`](crate::RenderFrame::sanitize).
 pub fn render_config_from_persist(serialized: &str) -> Option<RenderConfig> {
     ron::from_str::<UiPersist>(serialized)
         .ok()
         .filter(|p| p.version >= UI_PERSIST_VERSION)
-        .map(|persist| persist.render)
+        .map(|persist| {
+            let mut render = persist.render;
+            render.sanitize();
+            render
+        })
 }
 
 impl SharedState {

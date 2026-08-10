@@ -59,16 +59,25 @@ pub enum ParamKey {
 pub const MAX_TUNING_OFFSET: f32 = 40.0;
 
 impl ParamKey {
-    pub const ALL: [ParamKey; 8] = [
-        ParamKey::COffset,
-        ParamKey::Three,
-        ParamKey::Five,
-        ParamKey::Seven,
-        ParamKey::Tolerance,
-        ParamKey::Fade,
-        ParamKey::DarkestPitch,
-        ParamKey::BrightestPitch,
-    ];
+    /// Every key, for the host's parameter list and the round-trip tests.
+    ///
+    /// Built from an exhaustive `match` rather than written out as a literal,
+    /// so the list cannot fall behind the enum — the same guard
+    /// `SpectralOrientation::ALL` in `harmonigraph-ui` uses, for the same
+    /// reason.
+    pub const ALL: [ParamKey; 8] = {
+        use ParamKey::*;
+        // Exhaustive, and the compiler checks it. The arm is `()` because
+        // what is wanted is the coverage error, not the value.
+        const fn covered(key: ParamKey) {
+            match key {
+                COffset | Three | Five | Seven | Tolerance | Fade | DarkestPitch
+                | BrightestPitch => (),
+            }
+        }
+        covered(COffset);
+        [COffset, Three, Five, Seven, Tolerance, Fade, DarkestPitch, BrightestPitch]
+    };
 
     /// The structural tuning parameters (Tuning section of the UI).
     pub const TUNING: [ParamKey; 5] = [

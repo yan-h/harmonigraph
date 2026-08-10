@@ -164,6 +164,25 @@ impl Default for RenderConfig {
     }
 }
 
+impl RenderConfig {
+    /// Fit a deserialized render config to what its own controls can
+    /// produce, on the same footing as `ViewConfig::sanitize` and
+    /// `SpectrumConfig::sanitize` in `harmonigraph-ui`: a bar cannot hand
+    /// back a nonsense value, a hand-edited blob can, and this is a video
+    /// dial rather than a real-time one, so a bad number here silently
+    /// composes a frame nobody would have set rather than merely misdrawing
+    /// one.
+    pub fn sanitize(&mut self) {
+        // The Lead-in bar's own range (the Video pane's "Lead-in", `0.0..=5.0`).
+        self.lead_in = if self.lead_in.is_finite() {
+            self.lead_in.clamp(0.0, 5.0)
+        } else {
+            RenderConfig::default().lead_in
+        };
+        self.frame.sanitize();
+    }
+}
+
 /// Which side of the video frame the lattice takes; the Spectral pane takes
 /// whatever is left.
 ///
@@ -261,6 +280,29 @@ impl RenderFrame {
         } else {
             [even(short), even(short * h / w)]
         }
+    }
+
+    /// Fit a deserialized frame to what its own controls can produce.
+    ///
+    /// `aspect_w`/`aspect_h` need no repair: they are u32 (no NaN to carry)
+    /// and only ever set from the Video pane's fixed presets, and every
+    /// reader of the pair already floors each side at 1 (see
+    /// [`pixels`](Self::pixels)'s own `.max(1)`), so a hand-edited 0 costs
+    /// nothing here that isn't already caught where it is used.
+    ///
+    /// `split` is different: the Video pane's own bar holds it to
+    /// `0.05..=0.95`, and `Layout::split` clamps into that same literal
+    /// range — which cannot itself panic (the bounds are constants, not a
+    /// second field), but does not repair a NaN either, `clamp` losing every
+    /// comparison against one. A NaN split would then reach `Layout::resolve`
+    /// as a rect with no finite side — not a crash, but a frame with a torn
+    /// composition and nothing in the picture to say why.
+    pub fn sanitize(&mut self) {
+        self.split = if self.split.is_finite() {
+            self.split.clamp(0.05, 0.95)
+        } else {
+            RenderFrame::default().split
+        };
     }
 }
 

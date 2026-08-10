@@ -237,6 +237,66 @@ impl Camera {
         let up = Vec3::new(view.x_axis.y, view.y_axis.y, view.z_axis.y);
         (right, up)
     }
+
+    /// Fit a deserialized camera to what its own controls can produce.
+    ///
+    /// A bar cannot produce a nonsense value but a hand-edited blob can, and
+    /// this feeds `view_proj` every frame the camera is drawn with —
+    /// `screen_scale` already guards `distance` and `fov_y` locally for the
+    /// font-size math it does, but that guard is local to it, and nothing
+    /// stands between a NaN in the blob and the `tan` in `ortho`. Same
+    /// argument as [`ViewConfig::sanitize`], and the same split: finite-only
+    /// where a field has no natural bound, clamped into the working range
+    /// where it does.
+    ///
+    /// [`ViewConfig::sanitize`]: crate::ViewConfig::sanitize
+    pub fn sanitize(&mut self) {
+        let fresh = Camera::default();
+
+        // No bound the geometry cares about — the camera can look anywhere —
+        // so only the NaN or infinity a hand-edited blob can carry gets
+        // repaired, and as a whole vector: `eye()` reads all three
+        // components together, and one bad component NaNs the other two
+        // through it.
+        self.target = if self.target.is_finite() { self.target } else { fresh.target };
+
+        // Periodic (every use is a `sin`/`cos`), so any finite value draws
+        // correctly — only a non-finite one, which `sin`/`cos` turn into
+        // NaN, needs a fallback.
+        self.yaw = finite_or(self.yaw, fresh.yaw);
+
+        // `orbit` holds this to `PITCH_LIMIT` on every interactive drag; a
+        // hand-edited blob is not `orbit`.
+        self.pitch =
+            finite_or(self.pitch, fresh.pitch).clamp(-Self::PITCH_LIMIT, Self::PITCH_LIMIT);
+
+        // The range `zoom`/`zoom_by` already hold interactive input to; load
+        // is the one door those two don't cover.
+        self.distance =
+            finite_or(self.distance, fresh.distance).clamp(Self::MIN_DISTANCE, Self::MAX_DISTANCE);
+
+        // Nothing in the UI sets this — see the field's own doc, "nothing
+        // sets the field of view" — so the only value a session ever chose
+        // is the default; a blob can still carry a stale or hand-edited one,
+        // and `ortho`'s `tan` is silent about a bad angle rather than
+        // panicking on it. Held to the range `screen_scale` already trusts,
+        // for the same reason it does.
+        self.fov_y = finite_or(self.fov_y, fresh.fov_y).clamp(0.2, 2.0);
+
+        // The two cabinet knobs, ranged to what their own bars offer
+        // ("Sevenths angle" 0..=90°, "Sevenths length" 0.1..=1.0).
+        self.cabinet_angle = finite_or(self.cabinet_angle, fresh.cabinet_angle)
+            .clamp(0.0, std::f32::consts::FRAC_PI_2);
+        self.cabinet_scale =
+            finite_or(self.cabinet_scale, fresh.cabinet_scale).clamp(0.1, 1.0);
+    }
+}
+
+/// `value` if it is a real number, `fallback` if it is a NaN or an infinity
+/// — the guard `clamp` cannot be, NaN being its own answer to every
+/// comparison a clamp makes.
+fn finite_or(value: f32, fallback: f32) -> f32 {
+    if value.is_finite() { value } else { fallback }
 }
 
 /// Camera clip planes; must bracket Camera::MIN/MAX_DISTANCE with margin.

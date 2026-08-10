@@ -18,100 +18,81 @@
 //! rendered the default view would be indistinguishable from the setting
 //! having no effect, which is exactly the question these frames are asked to
 //! answer.
+//!
+//! Every key is a field of [`ViewConfig`] or [`Camera`], reached by splicing
+//! `key:value` into that config's own RON text and parsing the result — not
+//! a hand-maintained table of the two, which is what let this tool fall 13
+//! fields behind `ViewConfig` (issue #317 §6). `value` is RON syntax for the
+//! field's type, which is also what the CLI already asked for one field at a
+//! time: a bare number, `true`/`false`, a bare enum variant name
+//! (`sevens_label=Name`), or a nested `(..)` to set a whole sub-struct like
+//! `pitch_gradient` at once. The one behavior change from the table this
+//! replaces: `cabinet_angle` now takes radians, matching every other field,
+//! rather than degrees converted on the way in.
 
 use harmonigraph_render::wgpu::TextureFormat;
+use harmonigraph_scene::{Camera, ViewConfig};
 use harmonigraph_ui::SharedState;
 
 fn main() -> Result<(), String> {
     let mut state = SharedState::new(TextureFormat::Rgba8Unorm);
+    let mut view_text = ron::to_string(&state.view).map_err(|e| e.to_string())?;
+    let mut camera_text = ron::to_string(&state.camera).map_err(|e| e.to_string())?;
 
     for arg in std::env::args().skip(1) {
         let (key, value) = arg
             .split_once('=')
             .ok_or_else(|| format!("expected key=value, got `{arg}`"))?;
-        let num = || -> Result<f32, String> {
-            value.parse::<f32>().map_err(|_| format!("`{key}`: `{value}` is not a number"))
-        };
-        let int = || -> Result<i32, String> {
-            value.parse::<i32>().map_err(|_| format!("`{key}`: `{value}` is not an integer"))
-        };
-        let flag = || -> Result<bool, String> {
-            value.parse::<bool>().map_err(|_| format!("`{key}`: `{value}` is not true/false"))
-        };
-        let view = &mut state.view;
-        match key {
-            // Framing
-            "extent_threes" => view.extent_threes = int()?,
-            "extent_fives" => view.extent_fives = int()?,
-            "extent_sevens" => view.extent_sevens = int()?,
-            "center_threes" => view.center_threes = int()?,
-            "center_fives" => view.center_fives = int()?,
-            "center_sevens" => view.center_sevens = int()?,
-            "spacing" => view.spacing = num()?,
-            // The sevens layer's own look
-            "sevens_size" => view.sevens_size = num()?,
-            "sevens_gutter" => view.sevens_gutter = num()?,
-            "sevens_label" => {
-                view.sevens_label = ron::from_str(value)
-                    .map_err(|e| format!("`sevens_label`: {e}"))?
-            }
-            // Node body
-            "core_radius" => view.core_radius = num()?,
-            "core_solidity" => view.core_solidity = num()?,
-            "outer_inner" => view.outer_inner = num()?,
-            "outer_outer" => view.outer_outer = num()?,
-            "outer_gap" => view.outer_gap = num()?,
-            "mark_thickness" => view.mark_thickness = num()?,
-            // Seconds an end has to be held before its ring eases in. A still
-            // frame lands somewhere in that wait or past it, which is the
-            // whole of what the key does to one.
-            "mark_delay" => view.mark_delay = num()?,
-            // The note envelope's view-side half. It matters to a still frame
-            // for the same reason the delay does: the frame lands at some
-            // point along a note's arrival or its departure, and the curve is
-            // what decides how far along that point reads. (The other half,
-            // the Fade duration, is a param rather than a view key.)
-            "fade_shape" => view.fade_shape = num()?,
-            // Which shimmer sweeps the mark rings, and how that sheet is
-            // sized, paced, lit and shaped. A still frame of a moving look is a
-            // real question — the pattern itself is what the four `shimmer_*`
-            // keys below size — and the scene's clock is what decides which
-            // instant of it the frame lands on.
-            "pulse_marks" => {
-                view.pulse_marks =
-                    ron::from_str(value).map_err(|e| format!("`pulse_marks`: {e}"))?
-            }
-            "shimmer_speed" => view.shimmer_speed = num()?,
-            "shimmer_width" => view.shimmer_width = num()?,
-            "shimmer_intensity" => view.shimmer_intensity = num()?,
-            "shimmer_softness" => view.shimmer_softness = num()?,
-            // The octave wheel: how many octaves one turn covers, which pitch
-            // sits at the top of it, and how the circle is divided between
-            // them.
-            "octave_count" => view.octave_count = num()? as u32,
-            "octave_center" => view.octave_center = num()?,
-            "octave_extras" => view.octave_extras = num()? as u32,
-            "octave_extra_size" => view.octave_extra_size = num()?,
-            "octave_extra_blend" => view.octave_extra_blend = num()?,
-            "bloom_strength" => view.bloom_strength = num()?,
-            "show_labels" => view.show_labels = flag()?,
-            "show_cents" => view.show_cents = flag()?,
-            "show_perf" => view.show_perf = flag()?,
-            "frameless" => view.frameless = flag()?,
-            "mark_melody" => view.mark_melody = flag()?,
-            "mark_bass" => view.mark_bass = flag()?,
-            // Camera
-            "distance" => state.camera.distance = num()?,
-            "cabinet_scale" => state.camera.cabinet_scale = num()?,
-            "cabinet_angle" => state.camera.cabinet_angle = num()?.to_radians(),
-            "projection" => {
-                state.camera.projection = ron::from_str(value)
-                    .map_err(|e| format!("`projection`: {e}"))?
-            }
-            other => return Err(format!("unknown key `{other}`")),
+        if let Some(spliced) = splice(&view_text, key, value) {
+            ron::from_str::<ViewConfig>(&spliced).map_err(|e| format!("`{key}`: {e}"))?;
+            view_text = spliced;
+        } else if let Some(spliced) = splice(&camera_text, key, value) {
+            ron::from_str::<Camera>(&spliced).map_err(|e| format!("`{key}`: {e}"))?;
+            camera_text = spliced;
+        } else {
+            return Err(format!("unknown key `{key}`"));
         }
     }
 
+    state.view = ron::from_str(&view_text).map_err(|e| e.to_string())?;
+    state.camera = ron::from_str(&camera_text).map_err(|e| e.to_string())?;
+
     println!("{}", state.save_persist());
     Ok(())
+}
+
+/// Replace the top-level `key:value` pair named `key` in a serialized RON
+/// struct's text with `key:value` verbatim, or `None` if no top-level field
+/// is named `key`. Depth-aware, so a nested struct field's own commas (a
+/// `pitch_gradient:(...)`) don't fool the split into treating its inside as
+/// more top-level pairs.
+fn splice(text: &str, key: &str, value: &str) -> Option<String> {
+    let inner = text.trim().trim_start_matches('(').trim_end_matches(')');
+    let (mut pairs, mut depth, mut start) = (Vec::new(), 0i32, 0usize);
+    for (i, c) in inner.char_indices() {
+        match c {
+            '(' | '[' => depth += 1,
+            ')' | ']' => depth -= 1,
+            ',' if depth == 0 => {
+                pairs.push(&inner[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    pairs.push(&inner[start..]);
+
+    let mut found = false;
+    let spliced: Vec<String> = pairs
+        .into_iter()
+        .map(|pair| {
+            if pair.split_once(':').is_some_and(|(k, _)| k == key) {
+                found = true;
+                format!("{key}:{value}")
+            } else {
+                pair.to_string()
+            }
+        })
+        .collect();
+    found.then(|| format!("({})", spliced.join(",")))
 }
