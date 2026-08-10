@@ -595,11 +595,13 @@ pub(crate) struct PaneView {
     pub(crate) ppp: f32,
     /// The tallest image the GPU will take.
     pub(crate) max_rows: usize,
-    /// Points across the pitch axis, and across the heatmap's SHARE of the
-    /// depth axis (the roll owns the rest).
+    /// Points across the pitch axis, and across the FAR region of the depth
+    /// axis — which the heatmap does not own: the roll's ribbons draw over the
+    /// same region on the same time axis, and it is the spectrum CURVE that has
+    /// the near share to itself.
     pub(crate) pitch_len: f32,
     pub(crate) depth_len: f32,
-    /// Seconds the depth axis spans.
+    /// Seconds the far region spans.
     pub(crate) window: f64,
     pub(crate) scale: PitchScale,
     pub(crate) cfg: SpectrumConfig,
