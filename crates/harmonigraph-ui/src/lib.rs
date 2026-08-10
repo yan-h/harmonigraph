@@ -64,11 +64,16 @@ pub(crate) use config::{
 };
 pub use spectrum::{AudioSpectrum, SpectrogramColumn, SpectrumHistory, WholeSong};
 pub(crate) use spectrum::{SpectrogramCache, SpectrogramKey};
-pub use perf::ShellTimings;
 pub use state::{render_config_from_persist, CameraPreset, Console, SharedState, TakeState};
 pub(crate) use state::default_dock;
 
 use harmonigraph_core::{Comma, PitchClass, Tuning};
+// The overlay's model, which a windowed shell also writes: it fills in
+// `ShellTimings` for what it measures around `root_ui`. Named from
+// `harmonigraph-perf` at both ends rather than re-exported here, so the
+// contract between the shell and the readout does not run through the crate
+// that only passes it along.
+use harmonigraph_perf::{FrameCosts, Workload};
 use harmonigraph_scene::FrameParams;
 use params::ParamBackend;
 
@@ -338,16 +343,21 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     // Performance overlay: fold this frame's numbers in and, if it's on, draw
     // the corner HUD. Interactive path only — the offline renderer never
     // reaches root_ui, so nothing here touches a recorded frame.
+    //
+    // The fallback counts are BORROWED by the costs — how many restart reasons
+    // there are is this crate's business and not the model's — so the array
+    // they are read out of has to outlive the call.
+    let fallbacks = state.spectrum.spectrogram_fallbacks();
     state.instruments.perf.record(
-        perf::FrameCosts::assemble(
+        FrameCosts::assemble(
             state.instruments.timings,
             cpu_ms,
             &state.instruments.lattice_stats,
             state.instruments.roll_notes.load(std::sync::atomic::Ordering::Relaxed),
-            state.spectrum.spectrogram_fallbacks(),
+            (fallbacks.0, &fallbacks.1),
         ),
         now,
-        perf::Workload {
+        Workload {
             active_voices: state.tracker.voices().count(),
             held_voices: state.tracker.held_count(),
             visible_nodes: state.view.visible_count(),

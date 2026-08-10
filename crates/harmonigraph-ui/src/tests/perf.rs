@@ -69,14 +69,15 @@ fn the_perf_overlay_follows_the_analyzer_pane() {
     //
     // Wrapping means the tag can span two galleys, so this looks for the
     // branch name rather than the whole line.
-    let branch = perf::BUILD_TAG.split(" @").next().unwrap_or(perf::BUILD_TAG);
+    let branch =
+        harmonigraph_perf::BUILD_TAG.split(" @").next().unwrap_or(harmonigraph_perf::BUILD_TAG);
     assert!(
         output.shapes.iter().any(|clipped| matches!(
             &clipped.shape,
             egui::Shape::Text(text) if text.galley.text().contains(branch)
         )),
         "the overlay should name the build it is ({}), so a reload can be checked",
-        perf::BUILD_TAG,
+        harmonigraph_perf::BUILD_TAG,
     );
     // ...and naming it must not have pushed the HUD out of its pane. The tag
     // is a branch name, so it is arbitrarily long; `draw_overlay` wraps it to

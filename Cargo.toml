@@ -4,6 +4,7 @@ members = [
     "crates/harmonigraph-core",
     "crates/harmonigraph-scene",
     "crates/harmonigraph-render",
+    "crates/harmonigraph-perf",
     "crates/harmonigraph-ui",
     "crates/harmonigraph-take",
     "crates/harmonigraph-record",
@@ -26,6 +27,7 @@ license = "GPL-3.0-or-later"
 harmonigraph-core = { path = "crates/harmonigraph-core" }
 harmonigraph-scene = { path = "crates/harmonigraph-scene" }
 harmonigraph-render = { path = "crates/harmonigraph-render" }
+harmonigraph-perf = { path = "crates/harmonigraph-perf" }
 harmonigraph-ui = { path = "crates/harmonigraph-ui" }
 harmonigraph-take = { path = "crates/harmonigraph-take" }
 harmonigraph-record = { path = "crates/harmonigraph-record" }
