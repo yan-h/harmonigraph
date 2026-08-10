@@ -7,7 +7,8 @@ use harmonigraph_scene::{
 };
 
 use super::bar::{
-    aimed_at, bar_radius, bar_width, elided_name, grabbed, release_grab, BAR_TEXT_PAD,
+    aimed_at, bar_radius, bar_width, elided_name, grabbed, release_grab, track_fill,
+    BAR_TEXT_PAD,
 };
 use crate::theme;
 
@@ -206,13 +207,7 @@ impl<'a> OctaveStrip<'a> {
         let painter = ui.painter();
         painter.rect_filled(rect, CornerRadius::same(bar_radius(scale)), theme::well());
 
-        let fill_color = if response.dragged() {
-            theme::accent_fill_drag()
-        } else if response.hovered() {
-            theme::accent_fill_hover()
-        } else {
-            theme::accent_fill()
-        };
+        let fill_color = track_fill(&response);
         // The widths the wheel actually comes out at. The center pitch turns
         // each node's ring but never touches the widths, so which one this
         // asks for cannot show.

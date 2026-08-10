@@ -5,7 +5,7 @@
 //! it is written down, and one living inside a caller reads as that caller's
 //! own until the day it is changed for it.
 
-use egui::{CornerRadius, Ui};
+use egui::{Color32, CornerRadius, Response, Ui};
 
 use crate::theme;
 
@@ -19,6 +19,25 @@ use crate::theme;
 // it is the whole thing the shared height exists to prevent — a bar being the
 // tallest thing a row has to hold, two text runs inside a track, makes it what
 // the row height is FOR rather than something measured against it.
+
+/// The accent a bar fills its track with, at the strength its pointer state
+/// asks for: the drag mix while it is being dragged, the hover mix while it is
+/// merely under the pointer, and the resting one otherwise.
+///
+/// The three colours are the theme's. What is here is only WHICH of them a
+/// `Response` picks, which is the part `ValueBar`, `RangeBar`, `OctaveStrip` and
+/// `SpreadBar` were each spelling out identically — and a bar that answered the
+/// two states in a different order from its neighbours would be the one control
+/// in a pane lighting differently under the same pointer.
+pub(super) fn track_fill(response: &Response) -> Color32 {
+    if response.dragged() {
+        theme::accent_fill_drag()
+    } else if response.hovered() {
+        theme::accent_fill_hover()
+    } else {
+        theme::accent_fill()
+    }
+}
 
 /// Corner rounding of the bar track — the shared control radius, so a bar and
 /// a button beside it round the same.

@@ -7,6 +7,7 @@ use egui::{CornerRadius, Response, Sense, TextStyle, Ui, Vec2};
 
 use super::bar::{
     aimed_at, bar_radius, bar_width, elided_name, grabbed, grip_over_text, release_grab,
+    track_fill,
     BAR_LABEL_GAP, BAR_TEXT_PAD, GRAB_PX, HANDLE_INSET, HANDLE_REACH_SHARE, HANDLE_W, TEXT_GAP,
 };
 use super::mesh::gradient_strip;
@@ -402,13 +403,7 @@ impl<'a> RangeBar<'a> {
         let painter = ui.painter();
         painter.rect_filled(rect, radius, theme::well());
 
-        let fill_color = if response.dragged() {
-            theme::accent_fill_drag()
-        } else if response.hovered() {
-            theme::accent_fill_hover()
-        } else {
-            theme::accent_fill()
-        };
+        let fill_color = track_fill(&response);
         let (lx, hx) = (x_of(*self.low), x_of(*self.high));
         if self.fade_span {
             // One fill from the bar's left edge out to `high`, solid as far as

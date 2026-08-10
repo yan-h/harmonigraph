@@ -4,7 +4,7 @@ use std::ops::RangeInclusive;
 
 use egui::{Color32, CornerRadius, Key, Response, Sense, TextEdit, TextStyle, Ui, Vec2};
 
-use super::bar::{bar_radius, bar_width, elided_name, BAR_TEXT_PAD};
+use super::bar::{bar_radius, bar_width, elided_name, track_fill, BAR_TEXT_PAD};
 use crate::theme;
 
 /// How many segments a [`ValueBar::curve`] preview is drawn in.
@@ -311,13 +311,7 @@ impl<'a> ValueBar<'a> {
         painter.rect_filled(rect, radius, theme::well());
 
         let t = self.to_t(*self.value);
-        let fill_color = if response.dragged() {
-            theme::accent_fill_drag()
-        } else if response.hovered() {
-            theme::accent_fill_hover()
-        } else {
-            theme::accent_fill()
-        };
+        let fill_color = track_fill(&response);
         let mut fill = rect;
         fill.set_width(rect.width() * t);
         painter.rect_filled(fill, radius, fill_color);
