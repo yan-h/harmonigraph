@@ -4,14 +4,20 @@
 //! everything here computes, and none of it needs a font or a painter.
 //!
 //! Its own crate rather than a module of `harmonigraph-ui`, on three grounds
-//! that point the same way. Two items here pull weight no UI code wants: the
-//! `libc` dependency [`rss_bytes`] needs on macOS, and the `build.rs` that
-//! stamps [`BUILD_TAG`] — inside the UI crate each is a cost on every pane,
-//! widget and test that crate compiles, for a memory row and a build row.
-//! [`ShellTimings`] is a contract between a windowed shell and this model, and
-//! a shell reaching it through the UI crate's exports says the UI owns a
-//! measurement it never reads. And the model/drawing seam is already cut
-//! exactly where a crate boundary goes, so drawing one there costs nothing.
+//! that point the same way. Two items here are the whole reason a pane shell
+//! otherwise declares a platform syscall dependency and carries a build
+//! script: the `libc` that [`rss_bytes`] needs on macOS, and the `build.rs`
+//! that stamps [`BUILD_TAG`]. Neither is a BUILD cost that moving it removes,
+//! and reading it that way is the mistake worth heading off — `libc` reaches
+//! that crate transitively through wgpu and parking_lot whatever its manifest
+//! says, and a stamp keyed on `HEAD` re-links on every commit wherever it
+//! lives, taking its dependents with it. What moves is which crate ANSWERS
+//! for them, and the crate that draws panes is the wrong one to ask about
+//! `proc_pidinfo`. [`ShellTimings`] is a contract between a windowed shell and
+//! this model, and a shell reaching it through the UI crate's exports says the
+//! UI owns a measurement it never reads. And the model/drawing seam is already
+//! cut exactly where a crate boundary goes, so drawing one there costs
+//! nothing.
 //!
 //! Interactive only. `root_ui` times the frame, folds the numbers in through
 //! [`PerfStats::record`], and draws the overlay; the offline renderer bypasses
@@ -415,7 +421,11 @@ impl Stage {
 pub struct StageInfo {
     /// Which stage this describes, and by construction its own index in
     /// [`STAGES`] — see the check under the table.
-    pub stage: Stage,
+    ///
+    /// Private, like `sample` below and for the same reason: that check is the
+    /// only thing that reads it, and a caller wanting one stage's entry
+    /// indexes [`STAGES`] with the stage it already holds.
+    stage: Stage,
     /// How deep the breakdown indents it.
     pub depth: u8,
     /// What the row is called. `egui gpu` is the one stage whose label never
@@ -427,9 +437,9 @@ pub struct StageInfo {
     /// This frame's value, read or computed from the frame's costs. `None`
     /// where [`PerfStats::record`] feeds the window itself.
     ///
-    /// Private, unlike the three readings above it: nothing outside this crate
-    /// draws a sample, and a table only this crate can build is a table only
-    /// this crate can get wrong.
+    /// Private, unlike the three the overlay prints: nothing outside this
+    /// crate draws a sample, and a table only this crate can build is a table
+    /// only this crate can get wrong.
     sample: Option<fn(&FrameCosts<'_>) -> f32>,
 }
 
@@ -1293,9 +1303,20 @@ mod tests {
     /// relates a reading to the label it prints under.
     #[test]
     fn every_frame_cost_reaches_a_stage() {
+        // Code only, and only the code above this module: a field named in a
+        // doc comment as `costs.foo_ms`, or bound under that name by a test
+        // below, would otherwise answer for itself while no stage reads it.
         let src = include_str!("lib.rs");
+        let code: String = src
+            .split_once("#[cfg(test)]")
+            .map_or(src, |(above, _)| above)
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
         let after_kw =
-            src.split_once("pub struct FrameCosts").expect("FrameCosts is declared here").1;
+            code.split_once("pub struct FrameCosts").expect("FrameCosts is declared here").1;
         let body = after_kw
             .split_once('{')
             .expect("FrameCosts has a body")
@@ -1318,7 +1339,7 @@ mod tests {
         );
         for field in fields {
             assert!(
-                src.contains(&format!("c.{field}")) || src.contains(&format!("costs.{field}")),
+                code.contains(&format!("c.{field}")) || code.contains(&format!("costs.{field}")),
                 "`FrameCosts::{field}` is measured every frame and read by nothing — give it a \
                  line in STAGES, or feed its window from `record`",
             );
