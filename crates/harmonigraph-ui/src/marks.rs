@@ -10,11 +10,10 @@
 /// scale 1, and the scale a label is actually drawn at follows the camera —
 /// see [draw_node_labels](crate::panes::lattice::draw_node_labels).
 ///
-/// Doubled from the 15pt these labels were drawn at for as long as they had no
-/// setting, along with everything below that is measured in points. The Size
-/// bar landed on 2 immediately and stayed there, which says the old number was
-/// wrong rather than that the bar wanted using — so the number moved and the
-/// bar went back to reading 1 at the size the lattice is actually looked at.
+/// 30pt rather than 15, along with everything below that is measured in
+/// points. At 15 the Size bar sits at 2 and never moves, which says the number
+/// is what is wrong rather than that the bar wants using — so the bar reads 1
+/// at the size the lattice is actually looked at.
 pub(crate) const NAME_SIZE: f32 = 30.0;
 /// The pane the sizes here are quoted against: 860 points tall, which is what
 /// the lattice gets in the 1512x886 window they were dialled in. A pane half

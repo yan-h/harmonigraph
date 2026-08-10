@@ -89,7 +89,7 @@ pub struct ViewConfig {
     /// with no way to ask for a wide crisp one or a narrow soft one.
     ///
     /// One CONTROL is a different question from one number, and the Nodes
-    /// tab's Gutter bar is one: both are distances from the node's rim, so
+    /// section's Gutter bar is one: both are distances from the node's rim, so
     /// they are two points on one axis and the bar carries a handle at each.
     ///
     /// The clearing is solid out to `reach - fade` past the node's rim and

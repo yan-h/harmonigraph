@@ -47,8 +47,9 @@ cargo run -p harmonigraph-standalone
 cargo test
 
 # The exact checks .github/workflows/ci.yml runs: clippy -D warnings, the
-# tests, baseview's own tests, the rustdoc doc-link check, and the
-# harmonigraph-core dependency guard. Actions is currently off, so this is
+# tests, the harmonigraph-plugin package check, baseview's own tests, the
+# rustdoc doc-link check, the harmonigraph-core dependency guard, and the
+# worktree-reclaim lock cases. Actions is currently off, so this is
 # the gate — don't wait on a check to appear on your PR.
 ./ci.sh
 
@@ -94,8 +95,7 @@ harmonigraph-core        pure logic, no dependencies at all. PitchClass
                          (integer microcents) and Tuning; lattice coordinates;
                          NoteTracker (what sounds now); NoteHistory/NoteRoll
                          (what was played, by pitch and by time); the FFT
-                         spectrum analyzer and its spectrogram history; a
-                         minimal WAV reader; audio<->MIDI onset alignment.
+                         spectrum analyzer and its spectrogram history.
                          Unit-tested. One module per concern.
 harmonigraph-scene       per-frame view model: derive_scene() turns
                          tracker+tuning into NodeInstances; orbit Camera;
@@ -123,7 +123,9 @@ harmonigraph-record      writes a take while the transport rolls (lock-free
                          No plugin API, so it is testable on its own.
 harmonigraph-offline     offline video renderer: replays a take headless at an
                          exact frame rate, any resolution, own pane layout,
-                         frames piped to ffmpeg. No window, no DAW, no realtime.
+                         frames piped to ffmpeg. Also the minimal WAV reader
+                         and the audio<->MIDI onset alignment, which read a
+                         bounce at render time. No window, no DAW, no realtime.
 harmonigraph-standalone  eframe dev harness: mock chord progression OR hardware
                          MIDI in (midir, with MPE bend decoding), plus a mock
                          synth feeding the spectrum analyzer.

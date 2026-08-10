@@ -52,6 +52,13 @@ run cargo test --manifest-path vendor/baseview/Cargo.toml --target-dir target/ve
 # does not apply. It fires where a public item's docs point at a private one —
 # accurate for anyone reading the source, and only a problem for published
 # HTML, which nothing here produces. Everything else in the group is denied.
+#
+# What this gate CANNOT see, so that nobody plans around it again: rustdoc does
+# not document `#[test]` functions, so a link in one is never resolved and a
+# dead one never reported. `--cfg test` does not buy it back — the function is
+# still skipped — and the only thing that reaches such a path is the compiler,
+# through a `use` of it. Two commits in a row have now swept `cfg(test)` doc
+# links by eye and reported the sweep complete while nine were still broken.
 run env RUSTDOCFLAGS="-D rustdoc::all -A rustdoc::private_intra_doc_links" \
   cargo doc --no-deps --quiet --workspace --document-private-items
 

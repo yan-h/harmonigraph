@@ -116,7 +116,7 @@ pub struct Viewer<'a> {
 
 /// Where the settings pane being drawn ends on the right, written by
 /// [`Viewer`]'s `ui` before the body draws anything and read by
-/// `widgets::bar_width`.
+/// `widgets::bar::bar_width`.
 ///
 /// A bar fills the pane, so it has to ask how wide the pane is, and neither
 /// obvious answer survives contact with the dock. `max_rect` is no good by the

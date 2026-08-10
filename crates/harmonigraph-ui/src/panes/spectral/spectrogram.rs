@@ -162,6 +162,14 @@ fn heatmap_mesh(
     mesh
 }
 
+/// Draw the spectrogram across the roll's depth region (`split..1`), sharing
+/// the roll's `depth_of` time mapping so its columns register with the notes.
+///
+/// Builds the heatmap into a `[time slab x pitch bin]` image, (re)uploads it
+/// to the surface's texture, then stretches it over the region as a
+/// single bilinear-filtered quad — smooth in both axes, and opaque (silence is
+/// the ramp's dark end, not transparent) so the plane is a filled image rather
+/// than bright patches floating on the background.
 pub(crate) fn draw_spectrogram(
     painter: &egui::Painter,
     axes: &Axes,

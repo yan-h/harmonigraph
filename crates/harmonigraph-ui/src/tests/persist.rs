@@ -1,4 +1,4 @@
-//! What survives a session: round-trips through [`UiPersist`], the version
+//! What survives a session: round-trips through [`crate::state::UiPersist`], the version
 //! floor under it, and what a blob costs when a key it carries — or one it is
 //! missing — is not the shape this build expects.
 
@@ -1459,6 +1459,61 @@ fn a_blob_naming_a_nonsense_camera_opens_on_what_it_can_reach() {
             assert!(got >= lo && got <= hi, "{hint}: `{key}` opened at {got}, outside {lo}..={hi}");
         }
         assert_eq!(restored.view.extent_sevens, 3, "{hint}: the rest of the blob still restores");
+    }
+}
+
+/// A SAVED ANGLE carries the same two fields the camera does, and reaches the
+/// camera by plain assignment — the Display/View preset buttons write
+/// `camera.yaw`/`camera.pitch` straight through, so a preset is neither
+/// `orbit` (which clamps every drag) nor `Camera::sanitize` (which clamps the
+/// load). It is the one remaining door into those two fields that fits nothing.
+///
+/// Both halves matter and fail differently. A NaN yaw takes the whole lattice
+/// out: `eye()` returns an all-NaN direction, `look_at_rh` an all-NaN view
+/// matrix, and the pane draws bare background with no way back, since `orbit`'s
+/// `yaw -= delta` leaves NaN NaN. An out-of-range pitch is the quieter half and
+/// the one the repo's rule names directly — the camera sits past where any
+/// control can put it while the "Camera pitch" bar reads the raw number with
+/// its fill pinned at the end of a range that does not contain it.
+#[test]
+fn a_saved_angle_lands_where_the_camera_controls_could_have_put_it() {
+    for (hint, yaw, pitch) in [
+        ("a NaN yaw", "NaN", "0.0"),
+        ("a pitch past `orbit`'s limit", "0.0", "10.0"),
+    ] {
+        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        state.view.extent_sevens = 3;
+        state.camera_presets.push(crate::CameraPreset {
+            name: "reading".to_string(),
+            yaw: 0.25,
+            pitch: 0.5,
+        });
+        let saved = state.save_persist();
+        let edited = saved.replacen(
+            "yaw:0.25,pitch:0.5",
+            &format!("yaw:{yaw},pitch:{pitch}"),
+            1,
+        );
+        assert_ne!(edited, saved, "{hint}: the preset is not in the blob to edit");
+
+        let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+        restored.load_persist(&edited);
+        assert_eq!(restored.view.extent_sevens, 3, "{hint}: the rest of the blob still restores");
+        let preset = &restored.camera_presets[0];
+
+        // Applied exactly as the preset button applies it.
+        let mut camera = restored.camera;
+        camera.yaw = preset.yaw;
+        camera.pitch = preset.pitch;
+        assert!(camera.yaw.is_finite(), "{hint}: the camera's yaw became {}", camera.yaw);
+        assert!(
+            camera.pitch >= -Camera::PITCH_LIMIT && camera.pitch <= Camera::PITCH_LIMIT,
+            "{hint}: the camera's pitch became {}, outside {}..={}",
+            camera.pitch,
+            -Camera::PITCH_LIMIT,
+            Camera::PITCH_LIMIT,
+        );
+        assert!(camera.eye().is_finite(), "{hint}: `eye()` returned {:?}", camera.eye());
     }
 }
 
