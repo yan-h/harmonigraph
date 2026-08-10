@@ -7,8 +7,7 @@ use harmonigraph_scene::{
 };
 
 use super::bar::{
-    aimed_at, bar_radius, bar_width, elided_name, grabbed, release_grab, track_fill,
-    BAR_TEXT_PAD,
+    aimed_at, bar_radius, bar_width, elided_name, grabbed, release_grab, track_fill, BAR_TEXT_PAD,
 };
 use crate::theme;
 

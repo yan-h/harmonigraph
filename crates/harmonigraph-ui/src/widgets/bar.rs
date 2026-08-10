@@ -20,25 +20,6 @@ use crate::theme;
 // tallest thing a row has to hold, two text runs inside a track, makes it what
 // the row height is FOR rather than something measured against it.
 
-/// The accent a bar fills its track with, at the strength its pointer state
-/// asks for: the drag mix while it is being dragged, the hover mix while it is
-/// merely under the pointer, and the resting one otherwise.
-///
-/// The three colours are the theme's. What is here is only WHICH of them a
-/// `Response` picks, which is the part `ValueBar`, `RangeBar`, `OctaveStrip` and
-/// `SpreadBar` were each spelling out identically — and a bar that answered the
-/// two states in a different order from its neighbours would be the one control
-/// in a pane lighting differently under the same pointer.
-pub(super) fn track_fill(response: &Response) -> Color32 {
-    if response.dragged() {
-        theme::accent_fill_drag()
-    } else if response.hovered() {
-        theme::accent_fill_hover()
-    } else {
-        theme::accent_fill()
-    }
-}
-
 /// Corner rounding of the bar track — the shared control radius, so a bar and
 /// a button beside it round the same.
 pub(super) fn bar_radius(scale: f32) -> u8 {
@@ -147,6 +128,25 @@ pub(super) const HANDLE_INSET: f32 = HANDLE_W * 0.5 + 1.0;
 /// Breathing room between a handle and its readout, and between a readout and
 /// the bar's edge.
 pub(super) const TEXT_GAP: f32 = 5.0;
+
+/// The accent a bar fills its track with, at the strength its pointer state
+/// asks for: the drag mix while it is being dragged, the hover mix while it is
+/// merely under the pointer, and the resting one otherwise.
+///
+/// The three colours are the theme's. What is here is only WHICH of them a
+/// `Response` picks — the one part `ValueBar`, `RangeBar`, `OctaveStrip` and
+/// `SpreadBar` have in common, and a bar that answered the two states in a
+/// different order from its neighbours would be the one control in a pane
+/// lighting differently under the same pointer.
+pub(super) fn track_fill(response: &Response) -> Color32 {
+    if response.dragged() {
+        theme::accent_fill_drag()
+    } else if response.hovered() {
+        theme::accent_fill_hover()
+    } else {
+        theme::accent_fill()
+    }
+}
 
 /// Draw one handle, and any text run standing under it a second time INSIDE
 /// it — the same galley at the same origin, clipped to the grip and overridden
