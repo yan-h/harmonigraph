@@ -1514,3 +1514,24 @@ fn a_blob_naming_a_nonsense_render_config_opens_on_what_it_can_reach() {
         assert_eq!(restored.view.extent_sevens, 3, "{hint}: the rest of the blob still restores");
     }
 }
+
+/// `render_config_from_persist` is the OTHER door into a `ui_state` blob —
+/// `harmonigraph-offline`'s own, for the frame it composes at — and it has
+/// to sanitize independently of `load_persist`: a `--ui-state` file is
+/// handed straight to it without ever passing through a `SharedState`, so
+/// nothing upstream has repaired it.
+#[test]
+fn a_blob_naming_a_nonsense_split_opens_on_a_drawable_one_through_render_config_from_persist() {
+    let state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let saved = state.save_persist();
+    let edited = replace_pair(&saved, "split", "0.2", "NaN");
+    assert_ne!(edited, saved, "`split` is not in the blob to edit");
+
+    let rc = render_config_from_persist(&edited).expect("a version-floor blob still parses");
+    assert!(rc.frame.split.is_finite(), "split opened at {}", rc.frame.split);
+    assert!(
+        rc.frame.split >= 0.05 && rc.frame.split <= 0.95,
+        "split opened at {}, outside its bar's range",
+        rc.frame.split,
+    );
+}

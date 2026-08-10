@@ -790,11 +790,21 @@ pub(crate) struct UiPersist {
 /// at its recorded size and aspect around a scene nobody dialled in, which
 /// reads as a working render rather than a refused blob. Refusing here instead
 /// leaves `main`'s `unwrap_or_default` composing at a frame it can see.
+///
+/// Sanitized like `load_persist` too, and for the same reason: this is the
+/// door a hand-edited or corrupted `--ui-state` file comes through, and
+/// `frame.split` feeds `Layout::split` straight into `main`'s default layout,
+/// whose own clamp cannot repair a NaN — see
+/// [`RenderFrame::sanitize`](crate::RenderFrame::sanitize).
 pub fn render_config_from_persist(serialized: &str) -> Option<RenderConfig> {
     ron::from_str::<UiPersist>(serialized)
         .ok()
         .filter(|p| p.version >= UI_PERSIST_VERSION)
-        .map(|persist| persist.render)
+        .map(|persist| {
+            let mut render = persist.render;
+            render.sanitize();
+            render
+        })
 }
 
 impl SharedState {
