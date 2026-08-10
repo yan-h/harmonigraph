@@ -9,7 +9,7 @@
 use harmonigraph_render::wgpu::TextureFormat;
 use harmonigraph_ui::{begin_frame, draw_pane, Layout, SharedState};
 
-use harmonigraph_core::wav::Audio;
+use crate::wav::Audio;
 
 use crate::frames::Renderer;
 use crate::replay::Replay;

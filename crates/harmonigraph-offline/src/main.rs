@@ -12,10 +12,12 @@
 //!
 //! See `docs/offline-rendering.md` for the whole workflow.
 
+mod align;
 mod frames;
 mod render;
 mod replay;
 mod sink;
+mod wav;
 
 use harmonigraph_ui::Layout;
 use render::Settings;
@@ -318,7 +320,7 @@ fn size_matches_frame(size: [u32; 2], frame: &harmonigraph_ui::RenderFrame) -> b
 /// when neither can place it.
 fn align_replacement(
     recorded: Option<&std::path::Path>,
-    soundtrack: Option<&harmonigraph_core::wav::Audio>,
+    soundtrack: Option<&crate::wav::Audio>,
     reference_start: f64,
     midi_onsets: &[(f64, f32)],
     span: f64,
@@ -328,8 +330,8 @@ fn align_replacement(
     // Most robust: the take\'s own recording, stamped to the same clock as the
     // notes. Fall through only if it is missing or too short to lock onto.
     if let Some(recorded) = recorded {
-        let reference = harmonigraph_core::wav::read(recorded)?;
-        if let Some(found) = harmonigraph_core::align::align(&reference, reference_start, soundtrack) {
+        let reference = crate::wav::read(recorded)?;
+        if let Some(found) = crate::align::align(&reference, reference_start, soundtrack) {
             eprintln!(
                 "aligned audio to the take\'s recording: soundtrack starts at \
                  {:.3}s (confidence {:.2})",
@@ -347,7 +349,7 @@ fn align_replacement(
 
     // No usable recording: line the bounce up against the MIDI note onsets.
     // Great for clear attacks; soft or legato onsets match weakly, so say so.
-    match harmonigraph_core::align::align_to_notes(midi_onsets, span, soundtrack) {
+    match crate::align::align_to_notes(midi_onsets, span, soundtrack) {
         Some(found) if found.confidence >= 0.25 => {
             eprintln!(
                 "aligned audio to the MIDI note onsets: soundtrack starts at \
@@ -466,7 +468,7 @@ fn run() -> Result<(), String> {
             recorded.clone()
         }
     };
-    let audio = audio_path.as_deref().map(harmonigraph_core::wav::read).transpose()?;
+    let audio = audio_path.as_deref().map(crate::wav::read).transpose()?;
 
     if args.playhead && audio.is_none() {
         eprintln!(
