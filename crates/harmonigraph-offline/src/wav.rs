@@ -16,7 +16,7 @@
 ///
 /// Channels are kept, not averaged on the way in. The analyzer combines them
 /// in the POWER domain rather than mixing them
-/// ([`ChannelBank`](crate::spectrum::ChannelBank)), so averaging here would
+/// ([`ChannelBank`](harmonigraph_core::spectrum::ChannelBank)), so averaging here would
 /// cancel anti-phase content before the analyzer ever saw it — and a render
 /// would show the summed picture whatever the live pane showed, which is the
 /// one difference between the two that cannot be explained away.
@@ -225,7 +225,7 @@ mod tests {
 
     /// Channels come through INTACT — the analyzer combines them in the power
     /// domain and cannot do that with an average it never saw
-    /// ([`ChannelBank`](crate::spectrum::ChannelBank)). The average is still
+    /// ([`ChannelBank`](harmonigraph_core::spectrum::ChannelBank)). The average is still
     /// available, for the things that want one envelope rather than a spectrum.
     #[test]
     fn float32_stereo_keeps_its_channels_and_averages_only_on_request() {
