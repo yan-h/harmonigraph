@@ -4,6 +4,9 @@
 
 pub mod layout;
 pub mod params;
+/// The open/frame/close sequence a windowed shell runs around [`root_ui`],
+/// and the one window floor both shells hold.
+pub mod shell;
 pub mod theme;
 pub(crate) mod text;
 pub mod widgets;
@@ -145,11 +148,23 @@ fn kept_focus(ctx: &egui::Context) -> bool {
 /// window (egui-baseview hands the plugin editor exactly that; eframe hands
 /// the standalone harness the same via its `App::ui` hook).
 ///
-/// The shell contract, which is otherwise only discoverable by reading both
-/// shells: before calling this, feed the frame's MIDI into `state.tracker`
-/// and its audio samples into `state.spectrum`. `now` is seconds on the
-/// shell's clock, and must be the SAME clock that timestamped those
-/// `NoteEvent`s — envelopes are derived from the difference.
+/// The rest of the sequence a shell runs around this — theming a new context,
+/// releasing the old one's textures, the fold floor, the saved layout, and
+/// spending what a fold leaves the window needing — is [`shell`], which both
+/// shells call rather than keep in step by hand.
+///
+/// The one step still owed by the caller: before calling this, feed the
+/// frame's MIDI into `state.tracker` and its audio samples into
+/// `state.spectrum`. `now` is seconds on the shell's clock, and must be the
+/// SAME clock that timestamped those `NoteEvent`s — envelopes are derived from
+/// the difference.
+///
+/// That step cannot move into [`shell::Frame`] with the others, and the reason
+/// is a borrow rather than taste: a shell's rings and the parameters it draws
+/// from live in ONE struct — the plugin's `PluginParamBackend` reads a field of
+/// the same `EditorShared` its drain writes through — so a helper that ran the
+/// feed while holding the state would be holding the backend's own borrow.
+/// Both shells therefore feed first and hand over what they fed.
 pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBackend, now: f64) {
     begin_frame(state, params, now);
     end_stranded_drag(ui.ctx());

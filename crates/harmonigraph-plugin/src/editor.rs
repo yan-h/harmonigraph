@@ -33,7 +33,14 @@ const ASSUMED_SURFACE_FORMAT: harmonigraph_render::wgpu::TextureFormat =
 /// Editor size on first open, in logical pixels.
 pub(crate) const DEFAULT_SIZE: (u32, u32) = (1000, 700);
 /// Smallest size accepted from a host resize.
-const MIN_SIZE: (u32, u32) = (400, 300);
+///
+/// The width is not this editor's own number: it is the floor the pane layout
+/// dials to as well, so it comes from `harmonigraph_ui::shell` rather than
+/// being restated here — see
+/// [`MIN_WINDOW_WIDTH`](harmonigraph_ui::shell::MIN_WINDOW_WIDTH) for what a
+/// window and a layout holding two different floors would cost. The height is
+/// nobody else's business.
+const MIN_SIZE: (u32, u32) = (harmonigraph_ui::shell::MIN_WINDOW_WIDTH as u32, 300);
 
 /// Maps audio-clock timestamps (seconds on the plugin's sample clock)
 /// onto the GUI clock. A smoothed offset estimate preserves the relative
@@ -391,13 +398,16 @@ impl EditorShared {
     }
 }
 
-/// The plugin's per-frame GUI work, in order: take the frame's lock, close
-/// out the note frame, apply any pending host/self resize, drain the MIDI
-/// and audio rings, then hand the shared UI state to `harmonigraph_ui::root_ui`.
+/// The plugin's per-frame GUI work: take the frame's lock, close out the note
+/// frame, drain the MIDI and audio rings, reconcile the take — and then hand
+/// the state it has just fed to [`harmonigraph_ui::shell::Frame`], which draws
+/// it and answers with whatever the folds it settled leave the window needing.
 ///
-/// The standalone harness's counterpart is `App::ui` in harmonigraph-standalone.
-/// Both must feed the tracker and the spectrum BEFORE calling `root_ui`,
-/// and pass the same clock that stamped the events — see `root_ui`'s doc.
+/// What stays here is what only this shell can do: the rings are its own, and
+/// so is the pacing at the end, since it is the only shell asked for frames
+/// faster than it means to draw them. The standalone harness's counterpart is
+/// `App::ui` in harmonigraph-standalone, and the sequence the two share is one
+/// call each rather than a list each keeps in step by hand.
 fn frame(
     ui: &mut egui::Ui,
     queue: &mut Queue,
@@ -436,35 +446,49 @@ fn frame(
     };
     // Last frame's costs that the shell measures and the UI cannot: they
     // happen after `root_ui` returns.
-    shared.ui.instruments.timings.tess_ms = queue.tess_ms();
-    shared.ui.instruments.timings.egui_gpu_ms = queue.egui_gpu_ms();
-    shared.ui.instruments.timings.acquire_ms = queue.acquire_ms();
-    shared.ui.instruments.timings.tick_ms = queue.tick_ms();
-    shared.ui.instruments.timings.render_ms = queue.render_ms();
-    shared.ui.instruments.timings.upload_ms = queue.upload_ms();
-    shared.ui.instruments.timings.ubuf_ms = queue.ubuf_ms();
-    shared.ui.instruments.timings.texture_ms = queue.texture_ms();
-    shared.ui.instruments.timings.prims = queue.prims();
-    shared.ui.instruments.timings.verts = queue.verts();
-    shared.ui.instruments.timings.encode_ms = queue.encode_ms();
-    shared.ui.instruments.timings.submit_ms = queue.submit_ms();
-    shared.ui.instruments.timings.shell_ms = shell_start.elapsed().as_secs_f32() * 1000.0;
-    harmonigraph_ui::root_ui(ui, &mut shared.ui, &backend, now);
+    //
+    // One literal rather than a field at a time, so a reading the window
+    // starts publishing and this forgets to copy is a missing field the
+    // compiler names, not a line nobody misses — the overlay would otherwise
+    // show it as a steady zero, which reads as a cost that isn't there.
+    // `shell_ms` comes last because it measures everything above it.
+    shared.ui.instruments.timings = harmonigraph_ui::ShellTimings {
+        tess_ms: queue.tess_ms(),
+        egui_gpu_ms: queue.egui_gpu_ms(),
+        acquire_ms: queue.acquire_ms(),
+        tick_ms: queue.tick_ms(),
+        render_ms: queue.render_ms(),
+        upload_ms: queue.upload_ms(),
+        ubuf_ms: queue.ubuf_ms(),
+        texture_ms: queue.texture_ms(),
+        prims: queue.prims(),
+        verts: queue.verts(),
+        encode_ms: queue.encode_ms(),
+        submit_ms: queue.submit_ms(),
+        shell_ms: shell_start.elapsed().as_secs_f32() * 1000.0,
+    };
+    // A fold is priced against `egui_state.size`, which is the size the window
+    // actually has: `requested_size` is empty by now whatever happened above,
+    // since the window's size source clears it on refusal as well as on
+    // accept, and `size` is only updated when the host agrees. So two folds in
+    // consecutive frames add up rather than the second cancelling the first.
+    let (window_width, window_height) = egui_state.size();
+    let ask = harmonigraph_ui::shell::Frame {
+        ui,
+        state: &mut shared.ui,
+        params: &backend,
+        now,
+        window_width: window_width as f32,
+    }
+    .draw();
 
     // A pane folded sideways (or came back) leaves every other pane its width
     // and asks the WINDOW for the difference. Queued rather than applied:
-    // `request_resize` is the host's round trip, and `apply_pending_resizes`
-    // at the top of the next frame is where this window takes those.
-    //
-    // Measured against `egui_state.size`, which is the size the window
-    // actually has: `requested_size` is empty by now whatever happened above,
-    // since `apply_pending_resizes` clears it on refusal as well as on accept,
-    // and `size` is only updated when the host agrees. So two folds in
-    // consecutive frames add up rather than the second cancelling the first.
-    if let Some(change) = shared.ui.take_window_width_change() {
-        let (width, height) = egui_state.size();
-        let width = (width as f32 + change).round().max(MIN_SIZE.0 as f32) as u32;
-        egui_state.requested_size.store(Some((width, height)));
+    // `request_resize` is the host's round trip, and the window's size source
+    // — which runs at the top of the next tick, before the frame it will be
+    // laid out in — is where this window takes it (see `LatticeEditor::spawn`).
+    if let Some(width) = ask {
+        egui_state.requested_size.store(Some((width.round() as u32, window_height)));
         ui.ctx().request_repaint();
     }
 
@@ -842,24 +866,22 @@ impl Editor for LatticeEditor {
                 params: self.params.clone(),
             },
             |egui_ctx: &Context, _queue, state: &mut WindowState| {
-                harmonigraph_ui::theme::apply_theme(egui_ctx);
-                // This is a NEW context; the shared UI state is not. Anything
-                // it holds that belongs to the last one has to go now, or it
-                // silently keeps drawing with handles that point nowhere —
-                // which is how the spectrogram disappeared for good after the
-                // window was hidden and shown again.
-                let mut shared = state.shared.lock();
-                shared.ui.release_context_resources();
-                // The floor this editor holds its window to, which a sideways
-                // fold has to know before it asks for width the window cannot
-                // give (see `SharedState::min_window_width`).
-                shared.ui.min_window_width = MIN_SIZE.0 as f32;
-                // Restore dock layout / camera / view settings persisted
-                // with the plugin state (saved when the editor closes).
+                // Everything this context owes the shared UI state, which is
+                // NOT new when the context is: the theme, the release of what
+                // the closed window left behind, the fold floor, and the
+                // layout the host saved with the project (written on the way
+                // out, in `LatticeEditorHandle`'s Drop).
+                //
+                // Cloned out of the lock rather than read across the open, so
+                // this holds one lock at a time.
                 let serialized = state.params.ui_state.read().clone();
-                if !serialized.is_empty() {
-                    shared.ui.load_persist(&serialized);
+                let mut shared = state.shared.lock();
+                harmonigraph_ui::shell::Opening {
+                    ctx: egui_ctx,
+                    state: &mut shared.ui,
+                    persist: Some(&serialized),
                 }
+                .open();
             },
             // Thin shim: the real per-frame work is `frame`, above. The
             // closure exists only to own `egui_state`/`context` for the
@@ -946,7 +968,7 @@ impl Drop for LatticeEditorHandle {
         // the background analyzer off it for the whole of this — see
         // [`crate::background`] on why that ordering is load-bearing rather
         // than incidental.
-        *self.params.ui_state.write() = self.shared.lock().ui.save_persist();
+        *self.params.ui_state.write() = harmonigraph_ui::shell::close(&self.shared.lock().ui);
         self.egui_state.set_open(false);
         self.window.close();
     }
@@ -957,9 +979,20 @@ impl Drop for LatticeEditorHandle {
 mod tests {
     use super::{
         target_frame_interval, ClockMapper, EditorShared, DISPLAY_OVERSAMPLE,
-        FALLBACK_FRAME_INTERVAL,
+        FALLBACK_FRAME_INTERVAL, MIN_SIZE,
     };
     use harmonigraph_core::notes::{NoteEvent, NoteEventKind};
+
+    /// The floor this window is held to and the floor the pane layout dials to
+    /// are one number, and the cast into window pixels is where they could
+    /// stop being one: a floor with a fraction in it would leave the window
+    /// stopping a fraction below what the layout believes, and the layout
+    /// banking a difference the window will never give back (see
+    /// `harmonigraph_ui::shell::MIN_WINDOW_WIDTH`).
+    #[test]
+    fn the_window_floor_is_exactly_the_floor_the_layout_dials_to() {
+        assert_eq!(MIN_SIZE.0 as f32, harmonigraph_ui::shell::MIN_WINDOW_WIDTH);
+    }
 
     #[test]
     fn drain_observes_the_batch_before_mapping_it() {
