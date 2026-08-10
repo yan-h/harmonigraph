@@ -1390,9 +1390,13 @@ fn replace_pair(blob: &str, key: &str, was: &str, value: &str) -> String {
 /// the field's own bar can reach are swept together: both repair to the same
 /// place, since a NaN and an out-of-range value fall back through the same
 /// `finite_or(..).clamp(..)`.
+/// (key, bad value, hint, the range a repaired value must fall in — `None`
+/// for a field with no natural bound).
+type CameraCase = (&'static str, &'static str, &'static str, Option<(f32, f32)>);
+
 #[test]
 fn a_blob_naming_a_nonsense_camera_opens_on_what_it_can_reach() {
-    let cases: [(&str, &str, &str, Option<(f32, f32)>); 11] = [
+    let cases: [CameraCase; 11] = [
         ("yaw", "NaN", "a NaN yaw", None),
         ("pitch", "NaN", "a NaN pitch", Some((-Camera::PITCH_LIMIT, Camera::PITCH_LIMIT))),
         ("pitch", "10.0", "a pitch past `orbit`'s limit", Some((-Camera::PITCH_LIMIT, Camera::PITCH_LIMIT))),
