@@ -183,9 +183,9 @@ pub struct FrameCosts {
     pub roll_notes: u32,
     /// The spectrogram's cache fallbacks since the plugin opened: full
     /// re-aggregations of the window, and ring restarts BY REASON (see
-    /// `panes::spectral::spectrogram::Restart`). CUMULATIVE, so the readout below can
+    /// `spectrogram::Restart`). CUMULATIVE, so the readout below can
     /// difference them into a rate without a dropped frame losing an event.
-    pub spectrogram_fallbacks: (u32, [u32; crate::panes::spectral::spectrogram::Restart::COUNT]),
+    pub spectrogram_fallbacks: (u32, [u32; crate::spectrogram::Restart::COUNT]),
     /// The lattice callback's own `prepare`, which egui-wgpu runs from inside
     /// `update_buffers` — so it is billed to the buffer uploads.
     pub prepare_ms: f32,
@@ -357,11 +357,36 @@ enum Stage {
 }
 
 impl Stage {
-    /// How many there are. Taken off the last variant, so the table and the
-    /// window array size themselves from the enum rather than from a number
-    /// someone has to remember to bump — which does mean `Gpu` has to STAY
-    /// last: a variant added after it sizes nothing and indexes past both.
-    const COUNT: usize = Stage::Gpu as usize + 1;
+    /// How many there are, so the table and the window array size themselves
+    /// from the enum rather than from a number someone has to remember to
+    /// bump.
+    ///
+    /// The match below is exhaustive, so a variant added ANYWHERE — not only
+    /// after `Gpu` — fails to compile until it is named there, which is what
+    /// `Gpu as usize + 1` could never promise. What the match alone does not
+    /// enforce is the array on the last line staying in step with it; that
+    /// still wants the same per-variant care [`STAGES`] below already asks
+    /// for, and a variant named in one but not the other is what STAGES's
+    /// own array-length check catches, not this one.
+    const COUNT: usize = {
+        use Stage::*;
+        // Exhaustive, and the compiler checks it. The arms are `()` because
+        // what is wanted is the coverage error, not the value — a const fn
+        // cannot build the array itself.
+        const fn covered(s: Stage) {
+            match s {
+                Frame | Tick | Egui | Shell | Ui | Render | Tess | Texture | BufUp | Ubuf
+                | Prepare | Poll | Write | Scene | Around | Acquire | Encode | Submit
+                | EguiGpu | Gpu => (),
+            }
+        }
+        covered(Gpu);
+        [
+            Frame, Tick, Egui, Shell, Ui, Render, Tess, Texture, BufUp, Ubuf, Prepare, Poll,
+            Write, Scene, Around, Acquire, Encode, Submit, EguiGpu, Gpu,
+        ]
+        .len()
+    };
 }
 
 /// What the overlay needs to know about one [`Stage`]: where it sits in the
@@ -520,7 +545,7 @@ pub struct PerfStats {
     /// none.
     spec_restart_reason: &'static str,
     /// The totals the rates were last differenced from.
-    last_fallbacks: (u32, [u32; crate::panes::spectral::spectrogram::Restart::COUNT]),
+    last_fallbacks: (u32, [u32; crate::spectrogram::Restart::COUNT]),
     /// Smoothed resident set size in bytes, refreshed about once a second (0
     /// when the platform can't report it).
     ///
@@ -561,7 +586,7 @@ impl Default for PerfStats {
             roll_notes: 0,
             spec_fallbacks: (0.0, 0.0),
             spec_restart_reason: "",
-            last_fallbacks: (0, [0; crate::panes::spectral::spectrogram::Restart::COUNT]),
+            last_fallbacks: (0, [0; crate::spectrogram::Restart::COUNT]),
             rss_bytes: 0,
             last_mem_read: f64::NEG_INFINITY,
             last_frame: None,
@@ -589,7 +614,7 @@ impl FrameCosts {
         cpu_ms: f32,
         lattice: &harmonigraph_render::LatticeStats,
         roll_notes: u32,
-        spectrogram_fallbacks: (u32, [u32; crate::panes::spectral::spectrogram::Restart::COUNT]),
+        spectrogram_fallbacks: (u32, [u32; crate::spectrogram::Restart::COUNT]),
     ) -> FrameCosts {
         let ms = |bits: &std::sync::atomic::AtomicU32| {
             f32::from_bits(bits.load(std::sync::atomic::Ordering::Relaxed))
@@ -704,7 +729,7 @@ impl PerfStats {
                     .enumerate()
                     .max_by_key(|(_, n)| **n)
                     .filter(|(_, n)| **n > 0)
-                    .map_or("", |(i, _)| crate::panes::spectral::spectrogram::Restart::LABELS[i]);
+                    .map_or("", |(i, _)| crate::spectrogram::Restart::LABELS[i]);
             }
             self.last_fallbacks = costs.spectrogram_fallbacks;
             self.last_readout = now;
@@ -1372,7 +1397,7 @@ mod tests {
             );
         }
         perf.spec_fallbacks = (14.0, 15.0);
-        perf.spec_restart_reason = crate::panes::spectral::spectrogram::Restart::LABELS[4];
+        perf.spec_restart_reason = crate::spectrogram::Restart::LABELS[4];
         perf.rss_bytes = 490 * 1024 * 1024;
 
         let rows = overlay_rows(&perf, true);
@@ -1474,7 +1499,7 @@ mod tests {
         // And it names WHERE to look: the reason that accounted for most of the
         // restarts in the interval, which is the difference between "the image
         // changed", "the pane changed" and "the window jumped".
-        assert_eq!(perf.spec_restart_reason, crate::panes::spectral::spectrogram::Restart::LABELS[0]);
+        assert_eq!(perf.spec_restart_reason, crate::spectrogram::Restart::LABELS[0]);
         let mut heavier = (totals.0, [totals.1, totals.1 + 200, 0, 0, 0, 0]);
         for _ in 0..120 {
             heavier = (heavier.0, [heavier.1[0], heavier.1[1] + 1, 0, 0, 0, 0]);
@@ -1487,7 +1512,7 @@ mod tests {
         }
         assert_eq!(
             perf.spec_restart_reason,
-            crate::panes::spectral::spectrogram::Restart::LABELS[1],
+            crate::spectrogram::Restart::LABELS[1],
             "the dominant reason must follow the counts",
         );
     }
@@ -1774,7 +1799,7 @@ mod tests {
             FrameCosts {
                 // Enough of both to lay out at their widest: the row carries
                 // two rates, so a build falling back hard is the long case.
-                spectrogram_fallbacks: (900, [150; crate::panes::spectral::spectrogram::Restart::COUNT]),
+                spectrogram_fallbacks: (900, [150; crate::spectrogram::Restart::COUNT]),
                 shell_ms: 1.0,
                 cpu_ms: 2.0,
                 tess_ms: 3.0,
