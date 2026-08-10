@@ -171,7 +171,7 @@ pub(super) enum SettingsPane {
 impl SettingsPane {
     /// The tab that carries this pane — with the section that shows it opened,
     /// which for a `Section` is the whole difference between measuring the
-    /// pane and measuring four collapsed headers.
+    /// pane and measuring six collapsed headers.
     pub(super) fn install(self, state: &mut SharedState) -> panes::Tab {
         match self {
             SettingsPane::Tab(tab) => tab,
