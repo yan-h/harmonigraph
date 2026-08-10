@@ -127,7 +127,25 @@ impl Comma {
     /// up the primes, which is also the order they must be applied in — the
     /// septimal identity reads the third, so a tempered third has to be
     /// derived before the seventh is derived from it.
-    pub const ALL: [Comma; 2] = [Comma::Syntonic, Comma::SeptimalKleisma];
+    ///
+    /// Built from an exhaustive `match` rather than written out as a bare
+    /// literal, so a third comma cannot join the enum without joining this
+    /// list too — the same guard `SpectralOrientation::ALL` in
+    /// `harmonigraph-ui` uses, for the same reason. The order above is still
+    /// the one enforced elsewhere; this only adds the compiler's proof that
+    /// nothing is missing from it.
+    pub const ALL: [Comma; 2] = {
+        use Comma::*;
+        // Exhaustive, and the compiler checks it. The arm is `()` because
+        // what is wanted is the coverage error, not the value.
+        const fn covered(comma: Comma) {
+            match comma {
+                Syntonic | SeptimalKleisma => (),
+            }
+        }
+        covered(Syntonic);
+        [Syntonic, SeptimalKleisma]
+    };
     /// How many there are, for per-comma arrays indexed by [`Self::index`].
     pub const COUNT: usize = Comma::ALL.len();
 

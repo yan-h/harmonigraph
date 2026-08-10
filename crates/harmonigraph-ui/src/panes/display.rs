@@ -56,14 +56,23 @@ pub enum Section {
 }
 
 impl Section {
-    pub const ALL: [Section; 6] = [
-        Section::Color,
-        Section::View,
-        Section::Nodes,
-        Section::Labels,
-        Section::Grid,
-        Section::Analyzer,
-    ];
+    /// Every section, in the stacking order named on the enum's own doc.
+    ///
+    /// Built from an exhaustive `match` rather than written out as a bare
+    /// literal, so the list cannot fall behind the enum — the same guard
+    /// `SpectralOrientation::ALL` in this crate uses, for the same reason.
+    pub const ALL: [Section; 6] = {
+        use Section::*;
+        // Exhaustive, and the compiler checks it. The arm is `()` because
+        // what is wanted is the coverage error, not the value.
+        const fn covered(section: Section) {
+            match section {
+                Color | View | Nodes | Labels | Grid | Analyzer => (),
+            }
+        }
+        covered(Color);
+        [Color, View, Nodes, Labels, Grid, Analyzer]
+    };
 
     /// The section's header text, and the name of the settings pane it holds.
     pub fn title(self) -> &'static str {
