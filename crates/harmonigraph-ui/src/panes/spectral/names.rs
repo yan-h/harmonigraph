@@ -312,8 +312,7 @@ pub(super) fn plan(
     // length on the screen and the thinning measures in TIME, so this is the
     // rate between them — one number, the time axis being linear across the
     // region.
-    let seconds_per_point =
-        (time.time_at(1.0) - time.time_at(0.0)).abs() / axes.depth_len().max(1.0) as f64;
+    let seconds_per_point = time.seconds_per_point(axes);
     let gap = (REPEAT_GAP * label_scale) as f64 * seconds_per_point;
     let room = |name: &NoteName| {
         depth_extent(axes, name, size, label_scale) as f64 * seconds_per_point + gap

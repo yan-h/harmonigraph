@@ -303,7 +303,7 @@ pub(super) fn note_instances(
     // spectrum, so it is the ROLL's share of it that a point is measured
     // against. What every screen-space length here (the ink overhang) is
     // converted through.
-    let per_point = f64::from(1.0 / (axes.depth_len() * (1.0 - split)).max(1.0)) * time.window();
+    let per_point = time.seconds_per_point(axes);
     let ink_seconds = if time.whole_song() { 0.0 } else { f64::from(ink_px) * per_point };
     let edge = oldest - ink_seconds;
     // Across pitch there is no margin to be had at the NOTE's level, and that

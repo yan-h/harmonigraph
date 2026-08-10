@@ -302,6 +302,59 @@ fn the_axes_take_the_pane_sides_the_orientation_asks_for() {
     }
 }
 
+/// The far region's screen-to-time rate had three independent-looking
+/// derivations across roll.rs, names.rs and the spectrogram plan before they
+/// were unified as `TimeAxis::seconds_per_point` — nothing tied them
+/// together. Checked here against the names.rs-style form directly: how far
+/// apart `time_at(1.0)` and `time_at(0.0)` land, per point of the full depth
+/// axis.
+///
+/// Splits stop at 0.8. Past that the two forms are not the same computation:
+/// the names.rs form floors `axes.depth_len()` alone, which for an ordinary
+/// pane (hundreds of points) never engages, while `seconds_per_point` floors
+/// the REGION's own width (`depth_len * depth_span`), which does once the far
+/// region is dragged under a point wide — a real numeric difference, not
+/// float rounding, and the two grow apart without bound as the region closes
+/// further. What keeps it from being a regression is that the region is what
+/// a name is drawn IN: under a point wide there is no room for one letter,
+/// let alone a name, whichever rate is used to space them — so the corner
+/// where the two forms disagree is also the corner where nothing depends on
+/// which one answered.
+#[test]
+fn seconds_per_point_matches_the_time_at_derivation() {
+    for depth_len in [40.0f32, 300.0, 1200.0] {
+        for orientation in EVERY_ORIENTATION {
+            let rect = if orientation.is_time_vertical() {
+                egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(100.0, depth_len))
+            } else {
+                egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(depth_len, 100.0))
+            };
+            let a = axes(rect, orientation);
+            for split in [0.0f32, 0.2, 0.5, 0.8] {
+                let time = TimeAxis {
+                    split,
+                    depth_span: 1.0 - split,
+                    window: 12.0,
+                    origin: 5.0,
+                    now: 5.0,
+                    whole_song: false,
+                };
+                let direct = (time.time_at(1.0) - time.time_at(0.0)).abs()
+                    / f64::from(a.depth_len().max(1.0));
+                let via_method = time.seconds_per_point(&a);
+                // `time_at` divides in f32 before widening to f64
+                // (`(d - split) / depth_span`), so the two derivations round
+                // differently even within the splits swept here — an
+                // f32-epsilon difference, not the real one named above.
+                assert!(
+                    (via_method - direct).abs() < 1e-6,
+                    "{orientation:?} @{split}, {depth_len}pt: {via_method} vs {direct}",
+                );
+            }
+        }
+    }
+}
+
 /// Hover has to find the pitch the pointer is actually over, in every
 /// orientation — the lattice highlight hangs off this one inverse.
 #[test]

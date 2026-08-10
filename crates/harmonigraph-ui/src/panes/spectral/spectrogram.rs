@@ -195,7 +195,7 @@ pub(crate) fn draw_spectrogram(
         ppp: painter.ctx().pixels_per_point().max(1.0),
         max_rows: painter.ctx().input(|i| i.max_texture_side).max(64),
         pitch_len: axes.pitch_len(),
-        depth_len: (1.0 - split) * axes.depth_len(),
+        depth_len: time.region_depth_len(axes),
         window: time.window(),
         scale: *scale,
         cfg,

@@ -607,4 +607,19 @@ impl TimeAxis {
     pub(super) fn playhead_depth(&self) -> f32 {
         self.depth_of(self.now)
     }
+
+    /// This axis' own share of the depth axis, in points: `depth_span` (the
+    /// far region's fraction of it, live or whole-song alike) of what the
+    /// full axis spans.
+    pub(super) fn region_depth_len(&self, axes: &Axes) -> f32 {
+        axes.depth_len() * self.depth_span
+    }
+
+    /// Seconds per point along the depth axis, in the region this axis owns
+    /// — the rate a screen-space length converts through to reach take time.
+    /// Floored at one point, so a region squeezed to nothing returns a large
+    /// but finite rate rather than dividing by zero.
+    pub(super) fn seconds_per_point(&self, axes: &Axes) -> f64 {
+        self.window / f64::from(self.region_depth_len(axes).max(1.0))
+    }
 }
