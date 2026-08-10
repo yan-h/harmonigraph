@@ -1399,7 +1399,12 @@ fn a_blob_naming_a_nonsense_camera_opens_on_what_it_can_reach() {
     let cases: [CameraCase; 11] = [
         ("yaw", "NaN", "a NaN yaw", None),
         ("pitch", "NaN", "a NaN pitch", Some((-Camera::PITCH_LIMIT, Camera::PITCH_LIMIT))),
-        ("pitch", "10.0", "a pitch past `orbit`'s limit", Some((-Camera::PITCH_LIMIT, Camera::PITCH_LIMIT))),
+        (
+            "pitch",
+            "10.0",
+            "a pitch past `orbit`'s limit",
+            Some((-Camera::PITCH_LIMIT, Camera::PITCH_LIMIT)),
+        ),
         ("distance", "NaN", "a NaN distance", Some((Camera::MIN_DISTANCE, Camera::MAX_DISTANCE))),
         (
             "distance",
