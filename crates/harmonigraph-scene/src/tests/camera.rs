@@ -3,7 +3,7 @@
 
 use crate::*;
 use glam::{Vec2, Vec3};
-use harmonigraph_core::{NoteEvent, NoteEventKind, NoteTracker, PitchClass, Tuning};
+use harmonigraph_core::{NoteEvent, NoteTracker, PitchClass, Tuning};
 use super::harness::*;
 
 #[test]
@@ -194,12 +194,7 @@ fn idle_off_sheet_nodes_are_not_pickable() {
         .find(|&n| tuning.matches(pc, PitchClass::from_midi_note(n)))
         .expect("some MIDI note lands on this node under 12-TET");
     let mut tracker = NoteTracker::new();
-    tracker.handle_event(NoteEvent {
-        time: 0.0,
-        channel: 0,
-        note,
-        kind: NoteEventKind::On { velocity: 1.0 },
-    });
+    tracker.handle_event(NoteEvent::on(0.0, 0, note, 1.0));
     let lit = scene_of(&tracker, &tuning, &view, &plain_frame(), 0.0);
     let lit_off = lit
         .nodes

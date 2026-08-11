@@ -4,19 +4,14 @@
 
 use crate::*;
 use crate::derive::held_extremes;
-use harmonigraph_core::{NoteEvent, NoteEventKind, NoteTracker, PitchClass, Tuning};
+use harmonigraph_core::{NoteEvent, NoteTracker, PitchClass, Tuning};
 use super::harness::*;
 
 /// Play `notes` on channel 0 and derive a scene marking both extremes.
 fn marked_scene(notes: &[u8], mark_melody: bool, mark_bass: bool) -> Scene {
     let mut tracker = NoteTracker::new();
     for &note in notes {
-        tracker.handle_event(NoteEvent {
-            time: 0.0,
-            channel: 0,
-            note,
-            kind: NoteEventKind::On { velocity: 1.0 },
-        });
+        tracker.handle_event(NoteEvent::on(0.0, 0, note, 1.0));
     }
     // The flat harness, because these read the masks at time 0: under a real
     // Fade and mark Delay that instant is the one moment a note is guaranteed
@@ -28,11 +23,11 @@ fn marked_scene(notes: &[u8], mark_melody: bool, mark_bass: bool) -> Scene {
 
 /// A note-on and a note-off on channel 0, for the timed sequences below.
 fn on(time: f64, note: u8) -> NoteEvent {
-    NoteEvent { time, channel: 0, note, kind: NoteEventKind::On { velocity: 1.0 } }
+    NoteEvent::on(time, 0, note, 1.0)
 }
 
 fn off(time: f64, note: u8) -> NoteEvent {
-    NoteEvent { time, channel: 0, note, kind: NoteEventKind::Off }
+    NoteEvent::off(time, 0, note)
 }
 
 /// The envelope duration these tests run on, pinned here and deliberately NOT
@@ -179,14 +174,9 @@ fn a_handoff_inside_one_pitch_class_rings_whichever_end_is_stronger() {
     // the handoff, that the incoming one is at full before it has begun.
     let mut tracker = NoteTracker::new();
     for note in [60u8, 72] {
-        tracker.handle_event(NoteEvent {
-            time: 0.0,
-            channel: 0,
-            note,
-            kind: NoteEventKind::On { velocity: 1.0 },
-        });
+        tracker.handle_event(NoteEvent::on(0.0, 0, note, 1.0));
     }
-    tracker.handle_event(NoteEvent { time: 1.0, channel: 0, note: 72, kind: NoteEventKind::Off });
+    tracker.handle_event(NoteEvent::off(1.0, 0, 72));
     let view = delayed_view(0.0);
     // The key-up is a whole duration past the note-on, so the leaving ring is
     // leaving and nothing here is still arriving.
@@ -364,12 +354,8 @@ fn a_fresh_mark_eases_in_with_the_octave_it_links_to() {
     // what keeps the ring from arriving as the SQUARE of the sector's ease
     // (the ring carries its own attack, so only the release goes under it).
     let mut tracker = NoteTracker::new();
-    tracker.handle_event(NoteEvent {
-        time: 0.0,
-        channel: 0,
-        note: 60, // C4: the origin node, in middle C's octave slot
-        kind: NoteEventKind::On { velocity: 1.0 },
-    });
+    // C4: the origin node, in middle C's octave slot.
+    tracker.handle_event(NoteEvent::on(0.0, 0, 60, 1.0));
     let view = delayed_view(0.0);
     let at = |now: f64| {
         let scene = scene_of(&tracker, &Tuning::default(), &view, &attack_frame(), now);
@@ -400,14 +386,9 @@ fn an_inherited_end_eases_in_from_the_handoff_not_from_its_note_on() {
     // node having to carry both.
     let mut tracker = NoteTracker::new();
     for note in [60u8, 67] {
-        tracker.handle_event(NoteEvent {
-            time: 0.0,
-            channel: 0,
-            note,
-            kind: NoteEventKind::On { velocity: 1.0 },
-        });
+        tracker.handle_event(NoteEvent::on(0.0, 0, note, 1.0));
     }
-    tracker.handle_event(NoteEvent { time: 1.0, channel: 0, note: 67, kind: NoteEventKind::Off });
+    tracker.handle_event(NoteEvent::off(1.0, 0, 67));
     let view = delayed_view(0.0);
     let frame = attack_frame();
     let at = |now: f64| {
@@ -602,20 +583,10 @@ fn held_extremes_never_names_a_released_voice() {
     // leave the incoming ring nothing to ease from.
     let mut tracker = NoteTracker::new();
     for note in [60u8, 67] {
-        tracker.handle_event(NoteEvent {
-            time: 0.0,
-            channel: 0,
-            note,
-            kind: NoteEventKind::On { velocity: 1.0 },
-        });
+        tracker.handle_event(NoteEvent::on(0.0, 0, note, 1.0));
     }
     // Release the top note; C is now both the highest and lowest held.
-    tracker.handle_event(NoteEvent {
-        time: 0.1,
-        channel: 0,
-        note: 67,
-        kind: NoteEventKind::Off,
-    });
+    tracker.handle_event(NoteEvent::off(0.1, 0, 67));
     let (melody, bass) = held_extremes(&tracker, true, true);
     assert_eq!(melody.map(|e| e.key), Some((0, 60)), "the released G must not stay the melody");
     assert_eq!(bass.map(|e| e.key), Some((0, 60)));
@@ -625,12 +596,7 @@ fn held_extremes_never_names_a_released_voice() {
     assert_eq!(bass.map(|e| e.since), Some(0.0), "the end that never moved keeps its stamp");
 
     // Nothing held at all: nothing to mark.
-    tracker.handle_event(NoteEvent {
-        time: 0.2,
-        channel: 0,
-        note: 60,
-        kind: NoteEventKind::Off,
-    });
+    tracker.handle_event(NoteEvent::off(0.2, 0, 60));
     assert_eq!(held_extremes(&tracker, true, true), (None, None));
 }
 
@@ -639,12 +605,7 @@ fn held_extremes_never_names_a_released_voice() {
 fn marked(notes: &[u8], count: u32, center: f32) -> (Scene, FrameParams) {
     let mut tracker = NoteTracker::new();
     for &note in notes {
-        tracker.handle_event(NoteEvent {
-            time: 0.0,
-            channel: 0,
-            note,
-            kind: NoteEventKind::On { velocity: 1.0 },
-        });
+        tracker.handle_event(NoteEvent::on(0.0, 0, note, 1.0));
     }
     let view = ViewConfig {
         octave_count: count,

@@ -155,8 +155,8 @@ pub fn close(state: &SharedState) -> String {
 mod tests {
     use super::{close, Frame, Opening, MIN_WINDOW_WIDTH};
     use crate::params::{ParamBackend, ParamKey};
+    use crate::tests::probe::fresh;
     use crate::SharedState;
-    use harmonigraph_render::wgpu::TextureFormat;
 
     /// Parameters at their defaults, because nothing here reads one: this
     /// sequence is about the state around a frame, not what the frame draws.
@@ -167,10 +167,6 @@ mod tests {
             key.default_value()
         }
         fn set(&self, _key: ParamKey, _value: f32) {}
-    }
-
-    fn fresh() -> SharedState {
-        SharedState::new(TextureFormat::Bgra8Unorm)
     }
 
     /// Draw one frame into a window `width` points wide, and return what it

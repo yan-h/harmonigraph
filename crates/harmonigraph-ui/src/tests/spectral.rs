@@ -1,8 +1,6 @@
 //! The Spectral pane's gestures: the divider between spectrum and roll,
 //! and the drags and wheel that pan and zoom its two axes.
 
-use crate::*;
-use harmonigraph_render::wgpu::TextureFormat;
 use super::harness::*;
 
 /// Drag the Spectral pane's spectrum/spectrogram divider through the REAL
@@ -16,51 +14,32 @@ use super::harness::*;
 /// hover. So the assertion is that the split actually MOVED.
 #[test]
 fn the_spectral_divider_drags_through_the_dock() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
-    let backend = RecordingBackend::default();
-    let ctx = egui::Context::default();
-    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1000.0, 800.0));
-    let mut t = 0.0;
-    let mut frame = |state: &mut SharedState, events: Vec<egui::Event>| {
-        t += 1.0 / 60.0;
-        let raw = egui::RawInput {
-            screen_rect: Some(screen),
-            time: Some(t),
-            events,
-            ..Default::default()
-        };
-        let _ = ctx.run_ui(raw, |ui| root_ui(ui, state, &backend, t));
-    };
-    // Two warm-ups: egui resolves the top widget at the pointer from the
-    // previous pass, so the handle has to exist before the press.
-    frame(&mut state, vec![]);
-    frame(&mut state, vec![]);
+    let mut state = fresh();
+    let mut h = DockHarness::new();
+    h.settle(&mut state);
 
     // Ask egui where the handle actually landed rather than deriving the
     // dock's arithmetic here, which would just re-encode the layout.
     let handle = egui::Id::new(("spectral-split", 0usize));
-    let band = ctx.read_response(handle).expect("the split handle never registered").rect;
+    let band = h.ctx.read_response(handle).expect("the split handle never registered").rect;
     let grab = band.center();
     let before = state.spectrum_config.roll_fraction;
 
     // Left (the default orientation) puts the divider upright, so the drag
     // that moves it runs along x — pushing it away from the spectrum.
-    let press = |pos, pressed| egui::Event::PointerButton {
-        pos,
-        button: egui::PointerButton::Primary,
-        pressed,
-        modifiers: egui::Modifiers::default(),
-    };
-    frame(&mut state, vec![egui::Event::PointerMoved(grab)]);
+    h.frame(&mut state, vec![egui::Event::PointerMoved(grab)]);
     assert!(
-        ctx.read_response(handle).is_some_and(|r| r.hovered()),
+        h.ctx.read_response(handle).is_some_and(|r| r.hovered()),
         "the handle should light up under the pointer",
     );
-    frame(&mut state, vec![egui::Event::PointerMoved(grab), press(grab, true)]);
+    h.frame(&mut state, vec![egui::Event::PointerMoved(grab), press(grab, true)]);
     let target = grab + egui::vec2(40.0, 0.0);
-    frame(&mut state, vec![egui::Event::PointerMoved(target)]);
-    assert!(ctx.read_response(handle).is_some_and(|r| r.dragged()), "the handle should be dragged");
-    frame(&mut state, vec![press(target, false)]);
+    h.frame(&mut state, vec![egui::Event::PointerMoved(target)]);
+    assert!(
+        h.ctx.read_response(handle).is_some_and(|r| r.dragged()),
+        "the handle should be dragged",
+    );
+    h.frame(&mut state, vec![press(target, false)]);
 
     let after = state.spectrum_config.roll_fraction;
     assert!(
@@ -74,7 +53,7 @@ fn the_spectral_divider_drags_through_the_dock() {
 /// lower pitches into view, the way grabbing any picture does.
 #[test]
 fn dragging_the_spectral_picture_pans_the_pitch_range() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     // Start zoomed in, so there is room to pan in both directions.
     state.spectrum_config.low_midi = 48.0;
     state.spectrum_config.high_midi = 84.0;
@@ -113,7 +92,7 @@ fn dragging_the_spectral_picture_pans_the_pitch_range() {
 /// moves one axis.
 #[test]
 fn dragging_the_spectral_picture_along_time_zooms_the_span() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     let mut h = DockHarness::new();
     h.settle(&mut state);
 
@@ -162,7 +141,7 @@ fn dragging_the_spectral_picture_along_time_zooms_the_span() {
 /// as pulling away from the now-line shortens the Span.
 #[test]
 fn a_drag_over_the_spectrum_zooms_the_level_and_not_the_span() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     // Zoomed in, so a stray pan would show up rather than sitting against the
     // clamp at the ends of the axis.
     state.spectrum_config.low_midi = 48.0;
@@ -206,7 +185,7 @@ fn a_drag_over_the_spectrum_zooms_the_level_and_not_the_span() {
 /// could plausibly have meant.
 #[test]
 fn the_wheel_zooms_the_pitch_range_and_leaves_the_time_span_alone() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     state.spectrum_config.low_midi = 36.0;
     state.spectrum_config.high_midi = 96.0;
     let mut h = DockHarness::new();
@@ -253,7 +232,7 @@ fn the_wheel_zooms_the_pitch_range_and_leaves_the_time_span_alone() {
 /// handle still resizes the split and does NOT pan the pitch.
 #[test]
 fn the_divider_still_wins_the_drag_over_the_pane_behind_it() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     let mut h = DockHarness::new();
     h.settle(&mut state);
 

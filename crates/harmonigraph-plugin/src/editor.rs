@@ -981,7 +981,7 @@ mod tests {
         target_frame_interval, ClockMapper, EditorShared, DISPLAY_OVERSAMPLE,
         FALLBACK_FRAME_INTERVAL, MIN_SIZE,
     };
-    use harmonigraph_core::notes::{NoteEvent, NoteEventKind};
+    use harmonigraph_core::notes::NoteEvent;
 
     /// The floor this window is held to and the floor the pane layout dials to
     /// are one number, and the cast into window pixels is where they could
@@ -1012,14 +1012,7 @@ mod tests {
             std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
         );
         for (note, time) in [(60u8, 99.950), (64u8, 99.995)] {
-            producer
-                .push(NoteEvent {
-                    time,
-                    channel: 0,
-                    note,
-                    kind: NoteEventKind::On { velocity: 1.0 },
-                })
-                .unwrap();
+            producer.push(NoteEvent::on(time, 0, note, 1.0)).unwrap();
         }
 
         assert!(shared.drain_into_tracker(7.0), "events arrived -> repaint");
@@ -1061,14 +1054,7 @@ mod tests {
         // An empty ring is not a repaint.
         assert!(!shared.catch_up(7.0), "nothing arrived, so nothing needs drawing");
 
-        producer
-            .push(NoteEvent {
-                time: 1.0,
-                channel: 0,
-                note: 60,
-                kind: NoteEventKind::On { velocity: 1.0 },
-            })
-            .unwrap();
+        producer.push(NoteEvent::on(1.0, 0, 60, 1.0)).unwrap();
         assert!(shared.catch_up(7.1), "a note arrived and the frame was not told");
 
         // And the ring is empty again, so the next tick asks for nothing.

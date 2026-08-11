@@ -376,8 +376,7 @@ mod tests {
     /// zero-height, and the misalignment this guards against never happens.
     fn row_offset(row: RowFn) -> f32 {
         let mut offset = 0.0;
-        let ctx = egui::Context::default();
-        crate::theme::apply_theme(&ctx);
+        let ctx = crate::tests::probe::themed();
         let _ = ctx.run_ui(Default::default(), |ui| {
             row(ui, &mut |ui| {
                 let label = ui.label("Node style").rect.center().y;

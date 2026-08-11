@@ -813,8 +813,14 @@ pub(super) fn draw(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tests::probe::{fresh, frame_full, painted_full, themed_at};
     use crate::{SpectralOrientation, SpectrumConfig};
     use harmonigraph_core::{NoteEvent, NoteEventKind};
+
+    /// The window a batch of names is drawn on. Larger than [`PANE`] on both
+    /// axes, so a name placed off the pane still lands in the shapes rather
+    /// than being clipped away before a test can find it.
+    const SCREEN: egui::Vec2 = egui::vec2(400.0, 400.0);
 
     /// 300 points along the time axis, 100 across pitch — the same pane the
     /// roll's tests use.
@@ -855,7 +861,7 @@ mod tests {
     }
 
     fn turned(range: f32, span: f32, orientation: SpectralOrientation) -> SharedState {
-        let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
+        let mut state = fresh();
         state.spectrum_config = SpectrumConfig {
             orientation,
             low_midi: 60.0 - range * 0.5,
@@ -1129,13 +1135,8 @@ mod tests {
             })
             .collect();
 
-        let ctx = egui::Context::default();
-        crate::theme::apply_theme(&ctx); // the real Iosevka metrics
-        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 400.0));
         let mut batch = crate::text::TextBatch::default();
-        let _ = ctx.run_ui(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ui| {
-            draw(ui.painter(), &labels, 1.0, &mut batch);
-        });
+        let _ = painted_full(SCREEN, |ui| draw(ui.painter(), &labels, 1.0, &mut batch));
 
         let left_of = |letter: &str| {
             batch
@@ -1860,20 +1861,16 @@ mod tests {
         st.tracker.handle_event(on(10.0, 60));
         st.tracker.handle_event(off(10.3, 60));
 
-        let ctx = egui::Context::default();
-        crate::theme::apply_theme(&ctx);
-        ctx.set_pixels_per_point(PPP);
-        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 400.0));
+        // One context across the run: the galley cache is what makes a name's
+        // ink comparable from frame to frame.
+        let ctx = themed_at(PPP);
 
         let mut drawn = Vec::new();
         for frame in 0..90 {
             let now = 12.0 + f64::from(frame) / 60.0;
             let labels = labels(&st, now);
             let mut batch = crate::text::TextBatch::default();
-            let _ = ctx
-                .run_ui(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ui| {
-                    draw(ui.painter(), &labels, 1.0, &mut batch);
-                });
+            let _ = frame_full(&ctx, SCREEN, |ui| draw(ui.painter(), &labels, 1.0, &mut batch));
             if let Some(piece) = batch.pieces().iter().find(|p| p.text == "C") {
                 drawn.push(piece.ink.left() * PPP);
             }

@@ -1,9 +1,14 @@
 //! Fixtures more than one suite needs: a recording [`ParamBackend`], the
 //! [`DockHarness`] that drives a whole dock through egui frames, and the
 //! settings-pane painters the width and scale suites both measure.
+//!
+//! Everything here needs a whole dock. What a single pane or widget needs is
+//! in [`super::probe`], and [`press`] is re-exported from there so a suite
+//! reaching for the harness gets both.
 
 use crate::*;
-use harmonigraph_render::wgpu::TextureFormat;
+
+pub(super) use super::probe::{fresh, press};
 
 #[derive(Default)]
 pub(super) struct RecordingBackend {
@@ -29,9 +34,22 @@ pub(super) struct DockHarness {
     t: f64,
 }
 
+/// The window every dock fixture opens in unless it is about some other size:
+/// wide enough that the default layout's four leaves are all real panes rather
+/// than slivers, and the size the pane coordinates written into these suites
+/// (a point inside the top-left leaf, the settings column at x ~700..1000) are
+/// read against.
+pub(super) const DEFAULT_WINDOW: egui::Vec2 = egui::vec2(1000.0, 800.0);
+
 impl DockHarness {
     pub(super) fn new() -> Self {
-        let ctx = egui::Context::default();
+        DockHarness::at(DEFAULT_WINDOW)
+    }
+
+    /// A harness whose window is `size`, for the suites that are about a
+    /// particular one — the plugin's narrowest editor, a window short enough
+    /// that a settings pane overflows it.
+    pub(super) fn at(size: egui::Vec2) -> Self {
         // The real faces and sizes, like every other fixture that measures a
         // width (`settings_pane_at_width`, `settings_pane_at_scale`, and the
         // spectral ones that say "the real Iosevka metrics" outright). `root_ui`
@@ -41,16 +59,57 @@ impl DockHarness {
         // every string out in egui's 12.5pt fallback, and anything measuring
         // text is measuring the wrong font — which is the whole job of
         // `every_settings_tab_fits_on_its_tab_bar`.
-        crate::theme::apply_theme(&ctx);
         DockHarness {
-            ctx,
+            ctx: super::probe::themed(),
             backend: RecordingBackend::default(),
-            screen: egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1000.0, 800.0)),
+            screen: egui::Rect::from_min_size(egui::pos2(0.0, 0.0), size),
             t: 0.0,
         }
     }
 
+    /// The same with the chrome dialled to `scale`, which is the UI-scale
+    /// setting rather than the device's pixel ratio: it resizes every font,
+    /// margin and bar in the dock, so a window has to be scaled with it or the
+    /// sweep is also a sweep over how much overflows.
+    ///
+    /// The STATE is where the scale really lives, which is why this takes one:
+    /// `root_ui` calls `set_ui_scale` from `state.ui_scale` on every frame, so
+    /// a context dialled up on its own is reset by the first frame drawn on it
+    /// and the sweep silently measures the design size at every step. Dialling
+    /// the context as well is what puts the first frame at the scale rather
+    /// than one frame behind it.
+    pub(super) fn scaled(size: egui::Vec2, scale: f32, state: &mut SharedState) -> Self {
+        state.ui_scale = scale;
+        let mut harness = DockHarness::at(size);
+        harness.ctx = super::probe::themed_scaled(scale);
+        harness
+    }
+
     pub(super) fn frame(&mut self, state: &mut SharedState, events: Vec<egui::Event>) -> egui::FullOutput {
+        self.frame_timed(state, events).0
+    }
+
+    /// The clock the NEXT frame will run at, so a fixture that feeds the state
+    /// before drawing it — audio into the analyzer, note-ons into the tracker —
+    /// can stamp them at the time the frame will read them. Feeding at some
+    /// other clock puts the picture one frame away from its own input, which
+    /// for the spectrogram is a column of black down the now-line.
+    pub(super) fn next_time(&self) -> f64 {
+        self.t + 1.0 / 60.0
+    }
+
+    /// One frame, and the milliseconds spent inside `root_ui` itself.
+    ///
+    /// Timed from INSIDE the pass, so egui's own begin/end work stays outside
+    /// the reading and the number is the same slice of the frame the perf
+    /// overlay's `ui` row reports. Every frame pays the two `Instant::now`
+    /// calls, which is nothing beside a frame and keeps one code path rather
+    /// than a timed harness beside an untimed one.
+    pub(super) fn frame_timed(
+        &mut self,
+        state: &mut SharedState,
+        events: Vec<egui::Event>,
+    ) -> (egui::FullOutput, f64) {
         self.t += 1.0 / 60.0;
         let raw = egui::RawInput {
             screen_rect: Some(self.screen),
@@ -60,7 +119,13 @@ impl DockHarness {
         };
         let t = self.t;
         let backend = &self.backend;
-        self.ctx.run_ui(raw, |ui| root_ui(ui, state, backend, t))
+        let mut ui_ms = 0.0;
+        let output = self.ctx.run_ui(raw, |ui| {
+            let start = std::time::Instant::now();
+            root_ui(ui, state, backend, t);
+            ui_ms = start.elapsed().as_secs_f64() * 1000.0;
+        });
+        (output, ui_ms)
     }
 
     /// Answer a sideways fold's resize the way a shell does — the window it
@@ -130,15 +195,6 @@ impl DockHarness {
         let rect = crate::pane_body(state, &panes::Tab::Spectral)
             .expect("the Spectral pane should be visible in the default dock");
         rect.lerp_inside(egui::vec2(depth, 0.5))
-    }
-}
-
-pub(super) fn press(pos: egui::Pos2, pressed: bool) -> egui::Event {
-    egui::Event::PointerButton {
-        pos,
-        button: egui::PointerButton::Primary,
-        pressed,
-        modifiers: egui::Modifiers::default(),
     }
 }
 
@@ -223,7 +279,7 @@ pub(super) fn settings_pane_at_width(
     width: f32,
     projection: harmonigraph_scene::Projection,
 ) -> Vec<egui::epaint::ClippedShape> {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     state.take.supported = true;
     state.take.last_ready = true;
     state.take.render_progress = Some(FIXTURE_RENDER);
@@ -231,27 +287,54 @@ pub(super) fn settings_pane_at_width(
     // A saved angle, so the Angle row has the button a real session gives it.
     state.camera_presets.push(CameraPreset { name: "Front".into(), yaw: 0.0, pitch: 0.0 });
     let tab = pane.install(&mut state);
+    tab_body(&mut state, tab, width, PANE_HEIGHT).shapes
+}
+
+/// The height every pane fixture is drawn at: taller than any settings pane's
+/// content, so a column that reaches the bottom is the pane running out of
+/// controls rather than out of window.
+pub(super) const PANE_HEIGHT: f32 = 2400.0;
+
+/// One tab's body painted into a content box `width` points across on a themed
+/// context of its own, and the frame it produced.
+pub(super) fn tab_body(
+    state: &mut SharedState,
+    tab: panes::Tab,
+    width: f32,
+    height: f32,
+) -> egui::FullOutput {
+    tab_body_on(&super::probe::themed(), state, tab, width, height, 0.0)
+}
+
+/// The same on a caller's context and clock — for a fixture that drives many
+/// frames and wants one context across them.
+pub(super) fn tab_body_on(
+    ctx: &egui::Context,
+    state: &mut SharedState,
+    tab: panes::Tab,
+    width: f32,
+    height: f32,
+    now: f64,
+) -> egui::FullOutput {
     let backend = RecordingBackend::default();
-    let ctx = egui::Context::default();
-    crate::theme::apply_theme(&ctx);
-    let margin = crate::theme::PANE_INNER_MARGIN;
-    let body = egui::Rect::from_min_size(
-        egui::Pos2::ZERO,
-        egui::vec2(width + 2.0 * margin, 2400.0),
-    );
-    let out = ctx.run_ui(
-        egui::RawInput { screen_rect: Some(body), time: Some(0.0), ..Default::default() },
+    // The inset at the CONTEXT's chrome scale rather than at the design size,
+    // so a fixture that scales the chrome measures the pane the dock would
+    // actually give it — the margin scales with everything else.
+    let margin = crate::theme::pane_inner_margin(crate::theme::ui_scale(ctx));
+    let body =
+        egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width + 2.0 * margin, height));
+    ctx.run_ui(
+        egui::RawInput { screen_rect: Some(body), time: Some(now), ..Default::default() },
         |ui| {
             // The body ui's clip is the whole body (the screen here); the pane
             // ui inside it is inset, exactly as the dock's Frame leaves it.
             let mut body_ui =
                 ui.new_child(egui::UiBuilder::new().max_rect(body.shrink(margin)));
             let mut tab = tab;
-            let mut viewer = panes::Viewer { state: &mut state, params: &backend, now: 0.0 };
+            let mut viewer = panes::Viewer { state, params: &backend, now };
             egui_dock::TabViewer::ui(&mut viewer, &mut body_ui, &mut tab);
         },
-    );
-    out.shapes
+    )
 }
 
 /// The projections worth drawing `pane` at: all of them for the View section,

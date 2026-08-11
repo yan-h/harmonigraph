@@ -2,7 +2,6 @@
 //! resize, and the rails a folded subtree leaves behind.
 
 use crate::*;
-use harmonigraph_render::wgpu::TextureFormat;
 use super::harness::*;
 
 /// The layout opens with Notes and Console folded to their tab bar, and with
@@ -42,7 +41,7 @@ fn the_default_layout_opens_with_the_two_readout_panes_folded() {
 #[test]
 fn collapsing_a_pane_banks_the_width_it_gave_up() {
     let mut h = DockHarness::new();
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     h.settle(&mut state);
     assert_eq!(state.workspace.take_window_width_change(), None, "an idle frame asks for nothing");
 
@@ -94,7 +93,7 @@ fn every_separator_a_fold_has_pinned_resizes_the_open_panes_across_it() {
         for handle in 0..=rails {
             for delta in [45.0f32, -45.0] {
                 let mut h = DockHarness::new();
-                let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+                let mut state = fresh();
                 state.workspace.dock = a_row_of(row);
                 h.settle(&mut state);
                 for tab in &row[1..=rails] {
@@ -147,7 +146,7 @@ fn every_separator_a_fold_has_pinned_resizes_the_open_panes_across_it() {
 fn both_handles_beside_a_rail_resize_the_panes_around_it_in_the_default_layout() {
     for handle in [-2.0f32, 2.0] {
         let mut h = DockHarness::new();
-        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        let mut state = fresh();
         h.settle(&mut state);
         let _ = h.collapse_click(&mut state, panes::Tab::Spectral);
         let _ = h.settle_folds(&mut state);
@@ -206,7 +205,7 @@ fn no_pane_is_dragged_below_its_floor_wherever_it_sits() {
             (panes::Tab::Tuning, -900.0),
         ] {
             let mut h = DockHarness::new();
-            let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+            let mut state = fresh();
             h.settle(&mut state);
             if let Some(tab) = fold {
                 let _ = h.collapse_click(&mut state, tab);
@@ -286,7 +285,7 @@ fn start_dragging_the_settings_boundary(
 fn the_bar_being_dragged_stays_lit_when_the_pointer_leaves_the_window() {
     let style = theme::dock_style(&egui::Style::default(), 1.0);
     let mut h = DockHarness::new();
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     let target = start_dragging_the_settings_boundary(&mut h, &mut state, &style);
     let out = h.frame(&mut state, vec![]);
     assert!(a_bar_is_lit(&out, &style), "the bar is not lit while it is being dragged");
@@ -316,7 +315,7 @@ fn the_bar_being_dragged_stays_lit_when_the_pointer_leaves_the_window() {
 fn a_drag_the_host_takes_focus_from_lets_go_of_its_bar() {
     let style = theme::dock_style(&egui::Style::default(), 1.0);
     let mut h = DockHarness::new();
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     let target = start_dragging_the_settings_boundary(&mut h, &mut state, &style);
     h.frame(&mut state, vec![egui::Event::WindowFocused(false)]);
     let was = pane_rect(&state, panes::Tab::Tuning).left();
@@ -337,7 +336,7 @@ fn a_drag_the_host_takes_focus_from_lets_go_of_its_bar() {
 #[test]
 fn a_window_narrow_enough_to_squeeze_a_pane_does_not_re_dial_the_layout() {
     let mut h = DockHarness::new();
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     h.settle(&mut state);
     let panes = [panes::Tab::Lattice, panes::Tab::Spectral, panes::Tab::Tuning];
     let before = panes.map(|tab| pane_width(&state, tab));
@@ -365,7 +364,7 @@ fn a_window_narrow_enough_to_squeeze_a_pane_does_not_re_dial_the_layout() {
 fn a_pinned_separator_resizes_in_frameless_mode_too() {
     for delta in [40.0f32, -40.0] {
         let mut h = DockHarness::new();
-        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        let mut state = fresh();
         h.settle(&mut state);
         let _ = h.collapse_click(&mut state, panes::Tab::Spectral);
         let _ = h.settle_folds(&mut state);
@@ -410,7 +409,7 @@ fn a_pinned_separator_resizes_in_frameless_mode_too() {
 #[test]
 fn the_separator_inside_a_folded_pair_resizes_the_open_panes_around_it() {
     let mut h = DockHarness::new();
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     // Lattice | (Spectral Tuning) | Notes, the middle two siblings.
     let mut dock = egui_dock::DockState::new(vec![panes::Tab::Lattice]);
     {
@@ -467,7 +466,7 @@ fn the_separator_inside_a_folded_pair_resizes_the_open_panes_around_it() {
 #[test]
 fn the_handle_beside_an_outermost_rail_does_nothing() {
     let mut h = DockHarness::new();
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     h.settle(&mut state);
     // The Notes/Console leaf opens folded, so folding the settings leaf too
     // folds the whole column sideways into one rail down the right edge — and
@@ -540,7 +539,7 @@ fn a_row_of(tabs: &[panes::Tab]) -> egui_dock::DockState<panes::Tab> {
 /// and nothing moves.
 #[test]
 fn reset_layout_puts_the_dialled_pane_widths_back() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     let style = theme::dock_style(&egui::Style::default(), 1.0);
     let mut h = DockHarness::new();
     h.settle_folds(&mut state);
@@ -619,7 +618,7 @@ fn label_center(output: &egui::FullOutput, label: &str) -> Option<egui::Pos2> {
 /// else in the suite presses this button, so nothing else would notice.
 #[test]
 fn the_reset_layout_button_resets_the_layout_when_it_is_clicked() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     let style = theme::dock_style(&egui::Style::default(), 1.0);
     let mut h = DockHarness::new();
     // The button lives on the System pane, which shares its leaf with the other
@@ -665,7 +664,7 @@ fn the_reset_layout_button_resets_the_layout_when_it_is_clicked() {
 /// the seed guard cannot see (see [`fold::Dial::forget`]).
 #[test]
 fn loading_a_saved_layout_brings_its_pane_widths_with_it() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     let style = theme::dock_style(&egui::Style::default(), 1.0);
     let mut h = DockHarness::new();
     h.settle_folds(&mut state);
@@ -751,7 +750,7 @@ fn rail_rect(state: &SharedState, tabs: &[panes::Tab]) -> egui::Rect {
 /// by the fractions the column is dialled at, so both of them are on it.
 #[test]
 fn a_folded_column_names_every_pane_in_it() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     state.workspace.min_window_width = 400.0;
     let mut h = DockHarness::new();
     h.settle(&mut state);
@@ -793,7 +792,7 @@ fn a_folded_column_names_every_pane_in_it() {
 /// as a caption each.
 #[test]
 fn a_folded_pair_names_each_rail_under_its_own_arrow() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     state.workspace.min_window_width = 400.0;
     let mut h = DockHarness::new();
     h.settle(&mut state);
@@ -829,7 +828,7 @@ fn a_folded_pair_names_each_rail_under_its_own_arrow() {
 /// itself, which is the half of this that cannot be done in paint alone.
 #[test]
 fn a_folded_columns_lower_arrow_opens_its_own_pane() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     state.workspace.min_window_width = 400.0;
     let mut h = DockHarness::new();
     h.settle(&mut state);
@@ -871,7 +870,7 @@ fn a_folded_columns_lower_arrow_opens_its_own_pane() {
 /// and a click there would open a pane the rail says nothing about.
 #[test]
 fn a_folded_columns_stacked_arrow_is_inert() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     state.workspace.min_window_width = 400.0;
     let mut h = DockHarness::new();
     h.settle(&mut state);
@@ -940,7 +939,7 @@ fn a_squeezed_panes_far_separator_stops_rather_than_moving_the_pane_behind_it() 
     // steps: the press frame carries no travel of its own, and the fraction a
     // drag writes is read on the frame after the one it was written in.
     for (what, dx, want) in [("inward", -60.0f32, 0.0f32), ("outward", 60.0, 48.0)] {
-        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        let mut state = fresh();
         let mut h = DockHarness::new();
         h.settle_folds(&mut state);
         // Squeeze the analyzer to its floor with its own LEFT handle.
@@ -980,7 +979,7 @@ fn a_squeezed_panes_far_separator_stops_rather_than_moving_the_pane_behind_it() 
 /// the lattice, the analyzer and the settings leaf are what is left.
 #[test]
 fn a_dock_folded_whole_is_a_strip_of_named_rails() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     // The strip is worth about three tab bars, and the shell's own floor would
     // otherwise stop the window well above it.
     state.workspace.min_window_width = 50.0;

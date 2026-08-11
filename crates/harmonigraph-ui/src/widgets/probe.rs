@@ -15,20 +15,19 @@ use crate::theme;
 /// Paint `add` into a themed context of `size`, and answer the shapes it
 /// emitted, each still carrying the clip rect it was painted through.
 ///
-/// A context of its own per call rather than one held across a sweep: egui's
-/// temp store has no expiry and a widget remembers what a drag had hold of in
-/// it, so a shared context is one fixture reading the frame before it.
+/// A context of its own per call, which matters more here than anywhere else
+/// the shared fixture is used: a widget remembers what a drag had hold of in
+/// egui's temp store, which has no expiry, so a shared context is one bar's
+/// test reading the drag the bar before it started. See
+/// [`painted_full`](crate::tests::probe::painted_full).
 ///
-/// A bare context is the design scale, 1.0, which is why the geometry in these
-/// tests reads the constants unmultiplied.
+/// The design scale, 1.0, which is why the geometry in these tests reads the
+/// constants unmultiplied.
 pub(super) fn painted_in(
     size: egui::Vec2,
     add: impl FnMut(&mut Ui),
 ) -> Vec<egui::epaint::ClippedShape> {
-    let ctx = egui::Context::default();
-    theme::apply_theme(&ctx);
-    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), size);
-    ctx.run_ui(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, add).shapes
+    crate::tests::probe::painted_full(size, add).shapes
 }
 
 /// The same in a row `width` points across, which is the shape of nearly every
@@ -117,14 +116,7 @@ pub(super) fn handles(shapes: &[egui::Shape]) -> Vec<egui::Rect> {
     hs
 }
 
-pub(super) fn press(pos: egui::Pos2, pressed: bool) -> egui::Event {
-    egui::Event::PointerButton {
-        pos,
-        button: egui::PointerButton::Primary,
-        pressed,
-        modifiers: egui::Modifiers::NONE,
-    }
-}
+pub(super) use crate::tests::probe::press;
 
 /// What a galley actually PUTS ON SCREEN. `Galley::text()` answers with the
 /// source string, so it cannot see an elision; the glyphs can.

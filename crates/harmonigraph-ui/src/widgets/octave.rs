@@ -610,8 +610,7 @@ mod tests {
     /// the grab it remembers between them.
     fn drag_strip(start: (u32, u32), gestures: &[(f32, f32)]) -> (u32, u32) {
         const W: f32 = 300.0;
-        let ctx = egui::Context::default();
-        crate::theme::apply_theme(&ctx);
+        let ctx = crate::tests::probe::themed();
         let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(W, 100.0));
         let (mut count, mut extras) = start;
         let track = std::cell::Cell::new(egui::Rect::NOTHING);

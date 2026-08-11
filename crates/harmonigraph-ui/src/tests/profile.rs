@@ -28,8 +28,7 @@
 //! and `scene` rows are where they are read.
 
 use crate::*;
-use harmonigraph_core::{NoteEvent, NoteEventKind};
-use harmonigraph_render::wgpu::TextureFormat;
+use harmonigraph_core::NoteEvent;
 use super::harness::*;
 
 /// Counts what a frame takes off the heap. Two relaxed atomics per
@@ -95,12 +94,7 @@ fn chord_samples(n: usize, phase: &mut f64) -> Vec<f32> {
 /// lattice and give the roll something to scroll.
 fn held_chord(state: &mut SharedState, now: f64) {
     for note in [57u8, 61, 64, 69, 73, 76] {
-        state.tracker.handle_event(NoteEvent {
-            time: now,
-            channel: 0,
-            note,
-            kind: NoteEventKind::On { velocity: 0.8 },
-        });
+        state.tracker.handle_event(NoteEvent::on(now, 0, note, 0.8));
     }
 }
 
@@ -140,13 +134,12 @@ struct Load {
 /// Drive the whole dock for a fixed run and time both halves of every frame.
 fn profile(label: &str, ppp: f32, load: Load, tweak: impl Fn(&mut SharedState)) {
     const FRAMES: usize = 240;
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     tweak(&mut state);
-    let backend = RecordingBackend::default();
-    let ctx = egui::Context::default();
-    crate::theme::apply_theme(&ctx);
-    ctx.set_pixels_per_point(ppp);
-    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), WINDOW);
+    let mut h = DockHarness::at(WINDOW);
+    // The DEVICE ratio, not the chrome scale: a Retina panel tessellates the
+    // same shapes into four times the pixels.
+    h.ctx.set_pixels_per_point(ppp);
     held_chord(&mut state, 0.0);
 
     let mut phase = 0.0f64;
@@ -154,7 +147,9 @@ fn profile(label: &str, ppp: f32, load: Load, tweak: impl Fn(&mut SharedState)) 
     let (mut shapes, mut verts, mut idx) = (0, 0, 0);
 
     for i in 0..(WARMUP + FRAMES) {
-        let t = i as f64 / 60.0;
+        // Everything fed in below is stamped at the clock the frame about to
+        // run will read it at.
+        let t = h.next_time();
         let audio = chord_samples(FRAME_SAMPLES, &mut phase);
         let cfg = state.spectrum_config;
         state.spectrum.push_samples(&audio, 1, RATE, t, &cfg);
@@ -163,31 +158,17 @@ fn profile(label: &str, ppp: f32, load: Load, tweak: impl Fn(&mut SharedState)) 
             // memoized per pitch class, so a stuck note would measure one
             // cache hit a frame instead of the naming work.
             let note = 36 + ((i * load.notes_per_frame + k) * 7 % 60) as u8;
-            let on = NoteEventKind::On { velocity: 0.7 };
-            for (time, kind) in [(t, on), (t + 0.25, NoteEventKind::Off)] {
-                state.tracker.handle_event(NoteEvent { time, channel: 0, note, kind });
-            }
+            state.tracker.handle_event(NoteEvent::on(t, 0, note, 0.7));
+            state.tracker.handle_event(NoteEvent::off(t + 0.25, 0, note));
         }
 
-        let raw = egui::RawInput {
-            screen_rect: Some(screen),
-            time: Some(t),
-            events: load.hover.map(|at| vec![egui::Event::PointerMoved(at)]).unwrap_or_default(),
-            ..Default::default()
-        };
-        // Timed from inside the closure, so egui's own begin/end pass work
-        // stays outside the reading — the overlay's `ui` row is the same
-        // slice of the frame.
-        let mut ui = 0.0;
-        let out = ctx.run_ui(raw, |root| {
-            let start = std::time::Instant::now();
-            root_ui(root, &mut state, &backend, t);
-            ui = start.elapsed().as_secs_f64() * 1000.0;
-        });
+        let events =
+            load.hover.map(|at| vec![egui::Event::PointerMoved(at)]).unwrap_or_default();
+        let (out, ui) = h.frame_timed(&mut state, events);
 
         let n = out.shapes.len();
         let start = std::time::Instant::now();
-        let prims = ctx.tessellate(out.shapes, out.pixels_per_point);
+        let prims = h.ctx.tessellate(out.shapes, out.pixels_per_point);
         let tess = start.elapsed().as_secs_f64() * 1000.0;
 
         if i >= WARMUP {
@@ -277,12 +258,9 @@ fn profile_allocations() {
         )
     }
 
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
-    let backend = RecordingBackend::default();
-    let ctx = egui::Context::default();
-    crate::theme::apply_theme(&ctx);
-    ctx.set_pixels_per_point(2.0);
-    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), WINDOW);
+    let mut state = fresh();
+    let mut h = DockHarness::at(WINDOW);
+    h.ctx.set_pixels_per_point(2.0);
     held_chord(&mut state, 0.0);
 
     let mut phase = 0.0f64;
@@ -290,7 +268,7 @@ fn profile_allocations() {
     let mut at_warmup = (0, [0; crate::spectrogram::Restart::COUNT]);
 
     for i in 0..(WARMUP + FRAMES) {
-        let t = i as f64 / 60.0;
+        let t = h.next_time();
         if i == WARMUP {
             at_warmup = state.spectrum.spectrogram_fallbacks();
         }
@@ -310,18 +288,11 @@ fn profile_allocations() {
         charge(0, at);
 
         let at = mark();
-        let out = ctx.run_ui(
-            egui::RawInput {
-                screen_rect: Some(screen),
-                time: Some(t),
-                ..Default::default()
-            },
-            |ui| root_ui(ui, &mut state, &backend, t),
-        );
+        let out = h.frame(&mut state, vec![]);
         charge(1, at);
 
         let at = mark();
-        ctx.tessellate(out.shapes, out.pixels_per_point);
+        h.ctx.tessellate(out.shapes, out.pixels_per_point);
         charge(2, at);
     }
 
@@ -349,16 +320,12 @@ fn profile_allocations() {
 #[test]
 #[ignore]
 fn profile_settings_panes() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     // The Video pane's record button and progress bar only exist with a take
     // backend behind them.
     state.take.supported = true;
     state.take.last_ready = true;
-    let backend = RecordingBackend::default();
-    let ctx = egui::Context::default();
-    crate::theme::apply_theme(&ctx);
-    let margin = crate::theme::PANE_INNER_MARGIN;
-    let body = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(300.0 + 2.0 * margin, 900.0));
+    let ctx = super::probe::themed();
 
     println!("\n-- one settings pane at 300 points wide, ms per frame --");
     for pane in SETTINGS_PANES {
@@ -371,20 +338,7 @@ fn profile_settings_panes() {
         for i in 0..200 {
             let now = i as f64 / 60.0;
             let start = std::time::Instant::now();
-            let out = ctx.run_ui(
-                egui::RawInput {
-                    screen_rect: Some(body),
-                    time: Some(now),
-                    ..Default::default()
-                },
-                |ui| {
-                    let mut body_ui =
-                        ui.new_child(egui::UiBuilder::new().max_rect(body.shrink(margin)));
-                    let mut tab = tab;
-                    let mut viewer = panes::Viewer { state: &mut state, params: &backend, now };
-                    egui_dock::TabViewer::ui(&mut viewer, &mut body_ui, &mut tab);
-                },
-            );
+            let out = tab_body_on(&ctx, &mut state, tab, 300.0, 900.0, now);
             let ms = start.elapsed().as_secs_f64() * 1000.0;
             shapes = out.shapes.len();
             if i >= 40 {
@@ -403,12 +357,10 @@ fn profile_settings_panes() {
 fn profile_picture_panes() {
     println!("\n-- one picture pane at 1000x900, ms per frame --");
     for pane in [Pane::Lattice, Pane::Spectral] {
-        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        let mut state = fresh();
         let backend = RecordingBackend::default();
-        let ctx = egui::Context::default();
-        crate::theme::apply_theme(&ctx);
-        ctx.set_pixels_per_point(2.0);
-        let body = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 900.0));
+        let ctx = super::probe::themed_at(2.0);
+        let body = egui::vec2(1000.0, 900.0);
         held_chord(&mut state, 0.0);
         let mut phase = 0.0;
         let mut samples = Vec::new();
@@ -418,12 +370,10 @@ fn profile_picture_panes() {
             let cfg = state.spectrum_config;
             state.spectrum.push_samples(&audio, 1, RATE, t, &cfg);
             let start = std::time::Instant::now();
-            let _ = ctx.run_ui(
-                egui::RawInput {
-                    screen_rect: Some(body),
-                    time: Some(t),
-                    ..Default::default()
-                },
+            let _ = super::probe::frame_into(
+                &ctx,
+                body,
+                egui::Rect::from_min_size(egui::Pos2::ZERO, body),
                 |ui| {
                     crate::begin_frame(&mut state, &backend, t);
                     draw_pane(ui, pane, &mut state, t);
@@ -445,29 +395,19 @@ fn profile_picture_panes() {
 #[test]
 #[ignore]
 fn profile_shape_census() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
-    let backend = RecordingBackend::default();
-    let ctx = egui::Context::default();
-    crate::theme::apply_theme(&ctx);
-    ctx.set_pixels_per_point(2.0);
-    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), WINDOW);
+    let mut state = fresh();
+    let mut h = DockHarness::at(WINDOW);
+    h.ctx.set_pixels_per_point(2.0);
     held_chord(&mut state, 0.0);
 
     let mut phase = 0.0;
     let mut out = None;
-    for i in 0..(WARMUP + 30) {
-        let t = i as f64 / 60.0;
+    for _ in 0..(WARMUP + 30) {
+        let t = h.next_time();
         let audio = chord_samples(FRAME_SAMPLES, &mut phase);
         let cfg = state.spectrum_config;
         state.spectrum.push_samples(&audio, 1, RATE, t, &cfg);
-        out = Some(ctx.run_ui(
-            egui::RawInput {
-                screen_rect: Some(screen),
-                time: Some(t),
-                ..Default::default()
-            },
-            |ui| root_ui(ui, &mut state, &backend, t),
-        ));
+        out = Some(h.frame(&mut state, vec![]));
     }
 
     let mut census: std::collections::BTreeMap<&str, (usize, usize, usize)> = Default::default();

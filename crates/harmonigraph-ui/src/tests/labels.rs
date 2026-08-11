@@ -1,7 +1,86 @@
 //! Note labels: how a name and its comma marks stack over a node.
 
 use crate::*;
-use harmonigraph_render::wgpu::TextureFormat;
+use super::probe::{self, fresh};
+
+/// The window a stacked name is drawn on. Room for a label at the anchors
+/// below and no more: nothing here reads the window, only the ink.
+const NAME_SCREEN: egui::Vec2 = egui::vec2(400.0, 400.0);
+
+/// The pane the lattice's own labels are drawn into.
+const PANE: egui::Rect =
+    egui::Rect { min: egui::pos2(0.0, 0.0), max: egui::pos2(1000.0, 800.0) };
+
+/// One stacked name drawn into a [`crate::text::TextBatch`], and what
+/// [`marks::draw_stacked_name`] reported as its reach below the anchor.
+///
+/// The BATCH is what every reading in this file is off, rather than the shape
+/// list: a mark is geometry cut from a sheet of its own, so a name's letter,
+/// its counts and its signs only meet in there.
+///
+/// `scale` is what the name is asked for, `magnify` what it is drawn at
+/// against the size it was rasterized at, and `ppp` the panel's device pixels
+/// per point — see the callers, each of which drives exactly one of the three.
+fn stacked_name(
+    name: harmonigraph_core::NoteName,
+    anchor: egui::Pos2,
+    scale: f32,
+    magnify: f32,
+    ppp: f32,
+) -> (crate::text::TextBatch, f32, egui::FullOutput) {
+    let mut batch = crate::text::TextBatch::default();
+    let mut reach = 0.0;
+    let out = probe::frame_full(&probe::themed_at(ppp), NAME_SCREEN, |ui| {
+        reach = marks::draw_stacked_name(
+            &mut batch,
+            ui.painter(),
+            anchor,
+            name,
+            egui::Color32::WHITE,
+            egui::Color32::BLACK,
+            scale,
+            magnify,
+        );
+    });
+    (batch, reach, out)
+}
+
+/// Every label the lattice pane draws for `scene`, in one batch, at `ppp`.
+fn pane_labels(
+    scene: &harmonigraph_scene::Scene,
+    view: &harmonigraph_scene::ViewConfig,
+    ppp: f32,
+) -> crate::text::TextBatch {
+    let mut batch = crate::text::TextBatch::default();
+    let _ = probe::frame_full(&probe::themed_at(ppp), PANE.size(), |ui| {
+        panes::lattice::draw_node_labels(ui, PANE, scene, view, &mut batch);
+    });
+    batch
+}
+
+/// The lattice's labels as the render pass is handed them: a batch built by
+/// `draw_node_labels` into `rect` and turned into [`LatticeLabels`] inside the
+/// SAME frame, which is the only place a painter exists to measure the glyphs
+/// with.
+///
+/// `rect` is a parameter because where the pane sits in the window is one of
+/// the questions: the pass is handed positions relative to the pane's own
+/// corner, so the same picture in two places has to come out the same.
+///
+/// [`LatticeLabels`]: harmonigraph_render::LatticeLabels
+fn lattice_labels_in(
+    rect: egui::Rect,
+    scene: &harmonigraph_scene::Scene,
+    state: &SharedState,
+) -> harmonigraph_render::LatticeLabels {
+    let mut batch = crate::text::TextBatch::default();
+    let mut labels = None;
+    let _ = probe::painted_full(PANE.size(), |ui| {
+        panes::lattice::draw_node_labels(ui, rect, scene, &state.view, &mut batch);
+        labels = Some(batch.lattice_labels(ui.painter(), rect.min, state));
+    });
+    labels.expect("the closure runs")
+}
 
 /// The box one piece of text occupies.
 fn text_box(texts: &[(egui::Rect, String)], want: &str) -> egui::Rect {
@@ -73,26 +152,7 @@ fn label_ink_at(
     scale: f32,
     ppp: f32,
 ) -> Vec<(egui::Rect, String)> {
-    let ctx = egui::Context::default();
-    theme::apply_theme(&ctx);
-    ctx.set_pixels_per_point(ppp);
-    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 400.0));
-    let mut batch = crate::text::TextBatch::default();
-    let _ = ctx.run_ui(
-        egui::RawInput { screen_rect: Some(screen), ..Default::default() },
-        |ui| {
-            marks::draw_stacked_name(
-                &mut batch,
-                ui.painter(),
-                anchor,
-                name,
-                egui::Color32::WHITE,
-                egui::Color32::BLACK,
-                scale,
-                1.0,
-            );
-        },
-    );
+    let (batch, ..) = stacked_name(name, anchor, scale, 1.0, ppp);
     batch.pieces().iter().map(|p| (p.ink, p.text.clone())).collect()
 }
 
@@ -118,27 +178,7 @@ fn label_pieces(
     magnify: f32,
     ppp: f32,
 ) -> (Vec<(egui::Rect, egui::Rect, String)>, Vec<egui::Rect>, f32) {
-    let ctx = egui::Context::default();
-    theme::apply_theme(&ctx); // the real Iosevka metrics, not egui's fallback
-    ctx.set_pixels_per_point(ppp);
-    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 400.0));
-    let mut batch = crate::text::TextBatch::default();
-    let mut reach = 0.0;
-    let _ = ctx.run_ui(
-        egui::RawInput { screen_rect: Some(screen), ..Default::default() },
-        |ui| {
-            reach = marks::draw_stacked_name(
-                &mut batch,
-                ui.painter(),
-                anchor,
-                name,
-                egui::Color32::WHITE,
-                egui::Color32::BLACK,
-                1.0,
-                magnify,
-            );
-        },
-    );
+    let (batch, reach, _) = stacked_name(name, anchor, 1.0, magnify, ppp);
     let texts = batch.pieces().iter().map(|p| (p.galley, p.ink, p.text.clone())).collect();
     (texts, batch.marks().to_vec(), reach)
 }
@@ -398,25 +438,7 @@ fn a_mark_is_one_quad_in_the_batch_and_nothing_on_the_painter() {
         syntonic_commas: -1,
         septimal_commas: -1,
     };
-    let ctx = egui::Context::default();
-    theme::apply_theme(&ctx);
-    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 400.0));
-    let mut batch = crate::text::TextBatch::default();
-    let out = ctx.run_ui(
-        egui::RawInput { screen_rect: Some(screen), ..Default::default() },
-        |ui| {
-            marks::draw_stacked_name(
-                &mut batch,
-                ui.painter(),
-                anchor,
-                name,
-                egui::Color32::WHITE,
-                egui::Color32::BLACK,
-                1.0,
-                1.0,
-            );
-        },
-    );
+    let (batch, _, out) = stacked_name(name, anchor, 1.0, 1.0, 1.0);
     assert_eq!(batch.marks().len(), 2, "two marks: {:?}", batch.marks());
     // The letter, the two signs, and no count digit — both commas are single.
     assert_eq!(batch.len(), 3, "a mark is one instance, like the letter beside it");
@@ -493,7 +515,7 @@ fn a_natural_note_label_is_just_the_letter() {
 /// Every label the lattice draws, at one camera and one Size bar setting: the
 /// rasterized type size, and the ink it actually covers.
 fn lattice_labels_at(label_scale: f32, distance: f32, ppp: f32) -> Vec<(f32, egui::Rect)> {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     state.view.show_labels = true;
     state.view.label_scale = label_scale;
     state.camera.distance = distance;
@@ -503,12 +525,7 @@ fn lattice_labels_at(label_scale: f32, distance: f32, ppp: f32) -> Vec<(f32, egu
     // DRAWN, not when it appears.
     state.frame_params.fade_time = 0.0;
     // Middle C: the origin node, which the camera looks straight at.
-    state.tracker.handle_event(harmonigraph_core::NoteEvent {
-        time: 0.0,
-        channel: 0,
-        note: 60,
-        kind: harmonigraph_core::NoteEventKind::On { velocity: 1.0 },
-    });
+    state.tracker.handle_event(harmonigraph_core::NoteEvent::on(0.0, 0, 60, 1.0));
     let scene = harmonigraph_scene::derive_scene(
         &state.tracker,
         &state.tuning,
@@ -519,15 +536,7 @@ fn lattice_labels_at(label_scale: f32, distance: f32, ppp: f32) -> Vec<(f32, egu
         0.0,
     );
 
-    let ctx = egui::Context::default();
-    theme::apply_theme(&ctx); // the real Iosevka metrics, not egui's fallback
-    ctx.set_pixels_per_point(ppp);
-    let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1000.0, 800.0));
-    let mut batch = crate::text::TextBatch::default();
-    let _ = ctx.run_ui(
-        egui::RawInput { screen_rect: Some(rect), time: Some(0.0), ..Default::default() },
-        |ui| panes::lattice::draw_node_labels(ui, rect, &scene, &state.view, &mut batch),
-    );
+    let batch = pane_labels(&scene, &state.view, ppp);
     batch.pieces().iter().map(|p| (p.font_size, p.ink)).collect()
 }
 
@@ -764,19 +773,14 @@ fn the_reach_a_label_reports_is_where_its_drawn_mark_ends() {
 /// belongs to.
 #[test]
 fn the_cents_readout_sits_right_under_the_note_name() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     state.view.show_labels = true;
     state.view.show_cents = true;
     // Derived at time 0, so the note has to be lit without waiting on the
     // Fade's arrival — this is about where the readout SITS.
     state.frame_params.fade_time = 0.0;
     // Middle C: the origin node, which the default camera looks straight at.
-    state.tracker.handle_event(harmonigraph_core::NoteEvent {
-        time: 0.0,
-        channel: 0,
-        note: 60,
-        kind: harmonigraph_core::NoteEventKind::On { velocity: 1.0 },
-    });
+    state.tracker.handle_event(harmonigraph_core::NoteEvent::on(0.0, 0, 60, 1.0));
     let scene = harmonigraph_scene::derive_scene(
         &state.tracker,
         &state.tuning,
@@ -787,14 +791,7 @@ fn the_cents_readout_sits_right_under_the_note_name() {
         0.0,
     );
 
-    let ctx = egui::Context::default();
-    theme::apply_theme(&ctx); // the real Iosevka metrics, not egui's fallback
-    let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1000.0, 800.0));
-    let mut batch = crate::text::TextBatch::default();
-    let _ = ctx.run_ui(
-        egui::RawInput { screen_rect: Some(rect), time: Some(0.0), ..Default::default() },
-        |ui| panes::lattice::draw_node_labels(ui, rect, &scene, &state.view, &mut batch),
-    );
+    let batch = pane_labels(&scene, &state.view, 1.0);
 
     // A held note lights every node of its pitch class, so each piece turns
     // up once per lit node. Sort them by the label's own type sizes, which
@@ -892,7 +889,7 @@ fn the_lattice_label_bar_persists_through_the_range_it_offers() {
 /// corner and further out the further the pane is from it.
 #[test]
 fn every_label_names_its_own_node_in_the_panes_own_space() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     state.view.show_labels = true;
     // Derived at time 0, so the notes have to be lit without waiting on the
     // Fade's arrival — this is about which name lands on which node.
@@ -900,12 +897,7 @@ fn every_label_names_its_own_node_in_the_panes_own_space() {
     // Two notes a third apart, so there are two names to tell apart and two
     // nodes to confuse them between.
     for note in [60, 64] {
-        state.tracker.handle_event(harmonigraph_core::NoteEvent {
-            time: 0.0,
-            channel: 0,
-            note,
-            kind: harmonigraph_core::NoteEventKind::On { velocity: 1.0 },
-        });
+        state.tracker.handle_event(harmonigraph_core::NoteEvent::on(0.0, 0, note, 1.0));
     }
     let scene = harmonigraph_scene::derive_scene(
         &state.tracker,
@@ -917,23 +909,11 @@ fn every_label_names_its_own_node_in_the_panes_own_space() {
         0.0,
     );
 
-    let ctx = egui::Context::default();
-    theme::apply_theme(&ctx); // the real Iosevka metrics, not egui's fallback
-    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 800.0));
     // The pane, and the same pane sitting at the window's corner: what the
     // callback is handed has to be the same picture either way.
     let labels_in = |min: egui::Pos2| -> harmonigraph_render::LatticeLabels {
         let rect = egui::Rect::from_min_size(min, egui::vec2(600.0, 500.0));
-        let mut batch = crate::text::TextBatch::default();
-        let mut out = None;
-        let _ = ctx.run_ui(
-            egui::RawInput { screen_rect: Some(screen), time: Some(0.0), ..Default::default() },
-            |ui| {
-                panes::lattice::draw_node_labels(ui, rect, &scene, &state.view, &mut batch);
-                out = Some(batch.lattice_labels(ui.painter(), rect.min, &state));
-            },
-        );
-        out.expect("the closure runs")
+        lattice_labels_in(rect, &scene, &state)
     };
     let labels = labels_in(egui::pos2(120.0, 60.0));
     // Two notes light a node apiece on every sheet the view is showing, so
@@ -1014,15 +994,10 @@ fn every_label_names_its_own_node_in_the_panes_own_space() {
 /// the second passing over an empty list.
 #[test]
 fn a_names_drawn_marks_go_into_its_own_nodes_run() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     state.view.show_labels = true;
     state.frame_params.fade_time = 0.0;
-    state.tracker.handle_event(harmonigraph_core::NoteEvent {
-        time: 0.0,
-        channel: 0,
-        note: 61,
-        kind: harmonigraph_core::NoteEventKind::On { velocity: 1.0 },
-    });
+    state.tracker.handle_event(harmonigraph_core::NoteEvent::on(0.0, 0, 61, 1.0));
     let scene = harmonigraph_scene::derive_scene(
         &state.tracker,
         &state.tuning,
@@ -1033,19 +1008,7 @@ fn a_names_drawn_marks_go_into_its_own_nodes_run() {
         0.0,
     );
 
-    let ctx = egui::Context::default();
-    theme::apply_theme(&ctx); // the real Iosevka metrics, not egui's fallback
-    let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1000.0, 800.0));
-    let mut batch = crate::text::TextBatch::default();
-    let mut labels = None;
-    let _ = ctx.run_ui(
-        egui::RawInput { screen_rect: Some(rect), time: Some(0.0), ..Default::default() },
-        |ui| {
-            panes::lattice::draw_node_labels(ui, rect, &scene, &state.view, &mut batch);
-            labels = Some(batch.lattice_labels(ui.painter(), rect.min, &state));
-        },
-    );
-    let labels = labels.expect("the closure runs");
+    let labels = lattice_labels_in(PANE, &scene, &state);
     assert!(!labels.labels.is_empty(), "a held C sharp has to be named somewhere");
 
     let is_mark = |g: &harmonigraph_render::GlyphInstance| {

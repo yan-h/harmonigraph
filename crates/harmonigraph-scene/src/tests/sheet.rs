@@ -2,7 +2,7 @@
 //! knockout each sounding node clears behind it, and comma spelling.
 
 use crate::*;
-use harmonigraph_core::{NoteEvent, NoteEventKind, NoteTracker, Tuning};
+use harmonigraph_core::{NoteEvent, NoteTracker, Tuning};
 use super::harness::*;
 
 #[test]
@@ -57,12 +57,7 @@ fn off_sheet_grid_appears_only_where_the_music_reaches() {
     // sheet must display, dashed, in that note's color — the nodes
     // under it are silent.
     let mut tracker = NoteTracker::new();
-    tracker.handle_event(NoteEvent {
-        time: 0.0,
-        channel: 0,
-        note: 68,
-        kind: NoteEventKind::On { velocity: 1.0 },
-    });
+    tracker.handle_event(NoteEvent::on(0.0, 0, 68, 1.0));
     let scene =
         scene_of(&tracker, &Tuning::default(), &view, &plain_frame(), 0.0);
     let column_links: Vec<&EdgeInstance> = scene
@@ -322,12 +317,7 @@ fn a_releasing_note_keeps_its_gutters_width() {
     // Released a whole duration in, so the note is leaving rather than still
     // arriving at the two samples below: the departure waits out the arrival
     // (`Voice::release_level`).
-    tracker.handle_event(NoteEvent {
-        time: 1.0,
-        channel: 0,
-        note: 60,
-        kind: NoteEventKind::Off,
-    });
+    tracker.handle_event(NoteEvent::off(1.0, 0, 60));
 
     let off_sheet = |now: f64| {
         let scene = scene_of(&tracker, &tuning, &view, &frame, now);

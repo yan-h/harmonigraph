@@ -1318,8 +1318,7 @@ mod tests {
         /// every other harness here asks the bar the same question at one
         /// scale only.
         fn settled_scaled(g: &mut Gradient, width: f32, scale: f32) -> Spectrum {
-            let ctx = egui::Context::default();
-            crate::theme::apply_theme(&ctx);
+            let ctx = crate::tests::probe::themed();
             let mut h = Spectrum {
                 ctx,
                 screen: egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(width, 100.0)),
@@ -1706,9 +1705,7 @@ mod tests {
     #[test]
     fn a_band_lands_on_the_pixel_grid_the_bars_beside_it_do() {
         const PPP: f32 = 2.0;
-        let ctx = egui::Context::default();
-        crate::theme::apply_theme(&ctx);
-        ctx.set_pixels_per_point(PPP);
+        let ctx = crate::tests::probe::themed_at(PPP);
         let asked = std::cell::Cell::new(egui::Rect::NOTHING);
         let out = ctx.run_ui(
             egui::RawInput {
@@ -3211,8 +3208,7 @@ mod tests {
         start: Gradient,
         home: Option<Gradient>,
     ) -> (f32, f32) {
-        let ctx = egui::Context::default();
-        crate::theme::apply_theme(&ctx);
+        let ctx = crate::tests::probe::themed();
         let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(300.0, 100.0));
         let mut g = start;
         let bar = std::cell::Cell::new(egui::Rect::NOTHING);
@@ -3256,8 +3252,7 @@ mod tests {
     /// remembered in context data, so a synthetic call exercises neither the
     /// decision nor the memory.
     fn drag_bar(spread: Spread, pair: (f32, f32), (from, to): (f32, f32)) -> (f32, f32) {
-        let ctx = egui::Context::default();
-        crate::theme::apply_theme(&ctx);
+        let ctx = crate::tests::probe::themed();
         let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(300.0, 100.0));
         let mut g = holding(spread, pair);
         let bar = std::cell::Cell::new(egui::Rect::NOTHING);

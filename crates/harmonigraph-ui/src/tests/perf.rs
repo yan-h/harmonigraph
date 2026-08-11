@@ -1,7 +1,6 @@
 //! The performance overlay: where it hangs, and that it ships off.
 
 use crate::*;
-use harmonigraph_render::wgpu::TextureFormat;
 use super::harness::*;
 
 /// The performance overlay hangs off the analyzer pane; off the lattice when
@@ -9,27 +8,16 @@ use super::harness::*;
 /// neither is. All three land somewhere no tab bar's collapse arrow is.
 #[test]
 fn the_perf_overlay_follows_the_analyzer_pane() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     // Turned on by hand: the overlay ships off, and what is under test is where
     // it lands once asked for, not whether anything asks.
     state.view.show_perf = true;
-    let backend = RecordingBackend::default();
-    let ctx = egui::Context::default();
-    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1000.0, 800.0));
-    let mut t = 0.0;
-    let mut frame = |state: &mut SharedState| {
-        t += 1.0 / 60.0;
-        let raw = egui::RawInput {
-            screen_rect: Some(screen),
-            time: Some(t),
-            ..Default::default()
-        };
-        ctx.run_ui(raw, |ui| root_ui(ui, state, &backend, t))
-    };
+    let mut h = DockHarness::new();
+    let screen = h.screen;
     // A frame first: the dock only knows where its panes are once it has laid
     // them out, and before that the overlay has nothing to hang off.
-    frame(&mut state);
-    let output = frame(&mut state);
+    h.frame(&mut state, vec![]);
+    let output = h.frame(&mut state, vec![]);
 
     let area = perf_overlay_area(&state, screen, 1.0);
     assert_ne!(area, screen, "the overlay should have found the analyzer pane");
@@ -102,8 +90,8 @@ fn the_perf_overlay_follows_the_analyzer_pane() {
         panic!("Spectral should live in a leaf");
     };
     leaf.collapsed = true;
-    frame(&mut state);
-    let output = frame(&mut state);
+    h.frame(&mut state, vec![]);
+    let output = h.frame(&mut state, vec![]);
     let lattice = state.workspace.dock.find_tab(&panes::Tab::Lattice).expect("Lattice is docked");
     let egui_dock::Node::Leaf(lattice) = &state.workspace.dock[lattice.surface][lattice.node] else {
         panic!("Lattice should live in a leaf");
@@ -156,8 +144,8 @@ fn the_perf_overlay_follows_the_analyzer_pane() {
         panic!("Lattice should live in a leaf");
     };
     leaf.collapsed = true;
-    frame(&mut state);
-    let output = frame(&mut state);
+    h.frame(&mut state, vec![]);
+    let output = h.frame(&mut state, vec![]);
     let area = perf_overlay_area(&state, screen, 1.0);
     assert_eq!(
         area.min.y,
@@ -179,22 +167,14 @@ fn the_perf_overlay_follows_the_analyzer_pane() {
 fn the_perf_overlay_stays_inside_its_pane_at_the_narrowest_window() {
     // The plugin's own minimum editor width (`MIN_SIZE` in the plugin crate's
     // editor), which is a window the shell will actually hand the UI.
-    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 800.0));
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     // Turned on by hand: the overlay ships off, and what is under test is
     // whether it stays inside its pane once asked for.
     state.view.show_perf = true;
-    let backend = RecordingBackend::default();
-    let ctx = egui::Context::default();
-    let mut t = 0.0;
-    let mut frame = |state: &mut SharedState| {
-        t += 1.0 / 60.0;
-        let raw =
-            egui::RawInput { screen_rect: Some(screen), time: Some(t), ..Default::default() };
-        ctx.run_ui(raw, |ui| root_ui(ui, state, &backend, t))
-    };
-    frame(&mut state);
-    let output = frame(&mut state);
+    let mut h = DockHarness::at(egui::vec2(400.0, 800.0));
+    let screen = h.screen;
+    h.frame(&mut state, vec![]);
+    let output = h.frame(&mut state, vec![]);
 
     let plate = egui::Color32::from_black_alpha(0xC0);
     let hud = output
@@ -224,23 +204,23 @@ fn the_perf_overlay_stays_inside_its_pane_at_the_narrowest_window() {
 /// HUD sitting over the picture. Both are asserted here for that reason.
 #[test]
 fn the_performance_overlay_ships_off() {
-    let fresh = SharedState::new(TextureFormat::Bgra8Unorm);
-    assert!(!fresh.view.show_perf, "a fresh install opens with the overlay off");
+    let defaults = fresh();
+    assert!(!defaults.view.show_perf, "a fresh install opens with the overlay off");
 
     // A blob from before the setting existed: the key cut out of a saved one.
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     state.view.show_perf = true;
     let saved = state.save_persist();
     let old = saved.replacen("show_perf:true,", "", 1);
     assert_ne!(old, saved, "the show_perf cut must land for this to test anything");
 
-    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut restored = fresh();
     restored.load_persist(&old);
     assert!(!restored.view.show_perf, "a pre-show_perf blob opens with the overlay off");
 
     // And a project that asked for it still gets it: the cut above is what
     // makes the blob old, not the value, so the round-trip has to still work.
-    let mut kept = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut kept = fresh();
     kept.load_persist(&saved);
     assert!(kept.view.show_perf, "a project that turned the overlay on keeps it");
 }

@@ -599,8 +599,7 @@ mod tests {
     /// future row long enough to break the layout fails here instead.
     #[test]
     fn the_value_column_clears_the_longest_label() {
-        let ctx = egui::Context::default();
-        crate::theme::apply_theme(&ctx); // real metrics, not egui's fallback
+        let ctx = crate::tests::probe::themed();
         let area = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1000.0, 800.0));
         let mut perf = PerfStats::default();
         // A reading in every row, so none of them lays out as a short

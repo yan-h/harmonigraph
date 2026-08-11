@@ -1298,7 +1298,7 @@ mod tests {
     #[test]
     fn the_mark_sheet_is_published_when_it_moves_and_not_otherwise() {
         let ctx = egui::Context::default();
-        let state = crate::SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
+        let state = crate::tests::probe::fresh();
         let mirror = &state.instruments.font_atlas;
 
         // Nothing packed: there is no sheet to publish, on any frame.
@@ -1428,7 +1428,7 @@ mod tests {
     #[test]
     fn a_lattice_that_drew_no_names_hands_over_no_atlas() {
         let ctx = egui::Context::default();
-        let state = crate::SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
+        let state = crate::tests::probe::fresh();
         let mut published = 0usize;
         // Several frames: the first publication is the one that would seed
         // `seen` and quiet the rest, and with nothing drawn there is none.
@@ -1452,7 +1452,7 @@ mod tests {
         }
         let settled = ctx.fonts(|fonts| fonts.font_image_size());
 
-        let state = crate::SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
+        let state = crate::tests::probe::fresh();
         let first = batch_keys(&ctx, &font, "Ai");
         let mirror = &state.instruments.font_atlas;
         assert!(atlas_if_changed(&ctx, mirror, first.clone()).is_some(), "the first mirror");
@@ -1504,8 +1504,7 @@ mod tests {
     #[test]
     fn a_fresh_context_is_shown_the_atlas_again() {
         let font = egui::FontId::monospace(13.0);
-        let mut state =
-            crate::SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
+        let mut state = crate::tests::probe::fresh();
 
         // A window's worth of labels, settled: the second pass draws what the
         // first pass rasterized, which is where the keys stop moving.
@@ -1596,10 +1595,8 @@ mod tests {
     /// a time — and measured on the drawn INK, which is what the eye reads.
     #[test]
     fn a_zoom_moves_the_drawn_size_smoothly_and_the_atlas_by_rungs() {
-        let ctx = egui::Context::default();
-        crate::theme::apply_theme(&ctx);
         let (base, ppp) = (15.0, 2.0);
-        ctx.set_pixels_per_point(ppp);
+        let ctx = crate::tests::probe::themed_at(ppp);
 
         // One frame of a zoom, with the split either applied or not: lay a piece
         // out at the rung `want` falls on, draw it magnified by the rest (or
@@ -1740,7 +1737,7 @@ mod tests {
     /// different SIZE this stops quietly passing for the wrong reason.
     #[test]
     fn a_scale_change_refreshes_the_mirror_though_nothing_else_moves() {
-        let state = crate::SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
+        let state = crate::tests::probe::fresh();
         let ctx = egui::Context::default();
         let font = egui::FontId::proportional(12.0);
 

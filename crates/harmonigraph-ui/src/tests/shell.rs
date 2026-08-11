@@ -2,7 +2,6 @@
 //! [`root_ui`] asks for.
 
 use crate::*;
-use harmonigraph_render::wgpu::TextureFormat;
 use super::harness::*;
 
 /// Every tab needs an id of its own, and the title is not allowed to be its
@@ -16,7 +15,7 @@ use super::harness::*;
 #[test]
 fn every_tab_has_its_own_id_whatever_its_title_says() {
     use egui_dock::TabViewer;
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     let params = RecordingBackend::default();
     let tabs = [
         panes::Tab::Lattice,
@@ -57,7 +56,7 @@ fn every_tab_has_its_own_id_whatever_its_title_says() {
 #[test]
 fn the_picture_panes_do_not_scroll() {
     use egui_dock::TabViewer;
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     let params = RecordingBackend::default();
     let viewer = panes::Viewer { state: &mut state, params: &params, now: 0.0 };
     for tab in [panes::Tab::Lattice, panes::Tab::Spectral] {
@@ -109,7 +108,7 @@ fn every_settings_tab_fits_on_its_tab_bar() {
     // so a bar that overflows there is one a new user never sees whole; that
     // is issue #287, and this row of the sweep is what holds the fix.
     for window in [egui::vec2(1512.0, 886.0), egui::vec2(1000.0, 700.0)] {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     let mut harness = DockHarness::new();
     harness.screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), window);
     harness.settle(&mut state);

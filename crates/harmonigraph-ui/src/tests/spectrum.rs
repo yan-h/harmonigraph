@@ -2,7 +2,7 @@
 //! stamped, and how the live path and the offline precompute agree.
 
 use crate::*;
-use harmonigraph_render::wgpu::TextureFormat;
+use super::probe::fresh;
 
 #[test]
 fn audio_spectrum_shows_while_flowing_and_hides_after() {
@@ -501,22 +501,12 @@ fn the_heatmap_reads_the_curve_s_own_level_scale() {
 /// a test of the clear rather than of three things that were already empty.
 #[test]
 fn clearing_everything_empties_all_three_accumulations() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
 
     // A note played and released; `prune` past its fade turns the released
     // voice into trail history and leaves the roll's record of it.
-    state.tracker.handle_event(harmonigraph_core::NoteEvent {
-        time: 0.0,
-        channel: 0,
-        note: 60,
-        kind: harmonigraph_core::NoteEventKind::On { velocity: 1.0 },
-    });
-    state.tracker.handle_event(harmonigraph_core::NoteEvent {
-        time: 0.5,
-        channel: 0,
-        note: 60,
-        kind: harmonigraph_core::NoteEventKind::Off,
-    });
+    state.tracker.handle_event(harmonigraph_core::NoteEvent::on(0.0, 0, 60, 1.0));
+    state.tracker.handle_event(harmonigraph_core::NoteEvent::off(0.5, 0, 60));
     let env = harmonigraph_core::Envelope { fade_time: 0.1, ..Default::default() };
     state.tracker.prune(600.0, &env);
     // One analyzed column is enough; how audio becomes columns is the

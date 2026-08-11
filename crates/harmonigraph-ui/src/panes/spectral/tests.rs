@@ -5,6 +5,9 @@ use super::*;
 use super::axes::*;
 use super::gestures::*;
 use super::settings::*;
+use crate::tests::probe::{
+    events_into, fresh, frame_into, painted_full, painted_into, press, themed, themed_at,
+};
 use crate::{SpectralOrientation, SpectrumConfig};
 use harmonigraph_core::{NoteEvent, NoteEventKind};
 
@@ -14,6 +17,18 @@ const WIDE: egui::Rect =
     egui::Rect { min: egui::pos2(10.0, 20.0), max: egui::pos2(310.0, 120.0) };
 const TALL: egui::Rect =
     egui::Rect { min: egui::pos2(10.0, 20.0), max: egui::pos2(110.0, 320.0) };
+
+/// The window the pane is painted into. Bigger than [`WIDE`] and [`TALL`] on
+/// both axes on purpose: a pane that draws outside its own rect then leaves
+/// the ink in the shape list, where a test can find it, instead of having it
+/// clipped away by a screen the size of the pane.
+const SCREEN: egui::Vec2 = egui::vec2(500.0, 500.0);
+
+/// One frame of the whole Spectral pane into `rect` at `now`, on a themed
+/// context of its own.
+fn painted_pane(rect: egui::Rect, state: &mut SharedState, now: f64) -> egui::FullOutput {
+    painted_into(SCREEN, rect, |ui| spectral_pane(ui, state, now, 0))
+}
 
 fn axes(rect: egui::Rect, orientation: SpectralOrientation) -> Axes {
     let cfg = SpectrumConfig { orientation, ..Default::default() };
@@ -482,24 +497,17 @@ fn drag_pane(
     grab: f32,
     delta: egui::Vec2,
 ) -> SpectrumConfig {
-    let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     state.spectrum_config = cfg;
-    let ctx = egui::Context::default();
-    crate::theme::apply_theme(&ctx);
-    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(900.0, 900.0));
+    let ctx = themed();
+    // A window big enough for the widest `rect` a caller passes, so the drag
+    // is bounded by the pane rather than by the screen's edge.
+    let screen = egui::vec2(900.0, 900.0);
     let at = Axes::new(rect, &cfg).at(0.5, grab);
     let frame = |events: Vec<egui::Event>, state: &mut SharedState| {
-        let input = egui::RawInput { screen_rect: Some(screen), events, ..Default::default() };
-        let _ = ctx.run_ui(input, |ui| {
-            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
-            spectral_pane(&mut child, state, 100.0, 0);
+        let _ = events_into(&ctx, screen, rect, events, |ui| {
+            spectral_pane(ui, state, 100.0, 0);
         });
-    };
-    let press = |pos, pressed| egui::Event::PointerButton {
-        pos,
-        button: egui::PointerButton::Primary,
-        pressed,
-        modifiers: egui::Modifiers::default(),
     };
     frame(vec![egui::Event::PointerMoved(at)], &mut state);
     frame(vec![egui::Event::PointerMoved(at), press(at, true)], &mut state);
@@ -920,7 +928,7 @@ fn the_curve_clears_the_pane_edge_by_the_same_points_at_any_size() {
 /// depth budget. 1 kHz because it is the tilt's own pivot, where the slope
 /// takes nothing off and the level is the tone's alone.
 fn paint_tone(rect: egui::Rect, cfg: SpectrumConfig) -> Vec<egui::Shape> {
-    let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     state.spectrum_config = cfg;
     let sr = 48_000.0;
     let samples: Vec<f32> = (0..48_000)
@@ -928,16 +936,12 @@ fn paint_tone(rect: egui::Rect, cfg: SpectrumConfig) -> Vec<egui::Shape> {
         .collect();
     state.spectrum.push_samples(&samples, 1, sr, 1.0, &cfg);
 
-    let ctx = egui::Context::default();
-    crate::theme::apply_theme(&ctx);
-    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(2000.0, 2000.0));
-    let output = ctx.run_ui(
-        egui::RawInput { screen_rect: Some(screen), ..Default::default() },
-        |ui| {
-            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
-            spectral_pane(&mut child, &mut state, 1.0, 0);
-        },
-    );
+    // A screen of its own: `rect` here runs to 1200x400, which SCREEN could
+    // not hold, and this fixture is about what the curve reaches inside the
+    // pane rather than about anything at the window's edge.
+    let output = painted_into(egui::vec2(2000.0, 2000.0), rect, |ui| {
+        spectral_pane(ui, &mut state, 1.0, 0);
+    });
     output.shapes.into_iter().map(|s| s.shape).collect()
 }
 
@@ -979,7 +983,7 @@ fn a_cached_spectrogram_frame_matches_the_cold_build() {
         v
     }
 
-    let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     state.spectrum_config.orientation = SpectralOrientation::Left;
     state.spectrum_config.show_spectrogram = true;
     state.spectrum_config.low_midi = 55.0;
@@ -994,24 +998,10 @@ fn a_cached_spectrogram_frame_matches_the_cold_build() {
 
     // ONE context across both frames, as in the live app: the cache hands
     // back a texture handle owned by this context.
-    let ctx = egui::Context::default();
-    crate::theme::apply_theme(&ctx);
+    let ctx = themed();
     let now = 94.0;
-    let mut frame = || {
-        ctx.run_ui(
-            egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(
-                    egui::pos2(0.0, 0.0),
-                    egui::vec2(500.0, 500.0),
-                )),
-                ..Default::default()
-            },
-            |ui| {
-                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(WIDE));
-                spectral_pane(&mut child, &mut state, now, 0);
-            },
-        )
-    };
+    let mut frame =
+        || frame_into(&ctx, SCREEN, WIDE, |ui| spectral_pane(ui, &mut state, now, 0));
     let cold = quad(&frame());
     assert!(!cold.is_empty(), "the spectrogram drew no textured quad to cache");
     let hit = quad(&frame());
@@ -1032,7 +1022,7 @@ fn a_cached_spectrogram_frame_matches_the_cold_build() {
 /// to the data quad at that same `u`.
 #[test]
 fn the_strip_holds_its_leading_sliver_instead_of_reading_round_the_ring() {
-    let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     state.spectrum_config.orientation = SpectralOrientation::Left;
     state.spectrum_config.show_spectrogram = true;
     state.spectrum_config.roll_seconds = 2.0; // zoomed in: the sliver is widest
@@ -1043,21 +1033,7 @@ fn the_strip_holds_its_leading_sliver_instead_of_reading_round_the_ring() {
     }
     // The now-line, an analysis window's half-lag past the newest column.
     let now = 91.98 + 0.171;
-    let ctx = egui::Context::default();
-    crate::theme::apply_theme(&ctx);
-    let out = ctx.run_ui(
-        egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(
-                egui::pos2(0.0, 0.0),
-                egui::vec2(500.0, 500.0),
-            )),
-            ..Default::default()
-        },
-        |ui| {
-            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(WIDE));
-            spectral_pane(&mut child, &mut state, now, 0);
-        },
-    );
+    let out = painted_pane(WIDE, &mut state, now);
     let mesh = out
         .shapes
         .iter()
@@ -1090,7 +1066,7 @@ fn the_strip_holds_its_leading_sliver_instead_of_reading_round_the_ring() {
 #[test]
 fn the_heatmap_image_is_built_at_device_pixels() {
     fn rows_at(ppp: f32) -> usize {
-        let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
+        let mut state = fresh();
         state.spectrum_config.orientation = SpectralOrientation::Left;
         state.spectrum_config.show_spectrogram = true;
         state.spectrum_config.roll_seconds = 10.0;
@@ -1099,19 +1075,12 @@ fn the_heatmap_image_is_built_at_device_pixels() {
         for i in 0..40 {
             state.spectrum.push_history(90.0 + f64::from(i) * 0.1, &bins);
         }
-        let ctx = egui::Context::default();
-        crate::theme::apply_theme(&ctx);
-        ctx.set_pixels_per_point(ppp);
-        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(500.0, 500.0));
+        let ctx = themed_at(ppp);
         // Twice: `set_pixels_per_point` lands on the following frame.
         for _ in 0..2 {
-            let _ = ctx.run_ui(
-                egui::RawInput { screen_rect: Some(screen), ..Default::default() },
-                |ui| {
-                    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(WIDE));
-                    spectral_pane(&mut child, &mut state, 94.0, 0);
-                },
-            );
+            let _ = frame_into(&ctx, SCREEN, WIDE, |ui| {
+                spectral_pane(ui, &mut state, 94.0, 0);
+            });
         }
         state.spectrum.spectrogram[0].tex.as_ref().expect("a heatmap was uploaded").size()[1]
     }
@@ -1146,28 +1115,14 @@ fn the_now_line_paints_over_the_roll_that_arrives_at_it() {
     // callback, which the spectrogram would break the day it stops being a
     // mesh.
     let frame = |sounding: bool| {
-        let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
+        let mut state = fresh();
         state.spectrum_config.orientation = SpectralOrientation::Left;
         state.spectrum_config.low_midi = 60.0;
         state.spectrum_config.high_midi = 72.0;
         if sounding {
-            state.tracker.handle_event(NoteEvent {
-                time: 0.0,
-                channel: 0,
-                note: 69,
-                kind: NoteEventKind::On { velocity: 1.0 },
-            });
+            state.tracker.handle_event(NoteEvent::on(0.0, 0, 69, 1.0));
         }
-        let ctx = egui::Context::default();
-        crate::theme::apply_theme(&ctx);
-        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(500.0, 500.0));
-        let out = ctx.run_ui(
-            egui::RawInput { screen_rect: Some(screen), ..Default::default() },
-            |ui| {
-                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(WIDE));
-                spectral_pane(&mut child, &mut state, 0.1, 0);
-            },
-        );
+        let out = painted_pane(WIDE, &mut state, 0.1);
         let callbacks: Vec<usize> = out
             .shapes
             .iter()
@@ -1215,17 +1170,12 @@ fn the_whole_song_playhead_paints_over_the_roll_it_sweeps_across() {
     // paint callback, and the count of callbacks BEFORE the playhead is what
     // it has to move.
     let frame = |sounding: bool| {
-        let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
+        let mut state = fresh();
         state.spectrum_config.orientation = SpectralOrientation::Left;
         state.spectrum_config.low_midi = 60.0;
         state.spectrum_config.high_midi = 72.0;
         if sounding {
-            state.tracker.handle_event(NoteEvent {
-                time: 0.0,
-                channel: 0,
-                note: 69,
-                kind: NoteEventKind::On { velocity: 1.0 },
-            });
+            state.tracker.handle_event(NoteEvent::on(0.0, 0, 69, 1.0));
         }
         // The take laid out statically, the way the offline renderer sets it
         // up. No columns: the heatmap is not what this is about, and the roll
@@ -1236,16 +1186,7 @@ fn the_whole_song_playhead_paints_over_the_roll_it_sweeps_across() {
             columns: Vec::new(),
             roll: state.tracker.roll().clone(),
         });
-        let ctx = egui::Context::default();
-        crate::theme::apply_theme(&ctx);
-        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(500.0, 500.0));
-        let out = ctx.run_ui(
-            egui::RawInput { screen_rect: Some(screen), ..Default::default() },
-            |ui| {
-                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(WIDE));
-                spectral_pane(&mut child, &mut state, 1.0, 0);
-            },
-        );
+        let out = painted_pane(WIDE, &mut state, 1.0);
         let callbacks = out
             .shapes
             .iter()
@@ -1290,7 +1231,7 @@ fn the_whole_song_playhead_paints_over_the_roll_it_sweeps_across() {
 #[test]
 fn an_off_lattice_note_gets_a_band_down_the_spectrum() {
     let bands = |tuning_offset: f32| {
-        let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
+        let mut state = fresh();
         state.spectrum_config.orientation = SpectralOrientation::Left;
         state.spectrum_config.low_midi = 55.0;
         state.spectrum_config.high_midi = 67.0;
@@ -1299,12 +1240,7 @@ fn an_off_lattice_note_gets_a_band_down_the_spectrum() {
         // counted is whether the flag is DRAWN rather than how far its note
         // has eased in.
         state.frame_params.fade_time = 0.0;
-        state.tracker.handle_event(NoteEvent {
-            time: 0.0,
-            channel: 0,
-            note: 60,
-            kind: NoteEventKind::On { velocity: 1.0 },
-        });
+        state.tracker.handle_event(NoteEvent::on(0.0, 0, 60, 1.0));
         if tuning_offset != 0.0 {
             state.tracker.handle_event(NoteEvent {
                 time: 0.0,
@@ -1313,16 +1249,7 @@ fn an_off_lattice_note_gets_a_band_down_the_spectrum() {
                 kind: NoteEventKind::Tuning { semitones: tuning_offset },
             });
         }
-        let ctx = egui::Context::default();
-        crate::theme::apply_theme(&ctx);
-        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(500.0, 500.0));
-        let out = ctx.run_ui(
-            egui::RawInput { screen_rect: Some(screen), ..Default::default() },
-            |ui| {
-                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(WIDE));
-                spectral_pane(&mut child, &mut state, 0.05, 0);
-            },
-        );
+        let out = painted_pane(WIDE, &mut state, 0.05);
         let want = theme::warning_text().gamma_multiply(0.3);
         out.shapes
             .into_iter()
@@ -1343,19 +1270,10 @@ fn an_off_lattice_note_gets_a_band_down_the_spectrum() {
 /// handed a rim color to draw it with.
 #[test]
 fn the_axis_labels_are_rimmed() {
-    let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     state.spectrum_config.orientation = SpectralOrientation::Left;
     state.spectrum_config.roll_fraction = 0.55;
-    let ctx = egui::Context::default();
-    crate::theme::apply_theme(&ctx);
-    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(500.0, 500.0));
-    let out = ctx.run_ui(
-        egui::RawInput { screen_rect: Some(screen), ..Default::default() },
-        |ui| {
-            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(WIDE));
-            spectral_pane(&mut child, &mut state, 0.05, 0);
-        },
-    );
+    let out = painted_pane(WIDE, &mut state, 0.05);
     // The labels leave the shape list as one paint callback; what is
     // checkable from here is that the pane emitted one at all, and the
     // glyphs' colors are checked where they are built (`crate::text`).
@@ -1463,30 +1381,16 @@ fn only_the_decade_boundaries_take_the_stronger_ink() {
 /// frame of a `--playhead` video export.
 #[test]
 fn whole_song_mode_rules_no_frequencies() {
-    let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     state.spectrum_config.orientation = SpectralOrientation::Left;
-    state.tracker.handle_event(NoteEvent {
-        time: 0.0,
-        channel: 0,
-        note: 69,
-        kind: NoteEventKind::On { velocity: 1.0 },
-    });
+    state.tracker.handle_event(NoteEvent::on(0.0, 0, 69, 1.0));
     state.whole_song = Some(crate::WholeSong {
         start: 0.0,
         span: 2.0,
         columns: Vec::new(),
         roll: state.tracker.roll().clone(),
     });
-    let ctx = egui::Context::default();
-    crate::theme::apply_theme(&ctx);
-    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(500.0, 500.0));
-    let out = ctx.run_ui(
-        egui::RawInput { screen_rect: Some(screen), ..Default::default() },
-        |ui| {
-            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(WIDE));
-            spectral_pane(&mut child, &mut state, 1.0, 0);
-        },
-    );
+    let out = painted_pane(WIDE, &mut state, 1.0);
     let ruled = out.shapes.iter().any(|s| {
         matches!(&s.shape, egui::Shape::LineSegment { stroke, .. } if is_ruling(stroke.color))
     });
@@ -1550,17 +1454,13 @@ fn the_settings_pane_paints_at_either_extreme_of_the_pitch_range() {
     let axis =
         (harmonigraph_core::spectrum::SPECTRUM_MIN_MIDI, harmonigraph_core::spectrum::SPECTRUM_MAX_MIDI);
     for (low, high) in [axis, (40.5, 40.5 + crate::PITCH_RANGE_MIN_SPAN), (axis.0, axis.0)] {
-        let mut state =
-            SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
+        let mut state = fresh();
         state.spectrum_config.low_midi = low;
         state.spectrum_config.high_midi = high;
-        let ctx = egui::Context::default();
-        crate::theme::apply_theme(&ctx);
-        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(320.0, 700.0));
-        let output = ctx.run_ui(
-            egui::RawInput { screen_rect: Some(screen), ..Default::default() },
-            |ui| spectrum_settings_pane(ui, &mut state),
-        );
+        // A settings column rather than a picture: narrow and tall, and the
+        // pane takes the whole of it.
+        let column = egui::vec2(320.0, 700.0);
+        let output = painted_full(column, |ui| spectrum_settings_pane(ui, &mut state));
         assert!(!output.shapes.is_empty(), "{low}..{high} drew nothing");
     }
 }
@@ -1570,19 +1470,10 @@ fn the_settings_pane_paints_at_either_extreme_of_the_pitch_range() {
 #[test]
 fn a_degenerate_pitch_range_still_paints() {
     for (low, high) in [(60.0, 60.0), (90.0, 30.0)] {
-        let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
+        let mut state = fresh();
         state.spectrum_config.low_midi = low;
         state.spectrum_config.high_midi = high;
-        let ctx = egui::Context::default();
-        crate::theme::apply_theme(&ctx);
-        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(500.0, 500.0));
-        let output = ctx.run_ui(
-            egui::RawInput { screen_rect: Some(screen), ..Default::default() },
-            |ui| {
-                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(WIDE));
-                spectral_pane(&mut child, &mut state, 100.0, 0);
-            },
-        );
+        let output = painted_pane(WIDE, &mut state, 100.0);
         assert!(!output.shapes.is_empty(), "{low}..{high} drew nothing");
     }
 }
@@ -1594,7 +1485,7 @@ fn paint(
     orientation: SpectralOrientation,
     roll_fraction: f32,
 ) -> Vec<egui::Shape> {
-    let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     state.spectrum_config.orientation = orientation;
     state.spectrum_config.roll_fraction = roll_fraction;
     state.spectrum_config.roll_seconds = 10.0;
@@ -1611,13 +1502,8 @@ fn paint(
         state.spectrum.push_history(90.0 + f64::from(i) * 0.125, &spectrum_bins);
     }
 
-    let on = |time, note| NoteEvent {
-        time,
-        channel: 0,
-        note,
-        kind: NoteEventKind::On { velocity: 0.7 },
-    };
-    let off = |time, note| NoteEvent { time, channel: 0, note, kind: NoteEventKind::Off };
+    let on = |time, note| NoteEvent::on(time, 0, note, 0.7);
+    let off = |time, note| NoteEvent::off(time, 0, note);
     // Long past the window; inside it; bent across it; off the top of
     // the pitch range; and one still held at `now`.
     state.tracker.handle_event(on(0.0, 60));
@@ -1637,16 +1523,7 @@ fn paint(
     let now = 100.0;
     state.tracker.prune(now, &harmonigraph_core::Envelope::default());
 
-    let ctx = egui::Context::default();
-    crate::theme::apply_theme(&ctx);
-    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(500.0, 500.0));
-    let output = ctx.run_ui(
-        egui::RawInput { screen_rect: Some(screen), ..Default::default() },
-        |ui| {
-            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
-            spectral_pane(&mut child, &mut state, now, 0);
-        },
-    );
+    let output = painted_pane(rect, &mut state, now);
     output.shapes.into_iter().map(|s| s.shape).collect()
 }
 
@@ -1675,7 +1552,7 @@ fn the_rolls_ink_stops_at_the_now_line() {
         SpectralOrientation::Top,
         SpectralOrientation::Bottom,
     ] {
-        let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
+        let mut state = fresh();
         state.spectrum_config.orientation = orientation;
         state.spectrum_config.roll_fraction = 0.55;
         // The widest outline there is, so the reach that would cross the line
@@ -1683,26 +1560,14 @@ fn the_rolls_ink_stops_at_the_now_line() {
         state.spectrum_config.roll_outline = crate::ROLL_OUTLINE_MAX;
         state.view.bloom_strength = 1.2;
         // Held at `now`, so its leading end sits exactly on the line.
-        state.tracker.handle_event(NoteEvent {
-            time: 99.0,
-            channel: 0,
-            note: 60,
-            kind: NoteEventKind::On { velocity: 0.8 },
-        });
+        state.tracker.handle_event(NoteEvent::on(99.0, 0, 60, 0.8));
 
         let a = axes(WIDE, orientation);
         let split = spectrum_share(&state.spectrum_config);
         let scale = PitchScale { min_midi: 48.0, max_midi: 84.0, span: 36.0 };
-        let ctx = egui::Context::default();
-        crate::theme::apply_theme(&ctx);
-        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(500.0, 500.0));
-        let output = ctx.run_ui(
-            egui::RawInput { screen_rect: Some(screen), ..Default::default() },
-            |ui| {
-                let child = ui.new_child(egui::UiBuilder::new().max_rect(WIDE));
-                roll::draw_roll(child.painter(), &a, &scale, &state, split, 100.0, 0);
-            },
-        );
+        let output = painted_into(SCREEN, WIDE, |ui| {
+            roll::draw_roll(ui.painter(), &a, &scale, &state, split, 100.0, 0);
+        });
 
         let rolls: Vec<&egui::epaint::ClippedShape> = output
             .shapes

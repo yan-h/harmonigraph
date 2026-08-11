@@ -2,7 +2,6 @@
 //! — and the learn mode that writes tuning params back from held notes.
 
 use crate::*;
-use harmonigraph_render::wgpu::TextureFormat;
 use super::harness::*;
 
 /// Drive the real root_ui (dock, hover, everything) with a synthetic wheel
@@ -10,43 +9,30 @@ use super::harness::*;
 /// `modifiers` picks whether egui routes the wheel to a scroll delta (plain)
 /// or a zoom factor (COMMAND, egui's default zoom modifier).
 fn distance_after_wheel_over_lattice(modifiers: egui::Modifiers) -> (f32, f32) {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
-    let backend = RecordingBackend::default();
+    let mut state = fresh();
+    let mut h = DockHarness::new();
     let start = state.camera.distance;
 
-    let ctx = egui::Context::default();
-    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1000.0, 800.0));
     // A point solidly inside the top-left leaf, which holds the Lattice tab
     // alone (see default_dock): past the tab bar, left of the split.
     let over_lattice = egui::pos2(150.0, 150.0);
-
-    let run_frame = |state: &mut SharedState, ctx: &egui::Context, t: f64, wheel: bool| {
-        let mut events = vec![egui::Event::PointerMoved(over_lattice)];
-        if wheel {
-            events.push(egui::Event::MouseWheel {
-                unit: egui::MouseWheelUnit::Line,
-                // Positive y = scroll up = zoom in (both the scroll and the
-                // zoom-factor paths map an upward wheel to a smaller distance).
-                delta: egui::vec2(0.0, 1.0),
-                phase: egui::TouchPhase::Move,
-                modifiers,
-            });
-        }
-        let raw = egui::RawInput {
-            screen_rect: Some(screen),
-            time: Some(t),
-            events,
-            ..Default::default()
-        };
-        let _ = ctx.run_ui(raw, |ui| root_ui(ui, state, &backend, t));
-    };
+    let moved = || vec![egui::Event::PointerMoved(over_lattice)];
 
     // Warm-up passes so the pointer registers and egui's top-widget-at-
     // pointer resolution (which reads the previous pass) sees the lattice
     // under the pointer before the wheel pass.
-    run_frame(&mut state, &ctx, 0.0, false);
-    run_frame(&mut state, &ctx, 1.0 / 60.0, false);
-    run_frame(&mut state, &ctx, 2.0 / 60.0, true);
+    h.frame(&mut state, moved());
+    h.frame(&mut state, moved());
+    let mut wheel = moved();
+    wheel.push(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Line,
+        // Positive y = scroll up = zoom in (both the scroll and the
+        // zoom-factor paths map an upward wheel to a smaller distance).
+        delta: egui::vec2(0.0, 1.0),
+        phase: egui::TouchPhase::Move,
+        modifiers,
+    });
+    h.frame(&mut state, wheel);
 
     (start, state.camera.distance)
 }
@@ -70,17 +56,12 @@ fn zoom_gesture_over_lattice_zooms_the_camera() {
 
 #[test]
 fn learn_step_writes_params_only_when_the_chord_changes() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     let backend = RecordingBackend::default();
     state.learn_active = true;
     // Hold C and G (a 12-TET fifth: within learn range of just).
     for note in [60u8, 67] {
-        state.tracker.handle_event(harmonigraph_core::NoteEvent {
-            time: 0.0,
-            channel: 0,
-            note,
-            kind: harmonigraph_core::NoteEventKind::On { velocity: 1.0 },
-        });
+        state.tracker.handle_event(harmonigraph_core::NoteEvent::on(0.0, 0, note, 1.0));
     }
 
     learn_step(&mut state, &backend);
@@ -106,12 +87,7 @@ fn learn_step_writes_params_only_when_the_chord_changes() {
 /// tuning offset (cents). Used to synthesize just vs 12-TET chords.
 fn hold_chord(state: &mut SharedState, notes: &[(u8, f32)]) {
     for &(note, cents) in notes {
-        state.tracker.handle_event(harmonigraph_core::NoteEvent {
-            time: 0.0,
-            channel: 0,
-            note,
-            kind: harmonigraph_core::NoteEventKind::On { velocity: 1.0 },
-        });
+        state.tracker.handle_event(harmonigraph_core::NoteEvent::on(0.0, 0, note, 1.0));
         if cents != 0.0 {
             state.tracker.handle_event(harmonigraph_core::NoteEvent {
                 time: 0.0,
@@ -125,7 +101,7 @@ fn hold_chord(state: &mut SharedState, notes: &[(u8, f32)]) {
 
 #[test]
 fn learn_enables_meantone_from_a_12tet_triad() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     let backend = RecordingBackend::default();
     state.learn_active = true;
     // Plain 12-TET C-E-G pins a 700¢ fifth and a 400¢ third; since
@@ -137,7 +113,7 @@ fn learn_enables_meantone_from_a_12tet_triad() {
 
 #[test]
 fn learn_disables_meantone_from_a_just_triad() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     let backend = RecordingBackend::default();
     state.learn_active = true;
     state.view.meantone = true; // start engaged
@@ -151,7 +127,7 @@ fn learn_disables_meantone_from_a_just_triad() {
 
 #[test]
 fn learn_leaves_meantone_unchanged_without_a_third() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     let backend = RecordingBackend::default();
     state.learn_active = true;
     state.view.meantone = true;
@@ -164,7 +140,7 @@ fn learn_leaves_meantone_unchanged_without_a_third() {
 /// One switch governs every automatic meantone decision, learn included.
 #[test]
 fn learn_leaves_meantone_alone_when_the_auto_detect_is_off() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     let backend = RecordingBackend::default();
     state.learn_active = true;
     state.view.meantone_auto = false;
@@ -248,7 +224,7 @@ impl ParamBackend for TuningBackend {
 /// the just major third.
 #[test]
 fn a_meantone_tuning_engages_the_mode_by_itself() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     assert!(state.view.meantone_auto, "the auto-detect is on out of the box");
     assert!(!state.view.meantone, "and the mode starts off");
     let three = harmonigraph_core::tuning::THREE_JUST
@@ -269,7 +245,7 @@ fn a_meantone_tuning_engages_the_mode_by_itself() {
 /// case the tolerance exists to reject.
 #[test]
 fn just_intonation_does_not_engage_meantone() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     let params = TuningBackend::new(
         harmonigraph_core::tuning::THREE_JUST,
         harmonigraph_core::tuning::FIVE_JUST,
@@ -282,7 +258,7 @@ fn just_intonation_does_not_engage_meantone() {
 /// exactly as the user set it.
 #[test]
 fn the_auto_detect_off_leaves_the_mode_alone() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     state.view.meantone_auto = false;
     let params = TuningBackend::new(
         harmonigraph_core::tuning::THREE_12TET,
@@ -298,7 +274,7 @@ fn the_auto_detect_off_leaves_the_mode_alone() {
 /// which is the one thing meantone is for.
 #[test]
 fn dragging_the_fifth_does_not_drop_an_engaged_meantone() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     state.view.meantone = true;
     // 4·690 − 2400 = 360¢: the stale third param is 40¢ away, far outside
     // the tolerance, and irrelevant while the lock holds.
@@ -313,7 +289,7 @@ fn dragging_the_fifth_does_not_drop_an_engaged_meantone() {
 /// magnet only reaches `TEMPER_TOLERANCE`.
 #[test]
 fn a_third_dragged_clear_of_the_magnet_stays_released() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     // Either side of the window, as a FRACTION of it: the two cases have to
     // stay just outside and just inside whatever the tolerance is set to,
     // and fixed offsets stop straddling it the moment it narrows.
@@ -325,7 +301,7 @@ fn a_third_dragged_clear_of_the_magnet_stays_released() {
     begin_frame(&mut state, &params, 0.0);
     assert!(!state.view.meantone, "past the tolerance nothing pulls it back");
     // Just inside, though, and the magnet takes it.
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     let params = TuningBackend::new(
         harmonigraph_core::tuning::THREE_12TET,
         harmonigraph_core::tuning::FIVE_12TET + tolerance * 0.5,
@@ -340,7 +316,7 @@ fn a_third_dragged_clear_of_the_magnet_stays_released() {
 /// releases, so it cannot argue.
 #[test]
 fn the_switch_snaps_a_non_meantone_tuning_with_the_detect_on() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     let params = TuningBackend::new(
         harmonigraph_core::tuning::THREE_JUST,
         harmonigraph_core::tuning::FIVE_JUST,
@@ -369,7 +345,7 @@ fn the_switch_snaps_a_non_meantone_tuning_with_the_detect_on() {
 /// the next frame, and the press would do nothing you could see.
 #[test]
 fn the_switch_releases_under_the_detect_until_the_tuning_changes() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     let params = TuningBackend::new(
         harmonigraph_core::tuning::THREE_12TET,
         harmonigraph_core::tuning::FIVE_12TET,
@@ -403,7 +379,7 @@ fn the_switch_releases_under_the_detect_until_the_tuning_changes() {
 /// its own.
 #[test]
 fn switching_the_detect_on_asks_it_about_the_tuning_already_there() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     state.view.meantone_auto = false;
     let params = TuningBackend::new(
         harmonigraph_core::tuning::THREE_12TET,
@@ -430,7 +406,7 @@ fn switching_the_detect_on_asks_it_about_the_tuning_already_there() {
 /// edit was undoing.
 #[test]
 fn an_in_flight_tuning_write_is_not_judged_before_it_lands() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     let params = TuningBackend::new(
         harmonigraph_core::tuning::THREE_12TET,
         harmonigraph_core::tuning::FIVE_12TET,
@@ -457,7 +433,7 @@ fn an_in_flight_tuning_write_is_not_judged_before_it_lands() {
 /// asked for.
 #[test]
 fn a_marvel_tuning_engages_the_mode_by_itself() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     assert!(state.view.marvel_auto, "the septimal detect is on out of the box");
     assert!(!state.view.marvel, "and the mode starts off");
     let params = TuningBackend::new(
@@ -486,7 +462,7 @@ fn a_marvel_tuning_engages_the_mode_by_itself() {
 /// than the tolerance.
 #[test]
 fn just_intonation_does_not_engage_marvel() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     let params = TuningBackend::new(
         harmonigraph_core::tuning::THREE_JUST,
         harmonigraph_core::tuning::FIVE_JUST,
@@ -503,7 +479,7 @@ fn just_intonation_does_not_engage_marvel() {
 /// turns the pair into septimal meantone — a seventh of ten fifths.
 #[test]
 fn the_two_locks_compose_into_septimal_meantone() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     // Quarter-comma meantone, whose derived third is the just one — and a
     // seventh param nowhere near anything, to prove it is not being read.
     let three = harmonigraph_core::tuning::THREE_JUST
@@ -530,7 +506,7 @@ fn the_two_locks_compose_into_septimal_meantone() {
 /// judged-once rule exists to prevent, one axis over.
 #[test]
 fn a_seventh_that_moves_does_not_re_open_the_meantone_question() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     // The septimal mode is not what this is about; leave it out of the way.
     state.view.marvel_auto = false;
     let params = TuningBackend::new(
@@ -563,7 +539,7 @@ fn a_seventh_that_moves_does_not_re_open_the_meantone_question() {
 /// released would drop the lock the moment either moved.
 #[test]
 fn dragging_the_fifth_does_not_drop_an_engaged_marvel() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     state.view.marvel = true;
     // 2·690 + 2·400 − 1200 = 980¢: the stale seventh param is 20¢ away and
     // irrelevant while the lock holds.
@@ -580,7 +556,7 @@ fn dragging_the_fifth_does_not_drop_an_engaged_marvel() {
 /// one — from a chord that pins down every axis the identity reads.
 #[test]
 fn learn_enables_marvel_from_a_12tet_seventh() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     let backend = RecordingBackend::default();
     state.learn_active = true;
     // C-E-G-B♭ in plain 12-TET: a 700¢ fifth, a 400¢ third and a 1000¢
@@ -596,7 +572,7 @@ fn learn_enables_marvel_from_a_12tet_seventh() {
 /// identity the chord does state in full, is still settled.
 #[test]
 fn learn_leaves_marvel_unchanged_without_a_seventh() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     let backend = RecordingBackend::default();
     state.learn_active = true;
     state.view.marvel = true;
@@ -614,7 +590,7 @@ fn learn_leaves_marvel_unchanged_without_a_seventh() {
 /// wearing the other comma's clothes.
 #[test]
 fn releasing_meantone_does_not_re_engage_a_switched_off_marvel() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     // A third a tenth of a cent off four fifths: inside the tolerance, so
     // meantone engages — and far enough that the raw third and the derived
     // one are different numbers, which is what the verdict must not read.
@@ -640,7 +616,7 @@ fn releasing_meantone_does_not_re_engage_a_switched_off_marvel() {
 /// `begin_frame`'s detect never releases it.
 #[test]
 fn learn_measures_the_septimal_comma_against_the_derived_third() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     let backend = RecordingBackend::default();
     state.learn_active = true;
     // A 700¢ fifth, a third 0.4¢ sharp, a seventh 0.6¢ sharp. The third is
@@ -664,7 +640,7 @@ fn a_seventh_dragged_clear_of_the_magnet_stays_released() {
     // Either side of the window as a FRACTION of it, so the pair keeps
     // straddling the tolerance whatever it is set to.
     for (offset, engaged) in [(tolerance * 1.5, false), (tolerance * 0.5, true)] {
-        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        let mut state = fresh();
         let params = TuningBackend::new(
             harmonigraph_core::tuning::THREE_12TET,
             harmonigraph_core::tuning::FIVE_12TET,
