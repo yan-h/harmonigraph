@@ -377,8 +377,20 @@ pub(super) fn plan(
         .filter(|(_, edge)| edge.time >= sweep_from)
         .collect();
     // By ANCHOR, oldest first — where the name will sit, which is what
-    // the thinning is handing out — and a total order, since the offline
-    // render must not depend on the order the roll happened to hand them back.
+    // the thinning is handing out — and by channel and key after it, since the
+    // offline render must not depend on the order the roll happened to hand
+    // them back.
+    //
+    // Those three are a total order at the leading edge, where two entries of
+    // one key cannot share a stop. At the ONSET anchor they are not: a key
+    // struck, released and struck again at one sample — the delivery
+    // `one_press_is_named_once_however_the_host_delivers_it` is about — gives
+    // two entries agreeing on all three, and `sort_unstable_by` leaves those
+    // in an unspecified order. Harmless, and worth saying why rather than
+    // reaching for a fourth key: two entries with one onset land in one cell,
+    // so the second is refused whichever comes first, and one name is drawn in
+    // one place. Should they ever settle at different PITCHES they are
+    // different lanes, where both are named anyway.
     //
     // Oldest first, whether held or not: the order is about which instance of
     // a note takes the name, and a held note is no earlier a note for being
@@ -1608,6 +1620,48 @@ mod tests {
         assert_eq!(after[0].rect.min.x, still_down[0].rect.min.x);
     }
 
+    /// One pitch sounded by TWO voices is named once at either anchor, and one
+    /// press delivered as on/off/on is still one press.
+    ///
+    /// Both are the same question asked of the two anchors, and each answers it
+    /// somewhere else. At the leading edge a doubled MIDI source is caught by
+    /// an explicit check, held names being outside the thinning; at the onset
+    /// it falls to the grid, since two voices struck together share a cell and
+    /// the second is refused. Worth pinning because the second reading rests on
+    /// the grid doing a job nothing asked it to do, and a fourth sort key or a
+    /// per-note cell would quietly take it away.
+    #[test]
+    fn one_pitch_from_two_voices_is_named_once_at_either_anchor() {
+        let voiced = |travel: bool| {
+            let mut state = if travel { travelling(24.0, 10.0) } else { state(24.0, 10.0) };
+            // The same pitch on two channels, struck together and held — a
+            // doubled source, or one MPE part layered over another.
+            for channel in [0, 1] {
+                state.tracker.handle_event(NoteEvent {
+                    time: 1.0,
+                    channel,
+                    note: 60,
+                    kind: NoteEventKind::On { velocity: 0.8 },
+                });
+            }
+            state
+        };
+        assert_eq!(said(&labels(&voiced(false), 2.0)), ["C"], "held, at the leading edge");
+        assert_eq!(said(&labels(&voiced(true), 2.0)), ["C"], "and travelling, through the grid");
+
+        // ...and a press the host delivers as on/off/on at one sample is one
+        // press at either anchor, the two entries sharing an onset.
+        let pressed = |travel: bool| {
+            let mut state = if travel { travelling(24.0, 10.0) } else { state(24.0, 10.0) };
+            state.tracker.handle_event(on(1.0, 60));
+            state.tracker.handle_event(off(1.0, 60));
+            state.tracker.handle_event(on(1.0, 60));
+            state
+        };
+        assert_eq!(said(&labels(&pressed(false), 1.5)), ["C"]);
+        assert_eq!(said(&labels(&pressed(true), 1.5)), ["C"]);
+    }
+
     /// A travelling name leaves with the end it is written on: a note still
     /// sounding whose ONSET has scrolled off the far edge is no longer named.
     ///
@@ -1820,6 +1874,64 @@ mod tests {
         // ...and the static layout does not move as the playhead sweeps.
         let later = labels(&state, 9.0);
         assert_eq!(later[0].rect.min.x, placed[0].rect.min.x);
+    }
+
+    /// Whole-song keeps a note that began BEFORE the render's start, named at
+    /// the near edge it reaches over.
+    ///
+    /// The layout's own half of the cull. Live, a name goes when the end it is
+    /// written on scrolls off; whole-song has nothing to scroll off to and
+    /// clamps instead, which is what keeps a take rendered from its second
+    /// minute from losing every note already sounding at that moment —
+    /// `--start` past the first note is an ordinary way to render an excerpt.
+    #[test]
+    fn whole_song_keeps_a_note_that_began_before_the_render() {
+        let mut state = state(24.0, 10.0);
+        state.tracker.handle_event(on(1.0, 60)); // before the render's start
+        state.tracker.handle_event(off(8.0, 60));
+        let roll = state.tracker.roll().clone();
+        state.whole_song =
+            Some(crate::WholeSong { columns: Vec::new(), roll, start: 3.0, span: 10.0 });
+
+        let placed = labels(&state, 5.0);
+        assert_eq!(said(&placed), ["C"], "still sounding at the render's start, still named");
+        let axes = Axes::new(PANE, &state.spectrum_config);
+        assert!(
+            placed[0].rect.min.x >= axes.at(0.5, 0.0).x,
+            "clamped onto the near edge rather than drawn off the pane",
+        );
+    }
+
+    /// In the whole-song layout a note the PLAYHEAD is inside is thinned like
+    /// any other, so a render's names are decided once for the whole take.
+    ///
+    /// The held-note exemption is for a name standing at the now-line while the
+    /// picture scrolls past it, and whole-song has no such name: the take is
+    /// laid out statically and every name is anchored at an onset. Exempting a
+    /// note because the playhead happens to be inside it makes a name appear
+    /// and go as the playhead sweeps, which in a rendered video is a name
+    /// blinking for no reason a viewer can see.
+    #[test]
+    fn a_whole_song_render_thins_a_sounding_note_like_any_other() {
+        // Two strikes of one pitch too close for both names, the second still
+        // sounding — the case the exemption used to hand a name to.
+        let mut state = state(24.0, 10.0);
+        state.tracker.handle_event(on(1.0, 60));
+        state.tracker.handle_event(off(1.05, 60));
+        state.tracker.handle_event(on(1.1, 60));
+        let roll = state.tracker.roll().clone();
+        state.whole_song =
+            Some(crate::WholeSong { columns: Vec::new(), roll, start: 0.0, span: 10.0 });
+
+        // The playhead inside the second note, then well past where it would
+        // have ended: the same one name, in the same place, throughout.
+        let inside = labels(&state, 1.5);
+        assert_eq!(inside.len(), 1, "thinned, exactly as a released pair would be");
+        for now in [3.0, 6.0, 9.0] {
+            let later = labels(&state, now);
+            assert_eq!(said(&later), said(&inside), "the playhead moved a name at {now}s");
+            assert_eq!(later[0].rect.min.x, inside[0].rect.min.x);
+        }
     }
 
     /// The tiebreak's stated job is to keep a name from moving when the view
