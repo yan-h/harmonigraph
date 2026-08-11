@@ -407,9 +407,39 @@ pub(super) fn plan(
     // Where a name goes once it has one: on its own ribbon at its anchor,
     // growing the way [`grow`] points. The two callers below differ in what
     // they do with the box, never in how it is measured.
+    //
+    // A box growing toward the now-line is held off the roll's near edge. A
+    // note is younger than its own name for the first fraction of a second of
+    // it, and at the onset anchor there is no ribbon yet to lie over: the name
+    // reaches past that edge and over the SPECTRUM, which is another picture —
+    // the one this refuses to write names over at all when the roll is shut.
+    // So it sits against the edge and travels as soon as its ribbon is long
+    // enough to hold it, which is its own length of scrolling and no more; a
+    // name that came and went instead would blink at every note played, and one
+    // that started deeper would not be at the onset it names.
+    //
+    // What is clamped is the box DRAWN, not the anchor's time: a note's cell
+    // and its reach are the music's, and must not move with what the pane had
+    // room to show. Measured along `grow` and against the edge at the name's
+    // own pitch, so no screen side is named and a box growing the other way —
+    // every name at the leading edge, and every name in the whole-song layout —
+    // can never be caught by it.
+    let toward_near = grow.dot(axes.dir_depth()) < 0.0;
     let place = |edge: &Edge, name: &NoteName| {
         let (t, d) = (scale.t_of(edge.pitch), time.depth_of(edge.time));
-        label_rect(axes, grow, t, d, name, size, label_scale)
+        let rect = label_rect(axes, grow, t, d, name, size, label_scale);
+        if !toward_near {
+            return rect;
+        }
+        // The leading corner's reach past the edge: the box's centre projected
+        // onto `grow`, plus half of what it spans that way.
+        let span = (rect.width() * grow.x).abs() + (rect.height() * grow.y).abs();
+        let over = (rect.center() - axes.at(t, split)).dot(grow) + span * 0.5;
+        if over > 0.0 {
+            rect.translate(-grow * over)
+        } else {
+            rect
+        }
     };
 
     let mut occupied = Occupancy::default();
@@ -1481,6 +1511,47 @@ mod tests {
                     reach < (other - anchor).length(),
                     "{orientation:?}, travel {travel}: the name overruns the far end of \
                      its own ribbon",
+                );
+            }
+        }
+    }
+
+    /// No name ever reaches back over the SPECTRUM, at either anchor.
+    ///
+    /// A name anchored at the onset grows toward the now-line, and a note
+    /// younger than its own name has no ribbon to fill it — so the box reaches
+    /// past the roll's near edge and over the spectrum's curve, which is
+    /// another picture entirely and the thing [`plan`] refuses to draw names
+    /// over at all when the roll is shut.
+    ///
+    /// Every other fixture in this file gives the roll the whole pane
+    /// (`roll_fraction: 1.0`, so `split` is 0 and the near edge is the pane's
+    /// own), which is exactly where this cannot be seen: the overrun falls off
+    /// the pane and the painter clips it. This one keeps the fresh 0.55.
+    #[test]
+    fn a_name_never_reaches_back_over_the_spectrum() {
+        for travel in [false, true] {
+            let mut state = state(24.0, 10.0);
+            state.spectrum_config.roll_fraction = 0.55; // the fresh value
+            state.spectrum_config.note_names_travel = travel;
+            state.tracker.handle_event(on(5.0, 60));
+
+            let axes = Axes::new(PANE, &state.spectrum_config);
+            let split = super::super::axes::spectrum_share(&state.spectrum_config);
+            // Left: depth is x with the now-line at the roll's near edge, so
+            // the spectrum owns everything left of it.
+            let edge = axes.at(0.5, split).x;
+            // Struck this instant, then a moment later: the box is longer than
+            // the ribbon under it for as long as it takes the onset to scroll
+            // its own length.
+            for now in [5.0, 5.05, 5.1, 5.2] {
+                let placed = labels(&state, now);
+                assert_eq!(placed.len(), 1, "travel {travel} at {now}s");
+                assert!(
+                    placed[0].rect.min.x >= edge,
+                    "travel {travel} at {now}s: the name reaches to {} where the roll \
+                     only begins at {edge}, so it is drawn over the spectrum",
+                    placed[0].rect.min.x,
                 );
             }
         }
