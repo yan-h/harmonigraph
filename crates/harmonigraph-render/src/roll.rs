@@ -98,25 +98,43 @@ pub struct RollInstance {
     /// both on one bar, as two points on the axis running out from the note's
     /// edge.
     pub outline_fade: f32,
-    /// How much of this segment's LEADING end is a fade-out, in points, and 0
-    /// for the ordinary square end every other segment has.
+    /// How much of this segment's LEADING end is a LEAD — a stretch of ribbon
+    /// the caller grew the box by, drawn as an extension of the note rather
+    /// than as part of it — in points, and 0 for the ordinary segment that is
+    /// all note.
     ///
-    /// The leading end is the one at the low end of the depth axis, which is
-    /// the end nearest whatever the roll is drawn beside — for the spectral
-    /// pane, the now-line and the analyzer past it. Both layers ride it: a
-    /// segment ending in a fade wears no outline cap either, or the tip would
-    /// dissolve inside a hard black ring.
+    /// The leading end is the one at the low end of the depth axis, which is the
+    /// end nearest whatever the roll is drawn beside — for the spectral pane,
+    /// the now-line and the analyzer past it (see
+    /// `panes::spectral::roll::lead`, which is also the only thing that sets
+    /// this).
     ///
-    /// A property of the SEGMENT rather than of the roll, because it is the
-    /// caller's business which segments end that way — in the spectral pane
-    /// only the last segment of a note still being held (see
-    /// `panes::spectral::roll::lead`), which is what carries the ribbon over the
-    /// divider and into the picture it is making.
+    /// It is what divides the two: past this distance from the tip the segment
+    /// is the note itself and is drawn solid, and inside it
+    /// [`lead_fade`](Self::lead_fade) and [`lead_alpha`](Self::lead_alpha)
+    /// decide what is left. Without it the two would have nothing to measure
+    /// against and would take the note's own body with them.
     ///
-    /// This crate is told how long the fade is and nothing about why: it does
-    /// not grow the geometry to make room for one, the length being the
-    /// caller's already, and it invents no fade of its own.
+    /// This crate is told how long the lead is and nothing about why. It does
+    /// not grow the geometry to make room for one — the length is the caller's
+    /// already — and it invents no lead of its own.
+    pub lead: f32,
+    /// How much of that lead is spent fading out at the tip, in points: 0 ends
+    /// it square, the whole lead fades it from the note's own end outward.
+    ///
+    /// Both layers ride it: a lead that ends in a fade wears no outline cap
+    /// either, or the tip would dissolve inside a hard black ring.
     pub lead_fade: f32,
+    /// How much of the lead is still standing, 0..1 — the whole of it while the
+    /// note is sounding, falling to nothing over whatever the caller counts as
+    /// the note's release.
+    ///
+    /// It multiplies the LEAD alone and never the note, which is the reason
+    /// [`lead`](Self::lead) has to be carried here at all. So a lead on the way
+    /// out reads as a translucent extension of a solid ribbon, which is what it
+    /// is; the two meet at the note's own end, and at full opacity that join is
+    /// seamless.
+    pub lead_alpha: f32,
     /// Premultiplied sRGB bytes, straight out of [`egui::Color32`].
     pub core: [u8; 4],
     /// The outline's color where it is solid; the fade takes it out from there.
@@ -136,9 +154,11 @@ impl RollInstance {
             2 => Float32,   // shear
             3 => Float32,   // outline_reach
             4 => Float32,   // outline_fade
-            5 => Float32,   // lead_fade
-            6 => Unorm8x4,  // core
-            7 => Unorm8x4,  // outline
+            5 => Float32,   // lead
+            6 => Float32,   // lead_fade
+            7 => Float32,   // lead_alpha
+            8 => Unorm8x4,  // core
+            9 => Unorm8x4,  // outline
         ],
     };
 }
@@ -1014,10 +1034,22 @@ mod tests {
             shear: 0.0,
             outline_reach: 4.0,
             outline_fade: 0.0,
+            lead: 0.0,
             lead_fade: 0.0,
+            lead_alpha: 0.0,
             core: [255, 0, 0, 255],
             outline: [0, 0, 0, 255],
         }
+    }
+
+    /// [`centered_note`] with a lead of `lead` points at its leading tip, `fade`
+    /// of that spent fading, and `alpha` of it still standing. The lead is
+    /// carved OUT of the note's own length rather than added to it, so every
+    /// coordinate in the tests below stays where [`centered_note`] put it —
+    /// which is what the pane does too, in reverse: it grows the box first and
+    /// tells this crate where the note inside it ends.
+    fn led_note(lead: f32, fade: f32, alpha: f32) -> RollInstance {
+        RollInstance { lead, lead_fade: fade, lead_alpha: alpha, ..centered_note() }
     }
 
     #[test]
@@ -1224,19 +1256,15 @@ mod tests {
         // Black on white with no outline: every painted byte is the body's own
         // coverage, read straight off the frame. Under `TOP` the depth axis
         // runs down the screen, so the leading tip of this note is at y = 68
-        // and its trailing end at y = 188.
-        let note = RollInstance {
+        // and its trailing end at y = 188. A lead of 40 points reaches to
+        // y = 108, and the fade is measured back from the tip.
+        let bare = |lead: f32, fade: f32| RollInstance {
             outline_reach: 0.0,
             core: [0, 0, 0, 255],
-            ..centered_note()
+            ..led_note(lead, fade, 1.0)
         };
         let cov = |fade: f32, y: u32| {
-            let frame = draw(
-                &device,
-                &queue,
-                vec![RollInstance { lead_fade: fade, ..note }],
-                wgpu::Color::WHITE,
-            );
+            let frame = draw(&device, &queue, vec![bare(40.0, fade)], wgpu::Color::WHITE);
             1.0 - f32::from(pixel(&frame, 128, y)[0]) / 255.0
         };
 
@@ -1260,12 +1288,8 @@ mod tests {
         // 4-point outline's reach, and that is exactly where a body-only fade
         // leaves a black ring standing in front of nothing.
         let capped = |fade: f32| {
-            let frame = draw(
-                &device,
-                &queue,
-                vec![RollInstance { lead_fade: fade, ..centered_note() }],
-                bg_color(),
-            );
+            let frame =
+                draw(&device, &queue, vec![led_note(40.0, fade, 1.0)], bg_color());
             pixel(&frame, 128, 66)
         };
         assert!(
@@ -1278,6 +1302,52 @@ mod tests {
             "the outline still caps a tip that has faded out: {:?}",
             capped(20.0),
         );
+    }
+
+    /// A lead's opacity dims the LEAD and never the note it hangs off.
+    ///
+    /// That division is the whole reason `lead` is carried per instance rather
+    /// than the fade being measured against the box. The spectral pane takes a
+    /// released note's lead out over its release time
+    /// (`panes::spectral::roll::lead_alpha`) while the ribbon itself is still
+    /// sounding-loud and still scrolling; an opacity applied across the box
+    /// would fade the note along with the thing hanging off it, and a roll that
+    /// dims every note you let go of is telling you something the music did not.
+    ///
+    /// Read on both sides of the note's own end: inside the lead the ink
+    /// follows the opacity, and past it the ribbon is solid at every one.
+    #[test]
+    fn a_leads_opacity_dims_the_lead_and_not_the_note() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        // Black on white, no outline, a square-ended 40-point lead — so the
+        // only thing between the tip (y = 68) and the note's own end (y = 108)
+        // is the opacity, with no ramp on top of it to unpick.
+        let cov = |alpha: f32, y: u32| {
+            let note = RollInstance {
+                outline_reach: 0.0,
+                core: [0, 0, 0, 255],
+                ..led_note(40.0, 0.0, alpha)
+            };
+            let frame = draw(&device, &queue, vec![note], wgpu::Color::WHITE);
+            1.0 - f32::from(pixel(&frame, 128, y)[0]) / 255.0
+        };
+        for alpha in [0.25f32, 0.5, 0.75, 1.0] {
+            // Well inside the lead, and well inside the note.
+            let (lead, body) = (cov(alpha, 88), cov(alpha, 148));
+            assert!(
+                (lead - alpha).abs() < 0.03,
+                "the lead covers {lead:.3} at an opacity of {alpha}",
+            );
+            assert!(
+                body > 0.97,
+                "the note itself came out at {body:.3} with its lead at {alpha}",
+            );
+        }
+        // Gone entirely, and the note is still every bit of itself.
+        assert!(cov(0.0, 88) < 0.03, "a lead at no opacity still painted");
+        assert!(cov(0.0, 148) > 0.97, "a lead at no opacity took its note with it");
     }
 
     /// A fade set past the outline's own reach eats OUTWARD — it fades the

@@ -308,11 +308,11 @@ fn a_blob_naming_a_fade_wider_than_its_edge_opens_on_one_that_fits() {
         )
         .replace(
             &format!("roll_lead_fade:{:?},", state.spectrum_config.roll_lead_fade),
-            "roll_lead_fade:20.0,",
+            "roll_lead_fade:0.2,",
         )
         .replace(
             &format!("roll_lead:{:?},", state.spectrum_config.roll_lead),
-            "roll_lead:3.0,",
+            "roll_lead:0.05,",
         );
     assert_ne!(edited, saved, "the edge keys are not in the blob to edit");
 
@@ -330,7 +330,7 @@ fn a_blob_naming_a_fade_wider_than_its_edge_opens_on_one_that_fits() {
     );
     assert_eq!(
         (restored.spectrum_config.roll_lead, restored.spectrum_config.roll_lead_fade),
-        (3.0, 3.0),
+        (0.05, 0.05),
         "the lead's fade opened wider than the lead",
     );
     assert_eq!(restored.camera.yaw, 1.23, "the rest of the blob still restores");
@@ -394,6 +394,46 @@ fn a_blob_naming_a_nonsense_soft_edge_opens_on_a_drawable_one() {
                 && cfg.roll_outline_fade <= cfg.roll_outline
                 && cfg.roll_lead_fade <= cfg.roll_lead,
             "{hint}: opened on a fade wider than its reach",
+        );
+        assert_eq!(restored.camera.yaw, 1.23, "{hint}: the rest of the blob still restores");
+    }
+}
+
+/// The lead's RELEASE opens somewhere its own bar can reach, which for a
+/// duration means finite and inside the bar's travel.
+///
+/// It is the odd one out among the lead's settings and gets its own blob for
+/// that reason: the reach and the fade are two points on one axis and have each
+/// other to be wrong about, where this is a lone number in seconds. What it can
+/// still be is off the bar — a hand-edited blob asking for a lead that outlives
+/// its note by a minute — or not a number at all, where the draw path refuses
+/// it silently (`panes::spectral::roll::lead_alpha` compares against a NaN and
+/// simply draws no lead) and the pane would then be at a value the file does not
+/// hold, indefinitely, since nothing rewrites the key until someone drags that
+/// bar.
+#[test]
+fn a_blob_naming_a_lead_release_off_its_own_bar_opens_on_one_that_fits() {
+    for (value, want, hint) in [
+        ("99.0", crate::ROLL_LEAD_RELEASE_MAX, "a release of a minute and a half"),
+        ("-1.0", 0.0, "a negative release"),
+        ("NaN", SpectrumConfig::default().roll_lead_release, "a release that is not a number"),
+    ] {
+        let mut state = fresh();
+        state.camera.yaw = 1.23;
+        let saved = state.save_persist();
+        let was = state.spectrum_config.roll_lead_release;
+        let edited = saved.replace(
+            &format!("roll_lead_release:{was:?},"),
+            &format!("roll_lead_release:{value},"),
+        );
+        assert_ne!(edited, saved, "{hint}: `roll_lead_release` is not in the blob to edit");
+
+        let mut restored = fresh();
+        restored.load_persist(&edited);
+        assert_eq!(
+            restored.spectrum_config.roll_lead_release, want,
+            "{hint}: opened at {}",
+            restored.spectrum_config.roll_lead_release,
         );
         assert_eq!(restored.camera.yaw, 1.23, "{hint}: the rest of the blob still restores");
     }

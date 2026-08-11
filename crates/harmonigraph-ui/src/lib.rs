@@ -60,7 +60,7 @@ pub use harmonigraph_take::{
 };
 pub(crate) use config::{
     COLOR_RANGE_MIN_SPAN, LEVEL_MAX_DB, LEVEL_MIN_DB, LEVEL_RANGE_MIN_SPAN, PITCH_RANGE_MIN_SPAN,
-    ROLL_LEAD_MAX, ROLL_OUTLINE_MAX, ROLL_SECONDS_MAX, ROLL_SECONDS_MIN,
+    ROLL_LEAD_MAX, ROLL_LEAD_RELEASE_MAX, ROLL_OUTLINE_MAX, ROLL_SECONDS_MAX, ROLL_SECONDS_MIN,
 };
 pub use spectrum::{AudioSpectrum, SpectrogramColumn, SpectrumHistory, WholeSong};
 pub(crate) use spectrum::{SpectrogramCache, SpectrogramKey};

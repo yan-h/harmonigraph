@@ -1628,8 +1628,9 @@ fn the_rolls_ink_stops_at_the_now_line() {
             let a = axes(WIDE, orientation);
             let split = spectrum_share(&state.spectrum_config);
             // Where the roll's ink may reach, as a depth: the now-line, less
-            // whatever the lead is allowed to carry past it.
-            let near = split - lead / a.depth_len();
+            // whatever the lead is allowed to carry past it — which is the set
+            // share of the spectrum's own share, and so a share of `split`.
+            let near = split - lead * split;
             let scale = PitchScale { min_midi: 48.0, max_midi: 84.0, span: 36.0 };
             let output = painted_into(SCREEN, WIDE, |ui| {
                 roll::draw_roll(ui.painter(), &a, &scale, &state, split, 100.0, 0);

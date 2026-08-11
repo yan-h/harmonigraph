@@ -70,13 +70,18 @@ struct VertexOut {
     @location(3) @interpolate(flat) outline_reach: f32,
     /// How much of that reach the outline spends fading out, in points.
     @location(4) @interpolate(flat) outline_fade: f32,
-    /// How much of the note's LEADING end is a fade-out, in points — 0 for the
-    /// square end every ordinary segment has. See [`lead_coverage`].
-    @location(5) @interpolate(flat) lead_fade: f32,
+    /// How much of the box's LEADING end is a lead rather than the note itself,
+    /// in points — 0 for the ordinary segment that is all note. See
+    /// [`lead_coverage`].
+    @location(5) @interpolate(flat) lead: f32,
+    /// How much of that lead is spent fading out at the tip, in points.
+    @location(6) @interpolate(flat) lead_fade: f32,
+    /// How much of the lead is still standing, 0..1.
+    @location(7) @interpolate(flat) lead_alpha: f32,
     /// Premultiplied, gamma-space, exactly as egui carries `Color32`.
-    @location(6) @interpolate(flat) core: vec4<f32>,
+    @location(8) @interpolate(flat) core: vec4<f32>,
     /// The outline's color at full coverage; the fade takes it from there.
-    @location(7) @interpolate(flat) outline: vec4<f32>,
+    @location(9) @interpolate(flat) outline: vec4<f32>,
 };
 
 @vertex
@@ -87,9 +92,11 @@ fn vs_note(
     @location(2) shear: f32,
     @location(3) outline_reach: f32,
     @location(4) outline_fade: f32,
-    @location(5) lead_fade: f32,
-    @location(6) core: vec4<f32>,
-    @location(7) outline: vec4<f32>,
+    @location(5) lead: f32,
+    @location(6) lead_fade: f32,
+    @location(7) lead_alpha: f32,
+    @location(8) core: vec4<f32>,
+    @location(9) outline: vec4<f32>,
 ) -> VertexOut {
     // Triangle-strip corners: (-1,-1) (1,-1) (-1,1) (1,1).
     let corner = vec2<f32>(
@@ -137,7 +144,9 @@ fn vs_note(
     out.shear = shear;
     out.outline_reach = outline_reach;
     out.outline_fade = outline_fade;
+    out.lead = lead;
     out.lead_fade = lead_fade;
+    out.lead_alpha = lead_alpha;
     out.core = core;
     out.outline = outline;
     return out;
@@ -183,30 +192,53 @@ fn outline_coverage(in: VertexOut, d: f32) -> f32 {
     return clamp((in.outline_reach - max(d, 0.0)) / w, 0.0, 1.0);
 }
 
-/// How much of the ribbon survives at this fragment: 1 across the note,
-/// ramping to 0 at its LEADING tip over the last `lead_fade` points of it.
+/// How much of the ribbon survives at this fragment: 1 across the NOTE, and
+/// inside the lead at its leading end, whatever the lead's own fade and opacity
+/// have left there.
 ///
 /// The leading end is `-half_extent.y` along the depth axis, always — depth
 /// runs away from whatever the roll is drawn beside, so this names an end of
 /// the pane's own axis and not a screen side, exactly as everything else here
-/// does.
+/// does. `u` counts INWARD from that tip, so `u >= lead` is the note itself.
 ///
-/// Applied to BOTH layers, which is what makes a fading tip a fading note
-/// rather than a note dissolving inside its own outline: the surround wraps the
-/// ends as much as the flanks, so a body taken out on its own would leave a
-/// hard black cap standing where the ribbon went. Past the tip the ramp is
+/// The note is untouched, and that division is the whole reason `lead` is
+/// carried per instance. A lead on its way out is a translucent extension of a
+/// solid ribbon; taking the opacity across the whole box instead would fade the
+/// note along with the thing hanging off it, which is a note the picture claims
+/// is quieter than it is.
+///
+/// Applied to BOTH layers, which is what makes a fading tip a fading ribbon
+/// rather than a ribbon dissolving inside its own outline: the surround wraps
+/// the ends as much as the flanks, so a body taken out on its own would leave a
+/// hard black cap standing where the ink went. Past the tip the ramp is
 /// negative and clamps to 0, so that cap is gone rather than merely faint.
 ///
-/// Never narrower than one pixel, [`outline_coverage`]'s bargain taken here for
-/// the same reason: a sub-pixel ramp is an aliased edge. A `lead_fade` of 0
-/// leaves early with no ramp at all, so the ordinary square end is antialiased
-/// by [`inside`] alone and pays nothing for a fade it does not have.
+/// A lead with NO fade keeps its cap, and the branch that gives it one is not a
+/// special case dodged. Whether the tip fades is the one real distinction the
+/// pane's bar draws with its two handles closed against apart, and the two ends
+/// want opposite things: a tip that dissolves has nothing left for an outline to
+/// bound, while a tip that ends square is an edge like any other on the note and
+/// is owed the same surround the flanks get. So a fade of 0 is uniform right out
+/// to the box, and [`inside`] is what ends it — the same square end the ribbon
+/// would have without a lead at all, dimmed by the opacity.
+///
+/// The ramp is never narrower than one pixel, [`outline_coverage`]'s bargain
+/// taken here for the same reason: a sub-pixel ramp is an aliased edge. A
+/// segment with no lead leaves at the first line, so the ordinary ribbon pays
+/// nothing at all for a lead it does not have.
 fn lead_coverage(in: VertexOut) -> f32 {
-    if (in.lead_fade <= 0.0) {
+    if (in.lead <= 0.0) {
         return 1.0;
     }
+    let u = in.local.y + in.half_extent.y;
+    if (u >= in.lead) {
+        return 1.0;
+    }
+    if (in.lead_fade <= 0.0) {
+        return in.lead_alpha;
+    }
     let w = max(in.lead_fade, max(locals.feather, 1e-6));
-    return clamp((in.local.y + in.half_extent.y) / w, 0.0, 1.0);
+    return in.lead_alpha * clamp(u / w, 0.0, 1.0);
 }
 
 /// Signed distance from this fragment to the note's own box, in points:
