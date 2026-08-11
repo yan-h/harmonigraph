@@ -174,6 +174,61 @@ pub(crate) fn ladder(want: f32, base: f32, ppp: f32) -> (f32, f32) {
     (raster, want / raster)
 }
 
+/// How much empty box a piece of text leaves between its INK and the edge of
+/// its layout box on the side `toward` points at, in points.
+///
+/// A label is placed by its box, and for a line of digits that box is a good
+/// deal taller than the digits: the font's ascent stands above the figures and
+/// its descent hangs below them, and both scale with the point size. So a
+/// label set one point off a line is one point plus a descent off it, and the
+/// second term grows with the type — the number drifts off the thing it names
+/// exactly at the sizes where the drift is easiest to see. Subtracting this
+/// from the anchor makes the gap the caller asks for the gap a reader gets, at
+/// every size.
+///
+/// Measured off the galley rather than taken as a fraction of the em, which is
+/// what makes it worth a function: a ratio is right for one typeface and
+/// silently wrong for the next, and it would be wrong in the direction that
+/// looks fine on the machine it was tuned on. egui caches galleys, so laying
+/// the text out here and again where it is drawn costs one layout and a
+/// lookup.
+///
+/// `toward` is a screen direction, and only its dominant axis is read — the
+/// callers hand it an axis off [`Axes`](crate::panes::spectral::axes::Axes),
+/// which is always one of the four cardinals. Text with no ink at all (an
+/// empty label, a string of spaces) has no edge to measure, and reports 0.
+pub(crate) fn ink_inset(
+    painter: &egui::Painter,
+    text: &str,
+    font: &egui::FontId,
+    toward: egui::Vec2,
+) -> f32 {
+    let galley =
+        painter.layout_no_wrap(text.to_owned(), font.clone(), egui::Color32::PLACEHOLDER);
+    // The same glyph rects `TextBatch::text` draws, in the galley's own space
+    // — read here rather than out of the batch because this has to answer
+    // BEFORE the anchor it corrects is handed over.
+    let ink = galley
+        .rows
+        .iter()
+        .flat_map(|row| {
+            row.glyphs.iter().filter(|g| !g.uv_rect.is_nothing()).map(|glyph| {
+                let left_top = row.pos + (glyph.pos + glyph.uv_rect.offset).to_vec2();
+                egui::Rect::from_min_size(left_top, glyph.uv_rect.size)
+            })
+        })
+        .reduce(|a, b| a.union(b));
+    let Some(ink) = ink else { return 0.0 };
+    let size = galley.size();
+    if toward.x.abs() > toward.y.abs() {
+        if toward.x > 0.0 { size.x - ink.max.x } else { ink.min.x }
+    } else if toward.y > 0.0 {
+        size.y - ink.max.y
+    } else {
+        ink.min.y
+    }
+}
+
 /// One rung of the size ladder, as a ratio. 4% — under what reads as a change
 /// of size while a picture is moving, and coarse enough that a sixfold zoom
 /// asks for some 45 sizes where a pixel grid asked for 300.
@@ -1057,6 +1112,82 @@ impl MarkAtlas {
 mod tests {
     use super::*;
     use crate::marks::{mark_key, MarkKind, MARK_WEIGHT};
+
+    /// Backing an anchor off by [`ink_inset`] lands the label's INK where the
+    /// caller asked for its box — on both axes, and at any size.
+    ///
+    /// The size-independence is the whole claim. What sits between a layout
+    /// box and the digits inside it is the font's own ascent, descent and side
+    /// bearings, all of which grow with the point size, so a caller that
+    /// spaces a label off a line by a constant gets the constant plus a term
+    /// that quadruples when the type does. The analyzer's frequency labels are
+    /// that caller, and a number drifting off the ruling it names as the pane
+    /// grows is what this exists to stop.
+    ///
+    /// Both axes because the analyzer turns: its pitch axis runs up the screen
+    /// in the wide orientations and across it in the tall ones, so the edge a
+    /// label presents to its ruling is a descent in one pair and a side
+    /// bearing in the other.
+    #[test]
+    fn an_ink_correction_lands_a_label_the_same_way_at_any_size() {
+        let anchor = egui::pos2(100.0, 50.0);
+        // The label's box grows up and to the right of the anchor, so the
+        // edges facing back at it are its bottom and its left.
+        let placed = |size: f32, facing: egui::Vec2| {
+            let mut batch = TextBatch::default();
+            let font = egui::FontId::monospace(size);
+            let mut inset = 0.0;
+            let _ = crate::tests::probe::painted_full(egui::vec2(400.0, 200.0), |ui| {
+                inset = ink_inset(ui.painter(), "500", &font, facing);
+                batch.text(
+                    ui.painter(),
+                    anchor + facing * inset,
+                    egui::Align2::LEFT_BOTTOM,
+                    "500".to_owned(),
+                    font.clone(),
+                    egui::Color32::WHITE,
+                    egui::Color32::BLACK,
+                );
+            });
+            (inset, batch.pieces()[0].ink)
+        };
+
+        let (down, left) = (egui::vec2(0.0, 1.0), egui::vec2(-1.0, 0.0));
+        for size in [10.0, 40.0] {
+            let (inset, ink) = placed(size, down);
+            assert!(
+                (ink.max.y - anchor.y).abs() < 0.5,
+                "{size}pt type left the ink {} off the anchor it was corrected onto",
+                ink.max.y - anchor.y,
+            );
+            assert!(inset > 0.0, "{size}pt type reported no descent to correct for");
+
+            let (inset, ink) = placed(size, left);
+            assert!(
+                (ink.min.x - anchor.x).abs() < 0.5,
+                "{size}pt type left the ink {} off the anchor across the other axis",
+                ink.min.x - anchor.x,
+            );
+            // No assertion that this one is nonzero: a monospace digit's side
+            // bearing is a twentieth of the em, which rounds to no whole
+            // pixel at all until the type is large. The correction is
+            // therefore 0 at small sizes, and 0 is the right answer there.
+            let _ = inset;
+        }
+
+        // And it is the SCALING term it removes, not a fixed one: quadruple
+        // the type and the air quadruples with it. A constant would pass every
+        // assertion above at one size and none of them at the other.
+        let small = placed(10.0, down).0;
+        let big = placed(40.0, down).0;
+        assert!(big > small * 3.0, "a 4x size grew the descent only from {small} to {big}");
+
+        // Nothing to measure reports nothing rather than a box's worth of
+        // air: a label with no ink has no edge for a ruling to be near.
+        let _ = crate::tests::probe::painted_full(egui::vec2(400.0, 200.0), |ui| {
+            assert_eq!(ink_inset(ui.painter(), "", &egui::FontId::monospace(20.0), down), 0.0);
+        });
+    }
 
     /// A mark at a size in physical pixels, which is the axis a zoom walks:
     /// every rung of the size ladder is one more of these.

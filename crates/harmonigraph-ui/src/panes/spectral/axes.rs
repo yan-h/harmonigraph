@@ -50,6 +50,58 @@ pub(super) fn plot_budget(split: f32, depth_len: f32) -> f32 {
 /// The 1 kHz pivot of the tilt slope, as a MIDI pitch.
 pub(super) const TILT_PIVOT_MIDI: f32 = 83.213_1;
 
+/// How far off the ruling it names a frequency label sits, ACROSS the pitch
+/// axis, in points — measured to the INK, which is why the pane corrects the
+/// anchor by [`ink_inset`](crate::text::ink_inset) before drawing.
+///
+/// Two points, which is the reach of the halo every label on this pane
+/// carries: as close as the number can be set without its own rim eating the
+/// line it is pointing at, and no closer. That the halo is what decides it is
+/// the argument for measuring to the ink at all — a gap to the layout BOX
+/// carries the font's descent as well, which scales with the type, so the same
+/// constant would hold the number a hair off its line on a small pane and
+/// adrift from it on a large one. Adrift is the wrong way to fail: an axis
+/// logarithmic in frequency puts the ruling above a label a third as far off
+/// as the one below, so which line a number belongs to is precisely the
+/// reading the labels exist to settle.
+pub(super) const LABEL_GAP_PT: f32 = 2.0;
+
+/// How far in from the end of its ruling a frequency label starts, ALONG the
+/// depth axis, in points — enough that the label clears the pane edge it is
+/// anchored against.
+pub(super) const LABEL_INSET_PT: f32 = 2.0;
+
+/// Where on the depth axis the frequency labels ride, and how far they offset
+/// back into the spectrum from there — the pair [`Axes::text_anchor`] takes as
+/// its depth and its `into`.
+///
+/// The spectrum's CEILING end, which is the edge its peaks reach, rather than
+/// the baseline they stand on. The baseline is the busiest line the pane has:
+/// joined, it is the now-line, with the spectrogram's newest column arriving
+/// on one side of it and every sounding note's ribbon ending square on the
+/// other, so a number written there is read against three pictures at once and
+/// competes with the one line on the pane that divides two of them. The
+/// ceiling end is the quiet one — only a peak at full scale reaches it — and
+/// it is the end of the ruling nearest what the number is being looked up
+/// for.
+///
+/// Which screen edge that is flips with the layout, because joining a roll
+/// mirrors the curve: hanging off the now-line the peaks point out to depth 0,
+/// and standing alone on the outer edge they reach the far end instead. The
+/// offset follows, so in both the label sits inside the pane rather than off
+/// it.
+///
+/// Whole-song mode draws no spectrum at all and hands the whole axis to the
+/// roll (`split` is 0), so it takes the first arm and its labels ride the near
+/// edge — the only edge it has to put them on.
+pub(super) fn label_anchor(split: f32) -> (f32, f32) {
+    if split < 1.0 {
+        (0.0, LABEL_INSET_PT)
+    } else {
+        (1.0, -LABEL_INSET_PT)
+    }
+}
+
 /// Point size of an axis marking's label — a dozen standing marks that
 /// should stay quiet.
 ///

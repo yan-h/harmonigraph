@@ -25,8 +25,8 @@ pub(super) use settings::spectrum_settings_pane;
 use crate::{theme, SharedState};
 use crate::panes::nearest_visible_node;
 use axes::{
-    frequency_grid, loudness, plot_budget, spectrum_share, text_scales, Axes, PitchScale,
-    TimeAxis, MARKING_PT, PROFILE_PT,
+    frequency_grid, label_anchor, loudness, plot_budget, spectrum_share, text_scales, Axes,
+    PitchScale, TimeAxis, LABEL_GAP_PT, MARKING_PT, PROFILE_PT,
 };
 use gestures::{drag_split, drag_zoom};
 use egui::Sense;
@@ -138,11 +138,10 @@ pub(crate) fn spectral_pane(
     // nothing to join, so it stands up from the outer edge as usual.
     let joined = split < 1.0;
     let sd = |d: f32| if joined { split - d } else { d };
-    // Labels ride the baseline: the now-line when joined (offsetting into the
-    // spectrum, whichever way that runs), else the outer edge. Whole-song has
-    // no spectrum to join, so its labels ride the near edge like the latter.
-    let (label_d, label_into) =
-        if joined && !whole_song { (split, -2.0) } else { (0.0, 2.0) };
+    // Labels ride the end of the spectrum its PEAKS reach, not the baseline
+    // they stand on, and which screen edge that is flips with the mirroring
+    // above — see `label_anchor` for both.
+    let (label_d, label_into) = label_anchor(split);
 
     // A uniform dark bed under the whole spectrogram region, so it reads as one
     // surface. The heatmap mesh only covers the depths that actually have
@@ -400,14 +399,24 @@ pub(crate) fn spectral_pane(
     // over a bright spectrogram slab, or over the spectrum's own fill, has no
     // contrast to rely on at all.
     let mut labels = crate::text::TextBatch::default();
+    let marking_font = egui::FontId::monospace(MARKING_PT * text.markings);
+    // Which way the label's own edge faces its ruling: back down the pitch
+    // axis, since the anchor above offsets it up that axis and it grows the
+    // same way.
+    let facing = -axes.dir_pitch();
     for (p, label) in axis_labels {
-        let (pos, align) = axes.text_anchor(p, label_d, 3.0, label_into);
+        let (pos, align) = axes.text_anchor(p, label_d, LABEL_GAP_PT, label_into);
+        // That anchor pins the label's layout BOX, and the gap wanted is
+        // between the ruling and the digits — so the air the font leaves on
+        // the facing edge comes back off it, and `LABEL_GAP_PT` is what a
+        // reader measures rather than a floor under it.
+        let pos = pos + facing * crate::text::ink_inset(&painter, &label, &marking_font, facing);
         labels.text(
             &painter,
             pos,
             align,
             label,
-            egui::FontId::monospace(MARKING_PT * text.markings),
+            marking_font.clone(),
             theme::text_dim(),
             theme::well(),
         );
