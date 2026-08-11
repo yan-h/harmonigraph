@@ -689,14 +689,19 @@ fn anchor_edge(note: &RollNote, now: f64, anchor: Anchor) -> Edge {
 /// growth direction, or `C` and `C♯` disagree about where the letter goes and
 /// a column of names stops reading as one. [`draw_stacked_name`] always sets
 /// the letter first and lets the accidental/comma columns trail after it, so
-/// growth that runs the same way (time left-to-right or top-to-bottom) already
-/// puts the letter flush against the leading edge, same as it would with no
-/// marks at all -- nothing to do there. Growth that runs backward (Right's
-/// leftward time) is the mismatch: "first" is still the box's FAR edge from
-/// the leading edge, not its near one, so centring on the FULL name drags the
-/// letter along with however wide its marks happen to be. Measuring the pure
-/// letter's reach instead of the whole name's is what keeps it still; the
-/// marks are what absorb the difference.
+/// growth that runs the screen's own way (left-to-right or top-to-bottom)
+/// already puts the letter flush against the anchor, same as it would with no
+/// marks at all -- nothing to do there. Growth that runs backward is the
+/// mismatch: "first" is still the box's FAR edge from the anchor, not its near
+/// one, so centring on the FULL name drags the letter along with however wide
+/// its marks happen to be. Measuring the pure letter's reach instead of the
+/// whole name's is what keeps it still; the marks are what absorb the
+/// difference.
+///
+/// WHICH growth a name has is the anchor's and not the orientation's (see
+/// [`Anchor`]), so every orientation has a backward case in it: Right's
+/// leftward time at the leading edge, and Left's own at the onset, where the
+/// box grows back toward the now-line.
 ///
 /// What that costs is worth stating at its real size, because it is not a
 /// rounding error: the box's near edge lands at `inset + letter - along`, so a
