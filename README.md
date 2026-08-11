@@ -1,6 +1,6 @@
 # Harmonigraph
 
-![Spectrogram and spectrum analyzer on the left, the pitch lattice on the right, mid-passage](docs/images/visualization-example.png)
+![The pitch lattice on the left, the spectrum analyzer and its MIDI-overlaid spectrogram in the middle, the Display settings on the right, mid-passage](docs/images/plugin-window-lattice-analyzer-display.png)
 
 A harmony visualizer that runs as an audio plugin (CLAP + VST3). I use it for checking my tuning when composing in my DAW, and for generating visualizations of my pieces.
 
