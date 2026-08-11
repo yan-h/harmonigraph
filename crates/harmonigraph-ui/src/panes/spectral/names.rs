@@ -583,9 +583,17 @@ struct Edge {
 
 /// Which end of a ribbon its name is written on.
 ///
-/// The two agree for every note already released — a ribbon that has stopped
-/// growing has one shape — and differ only while a key is DOWN, where they are
-/// two answers to what a name should do about a note that is still happening.
+/// They are the two ENDS, so every name on the pane sits somewhere different
+/// under one than under the other — a released note's name at the head of its
+/// ribbon or at its tail, a ribbon's length apart. What differs is not only
+/// where a name starts but whether it MOVES: a leading edge tracks `now` while
+/// the key is down and an onset never moves at all, which is the question the
+/// two are answering.
+///
+/// They do agree at one instant, and it is the instant a note is struck: a
+/// ribbon of no length has its two ends in one place, at the now-line. So the
+/// setting decides what happens to a name AFTER that, and every name is at the
+/// same place at the moment it appears either way.
 #[derive(Clone, Copy, PartialEq)]
 enum Anchor {
     /// The end that comes first in reading order: the low-depth end, which is
