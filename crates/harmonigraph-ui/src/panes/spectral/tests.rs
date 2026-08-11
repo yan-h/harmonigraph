@@ -686,27 +686,80 @@ fn the_level_zoom_stops_at_the_minimum_span() {
     assert_eq!(after.ceiling_db, crate::LEVEL_MAX_DB, "opened past full scale");
 }
 
-/// A marking label at the now edge of a wide (Left) pane sits just
-/// inside it and grows up-and-inward (LEFT_BOTTOM anchor).
+/// A marking label on the outer edge of a wide (Left) pane sits just inside
+/// it and grows up-and-inward (LEFT_BOTTOM anchor).
+///
+/// Pinned as coordinates because both offsets are looks rather than laws —
+/// a hair off the ruling across the pitch axis, enough off the edge along the
+/// depth axis to clear it — and a look is exactly the kind of thing that
+/// drifts silently.
+///
+/// The anchor BEFORE the pane backs it off by the label's own
+/// [`ink_inset`](crate::text::ink_inset), which needs a laid-out galley and so
+/// belongs to the frame rather than to the geometry. What the correction does
+/// to it is held where the correction lives
+/// (`an_ink_correction_lands_a_label_the_same_way_at_any_size`).
 #[test]
-fn marking_labels_sit_just_inside_the_now_edge() {
+fn marking_labels_sit_just_inside_the_outer_edge() {
     let a = axes(WIDE, SpectralOrientation::Left);
-    let (pos, align) = a.text_anchor(0.5, 0.0, 3.0, 2.0);
-    assert_eq!(pos, egui::pos2(12.0, 67.0));
+    let (d, into) = label_anchor(spectrum_share(&SpectrumConfig::default()));
+    let (pos, align) = a.text_anchor(0.5, d, LABEL_GAP_PT, into);
+    assert_eq!(pos, egui::pos2(12.0, 68.0));
     assert_eq!(align, egui::Align2::LEFT_BOTTOM);
 }
 
-/// Whichever way the pane is turned, a label anchored just inside an
-/// edge grows inward rather than off the pane.
+/// Whichever way the pane is turned, a label sits inside the pane and grows
+/// further in rather than off it.
+///
+/// Both layouts, because they anchor against OPPOSITE edges of the depth axis
+/// (see [`label_anchor`]) — an offset that runs inward from one runs straight
+/// off the other, and the four orientations decide which screen edge each of
+/// those is.
 #[test]
 fn label_anchors_grow_into_the_pane() {
     for orientation in EVERY_ORIENTATION {
         let a = axes(WIDE, orientation);
-        let (pos, align) = a.text_anchor(0.5, 0.0, 3.0, 2.0);
-        // A nominal 40x12 label placed by this anchor.
-        let box_ = align.anchor_size(pos, egui::vec2(40.0, 12.0));
-        assert!(WIDE.contains_rect(box_), "{orientation:?}: {box_:?} escapes {WIDE:?}");
+        for split in [spectrum_share(&SpectrumConfig::default()), 1.0] {
+            let (d, into) = label_anchor(split);
+            let (pos, align) = a.text_anchor(0.5, d, LABEL_GAP_PT, into);
+            // A nominal 40x12 label placed by this anchor.
+            let box_ = align.anchor_size(pos, egui::vec2(40.0, 12.0));
+            assert!(
+                WIDE.contains_rect(box_),
+                "{orientation:?} at split {split}: {box_:?} escapes {WIDE:?}",
+            );
+        }
     }
+}
+
+/// The frequency labels ride the end of the spectrum its PEAKS reach, not the
+/// baseline they stand on — and that is the opposite end of the depth axis in
+/// the curve's two layouts, since joining a roll mirrors it.
+///
+/// Stated against `spectrum_share` rather than a literal split, so the two
+/// arms are the two layouts the pane can actually be in rather than two
+/// numbers that happen to straddle the branch.
+#[test]
+fn the_frequency_labels_ride_the_peak_end_of_the_spectrum() {
+    // Joined: the curve hangs off the now-line with its peaks pointing back
+    // out to depth 0, so that outer edge is where the numbers go.
+    let split = spectrum_share(&SpectrumConfig::default());
+    assert!(split > 0.0 && split < 1.0, "this needs a pane the spectrum shares");
+    let (d, into) = label_anchor(split);
+    assert_eq!(d, 0.0, "the labels sat on the baseline, not the peak end");
+    assert!(into > 0.0, "the offset runs off the pane rather than into it");
+
+    // Nothing to join: the curve stands up from the outer edge instead, so the
+    // peaks reach the far end of the axis and the labels follow them there.
+    let alone =
+        SpectrumConfig { show_roll: false, show_spectrogram: false, ..SpectrumConfig::default() };
+    let (d, into) = label_anchor(spectrum_share(&alone));
+    assert_eq!(d, 1.0, "the labels sat on the baseline, not the peak end");
+    assert!(into < 0.0, "the offset runs off the pane rather than into it");
+
+    // Whole-song draws no spectrum and gives the roll the whole axis; its
+    // labels have only the near edge to ride, and must still turn inward.
+    assert_eq!(label_anchor(0.0), (0.0, into.abs()));
 }
 
 /// The pitch range the whole analyzer covers, plus a hair either side, so a
