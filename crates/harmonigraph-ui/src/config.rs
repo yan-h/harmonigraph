@@ -348,6 +348,26 @@ pub struct SpectrumConfig {
     /// Write each note's name over its ribbon, at the moment it was struck —
     /// see [`panes::spectral::names`](crate::panes::spectral::names).
     pub note_names: bool,
+    /// Anchor a name on the note's ONSET rather than on its ribbon's leading
+    /// edge, so it scrolls with the picture from the moment the key goes down
+    /// instead of waiting at the now-line until the key comes up.
+    ///
+    /// The two are the same for every note already released; they differ only
+    /// while a key is DOWN, and each end has a cost worth stating:
+    ///
+    ///   - The leading edge (off) keeps a held note's name still and legible at
+    ///     the now-line for as long as you hold it — but the name then starts
+    ///     moving at the release, which is a jump nothing in the music made,
+    ///     and a drone held longer than the Span never scrolls at all.
+    ///   - The onset (on) pins a name to a take TIME, so it holds its place on
+    ///     the ribbon under it and nothing about it changes at the release. The
+    ///     cost is at the far edge: a note still sounding whose onset has
+    ///     scrolled off the pane loses its name, since the end it was written
+    ///     on has left.
+    ///
+    /// Off in a blob that has never heard of it, which is the behaviour every
+    /// saved view was dialled in against.
+    pub note_names_travel: bool,
     /// Overall size of those names, as a multiple of their built-in size.
     ///
     /// Rides on top of the pitch zoom, which already grows a name as the range
@@ -634,6 +654,9 @@ impl Default for SpectrumConfig {
             roll_outline: 2.0,
             roll_outline_fade: 1.5,
             note_names: true,
+            // The leading edge: a held note's name waits where you can read it
+            // while you play, which is what the naming was dialled in against.
+            note_names_travel: false,
             note_name_scale: 1.0,
             show_spectrogram: true,
             // The even ramp, which is the one that reads a heatmap's quiet

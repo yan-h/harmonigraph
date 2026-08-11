@@ -363,9 +363,10 @@ pub(crate) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
          further out from where it already starts to soften.",
     );
     ui.checkbox(&mut cfg.note_names, "Note names").on_hover_text(
-        "Write each note's name on its own ribbon, at the leading edge — so a \
-         held note's name waits at the now-line and travels off with the note \
-         when you let go. For reading the heatmap: a band of energy sits at \
+        "Write each note's name on its own ribbon, at the end it is anchored \
+         to — by default the leading edge, so a held note's name waits at the \
+         now-line and travels off with the note when you let go. For reading \
+         the heatmap: a band of energy sits at \
          some height on an axis marked only in decades of hertz, and the \
          ribbon over that band is the same note, so naming the ribbon names \
          the band.\n\n\
@@ -377,6 +378,22 @@ pub(crate) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
          named. Needs Note history on: a name labels a ribbon.",
     );
     ui.add_enabled_ui(cfg.note_names && cfg.show_roll, |ui| {
+        ui.checkbox(&mut cfg.note_names_travel, "Travel from the onset").on_hover_text(
+            "Write the name at the note's ONSET instead, so it starts \
+             scrolling the moment the key goes down rather than waiting at the \
+             now-line until you let go.\n\nThe two differ only while a key is \
+             down. Anchored at the leading edge a held note's name stays where \
+             you can read it while you play, and then starts moving at the \
+             release — a movement nothing in the music made, and a drone held \
+             longer than the Span never scrolls at all. Anchored at the onset \
+             a name is pinned to a moment of the take: it keeps its place on \
+             the ribbon under it, and the release changes nothing about it. \
+             The cost is at the far edge, where a note still sounding whose \
+             onset has scrolled off loses its name, the end it was written on \
+             having left the pane.\n\nThe offline render's whole-song layout \
+             is anchored at the onset either way — it lays the take out in \
+             reading order, where the onset IS the leading edge.",
+        );
         ValueBar::new(&mut cfg.note_name_scale, crate::SCALE_BAR_RANGE, "Name size")
             .show(ui)
             .on_hover_text(
