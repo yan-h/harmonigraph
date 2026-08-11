@@ -1240,10 +1240,10 @@ mod tests {
     /// [`a_name_sits_on_its_ribbon_at_the_leading_edge`]), so that is what has
     /// to agree between a plain letter and one carrying a mark.
     ///
-    /// Asked of BOTH growth directions in each orientation, because which one
-    /// a pane is in is no longer the orientation's to decide: a name anchored
-    /// at the onset ([`Anchor::Onset`]) grows back against the depth axis, so
-    /// every orientation now has a leftward case somewhere in it.
+    /// Asked of BOTH growth directions in each orientation, because the
+    /// orientation does not decide which one a pane is in: a name anchored at
+    /// the onset ([`Anchor::Onset`]) grows back against the depth axis, so
+    /// every orientation has a leftward case somewhere in it.
     ///
     /// [`draw_stacked_name`]: crate::marks::draw_stacked_name
     #[test]
@@ -1483,11 +1483,11 @@ mod tests {
     /// either anchor and in every orientation.
     ///
     /// The direction the box grows in is the anchor's rather than the layout's,
-    /// and the two point opposite ways live — so taking it from the layout, as
-    /// the pane could once afford to, lays a travelling name over the picture
-    /// BEHIND its note instead of over the note. Read by projecting onto the
-    /// depth axis, since nothing here may name a screen side, and swept over
-    /// [`SpectralOrientation::ALL`] so a fifth orientation cannot skip it.
+    /// and the two point opposite ways live — so taking it from the layout lays
+    /// a travelling name over the picture BEHIND its note instead of over the
+    /// note. Read by projecting onto the depth axis, since nothing here may
+    /// name a screen side, and swept over [`SpectralOrientation::ALL`] so a
+    /// fifth orientation cannot skip it.
     #[test]
     fn a_name_lies_over_its_own_ribbon_at_either_anchor() {
         // A plain `C`, whose box does not overrun its anchor: a name carrying
