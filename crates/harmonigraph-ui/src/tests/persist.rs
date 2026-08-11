@@ -1178,8 +1178,8 @@ fn both_doors_into_a_blob_agree_about_the_version_floor() {
     // The door `load_persist` is: refused, so the render config is the default.
     let mut restored = fresh();
     restored.load_persist(&stale);
-    let fresh = fresh();
-    assert_eq!(restored.take.render_config.playhead, fresh.take.render_config.playhead);
+    let defaults = fresh();
+    assert_eq!(restored.take.render_config.playhead, defaults.take.render_config.playhead);
 
     // The door `harmonigraph-offline`'s `main` is. Refusing the blob whole
     // means refusing it here too, so the renderer composes at a default frame

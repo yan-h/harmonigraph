@@ -1010,7 +1010,6 @@ const SCALES: [f32; 5] = [0.7, 0.9, 1.0, 1.1, 1.5];
 /// scroll, so the fixture gives the Console lines and the Notes pane voices.
 fn scrolling_settings_pane(pane: SettingsPane, scale: f32) -> Vec<egui::epaint::ClippedShape> {
     let mut state = fresh();
-    state.ui_scale = scale;
     let tab = pane.install(&mut state);
     state.workspace.dock = egui_dock::DockState::new(vec![tab]);
     // The same shell [`settings_pane_at_width`] draws for, so the Video pane
@@ -1028,7 +1027,7 @@ fn scrolling_settings_pane(pane: SettingsPane, scale: f32) -> Vec<egui::epaint::
     }
     // The window scales with the chrome, so every pane overflows it by the same
     // margin at every scale rather than the sweep having a size per scale.
-    let mut h = DockHarness::scaled(SCROLLING_PANE * scale, scale);
+    let mut h = DockHarness::scaled(SCROLLING_PANE * scale, scale, &mut state);
     let screen = h.screen;
     let mut frame = |state: &mut SharedState, events: Vec<egui::Event>| h.frame(state, events);
     let margin = crate::theme::pane_inner_margin(scale);

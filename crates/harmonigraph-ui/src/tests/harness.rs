@@ -29,7 +29,7 @@ impl ParamBackend for RecordingBackend {
 /// every layer that sits between it and the mouse.
 pub(super) struct DockHarness {
     pub(super) ctx: egui::Context,
-    pub(super) backend: RecordingBackend,
+    backend: RecordingBackend,
     pub(super) screen: egui::Rect,
     t: f64,
 }
@@ -39,11 +39,11 @@ pub(super) struct DockHarness {
 /// than slivers, and the size the pane coordinates written into these suites
 /// (a point inside the top-left leaf, the settings column at x ~700..1000) are
 /// read against.
-pub(super) const WINDOW: egui::Vec2 = egui::vec2(1000.0, 800.0);
+pub(super) const DEFAULT_WINDOW: egui::Vec2 = egui::vec2(1000.0, 800.0);
 
 impl DockHarness {
     pub(super) fn new() -> Self {
-        DockHarness::at(WINDOW)
+        DockHarness::at(DEFAULT_WINDOW)
     }
 
     /// A harness whose window is `size`, for the suites that are about a
@@ -71,7 +71,15 @@ impl DockHarness {
     /// setting rather than the device's pixel ratio: it resizes every font,
     /// margin and bar in the dock, so a window has to be scaled with it or the
     /// sweep is also a sweep over how much overflows.
-    pub(super) fn scaled(size: egui::Vec2, scale: f32) -> Self {
+    ///
+    /// The STATE is where the scale really lives, which is why this takes one:
+    /// `root_ui` calls `set_ui_scale` from `state.ui_scale` on every frame, so
+    /// a context dialled up on its own is reset by the first frame drawn on it
+    /// and the sweep silently measures the design size at every step. Dialling
+    /// the context as well is what puts the first frame at the scale rather
+    /// than one frame behind it.
+    pub(super) fn scaled(size: egui::Vec2, scale: f32, state: &mut SharedState) -> Self {
+        state.ui_scale = scale;
         let mut harness = DockHarness::at(size);
         harness.ctx = super::probe::themed_scaled(scale);
         harness

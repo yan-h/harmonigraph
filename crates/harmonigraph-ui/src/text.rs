@@ -1504,8 +1504,7 @@ mod tests {
     #[test]
     fn a_fresh_context_is_shown_the_atlas_again() {
         let font = egui::FontId::monospace(13.0);
-        let mut state =
-            crate::tests::probe::fresh();
+        let mut state = crate::tests::probe::fresh();
 
         // A window's worth of labels, settled: the second pass draws what the
         // first pass rasterized, which is where the keys stop moving.

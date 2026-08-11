@@ -219,28 +219,30 @@ fn the_fixture_dock_has_the_shape_of_the_plugins_own() {
             "node {index} is a different kind of node in the two docks",
         );
     }
-    // ...and the four indices these tests name really are those panes.
+    // ...and the four indices these tests name really are those panes, in BOTH
+    // docks. The kinds above cannot tell one leaf from another, so without this
+    // the fixture could hold the lattice and the analyzer the other way round
+    // and still match.
+    let under = |root: NodeIndex, of: NodeIndex| {
+        let mut walk = Some(of);
+        while let Some(n) = walk {
+            if n == root {
+                return true;
+            }
+            walk = n.parent();
+        }
+        false
+    };
     for (name, node, tab) in [
         ("PICTURES", PICTURES, Tab::Lattice),
         ("SETTINGS", SETTINGS, Tab::Tuning),
         ("LATTICE", LATTICE, Tab::Lattice),
         ("SPECTRAL", SPECTRAL, Tab::Spectral),
     ] {
-        let found = real.find_tab(&tab).expect("the plugin's dock holds every tab named here");
-        let under = |root: NodeIndex, of: NodeIndex| {
-            let mut walk = Some(of);
-            while let Some(n) = walk {
-                if n == root {
-                    return true;
-                }
-                walk = n.parent();
-            }
-            false
-        };
-        assert!(
-            under(node, found.node),
-            "{name} does not contain {tab:?} in the plugin's own dock",
-        );
+        for (whose, dock) in [("the plugin's own", &real), ("the fixture", &fixture)] {
+            let found = dock.find_tab(&tab).expect("both docks hold every tab named here");
+            assert!(under(node, found.node), "{name} does not contain {tab:?} in {whose} dock");
+        }
     }
 }
 

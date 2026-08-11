@@ -1,12 +1,12 @@
 //! What every test module in the crate builds a state with and reads a
 //! picture back through.
 //!
-//! Three things, and each was written out per test module before it was
-//! written here: the state a fixture starts from, a context carrying the real
-//! theme, and one frame of something painted into a rect. The first two are
-//! one line each and the third is ten, but all three are the same kind of
-//! liability — a fixture that quietly differs from its neighbour by a font or
-//! a screen size measures a different picture and says so nowhere.
+//! Three things, each of which every test module would otherwise restate: the
+//! state a fixture starts from, a context carrying the real theme, and one
+//! frame of something painted into a rect. The first two are one line each and
+//! the third is ten, but all three are the same kind of liability — a fixture
+//! that quietly differs from its neighbour by a font or a screen size measures
+//! a different picture and says so nowhere.
 //!
 //! Beside this, [`super::harness::DockHarness`] drives the whole dock through
 //! `root_ui`; that is the fixture for anything about pointer routing, folds or

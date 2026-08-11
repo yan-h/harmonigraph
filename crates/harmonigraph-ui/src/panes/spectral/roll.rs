@@ -999,8 +999,7 @@ mod tests {
         // spread over two seconds it is a shallow ramp. Same endpoints either
         // way, and both sit above the zoom.
         let glide = |after: f64| {
-            let mut state =
-                fresh();
+            let mut state = fresh();
             state.spectrum_config.orientation = SpectralOrientation::Left;
             state.spectrum_config.roll_seconds = 10.0;
             // The narrowest zoom there is (`PITCH_RANGE_MIN_SPAN`); anything
