@@ -12,8 +12,11 @@
 //! two things to read where there was one.
 //!
 //! So the roll says it, since the roll is already drawing the notes: a name
-//! written ON each ribbon, at its leading edge. The heatmap band under a
+//! written ON each ribbon, at one of its ends. The heatmap band under a
 //! ribbon is the same note, so naming the ribbon names the band.
+//!
+//! WHICH end is a setting, and the only thing it decides is what a name does
+//! while the key is still down — see [`Anchor`], which holds the trade.
 //!
 //! EVERY note, not one per pitch. The alternative — name a pitch the first
 //! time it is played and rule a line forward to carry it — reads well on paper
@@ -60,8 +63,9 @@ use crate::{theme, SharedState};
 /// and were being scaled by the same bar.
 pub(super) const LABEL_PT: f32 = 12.35;
 
-/// Points the name is set in from the ribbon's leading edge, along the time
-/// axis. Enough that the letter is not touching the end it starts from.
+/// Points the name is set in from the end of the ribbon it is anchored to,
+/// along the time axis. Enough that the letter is not touching the end it
+/// starts from.
 ///
 /// Scaled with the type, like every other length here — the scale the pane
 /// hands down carries the pitch zoom, the user's bar and the pane's own size,
@@ -241,14 +245,24 @@ fn depth_extent(axes: &Axes, name: &NoteName, size: f32, label_scale: f32) -> f3
     (extent.x * depth.x).abs() + (extent.y * depth.y).abs() + 2.0 * LABEL_PAD * label_scale
 }
 
-/// The stretch of TAKE TIME a name covers, from a leading edge at `at`.
+/// The stretch of TAKE TIME a name covers, from an anchor at `at`.
 ///
-/// A name always lies from its leading edge over the ribbon it names, which is
-/// to say toward increasing depth — and depth runs backward through time in
-/// the live layout (the picture scrolls into the past) and forward in the
-/// whole-song one. So which of two names reaches across the other is a
-/// question about the layout, and this is where it is answered; the thinning
-/// above only compares spans.
+/// A name always lies from its anchor over the ribbon it names, and which way
+/// through TIME that is depends on both the layout and which end the anchor is
+/// ([`Anchor`]): a leading edge is the ribbon's recent end and lies back into
+/// the past, an onset is its old end and lies forward. So which of two names
+/// reaches across the other is answered here; the thinning above only compares
+/// spans.
+///
+/// **Which of the two the caller passes cannot currently be observed**, and
+/// saying so is the point: a lane's reach is one number for the whole lane (see
+/// [`Lane`]), and against a sweep in ascending anchor order the two conventions
+/// are one inequality written twice — `at - reach >= prev` and
+/// `at >= prev + reach`. Every test in this file passes with the direction
+/// forced either way. It is kept because it is the honest description of where
+/// the ink goes, and because the per-note reach the lane's second defect
+/// contemplates would make the two come apart; it is not a switch the thinning
+/// can feel today, and a test asserting one is a test of nothing.
 fn name_span(at: f64, reach: f64, backward: bool) -> (f64, f64) {
     if backward {
         (at - reach, at)
@@ -305,6 +319,7 @@ pub(super) fn plan(
         return Vec::new();
     }
     let time = TimeAxis::new(state, split, now);
+    let anchor = Anchor::of(&time, cfg);
     let roll = state.roll();
 
     let size = LABEL_PT * label_scale;
@@ -317,9 +332,18 @@ pub(super) fn plan(
     let room = |name: &NoteName| {
         depth_extent(axes, name, size, label_scale) as f64 * seconds_per_point + gap
     };
-    // Live, the picture scrolls into the past, so a name lies back over its
-    // ribbon; the whole-song layout runs the other way. See [`name_span`].
-    let backward = !time.whole_song();
+    // Which way a name lies through TIME from where it is anchored: back over
+    // the ribbon behind a leading edge, forward over the ribbon ahead of an
+    // onset. See [`name_span`].
+    let backward = anchor == Anchor::Leading;
+    // ...and which way it lies on SCREEN, which is the same fact in the other
+    // currency: from the ribbon's head the name runs into the picture (with
+    // increasing depth), from its onset back out toward the now-line.
+    let grow = if anchor == Anchor::Onset && !time.whole_song() {
+        -axes.dir_depth()
+    } else {
+        axes.dir_depth()
+    };
 
     // How far back of the window the sweep has to read. NOT the whole roll,
     // and not the window either.
@@ -331,23 +355,42 @@ pub(super) fn plan(
     // half by wherever the range begins, and the offer after it compared
     // against a cut cell's, so the two that can be wrong sit at least two
     // cells short of the window and never reach the pane.
+    //
+    // Which end of the region the sweep starts behind is a fact about the
+    // LAYOUT — which way take time runs across it — and not about the anchor:
+    // whichever end of a ribbon a name is written on, the earliest one that can
+    // land on the pane is at the oldest time the region shows.
     let lookback = 4.0 * room(&WIDEST_NAME);
     let oldest = time.oldest();
-    let sweep_from = if backward { oldest - lookback } else { time.time_at(0.0) - lookback };
+    let sweep_from =
+        if time.whole_song() { time.time_at(0.0) - lookback } else { oldest - lookback };
     let mut notes: Vec<(&RollNote, Edge)> = roll
         .notes()
         // On its stop first, which is the one end every note carries without
-        // being asked: reading a leading edge reaches into the note's bends
+        // being asked: reading an anchor reaches into the note's bends
         // for the pitch there, and most of a long roll is nowhere near the
         // window. A note that stops before the sweep begins started before it
-        // too, so this drops nothing the exact test would have kept.
+        // too, so this drops nothing the exact test would have kept, at either
+        // anchor.
         .filter(|note| note.stop(now) >= sweep_from)
-        .map(|note| (note, leading_edge(&time, note, now)))
+        .map(|note| (note, anchor_edge(note, now, anchor)))
         .filter(|(_, edge)| edge.time >= sweep_from)
         .collect();
-    // By LEADING EDGE, oldest first — where the name will sit, which is what
-    // the thinning is handing out — and a total order, since the offline
-    // render must not depend on the order the roll happened to hand them back.
+    // By ANCHOR, oldest first — where the name will sit, which is what
+    // the thinning is handing out — and by channel and key after it, since the
+    // offline render must not depend on the order the roll happened to hand
+    // them back.
+    //
+    // Those three are a total order at the leading edge, where two entries of
+    // one key cannot share a stop. At the ONSET anchor they are not: a key
+    // struck, released and struck again at one sample — the delivery
+    // `one_press_is_named_once_however_the_host_delivers_it` is about — gives
+    // two entries agreeing on all three, and `sort_unstable_by` leaves those
+    // in an unspecified order. Harmless, and worth saying why rather than
+    // reaching for a fourth key: two entries with one onset land in one cell,
+    // so the second is refused whichever comes first, and one name is drawn in
+    // one place. Should they ever settle at different PITCHES they are
+    // different lanes, where both are named anyway.
     //
     // Oldest first, whether held or not: the order is about which instance of
     // a note takes the name, and a held note is no earlier a note for being
@@ -373,6 +416,44 @@ pub(super) fn plan(
         })
     };
 
+    // Where a name goes once it has one: on its own ribbon at its anchor,
+    // growing the way [`grow`] points. The two callers below differ in what
+    // they do with the box, never in how it is measured.
+    //
+    // A box growing toward the now-line is held off the roll's near edge. A
+    // note is younger than its own name for the first fraction of a second of
+    // it, and at the onset anchor there is no ribbon yet to lie over: the name
+    // reaches past that edge and over the SPECTRUM, which is another picture —
+    // the one this refuses to write names over at all when the roll is shut.
+    // So it sits against the edge and travels as soon as its ribbon is long
+    // enough to hold it, which is its own length of scrolling and no more; a
+    // name that came and went instead would blink at every note played, and one
+    // that started deeper would not be at the onset it names.
+    //
+    // What is clamped is the box DRAWN, not the anchor's time: a note's cell
+    // and its reach are the music's, and must not move with what the pane had
+    // room to show. Measured along `grow` and against the edge at the name's
+    // own pitch, so no screen side is named and a box growing the other way —
+    // every name at the leading edge, and every name in the whole-song layout —
+    // can never be caught by it.
+    let toward_near = grow.dot(axes.dir_depth()) < 0.0;
+    let place = |edge: &Edge, name: &NoteName| {
+        let (t, d) = (scale.t_of(edge.pitch), time.depth_of(edge.time));
+        let rect = label_rect(axes, grow, t, d, name, size, label_scale);
+        if !toward_near {
+            return rect;
+        }
+        // The leading corner's reach past the edge: the box's centre projected
+        // onto `grow`, plus half of what it spans that way.
+        let span = (rect.width() * grow.x).abs() + (rect.height() * grow.y).abs();
+        let over = (rect.center() - axes.at(t, split)).dot(grow) + span * 0.5;
+        if over > 0.0 {
+            rect.translate(-grow * over)
+        } else {
+            rect
+        }
+    };
+
     let mut occupied = Occupancy::default();
     let mut placed: Vec<NoteLabel> = Vec::new();
     let mut held: Vec<NoteLabel> = Vec::new();
@@ -381,13 +462,32 @@ pub(super) fn plan(
         // will be DRAWN at, not the note's pitch in general, since the two
         // differ for a bent note and it is the name that has to be visible.
         //
+        // A name lives as long as the END IT IS WRITTEN ON is on the pane, so
+        // live this is the anchor's own time: a leading edge inside the window
+        // is the note still having a head to name (`stop(now) >= oldest`,
+        // identically), and an onset that has scrolled off the far edge is a
+        // ribbon whose head has gone with it.
+        //
+        // Onsets have to be ASKED, because the depth they draw at CLAMPS. What
+        // catches a name written on one that has left is otherwise the sweep's
+        // own bound, and that is `lookback` — four of the widest name's rooms,
+        // some seconds at any ordinary Span — beyond the far edge: a held
+        // note's name would sit clamped against that edge for the whole of it
+        // before vanishing, which is the waiting this anchor exists to end,
+        // moved to the other end of the pane. Whole-song does want the clamp,
+        // and asks the note instead — a note that began before the render's
+        // start is named at the near edge, having nowhere to scroll off to.
+        //
         // Only DRAWING is culled here. A note off the far edge still takes its
         // turn in the thinning, which is what lets the names on the pane stand
         // still while it scrolls.
-        let visible = note.stop(now) >= oldest && scale.contains(edge.pitch);
-        // A held note stands outside the sweep in BOTH directions: it is named
-        // whatever is already there, and it is not recorded, so it takes
-        // nothing out of the running for anyone else.
+        let on_pane =
+            if time.whole_song() { note.stop(now) >= oldest } else { edge.time >= oldest };
+        let visible = on_pane && scale.contains(edge.pitch);
+        // A held note whose name is anchored on the LEADING EDGE stands outside
+        // the sweep in BOTH directions: it is named whatever is already there,
+        // and it is not recorded, so it takes nothing out of the running for
+        // anyone else.
         //
         // The second half is not a nicety. A held note's name sits at the
         // now-line and stays there, while every other name scrolls away from
@@ -404,13 +504,21 @@ pub(super) fn plan(
         // and it is the note being played: of the three ways to break the tie,
         // this is the only one that never withholds a name that could have
         // been shown.
-        if note.is_live() {
+        //
+        // All of which is about a name standing at the now-line while the
+        // picture scrolls past it, so the exemption belongs to the ANCHOR
+        // rather than to the key being down: a leading edge is the only thing
+        // here that does that. Anchored on the onset a held note's name is at a
+        // fixed take time like every other, and is thinned like every other —
+        // and has to be, or a name granted the exemption would be withdrawn at
+        // the release, which is the one moment that anchor exists to make
+        // uneventful.
+        if note.is_live() && anchor == Anchor::Leading {
             if !visible {
                 continue;
             }
             let (name, _) = naming(edge.pitch, &mut names);
-            let rect =
-                label_rect(axes, scale.t_of(edge.pitch), time.depth_of(edge.time), &name, size, label_scale);
+            let rect = place(&edge, &name);
             // Two keys sounding one pitch — a doubled MIDI source, a layered
             // MPE part — would otherwise stamp the same name on the same
             // points once per voice. The name still appears; it is drawn once.
@@ -452,8 +560,7 @@ pub(super) fn plan(
         lane.reached = to;
         if clear && visible {
             let (name, _) = naming(edge.pitch, &mut names);
-            let rect =
-                label_rect(axes, scale.t_of(edge.pitch), time.depth_of(edge.time), &name, size, label_scale);
+            let rect = place(&edge, &name);
             placed.push(NoteLabel { name, rect, #[cfg(test)] at: edge.time });
         }
     }
@@ -471,7 +578,8 @@ pub(super) fn plan(
     placed
 }
 
-/// A ribbon's LEADING edge: when it is, and what pitch the ribbon has THERE.
+/// A point on a ribbon a name can be written at: when it is, and what pitch the
+/// ribbon has THERE.
 ///
 /// A TIME, not a depth. The thinning is measured in it — a time is a fact
 /// about the music, where a depth is a fact about where the window happens to
@@ -485,25 +593,62 @@ struct Edge {
     pitch: f32,
 }
 
-/// The end of a ribbon that comes first in reading order — the low-depth end,
-/// which is the pane's now-line side in every orientation (the side
-/// [`SpectralOrientation`](crate::SpectralOrientation) is named for) — and the
-/// pitch it sits at.
+/// Which end of a ribbon its name is written on.
 ///
-/// Found by comparing the two ends rather than by naming one, because which
-/// end it is differs between the layouts and the arithmetic does not: live,
-/// time runs from the now-line outward, so a ribbon's leading edge is where it
-/// most recently sounded; whole-song lays the take out in reading order, so it
-/// is the onset.
+/// They are the two ENDS, so every name on the pane sits somewhere different
+/// under one than under the other — a released note's name at the head of its
+/// ribbon or at its tail, a ribbon's length apart. What differs is not only
+/// where a name starts but whether it MOVES: a leading edge tracks `now` while
+/// the key is down and an onset never moves at all, which is the question the
+/// two are answering.
 ///
-/// What this buys live is the behaviour a held note ought to have. While the
-/// key is down the note keeps reaching the present, so its leading edge IS the
-/// now-line: the name sits still there, at the head of a ribbon growing out
-/// behind it, for as long as the note is held. The moment it is released that
-/// edge is the release, and the name travels away with the note it belongs to.
-/// Anchoring on the onset instead would slide the name away from the note the
-/// whole time it was being played — which is exactly when you are looking at
-/// it.
+/// They do agree at one instant, and it is the instant a note is struck: a
+/// ribbon of no length has its two ends in one place, at the now-line. So the
+/// setting decides what happens to a name AFTER that, and every name is at the
+/// same place at the moment it appears either way.
+#[derive(Clone, Copy, PartialEq)]
+enum Anchor {
+    /// The end that comes first in reading order: the low-depth end, which is
+    /// the pane's now-line side in every orientation (the side
+    /// [`SpectralOrientation`](crate::SpectralOrientation) is named for).
+    ///
+    /// While the key is down the note keeps reaching the present, so this edge
+    /// IS the now-line: the name sits still there, at the head of a ribbon
+    /// growing out behind it, for as long as the note is held, and starts
+    /// travelling at the release. A name you can read in one place while you
+    /// play, at the price of a movement the music did not make and of a drone
+    /// whose name never scrolls at all.
+    Leading,
+    /// The onset — the moment the key went down, wherever the layout puts it.
+    ///
+    /// Fixed in take time, so the name scrolls with the picture from the first
+    /// frame of the note and nothing about it changes at the release: not where
+    /// it sits, not whether the thinning kept it. The price is a note whose
+    /// onset has scrolled off the far edge, which loses its name while it is
+    /// still sounding.
+    ///
+    /// The whole-song layout has no other option — it lays the take out in
+    /// reading order, where the onset is also the leading edge, and nothing
+    /// there tracks `now` at all.
+    Onset,
+}
+
+impl Anchor {
+    fn of(time: &TimeAxis, cfg: &crate::SpectrumConfig) -> Anchor {
+        if time.whole_song() || cfg.note_names_travel {
+            Anchor::Onset
+        } else {
+            Anchor::Leading
+        }
+    }
+}
+
+/// Where on a ribbon its name goes, and the pitch the ribbon has there.
+///
+/// Asked of the two ends' TIMES rather than of their depths, which is the same
+/// question — depth is monotone in time — and answerable for a note nowhere
+/// near the pane, where every depth clamps to the same edge and a comparison of
+/// depths stops meaning anything.
 ///
 /// **The pitch has to come from the same end as the depth**, which is the
 /// whole reason this returns a pair. A bent note is at a different pitch at
@@ -512,38 +657,42 @@ struct Edge {
 /// pitch from the other puts the name off the ribbon entirely — a semitone off
 /// for a modest bend, a quarter of the pitch axis for a wide glide, and over
 /// some other note's lane wherever it lands. A held-and-bent note shows it
-/// worst: the name parks at the now-line while the ribbon head slides out from
-/// under it, and a held note is the one always named.
+/// worst at the leading edge: the name parks at the now-line while the ribbon
+/// head slides out from under it, and a held note is the one always named
+/// there.
 ///
 /// Both ends are CLAMPED into the region on the way, so a note reaching past
-/// either edge is named at the last of it still on the pane.
-fn leading_edge(time: &TimeAxis, note: &RollNote, now: f64) -> Edge {
-    // Which end leads is a question about the LAYOUT, and `backward` is the
-    // whole of the answer: depth runs into the past live (so the ribbon's
-    // recent end is its head) and forward in the whole-song layout (so the
-    // onset is). Asked of the two ends' times rather than of their depths,
-    // which is the same question — depth is monotone in time — and answerable
-    // for a note nowhere near the pane, where every depth clamps to the same
-    // edge and the comparison stops meaning anything.
-    if time.whole_song() {
+/// either edge is named at the last of it still on the pane — except an onset
+/// gone off the far edge live, which [`plan`] culls rather than clamps.
+fn anchor_edge(note: &RollNote, now: f64, anchor: Anchor) -> Edge {
+    match anchor {
         // The onset end, so the pitch the note SETTLED on rather than the key
         // it was pressed at — a retuned note reaches its real pitch a moment
-        // after its note-on, and the ribbon is drawn from there.
-        Edge { time: note.start, pitch: note.settled_pitch() }
-    } else {
-        Edge { time: note.stop(now), pitch: note.end_pitch() }
+        // after its note-on, and the ribbon is drawn from there. It is also the
+        // one pitch on a bent note that stops moving, which is what lets a name
+        // anchored here hold both its place and its spelling while the note
+        // glides under it.
+        Anchor::Onset => Edge { time: note.start, pitch: note.settled_pitch() },
+        // Live, time runs from the now-line outward, so the ribbon's leading
+        // edge is where it most recently sounded.
+        Anchor::Leading => Edge { time: note.stop(now), pitch: note.end_pitch() },
     }
 }
 
-/// The screen box a name covers on a ribbon at pitch `p` whose leading edge is
-/// at depth `d`, padded by the clear space it demands around itself.
+/// The screen box a name covers on a ribbon at pitch `p` whose anchor is at
+/// depth `d`, padded by the clear space it demands around itself.
+///
+/// `grow` is the direction from that anchor INTO the note, which is the depth
+/// axis for a name at the ribbon's head and against it for one at its onset
+/// live — see [`Anchor`]. Everything below reads it rather than the axis, so
+/// the two differ in one vector and not in a second set of arithmetic.
 ///
 /// ON the ribbon across the pitch axis — centred on the note's own line, not
 /// standing off it. The note is what the name is about, so the name sits on
 /// it; the halo every label here carries is what keeps the letter legible
 /// against whatever colour the ribbon is (see [`draw`]).
 ///
-/// Along the time axis it grows from the leading edge INTO the note, so a name
+/// Along the time axis it grows from the anchor INTO the note, so a name
 /// lies over its own ribbon rather than over the picture in front of it —
 /// except where the growth runs backward and the name carries marks, which is
 /// the trade named at the bottom of this comment and measured in issue #151.
@@ -552,22 +701,27 @@ fn leading_edge(time: &TimeAxis, note: &RollNote, now: f64) -> Edge {
 /// growth direction, or `C` and `C♯` disagree about where the letter goes and
 /// a column of names stops reading as one. [`draw_stacked_name`] always sets
 /// the letter first and lets the accidental/comma columns trail after it, so
-/// growth that runs the same way (time left-to-right or top-to-bottom) already
-/// puts the letter flush against the leading edge, same as it would with no
-/// marks at all -- nothing to do there. Growth that runs backward (Right's
-/// leftward time) is the mismatch: "first" is still the box's FAR edge from
-/// the leading edge, not its near one, so centring on the FULL name drags the
-/// letter along with however wide its marks happen to be. Measuring the pure
-/// letter's reach instead of the whole name's is what keeps it still; the
-/// marks are what absorb the difference.
+/// growth that runs the screen's own way (left-to-right or top-to-bottom)
+/// already puts the letter flush against the anchor, same as it would with no
+/// marks at all -- nothing to do there. Growth that runs backward is the
+/// mismatch: "first" is still the box's FAR edge from the anchor, not its near
+/// one, so centring on the FULL name drags the letter along with however wide
+/// its marks happen to be. Measuring the pure letter's reach instead of the
+/// whole name's is what keeps it still; the marks are what absorb the
+/// difference.
+///
+/// WHICH growth a name has is the anchor's and not the orientation's (see
+/// [`Anchor`]), so every orientation has a backward case in it: Right's
+/// leftward time at the leading edge, and Left's own at the onset, where the
+/// box grows back toward the now-line.
 ///
 /// What that costs is worth stating at its real size, because it is not a
 /// rounding error: the box's near edge lands at `inset + letter - along`, so a
 /// name whose marks are wider than [`LABEL_INSET`] — which is every marked name
-/// — puts its mark column PAST the leading edge, over the picture in front of
-/// the note. Measured on a 300pt pane at `LABEL_PT`: a bare `C` clears it by
-/// 0.65pt, `C♯` crosses by 3.4pt, `B♭↓` by 9.0pt, the widest spelling by 17.2pt,
-/// and it scales with the pitch zoom.
+/// — puts its mark column PAST the end it is anchored to, over whatever the
+/// picture holds beyond it. Measured on a 300pt pane at `LABEL_PT`: a bare `C`
+/// clears it by 0.65pt, `C♯` crosses by 3.4pt, `B♭↓` by 9.0pt, the widest
+/// spelling by 17.2pt, and it scales with the pitch zoom.
 ///
 /// The two constraints cannot both hold while [`draw_stacked_name`] typesets the
 /// marks after the letter: pinning the letter fixes the box's near edge and lets
@@ -579,6 +733,7 @@ fn leading_edge(time: &TimeAxis, note: &RollNote, now: f64) -> Edge {
 /// [`draw_stacked_name`]: crate::marks::draw_stacked_name
 fn label_rect(
     axes: &Axes,
+    grow: egui::Vec2,
     p: f32,
     d: f32,
     name: &NoteName,
@@ -586,28 +741,26 @@ fn label_rect(
     label_scale: f32,
 ) -> egui::Rect {
     let extent = name_extent(name, size);
-    let depth = axes.dir_depth();
-    // How far the box reaches along the depth axis: text always runs across the
+    // How far the box reaches the way it grows: text always runs across the
     // screen, so that is its width when time runs across the pane and its height
     // when time runs up or down it. Projecting answers all four without naming a
     // screen side.
-    let along_depth = (extent.x * depth.x).abs() + (extent.y * depth.y).abs();
+    let along = (extent.x * grow.x).abs() + (extent.y * grow.y).abs();
     // The same projection, but of the bare letter alone -- no accidental,
     // comma, or septimal mark -- which is what backward growth measures from.
     let bare = NoteName { letter: name.letter, sharps: 0, syntonic_commas: 0, septimal_commas: 0 };
     let letter_extent = name_extent(&bare, size);
-    let letter_along_depth =
-        (letter_extent.x * depth.x).abs() + (letter_extent.y * depth.y).abs();
+    let letter_along = (letter_extent.x * grow.x).abs() + (letter_extent.y * grow.y).abs();
     let inset = LABEL_INSET * label_scale;
-    // `depth.x + depth.y` is `depth`'s own sign: +1 forward (time runs the
-    // screen's own way), -1 backward. Backward is where the letter and the box
-    // disagree on which end is "first" -- see above.
-    let growth = if depth.x + depth.y < 0.0 {
-        letter_along_depth - along_depth * 0.5
+    // `grow.x + grow.y` is its own sign: +1 forward (the box grows the screen's
+    // own way), -1 backward. Backward is where the letter and the box disagree
+    // on which end is "first" -- see above.
+    let growth = if grow.x + grow.y < 0.0 {
+        letter_along - along * 0.5
     } else {
-        along_depth * 0.5
+        along * 0.5
     };
-    let centre = axes.at(p, d) + depth * (inset + growth);
+    let centre = axes.at(p, d) + grow * (inset + growth);
     egui::Rect::from_center_size(centre, extent).expand(LABEL_PAD * label_scale)
 }
 
@@ -860,6 +1013,14 @@ mod tests {
         turned(range, span, SpectralOrientation::Left)
     }
 
+    /// The same pane with the names anchored on their onsets — the "Travel
+    /// from the onset" setting, and [`Anchor::Onset`] in the live layout.
+    fn travelling(range: f32, span: f32) -> SharedState {
+        let mut state = state(range, span);
+        state.spectrum_config.note_names_travel = true;
+        state
+    }
+
     fn turned(range: f32, span: f32, orientation: SpectralOrientation) -> SharedState {
         let mut state = fresh();
         state.spectrum_config = SpectrumConfig {
@@ -1091,6 +1252,11 @@ mod tests {
     /// [`a_name_sits_on_its_ribbon_at_the_leading_edge`]), so that is what has
     /// to agree between a plain letter and one carrying a mark.
     ///
+    /// Asked of BOTH growth directions in each orientation, because the
+    /// orientation does not decide which one a pane is in: a name anchored at
+    /// the onset ([`Anchor::Onset`]) grows back against the depth axis, so
+    /// every orientation has a leftward case somewhere in it.
+    ///
     /// [`draw_stacked_name`]: crate::marks::draw_stacked_name
     #[test]
     fn the_letter_lines_up_with_or_without_an_accidental() {
@@ -1099,14 +1265,16 @@ mod tests {
         for orientation in [SpectralOrientation::Left, SpectralOrientation::Right] {
             let cfg = SpectrumConfig { orientation, ..SpectrumConfig::default() };
             let axes = Axes::new(PANE, &cfg);
-            let plain_rect = label_rect(&axes, 0.5, 0.5, &plain, 12.0, 1.0);
-            let sharp_rect = label_rect(&axes, 0.5, 0.5, &sharp, 12.0, 1.0);
-            assert!(
-                (plain_rect.min.x - sharp_rect.min.x).abs() < 0.01,
-                "{orientation:?}: C's letter at {} but C♯'s at {}",
-                plain_rect.min.x,
-                sharp_rect.min.x,
-            );
+            for grow in [axes.dir_depth(), -axes.dir_depth()] {
+                let plain_rect = label_rect(&axes, grow, 0.5, 0.5, &plain, 12.0, 1.0);
+                let sharp_rect = label_rect(&axes, grow, 0.5, 0.5, &sharp, 12.0, 1.0);
+                assert!(
+                    (plain_rect.min.x - sharp_rect.min.x).abs() < 0.01,
+                    "{orientation:?} growing {grow:?}: C's letter at {} but C♯'s at {}",
+                    plain_rect.min.x,
+                    sharp_rect.min.x,
+                );
+            }
         }
     }
 
@@ -1129,7 +1297,7 @@ mod tests {
             .iter()
             .map(|&name| NoteLabel {
                 name,
-                rect: label_rect(&axes, 0.5, 0.5, &name, LABEL_PT, 1.0),
+                rect: label_rect(&axes, axes.dir_depth(), 0.5, 0.5, &name, LABEL_PT, 1.0),
                 #[cfg(test)]
                 at: 0.0,
             })
@@ -1251,6 +1419,299 @@ mod tests {
 
         let axes = Axes::new(PANE, &state.spectrum_config);
         assert!(placed[0].rect.min.x >= axes.at(0.5, 0.0).x, "at the now-line, held");
+    }
+
+    /// A TRAVELLING name is moving from the first frame of its note, and the
+    /// release is not an event in its life at all.
+    ///
+    /// The other anchor ([`Anchor::Onset`]), and the whole of what it is for.
+    /// Where the leading edge holds a held note's name at the now-line and
+    /// starts it moving at the key-up — a movement nothing in the music made —
+    /// this pins the name to the moment the key went DOWN, which is a fact
+    /// about the take and stops changing the instant it happens.
+    ///
+    /// Both halves are asserted, because either alone is met by something
+    /// wrong: a name that moves but jumps at the release is the defect this
+    /// replaces, and one that never moves is the leading edge again. The
+    /// release is compared against a state where the key is still down at the
+    /// same moment, so what is proved is that the name cannot tell.
+    #[test]
+    fn a_travelling_name_starts_moving_at_once_and_the_release_is_not_an_event() {
+        let played = |release: Option<f64>| {
+            let mut state = travelling(24.0, 10.0);
+            state.tracker.handle_event(on(1.0, 60));
+            if let Some(t) = release {
+                state.tracker.handle_event(off(t, 60));
+            }
+            state
+        };
+        let at = |state: &SharedState, now| labels(state, now)[0].rect.min.x;
+
+        let held = played(None);
+        assert!(at(&held, 4.0) > at(&held, 2.0), "held, the name is already travelling");
+        assert!(at(&held, 6.0) > at(&held, 4.0), "...and keeps travelling");
+
+        let released = played(Some(4.0));
+        for now in [4.5, 6.0, 8.0] {
+            assert_eq!(
+                at(&released, now),
+                at(&held, now),
+                "at {now}s the name moved because the key came up",
+            );
+        }
+    }
+
+    /// A travelling name lies over its own ribbon, which live is the picture
+    /// BEHIND the onset — the opposite screen direction from the one a name at
+    /// the leading edge grows in.
+    ///
+    /// The direction is the anchor's, not the layout's, and getting it from the
+    /// layout would put every travelling name past the tail of its own note and
+    /// over whatever is older than it.
+    #[test]
+    fn a_travelling_name_lies_over_its_ribbon_toward_the_now_line() {
+        let mut state = travelling(24.0, 10.0);
+        state.tracker.handle_event(on(2.0, 60));
+        state.tracker.handle_event(off(6.0, 60));
+
+        let placed = labels(&state, 10.0);
+        assert_eq!(placed.len(), 1);
+        let axes = Axes::new(PANE, &state.spectrum_config);
+        // Horizontal: depth is x with now at the left, so the ribbon runs from
+        // the onset (8s back, depth 0.8) to the release (4s back, depth 0.4)
+        // and the name is written at the onset, growing back toward now.
+        let onset = axes.at(0.5, 0.8);
+        let rect = placed[0].rect;
+        assert!(
+            (rect.center().y - onset.y).abs() < 1.0,
+            "the name is centred on the note's own line, not lifted off it",
+        );
+        assert!(rect.max.x <= onset.x, "it ends at the onset");
+        assert!(rect.max.x > onset.x - 2.0 * LABEL_INSET, "...and right at it");
+        assert!(rect.min.x > axes.at(0.5, 0.4).x, "growing into the note, not past its head");
+    }
+
+    /// A name lies over its OWN ribbon, from the end it is anchored to, at
+    /// either anchor and in every orientation.
+    ///
+    /// The direction the box grows in is the anchor's rather than the layout's,
+    /// and the two point opposite ways live — so taking it from the layout lays
+    /// a travelling name over the picture BEHIND its note instead of over the
+    /// note. Read by projecting onto the depth axis, since nothing here may
+    /// name a screen side, and swept over [`SpectralOrientation::ALL`] so a
+    /// fifth orientation cannot skip it.
+    #[test]
+    fn a_name_lies_over_its_own_ribbon_at_either_anchor() {
+        // A plain `C`, whose box does not overrun its anchor: a name carrying
+        // marks does, by up to 17 points, and that is the pinning trade
+        // measured in [`label_rect`] rather than anything about the anchor.
+        for orientation in SpectralOrientation::ALL {
+            for travel in [false, true] {
+                let mut state = turned(24.0, 10.0, orientation);
+                state.spectrum_config.note_names_travel = travel;
+                state.tracker.handle_event(on(2.0, 60));
+                state.tracker.handle_event(off(6.0, 60));
+
+                // Square, so the same pane serves the vertical orientations.
+                let square =
+                    egui::Rect { min: egui::pos2(10.0, 20.0), max: egui::pos2(310.0, 320.0) };
+                let placed = labels_in(&state, 10.0, square);
+                assert_eq!(placed.len(), 1, "{orientation:?}, travel {travel}");
+
+                // The ribbon's two ends, and how far the name sits from the one
+                // it is anchored to along the depth axis — signed, so a name
+                // laid the wrong way reads as a negative reach.
+                let axes = Axes::new(square, &state.spectrum_config);
+                let t = scale_of(&state).t_of(60.0);
+                let (head, onset) = (axes.at(t, 0.4), axes.at(t, 0.8));
+                let (anchor, other) = if travel { (onset, head) } else { (head, onset) };
+                let toward = (other - anchor).normalized();
+                let reach = (placed[0].rect.center() - anchor).dot(toward);
+                assert!(
+                    reach > 0.0,
+                    "{orientation:?}, travel {travel}: the name lies off the far side of \
+                     its anchor, {reach} points from it",
+                );
+                assert!(
+                    reach < (other - anchor).length(),
+                    "{orientation:?}, travel {travel}: the name overruns the far end of \
+                     its own ribbon",
+                );
+            }
+        }
+    }
+
+    /// No name ever reaches back over the SPECTRUM, at either anchor.
+    ///
+    /// A name anchored at the onset grows toward the now-line, and a note
+    /// younger than its own name has no ribbon to fill it — so the box reaches
+    /// past the roll's near edge and over the spectrum's curve, which is
+    /// another picture entirely and the thing [`plan`] refuses to draw names
+    /// over at all when the roll is shut.
+    ///
+    /// Every other fixture in this file gives the roll the whole pane
+    /// (`roll_fraction: 1.0`, so `split` is 0 and the near edge is the pane's
+    /// own), which is exactly where this cannot be seen: the overrun falls off
+    /// the pane and the painter clips it. This one keeps the fresh 0.55.
+    #[test]
+    fn a_name_never_reaches_back_over_the_spectrum() {
+        for travel in [false, true] {
+            let mut state = state(24.0, 10.0);
+            state.spectrum_config.roll_fraction = 0.55; // the fresh value
+            state.spectrum_config.note_names_travel = travel;
+            state.tracker.handle_event(on(5.0, 60));
+
+            let axes = Axes::new(PANE, &state.spectrum_config);
+            let split = super::super::axes::spectrum_share(&state.spectrum_config);
+            // Left: depth is x with the now-line at the roll's near edge, so
+            // the spectrum owns everything left of it.
+            let edge = axes.at(0.5, split).x;
+            // Struck this instant, then a moment later: the box is longer than
+            // the ribbon under it for as long as it takes the onset to scroll
+            // its own length.
+            for now in [5.0, 5.05, 5.1, 5.2] {
+                let placed = labels(&state, now);
+                assert_eq!(placed.len(), 1, "travel {travel} at {now}s");
+                assert!(
+                    placed[0].rect.min.x >= edge,
+                    "travel {travel} at {now}s: the name reaches to {} where the roll \
+                     only begins at {edge}, so it is drawn over the spectrum",
+                    placed[0].rect.min.x,
+                );
+            }
+        }
+    }
+
+    /// A travelling name is thinned like any other — a held note has no
+    /// exemption once its name is anchored somewhere that holds still.
+    ///
+    /// The exemption is for a name standing at the now-line while the picture
+    /// scrolls past it, which is what the OTHER anchor does. Kept here it would
+    /// hand a held note a name the thinning had no room for and take it away
+    /// again at the release, which is the one moment this anchor exists to make
+    /// uneventful.
+    #[test]
+    fn a_travelling_name_is_thinned_like_any_other_and_stays_thinned() {
+        // The same pitch twice, the second following close enough that its name
+        // has nowhere clear to go, and held.
+        let played = |travel: bool, release: Option<f64>| {
+            let mut state = if travel { travelling(24.0, 10.0) } else { state(24.0, 10.0) };
+            state.tracker.handle_event(on(1.0, 60));
+            state.tracker.handle_event(off(1.05, 60));
+            state.tracker.handle_event(on(1.1, 60));
+            if let Some(t) = release {
+                state.tracker.handle_event(off(t, 60));
+            }
+            state
+        };
+        assert_eq!(
+            labels(&played(false, None), 2.0).len(),
+            2,
+            "at the leading edge the held note is named however crowded it is",
+        );
+        let travelling = labels(&played(true, None), 2.0);
+        assert_eq!(travelling.len(), 1, "travelling, it waits for room like everything else");
+
+        // ...and the answer does not change when the key comes up: same name,
+        // same place, whether it is still down or was released a second ago.
+        let after = labels(&played(true, Some(1.5)), 2.5);
+        let still_down = labels(&played(true, None), 2.5);
+        assert_eq!(said(&after), said(&still_down));
+        assert_eq!(after[0].rect.min.x, still_down[0].rect.min.x);
+    }
+
+    /// One pitch sounded by TWO voices is named once at either anchor, and one
+    /// press delivered as on/off/on is still one press.
+    ///
+    /// Both are the same question asked of the two anchors, and each answers it
+    /// somewhere else. At the leading edge a doubled MIDI source is caught by
+    /// an explicit check, held names being outside the thinning; at the onset
+    /// it falls to the grid, since two voices struck together share a cell and
+    /// the second is refused. Worth pinning because the second reading rests on
+    /// the grid doing a job nothing asked it to do, and a fourth sort key or a
+    /// per-note cell would quietly take it away.
+    #[test]
+    fn one_pitch_from_two_voices_is_named_once_at_either_anchor() {
+        let voiced = |travel: bool| {
+            let mut state = if travel { travelling(24.0, 10.0) } else { state(24.0, 10.0) };
+            // The same pitch on two channels, struck together and held — a
+            // doubled source, or one MPE part layered over another.
+            for channel in [0, 1] {
+                state.tracker.handle_event(NoteEvent {
+                    time: 1.0,
+                    channel,
+                    note: 60,
+                    kind: NoteEventKind::On { velocity: 0.8 },
+                });
+            }
+            state
+        };
+        assert_eq!(said(&labels(&voiced(false), 2.0)), ["C"], "held, at the leading edge");
+        assert_eq!(said(&labels(&voiced(true), 2.0)), ["C"], "and travelling, through the grid");
+
+        // ...and a press the host delivers as on/off/on at one sample is one
+        // press at either anchor, the two entries sharing an onset.
+        let pressed = |travel: bool| {
+            let mut state = if travel { travelling(24.0, 10.0) } else { state(24.0, 10.0) };
+            state.tracker.handle_event(on(1.0, 60));
+            state.tracker.handle_event(off(1.0, 60));
+            state.tracker.handle_event(on(1.0, 60));
+            state
+        };
+        assert_eq!(said(&labels(&pressed(false), 1.5)), ["C"]);
+        assert_eq!(said(&labels(&pressed(true), 1.5)), ["C"]);
+    }
+
+    /// A travelling name leaves with the end it is written on: a note still
+    /// sounding whose ONSET has scrolled off the far edge is no longer named.
+    ///
+    /// The price of this anchor, and the one behaviour it gives up — the drone
+    /// of [`a_note_that_began_before_the_window_is_still_named`] keeps its name
+    /// at the leading edge and loses it here.
+    ///
+    /// Asked at the moment the onset LEAVES, which is the only moment that
+    /// distinguishes culling it from letting it clamp. Further off the far edge
+    /// the sweep's own `lookback` bound drops the note anyway and the name goes
+    /// whatever this decides — so a test asking about a drone minutes old would
+    /// pass against a name parked on the edge for the seconds in between, which
+    /// is the artifact being ruled out.
+    #[test]
+    fn a_travelling_name_leaves_with_the_onset_it_is_written_on() {
+        let mut state = travelling(24.0, 10.0);
+        state.tracker.handle_event(on(0.0, 67)); // still held, and never released
+
+        let placed = labels(&state, 5.0);
+        assert_eq!(said(&placed), ["G"], "on the pane, and named");
+        let axes = Axes::new(PANE, &state.spectrum_config);
+        assert!(placed[0].rect.min.x > axes.at(0.5, 0.0).x, "travelling, not at the now-line");
+        // The window is ten seconds, so at 9.5 the onset is half a second
+        // inside the far edge and at 10.5 it is half a second past it. The note
+        // is sounding at the now-line throughout, and its ribbon still fills
+        // the pane.
+        assert_eq!(said(&labels(&state, 9.5)), ["G"], "still on, just inside the far edge");
+        assert!(
+            labels(&state, 10.5).is_empty(),
+            "the onset has left: the name goes with it rather than clamping to the edge",
+        );
+    }
+
+    /// Travelling names hold still against each other as the roll scrolls, the
+    /// same as names at the leading edge do.
+    ///
+    /// The thinning's grid is what buys that, and the grid is measured against
+    /// the anchor — so moving the anchor is exactly the kind of change that
+    /// could put the blinking back. Same measurement as
+    /// [`a_name_never_blinks_out_and_back_as_the_roll_scrolls`], run with the
+    /// setting on; the vacuity guard lives there.
+    #[test]
+    fn travelling_names_never_blink_out_and_back_either() {
+        let travelling = |_now: f64| {
+            let mut state = phrase(f64::NEG_INFINITY);
+            state.spectrum_config.note_names_travel = true;
+            state
+        };
+        assert_eq!(blinks(travelling, 2.23), 0);
+        assert_eq!(blinks(travelling, 1.0), 0, "...and at the dialled size");
     }
 
     /// Notes off the pitch zoom are not named, and the zoom is the ordinary
@@ -1413,6 +1874,64 @@ mod tests {
         // ...and the static layout does not move as the playhead sweeps.
         let later = labels(&state, 9.0);
         assert_eq!(later[0].rect.min.x, placed[0].rect.min.x);
+    }
+
+    /// Whole-song keeps a note that began BEFORE the render's start, named at
+    /// the near edge it reaches over.
+    ///
+    /// The layout's own half of the cull. Live, a name goes when the end it is
+    /// written on scrolls off; whole-song has nothing to scroll off to and
+    /// clamps instead, which is what keeps a take rendered from its second
+    /// minute from losing every note already sounding at that moment —
+    /// `--start` past the first note is an ordinary way to render an excerpt.
+    #[test]
+    fn whole_song_keeps_a_note_that_began_before_the_render() {
+        let mut state = state(24.0, 10.0);
+        state.tracker.handle_event(on(1.0, 60)); // before the render's start
+        state.tracker.handle_event(off(8.0, 60));
+        let roll = state.tracker.roll().clone();
+        state.whole_song =
+            Some(crate::WholeSong { columns: Vec::new(), roll, start: 3.0, span: 10.0 });
+
+        let placed = labels(&state, 5.0);
+        assert_eq!(said(&placed), ["C"], "still sounding at the render's start, still named");
+        let axes = Axes::new(PANE, &state.spectrum_config);
+        assert!(
+            placed[0].rect.min.x >= axes.at(0.5, 0.0).x,
+            "clamped onto the near edge rather than drawn off the pane",
+        );
+    }
+
+    /// In the whole-song layout a note the PLAYHEAD is inside is thinned like
+    /// any other, so a render's names are decided once for the whole take.
+    ///
+    /// The held-note exemption is for a name standing at the now-line while the
+    /// picture scrolls past it, and whole-song has no such name: the take is
+    /// laid out statically and every name is anchored at an onset. Exempting a
+    /// note because the playhead happens to be inside it makes a name appear
+    /// and go as the playhead sweeps, which in a rendered video is a name
+    /// blinking for no reason a viewer can see.
+    #[test]
+    fn a_whole_song_render_thins_a_sounding_note_like_any_other() {
+        // Two strikes of one pitch too close for both names, the second still
+        // sounding — the case the exemption used to hand a name to.
+        let mut state = state(24.0, 10.0);
+        state.tracker.handle_event(on(1.0, 60));
+        state.tracker.handle_event(off(1.05, 60));
+        state.tracker.handle_event(on(1.1, 60));
+        let roll = state.tracker.roll().clone();
+        state.whole_song =
+            Some(crate::WholeSong { columns: Vec::new(), roll, start: 0.0, span: 10.0 });
+
+        // The playhead inside the second note, then well past where it would
+        // have ended: the same one name, in the same place, throughout.
+        let inside = labels(&state, 1.5);
+        assert_eq!(inside.len(), 1, "thinned, exactly as a released pair would be");
+        for now in [3.0, 6.0, 9.0] {
+            let later = labels(&state, now);
+            assert_eq!(said(&later), said(&inside), "the playhead moved a name at {now}s");
+            assert_eq!(later[0].rect.min.x, inside[0].rect.min.x);
+        }
     }
 
     /// The tiebreak's stated job is to keep a name from moving when the view

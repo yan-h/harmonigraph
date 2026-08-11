@@ -345,9 +345,36 @@ pub struct SpectrumConfig {
     /// Outline bar, a handle at each — because both are distances from the
     /// note's edge, which makes them two points on one axis.
     pub roll_outline_fade: f32,
-    /// Write each note's name over its ribbon, at the moment it was struck —
-    /// see [`panes::spectral::names`](crate::panes::spectral::names).
+    /// Write each note's name over its own ribbon — see
+    /// [`panes::spectral::names`](crate::panes::spectral::names), and
+    /// [`note_names_travel`](Self::note_names_travel) for which END of the
+    /// ribbon it is written on.
     pub note_names: bool,
+    /// Anchor a name on the note's ONSET rather than on its ribbon's leading
+    /// edge, so it scrolls with the picture from the moment the key goes down
+    /// instead of waiting at the now-line until the key comes up.
+    ///
+    /// These are the ribbon's two ENDS, so this moves every name on the pane
+    /// and not only the ones you are holding — a released note's name sits at
+    /// the head of its ribbon or at its tail, a ribbon's length apart. They
+    /// agree at one instant, the one a note is struck at, a ribbon of no length
+    /// having its two ends in one place. Each has a cost worth stating:
+    ///
+    ///   - The leading edge (off) keeps a held note's name still and legible at
+    ///     the now-line for as long as you hold it — but the name then starts
+    ///     moving at the release, which is a jump nothing in the music made,
+    ///     and a drone held longer than the Span never scrolls at all.
+    ///   - The onset (on) pins a name to a take TIME, so it holds its place on
+    ///     the ribbon under it and nothing about it changes at the release. It
+    ///     pays at both edges of the pane: a note still sounding whose onset has
+    ///     scrolled off the far one loses its name, the end it was written on
+    ///     having left, and at the near one a name waits against the roll's own
+    ///     edge until the ribbon is long enough to hold it rather than reaching
+    ///     back over the spectrum.
+    ///
+    /// The default is the leading edge, which is the look the naming was
+    /// dialled in at.
+    pub note_names_travel: bool,
     /// Overall size of those names, as a multiple of their built-in size.
     ///
     /// Rides on top of the pitch zoom, which already grows a name as the range
@@ -634,6 +661,9 @@ impl Default for SpectrumConfig {
             roll_outline: 2.0,
             roll_outline_fade: 1.5,
             note_names: true,
+            // The leading edge: a held note's name waits where you can read it
+            // while you play, which is what the naming was dialled in against.
+            note_names_travel: false,
             note_name_scale: 1.0,
             show_spectrogram: true,
             // The even ramp, which is the one that reads a heatmap's quiet
