@@ -665,4 +665,98 @@ mod tests {
             );
         }
     }
+
+    /// Every reading the shell measures reaches a row: each `pub` field of
+    /// [`Workload`] read as `workload.<field>` somewhere above, and each `pub`
+    /// field of [`PerfStats`] read as `perf.<field>`.
+    ///
+    /// A reading plumbed through the shell and printed by nothing is the
+    /// failure worth guarding, because it shows up as nothing at all — the
+    /// overlay draws its usual rows, not one of them looks wrong, and the
+    /// number someone went to the trouble of measuring is simply absent.
+    ///
+    /// `dead_code` said this for free while both types were `pub(crate)` in a
+    /// private module of this crate, and cannot now they are a public crate's
+    /// public API: a `pub` field of a reachable struct counts as read whether
+    /// or not anything reads it. That moved the declarations into
+    /// `harmonigraph-perf` and left the readers here, so this reads both files
+    /// — the same shallow parse, one field per line and an identifier before
+    /// the first `:`, that `harmonigraph-perf`'s own
+    /// `every_frame_cost_reaches_a_stage` runs over [`FrameCosts`].
+    ///
+    /// What it cannot check is that a field reaches the RIGHT row;
+    /// `every_breakdown_row_reports_the_cost_it_names` is what relates a
+    /// reading to the label it prints under.
+    #[test]
+    fn every_reading_reaches_a_row() {
+        // Code only, and only the code above the tests: a field named in a doc
+        // comment, or bound under that name by a test below, would otherwise
+        // answer for itself while no row prints it.
+        fn code_of(src: &str) -> String {
+            src.split_once("#[cfg(test)]")
+                .map_or(src, |(above, _)| above)
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.starts_with("//"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+        // Declarations from the crate that holds them, readers from this one.
+        let declared = code_of(include_str!("../../harmonigraph-perf/src/lib.rs"));
+        let readers = code_of(include_str!("perf.rs"));
+
+        fn fields<'a>(code: &'a str, decl: &str) -> Vec<&'a str> {
+            let body = code
+                .split_once(decl)
+                .unwrap_or_else(|| panic!("{decl} is declared here"))
+                .1
+                .split_once('{')
+                .expect("it has a body")
+                .1
+                .split_once('}')
+                .expect("its body ends")
+                .0;
+            body.lines()
+                .map(str::trim)
+                .filter_map(|line| line.strip_prefix("pub "))
+                .map(|field| field.split_once(':').expect("a field line has a `:`").0)
+                .collect()
+        }
+
+        // `receiver.field` and not a longer name that merely starts with it —
+        // `prims` must not be answered for by a later `prims_uploaded`.
+        fn reads(code: &str, receiver: &str, field: &str) -> bool {
+            let needle = format!("{receiver}.{field}");
+            code.match_indices(&needle).any(|(at, _)| {
+                !matches!(
+                    code[at + needle.len()..].chars().next(),
+                    Some(c) if c.is_alphanumeric() || c == '_'
+                )
+            })
+        }
+
+        let workload = fields(&declared, "pub struct Workload");
+        let stats = fields(&declared, "pub struct PerfStats");
+        // A shallow parse fails by finding nothing, which would pass every
+        // assertion below, so it has to show it found both lists first.
+        assert!(
+            workload.contains(&"animating") && stats.contains(&"rss_bytes"),
+            "the field lists did not parse: {workload:?} / {stats:?}",
+        );
+
+        for field in workload {
+            assert!(
+                reads(&readers, "workload", field),
+                "`Workload::{field}` is measured every frame and printed by nothing — \
+                 give it a row in `overlay_rows`",
+            );
+        }
+        for field in stats {
+            assert!(
+                reads(&readers, "perf", field),
+                "`PerfStats::{field}` is measured every frame and printed by nothing — \
+                 give it a row in `overlay_rows`",
+            );
+        }
+    }
 }

@@ -65,13 +65,17 @@ break either, and both are easy to break by reflex.
 
 **Never run `cargo fmt`.** There is no `rustfmt.toml`, and the tree has
 never been through rustfmt, so rustfmt's idea of this code and the code
-have drifted a long way apart: `cargo fmt --check` currently wants 1835
-changes across 99 of the 108 files in `crates/`. Running it once would bury
-whatever you actually changed under a whole-tree reformat that no reviewer
-can read past, which is why this is a ban rather than a preference. Match
-the surrounding style by hand, and wrap only the lines you write — about
-100 columns, which is where the tree sits. That is a habit, not a limit to
-enforce: 50 lines already exceed it and the longest runs to 155, and
+have drifted a long way apart: `cargo fmt --check` wants on the order of
+1800 changes across all but a handful of the files in `crates/`. Measure
+it rather than trusting that figure —
+`cargo fmt --all --check | grep -c '^Diff in '` — because an exact count
+goes stale on any merge that adds a file, and two audits running have now
+spent a finding restating one. Running it once would bury whatever you
+actually changed under a whole-tree reformat that no reviewer can read
+past, which is why this is a ban rather than a preference. Match the
+surrounding style by hand, and wrap only the lines you write — about 100
+columns, which is where the tree sits. That is a habit, not a limit to
+enforce: around 50 lines already exceed it and the longest runs to 155, and
 rewrapping code you are only passing through costs a reviewer the same way
 `cargo fmt` does, in miniature. To catch only your own long lines, run
 `awk 'length>100'` over the lines you added; leave pre-existing ones alone.
@@ -115,8 +119,8 @@ in the exception; it is now the ordinary rot case, because no code reads an
 old blob differently. State what the value is and why, not which build wrote
 it.
 
-This matters more here than in most repos: comments are ~40% of the non-blank
-lines under `crates/` — doc comments alone are ~28% of every non-blank line —
+This matters more here than in most repos: comments are over 40% of the
+non-blank lines under `crates/` — doc comments alone are nearly 30% —
 and the codebase is heavily rationale-driven, so a comment is often the only
 carrier of why the code is weird, and it acts as a tripwire against
 plausible-but-wrong "simplifications". New PRs keep regenerating the pattern,
@@ -155,9 +159,14 @@ Two mechanisms carry the weight instead, and they are worth keeping straight:
   `a_view_missing_any_one_key_reloads_at_the_fresh_value` and
   `a_persist_blob_missing_any_one_section_keeps_the_rest` sweep for it rather
   than pinning one field, because a struct added without the attribute is
-  invisible at its declaration. `UiPersist::ui_scale` is the one field-level
-  `default = "..."` left, and only because an `f32`'s own default of 0.0 is a
-  scale of nothing. Don't add others.
+  invisible at its declaration. `UiPersist::ui_scale` is the BLOB's one
+  field-level `default = "..."`, and only because an `f32`'s own default of
+  0.0 is a scale of nothing. Don't add others to it. The offline renderer's
+  `Layout` is outside this rule on purpose — a `.ron` a person writes by hand
+  (`--dump-layout` prints a preset to start from) rather than state the
+  plugin saves, so `panes` is REQUIRED, the struct carries no container-level
+  default at all, and `background` holds the tree's only other field-level
+  `default = "..."`.
 - **`UI_PERSIST_VERSION` is the floor**: a blob below it is refused whole
   rather than half-read. Note what it does NOT cover — see below.
 

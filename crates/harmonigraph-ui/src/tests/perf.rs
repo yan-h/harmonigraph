@@ -165,13 +165,17 @@ fn the_perf_overlay_follows_the_analyzer_pane() {
 /// window to its floor without the user ever dragging it there.
 #[test]
 fn the_perf_overlay_stays_inside_its_pane_at_the_narrowest_window() {
-    // The plugin's own minimum editor width (`MIN_SIZE` in the plugin crate's
-    // editor), which is a window the shell will actually hand the UI.
+    // The narrowest window a shell will actually hand the UI, read from the
+    // constant that decides it rather than restated. The plugin's `MIN_SIZE`
+    // derives its width from this one, so it is the source and the editor's
+    // copy is not; and taking it by hand would leave this measuring 400pt
+    // after a retune, which is the one window where the HUD has no room to
+    // spare and so the one that has to follow the floor down.
     let mut state = fresh();
     // Turned on by hand: the overlay ships off, and what is under test is
     // whether it stays inside its pane once asked for.
     state.view.show_perf = true;
-    let mut h = DockHarness::at(egui::vec2(400.0, 800.0));
+    let mut h = DockHarness::at(egui::vec2(shell::MIN_WINDOW_WIDTH, 800.0));
     let screen = h.screen;
     h.frame(&mut state, vec![]);
     let output = h.frame(&mut state, vec![]);
