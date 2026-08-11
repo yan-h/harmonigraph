@@ -464,12 +464,7 @@ fn octaves_fade_independently() {
     ] {
         tracker.handle_event(NoteEvent { time: 0.0, channel: 0, note, kind });
     }
-    tracker.handle_event(NoteEvent {
-        time: 0.1,
-        channel: 0,
-        note: 72,
-        kind: NoteEventKind::Off, // ...and released
-    });
+    tracker.handle_event(NoteEvent::off(0.1, 0, 72)); // ...and released
 
     // Half a fade after C5 starts LEAVING, which is when its arrival lands
     // rather than when the key came up — a tap this short is still arriving
@@ -498,15 +493,10 @@ fn a_note_shorter_than_the_fade_still_lights_every_layer_fully() {
     // product of two overlapping ramps, and each layer multiplies its own
     // pair: the disc would peak below full, and the ring below that.
     let mut tracker = NoteTracker::new();
-    tracker.handle_event(NoteEvent {
-        time: 0.0,
-        channel: 0,
-        note: 60,
-        kind: NoteEventKind::On { velocity: 1.0 },
-    });
+    tracker.handle_event(NoteEvent::on(0.0, 0, 60, 1.0));
     // Down for a twelfth of the Fade — a thirty-second note against a fade
     // set for whole ones.
-    tracker.handle_event(NoteEvent { time: 0.1, channel: 0, note: 60, kind: NoteEventKind::Off });
+    tracker.handle_event(NoteEvent::off(0.1, 0, 60));
     let frame = FrameParams { fade_time: 1.2, ..FrameParams::default() };
     let view = ViewConfig { mark_melody: true, mark_bass: true, ..plain_view() };
 
@@ -534,19 +524,14 @@ fn one_fade_time_carries_every_layer_of_the_node() {
     // reads as one gesture rather than as layers leaving at their own pace.
     let mut tracker = NoteTracker::new();
     for note in [60u8, 67] {
-        tracker.handle_event(NoteEvent {
-            time: 0.0,
-            channel: 0,
-            note,
-            kind: NoteEventKind::On { velocity: 1.0 },
-        });
+        tracker.handle_event(NoteEvent::on(0.0, 0, note, 1.0));
     }
     // Held a whole duration before the keys come up, so what is sampled below
     // is the departure and not the tail of an arrival — the two never overlap
     // (`Voice::release_level`), and a chord released mid-arrival would read
     // half-way down for the opposite reason.
     for note in [60u8, 67] {
-        tracker.handle_event(NoteEvent { time: 2.0, channel: 0, note, kind: NoteEventKind::Off });
+        tracker.handle_event(NoteEvent::off(2.0, 0, note));
     }
     let frame = FrameParams { fade_time: 2.0, ..FrameParams::default() };
     let view = ViewConfig {
@@ -597,24 +582,14 @@ fn the_delay_is_what_keeps_a_released_chord_from_smearing_rings() {
     let ring_count = |mark_delay: f32| {
         let mut tracker = NoteTracker::new();
         for &note in &chord {
-            tracker.handle_event(NoteEvent {
-                time: 0.0,
-                channel: 0,
-                note,
-                kind: NoteEventKind::On { velocity: 1.0 },
-            });
+            tracker.handle_event(NoteEvent::on(0.0, 0, note, 1.0));
         }
         // Held for a second — long enough that the chord's REAL ends clear
         // any delay worth setting — and then lifted one key at a time,
         // top-down, each a hair apart. Only the notes crowned by those lifts
         // wore an end briefly.
         for (i, &note) in [67u8, 65, 64, 62, 60].iter().enumerate() {
-            tracker.handle_event(NoteEvent {
-                time: 1.0 + 0.001 * (i as f64 + 1.0),
-                channel: 0,
-                note,
-                kind: NoteEventKind::Off,
-            });
+            tracker.handle_event(NoteEvent::off(1.0 + 0.001 * (i as f64 + 1.0), 0, note));
         }
         // Mid-fade, well within one fade time — and past the arrival the same
         // second bought, so the discs below are on their way out.
@@ -707,12 +682,7 @@ fn window_center_pans_which_nodes_display() {
 fn every_channel_draws_the_same_node() {
     let drawn = |channel: u8| {
         let mut tracker = NoteTracker::new();
-        tracker.handle_event(NoteEvent {
-            time: 0.0,
-            channel,
-            note: 60,
-            kind: NoteEventKind::On { velocity: 1.0 },
-        });
+        tracker.handle_event(NoteEvent::on(0.0, channel, 60, 1.0));
         let scene = scene_of(
             &tracker,
             &Tuning::default(),
@@ -734,12 +704,7 @@ fn every_channel_draws_the_same_node() {
 #[test]
 fn held_note_lights_matching_nodes() {
     let mut tracker = NoteTracker::new();
-    tracker.handle_event(NoteEvent {
-        time: 0.0,
-        channel: 0,
-        note: 60, // C4: pitch class 0, octave 4
-        kind: NoteEventKind::On { velocity: 1.0 },
-    });
+    tracker.handle_event(NoteEvent::on(0.0, 0, 60, 1.0)); // C4: pitch class 0, octave 4
     let tuning = Tuning::default(); // 12-TET: origin node matches C exactly
     // Sampled past the view's attack: every layer of a node eases in, so at
     // the note-on instant itself the whole thing is still at zero.
@@ -773,12 +738,7 @@ fn a_note_outside_the_ring_lights_the_outermost_indicator() {
     // what is past those folds.
     let lit = |note: u8| {
         let mut tracker = NoteTracker::new();
-        tracker.handle_event(NoteEvent {
-            time: 0.0,
-            channel: 0,
-            note,
-            kind: NoteEventKind::On { velocity: 1.0 },
-        });
+        tracker.handle_event(NoteEvent::on(0.0, 0, note, 1.0));
         let scene = scene_of(&tracker, &Tuning::default(), &view, &plain_frame(), 0.5);
         let octaves = origin_node(&scene).octaves;
         let slots: Vec<usize> = (0..OCTAVE_SLOTS).filter(|&s| octaves[s] > 0.0).collect();
@@ -802,12 +762,7 @@ fn a_note_outside_the_ring_lights_the_outermost_indicator() {
         ..ViewConfig::default()
     };
     let mut tracker = NoteTracker::new();
-    tracker.handle_event(NoteEvent {
-        time: 0.0,
-        channel: 0,
-        note: 96,
-        kind: NoteEventKind::On { velocity: 1.0 },
-    });
+    tracker.handle_event(NoteEvent::on(0.0, 0, 96, 1.0));
     let scene = scene_of(&tracker, &Tuning::default(), &wide, &plain_frame(), 0.5);
     assert_eq!(
         origin_node(&scene).octaves[MIDDLE_C_SLOT + 3],

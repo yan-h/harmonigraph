@@ -18,20 +18,28 @@ fn dock() -> DockState<Tab> {
     dock
 }
 
-/// The dock chrome as `theme::dock_style` sets it, in the numbers that
-/// matter here: a tab bar's height, a separator's width, and the floor a pane
-/// can be dragged to.
+/// The dock chrome the fold layout is run with, off the app's own
+/// [`theme::dock_style`](crate::theme::dock_style) rather than restated here.
 ///
 /// The floor especially. egui_dock's own default is 175pt, which the app
 /// replaces (`theme::min_pane`) — and leaving the default here means every
 /// test measures drags against a limit the editor does not have, in a module
-/// whose whole subject is which fraction ends up in which split.
+/// whose whole subject is which fraction ends up in which split. Three numbers
+/// out of that style reach the fold at all — the tab bar's height, the
+/// separator's width, and that floor — and taking them from the source is what
+/// keeps a retune of any of the three from leaving this file measuring a dock
+/// the app does not have.
+///
+/// At the design scale, because the fold layout is scale-free: it is handed
+/// widths in points and the style tells it what a rail costs, so a sweep over
+/// chrome scales here would only re-run the same arithmetic on bigger numbers.
 fn style() -> egui_dock::Style {
-    let mut style = egui_dock::Style::from_egui(&egui::Style::default());
-    style.tab_bar.height = 26.0;
-    style.separator.width = 4.0;
-    style.separator.extra = 4.0 * 26.0;
-    style
+    crate::theme::dock_style(&egui::Style::default(), 1.0)
+}
+
+/// The width a folded pane leaves behind — one tab bar — off that same style.
+fn rail() -> f32 {
+    style().tab_bar.height
 }
 
 /// What the dock does between two [`Folds::apply`] calls: hand every
@@ -175,6 +183,67 @@ const SETTINGS: NodeIndex = NodeIndex(2);
 const LATTICE: NodeIndex = NodeIndex(3);
 const SPECTRAL: NodeIndex = NodeIndex(4);
 
+/// [`dock`]'s claim about node indices, checked against the layout it stands
+/// in for rather than trusted.
+///
+/// The FRACTIONS and the tab set are the fixture's own and deliberately not
+/// the plugin's: these tests dial widths themselves and read them back, and
+/// the real default opens with a leaf already collapsed, which is a state
+/// half of them are about reaching. What has to match is the SHAPE — the same
+/// splits in the same order — because that is what makes [`PICTURES`],
+/// [`SETTINGS`], [`LATTICE`] and [`SPECTRAL`] name the nodes they claim to.
+/// A split reordered in `state::default_dock` renumbers every one of them, and
+/// nothing else here would notice: the tests would go on passing about
+/// whichever panes those indices landed on.
+#[test]
+fn the_fixture_dock_has_the_shape_of_the_plugins_own() {
+    let fixture = dock();
+    let real = crate::state::default_dock();
+    let kind = |dock: &DockState<Tab>, node: NodeIndex| match &dock[SurfaceIndex::main()][node] {
+        Node::Horizontal(_) => "horizontal",
+        Node::Vertical(_) => "vertical",
+        Node::Leaf(_) => "leaf",
+        Node::Empty => "empty",
+    };
+    let tree = &real[SurfaceIndex::main()];
+    assert_eq!(
+        fixture[SurfaceIndex::main()].len(),
+        tree.len(),
+        "the fixture dock has a different number of nodes than the plugin's",
+    );
+    for index in 0..tree.len() {
+        let node = NodeIndex(index);
+        assert_eq!(
+            kind(&fixture, node),
+            kind(&real, node),
+            "node {index} is a different kind of node in the two docks",
+        );
+    }
+    // ...and the four indices these tests name really are those panes.
+    for (name, node, tab) in [
+        ("PICTURES", PICTURES, Tab::Lattice),
+        ("SETTINGS", SETTINGS, Tab::Tuning),
+        ("LATTICE", LATTICE, Tab::Lattice),
+        ("SPECTRAL", SPECTRAL, Tab::Spectral),
+    ] {
+        let found = real.find_tab(&tab).expect("the plugin's dock holds every tab named here");
+        let under = |root: NodeIndex, of: NodeIndex| {
+            let mut walk = Some(of);
+            while let Some(n) = walk {
+                if n == root {
+                    return true;
+                }
+                walk = n.parent();
+            }
+            false
+        };
+        assert!(
+            under(node, found.node),
+            "{name} does not contain {tab:?} in the plugin's own dock",
+        );
+    }
+}
+
 /// The whole point: the width a folded pane gives up comes off the WINDOW,
 /// every other pane keeps the width it had, and the rail left behind is a
 /// tab bar thick rather than a fraction of the window.
@@ -191,14 +260,14 @@ fn folding_a_pane_takes_its_width_out_of_the_window() {
     collapse(&mut dock, Tab::Lattice, true);
     let window = frame(&mut folds, &mut dock, &mut dial, 1000.0);
     assert!(
-        (window - (1000.0 - (pane - 26.0))).abs() < 0.01,
+        (window - (1000.0 - (pane - rail()))).abs() < 0.01,
         "the window loses the pane's width, less the rail standing in for it"
     );
     // The frame after, at the size the window was asked for, is where the
     // layout settles — and asks for nothing more.
     let settled = frame(&mut folds, &mut dock, &mut dial, window);
     assert!((settled - window).abs() < 0.01, "one fold, one resize");
-    assert!((width(&dock, LATTICE) - 26.0).abs() < 0.01, "a rail, not a column");
+    assert!((width(&dock, LATTICE) - rail()).abs() < 0.01, "a rail, not a column");
     assert!(
         (width(&dock, SPECTRAL) - sibling).abs() < 0.01,
         "the analyzer keeps the width it had"
@@ -222,7 +291,7 @@ fn a_rail_is_the_same_width_at_any_window_size() {
         let window = frame(&mut folds, &mut dock, &mut dial, size);
         let _ = frame(&mut folds, &mut dock, &mut dial, window);
         assert!(
-            (width(&dock, LATTICE) - 26.0).abs() < 0.01,
+            (width(&dock, LATTICE) - rail()).abs() < 0.01,
             "at {size} wide, in the {window} the fold asked for"
         );
     }
@@ -312,7 +381,7 @@ fn a_resize_while_a_pane_is_folded_is_worn_by_the_panes_on_screen() {
         "the two panes on screen should have worn the whole 120pt, and wore {lost}",
     );
     assert!(
-        (width(&dock, LATTICE) - 26.0).abs() < 0.01,
+        (width(&dock, LATTICE) - rail()).abs() < 0.01,
         "while the rail stayed a rail: {}",
         width(&dock, LATTICE),
     );
@@ -373,9 +442,9 @@ fn a_column_of_collapsed_panes_folds_as_a_single_rail() {
     collapse(&mut dock, Tab::Tuning, true);
     collapse(&mut dock, Tab::Notes, true);
     let window = frame(&mut folds, &mut dock, &mut dial, 1000.0);
-    assert!((window - (1000.0 - (column - 26.0))).abs() < 0.01);
+    assert!((window - (1000.0 - (column - rail()))).abs() < 0.01);
     let window = frame(&mut folds, &mut dock, &mut dial, window);
-    assert!((width(&dock, SETTINGS) - 26.0).abs() < 0.01);
+    assert!((width(&dock, SETTINGS) - rail()).abs() < 0.01);
     assert!((width(&dock, PICTURES) - pictures).abs() < 0.01);
     // And back: a column is folded on the RIGHT of its split, where the
     // pane coming back is the one whose width the split does NOT count
@@ -406,7 +475,7 @@ fn a_folded_pair_becomes_two_rails_side_by_side() {
     // One pass, not two: the fold tells the split inside it the width it
     // is about to be given rather than leaving it to read that next frame,
     // so both rails are in the same set of fractions.
-    let rails = 26.0 + 4.0 + 26.0;
+    let rails = rail() + style().separator.width + rail();
     let window = frame(&mut folds, &mut dock, &mut dial, 1000.0);
     assert!(
         (window - (1000.0 - (pair - rails))).abs() < 0.01,
@@ -416,8 +485,8 @@ fn a_folded_pair_becomes_two_rails_side_by_side() {
     // charges the window, or the pair would be paid for twice.
     let settled = frame(&mut folds, &mut dock, &mut dial, window);
     assert!((settled - window).abs() < 0.01, "one fold, one resize");
-    assert!((width(&dock, LATTICE) - 26.0).abs() < 0.01, "the lattice's own rail");
-    assert!((width(&dock, SPECTRAL) - 26.0).abs() < 0.01, "the analyzer's own rail");
+    assert!((width(&dock, LATTICE) - rail()).abs() < 0.01, "the lattice's own rail");
+    assert!((width(&dock, SPECTRAL) - rail()).abs() < 0.01, "the analyzer's own rail");
     assert!(
         (width(&dock, PICTURES) - rails).abs() < 0.01,
         "two rails and the separator between them"
@@ -460,8 +529,8 @@ fn a_dock_folded_whole_is_a_strip_of_rails() {
     }
     // Three rails side by side: the two pictures, and the settings column as
     // one — its panes fold onto each other's tab bars, top to bottom.
-    let (rail, separator) = (style().tab_bar.height, style().separator.width);
-    let strip = 3.0 * rail + 2.0 * separator;
+    let separator = style().separator.width;
+    let strip = 3.0 * rail() + 2.0 * separator;
     assert!(
         (window - strip).abs() < 1.0,
         "the folded dock came out {window:.1} wide, not the {strip:.1} its rails are worth",
@@ -617,7 +686,7 @@ fn a_fold_that_changes_sides_pays_back_the_pane_that_opened() {
     collapse(&mut dock, Tab::Lattice, false);
     let window = settle(&mut folds, &mut dock, &mut dial, window);
     assert!((width(&dock, LATTICE) - lattice).abs() < 0.01, "the lattice comes back whole");
-    assert!((width(&dock, SPECTRAL) - 26.0).abs() < 0.01, "the analyzer is the rail now");
+    assert!((width(&dock, SPECTRAL) - rail()).abs() < 0.01, "the analyzer is the rail now");
     collapse(&mut dock, Tab::Spectral, false);
     let window = settle(&mut folds, &mut dock, &mut dial, window);
     assert!((window - 1000.0).abs() < 0.01, "the window is the one it started in");
@@ -686,8 +755,8 @@ fn a_fold_the_window_cannot_pay_for_still_gives_it_all_back() {
     // and the difference is spent on the panes still open rather than
     // shared out by fraction (see
     // `a_rail_is_the_same_width_in_a_window_that_would_not_shrink`).
-    assert!((width(&dock, LATTICE) - 26.0).abs() < 0.01, "the rails are still rails");
-    assert!((width(&dock, SPECTRAL) - 26.0).abs() < 0.01);
+    assert!((width(&dock, LATTICE) - rail()).abs() < 0.01, "the rails are still rails");
+    assert!((width(&dock, SPECTRAL) - rail()).abs() < 0.01);
     // The width the window would not give up is squeezed out of the panes
     // still on screen instead, which is the only place left for it.
     assert!(width(&dock, SETTINGS) > before[2], "the column takes what the window would not");
@@ -727,7 +796,7 @@ fn a_rail_is_the_same_width_in_a_window_that_would_not_shrink() {
     let window = settle_within(&mut folds, &mut dock, &mut dial, 1000.0, FLOOR);
     assert!((window - FLOOR).abs() < 0.01, "the window stops at the floor");
     assert!(
-        (width(&dock, LATTICE) - 26.0).abs() < 0.01,
+        (width(&dock, LATTICE) - rail()).abs() < 0.01,
         "a rail is a rail: {}",
         width(&dock, LATTICE)
     );
@@ -930,7 +999,7 @@ fn a_separator_with_a_fold_below_it_still_resizes_what_it_divides() {
         (width(&dock, SETTINGS) - (settings - 40.0)).abs() < 1.0,
         "the column on the other side of the handle should have paid for it",
     );
-    assert!((width(&dock, SPECTRAL) - 26.0).abs() < 0.01, "the rail is still a rail");
+    assert!((width(&dock, SPECTRAL) - rail()).abs() < 0.01, "the rail is still a rail");
     assert!((asked - window).abs() < 0.01, "and a drag is not a resize: the window stays");
     // Held, rather than undone one frame later, which is the whole bug.
     let _ = frame(&mut folds, &mut dock, &mut dial, window);
@@ -1339,8 +1408,8 @@ fn a_folded_subtree_gives_each_side_the_rails_it_holds() {
     let _ = settle(&mut folds, &mut dock, &mut dial, window);
     for tab in [Tab::Lattice, Tab::Spectral, Tab::Notes] {
         let path = dock.find_tab(&tab).expect("docked");
-        let rail = dock[path.surface][path.node].rect().expect("on screen").width();
-        assert!((rail - 26.0).abs() < 0.01, "{tab:?} came out {rail} wide, not a rail");
+        let width = dock[path.surface][path.node].rect().expect("on screen").width();
+        assert!((width - rail()).abs() < 0.01, "{tab:?} came out {width} wide, not a rail");
     }
 }
 

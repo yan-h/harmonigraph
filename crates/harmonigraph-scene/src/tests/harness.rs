@@ -2,7 +2,7 @@
 //! and the lookups that find one node in it.
 
 use crate::*;
-use harmonigraph_core::{NoteEvent, NoteEventKind, NoteTracker, Tuning};
+use harmonigraph_core::{NoteEvent, NoteTracker, Tuning};
 
 pub(super) fn scene_of(
     tracker: &NoteTracker,
@@ -60,24 +60,14 @@ pub(super) fn origin_node(scene: &Scene) -> &NodeInstance {
 /// the grid at all (idle ones are skipped as fully invisible).
 pub(super) fn sounding() -> NoteTracker {
     let mut tracker = NoteTracker::new();
-    tracker.handle_event(NoteEvent {
-        time: 0.0,
-        channel: 0,
-        note: 60,
-        kind: NoteEventKind::On { velocity: 1.0 },
-    });
+    tracker.handle_event(NoteEvent::on(0.0, 0, 60, 1.0));
     tracker
 }
 
 /// A tracker with one note held from time 0.
 pub(super) fn held(note: u8) -> NoteTracker {
     let mut tracker = NoteTracker::new();
-    tracker.handle_event(NoteEvent {
-        time: 0.0,
-        channel: 0,
-        note,
-        kind: NoteEventKind::On { velocity: 1.0 },
-    });
+    tracker.handle_event(NoteEvent::on(0.0, 0, note, 1.0));
     tracker
 }
 

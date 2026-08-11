@@ -454,7 +454,8 @@ pub(crate) fn draw_node_labels(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use harmonigraph_core::{NoteEvent, NoteEventKind};
+    use crate::tests::probe::{fresh, frame_full, painted_full, painted_into, themed};
+    use harmonigraph_core::NoteEvent;
 
     /// Draw the labels for a chord, with the camera at `distance`, and
     /// report the pieces of text that were laid out.
@@ -469,7 +470,7 @@ mod tests {
         rect: egui::Rect,
         distance: f32,
     ) -> (Vec<crate::text::TextPiece>, harmonigraph_scene::Scene) {
-        let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
+        let mut state = fresh();
         state.camera.distance = distance;
         // No arrival ramp: the scene below is derived 50ms in, a fraction of
         // any real Fade, and a label's alpha rides its node's activation.
@@ -478,12 +479,7 @@ mod tests {
         // A chord spread across the lattice, so nodes land all over the pane
         // and (zoomed in) well outside it.
         for note in [55u8, 60, 62, 64, 67, 69, 71] {
-            state.tracker.handle_event(NoteEvent {
-                time: 0.0,
-                channel: 0,
-                note,
-                kind: NoteEventKind::On { velocity: 1.0 },
-            });
+            state.tracker.handle_event(NoteEvent::on(0.0, 0, note, 1.0));
         }
         let scene = derive_scene(
             &state.tracker,
@@ -494,17 +490,10 @@ mod tests {
             None,
             0.05,
         );
-        let ctx = egui::Context::default();
-        crate::theme::apply_theme(&ctx);
-        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1200.0, 900.0));
         let mut batch = crate::text::TextBatch::default();
-        let _ = ctx.run_ui(
-            egui::RawInput { screen_rect: Some(screen), ..Default::default() },
-            |ui| {
-                let child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
-                draw_node_labels(&child, rect, &scene, &state.view, &mut batch);
-            },
-        );
+        let _ = painted_into(egui::vec2(1200.0, 900.0), rect, |ui| {
+            draw_node_labels(ui, rect, &scene, &state.view, &mut batch);
+        });
         (batch.pieces().to_vec(), scene)
     }
 
@@ -516,24 +505,18 @@ mod tests {
     /// a piece of text costs its own glyphs and nothing else.
     #[test]
     fn a_label_costs_one_quad_per_glyph() {
-        let ctx = egui::Context::default();
-        crate::theme::apply_theme(&ctx);
-        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(200.0, 100.0));
         let mut batch = crate::text::TextBatch::default();
-        let _ = ctx.run_ui(
-            egui::RawInput { screen_rect: Some(screen), ..Default::default() },
-            |ui| {
-                batch.text(
-                    ui.painter(),
-                    egui::pos2(100.0, 50.0),
-                    egui::Align2::CENTER_CENTER,
-                    "C440".to_owned(),
-                    egui::FontId::monospace(15.0),
-                    egui::Color32::WHITE,
-                    egui::Color32::BLACK,
-                );
-            },
-        );
+        let _ = painted_full(egui::vec2(200.0, 100.0), |ui| {
+            batch.text(
+                ui.painter(),
+                egui::pos2(100.0, 50.0),
+                egui::Align2::CENTER_CENTER,
+                "C440".to_owned(),
+                egui::FontId::monospace(15.0),
+                egui::Color32::WHITE,
+                egui::Color32::BLACK,
+            );
+        });
         assert_eq!(batch.len(), 4, "four glyphs, four quads");
     }
 
@@ -731,16 +714,11 @@ mod tests {
     /// view — the trail's kept names on — that is every lit node.
     #[test]
     fn a_name_arriving_is_no_brighter_than_the_note_it_names() {
-        let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
+        let mut state = fresh();
         // A long arrival, so the climb through the reserve's band is a stretch
         // to sample rather than a frame of it.
         state.frame_params.fade_time = 1.0;
-        state.tracker.handle_event(NoteEvent {
-            time: 0.0,
-            channel: 0,
-            note: 60,
-            kind: NoteEventKind::On { velocity: 1.0 },
-        });
+        state.tracker.handle_event(NoteEvent::on(0.0, 0, 60, 1.0));
         let scene = derive_scene(
             &state.tracker,
             &state.tuning,
@@ -770,12 +748,7 @@ mod tests {
         // depth into the departure the reserve DOES hold the name up. Without
         // this half, a fix that simply never reserved would pass the half
         // above.
-        state.tracker.handle_event(NoteEvent {
-            time: 1.0,
-            channel: 0,
-            note: 60,
-            kind: NoteEventKind::Off,
-        });
+        state.tracker.handle_event(NoteEvent::off(1.0, 0, 60));
         let scene = derive_scene(
             &state.tracker,
             &state.tuning,
@@ -805,27 +778,24 @@ mod tests {
     /// preview's second live copy has none, and must show none of it.
     #[test]
     fn only_the_interactive_copy_draws_the_learn_badge() {
-        let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
+        let mut state = fresh();
         state.learn_active = true;
         state.view.show_labels = false;
-        let ctx = egui::Context::default();
-        crate::theme::apply_theme(&ctx);
-        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 400.0));
+        let ctx = themed();
+        let screen = egui::vec2(400.0, 400.0);
         let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(300.0, 300.0));
 
-        let without = ctx
-            .run_ui(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ui| {
-                draw_lattice(ui, rect, &mut state, 0.0, 0, glam::Vec4::ZERO, None, None);
-            })
-            .shapes
-            .len();
-        let with = ctx
-            .run_ui(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ui| {
-                let (_, response) = ui.allocate_exact_size(rect.size(), egui::Sense::hover());
-                draw_lattice(ui, rect, &mut state, 0.0, 0, glam::Vec4::ZERO, Some(&response), None);
-            })
-            .shapes
-            .len();
+        let without = frame_full(&ctx, screen, |ui| {
+            draw_lattice(ui, rect, &mut state, 0.0, 0, glam::Vec4::ZERO, None, None);
+        })
+        .shapes
+        .len();
+        let with = frame_full(&ctx, screen, |ui| {
+            let (_, response) = ui.allocate_exact_size(rect.size(), egui::Sense::hover());
+            draw_lattice(ui, rect, &mut state, 0.0, 0, glam::Vec4::ZERO, Some(&response), None);
+        })
+        .shapes
+        .len();
         assert!(
             with > without,
             "learn mode should draw the badge for the interactive copy ({with} shapes) but not \
@@ -840,24 +810,23 @@ mod tests {
     /// out from under it.
     #[test]
     fn only_the_interactive_copy_lets_picking_touch_the_hover() {
-        let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
+        let mut state = fresh();
         let home = harmonigraph_core::LatticePos::new(0, 0, 0);
         state.hovered = Some(home);
-        let ctx = egui::Context::default();
-        crate::theme::apply_theme(&ctx);
-        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 400.0));
+        let ctx = themed();
+        let screen = egui::vec2(400.0, 400.0);
         let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(300.0, 300.0));
 
         // No response: nothing picks, so the docked pane's last hover must
         // survive a preview frame drawn in between.
-        let _ = ctx.run_ui(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ui| {
+        let _ = frame_full(&ctx, screen, |ui| {
             draw_lattice(ui, rect, &mut state, 0.0, 0, glam::Vec4::ZERO, None, None);
         });
         assert_eq!(state.hovered, Some(home), "a non-interactive copy must not touch the hover");
 
         // A response with no simulated pointer over it: picking runs and
         // reads "not hovering, not dragging", which clears it.
-        let _ = ctx.run_ui(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ui| {
+        let _ = frame_full(&ctx, screen, |ui| {
             let (_, response) = ui.allocate_exact_size(rect.size(), egui::Sense::hover());
             draw_lattice(ui, rect, &mut state, 0.0, 0, glam::Vec4::ZERO, Some(&response), None);
         });

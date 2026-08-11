@@ -144,13 +144,8 @@ fn an_off_sheet_node_stays_blank_even_after_it_is_played() {
     let mut tracker = NoteTracker::new();
     // Bend a note onto the sevens node's pitch class (a harmonic seventh
     // above C under the default 12-TET axes).
-    tracker.handle_event(NoteEvent {
-        time: 0.0,
-        channel: 0,
-        note: 70,
-        kind: NoteEventKind::On { velocity: 1.0 },
-    });
-    tracker.handle_event(NoteEvent { time: 1.0, channel: 0, note: 70, kind: NoteEventKind::Off });
+    tracker.handle_event(NoteEvent::on(0.0, 0, 70, 1.0));
+    tracker.handle_event(NoteEvent::off(1.0, 0, 70));
     tracker.prune(5.0, &Envelope::default());
 
     let scene = scene_of(&tracker, &tuning, &view, &frame, 10.0);

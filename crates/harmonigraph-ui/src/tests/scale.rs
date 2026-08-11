@@ -2,7 +2,6 @@
 //! and that pointing at a control does not move the row it sits in.
 
 use crate::*;
-use harmonigraph_render::wgpu::TextureFormat;
 use super::harness::*;
 
 /// The content width [`settings_pane_at_scale`] gives a pane — the column, not
@@ -14,26 +13,11 @@ const PANE_WIDTH: f32 = 400.0;
 /// [`settings_pane_at_width`] — the dock's clip outside the pane's content box
 /// — at a fixed width, because here it is the scale that varies.
 fn settings_pane_at_scale(pane: SettingsPane, scale: f32) -> Vec<egui::epaint::ClippedShape> {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     state.ui_scale = scale;
     let tab = pane.install(&mut state);
-    let backend = RecordingBackend::default();
-    let ctx = egui::Context::default();
-    crate::theme::apply_theme(&ctx);
-    crate::theme::set_ui_scale(&ctx, scale);
-    let margin = crate::theme::pane_inner_margin(scale);
-    let body =
-        egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(PANE_WIDTH + 2.0 * margin, 2400.0));
-    let out = ctx.run_ui(
-        egui::RawInput { screen_rect: Some(body), time: Some(0.0), ..Default::default() },
-        |ui| {
-            let mut body_ui = ui.new_child(egui::UiBuilder::new().max_rect(body.shrink(margin)));
-            let mut tab = tab;
-            let mut viewer = panes::Viewer { state: &mut state, params: &backend, now: 0.0 };
-            egui_dock::TabViewer::ui(&mut viewer, &mut body_ui, &mut tab);
-        },
-    );
-    out.shapes
+    let ctx = super::probe::themed_scaled(scale);
+    tab_body_on(&ctx, &mut state, tab, PANE_WIDTH, PANE_HEIGHT, 0.0).shapes
 }
 
 /// Every shape's bottom edge, ignoring the ones that carry no geometry (they
@@ -100,33 +84,21 @@ fn the_ui_scale_shrinks_the_panel_chrome() {
 #[test]
 fn the_ui_scale_leaves_the_picture_alone() {
     let picture = |scale: f32| {
-        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        let mut state = fresh();
         let backend = RecordingBackend::default();
         // Something to draw: a held voice for the roll and the voice bars, and
         // an analyzed column for the spectrum.
-        state.tracker.handle_event(harmonigraph_core::NoteEvent {
-            time: 0.5,
-            channel: 0,
-            note: 60,
-            kind: harmonigraph_core::NoteEventKind::On { velocity: 1.0 },
-        });
+        state.tracker.handle_event(harmonigraph_core::NoteEvent::on(0.5, 0, 60, 1.0));
         let mut bins = [0.0f32; harmonigraph_core::spectrum::SPECTRUM_BINS];
         bins[harmonigraph_core::spectrum::SPECTRUM_BINS / 3] = 0.8;
         state.spectrum.push_history(0.5, &bins);
-        let ctx = egui::Context::default();
-        crate::theme::apply_theme(&ctx);
-        crate::theme::set_ui_scale(&ctx, scale);
         // A rect the scale cannot move, so what is being compared is the
         // picture rather than the pane it was given.
-        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600.0, 400.0));
-        let out = ctx.run_ui(
-            egui::RawInput { screen_rect: Some(screen), time: Some(1.0), ..Default::default() },
-            |ui| {
-                crate::begin_frame(&mut state, &backend, 1.0);
-                let mut pane = ui.new_child(egui::UiBuilder::new().max_rect(screen));
-                crate::draw_pane(&mut pane, crate::Pane::Spectral, &mut state, 1.0);
-            },
-        );
+        let screen = egui::vec2(600.0, 400.0);
+        let out = super::probe::frame_full(&super::probe::themed_scaled(scale), screen, |ui| {
+            crate::begin_frame(&mut state, &backend, 1.0);
+            crate::draw_pane(ui, crate::Pane::Spectral, &mut state, 1.0);
+        });
         // Debug rather than the shapes themselves: they hold floats and
         // texture handles and are not `PartialEq`, and a difference anywhere
         // in one is a difference in the picture.
@@ -217,9 +189,7 @@ fn control_row(
     pointer: Option<egui::Pos2>,
     pressed: bool,
 ) -> (egui::Rect, Vec<egui::Rect>) {
-    let ctx = egui::Context::default();
-    crate::theme::apply_theme(&ctx);
-    crate::theme::set_ui_scale(&ctx, scale);
+    let ctx = super::probe::themed_scaled(scale);
     let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600.0, 200.0));
     let rects = std::cell::RefCell::new(Vec::new());
     let mut row = egui::Rect::NOTHING;

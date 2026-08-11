@@ -532,6 +532,7 @@ fn note_color(state: &SharedState, pitch: f32, alpha: f32) -> Color32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tests::probe::fresh;
     use crate::{SharedState, SpectralOrientation};
     use harmonigraph_core::{NoteEvent, NoteEventKind};
 
@@ -563,18 +564,13 @@ mod tests {
     /// pitch axis, so a wide range makes a thin ribbon, which is where the
     /// outline geometry is under the most pressure.
     fn ribbon_with_range(outline: f32, range: f32) -> Vec<RollInstance> {
-        let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
+        let mut state = fresh();
         state.spectrum_config.orientation = SpectralOrientation::Left;
         state.spectrum_config.low_midi = 60.0 - range * 0.5;
         state.spectrum_config.high_midi = 60.0 + range * 0.5;
         state.spectrum_config.roll_thickness = 2.0;
         state.spectrum_config.roll_outline = outline;
-        state.tracker.handle_event(NoteEvent {
-            time: 0.0,
-            channel: 0,
-            note: 60,
-            kind: NoteEventKind::On { velocity: 1.0 },
-        });
+        state.tracker.handle_event(NoteEvent::on(0.0, 0, 60, 1.0));
         instances(&state, 0.05)
     }
 
@@ -595,23 +591,13 @@ mod tests {
     /// as "notes vanish early" more strongly the further out you zoom.
     #[test]
     fn a_note_keeps_drawing_until_its_outline_has_left_too() {
-        let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
+        let mut state = fresh();
         state.spectrum_config.orientation = SpectralOrientation::Left;
         state.spectrum_config.roll_seconds = 10.0;
         state.spectrum_config.low_midi = 48.0;
         state.spectrum_config.high_midi = 84.0;
-        state.tracker.handle_event(NoteEvent {
-            time: 1.0,
-            channel: 0,
-            note: 60,
-            kind: NoteEventKind::On { velocity: 1.0 },
-        });
-        state.tracker.handle_event(NoteEvent {
-            time: 1.5,
-            channel: 0,
-            note: 60,
-            kind: NoteEventKind::Off,
-        });
+        state.tracker.handle_event(NoteEvent::on(1.0, 0, 60, 1.0));
+        state.tracker.handle_event(NoteEvent::off(1.5, 0, 60));
 
         // The moment the note's BOX leaves: released at 1.5 with a 10 s window.
         let box_gone = 11.5;
@@ -725,14 +711,9 @@ mod tests {
     /// rather than deriving one from the other.
     #[test]
     fn the_fade_is_its_own_setting_and_stops_at_the_reach() {
-        let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
+        let mut state = fresh();
         state.spectrum_config.orientation = SpectralOrientation::Left;
-        state.tracker.handle_event(NoteEvent {
-            time: 0.0,
-            channel: 0,
-            note: 60,
-            kind: NoteEventKind::On { velocity: 1.0 },
-        });
+        state.tracker.handle_event(NoteEvent::on(0.0, 0, 60, 1.0));
         let fade_at = |state: &mut SharedState, reach: f32, fade: f32| {
             state.spectrum_config.roll_outline = reach;
             state.spectrum_config.roll_outline_fade = fade;
@@ -785,23 +766,13 @@ mod tests {
         // share: about 60 ms per point, so a 20 ms tap is well under the floor
         // and a 2 s note is well over it.
         let tap = |length: f64| {
-            let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
+            let mut state = fresh();
             state.spectrum_config.orientation = SpectralOrientation::Left;
             state.spectrum_config.roll_seconds = 10.0;
             state.spectrum_config.low_midi = 48.0;
             state.spectrum_config.high_midi = 84.0;
-            state.tracker.handle_event(NoteEvent {
-                time: 2.0,
-                channel: 0,
-                note: 60,
-                kind: NoteEventKind::On { velocity: 1.0 },
-            });
-            state.tracker.handle_event(NoteEvent {
-                time: 2.0 + length,
-                channel: 0,
-                note: 60,
-                kind: NoteEventKind::Off,
-            });
+            state.tracker.handle_event(NoteEvent::on(2.0, 0, 60, 1.0));
+            state.tracker.handle_event(NoteEvent::off(2.0 + length, 0, 60));
             let notes = instances(&state, 5.0);
             let note = *one(&notes);
             let axes = Axes::new(PANE, &state.spectrum_config);
@@ -841,7 +812,7 @@ mod tests {
         // direction. Depth runs away from the now-line, so the box's far end is
         // `+ half_extent` and its near end `-`, and the moment the note happened
         // is the midpoint between them.
-        let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
+        let mut state = fresh();
         state.spectrum_config.orientation = SpectralOrientation::Left;
         state.spectrum_config.roll_seconds = 10.0;
         state.spectrum_config.low_midi = 48.0;
@@ -864,21 +835,11 @@ mod tests {
     /// exactly one class of display.
     #[test]
     fn the_length_floor_follows_the_display_density() {
-        let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
+        let mut state = fresh();
         state.spectrum_config.orientation = SpectralOrientation::Left;
         state.spectrum_config.roll_seconds = 10.0;
-        state.tracker.handle_event(NoteEvent {
-            time: 2.0,
-            channel: 0,
-            note: 60,
-            kind: NoteEventKind::On { velocity: 1.0 },
-        });
-        state.tracker.handle_event(NoteEvent {
-            time: 2.001,
-            channel: 0,
-            note: 60,
-            kind: NoteEventKind::Off,
-        });
+        state.tracker.handle_event(NoteEvent::on(2.0, 0, 60, 1.0));
+        state.tracker.handle_event(NoteEvent::off(2.001, 0, 60));
         let cfg = &state.spectrum_config;
         let axes = Axes::new(PANE, cfg);
         let scale = PitchScale { min_midi: 48.0, max_midi: 84.0, span: 36.0 };
@@ -916,17 +877,12 @@ mod tests {
     /// bar's top.
     #[test]
     fn a_floored_note_stays_inside_the_pitch_it_covered() {
-        let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
+        let mut state = fresh();
         state.spectrum_config.orientation = SpectralOrientation::Left;
         state.spectrum_config.roll_seconds = 60.0;
         state.spectrum_config.low_midi = 48.0;
         state.spectrum_config.high_midi = 84.0;
-        state.tracker.handle_event(NoteEvent {
-            time: 2.0,
-            channel: 0,
-            note: 60,
-            kind: NoteEventKind::On { velocity: 1.0 },
-        });
+        state.tracker.handle_event(NoteEvent::on(2.0, 0, 60, 1.0));
         // One 512-frame block at 48 kHz behind the note-on, which is what a
         // host's per-note tuning actually does.
         state.tracker.handle_event(NoteEvent {
@@ -938,12 +894,7 @@ mod tests {
         // Released almost at once, so the NOTE is under the length floor and
         // the floor is what draws it — which is the case this is about, now
         // that a segment is only stretched as its note is.
-        state.tracker.handle_event(NoteEvent {
-            time: 2.02,
-            channel: 0,
-            note: 60,
-            kind: NoteEventKind::Off,
-        });
+        state.tracker.handle_event(NoteEvent::off(2.02, 0, 60));
         let axes = Axes::new(PANE, &state.spectrum_config);
         // The whole drift any segment of this note can carry, as a half-extent
         // in points: 0.3 semitones of a 36-semitone axis. No segment may reach
@@ -983,19 +934,14 @@ mod tests {
     /// by their neighbours rather than being alone on the axis.
     #[test]
     fn the_segments_of_a_bent_note_tile_instead_of_overlapping() {
-        let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
+        let mut state = fresh();
         state.spectrum_config.orientation = SpectralOrientation::Left;
         // 60 s over the roll's share of 300 points: about 0.44 s to the point,
         // so the 20 ms steps below are each a twentieth of the length floor.
         state.spectrum_config.roll_seconds = 60.0;
         state.spectrum_config.low_midi = 48.0;
         state.spectrum_config.high_midi = 84.0;
-        state.tracker.handle_event(NoteEvent {
-            time: 2.0,
-            channel: 0,
-            note: 60,
-            kind: NoteEventKind::On { velocity: 1.0 },
-        });
+        state.tracker.handle_event(NoteEvent::on(2.0, 0, 60, 1.0));
         for (i, at) in [2.02, 2.04, 2.06, 2.08].into_iter().enumerate() {
             state.tracker.handle_event(NoteEvent {
                 time: at,
@@ -1054,7 +1000,7 @@ mod tests {
         // way, and both sit above the zoom.
         let glide = |after: f64| {
             let mut state =
-                SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
+                fresh();
             state.spectrum_config.orientation = SpectralOrientation::Left;
             state.spectrum_config.roll_seconds = 10.0;
             // The narrowest zoom there is (`PITCH_RANGE_MIN_SPAN`); anything
@@ -1062,12 +1008,7 @@ mod tests {
             state.spectrum_config.low_midi = 36.0;
             state.spectrum_config.high_midi = 60.0;
             state.spectrum_config.roll_outline = crate::ROLL_OUTLINE_MAX;
-            state.tracker.handle_event(NoteEvent {
-                time: 2.0,
-                channel: 0,
-                note: 62,
-                kind: NoteEventKind::On { velocity: 1.0 },
-            });
+            state.tracker.handle_event(NoteEvent::on(2.0, 0, 62, 1.0));
             state.tracker.handle_event(NoteEvent {
                 time: 2.0 + after,
                 channel: 0,
@@ -1101,16 +1042,11 @@ mod tests {
     /// which makes the box a parallelogram and costs nothing else.
     #[test]
     fn a_glide_shears_the_note_rather_than_needing_another_shape() {
-        let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
+        let mut state = fresh();
         state.spectrum_config.orientation = SpectralOrientation::Left;
         state.spectrum_config.low_midi = 55.0;
         state.spectrum_config.high_midi = 67.0;
-        state.tracker.handle_event(NoteEvent {
-            time: 0.0,
-            channel: 0,
-            note: 60,
-            kind: NoteEventKind::On { velocity: 1.0 },
-        });
+        state.tracker.handle_event(NoteEvent::on(0.0, 0, 60, 1.0));
         let held = instances(&state, 1.0);
         assert_eq!(one(&held).shear, 0.0, "a held note should not be sheared");
 
@@ -1136,16 +1072,11 @@ mod tests {
     /// move the note by that same fraction each time, not by 0 then 1.
     #[test]
     fn a_scrolling_note_moves_sub_pixel_rather_than_in_whole_pixel_jumps() {
-        let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
+        let mut state = fresh();
         state.spectrum_config.orientation = SpectralOrientation::Left;
         state.spectrum_config.low_midi = 55.0;
         state.spectrum_config.high_midi = 67.0;
-        state.tracker.handle_event(NoteEvent {
-            time: 0.0,
-            channel: 0,
-            note: 60,
-            kind: NoteEventKind::On { velocity: 1.0 },
-        });
+        state.tracker.handle_event(NoteEvent::on(0.0, 0, 60, 1.0));
         // A step that scrolls the roll by well under one point.
         let axes = Axes::new(PANE, &state.spectrum_config);
         let window = f64::from(state.spectrum_config.roll_seconds);

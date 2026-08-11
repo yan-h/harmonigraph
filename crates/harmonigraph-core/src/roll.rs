@@ -314,11 +314,11 @@ mod tests {
     use crate::notes::{Envelope, NoteEvent, NoteEventKind, NoteTracker};
 
     fn on(time: Time, note: u8) -> NoteEvent {
-        NoteEvent { time, channel: 0, note, kind: NoteEventKind::On { velocity: 0.8 } }
+        NoteEvent::on(time, 0, note, 0.8)
     }
 
     fn off(time: Time, note: u8) -> NoteEvent {
-        NoteEvent { time, channel: 0, note, kind: NoteEventKind::Off }
+        NoteEvent::off(time, 0, note)
     }
 
     fn bend(time: Time, note: u8, semitones: f32) -> NoteEvent {
@@ -506,12 +506,7 @@ mod tests {
     fn every_channel_reaches_the_roll() {
         for channel in 0..16u8 {
             let mut tracker = NoteTracker::new();
-            tracker.handle_event(NoteEvent {
-                time: 0.0,
-                channel,
-                note: 60,
-                kind: NoteEventKind::On { velocity: 0.8 },
-            });
+            tracker.handle_event(NoteEvent::on(0.0, channel, 60, 0.8));
             assert_eq!(tracker.roll().len(), 1, "channel {channel}");
         }
     }

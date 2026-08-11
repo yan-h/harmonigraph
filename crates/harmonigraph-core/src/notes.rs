@@ -42,6 +42,32 @@ pub struct NoteEvent {
     pub kind: NoteEventKind,
 }
 
+impl NoteEvent {
+    /// A note-on, its arguments in the struct's own field order — so the two
+    /// adjacent `u8`s are read in the order they are declared rather than
+    /// guessed at.
+    ///
+    /// Plain `pub` rather than `#[cfg(test)]`, and it is worth saying why,
+    /// because the cheap-looking option does not work: `cfg(test)` is set only
+    /// while a crate compiles its OWN test harness, so a `#[cfg(test)]` item
+    /// here would be invisible to every dependent crate's tests — which is
+    /// where all but a handful of the callers are. A cargo feature would
+    /// reach them, but only through a dev-dependency edge declared per crate,
+    /// and feature unification then leaves it on for the shipped build
+    /// anyway; a separate helper crate would trip the dependency guard
+    /// `ci.sh` holds over this one. Two dependency-free constructors, always
+    /// compiled, is the smallest thing that reaches the callers.
+    pub fn on(time: Time, channel: u8, note: u8, velocity: f32) -> Self {
+        NoteEvent { time, channel, note, kind: NoteEventKind::On { velocity } }
+    }
+
+    /// A note-off, which carries no velocity of its own: a release velocity
+    /// reaches nothing here (see [`NoteEventKind::Off`]).
+    pub fn off(time: Time, channel: u8, note: u8) -> Self {
+        NoteEvent { time, channel, note, kind: NoteEventKind::Off }
+    }
+}
+
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum VoiceState {
     Held,
@@ -599,11 +625,11 @@ mod tests {
     use super::*;
 
     fn on(time: Time, note: u8) -> NoteEvent {
-        NoteEvent { time, channel: 0, note, kind: NoteEventKind::On { velocity: 0.8 } }
+        NoteEvent::on(time, 0, note, 0.8)
     }
 
     fn off(time: Time, note: u8) -> NoteEvent {
-        NoteEvent { time, channel: 0, note, kind: NoteEventKind::Off }
+        NoteEvent::off(time, 0, note)
     }
 
     /// Press one note on every tracked channel at each of several pitches,
@@ -619,12 +645,7 @@ mod tests {
         for step in 0..11u8 {
             for channel in 0..15u8 {
                 let note = 21 + step * 7;
-                tracker.handle_event(NoteEvent {
-                    time: 0.0,
-                    channel,
-                    note,
-                    kind: NoteEventKind::On { velocity: 0.8 },
-                });
+                tracker.handle_event(NoteEvent::on(0.0, channel, note, 0.8));
                 keys.push((channel, note));
             }
         }
@@ -768,12 +789,7 @@ mod tests {
     fn no_channel_is_dropped_on_the_way_in() {
         for channel in 0..16u8 {
             let mut tracker = NoteTracker::new();
-            tracker.handle_event(NoteEvent {
-                time: 0.0,
-                channel,
-                note: 60,
-                kind: NoteEventKind::On { velocity: 0.8 },
-            });
+            tracker.handle_event(NoteEvent::on(0.0, channel, 60, 0.8));
             assert_eq!(tracker.voices().count(), 1, "channel {channel}");
         }
     }
@@ -996,12 +1012,7 @@ mod tests {
     fn all_off_releases_every_channel() {
         let mut tracker = NoteTracker::new();
         tracker.handle_event(on(0.0, 60));
-        tracker.handle_event(NoteEvent {
-            time: 0.0,
-            channel: 3,
-            note: 64,
-            kind: NoteEventKind::On { velocity: 0.5 },
-        });
+        tracker.handle_event(NoteEvent::on(0.0, 3, 64, 0.5));
         tracker.handle_event(NoteEvent {
             time: 1.0,
             channel: 0,

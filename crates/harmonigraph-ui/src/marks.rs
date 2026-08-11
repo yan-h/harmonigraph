@@ -1569,9 +1569,7 @@ mod tests {
 
     /// The same character as egui's own atlas rasterizes it, at the same size.
     fn typeset_coverage(ch: char, size: f32, ppp: f32) -> Grid {
-        let ctx = egui::Context::default();
-        crate::theme::apply_theme(&ctx); // the real Iosevka outlines
-        ctx.set_pixels_per_point(ppp);
+        let ctx = crate::tests::probe::themed_at(ppp);
         let _ = ctx.run_ui(egui::RawInput::default(), |_| {});
         let galley = ctx.fonts_mut(|f| {
             f.layout_no_wrap(ch.to_string(), egui::FontId::monospace(size), egui::Color32::WHITE)
@@ -2045,9 +2043,7 @@ mod tests {
         const PPP: f32 = 2.0;
         const RATE: f32 = 1.4286;
 
-        let ctx = egui::Context::default();
-        crate::theme::apply_theme(&ctx);
-        ctx.set_pixels_per_point(PPP);
+        let ctx = crate::tests::probe::themed_at(PPP);
         let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 400.0));
         // The analyzer's own label setting, split the way `names::draw` splits
         // it: the rung a mark is rasterized on, and the rest as magnification.

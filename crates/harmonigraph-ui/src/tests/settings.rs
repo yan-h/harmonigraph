@@ -3,7 +3,6 @@
 //! and the Video pane's own rows.
 
 use crate::*;
-use harmonigraph_render::wgpu::TextureFormat;
 use super::harness::*;
 
 /// Put the Notes/Console leaf back on screen, which is what the two wheel
@@ -31,16 +30,14 @@ fn unfold_the_readout_panes(state: &mut SharedState) {
 /// position-of-the-ink metric reports movement that isn't there (and misses
 /// movement that is). The y of a string drawn in both frames cannot lie.
 fn wheel_over_settings_pane(pane: SettingsPane, screen_h: f32) -> f32 {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     unfold_the_readout_panes(&mut state);
     // The settings leaf opens on Tuning; every other settings pane is a tab
     // behind it (a Section is the Display tab with that section open).
     let tab = pane.install(&mut state);
     let path = state.workspace.dock.find_tab(&tab).expect("{tab:?} is not in the default dock");
     state.workspace.dock.set_active_tab(path).expect("selecting the tab");
-    let backend = RecordingBackend::default();
-    let ctx = egui::Context::default();
-    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1000.0, screen_h));
+    let mut h = DockHarness::at(egui::vec2(1000.0, screen_h));
     // The top-right leaf (right of the 0.72 split, above the 0.55 one), from
     // under its tab bar down. Only shapes clipped to this are the pane's.
     let body = egui::Rect::from_min_max(
@@ -62,17 +59,8 @@ fn wheel_over_settings_pane(pane: SettingsPane, screen_h: f32) -> f32 {
         }
         map
     };
-    let mut t = 0.0;
-    let mut frame = |state: &mut SharedState, events: Vec<egui::Event>| {
-        t += 1.0 / 60.0;
-        let raw = egui::RawInput {
-            screen_rect: Some(screen),
-            time: Some(t),
-            events,
-            ..Default::default()
-        };
-        texts(&ctx.run_ui(raw, |ui| root_ui(ui, state, &backend, t)))
-    };
+    let mut frame =
+        |state: &mut SharedState, events: Vec<egui::Event>| texts(&h.frame(state, events));
     // egui resolves the widget under the pointer from the previous pass, so
     // the pointer has to be there for a frame before the wheel arrives.
     frame(&mut state, vec![egui::Event::PointerMoved(egui::pos2(860.0, screen_h * 0.22))]);
@@ -205,22 +193,17 @@ fn the_shape_bars_preview_is_the_curve_the_notes_run_on() {
 /// full-height `min_rect` where a hand-built one arrives empty. A fixture that
 /// skips it cannot see the difference — see `section`.
 fn video_pane_shapes(supported: bool) -> (Vec<egui::epaint::ClippedShape>, egui::Color32) {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     state.take.supported = supported;
     // Soloed so the Video pane's body is the only settings body on screen and
     // the first heading found is unambiguously its own.
     state.workspace.dock = egui_dock::DockState::new(vec![panes::Tab::Video]);
-    let backend = RecordingBackend::default();
-    let ctx = egui::Context::default();
-    crate::theme::apply_theme(&ctx);
-    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(420.0, 1200.0));
-    let out = ctx.run_ui(
-        egui::RawInput { screen_rect: Some(screen), time: Some(0.0), ..Default::default() },
-        |ui| root_ui(ui, &mut state, &backend, 0.0),
-    );
+    // Tall and narrow: one soloed pane, with room for its whole column.
+    let mut h = DockHarness::at(egui::vec2(420.0, 1200.0));
+    let out = h.frame(&mut state, vec![]);
     // What `ui.separator()` strokes with, so the assertion names the rule
     // rather than "some line" — the tab bar draws its own, in its own colors.
-    let rule = ctx.style_of(egui::Theme::Dark).visuals.widgets.noninteractive.bg_stroke.color;
+    let rule = h.ctx.style_of(egui::Theme::Dark).visuals.widgets.noninteractive.bg_stroke.color;
     (out.shapes, rule)
 }
 
@@ -473,25 +456,9 @@ fn every_bar_in_a_settings_pane_is_the_width_of_the_pane() {
 #[test]
 fn the_field_named_for_a_section_opens_that_sections_body() {
     let draw = |sections: crate::panes::display::DisplaySections| {
-        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        let mut state = fresh();
         state.display_sections = sections;
-        let backend = RecordingBackend::default();
-        let ctx = egui::Context::default();
-        crate::theme::apply_theme(&ctx);
-        let margin = crate::theme::PANE_INNER_MARGIN;
-        let body =
-            egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0 + 2.0 * margin, 2400.0));
-        ctx.run_ui(
-            egui::RawInput { screen_rect: Some(body), time: Some(0.0), ..Default::default() },
-            |ui| {
-                let mut body_ui =
-                    ui.new_child(egui::UiBuilder::new().max_rect(body.shrink(margin)));
-                let mut tab = panes::Tab::Display;
-                let mut viewer = panes::Viewer { state: &mut state, params: &backend, now: 0.0 };
-                egui_dock::TabViewer::ui(&mut viewer, &mut body_ui, &mut tab);
-            },
-        )
-        .shapes
+        tab_body(&mut state, panes::Tab::Display, 400.0, PANE_HEIGHT).shapes
     };
     type Open = fn(&mut crate::panes::display::DisplaySections);
     const CASES: [(Open, &str, &str); 6] = [
@@ -773,19 +740,17 @@ enum Grab {
 /// Press and drag at `grab`, lose the release, then wheel over the settings
 /// pane and answer how far its content moved.
 fn scroll_settings_after_lost_drag(grab: Grab, lose: Lose) -> f32 {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     unfold_the_readout_panes(&mut state);
     // The Analyzer settings, open in the Display tab.
     let tab = SettingsPane::Section(Section::Analyzer).install(&mut state);
     let path = state.workspace.dock.find_tab(&tab).expect("the Display tab");
     state.workspace.dock.set_active_tab(path).expect("selecting the tab");
-    let backend = RecordingBackend::default();
-    let ctx = egui::Context::default();
     // Tall enough that the Analyzer's first bars are inside the settings leaf:
     // the section opens under the five headers stacked above it, and a bar
     // this fixture presses on outside the leaf is a press on the pane below.
     let screen_h = 640.0;
-    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1000.0, screen_h));
+    let mut h = DockHarness::at(egui::vec2(1000.0, screen_h));
     let body =
         egui::Rect::from_min_max(egui::pos2(700.0, 20.0), egui::pos2(1000.0, screen_h * 0.55 + 2.0));
     // Named texts inside the settings body, as `wheel_over_settings_pane` does:
@@ -807,23 +772,12 @@ fn scroll_settings_after_lost_drag(grab: Grab, lose: Lose) -> f32 {
         }
         map
     };
-    let mut t = 0.0;
-    let mut frame = |state: &mut SharedState, events: Vec<egui::Event>| {
-        t += 1.0 / 60.0;
-        let raw = egui::RawInput {
-            screen_rect: Some(screen),
-            time: Some(t),
-            events,
-            ..Default::default()
-        };
-        texts(&ctx.run_ui(raw, |ui| root_ui(ui, state, &backend, t)))
-    };
-    let press = |pos: egui::Pos2, pressed: bool| egui::Event::PointerButton {
-        pos,
-        button: egui::PointerButton::Primary,
-        pressed,
-        modifiers: egui::Modifiers::NONE,
-    };
+    // A handle on the harness's own context, taken before the closure below
+    // borrows it: `egui::Context` is an `Arc`, so this reads the same context
+    // the frames run on rather than a second one.
+    let ctx = h.ctx.clone();
+    let mut frame =
+        |state: &mut SharedState, events: Vec<egui::Event>| texts(&h.frame(state, events));
     // Where the press lands, off a laid-out frame: a named bar is wherever
     // the layout put it, which under the Display pane's headers is nowhere a
     // constant can point.
@@ -895,18 +849,16 @@ fn scroll_settings_after_lost_drag(grab: Grab, lose: Lose) -> f32 {
 /// is the only reason it is here.
 #[test]
 fn a_bar_dragged_past_the_window_edge_keeps_tracking_the_pointer() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     unfold_the_readout_panes(&mut state);
     // The Analyzer settings, open in the Display tab.
     let tab = SettingsPane::Section(Section::Analyzer).install(&mut state);
     let path = state.workspace.dock.find_tab(&tab).expect("the Display tab");
     state.workspace.dock.set_active_tab(path).expect("selecting the tab");
-    let backend = RecordingBackend::default();
-    let ctx = egui::Context::default();
     // Tall enough that the Smoothing bar is on screen below the Display pane's
     // five section headers and the whole Plot section above it.
     let screen_h = 880.0;
-    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1000.0, screen_h));
+    let mut h = DockHarness::at(egui::vec2(1000.0, screen_h));
     // The settings leaf, whose bars run the width of the column at x ~700..1000:
     // from under its tab bar down to the 0.55 split.
     let body =
@@ -924,23 +876,11 @@ fn a_bar_dragged_past_the_window_edge_keeps_tracking_the_pointer() {
             _ => None,
         })
     };
-    let mut t = 0.0;
-    let mut frame = |state: &mut SharedState, events: Vec<egui::Event>| {
-        t += 1.0 / 60.0;
-        let raw = egui::RawInput {
-            screen_rect: Some(screen),
-            time: Some(t),
-            events,
-            ..Default::default()
-        };
-        ctx.run_ui(raw, |ui| root_ui(ui, state, &backend, t))
-    };
-    let press = |pos: egui::Pos2, pressed: bool| egui::Event::PointerButton {
-        pos,
-        button: egui::PointerButton::Primary,
-        pressed,
-        modifiers: egui::Modifiers::NONE,
-    };
+    // As above: an `Arc` handle on the harness's own context, so the drag
+    // state read below is the one the frames wrote.
+    let ctx = h.ctx.clone();
+    let mut frame =
+        |state: &mut SharedState, events: Vec<egui::Event>| h.frame(state, events);
     // Smoothing: a plain 0..=0.9 bar, so where the pointer is says what the
     // value should be, and the far end of the range is what an off-window drag
     // to the right must arrive at.
@@ -1069,7 +1009,7 @@ const SCALES: [f32; 5] = [0.7, 0.9, 1.0, 1.1, 1.5];
 /// Both readout panes list what has come in, and an empty one has nothing to
 /// scroll, so the fixture gives the Console lines and the Notes pane voices.
 fn scrolling_settings_pane(pane: SettingsPane, scale: f32) -> Vec<egui::epaint::ClippedShape> {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     state.ui_scale = scale;
     let tab = pane.install(&mut state);
     state.workspace.dock = egui_dock::DockState::new(vec![tab]);
@@ -1084,33 +1024,13 @@ fn scrolling_settings_pane(pane: SettingsPane, scale: f32) -> Vec<egui::epaint::
         state.console.log(format!("{i:02} a log line long enough to run the width of the pane"));
     }
     for note in 40..80 {
-        state.tracker.handle_event(harmonigraph_core::NoteEvent {
-            time: 0.5,
-            channel: 0,
-            note,
-            kind: harmonigraph_core::NoteEventKind::On { velocity: 1.0 },
-        });
+        state.tracker.handle_event(harmonigraph_core::NoteEvent::on(0.5, 0, note, 1.0));
     }
-    let backend = RecordingBackend::default();
-    let ctx = egui::Context::default();
-    crate::theme::apply_theme(&ctx);
-    crate::theme::set_ui_scale(&ctx, scale);
     // The window scales with the chrome, so every pane overflows it by the same
     // margin at every scale rather than the sweep having a size per scale.
-    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, SCROLLING_PANE * scale);
-    let mut t = 0.0;
-    let mut frame = |state: &mut SharedState, events: Vec<egui::Event>| {
-        t += 1.0 / 60.0;
-        ctx.run_ui(
-            egui::RawInput {
-                screen_rect: Some(screen),
-                time: Some(t),
-                events,
-                ..Default::default()
-            },
-            |ui| root_ui(ui, state, &backend, t),
-        )
-    };
+    let mut h = DockHarness::scaled(SCROLLING_PANE * scale, scale);
+    let screen = h.screen;
+    let mut frame = |state: &mut SharedState, events: Vec<egui::Event>| h.frame(state, events);
     let margin = crate::theme::pane_inner_margin(scale);
     let inside = egui::pos2(screen.right() - 2.0 * margin, screen.center().y);
     frame(&mut state, vec![egui::Event::PointerMoved(inside)]);
@@ -1126,10 +1046,7 @@ fn scrolling_settings_pane(pane: SettingsPane, scale: f32) -> Vec<egui::epaint::
 /// The theme's widest scroll bar at a given chrome scale, read back off a
 /// themed context rather than restated here.
 fn scroll_bar_width(scale: f32) -> f32 {
-    let ctx = egui::Context::default();
-    crate::theme::apply_theme(&ctx);
-    crate::theme::set_ui_scale(&ctx, scale);
-    ctx.style_of(egui::Theme::Dark).spacing.scroll.bar_width
+    super::probe::themed_scaled(scale).style_of(egui::Theme::Dark).spacing.scroll.bar_width
 }
 
 /// Nothing a settings pane draws goes under its own scroll bar.
@@ -1267,27 +1184,13 @@ fn nothing_is_drawn_under_a_settings_pane_scroll_bar() {
 /// instead of the cell.
 #[test]
 fn the_comma_tables_sideways_bar_runs_under_its_cells() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     state.workspace.dock = egui_dock::DockState::new(vec![panes::Tab::Tuning]);
-    let backend = RecordingBackend::default();
-    let ctx = egui::Context::default();
-    crate::theme::apply_theme(&ctx);
     // Narrower than the two columns need, and tall enough that the pane does
     // not also scroll — one bar in the picture is one bar to find.
-    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(120.0, 900.0));
-    let mut t = 0.0;
-    let mut frame = |state: &mut SharedState, events: Vec<egui::Event>| {
-        t += 1.0 / 60.0;
-        ctx.run_ui(
-            egui::RawInput {
-                screen_rect: Some(screen),
-                time: Some(t),
-                events,
-                ..Default::default()
-            },
-            |ui| root_ui(ui, state, &backend, t),
-        )
-    };
+    let mut h = DockHarness::at(egui::vec2(120.0, 900.0));
+    let screen = h.screen;
+    let mut frame = |state: &mut SharedState, events: Vec<egui::Event>| h.frame(state, events);
     let heading_rect = |out: &egui::FullOutput| {
         out.shapes.iter().find_map(|cs| match &cs.shape {
             egui::Shape::Text(text) if text.galley.text() == "Temper" => {

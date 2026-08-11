@@ -4,12 +4,12 @@
 
 use crate::*;
 use crate::state::UI_PERSIST_VERSION;
-use harmonigraph_render::wgpu::TextureFormat;
 use harmonigraph_scene::Camera;
+use super::probe::fresh;
 
 #[test]
 fn persist_round_trips_camera_and_view() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     state.camera.yaw = 1.23;
     state.camera.distance = 42.0;
     state.view.extent_sevens = 3;
@@ -59,7 +59,7 @@ fn persist_round_trips_camera_and_view() {
     });
     let saved = state.save_persist();
 
-    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut restored = fresh();
     restored.load_persist(&saved);
     assert_eq!(restored.camera.yaw, 1.23);
     assert_eq!(restored.camera.distance, 42.0);
@@ -94,7 +94,7 @@ fn a_blob_written_before_the_auto_detect_opts_into_it() {
     // pitch whether or not anyone said "meantone". Defaulting the missing
     // key to OFF would leave exactly those projects the only ones the
     // feature never reaches.
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     state.camera.yaw = 1.23;
     // One key at a time, each checked to have HIT: with three replacements
     // over one blob, a single `assert_ne!` at the end is satisfied by any one
@@ -107,7 +107,7 @@ fn a_blob_written_before_the_auto_detect_opts_into_it() {
         saved = stripped;
     }
 
-    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut restored = fresh();
     restored.load_persist(&saved);
     assert!(restored.view.meantone_auto, "a missing key means on");
     // And the septimal comma's keys are newer still, so EVERY project
@@ -126,7 +126,7 @@ fn a_blob_written_before_the_auto_detect_opts_into_it() {
 /// does not draw, since the layout re-clamps for itself and says nothing.
 #[test]
 fn a_blob_naming_more_wheel_than_fits_opens_on_what_fits() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     state.camera.yaw = 1.23;
     state.view.octave_count = 9;
     state.view.octave_extras = 0;
@@ -135,7 +135,7 @@ fn a_blob_naming_more_wheel_than_fits_opens_on_what_fits() {
     let overrun = saved.replace("octave_extras:0,", "octave_extras:5,");
     assert_ne!(overrun, saved, "`octave_extras` is not in the blob to overrun");
 
-    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut restored = fresh();
     restored.load_persist(&overrun);
     assert_eq!(
         (restored.view.octave_count, restored.view.octave_extras),
@@ -166,7 +166,7 @@ fn a_blob_naming_an_undrawable_level_range_opens_on_a_drawable_one() {
         ("-30.0", "-30.0", "a collapsed pair"),
         ("40.0", "60.0", "a pair right off the top of the scale"),
     ] {
-        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        let mut state = fresh();
         state.camera.yaw = 1.23;
         let saved = state.save_persist();
         let edited = saved
@@ -180,7 +180,7 @@ fn a_blob_naming_an_undrawable_level_range_opens_on_a_drawable_one() {
             );
         assert_ne!(edited, saved, "{hint}: the level keys are not in the blob to edit");
 
-        let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+        let mut restored = fresh();
         restored.load_persist(&edited);
         let cfg = restored.spectrum_config;
         assert!(
@@ -227,8 +227,7 @@ fn a_blob_naming_an_undrawable_level_range_opens_on_a_drawable_one() {
 /// what is being pinned is which of two resets the gesture reaches.
 #[test]
 fn a_double_click_on_a_soft_edge_restores_the_fresh_pair() {
-    let ctx = egui::Context::default();
-    crate::theme::apply_theme(&ctx);
+    let ctx = super::probe::themed();
     let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(300.0, 100.0));
     let fresh = harmonigraph_scene::ViewConfig::default();
     // Dialled somewhere else first, so landing on the fresh pair is a move.
@@ -287,7 +286,7 @@ fn a_double_click_on_a_soft_edge_restores_the_fresh_pair() {
 /// hold.
 #[test]
 fn a_blob_naming_a_fade_wider_than_its_edge_opens_on_one_that_fits() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     state.camera.yaw = 1.23;
     let saved = state.save_persist();
     let edited = saved
@@ -309,7 +308,7 @@ fn a_blob_naming_a_fade_wider_than_its_edge_opens_on_one_that_fits() {
         );
     assert_ne!(edited, saved, "the edge keys are not in the blob to edit");
 
-    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut restored = fresh();
     restored.load_persist(&edited);
     assert_eq!(
         (restored.view.sevens_gutter, restored.view.sevens_gutter_soft),
@@ -347,7 +346,7 @@ fn a_blob_naming_a_nonsense_soft_edge_opens_on_a_drawable_one() {
         ("roll_outline_fade", "NaN", "a NaN outline fade"),
     ];
     for (key, value, hint) in cases {
-        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        let mut state = fresh();
         state.camera.yaw = 1.23;
         let saved = state.save_persist();
         let was = match key {
@@ -359,7 +358,7 @@ fn a_blob_naming_a_nonsense_soft_edge_opens_on_a_drawable_one() {
         let edited = saved.replace(&format!("{key}:{was:?},"), &format!("{key}:{value},"));
         assert_ne!(edited, saved, "{hint}: `{key}` is not in the blob to edit");
 
-        let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+        let mut restored = fresh();
         restored.load_persist(&edited);
         let view = &restored.view;
         let cfg = &restored.spectrum_config;
@@ -391,7 +390,7 @@ fn a_blob_naming_a_nonsense_soft_edge_opens_on_a_drawable_one() {
 /// back at the fresh value, where a key that is UNKNOWN costs nothing at all.
 #[test]
 fn a_blob_written_against_the_taper_keeps_what_it_still_says() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     state.camera.yaw = 1.23;
     state.view.octave_count = 7;
     state.view.octave_extras = 3;
@@ -415,15 +414,15 @@ fn a_blob_written_against_the_taper_keeps_what_it_still_says() {
         saved.replace(&count, &format!("{count}octave_taper_amount:0.6,octave_taper_shape:0.25,"));
     assert_ne!(tapered, saved, "the taper's keys did not go into the blob");
 
-    let fresh = harmonigraph_scene::ViewConfig::default();
-    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+    let defaults = harmonigraph_scene::ViewConfig::default();
+    let mut restored = fresh();
     restored.load_persist(&tapered);
     assert_eq!(restored.view.octave_count, 7, "the count the blob names survives the taper keys");
     // The fresh fringe as this count can hold it, not the fresh fringe raw:
     // `sanitize` clamps the PAIR, and seven octaves leave room for two extras
     // a side. Spelling the clamp out keeps this measuring the fallback rather
     // than failing the day someone retunes the fresh fringe past what fits.
-    let (_, fits) = harmonigraph_scene::clamp_wheel(7, fresh.octave_extras);
+    let (_, fits) = harmonigraph_scene::clamp_wheel(7, defaults.octave_extras);
     assert_eq!(
         restored.view.octave_extras, fits,
         "and the fringe it is missing comes back at the fresh value, as the count can hold it",
@@ -444,7 +443,7 @@ fn a_blob_written_against_the_taper_keeps_what_it_still_says() {
 /// failing to parse loses the user's layout and camera along with it.
 #[test]
 fn a_blob_written_against_the_octave_shimmer_opens_with_the_glyphs_steady() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     state.camera.yaw = 1.23;
     state.view.pulse_marks = harmonigraph_scene::Pulse::Hex;
     let saved = state.save_persist();
@@ -454,7 +453,7 @@ fn a_blob_written_against_the_octave_shimmer_opens_with_the_glyphs_steady() {
     let with_octaves = saved.replace(marks, &format!("pulse_octaves:Bands,{marks}"));
     assert_ne!(with_octaves, saved, "`{marks}` is not in the blob to splice against");
 
-    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut restored = fresh();
     restored.load_persist(&with_octaves);
     assert_eq!(
         restored.view.pulse_marks,
@@ -472,14 +471,14 @@ fn a_blob_written_against_the_octave_shimmer_opens_with_the_glyphs_steady() {
 /// BOTH doors into the blob — the editor's and the offline renderer's.
 #[test]
 fn a_render_frame_round_trips_through_both_doors() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     state.camera.yaw = 1.23;
     state.take.render_config.frame.lattice = LatticeSide::Bottom;
     state.take.render_config.frame.split = 0.42;
     let saved = state.save_persist();
     assert!(saved.contains("lattice:Bottom"), "the side is what gets written");
 
-    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut restored = fresh();
     restored.load_persist(&saved);
     assert_eq!(restored.take.render_config.frame.lattice, LatticeSide::Bottom);
     assert_eq!(restored.take.render_config.frame.split, 0.42);
@@ -492,7 +491,7 @@ fn a_render_frame_round_trips_through_both_doors() {
 
 #[test]
 fn corrupt_persist_is_ignored() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     let default_distance = state.camera.distance;
     assert!(!state.load_persist("not json at all"), "a corrupt blob is not applied");
     assert_eq!(state.camera.distance, default_distance);
@@ -513,13 +512,13 @@ fn a_refused_blob_says_why() {
     // A dropped enum variant, spliced where a live one sat. The orientation,
     // the heatmap's look being six numbers rather than an enum — and a number
     // out of range is repaired rather than refused, which is the other test.
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     state.spectrum_config.orientation = crate::SpectralOrientation::Left;
     let saved = state.save_persist();
     let dropped = saved.replace("orientation:Left", "orientation:Diagonal");
     assert_ne!(dropped, saved, "the splice must land for this to test anything");
 
-    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut restored = fresh();
     assert!(!restored.load_persist(&dropped), "a dropped variant is not applied");
     assert!(
         restored.console.lines().any(|line| line.contains("did not parse")),
@@ -534,7 +533,7 @@ fn a_refused_blob_says_why() {
         &format!("version:{}", UI_PERSIST_VERSION - 1),
         1,
     );
-    let mut older = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut older = fresh();
     assert!(!older.load_persist(&stale), "a blob below the floor is not applied");
     assert!(
         older.console.lines().any(|line| line.contains("below the floor")),
@@ -544,7 +543,7 @@ fn a_refused_blob_says_why() {
 
 #[test]
 fn spectrum_config_round_trips_through_persist() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     state.spectrum_config.floor_db = -48.0;
     state.spectrum_config.ceiling_db = -12.0;
     state.spectrum_config.window = SpectrumWindow::Precise;
@@ -562,7 +561,7 @@ fn spectrum_config_round_trips_through_persist() {
     };
     let saved = state.save_persist();
 
-    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut restored = fresh();
     restored.load_persist(&saved);
     assert_eq!(restored.spectrum_config.floor_db, -48.0);
     assert_eq!(restored.spectrum_config.ceiling_db, -12.0);
@@ -586,14 +585,14 @@ fn spectrum_config_round_trips_through_persist() {
 fn a_pitch_range_off_the_current_axis_is_pulled_back_onto_it() {
     use harmonigraph_core::spectrum::{SPECTRUM_MAX_MIDI, SPECTRUM_MIN_MIDI};
     let restore = |low: &str, high: &str| {
-        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        let mut state = fresh();
         state.spectrum_config.low_midi = 60.0;
         state.spectrum_config.high_midi = 72.0;
         let saved = state
             .save_persist()
             .replace("low_midi:60.0", &format!("low_midi:{low}"))
             .replace("high_midi:72.0", &format!("high_midi:{high}"));
-        let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+        let mut restored = fresh();
         restored.load_persist(&saved);
         (restored.spectrum_config.low_midi, restored.spectrum_config.high_midi)
     };
@@ -613,20 +612,20 @@ fn a_pitch_range_off_the_current_axis_is_pulled_back_onto_it() {
 /// The two have to agree.
 #[test]
 fn a_persist_blob_predating_the_spectrogram_loads_with_it_on() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     state.spectrum_config.show_spectrogram = false;
     let saved = state.save_persist();
     let old = saved.replace("show_spectrogram:false,", "");
     assert_ne!(old, saved, "the field must have been there to strip");
 
-    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut restored = fresh();
     restored.load_persist(&old);
     assert!(
         restored.spectrum_config.show_spectrogram,
         "a missing field must fall back to the struct's own default, not bool::default()"
     );
     // An explicit `false` is a choice, not an absence, and still round-trips.
-    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut restored = fresh();
     restored.load_persist(&saved);
     assert!(!restored.spectrum_config.show_spectrogram);
 }
@@ -646,7 +645,7 @@ fn a_persist_blob_predating_the_spectrogram_loads_with_it_on() {
 /// `render`), and that is exactly what would let a key it has no field for sink
 /// a take while the editor went on loading.
 fn a_spliced_blob_survives_both_doors(anchor: &str, spliced: &str) {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     // Non-defaults on both sides of the splice, so "the blob survived" is
     // distinguishable from "it sank and everything reverted": the view is what
     // the editor door restores, the lead-in what the offline door reads.
@@ -656,7 +655,7 @@ fn a_spliced_blob_survives_both_doors(anchor: &str, spliced: &str) {
     let stale = saved.replace(anchor, &format!("{spliced}{anchor}"));
     assert_ne!(stale, saved, "the anchor field must have been there to splice onto");
 
-    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut restored = fresh();
     restored.load_persist(&stale);
     assert_eq!(restored.view.extent_sevens, 3, "an unknown key must not sink the blob");
 
@@ -725,13 +724,13 @@ fn a_persist_blob_naming_a_retired_node_style_still_loads() {
 /// project.
 #[test]
 fn a_persist_blob_missing_a_spectrum_field_keeps_the_rest_of_the_blob() {
-    let fresh = crate::SpectrumConfig::default();
+    let defaults = crate::SpectrumConfig::default();
     for key in [
-        format!("smoothing:{:?},", fresh.smoothing),
-        format!("floor_db:{:?},", fresh.floor_db),
-        format!("window:{:?},", fresh.window),
+        format!("smoothing:{:?},", defaults.smoothing),
+        format!("floor_db:{:?},", defaults.floor_db),
+        format!("window:{:?},", defaults.window),
     ] {
-        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        let mut state = fresh();
         // A non-default elsewhere in the blob, so "the blob survived" is
         // distinguishable from "it sank and everything reverted".
         state.view.extent_sevens = 3;
@@ -739,14 +738,14 @@ fn a_persist_blob_missing_a_spectrum_field_keeps_the_rest_of_the_blob() {
         let without = saved.replacen(key.as_str(), "", 1);
         assert_ne!(without, saved, "{key:?} must be in the blob to drop");
 
-        let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+        let mut restored = fresh();
         restored.load_persist(&without);
         assert_eq!(
             restored.view.extent_sevens, 3,
             "dropping {key:?} must cost that key alone, not the whole blob",
         );
         assert_eq!(
-            restored.spectrum_config, fresh,
+            restored.spectrum_config, defaults,
             "and the config it belongs to must load at the fresh-install values",
         );
     }
@@ -780,7 +779,7 @@ fn the_persist_blob_carries_exactly_these_top_level_keys() {
         "ui_scale",
     ];
 
-    let saved = SharedState::new(TextureFormat::Bgra8Unorm).save_persist();
+    let saved = fresh().save_persist();
     let keys: Vec<String> = top_level_pairs(&saved).into_iter().map(|(key, _)| key).collect();
     assert_eq!(keys, KEYS, "the persist blob's top-level keys have moved");
 }
@@ -813,7 +812,7 @@ fn the_persist_blob_carries_exactly_these_top_level_keys() {
 /// `both_doors_into_a_blob_agree_about_the_version_floor` holds at the version.
 #[test]
 fn a_persist_blob_missing_the_render_section_keeps_the_rest_of_the_blob() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     // Non-defaults on both sides of the drop, so "the blob survived" is
     // distinguishable from "it sank and everything reverted".
     state.view.extent_sevens = 3;
@@ -828,7 +827,7 @@ fn a_persist_blob_missing_the_render_section_keeps_the_rest_of_the_blob() {
     let without = format!("({})", kept.join(","));
     assert_ne!(without, saved, "the render section must be in the blob to drop");
 
-    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut restored = fresh();
     // Loaded OVER a config that is not the fresh one, which is what makes the
     // assertion below mean anything: a fresh state already holds
     // `RenderConfig::default()`, so a load that skipped the section entirely
@@ -872,7 +871,7 @@ fn a_persist_blob_missing_the_render_section_keeps_the_rest_of_the_blob() {
 /// the honest answer.
 #[test]
 fn a_persist_blob_missing_any_one_section_keeps_the_rest() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     // A witness in a section that is never the one dropped below, so "the
     // blob survived" is distinguishable from "it sank and everything
     // reverted". The camera is not swept for that reason.
@@ -892,7 +891,7 @@ fn a_persist_blob_missing_any_one_section_keeps_the_rest() {
         let without = format!("({})", kept.join(","));
         assert_ne!(without, saved, "{key:?} must be in the blob to drop");
 
-        let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+        let mut restored = fresh();
         assert!(
             restored.load_persist(&without),
             "dropping {key:?} sank the whole document instead of costing itself",
@@ -903,12 +902,12 @@ fn a_persist_blob_missing_any_one_section_keeps_the_rest() {
 
 #[test]
 fn persist_round_trips_the_frame_rate_cap() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     // Not one of the button values, so it proves the number round-trips
     // rather than being re-derived from a default.
     state.fps_cap = Some(45.0);
 
-    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut restored = fresh();
     restored.load_persist(&state.save_persist());
     assert_eq!(restored.fps_cap, Some(45.0));
 }
@@ -918,14 +917,14 @@ fn pre_cap_persist_blobs_load_as_uncapped() {
     // The cap was added after these blobs were written; dropping the field
     // must not fail the parse, which would silently discard the WHOLE
     // persist (layout, camera, every view setting) rather than one setting.
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     state.fps_cap = Some(30.0);
     state.view.extent_sevens = 3;
     let saved = state.save_persist();
     let stripped = saved.replace(",fps_cap:Some(30.0)", "");
     assert_ne!(stripped, saved, "the field removal must have hit");
 
-    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut restored = fresh();
     restored.load_persist(&stripped);
     assert_eq!(restored.fps_cap, None, "a missing cap reads as uncapped");
     assert_eq!(restored.view.extent_sevens, 3, "the rest of the blob must survive");
@@ -952,7 +951,7 @@ fn pre_cap_persist_blobs_load_as_uncapped() {
 #[test]
 fn a_retired_setting_does_not_discard_the_blob_it_was_saved_in() {
     for retired in ["roll_gap:2.5,", "roll_color:Pitch,"] {
-        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        let mut state = fresh();
         state.spectrum_config.roll_thickness = 1.75;
         state.spectrum_config.low_midi = 40.5;
         let saved = state.save_persist();
@@ -960,7 +959,7 @@ fn a_retired_setting_does_not_discard_the_blob_it_was_saved_in() {
         let old = saved.replacen("roll_thickness:", &format!("{retired}roll_thickness:"), 1);
         assert_ne!(old, saved, "the {retired} splice must land for this to test anything");
 
-        let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+        let mut restored = fresh();
         restored.load_persist(&old);
         assert_eq!(
             restored.spectrum_config.roll_thickness, 1.75,
@@ -975,10 +974,10 @@ fn a_retired_setting_does_not_discard_the_blob_it_was_saved_in() {
 /// projects.
 #[test]
 fn a_blob_without_a_ui_scale_loads_at_the_design_size() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     state.ui_scale = 0.75;
     let saved = state.save_persist();
-    let mut back = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut back = fresh();
     back.load_persist(&saved);
     assert_eq!(back.ui_scale, 0.75, "the scale did not round-trip");
 
@@ -990,7 +989,7 @@ fn a_blob_without_a_ui_scale_loads_at_the_design_size() {
         .expect("the blob names the field")
         .to_owned()
         + ")";
-    let mut older = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut older = fresh();
     older.load_persist(&stripped);
     assert_eq!(older.ui_scale, 1.0, "a blob with no scale did not load at the design size");
 }
@@ -999,8 +998,7 @@ fn a_blob_without_a_ui_scale_loads_at_the_design_size() {
 /// clamped rather than drawn at.
 #[test]
 fn an_impossible_ui_scale_is_clamped() {
-    let ctx = egui::Context::default();
-    crate::theme::apply_theme(&ctx);
+    let ctx = super::probe::themed();
     // A nonsense value falls back to the design size rather than to the end of
     // the range it points at: an infinity is not a request for the largest
     // chrome available, it is a blob that has lost the number.
@@ -1035,7 +1033,7 @@ fn an_impossible_ui_scale_is_clamped() {
 #[test]
 fn a_blob_with_a_nonsense_pitch_range_loads_at_the_design_range() {
     for end in ["low_midi", "high_midi"] {
-        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        let mut state = fresh();
         // Off the defaults, so the splice has something to name and a range
         // that survives proves it survived rather than matching by luck.
         state.spectrum_config.low_midi = 40.5;
@@ -1045,7 +1043,7 @@ fn a_blob_with_a_nonsense_pitch_range_loads_at_the_design_range() {
         let broken = saved.replacen(&format!("{end}:{value:?}"), &format!("{end}:NaN"), 1);
         assert_ne!(broken, saved, "the {end} splice must land for this to test anything");
 
-        let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+        let mut restored = fresh();
         restored.load_persist(&broken);
         let (low, high) = (restored.spectrum_config.low_midi, restored.spectrum_config.high_midi);
         assert!(low.is_finite() && high.is_finite(), "{end}:NaN left the range at {low}..{high}");
@@ -1079,7 +1077,7 @@ fn a_blob_with_a_nonsense_pitch_range_loads_at_the_design_range() {
 #[test]
 fn a_blob_with_a_nonsense_heatmap_gradient_loads_at_a_drawable_one() {
     for (key, broken) in [("lightness", "5.0"), ("chroma", "NaN")] {
-        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        let mut state = fresh();
         // A gradient off the defaults, and one sanitize leaves alone, so the
         // splice has something to name and the untouched knobs prove they
         // survived rather than matching a fresh install by luck.
@@ -1096,7 +1094,7 @@ fn a_blob_with_a_nonsense_heatmap_gradient_loads_at_a_drawable_one() {
         let spliced = saved.replacen(&format!("{key}:{was}"), &format!("{key}:{broken}"), 1);
         assert_ne!(spliced, saved, "the {key} splice must land for this to test anything");
 
-        let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+        let mut restored = fresh();
         restored.load_persist(&spliced);
         let g = restored.spectrum_config.spectrogram_gradient;
         assert_eq!(g.sanitized(), g, "{key}:{broken} left the file holding {g:?}");
@@ -1114,7 +1112,7 @@ fn a_blob_older_than_the_version_floor_is_refused_whole() {
     // so a project old enough to carry one names an identity this binary does
     // not claim. Refusing it here is what lets the migrations for those
     // formats be deleted rather than carried forever.
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     state.camera.yaw = 1.23;
     state.view.extent_sevens = 3;
     let saved = state.save_persist();
@@ -1125,17 +1123,17 @@ fn a_blob_older_than_the_version_floor_is_refused_whole() {
         &format!("version:{}", UI_PERSIST_VERSION - 1),
         1,
     );
-    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut restored = fresh();
     restored.load_persist(&stale);
     // Untouched, not partially applied: a refused blob must not leave the
     // camera from one era beside a dock from another.
-    let fresh = SharedState::new(TextureFormat::Bgra8Unorm);
-    assert_eq!(restored.camera.yaw, fresh.camera.yaw);
-    assert_eq!(restored.view.extent_sevens, fresh.view.extent_sevens);
+    let defaults = fresh();
+    assert_eq!(restored.camera.yaw, defaults.camera.yaw);
+    assert_eq!(restored.view.extent_sevens, defaults.view.extent_sevens);
 
     // And the same blob at the floor still loads, so the test above is
     // measuring the version rather than a blob that was broken anyway.
-    let mut current = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut current = fresh();
     current.load_persist(&saved);
     assert_eq!(current.camera.yaw, 1.23);
     assert_eq!(current.view.extent_sevens, 3);
@@ -1161,7 +1159,7 @@ fn a_blob_older_than_the_version_floor_is_refused_whole() {
 /// matters — both doors have to refuse the same blobs, and say so.
 #[test]
 fn both_doors_into_a_blob_agree_about_the_version_floor() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     // Values a default cannot produce, so a door that drops the blob is visible
     // rather than looking like it loaded something.
     state.take.render_config.frame.aspect_w = 9;
@@ -1178,9 +1176,9 @@ fn both_doors_into_a_blob_agree_about_the_version_floor() {
     assert_ne!(stale, saved, "the version splice must land for this to test anything");
 
     // The door `load_persist` is: refused, so the render config is the default.
-    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut restored = fresh();
     restored.load_persist(&stale);
-    let fresh = SharedState::new(TextureFormat::Bgra8Unorm);
+    let fresh = fresh();
     assert_eq!(restored.take.render_config.playhead, fresh.take.render_config.playhead);
 
     // The door `harmonigraph-offline`'s `main` is. Refusing the blob whole
@@ -1211,7 +1209,7 @@ fn both_doors_into_a_blob_agree_about_the_version_floor() {
 #[test]
 fn loading_a_project_re_opens_the_comma_verdicts() {
     use harmonigraph_core::Comma;
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     // A blob from before the septimal comma existed: its keys are stripped,
     // so `marvel` defaults off and `marvel_auto` on.
     let saved = state.save_persist().replace("marvel:false,", "").replace("marvel_auto:true,", "");
@@ -1292,7 +1290,7 @@ fn a_display_section_left_open_survives_an_editor_reopen() {
         })
     };
 
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     let path = state.workspace.dock.find_tab(&panes::Tab::Display).expect("Display is docked");
     state.workspace.dock.set_active_tab(path).expect("selecting the tab");
     let mut window = DockHarness::new();
@@ -1326,7 +1324,7 @@ fn a_display_section_left_open_survives_an_editor_reopen() {
 
     // The window closes and reopens: a FRESH `Context`, and the state the
     // host hands back through `load_persist`.
-    let mut reopened = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut reopened = fresh();
     assert!(reopened.load_persist(&saved), "the blob this build saved must load");
     let mut fresh_window = DockHarness::new();
     fresh_window.settle(&mut reopened);
@@ -1432,7 +1430,7 @@ fn a_blob_naming_a_nonsense_camera_opens_on_what_it_can_reach() {
         ("cabinet_scale", "5.0", "a cabinet scale past its bar", Some((0.1, 1.0))),
     ];
     for (key, value, hint, range) in cases {
-        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        let mut state = fresh();
         state.view.extent_sevens = 3;
         let saved = state.save_persist();
         let was = match key {
@@ -1446,7 +1444,7 @@ fn a_blob_naming_a_nonsense_camera_opens_on_what_it_can_reach() {
         let edited = replace_pair(&saved, key, &format!("{was:?}"), value);
         assert_ne!(edited, saved, "{hint}: `{key}` is not in the blob to edit");
 
-        let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+        let mut restored = fresh();
         restored.load_persist(&edited);
         let got = match key {
             "yaw" => restored.camera.yaw,
@@ -1483,7 +1481,7 @@ fn a_saved_angle_lands_where_the_camera_controls_could_have_put_it() {
         ("a NaN yaw", "NaN", "0.0"),
         ("a pitch past `orbit`'s limit", "0.0", "10.0"),
     ] {
-        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        let mut state = fresh();
         state.view.extent_sevens = 3;
         state.camera_presets.push(crate::CameraPreset {
             name: "reading".to_string(),
@@ -1498,7 +1496,7 @@ fn a_saved_angle_lands_where_the_camera_controls_could_have_put_it() {
         );
         assert_ne!(edited, saved, "{hint}: the preset is not in the blob to edit");
 
-        let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+        let mut restored = fresh();
         restored.load_persist(&edited);
         assert_eq!(restored.view.extent_sevens, 3, "{hint}: the rest of the blob still restores");
         let preset = &restored.camera_presets[0];
@@ -1526,13 +1524,13 @@ fn a_saved_angle_lands_where_the_camera_controls_could_have_put_it() {
 /// through it.
 #[test]
 fn a_blob_naming_a_nonsense_camera_target_opens_on_a_drawable_one() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut state = fresh();
     state.view.extent_sevens = 3;
     let saved = state.save_persist();
     let edited = saved.replace("target:(0.0,0.0,0.0),", "target:(NaN,0.0,0.0),");
     assert_ne!(edited, saved, "`target` is not in the blob to edit");
 
-    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut restored = fresh();
     restored.load_persist(&edited);
     assert!(
         restored.camera.target.is_finite(),
@@ -1555,7 +1553,7 @@ fn a_blob_naming_a_nonsense_render_config_opens_on_what_it_can_reach() {
         ("split", "inf", "an infinite split", (0.05, 0.95)),
     ];
     for (key, value, hint, (lo, hi)) in cases {
-        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        let mut state = fresh();
         state.view.extent_sevens = 3;
         let saved = state.save_persist();
         let was = match key {
@@ -1565,7 +1563,7 @@ fn a_blob_naming_a_nonsense_render_config_opens_on_what_it_can_reach() {
         let edited = replace_pair(&saved, key, &format!("{was:?}"), value);
         assert_ne!(edited, saved, "{hint}: `{key}` is not in the blob to edit");
 
-        let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+        let mut restored = fresh();
         restored.load_persist(&edited);
         let got = match key {
             "lead_in" => restored.take.render_config.lead_in,
@@ -1584,7 +1582,7 @@ fn a_blob_naming_a_nonsense_render_config_opens_on_what_it_can_reach() {
 /// nothing upstream has repaired it.
 #[test]
 fn a_blob_naming_a_nonsense_split_opens_on_a_drawable_one_through_render_config_from_persist() {
-    let state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let state = fresh();
     let saved = state.save_persist();
     let edited = replace_pair(&saved, "split", "0.2", "NaN");
     assert_ne!(edited, saved, "`split` is not in the blob to edit");

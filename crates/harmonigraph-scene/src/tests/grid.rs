@@ -3,7 +3,7 @@
 
 use crate::*;
 use glam::Vec3;
-use harmonigraph_core::{NoteEvent, NoteEventKind, NoteTracker, Tuning};
+use harmonigraph_core::{NoteEvent, NoteTracker, Tuning};
 use super::harness::*;
 
 #[test]
@@ -194,12 +194,7 @@ fn grid_lines_never_light_between_played_neighbors() {
     let tuning = Tuning { tolerance: harmonigraph_core::tuning::microcents(5.0), ..Tuning::just() };
     let mut tracker = NoteTracker::new();
     for note in [60u8, 67] {
-        tracker.handle_event(NoteEvent {
-            time: 0.0,
-            channel: 0,
-            note,
-            kind: NoteEventKind::On { velocity: 1.0 },
-        });
+        tracker.handle_event(NoteEvent::on(0.0, 0, note, 1.0));
     }
     let view = ViewConfig { extent_threes: 3, extent_fives: 3, ..ViewConfig::default() };
     let scene = scene_of(&tracker, &tuning, &view, &plain_frame(), 0.0);
@@ -241,12 +236,7 @@ fn a_chain_stops_at_the_first_sounding_note_under_it() {
     let chain = |notes: &[u8]| -> Vec<f32> {
         let mut tracker = NoteTracker::new();
         for &note in notes {
-            tracker.handle_event(NoteEvent {
-                time: 0.0,
-                channel: 0,
-                note,
-                kind: NoteEventKind::On { velocity: 1.0 },
-            });
+            tracker.handle_event(NoteEvent::on(0.0, 0, note, 1.0));
         }
         let scene =
             scene_of(&tracker, &Tuning::default(), &view, &plain_frame(), 0.0);
@@ -296,12 +286,7 @@ fn a_lit_chain_keeps_the_lattices_own_color() {
         ..plain_view()
     };
     let mut tracker = NoteTracker::new();
-    tracker.handle_event(NoteEvent {
-        time: 0.0,
-        channel: 0,
-        note: 70,
-        kind: NoteEventKind::On { velocity: 1.0 },
-    });
+    tracker.handle_event(NoteEvent::on(0.0, 0, 70, 1.0));
     let scene =
         scene_of(&tracker, &Tuning::default(), &view, &plain_frame(), 0.0);
     let lit: Vec<&EdgeInstance> = scene
