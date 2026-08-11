@@ -253,6 +253,16 @@ fn depth_extent(axes: &Axes, name: &NoteName, size: f32, label_scale: f32) -> f3
 /// the past, an onset is its old end and lies forward. So which of two names
 /// reaches across the other is answered here; the thinning above only compares
 /// spans.
+///
+/// **Which of the two the caller passes cannot currently be observed**, and
+/// saying so is the point: a lane's reach is one number for the whole lane (see
+/// [`Lane`]), and against a sweep in ascending anchor order the two conventions
+/// are one inequality written twice — `at - reach >= prev` and
+/// `at >= prev + reach`. Every test in this file passes with the direction
+/// forced either way. It is kept because it is the honest description of where
+/// the ink goes, and because the per-note reach the lane's second defect
+/// contemplates would make the two come apart; it is not a switch the thinning
+/// can feel today, and a test asserting one is a test of nothing.
 fn name_span(at: f64, reach: f64, backward: bool) -> (f64, f64) {
     if backward {
         (at - reach, at)
