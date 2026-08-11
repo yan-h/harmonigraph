@@ -1372,6 +1372,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "harmonigraph-perf"
+version = "0.1.0"
+dependencies = [
+ "harmonigraph-render",
+ "libc",
+]
+
+[[package]]
 name = "harmonigraph-plugin"
 version = "0.1.0"
 dependencies = [
@@ -1380,6 +1388,7 @@ dependencies = [
  "egui",
  "egui-baseview",
  "harmonigraph-core",
+ "harmonigraph-perf",
  "harmonigraph-record",
  "harmonigraph-render",
  "harmonigraph-ui",
@@ -1456,10 +1465,10 @@ dependencies = [
  "egui_dock",
  "glam",
  "harmonigraph-core",
+ "harmonigraph-perf",
  "harmonigraph-render",
  "harmonigraph-scene",
  "harmonigraph-take",
- "libc",
  "ron 0.8.1",
  "serde",
 ]

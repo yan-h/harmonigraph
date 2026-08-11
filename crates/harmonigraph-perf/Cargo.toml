@@ -1,0 +1,21 @@
+[package]
+name = "harmonigraph-perf"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+# For the lattice's own readings: the atomics the render callback publishes
+# into, and the two NaN sentinels that say "this device cannot time the GPU"
+# and "no measurement has landed yet". Unpacking those is what
+# `FrameCosts::assemble` is, and the alternative — a second copy of the
+# sentinels here — is a pair of bit patterns two crates have to keep equal
+# with nothing checking that they do.
+harmonigraph-render = { workspace = true }
+
+# Reading this process's resident memory for the performance overlay. macOS
+# only (proc_pidinfo); Linux reads /proc/self/statm with no dep, other targets
+# report "n/a". Already in the tree transitively, so this adds no build cost.
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"

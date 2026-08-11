@@ -6,10 +6,10 @@ use std::collections::VecDeque;
 
 use egui_dock::{DockState, NodeIndex};
 use harmonigraph_core::{Comma, LatticePos, NoteTracker, PitchClass, Tuning};
+use harmonigraph_perf::{PerfStats, ShellTimings};
 use harmonigraph_render::wgpu::TextureFormat;
 use harmonigraph_scene::{Camera, FrameParams, ViewConfig};
 
-use crate::perf::{self, PerfStats};
 use crate::{fold, panes, text};
 use crate::{AudioSpectrum, RenderConfig, RenderProgress, SpectrumConfig, WholeSong};
 
@@ -416,10 +416,12 @@ pub struct Instruments {
     /// mirror rather than a second reader of the first.
     pub(crate) lattice_atlas: std::sync::Mutex<text::AtlasMirror>,
     /// What the shell measured about the previous frame. Written by the shell
-    /// before `root_ui` and read once, by `perf::FrameCosts::assemble`; no pane
+    /// before `root_ui` and read once, by `FrameCosts::assemble`; no pane
     /// touches it. The one field here a shell outside this crate writes, which
-    /// is why it alone is `pub`.
-    pub timings: perf::ShellTimings,
+    /// is why it alone is `pub` — and why the type is `harmonigraph-perf`'s
+    /// rather than this crate's: a contract between the shell and the overlay's
+    /// model is not something the crate in between should own.
+    pub timings: ShellTimings,
     /// Rolling frame-rate / CPU / memory numbers for the performance overlay.
     /// Filled and drawn by [`root_ui`](crate::root_ui).
     pub(crate) perf: PerfStats,
@@ -444,7 +446,7 @@ impl Default for Instruments {
             roll_notes: std::sync::atomic::AtomicU32::new(0),
             font_atlas: Default::default(),
             lattice_atlas: Default::default(),
-            timings: perf::ShellTimings::default(),
+            timings: ShellTimings::default(),
             perf: PerfStats::default(),
         }
     }

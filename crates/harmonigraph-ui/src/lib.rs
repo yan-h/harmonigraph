@@ -64,11 +64,15 @@ pub(crate) use config::{
 };
 pub use spectrum::{AudioSpectrum, SpectrogramColumn, SpectrumHistory, WholeSong};
 pub(crate) use spectrum::{SpectrogramCache, SpectrogramKey};
-pub use perf::ShellTimings;
 pub use state::{render_config_from_persist, CameraPreset, Console, SharedState, TakeState};
 pub(crate) use state::default_dock;
 
 use harmonigraph_core::{Comma, PitchClass, Tuning};
+// The overlay's model. `ShellTimings` — the one piece of it a windowed shell
+// writes — is deliberately not re-exported from here: the contract runs from
+// the shell to the model, and routing it through the crate that only passes it
+// along is what made the UI look like its owner.
+use harmonigraph_perf::{FrameCosts, Workload};
 use harmonigraph_scene::FrameParams;
 use params::ParamBackend;
 
@@ -338,16 +342,21 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     // Performance overlay: fold this frame's numbers in and, if it's on, draw
     // the corner HUD. Interactive path only — the offline renderer never
     // reaches root_ui, so nothing here touches a recorded frame.
+    //
+    // The fallback counts are BORROWED by the costs — how many restart reasons
+    // there are is this crate's business and not the model's — so the array
+    // they are read out of has to outlive the call.
+    let fallbacks = state.spectrum.spectrogram_fallbacks();
     state.instruments.perf.record(
-        perf::FrameCosts::assemble(
+        FrameCosts::assemble(
             state.instruments.timings,
             cpu_ms,
             &state.instruments.lattice_stats,
             state.instruments.roll_notes.load(std::sync::atomic::Ordering::Relaxed),
-            state.spectrum.spectrogram_fallbacks(),
+            (fallbacks.0, &fallbacks.1),
         ),
         now,
-        perf::Workload {
+        Workload {
             active_voices: state.tracker.voices().count(),
             held_voices: state.tracker.held_count(),
             visible_nodes: state.view.visible_count(),

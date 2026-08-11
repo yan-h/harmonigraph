@@ -452,7 +452,7 @@ fn frame(
     // compiler names, not a line nobody misses — the overlay would otherwise
     // show it as a steady zero, which reads as a cost that isn't there.
     // `shell_ms` comes last because it measures everything above it.
-    shared.ui.instruments.timings = harmonigraph_ui::ShellTimings {
+    shared.ui.instruments.timings = harmonigraph_perf::ShellTimings {
         tess_ms: queue.tess_ms(),
         egui_gpu_ms: queue.egui_gpu_ms(),
         acquire_ms: queue.acquire_ms(),

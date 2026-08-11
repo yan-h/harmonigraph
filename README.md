@@ -104,6 +104,13 @@ harmonigraph-scene       per-frame view model: derive_scene() turns
 harmonigraph-render      wgpu renderer as an egui paint callback: instanced
                          billboard nodes, WGSL in src/shaders/lattice.wgsl.
                          *** Skins/effects/shaders iterate here. ***
+harmonigraph-perf        the performance overlay's instrumentation, with no
+                         egui in it: what a frame cost, the stage table that
+                         says what contains what, the window means and peaks
+                         the HUD prints, the process's resident memory, and
+                         the build tag its build.rs stamps. Also ShellTimings,
+                         which a windowed shell fills in and this averages.
+                         The overlay that DRAWS it is harmonigraph-ui.
 harmonigraph-ui          egui_dock pane shell: Lattice / Tuning / Display /
                          Console / Spectral / Notes / Video / System tabs under
                          src/panes/, where Display carries the Color & light,
