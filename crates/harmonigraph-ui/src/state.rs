@@ -862,8 +862,11 @@ pub(crate) struct UiPersist {
     #[serde(default)]
     pub(crate) fps_cap: Option<f32>,
     /// A blob without one loads at the design size — see [`default_ui_scale`],
-    /// and note that this is the one field-level `default = "..."` left in the
-    /// tree, because an `f32`'s own default of 0.0 is a scale of nothing.
+    /// and note that this is the BLOB's one field-level `default = "..."`,
+    /// because an `f32`'s own default of 0.0 is a scale of nothing. The
+    /// offline renderer's `Layout::background` is the tree's only other, and
+    /// answers to a different rule: a hand-written `.ron` rather than saved
+    /// state, so it defaults its fields one at a time and requires `panes`.
     #[serde(default = "default_ui_scale")]
     pub(crate) ui_scale: f32,
 }

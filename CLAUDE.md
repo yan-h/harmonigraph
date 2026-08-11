@@ -155,9 +155,14 @@ Two mechanisms carry the weight instead, and they are worth keeping straight:
   `a_view_missing_any_one_key_reloads_at_the_fresh_value` and
   `a_persist_blob_missing_any_one_section_keeps_the_rest` sweep for it rather
   than pinning one field, because a struct added without the attribute is
-  invisible at its declaration. `UiPersist::ui_scale` is the one field-level
-  `default = "..."` left, and only because an `f32`'s own default of 0.0 is a
-  scale of nothing. Don't add others.
+  invisible at its declaration. `UiPersist::ui_scale` is the BLOB's one
+  field-level `default = "..."`, and only because an `f32`'s own default of
+  0.0 is a scale of nothing. Don't add others to it. The offline renderer's
+  `Layout` is outside this rule on purpose — a `.ron` a person writes by hand
+  (`--dump-layout` prints a preset to start from) rather than state the
+  plugin saves, so `panes` is REQUIRED, the struct carries no container-level
+  default at all, and `background` holds the tree's only other field-level
+  `default = "..."`.
 - **`UI_PERSIST_VERSION` is the floor**: a blob below it is refused whole
   rather than half-read. Note what it does NOT cover — see below.
 
