@@ -362,6 +362,35 @@ pub(crate) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
          it (together they close for a hard edge), the outer one to reach \
          further out from where it already starts to soften.",
     );
+    edge_bar(
+        ui,
+        (&mut cfg.roll_lead, &mut cfg.roll_lead_fade),
+        crate::ROLL_LEAD_MAX,
+        "Lead",
+        {
+            let fresh = crate::SpectrumConfig::default();
+            (fresh.roll_lead, fresh.roll_lead_fade)
+        },
+        |v| format!("{v:.1}"),
+    )
+    .on_hover_text(
+        "How far a note you are HOLDING carries past the now-line and into the \
+         spectrum, in points, and how much of that it spends fading out. A \
+         sounding note's ribbon ends on the line and the peak it is making \
+         stands on the other side of it, so this is the ribbon reaching across \
+         the join — which notes are down reads off the picture instead of off \
+         the ends of the ribbons. 0 stops every note square on the line.\n\n\
+         Held notes only: a note you have let go has no line in front of it to \
+         cross, so its lead goes at the release. That is a small jump, and a \
+         wide fade is what softens it.\n\n\
+         The bar is the lead itself, read outward from the now-line: solid to \
+         the first handle, then fading, and gone by the second. Close them for \
+         a tongue that ends square, open the inner one to the outer for one \
+         that fades the whole way across.\n\n\
+         The divider still draws over it, unbroken — the ribbon passes under \
+         the line rather than eating it, which is what keeps the boundary \
+         followable while a chord is reaching over it.",
+    );
     ui.checkbox(&mut cfg.note_names, "Note names").on_hover_text(
         "Write each note's name on its own ribbon, at the end it is anchored \
          to — by default the leading edge, so a held note's name waits at the \

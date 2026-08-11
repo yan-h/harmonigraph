@@ -98,6 +98,25 @@ pub struct RollInstance {
     /// both on one bar, as two points on the axis running out from the note's
     /// edge.
     pub outline_fade: f32,
+    /// How much of this segment's LEADING end is a fade-out, in points, and 0
+    /// for the ordinary square end every other segment has.
+    ///
+    /// The leading end is the one at the low end of the depth axis, which is
+    /// the end nearest whatever the roll is drawn beside — for the spectral
+    /// pane, the now-line and the analyzer past it. Both layers ride it: a
+    /// segment ending in a fade wears no outline cap either, or the tip would
+    /// dissolve inside a hard black ring.
+    ///
+    /// A property of the SEGMENT rather than of the roll, because it is the
+    /// caller's business which segments end that way — in the spectral pane
+    /// only the last segment of a note still being held (see
+    /// `panes::spectral::roll::lead`), which is what carries the ribbon over the
+    /// divider and into the picture it is making.
+    ///
+    /// This crate is told how long the fade is and nothing about why: it does
+    /// not grow the geometry to make room for one, the length being the
+    /// caller's already, and it invents no fade of its own.
+    pub lead_fade: f32,
     /// Premultiplied sRGB bytes, straight out of [`egui::Color32`].
     pub core: [u8; 4],
     /// The outline's color where it is solid; the fade takes it out from there.
@@ -117,8 +136,9 @@ impl RollInstance {
             2 => Float32,   // shear
             3 => Float32,   // outline_reach
             4 => Float32,   // outline_fade
-            5 => Unorm8x4,  // core
-            6 => Unorm8x4,  // outline
+            5 => Float32,   // lead_fade
+            6 => Unorm8x4,  // core
+            7 => Unorm8x4,  // outline
         ],
     };
 }
@@ -982,10 +1002,11 @@ mod tests {
     }
 
     /// A straight note centered in the frame: 24 points thick, 120 long, in a
-    /// 4-point black outline with no fade. Wide enough that a sample lands well
-    /// inside the outline, and hard-edged so where it ends is a place rather
-    /// than a slope — the fade has [`a_fade_takes_the_outline_out_gradually`]
-    /// to itself.
+    /// 4-point black outline with no fade, and square at both ends. Wide enough
+    /// that a sample lands well inside the outline, and hard-edged so where it
+    /// ends is a place rather than a slope — the two fades have
+    /// [`a_fade_takes_the_outline_out_gradually`] and
+    /// [`a_lead_fade_takes_the_ribbon_out_toward_its_tip`] to themselves.
     fn centered_note() -> RollInstance {
         RollInstance {
             center: [128.0, 128.0],
@@ -993,6 +1014,7 @@ mod tests {
             shear: 0.0,
             outline_reach: 4.0,
             outline_fade: 0.0,
+            lead_fade: 0.0,
             core: [255, 0, 0, 255],
             outline: [0, 0, 0, 255],
         }
@@ -1176,6 +1198,86 @@ mod tests {
         );
         assert!(cov(0.0, 145) < 0.02, "the hard outline reaches past 4 points");
         assert!(cov(4.0, 145) < 0.02, "the faded outline reaches past 4 points");
+    }
+
+    /// A leading fade takes the ribbon out gradually toward its tip, and takes
+    /// the outline's cap with it: the tip dissolves rather than ending, and
+    /// nothing is left standing around where it went.
+    ///
+    /// Both layers is the half that a body-only fade would miss, and it is not
+    /// a refinement — the outline wraps the ENDS as much as the flanks, so a
+    /// body faded on its own leaves an opaque black cap hanging in front of a
+    /// ribbon that has already gone. That is the shape the spectral pane's lead
+    /// is drawn with (`panes::spectral::roll::lead`), where the tip lands in the
+    /// middle of the spectrum and a ring of black there is the loudest thing on
+    /// the pane.
+    ///
+    /// The OTHER end is untouched, which is what makes this a leading fade
+    /// rather than a softening of the whole segment: the leading end is the low
+    /// end of the depth axis, and the trailing end is where the ribbon carries
+    /// on into the rest of its own note.
+    #[test]
+    fn a_lead_fade_takes_the_ribbon_out_toward_its_tip() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        // Black on white with no outline: every painted byte is the body's own
+        // coverage, read straight off the frame. Under `TOP` the depth axis
+        // runs down the screen, so the leading tip of this note is at y = 68
+        // and its trailing end at y = 188.
+        let note = RollInstance {
+            outline_reach: 0.0,
+            core: [0, 0, 0, 255],
+            ..centered_note()
+        };
+        let cov = |fade: f32, y: u32| {
+            let frame = draw(
+                &device,
+                &queue,
+                vec![RollInstance { lead_fade: fade, ..note }],
+                wgpu::Color::WHITE,
+            );
+            1.0 - f32::from(pixel(&frame, 128, y)[0]) / 255.0
+        };
+
+        // A fade over 20 points of the tip: coverage climbs linearly from
+        // nothing at y = 68 to solid by y = 88. Sampled at pixel centres, which
+        // is the half point in each expectation.
+        for (y, want) in [(73u32, 0.275f32), (78, 0.525), (83, 0.775), (88, 1.0)] {
+            let got = cov(20.0, y);
+            assert!(
+                (got - want).abs() < 0.06,
+                "the leading fade covers {got:.3} at y = {y}, not {want:.3}",
+            );
+        }
+        // Square-ended, the same ribbon is solid from its tip.
+        assert!(cov(0.0, 73) > 0.97, "a fade of 0 is not a square end");
+        // And a fade at one end is not a fade at the other: the trailing end
+        // keeps its own edge whatever the leading one is doing.
+        assert!(cov(20.0, 185) > 0.97, "the leading fade reached the trailing end too");
+
+        // The outline's cap goes with it. Two points past the tip is inside a
+        // 4-point outline's reach, and that is exactly where a body-only fade
+        // leaves a black ring standing in front of nothing.
+        let capped = |fade: f32| {
+            let frame = draw(
+                &device,
+                &queue,
+                vec![RollInstance { lead_fade: fade, ..centered_note() }],
+                bg_color(),
+            );
+            pixel(&frame, 128, 66)
+        };
+        assert!(
+            near(capped(0.0), [0, 0, 0, 255]),
+            "a square-ended ribbon lost its outline cap: {:?}",
+            capped(0.0),
+        );
+        assert!(
+            near(capped(20.0), BG),
+            "the outline still caps a tip that has faded out: {:?}",
+            capped(20.0),
+        );
     }
 
     /// A fade set past the outline's own reach eats OUTWARD — it fades the

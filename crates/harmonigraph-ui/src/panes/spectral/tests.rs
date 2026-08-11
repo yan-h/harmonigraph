@@ -1580,15 +1580,18 @@ fn paint(
     output.shapes.into_iter().map(|s| s.shape).collect()
 }
 
-/// The roll's ink stops at the now-line: everything it draws is clipped to
-/// its own share of the pane, and none of it reaches into the spectrum.
+/// The roll's ink stops where the LEAD says it does, and nowhere further:
+/// everything it draws is clipped to its own share of the pane grown by exactly
+/// that reach, so how far the roll paints on the spectrum is one setting's
+/// decision rather than a side effect of some other one.
 ///
 /// The outline stands off EVERY side of a note, and a note sounding now has
 /// its leading end ON the line — so without the clip the roll paints its edge,
-/// and the halo the bloom lays over it, across the line and onto the curve.
-/// The spectrum is the one neighbour the roll shares an edge with and the one
-/// picture it has no business drawing on: a ribbon ending square on the line is
-/// what says "this note is what that peak is made of".
+/// and the halo the bloom lays over it, across the line and onto the curve, by
+/// however wide the outline happens to be set. The spectrum is the one
+/// neighbour the roll shares an edge with, and what it may spend on it is a few
+/// points of ribbon fading out (see [`roll::lead`]) and not an outline's worth
+/// of black around every held note.
 ///
 /// Checked in depth fractions rather than screen coordinates, and in every
 /// orientation, because which screen side the spectrum is on is exactly what
@@ -1599,87 +1602,100 @@ fn paint(
 /// their own (`crate::text`), and theirs is allowed everywhere.
 #[test]
 fn the_rolls_ink_stops_at_the_now_line() {
-    for orientation in [
-        SpectralOrientation::Left,
-        SpectralOrientation::Right,
-        SpectralOrientation::Top,
-        SpectralOrientation::Bottom,
-    ] {
-        let mut state = fresh();
-        state.spectrum_config.orientation = orientation;
-        state.spectrum_config.roll_fraction = 0.55;
-        // The widest outline there is, so the reach that would cross the line
-        // is as big as the setting allows, and a bloom over it.
-        state.spectrum_config.roll_outline = crate::ROLL_OUTLINE_MAX;
-        state.view.bloom_strength = 1.2;
-        // Held at `now`, so its leading end sits exactly on the line.
-        state.tracker.handle_event(NoteEvent::on(99.0, 0, 60, 0.8));
+    // The two ends of the Lead bar's travel: no lead at all, where the roll's
+    // ink stops dead on the line, and the widest one there is. Nothing between
+    // them is a third case — the boundary is `split` less the lead, and both
+    // of these read it off the same arithmetic.
+    for lead in [0.0, crate::ROLL_LEAD_MAX] {
+        for orientation in [
+            SpectralOrientation::Left,
+            SpectralOrientation::Right,
+            SpectralOrientation::Top,
+            SpectralOrientation::Bottom,
+        ] {
+            let mut state = fresh();
+            state.spectrum_config.orientation = orientation;
+            state.spectrum_config.roll_fraction = 0.55;
+            // The widest outline there is, so the reach that would cross the
+            // line is as big as the setting allows, and a bloom over it.
+            state.spectrum_config.roll_outline = crate::ROLL_OUTLINE_MAX;
+            state.spectrum_config.roll_lead = lead;
+            state.spectrum_config.roll_lead_fade = lead;
+            state.view.bloom_strength = 1.2;
+            // Held at `now`, so its leading end sits exactly on the line.
+            state.tracker.handle_event(NoteEvent::on(99.0, 0, 60, 0.8));
 
-        let a = axes(WIDE, orientation);
-        let split = spectrum_share(&state.spectrum_config);
-        let scale = PitchScale { min_midi: 48.0, max_midi: 84.0, span: 36.0 };
-        let output = painted_into(SCREEN, WIDE, |ui| {
-            roll::draw_roll(ui.painter(), &a, &scale, &state, split, 100.0, 0);
-        });
+            let a = axes(WIDE, orientation);
+            let split = spectrum_share(&state.spectrum_config);
+            // Where the roll's ink may reach, as a depth: the now-line, less
+            // whatever the lead is allowed to carry past it.
+            let near = split - lead / a.depth_len();
+            let scale = PitchScale { min_midi: 48.0, max_midi: 84.0, span: 36.0 };
+            let output = painted_into(SCREEN, WIDE, |ui| {
+                roll::draw_roll(ui.painter(), &a, &scale, &state, split, 100.0, 0);
+            });
 
-        let rolls: Vec<&egui::epaint::ClippedShape> = output
-            .shapes
-            .iter()
-            .filter(|s| matches!(s.shape, egui::Shape::Callback(_)))
-            .collect();
-        assert_eq!(rolls.len(), 1, "expected one roll callback, got {}", rolls.len());
-        let roll = rolls[0];
-        let egui::Shape::Callback(cb) = &roll.shape else { unreachable!() };
+            let rolls: Vec<&egui::epaint::ClippedShape> = output
+                .shapes
+                .iter()
+                .filter(|s| matches!(s.shape, egui::Shape::Callback(_)))
+                .collect();
+            assert_eq!(rolls.len(), 1, "expected one roll callback, got {}", rolls.len());
+            let roll = rolls[0];
+            let egui::Shape::Callback(cb) = &roll.shape else { unreachable!() };
 
-        // Both the callback's own rect — which is what the bloom chain covers —
-        // and the clip that actually cuts the ink.
-        for (what, rect) in [("the callback rect", cb.rect), ("the clip", roll.clip_rect)] {
-            let corners =
-                [rect.left_top(), rect.right_top(), rect.left_bottom(), rect.right_bottom()];
-            for corner in corners {
-                let d = a.depth_at(corner);
+            // Both the callback's own rect — which is what the bloom chain
+            // covers — and the clip that actually cuts the ink.
+            for (what, rect) in [("the callback rect", cb.rect), ("the clip", roll.clip_rect)] {
+                let corners =
+                    [rect.left_top(), rect.right_top(), rect.left_bottom(), rect.right_bottom()];
+                for corner in corners {
+                    let d = a.depth_at(corner);
+                    assert!(
+                        d >= near - 1e-3,
+                        "{what} reaches depth {d} in {orientation:?}, past the lead's own \
+                         edge at {near} (the now-line is {split})",
+                    );
+                }
+            }
+            // And it is not clipped to nothing either — the roll still gets its
+            // whole share of the axis, or this passes by drawing no roll at all.
+            let far = a
+                .depth_at(roll.clip_rect.left_top())
+                .max(a.depth_at(roll.clip_rect.right_bottom()));
+            assert!(
+                roll.clip_rect.area() > 0.0 && far > 1.0 - 1e-3,
+                "the roll was clipped short of its own far edge in {orientation:?}",
+            );
+
+            // The other axis, which the depth checks above say nothing about: a
+            // region that kept every one of them and covered half the pitch
+            // range would throw away half the notes at every orientation.
+            //
+            // By AREA, which is the one statement here that goes through
+            // neither `at` nor its inverse: `pitch_len` and `depth_len` are the
+            // pane rect's own two sides, so a region the whole pitch axis wide
+            // and the roll's share of depth long has exactly this area
+            // whichever way the pane is turned — and a mapping that lost an
+            // axis cannot produce it.
+            for (what, rect) in [("the callback rect", cb.rect), ("the clip", roll.clip_rect)] {
+                let want = a.pitch_len() * a.depth_len() * (1.0 - near);
                 assert!(
-                    d >= split - 1e-3,
-                    "{what} reaches depth {d} in {orientation:?}, past the now-line at {split}",
+                    (rect.area() - want).abs() < 1.0,
+                    "{what} covers {} of the pane in {orientation:?}, against {want}",
+                    rect.area(),
                 );
             }
-        }
-        // And it is not clipped to nothing either — the roll still gets its
-        // whole share of the axis, or this passes by drawing no roll at all.
-        let far = a
-            .depth_at(roll.clip_rect.left_top())
-            .max(a.depth_at(roll.clip_rect.right_bottom()));
-        assert!(
-            roll.clip_rect.area() > 0.0 && far > 1.0 - 1e-3,
-            "the roll was clipped short of its own far edge in {orientation:?}",
-        );
-
-        // The other axis, which the depth checks above say nothing about: a
-        // region that kept every one of them and covered half the pitch range
-        // would throw away half the notes at every orientation.
-        //
-        // By AREA, which is the one statement here that goes through neither
-        // `at` nor its inverse: `pitch_len` and `depth_len` are the pane
-        // rect's own two sides, so a region the whole pitch axis wide and the
-        // roll's share of depth long has exactly this area whichever way the
-        // pane is turned — and a mapping that lost an axis cannot produce it.
-        for (what, rect) in [("the callback rect", cb.rect), ("the clip", roll.clip_rect)] {
-            let want = a.pitch_len() * a.depth_len() * (1.0 - split);
-            assert!(
-                (rect.area() - want).abs() < 1.0,
-                "{what} covers {} of the pane in {orientation:?}, against {want}",
-                rect.area(),
-            );
-        }
-        // And the ends of the pitch axis are inside it, so the area above is
-        // the roll's own share of the pane rather than the same area somewhere
-        // else on it.
-        for p in [0.0, 1.0] {
-            let corner = a.at(p, (split + 1.0) * 0.5);
-            assert!(
-                cb.rect.expand(1e-3).contains(corner),
-                "pitch {p} sits outside the roll's region in {orientation:?}",
-            );
+            // And the ends of the pitch axis are inside it, so the area above
+            // is the roll's own share of the pane rather than the same area
+            // somewhere else on it.
+            for p in [0.0, 1.0] {
+                let corner = a.at(p, (split + 1.0) * 0.5);
+                assert!(
+                    cb.rect.expand(1e-3).contains(corner),
+                    "pitch {p} sits outside the roll's region in {orientation:?}",
+                );
+            }
         }
     }
 }

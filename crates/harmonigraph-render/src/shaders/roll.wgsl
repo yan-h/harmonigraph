@@ -1,6 +1,8 @@
 // The piano roll's notes: one instanced quad per note segment — a solid
 // rectangle in the note's own color, wrapped on every side by an outline that
-// fades out, both falling out of a signed distance field.
+// fades out, both falling out of a signed distance field. A segment may also
+// end in a fade at its LEADING tip (`lead_coverage`), which takes both layers
+// out together.
 //
 // TWO LAYERS, drawn as two passes over the same instances rather than
 // composited per note: every note's outline (`fs_outline_*`), then every
@@ -68,10 +70,13 @@ struct VertexOut {
     @location(3) @interpolate(flat) outline_reach: f32,
     /// How much of that reach the outline spends fading out, in points.
     @location(4) @interpolate(flat) outline_fade: f32,
+    /// How much of the note's LEADING end is a fade-out, in points — 0 for the
+    /// square end every ordinary segment has. See [`lead_coverage`].
+    @location(5) @interpolate(flat) lead_fade: f32,
     /// Premultiplied, gamma-space, exactly as egui carries `Color32`.
-    @location(5) @interpolate(flat) core: vec4<f32>,
+    @location(6) @interpolate(flat) core: vec4<f32>,
     /// The outline's color at full coverage; the fade takes it from there.
-    @location(6) @interpolate(flat) outline: vec4<f32>,
+    @location(7) @interpolate(flat) outline: vec4<f32>,
 };
 
 @vertex
@@ -82,8 +87,9 @@ fn vs_note(
     @location(2) shear: f32,
     @location(3) outline_reach: f32,
     @location(4) outline_fade: f32,
-    @location(5) core: vec4<f32>,
-    @location(6) outline: vec4<f32>,
+    @location(5) lead_fade: f32,
+    @location(6) core: vec4<f32>,
+    @location(7) outline: vec4<f32>,
 ) -> VertexOut {
     // Triangle-strip corners: (-1,-1) (1,-1) (-1,1) (1,1).
     let corner = vec2<f32>(
@@ -131,6 +137,7 @@ fn vs_note(
     out.shear = shear;
     out.outline_reach = outline_reach;
     out.outline_fade = outline_fade;
+    out.lead_fade = lead_fade;
     out.core = core;
     out.outline = outline;
     return out;
@@ -174,6 +181,32 @@ fn inside(d: f32, edge: f32) -> f32 {
 fn outline_coverage(in: VertexOut, d: f32) -> f32 {
     let w = max(min(in.outline_fade, in.outline_reach), max(locals.feather, 1e-6));
     return clamp((in.outline_reach - max(d, 0.0)) / w, 0.0, 1.0);
+}
+
+/// How much of the ribbon survives at this fragment: 1 across the note,
+/// ramping to 0 at its LEADING tip over the last `lead_fade` points of it.
+///
+/// The leading end is `-half_extent.y` along the depth axis, always — depth
+/// runs away from whatever the roll is drawn beside, so this names an end of
+/// the pane's own axis and not a screen side, exactly as everything else here
+/// does.
+///
+/// Applied to BOTH layers, which is what makes a fading tip a fading note
+/// rather than a note dissolving inside its own outline: the surround wraps the
+/// ends as much as the flanks, so a body taken out on its own would leave a
+/// hard black cap standing where the ribbon went. Past the tip the ramp is
+/// negative and clamps to 0, so that cap is gone rather than merely faint.
+///
+/// Never narrower than one pixel, [`outline_coverage`]'s bargain taken here for
+/// the same reason: a sub-pixel ramp is an aliased edge. A `lead_fade` of 0
+/// leaves early with no ramp at all, so the ordinary square end is antialiased
+/// by [`inside`] alone and pays nothing for a fade it does not have.
+fn lead_coverage(in: VertexOut) -> f32 {
+    if (in.lead_fade <= 0.0) {
+        return 1.0;
+    }
+    let w = max(in.lead_fade, max(locals.feather, 1e-6));
+    return clamp((in.local.y + in.half_extent.y) / w, 0.0, 1.0);
 }
 
 /// Signed distance from this fragment to the note's own box, in points:
@@ -225,13 +258,14 @@ fn box_distance(in: VertexOut) -> f32 {
 /// across two passes.
 fn outline_color(in: VertexOut) -> vec4<f32> {
     let d = box_distance(in);
-    return in.outline * outline_coverage(in, d) * (1.0 - inside(d, 0.0));
+    return in.outline * outline_coverage(in, d) * (1.0 - inside(d, 0.0)) * lead_coverage(in);
 }
 
 /// Premultiplied gamma-space color of the BODY layer: the note, solid in its
-/// own color right to its edge.
+/// own color right to its edge — except at a leading tip that is set to fade,
+/// where [`lead_coverage`] takes it out.
 fn core_color(in: VertexOut) -> vec4<f32> {
-    return in.core * inside(box_distance(in), 0.0);
+    return in.core * inside(box_distance(in), 0.0) * lead_coverage(in);
 }
 
 // 0-1 linear from 0-1 sRGB gamma. Lifted from egui's own shader, and used

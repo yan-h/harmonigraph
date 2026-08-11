@@ -345,6 +345,40 @@ pub struct SpectrumConfig {
     /// Outline bar, a handle at each — because both are distances from the
     /// note's edge, which makes them two points on one axis.
     pub roll_outline_fade: f32,
+    /// How far a note you are HOLDING carries past the now-line and into the
+    /// spectrum, in POINTS, 0 = not at all. Its ribbon is drawn that much
+    /// longer at its leading end, so it crosses the divider instead of stopping
+    /// square on it.
+    ///
+    /// Held notes alone, and that is the whole content of the setting rather
+    /// than a simplification of it. The lead says "this is sounding NOW", and
+    /// the picture it says it in is the spectrum: a sounding note's ribbon
+    /// reaches into the peak it is making, which is the one reading this pane
+    /// is built around. A released note's leading end is somewhere back in the
+    /// roll and has no line in front of it to cross, so extending it would say
+    /// nothing and would only draw every note longer than it was played.
+    ///
+    /// What that costs is a pop at the release: the lead is there while the key
+    /// is down and gone the frame after, which is a few points of ink appearing
+    /// and vanishing rather than sliding. Deliberate — the moment it marks is
+    /// the moment the note stopped — and it is the reason the fade is worth
+    /// having wide, a lead that ends softly having less to take away.
+    ///
+    /// In POINTS, exactly as [`roll_outline`](Self::roll_outline) is and for the
+    /// same reason: it is a constant of the picture rather than a reading of
+    /// it, so it holds still as the pitch range is zoomed, as the Span is
+    /// dragged, and as the divider is moved. A lead measured as a share of the
+    /// spectrum would grow every time the roll was given less room, which is
+    /// the one moment there is least room to spend on it.
+    pub roll_lead: f32,
+    /// How much of that reach the lead spends fading out, in points: 0 ends the
+    /// ribbon square in the middle of the spectrum, and the whole reach fades it
+    /// from the now-line outward.
+    ///
+    /// One control with the reach, on the same Lead bar and for the same reason
+    /// the outline's pair share one: both are distances measured out from where
+    /// the ribbon used to stop, which makes them two points on one axis.
+    pub roll_lead_fade: f32,
     /// Write each note's name over its own ribbon — see
     /// [`panes::spectral::names`](crate::panes::spectral::names), and
     /// [`note_names_travel`](Self::note_names_travel) for which END of the
@@ -493,6 +527,16 @@ impl SpectrumConfig {
             fresh.roll_outline_fade
         }
         .clamp(0.0, self.roll_outline);
+        // The lead and its fade, which are the same shape of pair on the same
+        // shape of bar (the Lead bar), and carry the same trap: a NaN reach
+        // becomes the MAX of the fade's clamp, and `f32::clamp` asserts
+        // `min <= max`.
+        self.roll_lead =
+            if self.roll_lead.is_finite() { self.roll_lead } else { fresh.roll_lead }
+                .clamp(0.0, ROLL_LEAD_MAX);
+        self.roll_lead_fade =
+            if self.roll_lead_fade.is_finite() { self.roll_lead_fade } else { fresh.roll_lead_fade }
+                .clamp(0.0, self.roll_lead);
         // The level pair, against the same threat and for the same reason.
         // `loudness_raw` already refuses a collapsed or inverted window, which
         // is what a `max` can answer; a NaN end it cannot, because NaN loses
@@ -588,6 +632,19 @@ pub(crate) const ROLL_SECONDS_MAX: f32 = 600.0;
 /// reading, and the picture is outline with ribbons in it.
 pub(crate) const ROLL_OUTLINE_MAX: f32 = 4.0;
 
+/// How far a held note's ribbon may be carried past the now-line, and how much
+/// of that may be fade — one number for both ends of the Lead bar, a fade past
+/// the reach it softens having nothing left to soften.
+///
+/// Twenty-four points, which is a tongue of ribbon you cannot miss and still
+/// only a fraction of the spectrum it lands on: the analyzer's own share of the
+/// depth axis is a few hundred points at any pane size worth reading, so the
+/// widest lead there is spends under a tenth of it. Past that the ribbons stop
+/// reading as notes reaching across a boundary and start reading as a comb laid
+/// over the curve — and the curve is what they are reaching INTO, so covering
+/// it defeats the whole errand.
+pub(crate) const ROLL_LEAD_MAX: f32 = 24.0;
+
 /// The level range's domain, in dB. The top is a full-scale sine, the
 /// loudest thing a bucket can hold; the bottom is well under any noise
 /// floor worth looking at.
@@ -660,6 +717,14 @@ impl Default for SpectrumConfig {
             // off the picture rather than as a second shape drawn around it.
             roll_outline: 2.0,
             roll_outline_fade: 1.5,
+            // A short tongue that is solid across the divider and gone a few
+            // points into the spectrum: at 6 points with 5 of them fading, a
+            // held note covers the line at full color and dissolves before it
+            // reaches anything the curve is drawing. Enough to see which notes
+            // are sounding at a glance, little enough that a held chord does
+            // not fence off the analyzer.
+            roll_lead: 6.0,
+            roll_lead_fade: 5.0,
             note_names: true,
             // The leading edge: a held note's name waits where you can read it
             // while you play, which is what the naming was dialled in against.
