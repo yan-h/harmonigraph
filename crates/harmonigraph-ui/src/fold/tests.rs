@@ -1090,7 +1090,18 @@ fn a_boundary_dragged_past_a_floor_waits_for_the_pointer_to_come_back() {
         }
         let stopped = at(&dock);
         let travelled = (stopped - start).abs();
-        assert!(travelled > 100.0, "the boundary moved only {travelled:.0}pt before stopping");
+        // It accumulated more than a single step before the floor caught it,
+        // and stopped well short of the 800 pushed. Both bounds are stated
+        // against numbers this test already holds, because what the boundary
+        // CAN travel is the shrinking pane's starting width less
+        // `separator.extra` — the two move together point for point, so a
+        // literal here fails on a tab-bar retune and fails naming the fold
+        // layout, which is the one thing that did not change.
+        assert!(
+            travelled > step.abs(),
+            "the boundary moved {travelled:.0}pt before stopping, less than one {:.0}pt step",
+            step.abs(),
+        );
         assert!(travelled < 700.0, "the boundary should have stopped, and moved {travelled:.0}pt");
         // Back, but not yet as far as the boundary is.
         for _ in 0..2 {
