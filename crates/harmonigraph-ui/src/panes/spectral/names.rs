@@ -414,13 +414,17 @@ pub(super) fn plan(
         // live this is the anchor's own time: a leading edge inside the window
         // is the note still having a head to name (`stop(now) >= oldest`,
         // identically), and an onset that has scrolled off the far edge is a
-        // ribbon whose head has gone with it. Onsets have to be asked, because
-        // the depth they draw at CLAMPS: a note still sounding whose onset has
-        // left would otherwise have its name parked against the far edge for
-        // however long it went on, which is precisely the waiting that
-        // anchoring there is meant to end. Whole-song does want the clamp, and
-        // asks the note instead — a note that began before the render's start
-        // is named at the near edge, having nowhere to scroll off to.
+        // ribbon whose head has gone with it.
+        //
+        // Onsets have to be ASKED, because the depth they draw at CLAMPS. What
+        // catches a name written on one that has left is otherwise the sweep's
+        // own bound, and that is `lookback` — four of the widest name's rooms,
+        // some seconds at any ordinary Span — beyond the far edge: a held
+        // note's name would sit clamped against that edge for the whole of it
+        // before vanishing, which is the waiting this anchor exists to end,
+        // moved to the other end of the pane. Whole-song does want the clamp,
+        // and asks the note instead — a note that began before the render's
+        // start is named at the near edge, having nowhere to scroll off to.
         //
         // Only DRAWING is culled here. A note off the far edge still takes its
         // turn in the thinning, which is what lets the names on the pane stand
@@ -1515,23 +1519,32 @@ mod tests {
     ///
     /// The price of this anchor, and the one behaviour it gives up — the drone
     /// of [`a_note_that_began_before_the_window_is_still_named`] keeps its name
-    /// at the leading edge and loses it here. Asserted because the alternative
-    /// is not "no name" but a name CLAMPED against the far edge: the depth of
-    /// an off-pane time is the edge's, so a name left to it would sit there for
-    /// as long as the note went on, which is the waiting this setting is for
-    /// removing.
+    /// at the leading edge and loses it here.
+    ///
+    /// Asked at the moment the onset LEAVES, which is the only moment that
+    /// distinguishes culling it from letting it clamp. Further off the far edge
+    /// the sweep's own `lookback` bound drops the note anyway and the name goes
+    /// whatever this decides — so a test asking about a drone minutes old would
+    /// pass against a name parked on the edge for the seconds in between, which
+    /// is the artifact being ruled out.
     #[test]
     fn a_travelling_name_leaves_with_the_onset_it_is_written_on() {
         let mut state = travelling(24.0, 10.0);
-        state.tracker.handle_event(on(0.0, 67)); // still held
+        state.tracker.handle_event(on(0.0, 67)); // still held, and never released
 
         let placed = labels(&state, 5.0);
         assert_eq!(said(&placed), ["G"], "on the pane, and named");
         let axes = Axes::new(PANE, &state.spectrum_config);
         assert!(placed[0].rect.min.x > axes.at(0.5, 0.0).x, "travelling, not at the now-line");
-        // The window is 10 seconds: by now = 100 the onset is nine windows off
-        // the far edge, though the note is still sounding at the near one.
-        assert!(labels(&state, 100.0).is_empty(), "gone with its onset, not parked at the edge");
+        // The window is ten seconds, so at 9.5 the onset is half a second
+        // inside the far edge and at 10.5 it is half a second past it. The note
+        // is sounding at the now-line throughout, and its ribbon still fills
+        // the pane.
+        assert_eq!(said(&labels(&state, 9.5)), ["G"], "still on, just inside the far edge");
+        assert!(
+            labels(&state, 10.5).is_empty(),
+            "the onset has left: the name goes with it rather than clamping to the edge",
+        );
     }
 
     /// Travelling names hold still against each other as the roll scrolls, the
