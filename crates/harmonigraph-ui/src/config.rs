@@ -381,8 +381,8 @@ pub struct SpectrumConfig {
     /// reach fades it from the now-line outward.
     ///
     /// One control with the reach, on the same Lead bar and for the same reason
-    /// the outline's pair share one: both are distances measured out from where
-    /// the ribbon used to stop, which makes them two points on one axis.
+    /// the outline's pair share one: both are distances from the now-line, which
+    /// makes them two points on one axis.
     pub roll_lead_fade: f32,
     /// How long a note's lead takes to fade away once the key comes up, in
     /// SECONDS. 0 takes it the instant the note stops.

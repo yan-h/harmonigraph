@@ -1149,12 +1149,12 @@ fn the_heatmap_image_is_built_at_device_pixels() {
 
 /// The now-line is painted after the roll that arrives at it.
 ///
-/// A sounding note's ribbon ends square ON the line, which makes the roll
-/// the one layer that LANDS on the boundary rather than merely reaching it:
-/// drawn over the line it takes half the line's width away under every note
-/// that is sounding, so the divider frays exactly where the picture is
-/// busiest and the boundary hardest to follow. Painted last, the line stays
-/// one unbroken mark and the ribbon still runs right up to it.
+/// A sounding note's ribbon reaches the line and carries its lead THROUGH it,
+/// which makes the roll the one layer that lands on the boundary rather than
+/// merely arriving at it: drawn over the line it takes the line's whole width
+/// away under every note that is sounding, so the divider frays exactly where
+/// the picture is busiest and the boundary hardest to follow. Painted last, the
+/// line stays one unbroken mark and the ribbon still passes under it.
 #[test]
 fn the_now_line_paints_over_the_roll_that_arrives_at_it() {
     // Both the roll and the label batch are paint callbacks (the roll's notes

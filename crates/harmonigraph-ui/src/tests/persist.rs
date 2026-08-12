@@ -277,13 +277,13 @@ fn a_double_click_on_a_soft_edge_restores_the_fresh_pair() {
 /// and the lead a held note carries over the now-line — opens on a pair its own
 /// bar can reach: a fade no wider than the reach it is measured back from.
 ///
-/// The picture does not care. Both shaders floor the fade at the edge it
-/// surrounds, so a fade dialled past its reach DRAWS as a fade over the whole
-/// of it — which is exactly why the repair is safe to make, and why it has to
-/// be made here rather than left to the draw path: the two are one bar reading
-/// out two points on one axis, and an unclamped fade puts its low end off the
-/// bottom of that axis, where the bar would report a number the blob does not
-/// hold.
+/// The picture does not care. Every one of the shaders caps the fade at the
+/// reach it is taking out, so a fade dialled past that DRAWS as a fade over the
+/// whole of it — which is exactly why the repair is safe to make, and why it
+/// has to be made here rather than left to the draw path: each pair is one bar
+/// reading out two points on one axis, and an unclamped fade puts its low end
+/// off the bottom of that axis, where the bar would report a number the blob
+/// does not hold.
 #[test]
 fn a_blob_naming_a_fade_wider_than_its_edge_opens_on_one_that_fits() {
     let mut state = fresh();

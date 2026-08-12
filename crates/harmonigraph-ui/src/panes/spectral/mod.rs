@@ -345,7 +345,9 @@ pub(crate) fn spectral_pane(
 
     // The roll. Its ribbons occupy the far side of the split and the spectrum
     // the near side, so the only thing this shares with the line below is what
-    // happens ON the line: a sounding note's ribbon ends square on it.
+    // happens AT the line: a sounding note's ribbon reaches it and carries its
+    // lead a little way past, into the spectrum peak it is making (see
+    // `roll::lead`, and the divider below for what still draws over it).
     if split < 1.0 && cfg.show_roll {
         roll::draw_roll(&painter, &axes, &scale, state, split, now, surface);
     }
@@ -355,18 +357,20 @@ pub(crate) fn spectral_pane(
     // the boundary between two pictures, so it has to sit ON them, and each of
     // the three arrives at it from its own side: the spectrum curve's fill
     // paints down to it, the spectrogram's quad reaches it from the far side,
-    // and a sounding note's ribbon stops on it. Any of them eating into the
+    // and a sounding note's ribbon crosses it. Any of them eating into the
     // line leaves a divider that thins and flickers with the music instead of
     // holding still — and the roll is the worst of the three, taking half the
     // line's width under every ribbon that is sounding, which is exactly where
     // the picture is busiest and the boundary hardest to follow.
     //
-    // The cost is the ribbon end, covered by the line rather than painting
-    // across it. What a sounding note has to show is that it reaches the
-    // boundary and comes out the other side as the spectrum peak it is making,
-    // and it still shows that; an unbroken line is what makes the two sides one
-    // picture to read across, and a line chewed away wherever a note crosses
-    // reads as a drawing error rather than as the note.
+    // The cost is that a note's lead passes UNDER the line rather than over
+    // it, so the boundary is drawn across every ribbon reaching through it.
+    // That is the right way round: what a sounding note has to show is that it
+    // reaches the boundary and comes out the other side as the spectrum peak it
+    // is making, and a hairline over the tongue costs it none of that — where
+    // an unbroken line is what makes the two sides one picture to read across,
+    // and a line chewed away wherever a note crosses reads as a drawing error
+    // rather than as the note.
     //
     // Always drawn (there is no setting): the handover is what the pane is
     // built around, so the boundary is marked whether or not anything is
