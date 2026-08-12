@@ -19,7 +19,9 @@
 # Staleness is WARN-ONLY: a build whose dylib predates its branch HEAD is
 # flagged "built before <hash>" but still loadable — the mtime check can't
 # see uncommitted edits, so treat "fresh" as "matches the last commit", not
-# "matches the working tree".
+# "matches the working tree". The renderer it installs alongside is held to
+# the same test, and is the half that actually goes stale: nothing rebuilds
+# it unless a session names `-p harmonigraph-offline`.
 set -euo pipefail
 
 PKG="harmonigraph-plugin"
@@ -132,17 +134,48 @@ load_build() {  # $1 = worktree index
 
   # Keep the renderer matched to the build being loaded (they share the take
   # format). Only if this worktree built one; otherwise leave the installed one.
+  #
+  # Matched is the INTENT and not something the copy can guarantee, which is
+  # what the freshness check below is for. The renderer draws the picture through
+  # harmonigraph-ui and harmonigraph-render, exactly as the plugin does, so
+  # every change to what the panes look like changes an export too — but a
+  # session builds `-p harmonigraph-plugin` and nothing rebuilds the renderer
+  # unless it asked for `-p harmonigraph-offline` by name. A worktree that
+  # built only the plugin therefore hands over whatever renderer was last left
+  # in its target/release, which can be from any commit at all, and the
+  # divergence shows up nowhere until an export comes out drawn the old way.
   local offline="$path/target/release/harmonigraph-offline"
   local support="$HOME/Library/Application Support/$NAME"
   if [[ -f "$offline" ]]; then
     mkdir -p "$support"; cp "$offline" "$support/harmonigraph-offline"
     echo "Loaded renderer: $support/harmonigraph-offline"
+    # The freshness test the table already applies to the dylib, applied to the
+    # renderer, and read the same way: "matches the last commit", not "matches
+    # the working tree". Against HEAD rather than against the dylib's own mtime,
+    # which is the tempting comparison and the wrong one — two artifacts built
+    # from one source state can be minutes apart (separate `cargo build` runs, a
+    # plugin relinked while the renderer was left alone), so a gap between them
+    # flags matched pairs as often as mismatched ones.
+    local offline_mtime head_ct head_short
+    offline_mtime="$(stat -f %m "$offline")"
+    head_ct="$(git -C "$path" show -s --format=%ct HEAD 2>/dev/null || echo 0)"
+    head_short="$(git -C "$path" show -s --format=%h HEAD 2>/dev/null || echo '?')"
+    if (( head_ct > offline_mtime )); then
+      echo "WARNING: that renderer was built before $head_short ($(ago "$offline_mtime")). Video exports" >&2
+      echo "         come out drawn by the older build while the editor shows the new one, and" >&2
+      echo "         nothing on screen says so. To match them:" >&2
+      echo "         (cd \"$path\" && cargo build --release -p harmonigraph-offline) && ./load-plugin.sh $branch" >&2
+    fi
   else
     # Says "if any" because the support directory can hold no renderer at all:
     # the plugin resolves one fixed path under the product name, and nothing
     # puts a binary there until some worktree builds -p harmonigraph-offline
     # and a load copies it across.
     echo "NOTE: no harmonigraph-offline in this build; offline render keeps the previously-installed renderer, if any." >&2
+    if [[ -f "$support/harmonigraph-offline" ]]; then
+      local kept; kept="$(ago "$(stat -f %m "$support/harmonigraph-offline")")"
+      echo "      The one it keeps is $kept and knows nothing this build changed." >&2
+    fi
   fi
 
   { echo "worktree=$path"

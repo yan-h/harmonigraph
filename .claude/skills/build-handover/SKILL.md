@@ -30,6 +30,41 @@ the running host has not faulted in yet.
   explicitly want a session to make its own build live, e.g. a single-session
   flow. Run it from the main checkout and it rebuilds main, not your branch.
 
+## The renderer is a SECOND slot, and it goes stale on its own
+
+Video export does not run in the plugin. The Render pane spawns
+`~/Library/Application Support/Harmonigraph/harmonigraph-offline`
+(`harmonigraph-record`'s default path), and `load-plugin.sh` installs that
+binary from the same worktree it takes the dylib from — so a load is really
+two swaps, and only the first one is guaranteed to be current.
+
+The renderer draws through `harmonigraph-ui` and `harmonigraph-render` exactly
+as the editor does, so it goes out of date on any change to the picture, not
+only on changes under `crates/harmonigraph-offline/`. But nothing rebuilds it
+unless a session names `-p harmonigraph-offline`, and `load-plugin.sh` copies
+whatever is in `target/release` without minding its age. A session that builds
+only the plugin therefore hands over a matched editor and a renderer from some
+earlier commit, and the pair is indistinguishable from a matched one until an
+export comes back drawn the old way. PR #340's lead is the worked example: it
+was live in the editor within minutes and absent from every mp4 for hours.
+
+Which is why the build line in `CLAUDE.md` names both packages. `load-plugin.sh`
+warns when the renderer it installs is much older than the plugin beside it,
+and prints the age of the one it is leaving in place when a worktree built no
+renderer at all — but a warning during a load is a backstop for a build that
+should have happened.
+
+To check the live pair directly, without a render:
+
+```
+ls -la ~/Library/Application\ Support/Harmonigraph/harmonigraph-offline
+strings -a ~/Library/Application\ Support/Harmonigraph/harmonigraph-offline | grep -c "<new symbol>"
+```
+
+A persisted config key is the reliable symbol — the serde field names are in
+the binary, so `roll_lead` answers "does this renderer know about the lead?"
+the same way a WGSL const answers it for the plugin.
+
 ## Every build says which build it is
 
 The performance overlay's bottom line reads `build  <branch> @<sha>` — the

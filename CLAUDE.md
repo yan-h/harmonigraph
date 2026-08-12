@@ -40,8 +40,26 @@ partial progress — leave a fresh release build in YOUR worktree so it is
 loadable:
 
 ```
-cargo build --release -p harmonigraph-plugin          # add -p harmonigraph-offline if you touched video render
+cargo build --release -p harmonigraph-plugin -p harmonigraph-offline
 ```
+
+**Both packages, and the second one is the easy half to skip.** The offline
+renderer is not a separate picture: it draws through `harmonigraph-ui` and
+`harmonigraph-render`, the same crates the editor does, so a change to what
+any pane looks like is a change to what an mp4 looks like even when nothing
+under `crates/harmonigraph-offline/` is touched. Read "did I touch video
+render?" as "did I touch the picture?" and the answer is yes for almost every
+change worth loading. It is not a second full build either — the two share
+every dependency and the whole UI, so the renderer costs a link on top of a
+plugin build that is already done.
+
+What skipping it produces is the quiet failure: `load-plugin.sh` copies
+whatever renderer the worktree happens to hold into the one slot the plugin
+spawns, so the editor gets the new build and exports keep coming out drawn by
+an old one, with nothing on screen saying so. PR #340's lead landed in the
+editor and was missing from every render for exactly this reason. The loader
+now warns when the renderer it is installing is much older than the plugin
+beside it, but the warning is a backstop, not the contract — build both.
 
 Then end your message telling Yan it's `loadable via ./load-plugin.sh
 <branch>`, and name the tag the overlay will show (see the `build-handover`

@@ -86,6 +86,8 @@ Two scripts sidestep both. Each copies the binary into the bundles the DAW loads
 
 The two differ in one way: `update-plugin.sh` builds, `load-plugin.sh` only copies. That split exists because the bundle slot is shared. With several branches in flight, each build stays in its own worktree. You then pick which one goes live, rather than having them overwrite each other.
 
+Both also install `harmonigraph-offline`, which is a second slot and the one that goes quietly out of date. Video export runs in that binary, and it draws through the same UI crates the editor does — so a change to any pane changes an mp4 too, even though nothing under `crates/harmonigraph-offline/` was touched. `update-plugin.sh` rebuilds it every time; `load-plugin.sh` copies whatever the worktree holds and warns when that predates the branch's HEAD. A build made with `cargo build --release -p harmonigraph-plugin` alone leaves it behind, and the symptom is an export drawn the old way while the plugin window shows the new one.
+
 ## Architecture
 
 Dependencies point strictly downward; the fun layers never touch plugin plumbing.
