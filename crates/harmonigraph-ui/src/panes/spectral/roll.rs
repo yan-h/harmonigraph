@@ -11,7 +11,10 @@
 //! turns with the rest of the pane and this file never names a screen side.
 //! Its share of the depth axis runs from `split` (now) to 1 (the
 //! oldest note still on screen), so time flows *away* from the spectrum
-//! and a note crossing the split meets the peak it is making.
+//! and a note crossing the split meets the peak it is making. A SOUNDING note
+//! carries a little way past that line and fades out there, which is the one
+//! thing the roll draws outside its own share — see [`lead`], and
+//! [`lead_alpha`] for what becomes of it at the release.
 
 use egui::Color32;
 use harmonigraph_core::RollNote;
@@ -141,6 +144,93 @@ fn outline(cfg: &crate::SpectrumConfig) -> (f32, f32, Color32) {
     (reach, cfg.roll_outline_fade.clamp(0.0, reach), Color32::BLACK)
 }
 
+/// How far a SOUNDING note's ribbon carries past the now-line, and how much of
+/// that it spends fading out: `(reach, fade)` in POINTS, both 0 where there is
+/// no line to cross.
+///
+/// A sounding note ends ON the now-line, and the picture on the other side of
+/// it is the spectrum peak that note is making. The lead is what carries the
+/// ribbon across the join rather than stopping it square: a stretch of the
+/// note's own color over the divider, dissolving into the curve. Which notes
+/// are down then reads off the picture at a glance, in the one place the pane
+/// already puts the answer.
+///
+/// The setting is a FRACTION OF THE ANALYZER and this is where it becomes a
+/// length: the spectrum owns `0..split` of the depth axis, so its share in
+/// points is `split * depth_len` and the lead is the set share of that. Two
+/// things fall out, and both are the point rather than a side effect — the
+/// tongue is the same share of the picture at every pane size, and it shrinks
+/// with the spectrum as the divider is dragged over it, so it can never be more
+/// of the analyzer than the bar says. See
+/// [`SpectrumConfig::roll_lead`](crate::SpectrumConfig) for why the outline
+/// beside it is measured the other way.
+///
+/// The divider is drawn AFTER the roll and is not chewed by this — see
+/// `spectral_pane`, where the reasoning for that order is set out. A lead
+/// passes UNDER an unbroken hairline, which is what keeps the boundary
+/// followable while a chord is reaching over it.
+///
+/// Zero where the pane has no spectrum to reach into, which is two layouts and
+/// not a guard against a bad number:
+///
+///   - Whole-song (the offline `--playhead` render) hands the roll the entire
+///     depth axis and draws no spectrum at all, so `split` is 0 and there is no
+///     line anywhere on the pane to cross.
+///   - The divider dragged all the way over the curve leaves the same picture
+///     from the other direction.
+///
+/// Both fall out of the arithmetic rather than needing a test of their own —
+/// a `split` of 0 is a spectrum of no length, and the share of nothing is
+/// nothing — but the guard is kept because `whole_song` does not always mean a
+/// zero split to the reader, and because a lead is a claim about a picture that
+/// is not being drawn at all there.
+///
+/// Off comes back zero-reach AND zero-fade, never one or the other, for
+/// [`outline`]'s reason: the reach is what the geometry grows by, so a lead
+/// that will not be drawn must not be paid for in a fade either.
+pub(super) fn lead(
+    cfg: &crate::SpectrumConfig,
+    axes: &Axes,
+    whole_song: bool,
+    split: f32,
+) -> (f32, f32) {
+    if whole_song || split <= 0.0 {
+        return (0.0, 0.0);
+    }
+    let spectrum_px = split * axes.depth_len();
+    let reach = cfg.roll_lead.max(0.0) * spectrum_px;
+    if reach <= 0.0 {
+        return (0.0, 0.0);
+    }
+    (reach, (cfg.roll_lead_fade.max(0.0) * spectrum_px).min(reach))
+}
+
+/// How much of a note's lead is still standing, 0..1: all of it while the key
+/// is down, then falling to nothing over the Lead release once it comes up.
+///
+/// A ramp in TAKE TIME rather than in frames, so a release lasts as long
+/// offline as it does live and the same take renders the same picture at any
+/// fps — which is what the whole draw path is built to keep true.
+///
+/// Linear, and that is worth one line because a fade usually should not be: a
+/// curve here would be shaping an OPACITY over a few hundred milliseconds
+/// against a spectrogram whose own brightness is moving underneath it, where
+/// nothing in the picture is stable enough for the difference to be read. The
+/// lattice's envelope is the place a curve earns its keep, and it has one.
+///
+/// A release of 0 takes the lead the instant the note stops, which is the pop
+/// the setting exists to answer, and is still what someone dialling the bar to
+/// its bottom is asking for.
+fn lead_alpha(note: &RollNote, now: f64, release: f32) -> f32 {
+    let Some(end) = note.end else {
+        return 1.0;
+    };
+    if release <= 0.0 {
+        return 0.0;
+    }
+    1.0 - ((now - end) / f64::from(release)).clamp(0.0, 1.0) as f32
+}
+
 /// Draw every remembered note that falls inside the pane's time window and
 /// pitch range. `split` is the depth fraction the roll starts at; `now` is
 /// the shell clock, the same one the tracker's events are stamped with.
@@ -181,16 +271,25 @@ pub(super) fn draw_roll(
     // The roll's own share of the pane, and the whole of what its ink may
     // reach. The outline stands off EVERY side of a note, so a note sounding
     // now — whose leading end is the now-line itself — paints its edge across
-    // the line and into the spectrum unless something stops it, and the
-    // spectrum is the one neighbour the roll has no business drawing on. The
-    // clip is what stops it: a sounding note's ribbon ends square on the line,
-    // and so does everything the roll draws around it.
+    // the line and into the spectrum unless something stops it, and how far the
+    // roll may draw on the spectrum is the [`lead`]'s decision and no one
+    // else's. The clip is what holds it to that: a sounding note reaches its
+    // lead past the line and not a point further, and with no lead set its
+    // ribbon ends square on the line as everything the roll draws around it
+    // does.
+    //
+    // The lead is in POINTS and the axis in fractions, so it converts through
+    // the axis' own length. Floored at the pane's near edge, which costs
+    // nothing — the pane's clip cuts there anyway — and keeps the bloom chain
+    // this rect also sizes from spending resolution off the pane.
     //
     // It bounds the far end and the pitch range too, which the pane's own clip
     // already did — a note is deliberately allowed to overhang the window's
     // oldest edge and slide out under the scissor (see `note_instances`), and
     // this is the same edge in the same place.
-    let region = egui::Rect::from_two_pos(axes.at(0.0, split), axes.at(1.0, 1.0));
+    let (lead_px, _) = lead(&state.spectrum_config, axes, state.whole_song.is_some(), split);
+    let near = (split - lead_px / axes.depth_len().max(1.0)).max(0.0);
+    let region = egui::Rect::from_two_pos(axes.at(0.0, near), axes.at(1.0, 1.0));
     let painter = painter.with_clip_rect(painter.clip_rect().intersect(region));
     let dir = |v: egui::Vec2| [v.x, v.y];
     painter.add(harmonigraph_render::roll_paint_callback(
@@ -259,6 +358,11 @@ pub(super) fn note_instances(
     // note: the outline standing outside it. The note itself is a solid
     // rectangle of its own color and has nothing else to decide.
     let (outline_px, outline_fade_px, outline_color) = outline(cfg);
+    // ...and how far a SOUNDING note carries past the now-line, which is
+    // decided once for the same reason. See [`lead`]. How much of that a
+    // particular note still has is [`lead_alpha`]'s, and is per note: it is a
+    // reading of that note's own release.
+    let (lead_px, lead_fade_px) = lead(cfg, axes, time.whole_song(), split);
     // The antialiasing ramp the shader feathers every edge with — one physical
     // pixel, in points at this display's density, the same figure it takes as
     // `feather`. Ink reaches half of it past whatever it edges.
@@ -362,7 +466,22 @@ pub(super) fn note_instances(
         let zero_span = span_px <= 1e-6;
         let stretch =
             if zero_span { 1.0 } else { (2.0 * min_half_depth / span_px).max(1.0) };
-        for ((t0, p0), (t1, p1)) in note.segments(now) {
+        // How much lead this note still owns: all of it while the key is down,
+        // and whatever its release has left once it is up. Per note and decided
+        // once for it, since every segment of a note releases together.
+        //
+        // NOT `alpha`, which the segment loop below already uses for the note's
+        // own opacity — a different number about a different part of the
+        // picture, and one that shadows this where the two meet.
+        let standing = lead_alpha(note, now, cfg.roll_lead_release);
+        // Peekable so the loop can tell which segment is the LAST, which is the
+        // one the lead extends: a note's segments run oldest first, so its
+        // leading end is the far end of the last of them. The rest end on the
+        // next bend, in the middle of the ribbon, where there is nothing in
+        // front of them to lead into.
+        let mut segments = note.segments(now).peekable();
+        while let Some(((t0, p0), (t1, p1))) = segments.next() {
+            let last = segments.peek().is_none();
             let (t0, t1) = (t0.max(edge), t1.max(edge));
             if t1 < edge {
                 continue;
@@ -377,6 +496,34 @@ pub(super) fn note_instances(
             // direction, and the segments keep their proportions inside it.
             let (d0, d1) = (mid + (d0 - mid) * stretch, mid + (d1 - mid) * stretch);
             let (a0, a1) = (scale.t_of(p0), scale.t_of(p1));
+
+            // Whether this segment carries a lead at all — which is not the
+            // same question as whether any of it is still visible.
+            //
+            // A lead the release has spent is kept, at no opacity, for as long
+            // as the note's own end is close enough to the now-line for its
+            // OUTLINE to cross it. That is not a nicety: the clip opens by the
+            // lead, and what the lead opens belongs to the lead. Drop the lead
+            // the instant its opacity runs out and the box snaps back to the
+            // note's own end, which puts a square end — and so the outline's
+            // opaque cap — inside a budget meant for a tongue that fades. The
+            // cap is the exact ink the clip has stopped since before there was
+            // a lead, and it lands in the middle of the analyzer.
+            //
+            // Held at no opacity the end stays INTERIOR to the box, where a box
+            // has no edge and an outline has nothing to wrap, so nothing is
+            // drawn there at all. It costs four vertices of invisible quad for
+            // the couple of points of scrolling it takes the note to clear the
+            // line — and the cap comes back as soon as it is wholly inside it,
+            // which is the earliest it can without spending what is not its.
+            //
+            // How far the note's own end sits inside the roll, in points, and
+            // how far the outline stands off it: the same reach `vs_note` grows
+            // the quad by, since it is the same ink.
+            let behind_px = (d1 - split) * axes.depth_len();
+            let leads = lead_px > 0.0
+                && last
+                && (standing > 0.0 || behind_px < outline_px + 0.5 * feather_px);
 
             // Notes always draw fully opaque — how much of the heatmap comes
             // through a note is the Fill setting's business, not an opacity
@@ -500,12 +647,55 @@ pub(super) fn note_instances(
             if center_pitch + ink_pitch < 0.0 || center_pitch - ink_pitch > 1.0 {
                 continue;
             }
+            // The lead: the ribbon carried on past the now-line, so a sounding
+            // note crosses into the spectrum peak it is making instead of
+            // stopping square on the join. Half of it goes on the length and
+            // half on moving the box the other way along depth, which is the
+            // same thing as growing one end.
+            //
+            // The box grows by the whole lead however far the release has taken
+            // it, and the fading is left to the shader. Retracting the geometry
+            // instead would take the tongue back toward the note as it went,
+            // which is a lead that ends by being pulled in rather than by going
+            // out — and it would make the release a second thing moving on a
+            // ribbon that is already scrolling.
+            //
+            // Depth runs AWAY from the spectrum, so the leading end is at the
+            // box's low-depth side whichever way the pane is turned, and this
+            // names no screen side either. It is applied after the pitch cull
+            // above because it reaches along DEPTH alone: the cull is about how
+            // far the ink goes across pitch, and a lead moves none of it there.
+            //
+            // The `slope` term is what keeps the extension on the ribbon's own
+            // center line rather than parallel to it — shifting the center of a
+            // SHEARED box along depth alone slides the whole note sideways by
+            // `slope * shift`, which would kink the ribbon at the join. It is
+            // zero today at every note: a note's last segment is flat by
+            // construction (`RollNote::segments` closes the note at the pitch
+            // of its final bend), so the one segment a lead can reach has no
+            // shear to correct for. Written out because the correction belongs
+            // to the shift rather than to that fact about the segments.
+            let (center, half_depth, lead_px, lead_fade_px, standing) = if leads {
+                let half = lead_px * 0.5;
+                (
+                    center - axes.dir_depth() * half - axes.dir_pitch() * (slope * half),
+                    half_depth + half,
+                    lead_px,
+                    lead_fade_px,
+                    standing,
+                )
+            } else {
+                (center, half_depth, 0.0, 0.0, 0.0)
+            };
             instances.push(RollInstance {
                 center: [center.x, center.y],
                 half_extent: [half_pitch, half_depth],
                 shear: slope,
                 outline_reach: outline_px,
                 outline_fade: outline_fade_px,
+                lead: lead_px,
+                lead_fade: lead_fade_px,
+                lead_alpha: standing,
                 core: core.to_array(),
                 outline: outline_color.to_array(),
             });
@@ -980,6 +1170,376 @@ mod tests {
     /// recognise a floored extent.
     fn min_half_depth_for(ppp: f32) -> f32 {
         0.5 * MIN_LENGTH_DEVICE_PX / ppp
+    }
+
+    /// How far past the now-line a segment's LEADING end reaches, in points —
+    /// negative when it stops short of the line, as every ribbon but a held
+    /// note's does.
+    ///
+    /// Read along the depth axis, which runs away from the spectrum, so the
+    /// leading end is the box's low-depth side and this names no screen side.
+    fn past_the_line(note: &RollInstance, axes: &Axes, split: f32) -> f32 {
+        // The depth direction is axis-aligned in all four orientations, so
+        // projecting a screen point onto it drops the pitch coordinate and
+        // leaves a position on the depth axis alone.
+        let dir = axes.dir_depth();
+        let along = |x: f32, y: f32| x * dir.x + y * dir.y;
+        let line = axes.at(0.0, split);
+        let tip = along(note.center[0], note.center[1]) - note.half_extent[1];
+        along(line.x, line.y) - tip
+    }
+
+    /// A SOUNDING note carries its ribbon past the now-line and into the
+    /// spectrum, by exactly the share of the analyzer it is set to, in every
+    /// orientation.
+    ///
+    /// The lead is the whole point of the setting rather than a decoration on
+    /// it: a sounding note's peak is on the other side of that line, and a
+    /// ribbon that reaches over says which peak belongs to which note without
+    /// the eye having to carry a pitch across a boundary.
+    ///
+    /// A SHARE OF THE SPECTRUM rather than a length, which is why the expected
+    /// reach is derived from the split here instead of being the number the
+    /// setting holds: what the bar promises is a fraction of the analyzer, and a
+    /// lead that came out the same points at two splits would be breaking it.
+    #[test]
+    fn a_sounding_note_carries_its_ribbon_past_the_now_line() {
+        for orientation in [
+            SpectralOrientation::Left,
+            SpectralOrientation::Right,
+            SpectralOrientation::Top,
+            SpectralOrientation::Bottom,
+        ] {
+            // Two splits as well as three reaches: the spectrum's own share is
+            // what the fraction is taken of, so a roll given more of the pane
+            // must come out with a proportionally shorter tongue.
+            for roll_fraction in [0.3f32, 0.7] {
+                for reach in [0.01f32, 0.05, crate::ROLL_LEAD_MAX] {
+                    let mut state = fresh();
+                    state.spectrum_config.orientation = orientation;
+                    state.spectrum_config.roll_seconds = 10.0;
+                    state.spectrum_config.low_midi = 48.0;
+                    state.spectrum_config.high_midi = 84.0;
+                    state.spectrum_config.roll_fraction = roll_fraction;
+                    state.spectrum_config.roll_lead = reach;
+                    state.spectrum_config.roll_lead_fade = 0.0;
+                    // Held since 2 s and never released, so its leading end is
+                    // the now-line itself.
+                    state.tracker.handle_event(NoteEvent::on(2.0, 0, 60, 1.0));
+
+                    let axes = Axes::new(PANE, &state.spectrum_config);
+                    let split = super::super::axes::spectrum_share(&state.spectrum_config);
+                    // The bar's promise, in points: that share of the spectrum's
+                    // own share of the depth axis.
+                    let want = reach * split * axes.depth_len();
+                    let held = instances(&state, 5.0);
+                    let over = past_the_line(one(&held), &axes, split);
+                    assert!(
+                        (over - want).abs() < 1e-2,
+                        "a sounding note reaches {over} points past the line in \
+                         {orientation:?} at a split of {split}, not the {want} \
+                         that {reach} of the analyzer comes to",
+                    );
+                }
+            }
+        }
+    }
+
+    /// ...and a note LONG let go does not. Its leading end is far back in the
+    /// roll with no line in front of it to cross, so a lead there would only
+    /// draw every note longer than it was played.
+    ///
+    /// The same note in all three readings, differing only in when — or whether
+    /// — the key came up, which is what makes this a test of the release rather
+    /// than of the arithmetic.
+    #[test]
+    fn a_note_long_released_keeps_its_ribbons_own_end() {
+        let ribbon = |release: Option<f64>, now: f64| {
+            let mut state = fresh();
+            state.spectrum_config.orientation = SpectralOrientation::Left;
+            state.spectrum_config.roll_seconds = 10.0;
+            state.spectrum_config.low_midi = 48.0;
+            state.spectrum_config.high_midi = 84.0;
+            state.spectrum_config.roll_lead = 0.05;
+            state.spectrum_config.roll_lead_release = 0.25;
+            state.tracker.handle_event(NoteEvent::on(2.0, 0, 60, 1.0));
+            if let Some(at) = release {
+                state.tracker.handle_event(NoteEvent::off(at, 0, 60));
+            }
+            let axes = Axes::new(PANE, &state.spectrum_config);
+            let split = super::super::axes::spectrum_share(&state.spectrum_config);
+            let notes = instances(&state, now);
+            let note = *one(&notes);
+            (past_the_line(&note, &axes, split), note.lead, note.lead_alpha)
+        };
+
+        let axes = Axes::new(PANE, &fresh().spectrum_config);
+        let split = super::super::axes::spectrum_share(&fresh().spectrum_config);
+        let want = 0.05 * split * axes.depth_len();
+        let (held, lead, alpha) = ribbon(None, 5.0);
+        assert!(
+            (held - want).abs() < 1e-2 && alpha == 1.0,
+            "the sounding note leads {held} at {alpha}, not {want} at full; the \
+             case is vacuous",
+        );
+        assert!(lead > 0.0, "the sounding note carries no lead for the shader to draw");
+        // Let go a whole second ago, against a release of a quarter of one: the
+        // ribbon is back to its own end, and carries nothing for the shader to
+        // fade.
+        let (gone, lead, alpha) = ribbon(Some(4.0), 5.0);
+        assert!(gone < 0.0, "a note long released still reached {gone} points past the line");
+        assert_eq!((lead, alpha), (0.0, 0.0), "a spent lead was still handed to the shader");
+    }
+
+    /// What the lead opens in the clip belongs to the LEAD. A segment that is
+    /// not leading may not put ink there.
+    ///
+    /// The ink it would put there is its outline CAP, and that is the exact
+    /// thing the clip has always existed to stop — see
+    /// [`the_rolls_ink_stops_at_the_now_line`](super::super::tests). Before the
+    /// lead the clip sat on the now-line and cut every cap that reached it; the
+    /// lead opens a budget past the line, and a released note whose own end is
+    /// still near the line will spend that budget on a slab of opaque black in
+    /// the middle of the analyzer unless something stops it.
+    ///
+    /// The reach is the whole of the outline's, and the fixtures below are the
+    /// two ways in. A release of 0 puts the note's end ON the line at the
+    /// moment the lead goes; a long Span puts it a fraction of a point off the
+    /// line for seconds after even a slow one, because how far a note scrolls
+    /// in the release is the Span's business and the cap's size is not.
+    #[test]
+    fn a_note_that_is_not_leading_keeps_its_ink_behind_the_line() {
+        for (release, span, when, hint) in [
+            (0.0f32, 12.0f32, 4.0f64, "a release of 0, at the note-off"),
+            (0.25, 600.0, 4.3, "a slow Span, just past a quarter-second release"),
+        ] {
+            let mut state = fresh();
+            state.spectrum_config.orientation = SpectralOrientation::Left;
+            state.spectrum_config.roll_seconds = span;
+            state.spectrum_config.low_midi = 48.0;
+            state.spectrum_config.high_midi = 84.0;
+            state.spectrum_config.roll_lead = 0.05;
+            state.spectrum_config.roll_lead_fade = 0.04;
+            state.spectrum_config.roll_lead_release = release;
+            state.spectrum_config.roll_outline = crate::ROLL_OUTLINE_MAX;
+            state.tracker.handle_event(NoteEvent::on(2.0, 0, 60, 1.0));
+            state.tracker.handle_event(NoteEvent::off(4.0, 0, 60));
+
+            let axes = Axes::new(PANE, &state.spectrum_config);
+            let split = super::super::axes::spectrum_share(&state.spectrum_config);
+            let note = *one(&instances(&state, when));
+            assert_eq!(
+                note.lead_alpha, 0.0,
+                "{hint}: the lead is still standing at {}, so this says nothing",
+                note.lead_alpha,
+            );
+            // Two legal ways for the cap not to be there, and the assertion is
+            // that one of them holds. Either the box still carries the (spent)
+            // lead, in which case the note's own end is INTERIOR to it and a box
+            // has no edge in its middle for an outline to wrap; or the lead is
+            // gone and the box ends at the note, in which case the cap is drawn
+            // and has to be behind the line under its own steam.
+            let capped = note.lead <= 0.0;
+            let over = past_the_line(&note, &axes, split) + note.outline_reach + 0.5 / PPP;
+            assert!(
+                !capped || over <= 0.0,
+                "{hint}: a note that is not leading reaches {over} points onto \
+                 the analyzer",
+            );
+        }
+    }
+
+    /// In between, a released note's lead FADES rather than going: it holds its
+    /// full length and its opacity runs down over the Lead release, so the
+    /// tongue dissolves where it stands instead of vanishing in a frame.
+    ///
+    /// Both halves are the setting. The length holding is what makes it a fade
+    /// rather than a retraction — a tongue pulled back toward its note is a
+    /// second thing moving on a ribbon that is already scrolling — and the
+    /// opacity running to nothing on the note's own clock is what makes it a
+    /// release rather than a look.
+    ///
+    /// Read at take times rather than frames, which is the same reason the ramp
+    /// is: at 30 fps or 120, offline or live, a note a tenth of a second past
+    /// its release is drawn the same.
+    #[test]
+    fn a_released_notes_lead_fades_out_over_its_release_time() {
+        let mut state = fresh();
+        state.spectrum_config.orientation = SpectralOrientation::Left;
+        state.spectrum_config.roll_seconds = 10.0;
+        state.spectrum_config.low_midi = 48.0;
+        state.spectrum_config.high_midi = 84.0;
+        state.spectrum_config.roll_lead = 0.05;
+        state.spectrum_config.roll_lead_fade = 0.04;
+        state.spectrum_config.roll_lead_release = 0.4;
+        state.tracker.handle_event(NoteEvent::on(2.0, 0, 60, 1.0));
+        state.tracker.handle_event(NoteEvent::off(4.0, 0, 60));
+
+        let at = |state: &SharedState, now: f64| {
+            let notes = instances(state, now);
+            let note = *one(&notes);
+            (note.lead, note.lead_alpha)
+        };
+        let (full_lead, _) = at(&state, 4.0);
+        assert!(full_lead > 0.0, "the note carries no lead at the moment of release");
+        // Quarters of the way through the release, and the opacity is the
+        // fraction of it left.
+        for (elapsed, want) in [(0.0f64, 1.0f32), (0.1, 0.75), (0.2, 0.5), (0.3, 0.25)] {
+            let (lead, alpha) = at(&state, 4.0 + elapsed);
+            assert!(
+                (alpha - want).abs() < 1e-3,
+                "{elapsed}s into a 0.4s release the lead stands at {alpha}, not {want}",
+            );
+            assert!(
+                (lead - full_lead).abs() < 1e-3,
+                "the lead retracted to {lead} from {full_lead} while fading",
+            );
+        }
+        // And it is spent at the end of it, geometry and all.
+        assert_eq!(at(&state, 4.4), (0.0, 0.0), "the lead outlived its own release");
+
+        // A release of 0 is the instant drop, which is what someone dialling
+        // the bar to its bottom is asking for and what the setting exists to
+        // answer. Nothing of the lead paints — but the note is still ON the
+        // line, so its geometry is held at no opacity rather than snapped back,
+        // which is what keeps its outline off the analyzer. See
+        // [`a_note_that_is_not_leading_keeps_its_ink_behind_the_line`].
+        state.spectrum_config.roll_lead_release = 0.0;
+        let (lead, alpha) = at(&state, 4.0);
+        assert_eq!(alpha, 0.0, "a release of 0 kept the lead standing past the note-off");
+        assert!(lead > 0.0, "the note is still on the line; its box must not snap back yet");
+    }
+
+    /// Only the note's LAST segment leads. The rest end on the next bend, in
+    /// the middle of the ribbon, and a lead on one of those would tear a bent
+    /// note into overlapping pieces at every breakpoint.
+    #[test]
+    fn only_the_leading_segment_of_a_sounding_note_leads() {
+        let mut state = fresh();
+        state.spectrum_config.orientation = SpectralOrientation::Left;
+        state.spectrum_config.roll_seconds = 10.0;
+        state.spectrum_config.low_midi = 48.0;
+        state.spectrum_config.high_midi = 84.0;
+        state.spectrum_config.roll_lead = 0.05;
+        state.spectrum_config.roll_lead_fade = 0.03;
+        state.tracker.handle_event(NoteEvent::on(2.0, 0, 60, 1.0));
+        for (i, at) in [2.5, 3.0, 3.5].into_iter().enumerate() {
+            state.tracker.handle_event(NoteEvent {
+                time: at,
+                channel: 0,
+                note: 60,
+                kind: NoteEventKind::Tuning { semitones: 0.4 * (i + 1) as f32 },
+            });
+        }
+        let notes = instances(&state, 5.0);
+        assert!(notes.len() >= 4, "expected a segment per bend, got {}", notes.len());
+        let leading: Vec<&RollInstance> = notes.iter().filter(|n| n.lead > 0.0).collect();
+        assert_eq!(
+            leading.len(),
+            1,
+            "{} of {} segments lead; only the last one may",
+            leading.len(),
+            notes.len(),
+        );
+        // And it is the LAST one — the segments are built in time order, and
+        // depth runs away from the now-line, so the leading segment is the one
+        // nearest it.
+        let axes = Axes::new(PANE, &state.spectrum_config);
+        let split = super::super::axes::spectrum_share(&state.spectrum_config);
+        let nearest = notes
+            .iter()
+            .max_by(|a, b| {
+                past_the_line(a, &axes, split).total_cmp(&past_the_line(b, &axes, split))
+            })
+            .expect("the roll drew at least one segment");
+        assert!(nearest.lead > 0.0, "the segment that leads is not the one nearest the line");
+        // The segments still TILE: the lead grows the last one's leading end,
+        // which is the end no other segment is behind, so it can overlap none
+        // of them.
+        let dir = axes.dir_depth();
+        let along = |n: &RollInstance| n.center[0] * dir.x + n.center[1] * dir.y;
+        for pair in notes.windows(2) {
+            let (a, b) = (&pair[0], &pair[1]);
+            let clear = (along(b) - along(a)).abs() - (a.half_extent[1] + b.half_extent[1]);
+            assert!(
+                clear >= -1e-3,
+                "the lead pushed two segments {} points into each other",
+                -clear,
+            );
+        }
+    }
+
+    /// The lead's fade rides its own setting and is bounded by the reach it
+    /// softens, exactly as the outline's is and for the same reason: past that
+    /// there is nothing left to fade, and the bar would have no pair of points
+    /// to put on its axis.
+    ///
+    /// Off has to mean zero reach AND no fade: the reach is what the geometry
+    /// grows by, so a lead that will not be drawn must not be paid for in a
+    /// fade the shader would then apply to the ribbon's own square end.
+    #[test]
+    fn the_leads_fade_is_its_own_setting_and_stops_at_the_reach() {
+        let mut state = fresh();
+        state.spectrum_config.orientation = SpectralOrientation::Left;
+        state.tracker.handle_event(NoteEvent::on(0.0, 0, 60, 1.0));
+        // The fractions come back as points, so each expectation is stated in
+        // the currency the bar is dialled in and converted the way [`lead`]
+        // converts it.
+        let axes = Axes::new(PANE, &state.spectrum_config);
+        let split = super::super::axes::spectrum_share(&state.spectrum_config);
+        let px = |share: f32| share * split * axes.depth_len();
+        let fade_at = |state: &mut SharedState, reach: f32, fade: f32| {
+            state.spectrum_config.roll_lead = reach;
+            state.spectrum_config.roll_lead_fade = fade;
+            let notes = instances(state, 0.05);
+            one(&notes).lead_fade
+        };
+        // Within float error rather than to the bit: a fraction reaches the
+        // instance through two multiplications, and the clamped case reaches it
+        // through a `min` of two numbers that took different routes there.
+        let same = |got: f32, want: f32, what: &str| {
+            assert!((got - want).abs() < 1e-3, "{what}: {got} against {want}");
+        };
+        same(fade_at(&mut state, 0.06, 0.0), 0.0, "a fade of 0 is a square end, not a default");
+        same(fade_at(&mut state, 0.06, 0.02), px(0.02), "the fade is not its own setting");
+        same(fade_at(&mut state, 0.06, 0.06), px(0.06), "a fade of the whole lead is allowed");
+        same(fade_at(&mut state, 0.06, 0.09), px(0.06), "a fade past the lead was not clamped");
+        same(fade_at(&mut state, 0.0, 0.04), 0.0, "a lead of no reach kept a fade");
+    }
+
+    /// A pane with no spectrum on it has no line to cross, and nothing leads.
+    ///
+    /// Two layouts reach that state and both are ordinary rather than
+    /// degenerate: the offline `--playhead` render lays the whole take out
+    /// statically and gives the roll the entire depth axis, and the divider
+    /// dragged all the way over the curve leaves the same picture live. A lead
+    /// in either would be a ribbon poking off the end of the pane.
+    #[test]
+    fn a_pane_with_no_spectrum_has_no_line_to_lead_over() {
+        let cfg = crate::SpectrumConfig {
+            roll_lead: 0.05,
+            roll_lead_fade: 0.04,
+            ..fresh().spectrum_config
+        };
+        let axes = Axes::new(PANE, &cfg);
+        let px = |share: f32| share * 0.45 * axes.depth_len();
+        let (reach, fade) = lead(&cfg, &axes, false, 0.45);
+        assert!(
+            (reach - px(0.05)).abs() < 1e-3 && (fade - px(0.04)).abs() < 1e-3,
+            "an ordinary pane leads ({reach}, {fade}) rather than ({}, {})",
+            px(0.05),
+            px(0.04),
+        );
+        assert_eq!(
+            lead(&cfg, &axes, true, 0.45),
+            (0.0, 0.0),
+            "the whole-song layout drew a lead",
+        );
+        assert_eq!(
+            lead(&cfg, &axes, false, 0.0),
+            (0.0, 0.0),
+            "a pane with no spectrum drew a lead",
+        );
     }
 
     /// A note off the octave zoom is dropped when its INK is off it, and how

@@ -362,6 +362,55 @@ pub(crate) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
          it (together they close for a hard edge), the outer one to reach \
          further out from where it already starts to soften.",
     );
+    edge_bar(
+        ui,
+        (&mut cfg.roll_lead, &mut cfg.roll_lead_fade),
+        crate::ROLL_LEAD_MAX,
+        "Lead",
+        {
+            let fresh = crate::SpectrumConfig::default();
+            (fresh.roll_lead, fresh.roll_lead_fade)
+        },
+        |v| format!("{:.1}%", v * 100.0),
+    )
+    .on_hover_text(
+        "How far a SOUNDING note carries past the now-line and into the \
+         spectrum, and how much of that it spends fading out. A sounding note's \
+         ribbon ends on the line and the peak it is making stands on the other \
+         side of it, so this is the ribbon reaching across the join — which \
+         notes are down reads off the picture instead of off the ends of the \
+         ribbons. 0 stops every note square on the line.\n\n\
+         As a share of the ANALYZER, not a length: 10% reaches a tenth of the \
+         way across the spectrum, so the same setting draws the same picture on \
+         a window of any size, and dragging the divider over the curve shortens \
+         the tongues with it rather than letting them cover what is left. (The \
+         Outline bar above is in points instead, and deliberately — an edge \
+         wants to be the same weight everywhere, where a reach into another \
+         picture wants to be the same share of it.)\n\n\
+         The bar is the lead itself, read outward from the now-line: solid to \
+         the first handle, then fading, and gone by the second. Close them for \
+         a tongue that ends square, open the inner one to the outer for one \
+         that fades the whole way across.\n\n\
+         The divider still draws over it, unbroken — the ribbon passes under \
+         the line rather than eating it, which is what keeps the boundary \
+         followable while a chord is reaching over it.",
+    );
+    ValueBar::new(&mut cfg.roll_lead_release, 0.0..=crate::ROLL_LEAD_RELEASE_MAX, "Lead release")
+        .decimals(2)
+        .display(|v| format!("{v:.2} s"))
+        .show(ui)
+        .on_hover_text(
+            "How long a note's lead takes to fade away once you let go of the \
+             key. 0 takes it the instant the note stops.\n\nThe lead is a claim \
+             about the present — this is sounding — so it has to go when the \
+             note does, and going in one frame is a tongue of ink vanishing \
+             rather than ending. Given a fifth of a second it dims instead, \
+             riding the ribbon's own end as that scrolls away from the line: \
+             the release becomes something the picture does rather than \
+             something that happens to it.\n\nIn seconds, so it is the same \
+             gesture at every Span. At a long one the ribbon barely moves \
+             while it happens and the tongue simply dissolves on the spot.",
+        );
     ui.checkbox(&mut cfg.note_names, "Note names").on_hover_text(
         "Write each note's name on its own ribbon, at the end it is anchored \
          to — by default the leading edge, so a held note's name waits at the \

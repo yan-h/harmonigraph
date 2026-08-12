@@ -389,8 +389,15 @@ pub(super) fn param_range_bar(
 }
 
 /// One bar for a soft edge: how far it REACHES past whatever it surrounds, and
-/// how much of that reach it spends FADING out. The lattice's knockout gutter
-/// and the piano roll's note outline are both this shape.
+/// how much of that reach it spends FADING out. Three settings are this shape —
+/// the lattice's knockout gutter, the piano roll's note outline, and the lead a
+/// sounding note carries over the now-line.
+///
+/// The lead is the one whose axis is not in points, and it is worth saying that
+/// this bar does not care: it is handed two numbers and a far end, and what
+/// they measure is the caller's. See
+/// [`SpectrumConfig::roll_lead`](crate::SpectrumConfig) for why that one is a
+/// share of the analyzer where the outline beside it is a length.
 ///
 /// The pair is stored as a reach and a fade WIDTH, and dragged as the two
 /// points those describe — solid out to `reach - fade`, gone by `reach` — which

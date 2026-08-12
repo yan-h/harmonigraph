@@ -273,17 +273,17 @@ fn a_double_click_on_a_soft_edge_restores_the_fresh_pair() {
     );
 }
 
-/// Both soft edges — the lattice's knockout gutter and the roll's note
-/// outline — open on a pair their own bar can reach: a fade no wider than the
-/// reach it is measured back from.
+/// Every soft edge — the lattice's knockout gutter, the roll's note outline,
+/// and the lead a held note carries over the now-line — opens on a pair its own
+/// bar can reach: a fade no wider than the reach it is measured back from.
 ///
-/// The picture does not care. Both shaders floor the fade at the edge it
-/// surrounds, so a fade dialled past its reach DRAWS as a fade over the whole
-/// of it — which is exactly why the repair is safe to make, and why it has to
-/// be made here rather than left to the draw path: the two are one bar reading
-/// out two points on one axis, and an unclamped fade puts its low end off the
-/// bottom of that axis, where the bar would report a number the blob does not
-/// hold.
+/// The picture does not care. Every one of the shaders caps the fade at the
+/// reach it is taking out, so a fade dialled past that DRAWS as a fade over the
+/// whole of it — which is exactly why the repair is safe to make, and why it
+/// has to be made here rather than left to the draw path: each pair is one bar
+/// reading out two points on one axis, and an unclamped fade puts its low end
+/// off the bottom of that axis, where the bar would report a number the blob
+/// does not hold.
 #[test]
 fn a_blob_naming_a_fade_wider_than_its_edge_opens_on_one_that_fits() {
     let mut state = fresh();
@@ -305,6 +305,14 @@ fn a_blob_naming_a_fade_wider_than_its_edge_opens_on_one_that_fits() {
         .replace(
             &format!("roll_outline:{:?},", state.spectrum_config.roll_outline),
             "roll_outline:1.0,",
+        )
+        .replace(
+            &format!("roll_lead_fade:{:?},", state.spectrum_config.roll_lead_fade),
+            "roll_lead_fade:0.2,",
+        )
+        .replace(
+            &format!("roll_lead:{:?},", state.spectrum_config.roll_lead),
+            "roll_lead:0.05,",
         );
     assert_ne!(edited, saved, "the edge keys are not in the blob to edit");
 
@@ -319,6 +327,11 @@ fn a_blob_naming_a_fade_wider_than_its_edge_opens_on_one_that_fits() {
         (restored.spectrum_config.roll_outline, restored.spectrum_config.roll_outline_fade),
         (1.0, 1.0),
         "the outline's fade opened wider than the outline",
+    );
+    assert_eq!(
+        (restored.spectrum_config.roll_lead, restored.spectrum_config.roll_lead_fade),
+        (0.05, 0.05),
+        "the lead's fade opened wider than the lead",
     );
     assert_eq!(restored.camera.yaw, 1.23, "the rest of the blob still restores");
 }
@@ -339,11 +352,13 @@ fn a_blob_naming_a_fade_wider_than_its_edge_opens_on_one_that_fits() {
 /// exists a few tests up.
 #[test]
 fn a_blob_naming_a_nonsense_soft_edge_opens_on_a_drawable_one() {
-    let cases: [(&str, &str, &str); 4] = [
+    let cases: [(&str, &str, &str); 6] = [
         ("sevens_gutter", "NaN", "a NaN gutter"),
         ("sevens_gutter_soft", "NaN", "a NaN gutter fade"),
         ("roll_outline", "inf", "an infinite outline"),
         ("roll_outline_fade", "NaN", "a NaN outline fade"),
+        ("roll_lead", "NaN", "a NaN lead"),
+        ("roll_lead_fade", "inf", "an infinite lead fade"),
     ];
     for (key, value, hint) in cases {
         let mut state = fresh();
@@ -353,7 +368,9 @@ fn a_blob_naming_a_nonsense_soft_edge_opens_on_a_drawable_one() {
             "sevens_gutter" => state.view.sevens_gutter,
             "sevens_gutter_soft" => state.view.sevens_gutter_soft,
             "roll_outline" => state.spectrum_config.roll_outline,
-            _ => state.spectrum_config.roll_outline_fade,
+            "roll_outline_fade" => state.spectrum_config.roll_outline_fade,
+            "roll_lead" => state.spectrum_config.roll_lead,
+            _ => state.spectrum_config.roll_lead_fade,
         };
         let edited = saved.replace(&format!("{key}:{was:?},"), &format!("{key}:{value},"));
         assert_ne!(edited, saved, "{hint}: `{key}` is not in the blob to edit");
@@ -367,13 +384,56 @@ fn a_blob_naming_a_nonsense_soft_edge_opens_on_a_drawable_one() {
             ("sevens_gutter_soft", view.sevens_gutter_soft),
             ("roll_outline", cfg.roll_outline),
             ("roll_outline_fade", cfg.roll_outline_fade),
+            ("roll_lead", cfg.roll_lead),
+            ("roll_lead_fade", cfg.roll_lead_fade),
         ] {
             assert!(v.is_finite(), "{hint}: `{name}` opened at {v}");
         }
         assert!(
             view.sevens_gutter_soft <= view.sevens_gutter
-                && cfg.roll_outline_fade <= cfg.roll_outline,
+                && cfg.roll_outline_fade <= cfg.roll_outline
+                && cfg.roll_lead_fade <= cfg.roll_lead,
             "{hint}: opened on a fade wider than its reach",
+        );
+        assert_eq!(restored.camera.yaw, 1.23, "{hint}: the rest of the blob still restores");
+    }
+}
+
+/// The lead's RELEASE opens somewhere its own bar can reach, which for a
+/// duration means finite and inside the bar's travel.
+///
+/// It is the odd one out among the lead's settings and gets its own blob for
+/// that reason: the reach and the fade are two points on one axis and have each
+/// other to be wrong about, where this is a lone number in seconds. What it can
+/// still be is off the bar — a hand-edited blob asking for a lead that outlives
+/// its note by a minute — or not a number at all, where the draw path refuses
+/// it silently (`panes::spectral::roll::lead_alpha` compares against a NaN and
+/// simply draws no lead) and the pane would then be at a value the file does not
+/// hold, indefinitely, since nothing rewrites the key until someone drags that
+/// bar.
+#[test]
+fn a_blob_naming_a_lead_release_off_its_own_bar_opens_on_one_that_fits() {
+    for (value, want, hint) in [
+        ("99.0", crate::ROLL_LEAD_RELEASE_MAX, "a release of a minute and a half"),
+        ("-1.0", 0.0, "a negative release"),
+        ("NaN", SpectrumConfig::default().roll_lead_release, "a release that is not a number"),
+    ] {
+        let mut state = fresh();
+        state.camera.yaw = 1.23;
+        let saved = state.save_persist();
+        let was = state.spectrum_config.roll_lead_release;
+        let edited = saved.replace(
+            &format!("roll_lead_release:{was:?},"),
+            &format!("roll_lead_release:{value},"),
+        );
+        assert_ne!(edited, saved, "{hint}: `roll_lead_release` is not in the blob to edit");
+
+        let mut restored = fresh();
+        restored.load_persist(&edited);
+        assert_eq!(
+            restored.spectrum_config.roll_lead_release, want,
+            "{hint}: opened at {}",
+            restored.spectrum_config.roll_lead_release,
         );
         assert_eq!(restored.camera.yaw, 1.23, "{hint}: the rest of the blob still restores");
     }
