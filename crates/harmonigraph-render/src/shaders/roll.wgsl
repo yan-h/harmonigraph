@@ -220,25 +220,42 @@ fn outline_coverage(in: VertexOut, d: f32) -> f32 {
 /// bound, while a tip that ends square is an edge like any other on the note and
 /// is owed the same surround the flanks get. So a fade of 0 is uniform right out
 /// to the box, and [`inside`] is what ends it — the same square end the ribbon
-/// would have without a lead at all, dimmed by the opacity.
+/// would have without a lead at all, dimmed by the opacity. (The spectral pane
+/// clips that cap off, its budget past the now-line being the lead itself; a
+/// caller who wants the cap has only to leave it room.)
 ///
-/// The ramp is never narrower than one pixel, [`outline_coverage`]'s bargain
-/// taken here for the same reason: a sub-pixel ramp is an aliased edge. A
-/// segment with no lead leaves at the first line, so the ordinary ribbon pays
+/// The fade is floored at one pixel and CAPPED at the lead, [`outline_coverage`]'s
+/// bargain in both directions and for its reasons: a sub-pixel ramp is an
+/// aliased edge, and a fade wider than the thing it is taking out has nothing
+/// past that to take. Capped, a fade dialled past its reach fades the whole
+/// lead from the note's own end outward rather than stepping at it — which is
+/// what this crate's `lead_fade` promises, and what lets the pane's bar clamp
+/// the pair for the bar's sake alone.
+///
+/// The junction at the note's own end is CROSSED over a pixel rather than
+/// stepped, and that is the one place the two coverages meet. They differ by
+/// however much opacity the lead has lost, so at full opacity there is nothing
+/// to cross and at none of it the step would be the ribbon's whole edge — drawn
+/// hard, with no antialiasing of its own, since the box's own edge is a lead
+/// away and [`inside`] is not looking here.
+///
+/// A segment with no lead leaves at the first line, so the ordinary ribbon pays
 /// nothing at all for a lead it does not have.
 fn lead_coverage(in: VertexOut) -> f32 {
     if (in.lead <= 0.0) {
         return 1.0;
     }
+    let f = max(locals.feather, 1e-6);
     let u = in.local.y + in.half_extent.y;
-    if (u >= in.lead) {
-        return 1.0;
+    // The lead's own coverage: its opacity, taken out over the fade at the tip.
+    var led = in.lead_alpha;
+    if (in.lead_fade > 0.0) {
+        led = in.lead_alpha * clamp(u / max(min(in.lead_fade, in.lead), f), 0.0, 1.0);
     }
-    if (in.lead_fade <= 0.0) {
-        return in.lead_alpha;
-    }
-    let w = max(in.lead_fade, max(locals.feather, 1e-6));
-    return in.lead_alpha * clamp(u / w, 0.0, 1.0);
+    // ...and the note's, which is solid. 1 inside the note, 0 in the lead, a
+    // pixel wide in between.
+    let note = clamp((u - in.lead) / f + 0.5, 0.0, 1.0);
+    return mix(led, 1.0, note);
 }
 
 /// Signed distance from this fragment to the note's own box, in points:

@@ -481,7 +481,7 @@ pub(super) fn note_instances(
         // front of them to lead into.
         let mut segments = note.segments(now).peekable();
         while let Some(((t0, p0), (t1, p1))) = segments.next() {
-            let leads = lead_px > 0.0 && standing > 0.0 && segments.peek().is_none();
+            let last = segments.peek().is_none();
             let (t0, t1) = (t0.max(edge), t1.max(edge));
             if t1 < edge {
                 continue;
@@ -496,6 +496,34 @@ pub(super) fn note_instances(
             // direction, and the segments keep their proportions inside it.
             let (d0, d1) = (mid + (d0 - mid) * stretch, mid + (d1 - mid) * stretch);
             let (a0, a1) = (scale.t_of(p0), scale.t_of(p1));
+
+            // Whether this segment carries a lead at all — which is not the
+            // same question as whether any of it is still visible.
+            //
+            // A lead the release has spent is kept, at no opacity, for as long
+            // as the note's own end is close enough to the now-line for its
+            // OUTLINE to cross it. That is not a nicety: the clip opens by the
+            // lead, and what the lead opens belongs to the lead. Drop the lead
+            // the instant its opacity runs out and the box snaps back to the
+            // note's own end, which puts a square end — and so the outline's
+            // opaque cap — inside a budget meant for a tongue that fades. The
+            // cap is the exact ink the clip has stopped since before there was
+            // a lead, and it lands in the middle of the analyzer.
+            //
+            // Held at no opacity the end stays INTERIOR to the box, where a box
+            // has no edge and an outline has nothing to wrap, so nothing is
+            // drawn there at all. It costs four vertices of invisible quad for
+            // the couple of points of scrolling it takes the note to clear the
+            // line — and the cap comes back as soon as it is wholly inside it,
+            // which is the earliest it can without spending what is not its.
+            //
+            // How far the note's own end sits inside the roll, in points, and
+            // how far the outline stands off it: the same reach `vs_note` grows
+            // the quad by, since it is the same ink.
+            let behind_px = (d1 - split) * axes.depth_len();
+            let leads = lead_px > 0.0
+                && last
+                && (standing > 0.0 || behind_px < outline_px + 0.5 * feather_px);
 
             // Notes always draw fully opaque — how much of the heatmap comes
             // through a note is the Fill setting's business, not an opacity
@@ -1263,6 +1291,64 @@ mod tests {
         assert_eq!((lead, alpha), (0.0, 0.0), "a spent lead was still handed to the shader");
     }
 
+    /// What the lead opens in the clip belongs to the LEAD. A segment that is
+    /// not leading may not put ink there.
+    ///
+    /// The ink it would put there is its outline CAP, and that is the exact
+    /// thing the clip has always existed to stop — see
+    /// [`the_rolls_ink_stops_at_the_now_line`](super::super::tests). Before the
+    /// lead the clip sat on the now-line and cut every cap that reached it; the
+    /// lead opens a budget past the line, and a released note whose own end is
+    /// still near the line will spend that budget on a slab of opaque black in
+    /// the middle of the analyzer unless something stops it.
+    ///
+    /// The reach is the whole of the outline's, and the fixtures below are the
+    /// two ways in. A release of 0 puts the note's end ON the line at the
+    /// moment the lead goes; a long Span puts it a fraction of a point off the
+    /// line for seconds after even a slow one, because how far a note scrolls
+    /// in the release is the Span's business and the cap's size is not.
+    #[test]
+    fn a_note_that_is_not_leading_keeps_its_ink_behind_the_line() {
+        for (release, span, when, hint) in [
+            (0.0f32, 12.0f32, 4.0f64, "a release of 0, at the note-off"),
+            (0.25, 600.0, 4.3, "a slow Span, just past a quarter-second release"),
+        ] {
+            let mut state = fresh();
+            state.spectrum_config.orientation = SpectralOrientation::Left;
+            state.spectrum_config.roll_seconds = span;
+            state.spectrum_config.low_midi = 48.0;
+            state.spectrum_config.high_midi = 84.0;
+            state.spectrum_config.roll_lead = 0.05;
+            state.spectrum_config.roll_lead_fade = 0.04;
+            state.spectrum_config.roll_lead_release = release;
+            state.spectrum_config.roll_outline = crate::ROLL_OUTLINE_MAX;
+            state.tracker.handle_event(NoteEvent::on(2.0, 0, 60, 1.0));
+            state.tracker.handle_event(NoteEvent::off(4.0, 0, 60));
+
+            let axes = Axes::new(PANE, &state.spectrum_config);
+            let split = super::super::axes::spectrum_share(&state.spectrum_config);
+            let note = *one(&instances(&state, when));
+            assert_eq!(
+                note.lead_alpha, 0.0,
+                "{hint}: the lead is still standing at {}, so this says nothing",
+                note.lead_alpha,
+            );
+            // Two legal ways for the cap not to be there, and the assertion is
+            // that one of them holds. Either the box still carries the (spent)
+            // lead, in which case the note's own end is INTERIOR to it and a box
+            // has no edge in its middle for an outline to wrap; or the lead is
+            // gone and the box ends at the note, in which case the cap is drawn
+            // and has to be behind the line under its own steam.
+            let capped = note.lead <= 0.0;
+            let over = past_the_line(&note, &axes, split) + note.outline_reach + 0.5 / PPP;
+            assert!(
+                !capped || over <= 0.0,
+                "{hint}: a note that is not leading reaches {over} points onto \
+                 the analyzer",
+            );
+        }
+    }
+
     /// In between, a released note's lead FADES rather than going: it holds its
     /// full length and its opacity runs down over the Lead release, so the
     /// tongue dissolves where it stands instead of vanishing in a frame.
@@ -1314,9 +1400,14 @@ mod tests {
 
         // A release of 0 is the instant drop, which is what someone dialling
         // the bar to its bottom is asking for and what the setting exists to
-        // answer.
+        // answer. Nothing of the lead paints — but the note is still ON the
+        // line, so its geometry is held at no opacity rather than snapped back,
+        // which is what keeps its outline off the analyzer. See
+        // [`a_note_that_is_not_leading_keeps_its_ink_behind_the_line`].
         state.spectrum_config.roll_lead_release = 0.0;
-        assert_eq!(at(&state, 4.0), (0.0, 0.0), "a release of 0 kept the lead past the note-off");
+        let (lead, alpha) = at(&state, 4.0);
+        assert_eq!(alpha, 0.0, "a release of 0 kept the lead standing past the note-off");
+        assert!(lead > 0.0, "the note is still on the line; its box must not snap back yet");
     }
 
     /// Only the note's LAST segment leads. The rest end on the next bend, in
