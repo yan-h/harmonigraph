@@ -396,10 +396,16 @@ mod tests {
     /// turn's outer half over the edge.
     #[test]
     fn the_disc_keeps_its_hole_and_stays_in_the_pane() {
-        // Across the range the Analyzer offers, plus the extremes of the bar:
-        // the fit is solved rather than clamped, so it has to hold at a tenth
-        // of an octave as well as at ten.
-        for (low, high) in [(36.0, 96.0), (15.5, 135.1), (60.0, 61.0), (60.0, 72.0)] {
+        // Both ends of what the range bar can produce, and the middle: the fit
+        // is solved rather than clamped, so it has to hold at the two octaves
+        // `PITCH_RANGE_MIN_SPAN` floors the range at as well as at the ten the
+        // analyzer covers.
+        //
+        // Two octaves is written as `(60, 72)` and not as some narrower pair
+        // that `Spiral::new` widens to it — a fixture the constructor rewrites
+        // tests the row it is rewritten INTO, so a pair of them silently
+        // becomes one case tested twice.
+        for (low, high) in [(36.0, 96.0), (15.5, 135.1), (60.0, 72.0)] {
             let s = spiral(low, high);
             let (r_in, r_out) = s.bounds();
             let half_pane = PANE.width().min(PANE.height()) * 0.5;
