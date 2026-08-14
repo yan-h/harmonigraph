@@ -38,8 +38,11 @@ use crate::SharedState;
 /// It has to be positive, and generously so: radius is linear in octave, so an
 /// innermost turn drawn near the centre gets almost no circumference to spell
 /// twelve pitch classes across. At the analyzer's full ~10-octave range this
-/// leaves the innermost turn about a sixth of the outer one's circumference,
-/// which is coarse but still reads as twelve directions rather than as a blot.
+/// leaves the innermost turn about a fifth of the outermost one's
+/// circumference — measured centre to centre, which is the room a turn
+/// actually has; edge to edge it reads as a sixth, and saying which is what
+/// keeps the figure checkable. Coarse either way, but still twelve directions
+/// rather than a blot.
 /// Narrowing the Analyzer's pitch range is what buys the inner turns room, and
 /// is the intended way to read this pane closely.
 const INNER_HOLE: f32 = 0.16;
