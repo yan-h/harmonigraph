@@ -94,6 +94,14 @@ pub(crate) fn render_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) 
                 // its type small, as the render will.
                 super::spectral::spectral_pane(&mut child, state, now, 1);
             }
+            // No texture slot to keep apart from the docked copy, unlike the
+            // Spectral pane above: the spiral reads the analyzer's current
+            // buckets straight and holds nothing between frames, so a second
+            // live copy of it is just a second copy.
+            Pane::Spiral => {
+                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+                super::spiral::spiral_pane(&mut child, state, now);
+            }
             Pane::Lattice => preview_lattice(ui, rect, state, now),
         }
     }

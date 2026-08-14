@@ -706,13 +706,14 @@ pub(super) fn note_instances(
 
 /// The color of a note at `pitch`: the lattice's own, off the same
 /// [`pitch_lut_color`] ramp the nodes are painted through, so a ribbon and the
-/// node it lit up are the same color.
+/// node it lit up are the same color. Shared with the Spiral pane's radial
+/// marks, which are the same notes drawn somewhere else.
 ///
 /// The only coloring there is, deliberately. The obvious alternative — one
 /// flat accent for the roll — breaks the identity that makes it readable
-/// beside the lattice: what a color means has to be the same thing in both
-/// pictures, or reading across them is a translation.
-fn note_color(state: &SharedState, pitch: f32, alpha: f32) -> Color32 {
+/// beside the lattice: what a color means has to be the same thing in every
+/// picture, or reading across them is a translation.
+pub(crate) fn note_color(state: &SharedState, pitch: f32, alpha: f32) -> Color32 {
     let (darkest, brightest) =
         (state.frame_params.darkest_pitch, state.frame_params.brightest_pitch);
     scene_color(pitch_lut_color(pitch, darkest, brightest, state.view.pitch_gradient), alpha)
