@@ -23,6 +23,7 @@ fn every_tab_has_its_own_id_whatever_its_title_says() {
         panes::Tab::Display,
         panes::Tab::Console,
         panes::Tab::Spectral,
+        panes::Tab::Spiral,
         panes::Tab::Notes,
         panes::Tab::Video,
         panes::Tab::System,
