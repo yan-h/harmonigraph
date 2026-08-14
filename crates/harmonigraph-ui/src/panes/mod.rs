@@ -9,7 +9,8 @@
 //! you are looking at and from where), [`nodes`] (a played note's own layers),
 //! [`labels`] (the text on them), [`grid`] (the lines between them) and the
 //! analyzer settings. [`system`] is the plugin's own render/layout knobs.
-//! Alongside are the [`spectral`] display, [`render`] (the Video tab), and
+//! Alongside are the [`spectral`] display, the [`spiral`] one beside it (the
+//! same analyzer wound onto a chroma circle), [`render`] (the Video tab), and
 //! [`notes`] (Console + Notes). This file holds the `Tab` enum, the
 //! `TabViewer` that dispatches to them, and the small helpers more than one
 //! pane needs.
@@ -32,6 +33,7 @@ pub mod notes;
 /// before rendering. The "Video" tab.
 pub mod render;
 pub mod spectral;
+pub mod spiral;
 pub mod system;
 pub mod tuning;
 pub mod view;
@@ -41,6 +43,7 @@ use lattice::lattice_pane;
 use notes::{console_pane, notes_pane};
 use render::render_pane;
 use spectral::spectral_pane;
+use spiral::spiral_pane;
 use system::system_pane;
 use tuning::tuning_pane;
 
@@ -97,6 +100,9 @@ pub enum Tab {
     /// The Spectral display: FFT curve, voices, and piano roll. Titled
     /// "Analyzer".
     Spectral,
+    /// The same analyzer frame wound onto a chroma spiral, one turn per
+    /// octave, with the sounding notes marked on it. Titled "Spiral".
+    Spiral,
     Notes,
     /// A live preview of the offline video frame, composed and adjusted here.
     /// Titled "Video".
@@ -106,6 +112,20 @@ pub enum Tab {
     /// than anything the tab changes — and sits one letter from "pane", which
     /// is what every tab in this dock is.
     System,
+}
+
+impl Tab {
+    /// Whether this tab is a PICTURE — a pane that paints its own surface edge
+    /// to edge — rather than a list of controls.
+    ///
+    /// A method rather than a `matches!` at each site, because more than one
+    /// site asks (the scroll bars and the body margin below), and a new picture
+    /// pane that slips past one of them draws with a scroll area around it or a
+    /// border of chrome inside it, neither of which fails anything: it just
+    /// looks wrong, in a way nobody thinks to attribute to a missing arm.
+    pub(crate) fn is_picture(&self) -> bool {
+        matches!(self, Tab::Lattice | Tab::Spectral | Tab::Spiral)
+    }
 }
 
 pub struct Viewer<'a> {
@@ -148,6 +168,7 @@ pub fn tab_title(tab: &Tab) -> &'static str {
         // on different surfaces, so the pair reads as "the analyzer, and its
         // knobs" rather than as two things to tell apart.
         Tab::Spectral => "Analyzer",
+        Tab::Spiral => "Spiral",
         Tab::Notes => "Notes",
         Tab::Video => "Video",
         Tab::System => "System",
@@ -193,10 +214,11 @@ impl egui_dock::TabViewer for Viewer<'_> {
         egui::Id::new(("lattice-pane", *tab))
     }
 
-    /// The picture panes never scroll. Both fill their body exactly — the
-    /// lattice with a wgpu callback, the analyzer with a painter over the
-    /// whole rect — so there is nothing under the edge to reach, and a scroll
-    /// area around them can only shift a picture that is meant to sit still.
+    /// The picture panes never scroll. Each fills its body exactly — the
+    /// lattice with a wgpu callback, the analyzer and the spiral with a
+    /// painter over the whole rect — so there is nothing under the edge to
+    /// reach, and a scroll area around them can only shift a picture that is
+    /// meant to sit still.
     /// Settings panes keep the VERTICAL bar only: they are lists, and a short
     /// dock column has to be able to reach the end of one.
     ///
@@ -208,8 +230,7 @@ impl egui_dock::TabViewer for Viewer<'_> {
     /// scroll at all. Vertical-only matches the panes that build their own
     /// `ScrollArea::vertical()` — the ones that always scrolled fine.
     fn scroll_bars(&self, tab: &Tab) -> [bool; 2] {
-        let picture = matches!(tab, Tab::Lattice | Tab::Spectral);
-        [false, !picture]
+        [false, !tab.is_picture()]
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Tab) {
@@ -222,15 +243,16 @@ impl egui_dock::TabViewer for Viewer<'_> {
             Tab::Display => display_pane(ui, self.state, self.params),
             Tab::Console => console_pane(ui, self.state),
             Tab::Spectral => spectral_pane(ui, self.state, self.now, 0),
+            Tab::Spiral => spiral_pane(ui, self.state, self.now),
             Tab::Notes => notes_pane(ui, self.state),
             Tab::Video => render_pane(ui, self.state, self.now),
             Tab::System => system_pane(ui, self.state),
         }
     }
 
-    /// The two picture panes paint their own surface edge to edge — the
-    /// Spectral display its plot well, the Lattice its 3D view — so the
-    /// default 8px body margin reads as a pointless border around a picture
+    /// The picture panes paint their own surface edge to edge — the Spectral
+    /// display its plot well, the Lattice its 3D view, the Spiral its disc — so
+    /// the default 8px body margin reads as a pointless border around a picture
     /// rather than as breathing room between controls. Drop it and let them
     /// fill the whole tab.
     ///
@@ -241,7 +263,7 @@ impl egui_dock::TabViewer for Viewer<'_> {
         tab: &Tab,
         global_style: &egui_dock::TabStyle,
     ) -> Option<egui_dock::TabStyle> {
-        matches!(tab, Tab::Spectral | Tab::Lattice).then(|| {
+        tab.is_picture().then(|| {
             let mut style = global_style.clone();
             style.tab_body.inner_margin = egui::Margin::ZERO;
             style
