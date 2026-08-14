@@ -1070,9 +1070,9 @@ impl SlabGrid {
 /// its row count, which buckets a row reads — is applied downstream, at
 /// compose time, so a pitch zoom or pan re-reads a grid that is already folded
 /// and never comes here. That is not incidental: a pitch drag moves its scale
-/// on every frame of itself, and when the rows were folded in it re-walked the
-/// whole retention each of those frames — 46 ms at the default Span on a
-/// full-height 2x pane, and past 100 ms at long ones, measured.
+/// on every frame of itself, and a fold that applied the rows would re-walk
+/// the whole retention on each of those frames — 46 ms at the default Span on
+/// a full-height 2x pane, and past 100 ms at long ones, measured.
 ///
 /// It reproduces `aggregate_slabs` over the columns AS THEY ARRIVED: the shared
 /// [`SlabGrid::fold`] gives identical slab values, and the window is served from
@@ -2813,8 +2813,8 @@ mod tests {
     /// repaint the image WITHOUT re-walking the store: the ring restarts, since
     /// the pixels really are all different, while the aggregator's grid, which
     /// is in bucket space, is carried untouched. That split is what holds the
-    /// gesture's cost to a compose. When the rows were folded in, every frame
-    /// of it re-folded the whole retention — 46 ms at the default Span on a
+    /// gesture's cost to a compose. With the rows folded in, every frame of it
+    /// would re-fold the whole retention — 46 ms at the default Span on a
     /// full-height 2x pane, measured — and only the rebuild counter can see the
     /// difference, since the refold draws the same picture.
     #[test]
