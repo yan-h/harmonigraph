@@ -1026,6 +1026,95 @@ fn the_sweep_is_worth_the_same_contrast_on_a_dark_color_as_on_a_bright_one() {
     );
 }
 
+/// Between peaks the layer sits at its own color wherever the ceiling covers
+/// the swing: a sweep's trough IS the steady picture rather than a dimmed copy
+/// of it, on every color whose luma the swing still fits under
+/// `SHIMMER_CEILING` — and where it stops fitting, the standing shade the
+/// slide buys is bounded, and grows with how bright the color is.
+///
+/// This is the half of the model nothing else reads. The contrast test above
+/// is indifferent to it — a slid swing is the same crest-to-trough ratio, so
+/// that reading passes whether the troughs hold still or the whole ramp rides
+/// a standing dimmer — and the chroma and hue test below reads only the crest.
+/// A ceiling of 0.5 puts 9 `L*` of standing shade under even the ramp's dark
+/// end with every other test in this file green; this is the one that goes
+/// red.
+///
+/// The budgets are the measured shape of that trade, with room for a
+/// rasteriser to disagree over ring edges and none for a regression. The slide
+/// engages where a color's luma — in the scale the shader's arithmetic runs
+/// on, which is brighter than the same values read as encoded sRGB — clears
+/// `SHIMMER_CEILING / e^swing`, about 0.40 at this fixture's Intensity of 1.
+/// The default ramp crosses that in its upper half: the dark end (luma 0.33)
+/// pays nothing and is held to rounding, mid-ramp (0.45) measures 3.7 `L*`,
+/// and the bright end (0.64) measures 15 — the real price of one uniform
+/// swing on a bright color under a hard gamut, and several times what the
+/// ramp's encoded reading suggests. `SHIMMER_CEILING`'s comment carries the
+/// trade; this pins its measured cost so a retune moves a number here rather
+/// than a picture only.
+#[test]
+fn between_peaks_the_layer_sits_at_its_own_color() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut gpu) = Shooter::new(SIZE) else {
+        return;
+    };
+    let lut = harmonigraph_scene::pitch_ramp_lut(
+        harmonigraph_scene::ViewConfig::default().pitch_gradient,
+    );
+    let ends = [
+        ("dark", lut[0]),
+        ("mid", lut[harmonigraph_scene::PITCH_LUT_N / 2]),
+        ("bright", lut[harmonigraph_scene::PITCH_LUT_N - 1]),
+    ];
+    let shots = ends.map(|(end, color)| (end, sweep_over_color(&mut gpu, color)));
+    // The rings alone. The slice under them wears the fixture's own synthetic
+    // ramp, whose brightest entries sit high enough to buy a little slide of
+    // their own; the claim here is about the color under test, and the steady
+    // difference between the two end colors is what confines a reading to the
+    // pixels that wear it — the same fence `lifted_pixels` builds.
+    let ring: Vec<usize> = (0..shots[0].1 .0.len() / 4)
+        .filter(|&i| shots[0].1 .0[i * 4..i * 4 + 3] != shots[2].1 .0[i * 4..i * 4 + 3])
+        .collect();
+    for (end, shot) in &shots {
+        let moved: Vec<usize> = ring.iter().copied().filter(|&i| swept(shot, i)).collect();
+        assert!(
+            moved.len() > 200,
+            "only {} ring pixels shimmered at the ramp's {end} end — the sweep is not \
+             reaching the rings and the trough reading below would be noise",
+            moved.len(),
+        );
+        // How far below its steady self the sweep ever takes a pixel, at the
+        // pixel's own darkest moment of the cycle, averaged over the rings.
+        let (mut dip, mut base) = (0.0, 0.0);
+        for &i in &moved {
+            let steady = lightness(&shot.0[i * 4..i * 4 + 4]);
+            let low = shot
+                .1
+                .iter()
+                .map(|f| lightness(&f[i * 4..i * 4 + 4]))
+                .fold(steady, f64::min);
+            dip += steady - low;
+            base += steady;
+        }
+        let (dip, base) = (dip / moved.len() as f64, base / moved.len() as f64);
+        eprintln!(
+            "the {end} ramp color draws its rings at L* {base:.1}; the sweep's troughs sit \
+             {dip:.2} under that"
+        );
+        let allowed = match *end {
+            "dark" => 1.0,
+            "mid" => 6.0,
+            _ => 17.0,
+        };
+        assert!(
+            dip < allowed,
+            "at the ramp's {end} end the sweep holds {dip:.1} L* of standing shade between \
+             its peaks (the budget there is {allowed}): the troughs are not the steady \
+             layer, which is the promise SHIMMER_CEILING exists to keep",
+        );
+    }
+}
+
 /// A ring keeps its color under a peak — the sweep lights it rather than
 /// bleaching it, and lights it rather than turning it some other color.
 ///
