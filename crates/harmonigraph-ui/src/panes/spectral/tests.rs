@@ -1835,6 +1835,52 @@ fn a_level_number_with_no_room_is_not_written() {
     assert!(!squeezed[1].numbered);
 }
 
+/// `level_label_room` measures a label along whichever screen axis depth
+/// actually runs on: width for a horizontal depth axis, height for a
+/// vertical one.
+///
+/// Isolated from the pane it feeds, because every other level-axis test
+/// builds its `want` off a hand-picked `label_room` and never calls this
+/// function at all — a swap between the two projections still draws some
+/// ladder, just not the one the type actually needs room for, so nothing
+/// else here would catch it.
+#[test]
+fn level_label_room_answers_to_the_axis_the_depth_runs_on() {
+    let ctx = egui::Context::default();
+    let font = egui::FontId::monospace(MARKING_PT);
+    let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+        let painter = ui.painter();
+        let galley =
+            painter.layout_no_wrap("-100".to_owned(), font.clone(), egui::Color32::PLACEHOLDER);
+        let horizontal = axes(reference_pane(), SpectralOrientation::Left);
+        let vertical = axes(reference_pane(), SpectralOrientation::Top);
+        assert!(
+            (horizontal.dir_depth().x.abs() - 1.0).abs() < 1e-4,
+            "Left's depth axis is not horizontal in this test's own terms",
+        );
+        assert!(
+            (vertical.dir_depth().y.abs() - 1.0).abs() < 1e-4,
+            "Top's depth axis is not vertical in this test's own terms",
+        );
+        let room_h = level_label_room(painter, &horizontal, &font);
+        let room_v = level_label_room(painter, &vertical, &font);
+        assert!(
+            (room_h - (galley.size().x + LABEL_GAP_PT * 2.0)).abs() < 1e-3,
+            "a horizontal depth axis measured {room_h}, not the label's width",
+        );
+        assert!(
+            (room_v - (galley.size().y + LABEL_GAP_PT * 2.0)).abs() < 1e-3,
+            "a vertical depth axis measured {room_v}, not the label's height",
+        );
+        assert!(
+            room_h != room_v,
+            "width {} and height {} came out equal, which cannot tell a swap apart",
+            galley.size().x,
+            galley.size().y,
+        );
+    });
+}
+
 /// Whole-song playhead mode rules no levels either — it draws no spectrum for a
 /// level to measure, and a ruling drawn anyway would be baked into every frame
 /// of a `--playhead` export.
