@@ -1518,9 +1518,10 @@ fn the_mark_sheet_reaches_the_slice_whole() {
     );
     // A floor rather than a share of the ring: how much of the band the
     // fixture shows is a setting, and the slice is one wedge of it against
-    // two full annuli. Measured 1532 px of slice against 1836 of ring; a
-    // wiring that blends the slice toward the sheet by anything but the
-    // identity pair reads 0 of slice against that same 1836.
+    // two full annuli. Measured 625 px of slice against 5781 of ring; a
+    // wiring that scaled the band's shape rather than its swing reads 0 of
+    // slice against that same ring count, brightening at every phase and
+    // never dipping.
     assert!(
         dimmed_slice > 200,
         "the mark rings' shimmer dimmed {dimmed_ring} px of ring but only \
@@ -1533,12 +1534,11 @@ fn the_mark_sheet_reaches_the_slice_whole() {
 /// Intensity is the DEPTH of the sweep, and its bottom end is the identity:
 /// at 0 the layer draws exactly as it does with the mode Off, byte for byte.
 ///
-/// That last claim is the one worth pinning. The two terms a band carries
-/// (the added light and the dip in coverage) are scaled off separate
-/// constants, so an intensity that scaled only one of them would still look
-/// like a working bar at every setting a reader would try — and would leave
-/// the layer a permanent 0.82 of its coverage at the bottom of the bar, a
-/// steady dimming with no shimmer in it at all.
+/// That last claim is the one worth pinning: `shimmer_light` is applied
+/// unconditionally rather than behind the mode switch, so the bar's bottom
+/// has to be the exact identity and not nearly one. A layer coming back a
+/// rounding under itself would be a steady dimming with no shimmer in it —
+/// on every frame, at a setting that reads as "off".
 #[test]
 fn shimmer_intensity_scales_the_sweep_and_bottoms_out_at_the_steady_layer() {
     const SIZE: [u32; 2] = [256, 256];
@@ -3003,9 +3003,10 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
     };
     // The sheet running, at one fixed instant. `paint_reach` is where the
     // claim that shimmer keeps every bound exact has to be checked, and it can
-    // only be checked here: the shimmer scales the rings' coverage and the
-    // marked slice's, and a term that ever came out ABOVE 1 would push a layer
-    // past the reach the early-out proved it could not cross — visible as a
+    // only be checked here: the sheet relights the rings and the marked
+    // slice inside their own coverage — `shimmer_terms` never touches
+    // coverage — and a sheet that widened what a layer paints would push it
+    // past the reach the early-out proved it could not cross, visible as a
     // ring clipped flat in the fast pipeline alone, which no other fixture
     // would catch because every other one leaves the pulse Off.
     let shimmering = || {
@@ -3832,5 +3833,3 @@ fn a_label_adds_no_light_through_the_bloom() {
         (at / 4) / SCENE_SIZE[0] as usize,
     );
 }
-
-
