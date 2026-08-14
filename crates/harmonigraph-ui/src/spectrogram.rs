@@ -2738,6 +2738,37 @@ mod tests {
         }
     }
 
+    /// The coarse read, which the settled suite never takes and every wide
+    /// texel of every gesture frame goes through: `bins_for` swaps the wide
+    /// rows' power mean for a MAX over the same run and leaves the narrow
+    /// rows' lerp alone, and the max arm answers the loudest bucket of its
+    /// run.
+    #[test]
+    fn a_coarse_bin_reads_the_max_of_its_run() {
+        let mut db = [0 as BucketDb; SPECTRUM_BINS];
+        db[5] = 40;
+        db[6] = 200;
+        db[7] = 120;
+        assert_eq!(RowRead::Max { from: 5, to: 8 }.of(&db), 200);
+        assert_eq!(RowRead::Max { from: 8, to: 10 }.of(&db), 0, "an empty run is silence");
+
+        // A zoomed-out scale, so rows are wider than buckets: each coarse row
+        // covers exactly the run its settled twin takes the mean over.
+        let wide = PitchScale { min_midi: 16.0, max_midi: 135.0, span: 119.0 };
+        let (settled, coarse) = (bins_for(64, &wide, false), bins_for(64, &wide, true));
+        let mut wide_rows = 0;
+        for (s, c) in settled.iter().zip(&coarse) {
+            match (s.read, c.read) {
+                (RowRead::Mean { from: a, to: b }, RowRead::Max { from: x, to: y }) => {
+                    assert_eq!((a, b), (x, y), "the coarse read covers the same run");
+                    wide_rows += 1;
+                }
+                (a, b) => assert!(a == b, "a narrow row keeps its lerp either way"),
+            }
+        }
+        assert!(wide_rows > 0, "a zoomed-out scale must produce wide rows");
+    }
+
     /// The gesture detector: a style CHANGE opens a gesture, the gesture holds
     /// for [`STYLE_SETTLE`] past the last change, and first sight of a surface
     /// is a fresh pane rather than a gesture — so an opened editor draws sharp
