@@ -125,6 +125,19 @@ impl StyleMotion {
     /// at full height straight away.
     pub(crate) fn observe(slot: &mut Option<StyleMotion>, style: &ColumnStyle, t: f64) -> bool {
         match slot {
+            // A clock reading EARLIER than the stamp is a new egui context —
+            // the editor window creates one per open and its input clock
+            // starts at zero, while this slot lives on `SharedState`, which
+            // does not. The stamp is from a clock that no longer exists, so
+            // answering from it would hold the settle window shut until the
+            // new clock catches the old reading: minutes of coarse picture
+            // for reopening the editor. Re-stamp as settled instead — a
+            // reopen is first sight on this clock, not a gesture.
+            Some(m) if t < m.changed_at => {
+                m.style = style.clone();
+                m.changed_at = t - STYLE_SETTLE;
+                false
+            }
             Some(m) if m.style == *style => t - m.changed_at < STYLE_SETTLE,
             Some(m) => {
                 m.style = style.clone();
@@ -2747,6 +2760,22 @@ mod tests {
         );
         assert!(!StyleMotion::observe(&mut slot, &b, 20.0), "quiet frames stay settled");
         assert!(StyleMotion::observe(&mut slot, &a, 21.0), "the next change opens a new one");
+
+        // A fresh egui context restarts the input clock at zero while the slot
+        // lives on (the editor window recreates its context per open; `motion`
+        // sits on SharedState, which does not). A stamp from the old clock then
+        // reads as the future, and `t - changed_at` goes negative — which
+        // without the restart guard counts as inside the settle window until
+        // the NEW clock catches the old stamp: minutes of coarse picture for
+        // reopening the editor.
+        let mut slot = Some(StyleMotion { style: a.clone(), changed_at: 600.0 });
+        assert!(
+            !StyleMotion::observe(&mut slot, &a, 0.5),
+            "a restarted clock reads as settled, not as ten minutes of gesture",
+        );
+        // And the slot is re-stamped onto the new clock: an actual change a
+        // moment later still opens a gesture.
+        assert!(StyleMotion::observe(&mut slot, &b, 0.6), "the new clock's changes still count");
     }
 
     /// A pitch gesture — the range zoomed or panned a frame at a time — must
