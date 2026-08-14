@@ -1445,11 +1445,14 @@ fn the_shimmers_speed_and_width_reach_the_picture_and_only_speed_carries_the_clo
 /// The mark rings' sweep reaches the slice WHOLE — both halves of a band's
 /// swing, not just the bright one.
 ///
-/// A band is an exposure that runs above AND below the layer's own color
-/// (`shimmer_light`), and the dark half is what gives it a body to travel
-/// through. The ring takes both. The slice that ring names has to take both as
-/// well, or one mark is lit by two different lights: the annulus dipping
-/// between bands while the wedge it points at only ever brightens.
+/// A band is an exposure around the layer's own color (`shimmer_light`): the
+/// whole swing runs upward where the ceiling leaves it room, and slides below
+/// the layer's color where the swing outruns that room — which this fixture's
+/// ring colors do, so the sheet here has a dark half, and the dark half is
+/// what gives it a body to travel through. The ring takes both. The slice that
+/// ring names has to take both as well, or one mark is lit by two different
+/// lights: the annulus dipping between bands while the wedge it points at
+/// only ever brightens.
 ///
 /// The dip is the half a plausible wiring drops, which is why it is measured
 /// rather than assumed. The slice takes the sheet through a SWING scaled by how
