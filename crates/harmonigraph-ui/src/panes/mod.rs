@@ -214,10 +214,11 @@ impl egui_dock::TabViewer for Viewer<'_> {
         egui::Id::new(("lattice-pane", *tab))
     }
 
-    /// The picture panes never scroll. Both fill their body exactly — the
-    /// lattice with a wgpu callback, the analyzer with a painter over the
-    /// whole rect — so there is nothing under the edge to reach, and a scroll
-    /// area around them can only shift a picture that is meant to sit still.
+    /// The picture panes never scroll. Each fills its body exactly — the
+    /// lattice with a wgpu callback, the analyzer and the spiral with a
+    /// painter over the whole rect — so there is nothing under the edge to
+    /// reach, and a scroll area around them can only shift a picture that is
+    /// meant to sit still.
     /// Settings panes keep the VERTICAL bar only: they are lists, and a short
     /// dock column has to be able to reach the end of one.
     ///
