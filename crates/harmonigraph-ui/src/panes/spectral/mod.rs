@@ -32,30 +32,33 @@ use gestures::{drag_split, drag_zoom};
 use egui::Sense;
 
 /// How faint a ruling is drawn against [`theme::hairline`], the pane's
-/// quietest line already: a frequency decade boundary first, every other
-/// ruling — the rest of the frequency ladder, and the whole of the volume grid
-/// crossing it — second.
+/// quietest line already: the marks that anchor a ladder first, the steps
+/// between them second.
 ///
-/// Two weights rather than one, and the DECADE is what earns the stronger one.
-/// A log axis draws every decade at the same length, so nothing in the spacing
-/// says that the step size changes tenfold at 100 Hz and again at 1 kHz — mark
-/// those three and the picture reads as one ruler repeated, rather than as
-/// lines that inexplicably bunch up. The numbered marks do not need it: they
-/// carry a number, which is a stronger signal than any weight of line.
+/// Both grids take the stronger ink for the same job and reach it from opposite
+/// directions. On the FREQUENCY axis it is the decade boundary: a log axis
+/// draws every decade at the same length, so nothing in the spacing says the
+/// step size changes tenfold at 100 Hz and again at 1 kHz — mark those three and
+/// the picture reads as one ruler repeated rather than as lines that
+/// inexplicably bunch up. Its numbered marks do not need it, because the number
+/// is written ON the ruling and points at nothing else.
 ///
-/// That same argument is what leaves the volume grid on ONE weight. It is even
-/// in the unit its axis is linear in, so there is no step-size change for a
-/// heavier line to disclose, and the two grids drawn at one weight read as a
-/// single mesh under the picture rather than as two rulers arguing about which
-/// is the measurement.
+/// On the LEVEL axis it is exactly the numbered rulings that take it, because
+/// there the number is written BESIDE its line rather than across it, and the
+/// lines it is not written beside are identical to the one it is. A number set
+/// against every second or fifth ruling then has to be attributed by counting,
+/// and counting is the reading a grid exists to remove — most of all where the
+/// type is large against the separation, which is the case the grid is already
+/// coarsening for (see [`NUMBERED_LINE_SHARE`](axes)). Inking the named line
+/// answers it outright.
 ///
 /// Both stay quieter than the now-line, which is the one line on this pane that
 /// divides two pictures rather than measuring one.
 const RULING_FADE: (f32, f32) = (0.85, 0.45);
 
-/// The closest two level numbers may be set, centre to centre, in points along
-/// the DEPTH axis — the axis they are stacked on, and the one
-/// [`level_grid`] thins them against.
+/// The closest two level numbers may be set, in points along the DEPTH axis —
+/// the axis they are stacked on, and the one [`level_grid`] thins both them and
+/// its rulings against.
 ///
 /// Measured off the type about to draw them rather than assumed, because both
 /// things it turns on move. The markings follow the pane's size; and which way
@@ -70,10 +73,45 @@ const RULING_FADE: (f32, f32) = (0.85, 0.45);
 /// Plus [`LABEL_GAP_PT`] on each side, which is the reach of the halo every
 /// label here carries — the rims are what touch first, not the ink.
 fn level_label_room(painter: &egui::Painter, axes: &Axes, font: &egui::FontId) -> f32 {
+    level_reach(painter, axes, font, "-100") + LABEL_GAP_PT * 2.0
+}
+
+/// How far a level number reaches along the DEPTH axis — its width where that
+/// axis runs horizontally, its height where it runs down the pane.
+fn level_reach(painter: &egui::Painter, axes: &Axes, font: &egui::FontId, label: &str) -> f32 {
     let galley =
-        painter.layout_no_wrap("-100".to_owned(), font.clone(), egui::Color32::PLACEHOLDER);
+        painter.layout_no_wrap(label.to_owned(), font.clone(), egui::Color32::PLACEHOLDER);
     let (size, depth) = (galley.size(), axes.dir_depth());
-    size.x * depth.x.abs() + size.y * depth.y.abs() + LABEL_GAP_PT * 2.0
+    size.x * depth.x.abs() + size.y * depth.y.abs()
+}
+
+/// Which side of its ruling a level number is set on, as the depth offset
+/// [`Axes::text_anchor`] takes.
+///
+/// Back along the screen's own axis by preference ([`Axes::depth_back`]), which
+/// is what puts the END of the number against the line rather than the minus
+/// sign that opens it — and flipped to the other side where that end of the
+/// level axis is too near to hold the digits. Only ever the extreme ruling in
+/// the preferred direction can flip, and which extreme that is turns with the
+/// layout: overhanging the ceiling end it would cross into the frequency
+/// numbers riding there, and the floor end, over the now-line and into the
+/// heatmap.
+///
+/// `level` is the ruling's own `0..1` place on the axis, `level_len` the axis
+/// in points, and `reach` what the number spans along it.
+fn level_label_into(axes: &Axes, joined: bool, level: f32, level_len: f32, reach: f32) -> f32 {
+    let into = LABEL_GAP_PT * axes.depth_back();
+    // Growing along +depth runs toward the FLOOR where the spectrum is mirrored
+    // to meet the now-line, and toward the ceiling where it stands alone.
+    let clear = |into: f32| {
+        let toward_ceiling = if joined { into < 0.0 } else { into > 0.0 };
+        if toward_ceiling { 1.0 - level } else { level }
+    };
+    if clear(into) * level_len < reach && clear(-into) * level_len >= reach {
+        -into
+    } else {
+        into
+    }
 }
 
 /// Three views of the same music over one shared MIDI-pitch axis: the
@@ -256,9 +294,10 @@ pub(crate) fn spectral_pane(
         // would be a statement about loudness laid across a heatmap that reads
         // its own.
         for level in &levels {
+            let fade = if level.numbered { RULING_FADE.0 } else { RULING_FADE.1 };
             painter.line_segment(
                 axes.across_pitch(level_d(level.level)),
-                egui::Stroke::new(1.0, theme::hairline().gamma_multiply(RULING_FADE.1)),
+                egui::Stroke::new(1.0, theme::hairline().gamma_multiply(fade)),
             );
         }
     }
@@ -498,20 +537,32 @@ pub(crate) fn spectral_pane(
     // meet only in the corner between them, and a number there is dropped by
     // `level_grid`'s own clearance rather than allowed to overlap.
     //
-    // Set ON their rulings rather than beside them (the zero `into`, which
-    // `text_anchor` reads as centred): the ladder is even, so a number between
-    // two lines belongs to neither by any spacing argument, where a number
-    // straddling its own line can only be read one way.
-    let level_facing = axes.dir_pitch();
+    // Set BESIDE their rulings, and on the side that puts the end of the number
+    // against the line rather than the minus sign that opens it — so what the
+    // reader's eye meets at the line is a digit, and the number reads as
+    // pointing at it. That is a fact about type rather than about this pane's
+    // axes (see `Axes::depth_back`), which is why the offset is taken back along
+    // the SCREEN and holds through all four turns.
+    //
+    // Straddling the line is what this replaces: the ruling ran through the
+    // middle of the digits, cutting the number it was supposed to be named by.
+    let level_edge = axes.dir_pitch();
+    let level_depth = axes.dir_depth();
     for level in levels.iter().filter(|level| level.numbered) {
         let label = format!("{}", level.db);
-        let (pos, align) =
-            axes.text_anchor(1.0, level_d(level.level), -LABEL_INSET_PT, 0.0);
-        // The inset a reader measures is from the pane's edge to the digits,
-        // so the font's air on that side comes off it — the same correction
-        // the frequency labels make against their rulings.
-        let inset = crate::text::ink_inset(&painter, &label, &marking_font, level_facing);
-        let pos = pos + level_facing * inset;
+        let reach = level_reach(&painter, &axes, &marking_font, &label);
+        let into = level_label_into(&axes, joined, level.level, level_len, reach);
+        let (pos, align) = axes.text_anchor(1.0, level_d(level.level), -LABEL_INSET_PT, into);
+        // Two corrections, on the two axes the anchor offsets along: the inset a
+        // reader measures runs from the pane's edge to the digits, and the gap
+        // from the ruling to them. Both are to the INK, so the font's own air on
+        // each facing edge comes back off — the same correction the frequency
+        // labels make against their rulings, on one axis more.
+        let toward_line = -level_depth * into.signum();
+        let pos = pos
+            + level_edge * crate::text::ink_inset(&painter, &label, &marking_font, level_edge)
+            + toward_line
+                * crate::text::ink_inset(&painter, &label, &marking_font, toward_line);
         labels.text(
             &painter,
             pos,

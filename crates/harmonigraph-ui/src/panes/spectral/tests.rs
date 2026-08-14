@@ -952,9 +952,9 @@ fn a_ruling_lands_where_the_curve_reaching_that_level_lands() {
 /// closing to a wash.
 #[test]
 fn the_volume_grid_follows_the_level_zoom_in_both_directions() {
-    let gaps = |cfg: &SpectrumConfig, level_len: f32| -> Vec<f32> {
+    let gaps = |cfg: &SpectrumConfig, level_len: f32, room: f32| -> Vec<f32> {
         let (floor, ceiling) = level_window(cfg);
-        level_grid(cfg, level_len, 60.0)
+        level_grid(cfg, level_len, room)
             .windows(2)
             .map(|w| (w[1].db - w[0].db) / (ceiling - floor) * level_len)
             .collect()
@@ -963,39 +963,49 @@ fn the_volume_grid_follows_the_level_zoom_in_both_directions() {
     // Zoomed IN to the narrowest window the Level bar allows. A 10 dB step has
     // one line to give here, which brackets the picture instead of measuring it.
     let tight = level_cfg(-32.0, -20.0);
-    assert_eq!(ruled_db(&tight, 40.0 * crate::LEVEL_RANGE_MIN_SPAN / 12.0, 60.0).len(), 1,
-        "a 40-point axis has room for nothing finer");
+    assert_eq!(ruled_db(&tight, 40.0, 60.0).len(), 1, "a 40-point axis has room for nothing finer");
     let zoomed = ruled_db(&tight, 400.0, 60.0);
     assert_eq!(zoomed, vec![-30.0, -28.0, -26.0, -24.0, -22.0], "the ladder did not subdivide");
 
     // Zoomed OUT to the whole legal range on a short analyzer, where a 10 dB
-    // step would rule ten lines into 100 points.
+    // step would rule ten lines into 200 points.
     let wide = level_cfg(-100.0, 0.0);
-    assert_eq!(ruled_db(&wide, 100.0, 60.0), vec![-80.0, -60.0, -40.0, -20.0], "nothing coarsened");
+    assert_eq!(ruled_db(&wide, 200.0, 60.0), vec![-80.0, -60.0, -40.0, -20.0], "nothing coarsened");
 
-    // And whatever it settled on, the lines are far enough apart to read as
-    // lines and close enough to measure between — at every window the two
-    // controls can reach.
+    // ...and the same window coarsens FURTHER for larger type on the same axis,
+    // which is the half of "too big against the separation" the numbers cannot
+    // fix by thinning.
+    assert_eq!(ruled_db(&wide, 200.0, 140.0), vec![-50.0], "the type grew and the grid did not");
+
+    // Whatever it settled on, the lines are far enough apart to read as lines —
+    // both absolutely and against the type — and close enough to measure
+    // between, at every window the two controls can reach.
     for floor in [-100.0, -60.0, -32.0, -12.5] {
         for ceiling in [-20.0, -0.5, 0.0] {
             let cfg = level_cfg(floor, ceiling);
             for level_len in [40.0, 100.0, 300.0, 900.0] {
-                for gap in gaps(&cfg, level_len) {
-                    assert!(
-                        gap >= MIN_LEVEL_GAP_PT,
-                        "{floor}..{ceiling} on {level_len} points ruled {gap} points apart",
-                    );
-                }
-                // The sparse bound binds only where the ladder has a finer rung
-                // left to take: below 1 dB there is nothing to subdivide to.
-                let grid = level_grid(&cfg, level_len, 60.0);
-                let step = grid.windows(2).map(|w| w[1].db - w[0].db).next();
-                if step.is_some_and(|s| s > LEVEL_STEPS_DB[0]) {
-                    for gap in gaps(&cfg, level_len) {
+                for room in [20.0, 60.0, 140.0] {
+                    let closest = MIN_LEVEL_GAP_PT.max(room * NUMBERED_LINE_SHARE);
+                    for gap in gaps(&cfg, level_len, room) {
                         assert!(
-                            gap <= MAX_LEVEL_GAP_PT,
-                            "{floor}..{ceiling} on {level_len} points left a {gap}-point hole",
+                            gap >= closest,
+                            "{floor}..{ceiling} on {level_len} points at room {room} \
+                             ruled {gap} points apart",
                         );
+                    }
+                    // The sparse bound binds only where the ladder has a finer
+                    // rung left to take: below 1 dB there is nothing to
+                    // subdivide to, and the crowding bound wins where they
+                    // disagree.
+                    let grid = level_grid(&cfg, level_len, room);
+                    let step = grid.windows(2).map(|w| w[1].db - w[0].db).next();
+                    if step.is_some_and(|s| s > LEVEL_STEPS_DB[0]) && closest <= MAX_LEVEL_GAP_PT {
+                        for gap in gaps(&cfg, level_len, room) {
+                            assert!(
+                                gap <= MAX_LEVEL_GAP_PT.max(closest),
+                                "{floor}..{ceiling} on {level_len} points left a {gap}-point hole",
+                            );
+                        }
                     }
                 }
             }
@@ -1016,10 +1026,12 @@ fn the_numbers_are_as_dense_as_the_type_allows() {
     assert_eq!(numbered_db(&cfg, 400.0, 60.0), vec![-50.0, -40.0, -30.0]);
 
     // Squeezed, the numbers thin and the rulings do not — a grid that kept its
-    // lines and dropped every other number, rather than a coarser grid.
-    let cramped = numbered_db(&cfg, 200.0, 80.0);
+    // lines and dropped every other number, rather than a coarser grid. The
+    // pair that survives is counted from the BOTTOM, so the lowest line keeps
+    // its number; numbering the round multiples of 20 would have named -40 and
+    // left the bottom of the scale bare.
     assert_eq!(ruled_db(&cfg, 200.0, 80.0), vec![-50.0, -40.0, -30.0], "the lines coarsened too");
-    assert_eq!(cramped, vec![-40.0], "the numbers did not thin");
+    assert_eq!(numbered_db(&cfg, 200.0, 80.0), vec![-50.0, -30.0], "the numbers did not thin");
 
     // On an axis long enough that the lines subdivide to fives, the numbers
     // follow them down rather than staying on the tens: there is room, and a
@@ -1034,24 +1046,39 @@ fn the_numbers_are_as_dense_as_the_type_allows() {
     assert_eq!(numbered_db(&tight, 400.0, 60.0), vec![-30.0, -28.0, -26.0, -24.0, -22.0]);
 }
 
-/// A number is only ever written beside a line that was drawn, and never
-/// closer to the next number than the type it is set in.
+/// A number is only ever written beside a line that was drawn, is never closer
+/// to the next number than the type it is set in — and the LOWEST line always
+/// carries one.
 ///
-/// Thinning by NUMBERING one line in two or five is what buys that: it is the
-/// one way of making room that cannot leave a number sitting on nothing.
+/// The bottom of the scale is the one level a reader cannot infer from the
+/// others: the floor itself is not ruled, so every other number is measured
+/// from somewhere, and where the numbers thin is exactly where the axis most
+/// needs its bottom stated. Swept across every window the two controls reach,
+/// at every type size, because "always" is the claim.
 #[test]
-fn a_level_number_always_has_its_own_ruling() {
+fn the_lowest_ruling_always_carries_a_number() {
     for (floor, ceiling) in [(-60.0, -20.0), (-100.0, 0.0), (-32.0, -20.0), (-63.0, -21.0)] {
         let cfg = level_cfg(floor, ceiling);
         for level_len in [40.0, 100.0, 300.0, 900.0] {
             for room in [20.0, 60.0, 140.0] {
                 let grid = level_grid(&cfg, level_len, room);
+                let Some(lowest) = grid.first() else { continue };
+                assert!(
+                    lowest.numbered,
+                    "{floor}..{ceiling} on {level_len} points at room {room} left its \
+                     lowest ruling ({} dB) bare",
+                    lowest.db,
+                );
+
                 let ruled: Vec<f32> = grid.iter().map(|r| r.db).collect();
                 let numbered: Vec<f32> =
                     grid.iter().filter(|r| r.numbered).map(|r| r.db).collect();
                 for db in &numbered {
                     assert!(ruled.contains(db), "{db} dB was numbered and never ruled");
                 }
+                // Thinning by NUMBERING one line in two or five is what buys
+                // that: it is the one way of making room that cannot leave a
+                // number sitting on nothing.
                 let (floor, ceiling) = level_window(&cfg);
                 let apart = |a: f32, b: f32| (b - a) / (ceiling - floor) * level_len;
                 for pair in numbered.windows(2) {
@@ -1061,16 +1088,6 @@ fn a_level_number_always_has_its_own_ruling() {
                         pair[0],
                         pair[1],
                         apart(pair[0], pair[1]),
-                    );
-                }
-                // ...and no number hangs off either end of the axis it
-                // measures: the ceiling end is where the frequency numbers
-                // ride, and the floor end is the now-line.
-                for db in &numbered {
-                    let clear = apart(floor, *db).min(apart(*db, ceiling));
-                    assert!(
-                        clear >= room * 0.5,
-                        "{db} dB sits {clear} points from an end of the axis",
                     );
                 }
             }
@@ -1675,6 +1692,111 @@ fn the_volume_rulings_cross_the_pitch_axis_under_the_spectrum() {
     }
 }
 
+/// A numbered level is inked stronger than the steps between, and the ruling
+/// nearest the FLOOR is always one of them.
+///
+/// Both halves are about the same ambiguity. A level number is set beside its
+/// line rather than across it, so on a ladder of identical lines it has to be
+/// attributed by counting — the ink is what settles which line was named. And
+/// the bottom of the scale is the one level nothing else on the pane states,
+/// since the floor is not ruled; read through the ink, this is what says the
+/// pane never leaves it unnamed.
+///
+/// Checked in every orientation because which end of the depth axis the floor
+/// is on flips with the layout — the spectrum mirrors to meet the now-line —
+/// so a rule written against a screen side would name the ceiling in half of
+/// them.
+#[test]
+fn the_lowest_level_is_inked_as_a_numbered_one() {
+    for orientation in EVERY_ORIENTATION {
+        let cfg = SpectrumConfig { orientation, ..Default::default() };
+        let rect = reference_pane();
+        let axes = Axes::new(rect, &cfg);
+        let split = spectrum_share(&cfg);
+
+        let (levels, _) = painted_levels(rect, cfg);
+        assert!(!levels.is_empty(), "{orientation:?} ruled no levels at all");
+        assert!(
+            levels.iter().any(|ruling| ruling.strong),
+            "{orientation:?}: no level was inked as a numbered one",
+        );
+
+        // The floor is where the curve stands — depth `split` mirrored, or 0
+        // standing alone — so the lowest level is the ruling furthest from the
+        // end its peaks reach.
+        let joined = split < 1.0;
+        let floor_end = if joined { split } else { 0.0 };
+        let lowest = levels
+            .iter()
+            .min_by(|a, b| {
+                let depth = |r: &PaintedRuling| (axes.depth_at(r.points[0]) - floor_end).abs();
+                depth(a).total_cmp(&depth(b))
+            })
+            .unwrap();
+        assert!(
+            lowest.strong,
+            "{orientation:?}: the ruling nearest the floor was inked as an unnumbered step",
+        );
+    }
+}
+
+/// A level number is set against the END of its own digits — back along the
+/// screen, so the reader meets a digit at the line and not the minus sign that
+/// opens the number.
+///
+/// A statement about TYPE, not about the axes, which is what makes it the one
+/// placement on this pane that does not turn with the layout: text runs left to
+/// right and sits on its baseline in all four. So the number grows up-and-left
+/// of its ruling in every orientation, where anything read off the level axis
+/// would put it on the loud side in two of them and the quiet side in the other
+/// two.
+#[test]
+fn a_level_number_is_set_against_the_end_of_its_digits() {
+    for orientation in EVERY_ORIENTATION {
+        let axes = axes(reference_pane(), orientation);
+        // A ruling in the middle of the axis, where neither end is near enough
+        // to force the number to the other side of its line.
+        let into = level_label_into(&axes, true, 0.5, 400.0, 40.0);
+        let grows = axes.dir_depth() * into;
+        assert!(
+            grows.x <= 0.0 && grows.y <= 0.0 && grows.length() > 0.0,
+            "{orientation:?}: the number grows {grows:?}, not back along the screen",
+        );
+    }
+}
+
+/// ...and flips to the other side of its line rather than hang off the end of
+/// the axis it measures.
+///
+/// Which ruling is at risk turns with the layout, because the spectrum mirrors
+/// to meet the now-line: the number grows toward the ceiling in half the
+/// orientations and toward the floor in the other half, and an overhang lands
+/// in the frequency numbers at one end and over the now-line at the other.
+#[test]
+fn a_level_number_with_no_room_flips_to_the_other_side_of_its_line() {
+    for orientation in EVERY_ORIENTATION {
+        let axes = axes(reference_pane(), orientation);
+        for joined in [true, false] {
+            let middle = level_label_into(&axes, joined, 0.5, 400.0, 40.0);
+            // The two extremes of the axis; whichever one the number grows
+            // toward is the one with nothing left to hold it.
+            let (low, high) = (
+                level_label_into(&axes, joined, 0.02, 400.0, 40.0),
+                level_label_into(&axes, joined, 0.98, 400.0, 40.0),
+            );
+            assert!(
+                (low == -middle) ^ (high == -middle),
+                "{orientation:?} joined={joined}: {} of the two ends flipped",
+                u8::from(low == -middle) + u8::from(high == -middle),
+            );
+            // A number that fits on the preferred side never flips, however
+            // close to an end it sits — the flip is about room, not position.
+            assert_eq!(level_label_into(&axes, joined, 0.02, 400.0, 1.0), middle);
+            assert_eq!(level_label_into(&axes, joined, 0.98, 400.0, 1.0), middle);
+        }
+    }
+}
+
 /// Whole-song playhead mode rules no levels either — it draws no spectrum for a
 /// level to measure, and a ruling drawn anyway would be baked into every frame
 /// of a `--playhead` export.
@@ -1808,14 +1930,18 @@ fn painted_rulings(
     (rulings, slabs)
 }
 
-/// The same frame's LEVEL rulings, in paint order.
+/// The same frame's LEVEL rulings, in paint order. `strong` is the ink a
+/// NUMBERED level takes — the only thing in the shape list that says which
+/// rulings the pane wrote a number beside, since the numbers themselves leave
+/// it as one opaque text callback.
 fn painted_levels(rect: egui::Rect, cfg: SpectrumConfig) -> (Vec<PaintedRuling>, Vec<usize>) {
+    let strong = theme::hairline().gamma_multiply(RULING_FADE.0);
     let axes = Axes::new(rect, &cfg);
     let (mut levels, mut slabs) = (Vec::new(), Vec::new());
     for (i, shape) in paint_tone(rect, cfg).into_iter().enumerate() {
         let egui::Shape::LineSegment { points, stroke } = shape else { continue };
         if is_ruling(stroke.color) && !rules_a_frequency(&axes, points) {
-            levels.push(PaintedRuling { index: i, points, strong: false });
+            levels.push(PaintedRuling { index: i, points, strong: stroke.color == strong });
         } else if stroke.color.a() == 210 {
             slabs.push(i);
         }

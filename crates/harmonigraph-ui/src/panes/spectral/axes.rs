@@ -346,6 +346,25 @@ impl Axes {
         (self.at(0.0, 1.0) - self.at(0.0, 0.0)).normalized()
     }
 
+    /// Which sign of a depth offset runs BACK along the screen's own axis —
+    /// leftward where depth is horizontal, upward where it is vertical.
+    ///
+    /// The one thing on this pane that has to be said about the SCREEN rather
+    /// than about an axis, and it is here for that reason rather than in the
+    /// layer that wants it. Type runs left to right and sits on its baseline
+    /// however the pane has been turned, so "set the end of the number against
+    /// its line, not the minus sign that opens it" names a screen direction and
+    /// nothing else — where every other placement on this pane is a statement
+    /// about pitch or depth and turns with them.
+    pub(super) fn depth_back(&self) -> f32 {
+        let depth = self.dir_depth();
+        if depth.x + depth.y > 0.0 {
+            -1.0
+        } else {
+            1.0
+        }
+    }
+
     /// A line clean across the pitch axis at depth `d` — the shape of the
     /// roll's "now" line and the divider.
     pub fn across_pitch(&self, d: f32) -> [egui::Pos2; 2] {
@@ -398,12 +417,6 @@ impl Axes {
     /// growing in those same directions. One helper covers both
     /// orientations: the growth direction is read off the axes rather
     /// than case-matched per side.
-    ///
-    /// A ZERO offset centres the label on that axis instead of growing either
-    /// way — what a label naming the line it sits on wants, and the level
-    /// numbers are set that way (see [`level_grid`]). `f32::signum` cannot say
-    /// it, since it answers +1 for +0.0; the sign is taken by hand for exactly
-    /// that reason.
     pub(super) fn text_anchor(
         &self,
         p: f32,
@@ -413,8 +426,7 @@ impl Axes {
     ) -> (egui::Pos2, egui::Align2) {
         let (pu, du) = (self.dir_pitch(), self.dir_depth());
         let pos = self.at(p, d) + pu * along + du * into;
-        let sign = |v: f32| if v == 0.0 { 0.0 } else { v.signum() };
-        let grow = pu * sign(along) + du * sign(into);
+        let grow = pu * along.signum() + du * into.signum();
         let axis = |v: f32| {
             if v > 0.5 {
                 egui::Align::Min
@@ -599,7 +611,8 @@ pub(super) const LEVEL_STEPS_DB: [f32; 7] = [1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 10
 /// needs room to be read.
 pub(super) const LEVEL_STEP: usize = 3;
 
-/// The closest two level rulings may be drawn, in points.
+/// The closest two level rulings may be drawn, in points — the ABSOLUTE floor,
+/// under the type-relative one below.
 ///
 /// Wider air than the frequency ladder's [`MIN_RULING_GAP_PT`], and the reason
 /// is what the two grids are FOR. Frequency rulings crowd at the top of every
@@ -610,6 +623,22 @@ pub(super) const LEVEL_STEP: usize = 3;
 /// simply a mesh laid across the picture, closing into texture. Coarsening to
 /// the next rung keeps it a set of lines.
 pub(super) const MIN_LEVEL_GAP_PT: f32 = 12.0;
+
+/// What share of a NUMBER's own room two rulings are also held apart by, on top
+/// of [`MIN_LEVEL_GAP_PT`].
+///
+/// This is what makes the grid coarsen as the type grows and not only as the
+/// pane shrinks, and the two are the same problem: what makes a number hard to
+/// attribute to a line is its size against the line SEPARATION, so the
+/// separation has to answer to the size. A grid that only watched the pane
+/// would rule tens under numbers set large enough to span three of them.
+///
+/// A half, so wherever the ladder has a rung at twice the step — which is every
+/// rung of a 1-2-5 ladder except the 2 — the numbers land on every ruling or
+/// every second one, and at most one unnumbered line stands between two
+/// numbers. That is the ambiguity the stronger ink then settles outright (see
+/// `RULING_FADE`); past it the grid coarsens instead.
+pub(super) const NUMBERED_LINE_SHARE: f32 = 0.5;
 
 /// The furthest apart two level rulings may stand before the grid is
 /// subdivided, in points.
@@ -642,9 +671,15 @@ pub(super) struct LevelRuling {
     pub(super) level: f32,
     /// The level itself, in the dB the Level bar is quoted in.
     pub(super) db: f32,
-    /// Carries a number. A coarser multiple of the ruling step, so the numbers
-    /// thin on their own account without ever leaving one written beside no
-    /// line.
+    /// Carries a number — and, because it does, the stronger of the pane's two
+    /// ruling inks.
+    ///
+    /// Counted UP FROM THE LOWEST ruling rather than off the round dB values,
+    /// so the bottom of the scale is always named: it is the one level a reader
+    /// cannot infer from the others, since the floor itself is not ruled and
+    /// every number above it is measured from somewhere. Numbering the round
+    /// multiples instead leaves the lowest line bare exactly when the numbers
+    /// thin, which is when the axis most needs its bottom stated.
     pub(super) numbered: bool,
 }
 
@@ -655,14 +690,21 @@ pub(super) struct LevelRuling {
 ///
 /// `level_len` is what the LEVEL axis spans in points — the spectrum's depth
 /// budget, not the whole depth axis — and `label_room` the closest two numbers
-/// may be set centre to centre, which the pane measures off the type it is about
-/// to draw them in. Both densities are decided from those two lengths alone, so
-/// the grid answers a pane resize and a Level zoom by the same rule.
+/// may be set, which the pane measures off the type it is about to draw them in.
+/// BOTH densities are decided from those two lengths alone, so the grid answers
+/// a pane resize, a Level zoom and a Marking-size change by one rule. The
+/// rulings answer to the type as well as to the pane (see
+/// [`NUMBERED_LINE_SHARE`]): a number is hard to attribute when it is large
+/// against the line separation, and coarsening the lines is the half of that the
+/// numbers cannot fix for themselves.
 ///
 /// The ENDS are not ruled. Both are already drawn, and by lines that say more
 /// than a ruling would: the floor is where every quiet bucket stands, which
 /// joined is the now-line itself, and the ceiling is the edge the pane stops at.
-/// A ruling on either is a second line over a line already there.
+/// A ruling on either is a second line over a line already there. Which is why
+/// the LOWEST ruling — not the floor — is what always carries a number: it is
+/// the lowest level the grid actually draws, and the bottom of a scale that goes
+/// unstated is the one reading no other number supplies.
 ///
 /// What the numbers mean is the window's own dB, which is the reading the Level
 /// bar is quoted in and the one the curve is drawn against. With a Tilt dialled
@@ -689,8 +731,9 @@ pub(super) fn level_grid(
     // Down the ladder while the rulings crowd, then up it while they stand too
     // far apart. Only one of the two can run: the gap grows with the rung, so
     // reaching the minimum leaves it under the maximum by construction.
+    let closest = MIN_LEVEL_GAP_PT.max(label_room * NUMBERED_LINE_SHARE);
     let mut rung = LEVEL_STEP;
-    while rung + 1 < LEVEL_STEPS_DB.len() && gap(LEVEL_STEPS_DB[rung]) < MIN_LEVEL_GAP_PT {
+    while rung + 1 < LEVEL_STEPS_DB.len() && gap(LEVEL_STEPS_DB[rung]) < closest {
         rung += 1;
     }
     while rung > 0 && gap(LEVEL_STEPS_DB[rung]) > MAX_LEVEL_GAP_PT {
@@ -722,16 +765,21 @@ pub(super) fn level_grid(
     // the window has been dragged to, rather than a phase of it.
     let first = (floor / step).floor() as i32 + 1;
     let last = ((ceiling / step).ceil() as i32 - 1).min(first + MAX_LEVEL_RULINGS - 1);
+    // ...and the numbers every `stride` rulings COUNTED UP FROM THE LOWEST, so
+    // the bottom of the scale is named whatever the window has been dragged to.
+    // Numbering the round multiples of `labels` instead reads the same on a
+    // window whose floor happens to sit on the ladder and leaves the lowest line
+    // bare on every other one — the -60..-20 default among them, where numbers
+    // every 20 dB would name -40 and nothing else.
+    let stride = (labels / step).round().max(1.0) as i32;
     (first..=last)
         .map(|k| {
             let db = k as f32 * step;
-            // A number is also dropped where its own body would hang off the
-            // end of the axis it is measuring. The ceiling end is where the
-            // frequency numbers ride (see `label_anchor`) and the floor end is
-            // the now-line, so an overhang is not empty margin at either.
-            let numbered = ((db / labels) - (db / labels).round()).abs() < 1e-3
-                && (ceiling - db).min(db - floor) / span * level_len >= label_room * 0.5;
-            LevelRuling { level: (db - floor) / span, db, numbered }
+            LevelRuling {
+                level: (db - floor) / span,
+                db,
+                numbered: (k - first) % stride == 0,
+            }
         })
         .collect()
 }
