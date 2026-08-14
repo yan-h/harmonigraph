@@ -806,10 +806,17 @@ fn default_ui_scale() -> f32 {
 /// A bump costs the whole blob, not the dock alone: `load_persist` refuses
 /// anything below this outright, so camera, view, spectrum and render settings
 /// all fall back to defaults with it. That is what lets a format change be
-/// made outright rather than shimmed, and it is why raising this means
-/// changing the plugin ids again (see [`SharedState::load_persist`], which
-/// sets out what the id change bought and which of its callers the argument
-/// covers).
+/// made outright rather than shimmed.
+///
+/// What it costs is a real project's settings, and the cost is paid rather
+/// than avoided. The plugin ids gate everything below version 2 — a project
+/// that old names an identity this binary does not claim, so its state never
+/// arrives — but NOTHING gates a blob one bump behind, which is what a project
+/// saved by the previous build carries. Changing the ids again would buy that
+/// gate back at the price of orphaning every project that loads the plugin,
+/// which is the worse trade; the refusal is made audible instead. See
+/// [`SharedState::load_persist`], which sets out both halves and which of its
+/// callers each covers.
 ///
 /// 2: Tuning and Frame merged into one tab. A version-1 layout has both, and
 /// they now name the same variant — kept as the floor's worked example, since
