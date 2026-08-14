@@ -169,9 +169,9 @@ pub(super) const REFERENCE_PITCH_LEN: f32 = 860.0;
 /// [`REFERENCE_PITCH_LEN`], the user's bar for that kind of text, and — for
 /// the note names alone — the pitch zoom.
 ///
-/// [`names_air`](TextScales::names_air) is the odd one out and is not a text
-/// size at all: it carries the first factor alone, for the spacing that has to
-/// stay put while the type it stands next to grows.
+/// The names carry a second number that is not a text size at all — the air
+/// they keep in front of them, which takes the first factor alone, so that the
+/// spacing stays put while the type it stands next to grows.
 ///
 /// The markings come out snapped onto the size ladder, since they change only
 /// with the pane and a snapped size is one fewer entry in egui's font atlas.
@@ -182,33 +182,39 @@ pub(super) const REFERENCE_PITCH_LEN: f32 = 860.0;
 pub(super) struct TextScales {
     /// The axis marking labels.
     pub(super) markings: f32,
-    /// The name written on each ribbon.
-    pub(super) names: f32,
-    /// What a clear space around a name that is fixed on the SCREEN scales by
-    /// — the pane's own size, and neither the zoom nor the user's bar.
+    /// The name written on each ribbon: its type, and separately the air it
+    /// keeps in front of it.
     ///
-    /// A second scale rather than a share of [`names`](Self::names) because the
-    /// two answer different questions. How big a name is drawn is a question
-    /// about the picture it is written over, and the picture grows with the
-    /// zoom; how far it stands off the end of the ribbon it names is a question
-    /// about the reader's eye, which does not. The pane's size is the one
-    /// factor common to both, and it has to be, or the Render preview and the
-    /// video it previews would set their names different distances off their
-    /// notes — see [`REFERENCE_PITCH_LEN`].
-    pub(super) names_air: f32,
+    /// The pair is nested rather than laid out as two fields here so that it
+    /// has exactly ONE construction site, in [`text_scales`], with each half
+    /// beside the expression that computes it. They are both `f32` and they are
+    /// equal in any picture that is not zoomed, so a second site assembling
+    /// them would be a swap that draws correctly at the dialled view and
+    /// wrongly everywhere else — see [`NameScale`](super::names::NameScale).
+    pub(super) names: super::names::NameScale,
 }
 
 pub(super) fn text_scales(cfg: &crate::SpectrumConfig, axes: &Axes, span: f32, ppp: f32) -> TextScales {
     let pane = axes.pitch_len() / REFERENCE_PITCH_LEN;
     TextScales {
         markings: crate::text::snap_scale(pane * cfg.marking_scale, MARKING_PT, ppp),
-        // NOT snapped, unlike the markings above: this is the one size here
-        // that follows a zoom, and a zoom is continuous. It is snapped for
-        // RASTERIZING where it is drawn (`names::draw`), which is what keeps
-        // the atlas bounded without quantizing the picture -- see
-        // `crate::text::TextBatch::magnified`.
-        names: pane * cfg.note_name_scale * name_zoom(span),
-        names_air: pane,
+        names: super::names::NameScale {
+            // NOT snapped, unlike the markings above: this is the one size here
+            // that follows a zoom, and a zoom is continuous. It is snapped for
+            // RASTERIZING where it is drawn (`names::draw`), which is what
+            // keeps the atlas bounded without quantizing the picture -- see
+            // `crate::text::TextBatch::magnified`.
+            label: pane * cfg.note_name_scale * name_zoom(span),
+            // The pane alone. Neither the zoom nor the user's bar reaches it:
+            // how big a name is drawn is a question about the picture it is
+            // written over, and the picture grows with the zoom; how far it
+            // stands off the end of the ribbon it names is a question about the
+            // reader's eye, which does not. The pane is the one factor common
+            // to both, and has to be, or the Render preview and the video it
+            // previews would set their names different distances off their
+            // notes -- see REFERENCE_PITCH_LEN.
+            air: pane,
+        },
     }
 }
 

@@ -60,9 +60,9 @@ fn names_follow_the_pitch_zoom_and_markings_hold_still() {
     // a pixel of type and no closer. See `text::snap_scale`.
     let pixel = 0.5 / (names::LABEL_PT * 2.0);
 
-    let full = at(FULL_PITCH_SPAN).names;
+    let full = at(FULL_PITCH_SPAN).names.label;
     assert!((full - 1.0).abs() <= pixel, "the whole axis draws names at {full}, not 1");
-    let tightest = at(crate::PITCH_RANGE_MIN_SPAN).names;
+    let tightest = at(crate::PITCH_RANGE_MIN_SPAN).names.label;
     assert!(
         (tightest - FULL_PITCH_SPAN / crate::PITCH_RANGE_MIN_SPAN).abs() <= pixel,
         "the tightest range draws names at {tightest}, not in proportion to its zoom",
@@ -71,14 +71,14 @@ fn names_follow_the_pitch_zoom_and_markings_hold_still() {
     // reference is the widest range there is, so the only way is up.
     let mut previous = 0.0;
     for span in [FULL_PITCH_SPAN, 96.0, 60.0, 36.0, crate::PITCH_RANGE_MIN_SPAN] {
-        let names = at(span).names;
+        let names = at(span).names.label;
         assert!(names >= previous, "{span} semitones drew smaller names than the span above");
         previous = names;
     }
     // A range zoomed past either end (a hand-edited blob; the bars cannot
     // do it) still lands inside the band rather than off it.
-    assert_eq!(at(0.0).names, tightest);
-    assert_eq!(at(1e6).names, full);
+    assert_eq!(at(0.0).names.label, tightest);
+    assert_eq!(at(1e6).names.label, full);
 
     // The markings ignore all of it, and answer to their own bar.
     assert_eq!(at(FULL_PITCH_SPAN).markings, at(crate::PITCH_RANGE_MIN_SPAN).markings);
@@ -88,17 +88,23 @@ fn names_follow_the_pitch_zoom_and_markings_hold_still() {
     // rounded onto — see `text::snap_scale`.
     assert!((doubled / 2.0 - 1.0).abs() <= 0.04, "the bar's 2 drew at {doubled}");
     assert_eq!(
-        text_scales(&bigger, &axes, 24.0, 2.0).names,
-        at(24.0).names,
+        text_scales(&bigger, &axes, 24.0, 2.0).names.label,
+        at(24.0).names.label,
         "and the two bars are independent",
     );
 
     // The air a name keeps in front of it answers to neither: it is a distance
     // on the screen, and the zoom that grows the type is exactly what it must
     // not follow — see `names::LABEL_INSET`.
-    assert_eq!(at(FULL_PITCH_SPAN).names_air, at(crate::PITCH_RANGE_MIN_SPAN).names_air);
+    //
+    // Read together with the `.label` assertions above, this is also what holds
+    // the PAIR the right way round. The two halves of a `NameScale` are both
+    // `f32` and are equal in any picture that is not zoomed, so a construction
+    // that swapped them would draw correctly at the dialled view and wrongly at
+    // every other — and `text_scales` is the one place that builds one.
+    assert_eq!(at(FULL_PITCH_SPAN).names.air, at(crate::PITCH_RANGE_MIN_SPAN).names.air);
     let louder = SpectrumConfig { note_name_scale: 2.0, ..SpectrumConfig::default() };
-    assert_eq!(text_scales(&louder, &axes, 24.0, 2.0).names_air, at(24.0).names_air);
+    assert_eq!(text_scales(&louder, &axes, 24.0, 2.0).names.air, at(24.0).names.air);
 }
 
 /// A pane at the size these sizes were chosen at, so a test about anything
@@ -127,13 +133,13 @@ fn text_shrinks_with_the_pane() {
     let small = axes(half, SpectralOrientation::Left);
     let docked = text_scales(&cfg, &full, 48.0, 2.0);
     let shrunk = text_scales(&cfg, &small, 48.0, 2.0);
-    assert!((shrunk.names / docked.names - 0.5).abs() < 0.02);
+    assert!((shrunk.names.label / docked.names.label - 0.5).abs() < 0.02);
     assert!((shrunk.markings / docked.markings - 0.5).abs() < 0.02);
     // The air in front of a name too, and this is the whole reason it is a
     // scale rather than flat points: the preview and the video are one picture
     // at two sizes, so a name has to stand off its note by the same fraction of
     // the pane in both.
-    assert!((shrunk.names_air / docked.names_air - 0.5).abs() < 0.02);
+    assert!((shrunk.names.air / docked.names.air - 0.5).abs() < 0.02);
     // ...and at the reference pane the bars read what they say.
     assert!((docked.markings - 1.0).abs() < 0.02, "{}", docked.markings);
 }
