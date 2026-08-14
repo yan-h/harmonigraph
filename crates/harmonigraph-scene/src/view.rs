@@ -201,6 +201,48 @@ pub struct ViewConfig {
     // `pulse_octaves` key, naming a pattern nothing reads any more; serde
     // ignores unknown keys, so such a blob loads intact, opens on the steady
     // octave layer, and drops the key on the next save.
+    // ---- What lights the lattice -----------------------------------------
+    // Which notes are HELD, or which sine waves are SOUNDING. The two are
+    // different questions about the same music, and the second one is the
+    // lattice's native coordinate system: a harmonic partial sits at an exact
+    // rational multiple of its fundamental, so folded to pitch class the first
+    // sixteen harmonics occupy six 7-limit nodes and a timbre draws as a
+    // constellation. See the fold in `harmonigraph-ui`, which is where all of
+    // the analysis lives — nothing in this crate reads audio.
+    /// Light the nodes from the analyzer's spectrum instead of from MIDI.
+    ///
+    /// A REPLACEMENT and never a blend: with this on, a node's body level and
+    /// its octave wedges come from folded spectral power alone, and a held key
+    /// that nothing is sounding for lights nothing. Two sources at once wants a
+    /// second per-slot channel through the instance packing and a shader that
+    /// can tell them apart, which is a picture to design rather than a flag to
+    /// add.
+    ///
+    /// Off fresh. Everything else about the lattice is unchanged by it —
+    /// geometry, the wheel, the marks, the camera — so the toggle is a
+    /// question about the same picture rather than a second one.
+    pub spectral_light: bool,
+    /// How far off a node's own pitch a partial may sit and still light it, in
+    /// cents: the standard deviation of the Gaussian the fold weights power by,
+    /// 1..=50.
+    ///
+    /// A WEIGHT and not a gate, which is the whole of why it is a width in
+    /// cents rather than a tolerance: distance maps to dimness, so a detuned
+    /// partial fades rather than switching off, and ±15¢ of vibrato reads as
+    /// breathing instead of flicker.
+    ///
+    /// Independent of [`Tuning::tolerance`](harmonigraph_core::Tuning), which
+    /// answers a different question — whether a PLAYED pitch class counts as
+    /// this node's — and is a hard threshold because a MIDI note either is that
+    /// node or is not.
+    ///
+    /// Narrow fresh, at 10¢, because just intonation is what this is for:
+    /// partials of just-tuned notes land dead on nodes, so a narrow kernel
+    /// draws them crisp and rejects everything between. 12-TET material reads
+    /// softer at that width and wants the bar dragged right — a tempered major
+    /// third's 5th harmonic sits 13.7¢ off the node it belongs to and a
+    /// harmonic seventh 31¢ off.
+    pub spectral_width: f32,
     // ---- Note envelope ---------------------------------------------------
     // How a note ARRIVES and how it LEAVES, for every layer of the node at
     // once. The DURATION of both is the host-automatable Fade param and lives
@@ -772,6 +814,14 @@ impl ViewConfig {
         self.sevens_gutter_soft = finite_or(self.sevens_gutter_soft, fresh.sevens_gutter_soft)
             .clamp(0.0, self.sevens_gutter);
 
+        // The spectral kernel's width, against that same hole and one more: it
+        // is a DIVISOR in the fold's Gaussian, so a 0 from a hand-edited blob
+        // makes every weight a NaN and the whole lattice reads as silent —
+        // dark, with nothing to say why. The clamp is what keeps that
+        // impossible; the finite check is what a clamp cannot be.
+        self.spectral_width = finite_or(self.spectral_width, fresh.spectral_width)
+            .clamp(crate::SPECTRAL_WIDTH_MIN, crate::SPECTRAL_WIDTH_MAX);
+
         self.shimmer_speed = finite_or(self.shimmer_speed, fresh.shimmer_speed);
         self.shimmer_width = finite_or(self.shimmer_width, fresh.shimmer_width);
         self.shimmer_intensity = finite_or(self.shimmer_intensity, fresh.shimmer_intensity);
@@ -885,6 +935,13 @@ impl Default for ViewConfig {
             octave_extras: 2,
             octave_extra_size: 0.387_534_47,
             octave_extra_blend: 0.562_241_4,
+            // MIDI, which is the picture the plugin is about: what the player
+            // meant. The spectral source is the second reading of the same
+            // music and is opened deliberately, not stumbled into.
+            spectral_light: false,
+            // Narrow, for the just-tuned material this is aimed at — see the
+            // field.
+            spectral_width: 10.0,
             // Near enough a square law (the exponent lands at 2.05): enough
             // that a release leaves promptly and settles instead of sliding
             // out at one rate, and not so much that the tail is over before

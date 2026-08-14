@@ -93,6 +93,15 @@ pub(crate) fn draw_lattice(
         response.and(state.hovered),
         now,
     );
+    // Lit by AUDIO rather than by the keys: the scene is derived exactly as
+    // above and its lighting is then overwritten from the analyzer's current
+    // spectrum. A post-pass and not a branch inside the derivation, because
+    // everything else about the picture — the geometry, the wheel, the grid,
+    // the camera — is the same answer either way, and a source that reached
+    // into `derive_scene` would be a second path through all of it.
+    if state.view.spectral_light {
+        super::spectral_fold::light_from_spectrum(&mut scene, state, now);
+    }
     // The ground the sevens knockout clears to. Only the shell knows what
     // this pass is composited over -- the dock's tab body here, the render
     // layout's own background offline -- so it is carried in by the caller

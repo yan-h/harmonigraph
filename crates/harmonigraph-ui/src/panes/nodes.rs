@@ -16,19 +16,22 @@ use crate::widgets::{button_row, choice_row, OctaveStrip, RangeBar, ValueBar};
 use crate::SharedState;
 use harmonigraph_scene::{
     Pulse, ViewConfig, MARK_DELAY_MAX, MIN_EXTRA_SIZE, PITCH_CEIL, PITCH_FLOOR,
+    SPECTRAL_WIDTH_MAX, SPECTRAL_WIDTH_MIN,
 };
 
-/// The sounding-note controls: the whole note first — the time it takes to
-/// arrive and leave, and the gutter it clears — then each layer of it reading
-/// outward from the center, and last the sweep the outermost layer can be set
-/// to run.
+/// The sounding-note controls: what lights a node at all, then the whole note
+/// — the time it takes to arrive and leave, and the gutter it clears — then
+/// each layer of it reading outward from the center, and last the sweep the
+/// outermost layer can be set to run.
 ///
-/// Whole-note first, because those settings are the ones reached for most and
-/// because none of them belongs to a layer. Ordering them after Core, Octaves
-/// and the marks would read more consistently outward, and would put the
-/// section's most-used controls under the ones reached for least. Reading
-/// outward is what orders the rest.
+/// Whole-note before the layers, because those settings are the ones reached
+/// for most and because none of them belongs to a layer. Ordering them after
+/// Core, Octaves and the marks would read more consistently outward, and would
+/// put the section's most-used controls under the ones reached for least.
+/// Reading outward is what orders the rest. Source comes above even those,
+/// being the one control that changes what all of them are about.
 pub(super) fn nodes_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBackend) {
+    source_section(ui, &mut state.view);
     note_section(ui, &mut state.view, params);
     core_section(ui, &mut state.view);
     octaves_section(ui, &mut state.view);
@@ -354,6 +357,52 @@ fn shimmer_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     });
 }
 
+/// Source: what lights a node at all — which notes are HELD, or which sine
+/// waves are SOUNDING.
+///
+/// First in the pane, and above even the note-wide settings, because it is the
+/// one control here that changes what every other one is ABOUT: Fade, the core,
+/// the wheel and the rings all describe a lit node, and this says what makes
+/// one. It is a plain heading for that reason too — it is the top of the
+/// section body, where `section`'s leading rule would sit directly under the
+/// Display pane's own Nodes header. (The View and Analyzer section bodies, and
+/// the Tuning and System panes, open the same way.)
+fn source_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
+    ui.heading("Source");
+    ui.checkbox(&mut view.spectral_light, "Light from audio")
+        .on_hover_text(
+            "Light the lattice from the analyzer's spectrum instead of from \
+             the MIDI notes: which sine waves are sounding, rather than which \
+             keys are down. A partial sits at an exact ratio of its \
+             fundamental, so a timbre draws as a constellation around its own \
+             node — a fifth up for the 3rd harmonic, a third up for the 5th, \
+             the sevenths axis for the 7th — and each node's wheel says which \
+             octaves those partials are in. It REPLACES the notes rather than \
+             joining them, and with no audio flowing the lattice is dark",
+        );
+    // Inert with the source off, like every other gated bar in the pane: the
+    // kernel is the fold's own, so with nothing folding there is nothing for it
+    // to be the width of.
+    ui.add_enabled_ui(view.spectral_light, |ui| {
+        ValueBar::new(
+            &mut view.spectral_width,
+            SPECTRAL_WIDTH_MIN..=SPECTRAL_WIDTH_MAX,
+            "Width",
+        )
+        .display(|cents| format!("{cents:.0}¢"))
+        .show(ui)
+        .on_hover_text(
+            "How far off a node's own pitch a partial may sit and still light \
+             it, in cents. A weight and not a cutoff: distance reads as \
+             dimness, so a detuned partial fades rather than switching off and \
+             vibrato breathes instead of flickering. Narrow is right for just \
+             intonation, where partials land dead on the nodes; equal-tempered \
+             material wants it wider, a tempered third's 5th harmonic sitting \
+             13.7 ¢ off its node and a 7th harmonic 31 ¢",
+        );
+    });
+}
+
 /// Note: what the whole node does rather than any one layer of it — the time
 /// it takes to arrive and leave, the curve it runs on, and the gap it clears
 /// around itself.
@@ -365,11 +414,7 @@ fn shimmer_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
 /// reads as a single gesture instead of pieces of the node going dark at
 /// different moments.
 fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBackend) {
-    // A plain heading rather than `section`: this is the top of the section
-    // body, and the leading rule `section` draws would sit directly under the
-    // Display pane's own Nodes header. Matches the View and Analyzer section
-    // bodies, and the Tuning and System panes.
-    ui.heading("Note");
+    section(ui, "Note");
     // The note's timing and the curve it runs on, in that order. Fade is an
     // automatable param and Shape a view setting, so the two are stored apart
     // (`ViewConfig::envelope` is where they are put back together); the pane
