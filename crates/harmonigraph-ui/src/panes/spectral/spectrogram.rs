@@ -199,7 +199,7 @@ pub(crate) fn draw_spectrogram(
         return;
     }
 
-    let view = PaneView {
+    let mut view = PaneView {
         ppp: painter.ctx().pixels_per_point().max(1.0),
         max_rows: painter.ctx().input(|i| i.max_texture_side).max(64),
         pitch_len: axes.pitch_len(),
@@ -208,6 +208,7 @@ pub(crate) fn draw_spectrogram(
         scale: *scale,
         cfg,
         whole: whole.is_some(),
+        coarse: false,
     };
     let columns = match whole {
         Some(ws) => Columns {
@@ -224,7 +225,33 @@ pub(crate) fn draw_spectrogram(
             }
         }
     };
-    let plan = Plan::new(&view, &columns);
+    let mut plan = Plan::new(&view, &columns);
+
+    // While the style is moving — a pitch wheel, a Level drag, a palette bar,
+    // the Span crossing a slab rung — every frame restarts the ring, so the
+    // frame builds the COARSE image instead: rows capped and stretched over
+    // the same pane, and wide rows reading a plain max (see
+    // [`crate::spectrogram::GESTURE_ROWS`] and
+    // [`RowRead::Max`](crate::spectrogram::RowRead)). One build at full
+    // quality sharpens it once the style has held still — a frame nothing
+    // else schedules when no audio is flowing and the pointer has let go, so
+    // it is requested here. Whole-song is out: its one style change per
+    // config edit is already cached after a frame, and an offline render must
+    // never trade resolution away.
+    if !view.whole
+        && crate::spectrogram::StyleMotion::observe(
+            &mut spectrum.spectrogram[surface].motion,
+            plan.key.style(),
+            painter.ctx().input(|i| i.time),
+        )
+    {
+        painter.ctx().request_repaint_after(std::time::Duration::from_secs_f64(
+            crate::spectrogram::STYLE_SETTLE,
+        ));
+        view.coarse = true;
+        view.max_rows = view.max_rows.min(crate::spectrogram::GESTURE_ROWS);
+        plan = Plan::new(&view, &columns);
+    }
 
     // Fast path: the built image is still valid — reuse the uploaded texture and
     // its geometry; only the scrolling quad below is recomputed (with `now`).
@@ -236,7 +263,7 @@ pub(crate) fn draw_spectrogram(
     let layout = match reused {
         Some(layout) => layout,
         None => {
-            let bins = bins_for(plan.rows, scale);
+            let bins = bins_for(plan.rows, scale, view.coarse);
             match build(painter.ctx(), spectrum, whole, surface, &plan, &view, &bins) {
                 Some(layout) => layout,
                 None => return,
