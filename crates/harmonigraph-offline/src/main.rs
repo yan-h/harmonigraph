@@ -19,10 +19,14 @@ mod replay;
 mod sink;
 mod wav;
 
-use harmonigraph_ui::Layout;
+use harmonigraph_ui::{Layout, PRESETS};
 use render::Settings;
 use replay::Replay;
 use sink::{Sink, VideoOptions};
+
+/// Where [`USAGE`] carries the preset names, replaced at print time with
+/// [`PRESETS`] so there is only ever one list.
+const PRESET_TOKEN: &str = "PRESET_LIST";
 
 const USAGE: &str = "\
 harmonigraph-offline — render a recorded take to video
@@ -39,7 +43,7 @@ OPTIONS:
                            is auto-aligned to the take (see --align), feeds
                            the spectrum, and is muxed into the video.
     -l, --layout <SPEC>    Preset name or path to a .ron layout.
-                           Presets: side-by-side, stacked, lattice, spectral
+                           Presets: PRESET_LIST
                            [default: side-by-side]
     -s, --size <WxH>       Output pixels. At an aspect other than the one the
                            take was framed at, the picture is recomposed to
@@ -177,7 +181,17 @@ fn parse_args_from(raw: impl IntoIterator<Item = String>) -> Result<Option<Args>
         };
         match arg.as_str() {
             "-h" | "--help" => {
-                print!("{USAGE}");
+                // The preset names are `harmonigraph_ui::PRESETS`'s to state,
+                // spliced in here rather than written out above. A second copy
+                // drifts the moment a preset is added, and it drifts against
+                // the one message that would correct it: `Layout::load` prints
+                // the real list when a name is not a preset, so the help and
+                // the error would disagree exactly when someone is trying to
+                // learn the names.
+                //
+                // A token and a `replace` rather than a `format!`, so the help
+                // text stays a plain string with no braces to escape.
+                print!("{}", USAGE.replace(PRESET_TOKEN, &PRESETS.join(", ")));
                 return Ok(None);
             }
             "-o" | "--out" => args.out = Some(value("--out")?),
