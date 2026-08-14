@@ -1032,6 +1032,40 @@ fn the_volume_grid_follows_the_level_zoom_in_both_directions() {
     }
 }
 
+/// Type asking for more room than the axis can give it: the two bounds on
+/// ruling density cannot both hold, and the SPARSE one wins.
+///
+/// The room bound would take the ladder to a rung that leaves a hole wider than
+/// the grid is allowed to leave, so the search walks back off it — the two loops
+/// both run, which is the case the ordering of them decides. Losing the type's
+/// bound costs a crowded grid under numbers that thin hard; losing the other
+/// costs a rung so coarse it rules nothing across the picture, and a grid that
+/// rules nothing is not a grid.
+#[test]
+fn the_sparse_bound_wins_where_the_type_wants_more_room_than_the_axis_has() {
+    // 30.5 dB over 100 points, against numbers wanting 500 to themselves: the
+    // room bound asks for rungs at least 250 points apart, which nothing under
+    // 100 dB reaches — and 100 dB leaves a 328-point hole.
+    let cfg = level_cfg(-60.0, -29.5);
+    let (level_len, room) = (100.0, 500.0);
+    let grid = level_grid(&cfg, level_len, room);
+    assert!(grid.len() >= 2, "this needs a ladder with a gap in it: {grid:?}");
+
+    let (floor, ceiling) = level_window(&cfg);
+    let gap = (grid[1].db - grid[0].db) / (ceiling - floor) * level_len;
+    assert!(
+        gap <= MAX_LEVEL_GAP_PT,
+        "the ladder left a {gap}-point hole rather than give up the type's bound",
+    );
+    assert!(
+        gap < room * NUMBERED_LINE_SHARE,
+        "this fixture no longer has the two bounds disagreeing at all",
+    );
+    // The bottom of the scale is still named, which is the one thing that holds
+    // through every regime.
+    assert!(grid[0].numbered);
+}
+
 /// Ten is where the RULINGS live. The numbers start from whatever the rulings
 /// settled on and are as dense as the type allows from there — which is the
 /// only rule that survives both ends of the Level zoom.

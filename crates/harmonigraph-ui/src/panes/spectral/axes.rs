@@ -719,8 +719,18 @@ pub(super) fn level_grid(
     let gap = |step: f32| step / span * level_len;
 
     // Down the ladder while the rulings crowd, then up it while they stand too
-    // far apart. Only one of the two can run: the gap grows with the rung, so
-    // reaching the minimum leaves it under the maximum by construction.
+    // far apart.
+    //
+    // Ordinarily one of the two runs and the other finds nothing to do. They can
+    // BOTH run, and the order is what settles it when they do: type large enough
+    // that `closest` passes `MAX_LEVEL_GAP_PT` asks for a rung the sparse bound
+    // will not have, and the second loop walks back off it. The sparse bound
+    // wins because losing it costs a rung so coarse it rules nothing across the
+    // picture, where losing the other costs a crowded grid under numbers that
+    // thin hard — and a grid that rules nothing is not a grid.
+    // `the_sparse_bound_wins_where_the_type_wants_more_room_than_the_axis_has`
+    // holds the case, which is off the end of what any real Marking size
+    // reaches.
     let closest = MIN_LEVEL_GAP_PT.max(label_room * NUMBERED_LINE_SHARE);
     let mut rung = LEVEL_STEP;
     while rung + 1 < LEVEL_STEPS_DB.len() && gap(LEVEL_STEPS_DB[rung]) < closest {
