@@ -14,25 +14,29 @@ lock cases — not judgement. `ci.sh`'s own header is the list to copy when this
 one looks stale. Review is therefore a habit, in two
 halves, and each half catches a class the other cannot.
 
-**Sessions: review your own diff before you open the PR.** Not with
-`/code-review` — that is a built-in whose frontmatter sets
-`disable-model-invocation`, and the harness treats that as locked: no
-setting re-enables it, and there is no Bash route to a slash command
-either — for the `/code-review ultra` variant, sessions are told in so
-many words not to try. It is billed, so it is Yan's to run. The gate is
-per-skill and deliberate — `/simplify` sits beside it in the same built-in
-family and is model-invocable — so this is a boundary to work within, not
-an oversight to work around.
+**`/self-review` reviews a branch's own diff — run it when Yan asks, not on
+your own initiative.** The harness already tells a session not to call the
+Agent tool unless the user requested it, and that rule stands; a per-task
+"run self-review" or "use subagents" in the prompt satisfies it same as
+`/self-review` typed directly, but nothing in this skill is a standing
+instruction to spawn one before every PR. Not with `/code-review` either —
+that is a built-in whose frontmatter sets `disable-model-invocation`, and the
+harness treats that as locked: no setting re-enables it, and there is no
+Bash route to a slash command either — for the `/code-review ultra` variant,
+sessions are told in so many words not to try. It is billed, so it is Yan's
+to run. The gate is per-skill and deliberate — `/simplify` sits beside it in
+the same built-in family and is model-invocable — so this is a boundary to
+work within, not an oversight to work around.
 
-Run **`/self-review`** instead. It is the project-local command that goes
-where `/code-review` cannot: it spawns a single `diff-reviewer` subagent on
-`git diff main...HEAD`, which works four readings in one pass — conventions,
-bugs, cache keys and test reach. A session has full context on what it just
-wrote, which makes this cheap; it is also biased toward its own work, which
-is what the subagent corrects for, since it did not write it. This half
-catches the bugs that live entirely inside one branch — a cache key carrying
-the wrong inputs in either direction, an underflow, a test whose fixture never
-reaches the new path.
+`/self-review` is the project-local command that goes where `/code-review`
+cannot: it spawns a single `diff-reviewer` subagent on `git diff main...HEAD`,
+which works four readings in one pass — conventions, bugs, cache keys and
+test reach. A session has full context on what it just wrote, which makes
+this cheap; it is also biased toward its own work, which is what the
+subagent corrects for, since it did not write it. This half catches the bugs
+that live entirely inside one branch — a cache key carrying the wrong inputs
+in either direction, an underflow, a test whose fixture never reaches the
+new path.
 
 The findings come back **unverified** — there is no refuter pass — so the
 calling session is the only thing between a first reading and a commit. The
