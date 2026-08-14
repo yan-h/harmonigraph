@@ -130,7 +130,9 @@ impl Spiral {
         // directly. Solving rather than clamping afterwards is what makes
         // `r0 > 0` a property of the fit rather than a case to catch, and it
         // holds the hole at a constant SHARE of the disc, so zooming the pitch
-        // range in does not eat it.
+        // range in does not eat it. The narrowest disc this has to fit is two
+        // octaves, which is what `PITCH_RANGE_MIN_SPAN` holds the range open
+        // to — the widest a single turn ever gets.
         let dr = (r_out - hole) / (octaves + 1.0 + VOICE_OVERHANG);
         let r0 = hole + dr * 0.5 * (1.0 + VOICE_OVERHANG);
         Spiral { centre: rect.center(), r0, dr, min_midi, max_midi }
