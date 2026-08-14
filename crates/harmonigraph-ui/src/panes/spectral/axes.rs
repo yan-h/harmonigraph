@@ -676,10 +676,10 @@ pub(super) struct LevelRuling {
     ///
     /// Counted UP FROM THE LOWEST ruling rather than off the round dB values,
     /// so the bottom of the scale is always named: it is the one level a reader
-    /// cannot infer from the others, since the floor itself is not ruled and
-    /// every number above it is measured from somewhere. Numbering the round
-    /// multiples instead leaves the lowest line bare exactly when the numbers
-    /// thin, which is when the axis most needs its bottom stated.
+    /// cannot infer from the others, every number above it being measured from
+    /// somewhere. Numbering the round multiples instead leaves the lowest line
+    /// bare exactly when the numbers thin, which is when the axis most needs its
+    /// bottom stated.
     pub(super) numbered: bool,
 }
 
@@ -698,13 +698,22 @@ pub(super) struct LevelRuling {
 /// against the line separation, and coarsening the lines is the half of that the
 /// numbers cannot fix for themselves.
 ///
-/// The ENDS are not ruled. Both are already drawn, and by lines that say more
-/// than a ruling would: the floor is where every quiet bucket stands, which
-/// joined is the now-line itself, and the ceiling is the edge the pane stops at.
-/// A ruling on either is a second line over a line already there. Which is why
-/// the LOWEST ruling — not the floor — is what always carries a number: it is
-/// the lowest level the grid actually draws, and the bottom of a scale that goes
-/// unstated is the one reading no other number supplies.
+/// The FLOOR is ruled where it lands on the ladder, and being the lowest rung
+/// it is then always numbered — so a window of -60 to -20 states its own bottom
+/// rather than trailing off after -50 and leaving the reader to work out where
+/// the scale ends. Where the floor does not land on a rung there is nothing
+/// round to write, and the lowest ruling above it is what carries the number
+/// instead.
+///
+/// Joined, that rung falls exactly on the now-line, which draws over it at full
+/// strength — so what it costs is one covered shape and no ink, against a number
+/// that would otherwise point at nothing. Standing alone the spectrum has no
+/// now-line and the rung is its baseline, which is the line it should have had.
+///
+/// The CEILING is not ruled at either. It is the edge the picture stops at,
+/// already stated by the pane ending there, and it is the end the frequency
+/// numbers ride along (see [`label_anchor`]) — so a number on it is written into
+/// the one corner of this pane that is already spoken for.
 ///
 /// What the numbers mean is the window's own dB, which is the reading the Level
 /// bar is quoted in and the one the curve is drawn against. With a Tilt dialled
@@ -760,10 +769,16 @@ pub(super) fn level_grid(
         }
     }
 
-    // Multiples of the step strictly INSIDE the window — see the ends above.
-    // Taken as whole counts so the ladder is the same set of levels wherever
-    // the window has been dragged to, rather than a phase of it.
-    let first = (floor / step).floor() as i32 + 1;
+    // Multiples of the step across the window, taken as whole counts so the
+    // ladder is the same set of levels wherever the window has been dragged to,
+    // rather than a phase of it. The floor is IN when it lands on one and the
+    // ceiling is always out — see the ends above.
+    let rungs = floor / step;
+    let first = if (rungs - rungs.round()).abs() < 1e-4 {
+        rungs.round() as i32
+    } else {
+        rungs.floor() as i32 + 1
+    };
     let last = ((ceiling / step).ceil() as i32 - 1).min(first + MAX_LEVEL_RULINGS - 1);
     // ...and the numbers every `stride` rulings COUNTED UP FROM THE LOWEST, so
     // the bottom of the scale is named whatever the window has been dragged to.

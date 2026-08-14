@@ -896,18 +896,25 @@ fn numbered_db(cfg: &SpectrumConfig, level_len: f32, room: f32) -> Vec<f32> {
     level_grid(cfg, level_len, room).iter().filter(|r| r.numbered).map(|r| r.db).collect()
 }
 
-/// The volume grid is a ladder of tens: every 10 dB of the Level window, and
-/// neither END of it, both of which are already drawn by lines that say more.
+/// The volume grid is a ladder of tens: every 10 dB of the Level window, the
+/// FLOOR among them where it lands on one, and never the ceiling.
 #[test]
 fn the_volume_grid_rules_every_ten_decibels() {
     // The default window (-60..-20) on an axis with comfortable room for a 10 dB
-    // step, so nothing is coarsened or subdivided — that is the next test.
+    // step, so nothing is coarsened or subdivided — that is the next test. The
+    // floor is a ten and is ruled; the ceiling is a ten and is not, being the
+    // edge the picture already stops at.
     let cfg = level_cfg(-60.0, -20.0);
-    assert_eq!(ruled_db(&cfg, 400.0, 60.0), vec![-50.0, -40.0, -30.0]);
+    assert_eq!(ruled_db(&cfg, 400.0, 60.0), vec![-60.0, -50.0, -40.0, -30.0]);
 
     // Whole tens, not a phase of the window: dragged to an off-ten floor the
-    // ladder stays on the round numbers rather than sliding with the edge.
+    // ladder stays on the round numbers rather than sliding with the edge, and
+    // -63 gets no rung of its own — there is nothing round to write on it.
     assert_eq!(ruled_db(&level_cfg(-63.0, -21.0), 400.0, 60.0), vec![-60.0, -50.0, -40.0, -30.0]);
+    // The pair either side of a floor landing exactly on a rung, so the
+    // whole-count test that decides it is pinned rather than assumed.
+    assert_eq!(ruled_db(&level_cfg(-60.5, -20.0), 400.0, 60.0)[0], -60.0);
+    assert_eq!(ruled_db(&level_cfg(-59.5, -20.0), 400.0, 60.0)[0], -50.0);
 
     // Low to high, on the axis, and each level exactly where the window puts it.
     let grid = level_grid(&cfg, 400.0, 60.0);
@@ -965,17 +972,29 @@ fn the_volume_grid_follows_the_level_zoom_in_both_directions() {
     let tight = level_cfg(-32.0, -20.0);
     assert_eq!(ruled_db(&tight, 40.0, 60.0).len(), 1, "a 40-point axis has room for nothing finer");
     let zoomed = ruled_db(&tight, 400.0, 60.0);
-    assert_eq!(zoomed, vec![-30.0, -28.0, -26.0, -24.0, -22.0], "the ladder did not subdivide");
+    assert_eq!(
+        zoomed,
+        vec![-32.0, -30.0, -28.0, -26.0, -24.0, -22.0],
+        "the ladder did not subdivide",
+    );
 
     // Zoomed OUT to the whole legal range on a short analyzer, where a 10 dB
     // step would rule ten lines into 200 points.
     let wide = level_cfg(-100.0, 0.0);
-    assert_eq!(ruled_db(&wide, 200.0, 60.0), vec![-80.0, -60.0, -40.0, -20.0], "nothing coarsened");
+    assert_eq!(
+        ruled_db(&wide, 200.0, 60.0),
+        vec![-100.0, -80.0, -60.0, -40.0, -20.0],
+        "nothing coarsened",
+    );
 
     // ...and the same window coarsens FURTHER for larger type on the same axis,
     // which is the half of "too big against the separation" the numbers cannot
     // fix by thinning.
-    assert_eq!(ruled_db(&wide, 200.0, 140.0), vec![-50.0], "the type grew and the grid did not");
+    assert_eq!(
+        ruled_db(&wide, 200.0, 140.0),
+        vec![-100.0, -50.0],
+        "the type grew and the grid did not",
+    );
 
     // Whatever it settled on, the lines are far enough apart to read as lines —
     // both absolutely and against the type — and close enough to measure
@@ -1023,15 +1042,22 @@ fn the_numbers_are_as_dense_as_the_type_allows() {
 
     // Room to spare: every ruling is numbered, and they are tens.
     assert_eq!(numbered_db(&cfg, 400.0, 60.0), ruled_db(&cfg, 400.0, 60.0));
-    assert_eq!(numbered_db(&cfg, 400.0, 60.0), vec![-50.0, -40.0, -30.0]);
+    assert_eq!(numbered_db(&cfg, 400.0, 60.0), vec![-60.0, -50.0, -40.0, -30.0]);
 
     // Squeezed, the numbers thin and the rulings do not — a grid that kept its
     // lines and dropped every other number, rather than a coarser grid. The
-    // pair that survives is counted from the BOTTOM, so the lowest line keeps
-    // its number; numbering the round multiples of 20 would have named -40 and
-    // left the bottom of the scale bare.
-    assert_eq!(ruled_db(&cfg, 200.0, 80.0), vec![-50.0, -40.0, -30.0], "the lines coarsened too");
-    assert_eq!(numbered_db(&cfg, 200.0, 80.0), vec![-50.0, -30.0], "the numbers did not thin");
+    // pair that survives is counted from the BOTTOM, so the floor keeps its
+    // number.
+    assert_eq!(
+        ruled_db(&cfg, 200.0, 80.0),
+        vec![-60.0, -50.0, -40.0, -30.0],
+        "the lines coarsened too",
+    );
+    assert_eq!(
+        numbered_db(&cfg, 200.0, 80.0),
+        vec![-60.0, -40.0],
+        "the numbers did not thin",
+    );
 
     // On an axis long enough that the lines subdivide to fives, the numbers
     // follow them down rather than staying on the tens: there is room, and a
@@ -1043,7 +1069,10 @@ fn the_numbers_are_as_dense_as_the_type_allows() {
     // ...and closed to the narrowest window the Level bar allows, the numbers
     // reach 2 dB. Pinned to tens this axis would carry exactly one number.
     let tight = level_cfg(-32.0, -20.0);
-    assert_eq!(numbered_db(&tight, 400.0, 60.0), vec![-30.0, -28.0, -26.0, -24.0, -22.0]);
+    assert_eq!(
+        numbered_db(&tight, 400.0, 60.0),
+        vec![-32.0, -30.0, -28.0, -26.0, -24.0, -22.0],
+    );
 }
 
 /// A number is only ever written beside a line that was drawn, is never closer
@@ -1648,7 +1677,7 @@ fn the_volume_rulings_cross_the_pitch_axis_under_the_spectrum() {
         let budget = plot_budget(split, axes.depth_len());
 
         let want = level_grid(&cfg, budget * axes.depth_len(), 60.0);
-        assert_eq!(want.len(), 3, "the default window is ruled in tens: -50, -40, -30");
+        assert_eq!(want.len(), 4, "the default window is ruled in tens: -60, -50, -40, -30");
 
         let (levels, slabs) = painted_levels(rect, cfg);
         assert_eq!(levels.len(), want.len(), "{orientation:?} ruled a different ladder");
