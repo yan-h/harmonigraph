@@ -880,9 +880,12 @@ fn shimmer_light(rgb: vec3<f32>, terms: vec2<f32>) -> vec3<f32> {
     // lets the others climb past it, which is the 15 degrees in #235.
     let grey = dot(v, SHIMMER_LUMA);
     let t = clamp((over - 1.0) / max(over - grey, 1e-4), 0.0, 1.0);
-    // The final clamp answers the one case the mix cannot: a swing asking for
-    // more light than the display has puts `grey` itself past 1, and white is
-    // the honest end of that.
+    // The slide keeps `grey` at or under the ceiling for any in-gamut layer
+    // at any swing — the crest's luma is capped at max(SHIMMER_CEILING, lit)
+    // by construction — and the mix lands the top channel at exactly 1. The
+    // clamp is rounding insurance on the exp/log round trip, and the honest
+    // end for a layer handed in already brighter than white, whose grey sits
+    // past 1 before the sheet touches it.
     return min(mix(v, vec3<f32>(grey), t), vec3<f32>(1.0));
 }
 
