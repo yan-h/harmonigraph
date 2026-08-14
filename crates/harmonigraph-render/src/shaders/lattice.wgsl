@@ -559,61 +559,56 @@ const SHIMMER_SHARP_MAX: f32 = 3.0;
 fn shimmer_sharpness() -> f32 {
     return exp2(SHIMMER_SHARP_MAX * (1.0 - clamp(u.misc8.w, 0.0, 1.0)));
 }
-// How much brightness a peak ADDS to the layer, at intensity 1, in the color
-// values this shader works in — which are gamma-encoded, since the targets are
-// UNORM and nothing decodes on the way in.
+// What a peak is worth at intensity 1, as the natural log of the gain from the
+// sheet's trough to its crest: an EXPOSURE, not an amount of light to add.
 //
-// Added and not mixed toward white, which is what keeps the sheet close to
-// meaning one thing across the pitch ramp. A mix is a lerp to a fixed endpoint,
-// so what it does to a color depends on how far that color already is from
-// white: it lands 54 points of `L*` on the ramp's dark end against 27 on its
-// bright one, twice as much light for the same setting, and — the half that
-// shows — it leaves 15% of the chroma at EVERY point on the ramp, because a
-// lerp shrinks the gaps between the channels as it goes. A ring under such a
-// peak is not so much brightened as bleached, and on a dark saturated color
-// bleaching is most of what there is to see: the violet goes pale rather than
-// lit. An addition leaves the channel gaps where they are until a channel
-// saturates, so 39 lands against 30 and the chroma left runs 44% to 100%. Both
-// halves are measured in
-// `the_sweep_adds_the_same_light_to_a_dark_color_as_to_a_bright_one` and
+// A multiply and not an addition, and that is what the sheet MEANS rather than
+// how it is arithmetically spelled. The values here are gamma-encoded — the
+// targets are UNORM and nothing decodes on the way in — so a multiply here is a
+// multiply in linear light too, which is a pure luminance scale: it slides a
+// color along its own chromaticity, holding hue AND saturation exactly, at
+// every phase and on every color. That is what light falling on a surface does,
+// and it is the one model of the three that needs no gamut decision, because
+// scaling a color that is in gamut cannot take it out of one.
+//
+// The two it replaces each give up one half of that. A mix toward white holds
+// hue and drains chroma to 15% at every point on the ramp — a ring under a peak
+// is bleached rather than lit, and on a dark saturated color bleaching is most
+// of what there is to see. An addition holds the channel GAPS instead, which is
+// the same thing until a channel saturates: 0.4 of added light fits the
+// headroom of exactly one color on the default ramp, so the other 63 clip at
+// Intensity 1, and a clip is asymmetric — the channels with room go on rising
+// and the one without does not. That costs chroma AND swings the hue 15 degrees
+// at the ramp's bright end, which a lerp does not do. Nothing clips here: the
+// swing is fitted to the headroom in `shimmer_light`, so the hue moves 0.2
+// degrees across the whole ramp instead.
+//
+// The SIZE is in contrast, which is the currency a texture this fine is seen
+// in, and choosing it is the whole of what this constant decides. An addition
+// is near-uniform in the `L*` it ADDS — 20.8 to 23.9 across the ramp at the
+// fresh view's Intensity, a 13% spread, and the property it was tuned for — but
+// the ratio between a crest and its trough falls from 0.508 at the ramp's dark
+// end to 0.367 at its bright one, a 29% decline. A moving texture is read by
+// that ratio and not by the `L*` difference, which is why the sheet reads
+// weaker on the ramp's bright half however uniform its added light is. One
+// exposure everywhere makes the ratio the constant instead: 0.436 to 0.460, a
+// 5% spread. The trade is exactly the other way round — the `L*` a peak adds
+// now runs 16.8 to 28.2 — and that is the right way round for what the eye is
+// doing here. Both halves are measured in
+// `the_sweep_is_worth_the_same_contrast_on_a_dark_color_as_on_a_bright_one` and
 // `a_ring_keeps_its_color_under_a_sweep_peak`.
 //
-// Encoded values are what makes ONE constant close to enough. The encoding is a
-// power of 1/2.4 and `L*` is a cube root of luminance, so a fixed step here is
-// a near-fixed step in what the eye reads. Decoding to linear light first would
-// undo exactly that — a fixed step in luminance is a huge one down at the
-// bottom of the ramp and invisible at the top.
-//
-// What the size does NOT do is hold a peak where a mix put it: at the middle of
-// the ramp a mix is worth 40 points of `L*` and this is worth 31, so the same
-// Intensity reads as a weaker sweep and matching the old peak would take 0.54.
-// That is the trade taken deliberately, because 0.54 is bought from the two
-// things above — it clips more of the ramp and takes more of the color, which
-// is what the constant exists to stop.
-//
-// Nor is the addition equal all the way up. 0.4 fits in the headroom of exactly
-// one color on the default ramp, so by Intensity 1 the other 63 are clipping in
-// their top channel, and a clip is not symmetric: the channels with room go on
-// rising and the one without does not, which drains chroma and swings hue. The
-// ramp's most saturated color starts that at Intensity 0.39 and its bright end
-// swings 15 degrees of hue by 1. Holding hue AND lightness across the whole bar
-// is a different model — a lift in Oklab `L` rather than in these channels,
-// with a gamut decision attached — and not one this constant can express.
-// Under a peak an indicator still gives up most of its pitch color either way,
-// which is the trade the Intensity bar exists to make: see
-// `ViewConfig::shimmer_intensity`.
-const SHIMMER_LIFT: f32 = 0.4;
-// What the layer's coverage sits at between peaks at intensity 1, against 1
-// under one. A shallow dip on purpose: it is the trough that gives the sweep
-// a body to travel through, but the indicators still have to be readable at
-// every moment of the cycle. Intensity past 1 deepens it, which is that
-// promise being spent — deliberately, by the bar.
-const SHIMMER_TROUGH: f32 = 0.82;
-// How much of that tuned depth this view asks for (u.misc8.z, the Intensity
-// bar). It scales the pair above TOGETHER, so the shimmer is one shape at
-// every setting rather than a brightness and a fade to be dialed against each
-// other, and 0 leaves `shimmer_terms` returning its exact identity — the
-// layer as it draws unshimmered, from the bar rather than from the mode.
+// 0.87 is where a peak at the fresh view's Intensity is worth what the added
+// light it replaces was worth at mid-ramp, so a view saved against the old
+// model carries its setting over at about the size it was dialled at. 0.869
+// matches there exactly and 0.885 matches at Intensity 1; one constant cannot
+// do both, and the fresh view's own setting is the one worth landing on.
+const SHIMMER_EXPOSURE: f32 = 0.87;
+// How much of that exposure this view asks for (u.misc8.z, the Intensity bar).
+// One number scaling one thing, where the model this replaces had a brightness
+// and a coverage fade to keep in step: the sheet is one shape at every setting,
+// and 0 leaves `shimmer_light` returning the layer exactly as it draws
+// unshimmered — from the bar rather than from the mode.
 fn shimmer_depth() -> f32 {
     return max(u.misc8.z, 0.0);
 }
@@ -699,18 +694,22 @@ fn shimmer_pattern(mode: u32, p: vec2<f32>, d: vec2<f32>, n: vec2<f32>) -> f32 {
     // Bands (mode 1): one grating along the sheet's own direction.
     return sin(k * dot(p, d));
 }
-// What the shimmer does to a layer here, as (brightness added, coverage
-// scale): how much light to add to its color at this fragment, and what to
-// scale its coverage by. Both terms and not just one — the added light clips
-// at white and an octave ghost is already nearly there, so it would barely
-// move on color alone, and coverage is an opacity that cannot go past 1, so
-// the brightening has to be the color's job and the dip has to be the
-// coverage's.
+// The sheet at this fragment, as (swing, shape): the log gain from its trough
+// to its crest, and where in that swing this fragment sits, 0 at a trough and 1
+// at a crest. `shimmer_light` is what turns the pair into a color.
 //
-// The identity (0, 1) in mode 0, so a caller applies it unconditionally and
-// Off stays byte-for-byte the look it was. The coverage term is never ABOVE 1
-// either, which is what keeps `paint_reach` exact: a shimmering layer can only
-// cover less than it did, so no bound out there moves.
+// ONE term where this used to hand back a brightness and a coverage scale, and
+// the reason the pair existed is gone with the addition. An added light clips
+// at white and an octave ghost is already nearly there, so the ghost would
+// barely move on color alone and the dip had to be an opacity's job; an
+// exposure moves a near-white ghost as readily as a dark ring, because it is a
+// ratio rather than an amount. Coverage is now the layer's own, untouched by
+// the sheet, which is what keeps `paint_reach` exact: nothing here can make a
+// layer cover more than it did, since it no longer touches coverage at all.
+//
+// A swing of 0 in mode 0, which `shimmer_light` reads as the identity, so a
+// caller applies it unconditionally and Off stays byte-for-byte the look it
+// was.
 //
 // `footprint` is how much of the field one pixel spans, in the field's own
 // world units, taken with the other derivatives at the top of the fragment
@@ -724,7 +723,7 @@ fn shimmer_pattern(mode: u32, p: vec2<f32>, d: vec2<f32>, n: vec2<f32>) -> f32 {
 // of thing that holds on one driver and not the next.
 fn shimmer_terms(mode: u32, field: vec2<f32>, footprint: f32) -> vec2<f32> {
     if mode == 0u {
-        return vec2<f32>(0.0, 1.0);
+        return vec2<f32>(0.0, 0.0);
     }
     let period = shimmer_period();
     let dir = vec2<f32>(cos(SHIMMER_ANGLE), sin(SHIMMER_ANGLE));
@@ -757,18 +756,54 @@ fn shimmer_terms(mode: u32, field: vec2<f32>, footprint: f32) -> vec2<f32> {
         footprint / period,
     );
     let depth = shimmer_depth() * resolve;
-    // Both clamped into what each term can MEAN rather than trusted to the
-    // bar's range, and the bar is not where either bound bites: a lift past 1
-    // says "whiter than white", which no channel can carry further than 1
-    // anyway, and a coverage scale below 0 would take the layer negative.
-    // `ViewConfig::sanitize` checks this intensity for finiteness and not for
-    // range, so what these hold against is a value arriving from a saved view
-    // rather than from the bar — which tops out at 2, well inside both. The
-    // peak is clamped BEFORE the band shapes it, so a clamped intensity is
-    // still a band and not a flat lid over one.
-    let lift = min(SHIMMER_LIFT * depth, 1.0);
-    let trough = clamp(1.0 - (1.0 - SHIMMER_TROUGH) * depth, 0.0, 1.0);
-    return vec2<f32>(lift * band, mix(trough, 1.0, band));
+    // No clamp on the swing, and none is needed: an exposure has no value that
+    // stops meaning something the way an added light past 1 or a coverage below
+    // 0 does, and `shimmer_light` fits whatever arrives to the layer's own
+    // headroom. `ViewConfig::sanitize` checks this intensity for finiteness and
+    // not for range, so what reaches here from a saved view can be larger than
+    // the bar's own top of 2 — a very large swing is a very dark trough, which
+    // is a picture, where a clamp would be a flat lid over one.
+    return vec2<f32>(SHIMMER_EXPOSURE * depth, band);
+}
+// The layer's color under the sheet: `rgb` scaled by the gain the pair from
+// `shimmer_terms` asks for at this fragment.
+//
+// The headroom fit is the whole of the gamut handling, and it is what a
+// multiply gets for free that an addition cannot. A crest may not take the top
+// channel past 1, so where a color has less room above it than the swing asks
+// for, the swing SLIDES DOWN rather than clipping at the top: a sliding swing
+// is the same RATIO between its crest and its trough, which is what keeps the
+// sheet one size across the whole ramp, where a clipped one is not.
+//
+// It slides only as far as it has to, and where nothing forces it the trough
+// sits at the layer's own color — so a sheet is light ADDED wherever there is
+// room for light, which is the look this shares with the addition it replaces,
+// and turns to shade only as the room runs out. That is the ramp's bright half
+// and the near-white octave ghost, and a color already at white takes the whole
+// swing as shade, which is the case the coverage dip used to exist for.
+// Centring the swing instead — so the sheet's average exposure is 1 everywhere
+// — makes the mean uniform too, and costs more than it is worth: a white ghost
+// then averages 0.67 of its own light and the picture DIMS as Intensity rises,
+// which is not what a bar of that name can do.
+//
+// Read for its top channel alone, and read per LAYER rather than once per
+// fragment: a near-white ghost and a ramp color have different room, and one
+// fit for both would clip whichever it was not measured on.
+//
+// The early return is the identity, and it has to be exact rather than nearly
+// so: Off and Intensity 0 both arrive here as a swing of 0, and every layer
+// below premultiplies its color by its coverage, so a color coming back a
+// rounding under itself would show as a mark drawn dimmer than the bar says.
+fn shimmer_light(rgb: vec3<f32>, terms: vec2<f32>) -> vec3<f32> {
+    let a = terms.x;
+    if a <= 0.0 {
+        return rgb;
+    }
+    // The floor keeps the log finite on a black layer, which has no headroom
+    // worth measuring and no light to lose either.
+    let top = max(max(max(rgb.r, rgb.g), rgb.b), 1e-4);
+    let slide = min(0.0, -log(top) - a);
+    return rgb * exp(slide + a * terms.y);
 }
 
 // ---- Outer octave layer ----------------------------------------------------
@@ -1401,21 +1436,24 @@ fn node_paint(in: VsOut) -> vec4<f32> {
     // crossing the lattice rather than anything per slot, and a peak must not
     // push the layer back out past the fade the taper just closed.
     let mark_shimmer = shimmer_terms(pulse_marks_mode(), in.field, field_step);
-    // Blended ON by the slice weight rather than applied flat, which is what
+    // Taken down by the slice weight rather than applied flat, which is what
     // keeps the sheet inside the mark: `mark_slice` is how much of this pixel
-    // is a wedge some ring points at, so a plain slice mixes toward the
-    // identity (0, 1) and draws exactly as it does steady. The mode needs no
-    // guard of its own here -- `shimmer_terms` returns that same identity when
-    // the pattern is Off, so the mix is a no-op either way.
-    let glyph_shimmer = mix(vec2<f32>(0.0, 1.0), mark_shimmer, mark_slice);
-    // Clamped at white, and it has to be clamped HERE rather than left to the
-    // target's own clamp on write: every layer below is multiplied by its
-    // coverage first, so a channel left at 1.2 does not come back to 1, it
-    // comes back as 1.2 times whatever fraction of the pixel it covers. A
-    // half-covered edge would then draw brighter than the solid interior
-    // beside it, and the ring would grow a bright fringe under every peak.
-    glyph_rgb = min(glyph_rgb + vec3<f32>(glyph_shimmer.x), vec3<f32>(1.0));
-    glyph = glyph * glyph_shimmer.y;
+    // is a wedge some ring points at, so a plain slice arrives at a SWING of
+    // zero and draws exactly as it does steady. Scaling the swing and not the
+    // shape, because the shape is where in the sheet this fragment sits and a
+    // half-lit slice sits in the same place as a fully lit one -- it is how far
+    // the sheet moves it that the weight is about. The mode needs no guard of
+    // its own here -- `shimmer_terms` returns a zero swing when the pattern is
+    // Off, so the scale is a no-op either way.
+    let glyph_shimmer = vec2<f32>(mark_shimmer.x * mark_slice, mark_shimmer.y);
+    // No clamp at white here, where the added light this replaces needed one:
+    // `shimmer_light` fits its crest to the layer's own headroom, so the top
+    // channel lands AT 1 and never past it. That guarantee is what the layers
+    // below rely on, and they rely on it exactly -- each one premultiplies its
+    // color by its coverage, so a channel left at 1.2 would not come back to 1
+    // but to 1.2 times whatever fraction of the pixel it covers, and the ring
+    // would grow a bright fringe on its half-covered edges under every peak.
+    glyph_rgb = shimmer_light(glyph_rgb, glyph_shimmer);
 
     // Melody/bass rings, bracketing the octave band: melody inside, bass
     // outside — the ring's radius echoes where its note sits in the chord.
@@ -1438,14 +1476,14 @@ fn node_paint(in: VsOut) -> vec4<f32> {
     // above). ONE direction for both rings, not one each: they are concentric
     // and never overlap, so a single sweep crossing both reads as light
     // passing over the node, where two would read as two unrelated animations
-    // stacked at different radii. Clamped at white for the same reason the
-    // glyph layer's lift is: `mark` premultiplies this a few lines down.
-    let mark_rgb = min(
-        select(in.bass_color.rgb, in.melody_color.rgb, melody_cov > bass_cov)
-            + vec3<f32>(mark_shimmer.x),
-        vec3<f32>(1.0),
+    // stacked at different radii. The ring's own color is what the fit is
+    // measured on, which is why this is a second call and not the glyph
+    // layer's result reused -- a ring and the slice under it are different
+    // colors with different room above them.
+    let mark_rgb = shimmer_light(
+        select(in.bass_color.rgb, in.melody_color.rgb, melody_cov > bass_cov),
+        mark_shimmer,
     );
-    mark = mark * mark_shimmer.y;
     // Safety taper only. The radii above are already capped inside the
     // billboard (a circle of radius QUAD_MARGIN fits the square quad), so
     // this just keeps a soft edge from ending on the boundary; starting it

@@ -366,29 +366,34 @@ pub struct ViewConfig {
     /// chosen for.
     pub shimmer_width: f32,
     /// How strong the sweep is where it passes, 0..1 being none to the full
-    /// tuned depth: ONE number drives both of what a band does — how much
-    /// brightness it adds to the layer, and how far the layer's coverage dips
-    /// between bands — so the two can never be dialed against each other into
-    /// a shimmer that brightens without dimming or the reverse.
+    /// tuned depth: the ratio of light between a band's crest and the trough
+    /// beside it, which is ONE number for the whole of what a band does.
     ///
-    /// The light is ADDED rather than mixed toward white (`SHIMMER_LIFT` in
-    /// `lattice.wgsl`), which is what brings one setting close to meaning one
-    /// thing across the pitch ramp: a peak lands within a quarter as much on a
-    /// low note's dark color as on a high note's bright one, where a mix toward
-    /// a fixed white lifts whichever is further from it by twice as much and
-    /// spends the color of both getting there.
+    /// The light is a MULTIPLY — an exposure — rather than an amount added or a
+    /// mix toward white (`SHIMMER_EXPOSURE` in `lattice.wgsl`). That is what
+    /// makes one setting mean one thing across the pitch ramp, and it means it
+    /// in the currency the eye reads a moving texture in: the crest-to-trough
+    /// ratio a setting is worth varies 3% from the ramp's dark end to its bright
+    /// one, where an added light varies 28% and a mix toward white more still.
+    /// A sheet that was uniform in the LIGHT it added — which the addition very
+    /// nearly was — still read weaker on the ramp's bright half, because equal
+    /// added light is not equal contrast up there.
+    ///
+    /// It is also the setting that stops costing the color anything. Scaling all
+    /// three channels by one gain slides a color along its own chromaticity, so
+    /// hue and saturation hold at every setting and at every phase; an addition
+    /// clips in whichever channel is already highest, which drains chroma and
+    /// swings the ramp's bright end 15 degrees of hue, and a mix toward white
+    /// leaves 15% of the chroma everywhere.
     ///
     /// 0 is the layer drawing exactly as it does unshimmered, from a bar rather
-    /// than from the mode. The two stop moving together well before the top,
-    /// and not because they are separate: the added light CLIPS, first in
-    /// whichever channel is already highest, so the ramp's most saturated color
-    /// starts flattening at about 0.39 and all but its darkest by 1, while the
-    /// trough goes on deepening to the clamp under every one of them. So the
-    /// upper half of the bar buys its contrast by darkening the layer between
-    /// bands rather than by lighting them evenly, and what it takes on the way
-    /// is chroma and a little hue at the ramp's bright end — 15 degrees of it
-    /// by 1. Still more shimmer, and worth having, but a different trade from
-    /// the bottom half.
+    /// than from the mode. Upward there is one thing to know: where a color has
+    /// room above it the sweep reads as light added, and where it has none the
+    /// same setting is the same ratio taken as SHADE between crests instead —
+    /// the sheet slides down to fit rather than clipping at the top. So a deeper
+    /// setting always deepens the sweep, but on a color already near the top of
+    /// a channel it deepens downward, and the picture there gets darker between
+    /// bands rather than brighter under them.
     ///
     /// What the light costs is real at any setting, and it is the point of
     /// the bar: under a strong band an indicator says "an octave sounds here"

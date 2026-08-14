@@ -728,8 +728,8 @@ fn one_period_of_travel_repeats_every_pattern_but_hex() {
 ///   peak taking most of the period instead of a narrow crest;
 /// - and it does that without going any BRIGHTER at its brightest. That last
 ///   is what rules out the wiring this could otherwise have — a bar on
-///   `SHIMMER_LIFT`, raising the peak rather than widening the fall from it,
-///   passes the first two and fails this one. The peak is Intensity's to
+///   `SHIMMER_EXPOSURE`, raising the peak rather than widening the fall from
+///   it, passes the first two and fails this one. The peak is Intensity's to
 ///   move, and the shape's own crest is pinned wherever it lands: `pow(1, n)`
 ///   is 1 for every exponent, so however the profile is dialled the brightest
 ///   pixel is the same pixel at the same value.
@@ -892,11 +892,19 @@ fn sweep_over_color(gpu: &mut Shooter, color: glam::Vec4) -> Shots {
     (steady, swept)
 }
 
-/// Whether one shot's sweep moves this pixel: brighter at some moment of the
-/// period than the same pixel is steady, by more than a byte's rounding.
+/// Whether one shot's sweep moves this pixel: further from its steady self than
+/// a byte's rounding at some moment of the period.
+///
+/// MOVED and not brightened, which is the whole of what an exposure changes
+/// here. The sheet is a ratio fitted to the layer's own headroom
+/// (`shimmer_light`), so where a color has room the sweep reads as light added
+/// and where it has none it reads as shade between crests — and a color at the
+/// top of a channel takes ALL of it as shade. Asking for a brighter pixel would
+/// find the sheet at one end of the ramp and miss it at the other, which is the
+/// difference these tests exist to measure rather than to filter out.
 fn swept(shot: &Shots, i: usize) -> bool {
     let base = lightness(&shot.0[i * 4..i * 4 + 4]);
-    shot.1.iter().any(|f| lightness(&f[i * 4..i * 4 + 4]) > base + 1.0)
+    shot.1.iter().any(|f| (lightness(&f[i * 4..i * 4 + 4]) - base).abs() > 1.0)
 }
 
 /// The pixels one color's sweep moves, for a reading taken over a single shot.
@@ -925,32 +933,39 @@ fn lifted_pixels(a: &Shots, b: &Shots) -> Vec<usize> {
         .collect()
 }
 
-/// One sweep peak adds nearly as much brightness to the pitch ramp's dark end
-/// as to its bright one — far nearer than the mix it replaces, and not equal.
+/// One sweep is worth the same CONTRAST on the pitch ramp's dark end as on its
+/// bright one — the ratio between a crest and its trough, which is the currency
+/// a texture this fine is seen in.
 ///
-/// Nearly is the honest claim and still the whole point. On the ramp's own ends
-/// at full coverage an added light lands 38.9 points of `L*` against 30.3,
-/// where a mix toward white lands 53.6 against 26.8: a lerp's step is
-/// proportional to how far the color already is from its endpoint, so it gives
-/// the dark end twice what it gives the bright one and the sheet means two
-/// different things depending on which note it is passing over — not something
-/// a Speed, Width, Intensity or Softness setting can correct. An addition
-/// halves that spread.
+/// The currency is the claim, and it is a different one from the claim this
+/// test used to make. An added light is near-uniform in the `L*` it ADDS — 21.6
+/// to 22.4 across the ramp here, a 13% spread — and that was the property it
+/// was tuned for; but the crest-to-trough RATIO under it falls from 0.514 at
+/// the ramp's dark end to 0.369 at its bright one, a 28% decline, and with the
+/// fresh view's bloom on it is a 35% one. A moving texture is read by that
+/// ratio rather than by the difference, which is why the sheet reads weaker on
+/// the ramp's bright half however uniform the light it adds. An exposure makes
+/// the ratio the constant instead and lets the difference vary — the trade
+/// taken deliberately, and the reason `SHIMMER_EXPOSURE` is a gain rather than
+/// an amount.
 ///
-/// What is left of the spread is inherent rather than untuned, which is why the
-/// bound below is a quarter and not a tenth: the shader adds in encoded values,
-/// a power of 1/2.4, where `L*` is a cube root, so equal steps in one are
-/// near-equal rather than equal in the other — and past the knee the bright end
-/// also clips, which takes its share off the top (see `SHIMMER_LIFT`).
+/// The bound is a tenth where the old claim's was a quarter, because this is
+/// the property the model HOLDS rather than the one it approximates: a multiply
+/// is one ratio by construction, and what is left to vary is the layers under
+/// the rings that the sheet does not touch. Measured at 3% over the ramp with
+/// bloom off and 7% with it on.
 ///
 /// The two colors are the ramp's own ends, injected as the node's ring colors.
 /// The table the SHADER samples is the fixture's synthetic ramp and is not what
 /// the rings wear — which is exactly why `lifted_pixels` has to drop the pixels
 /// that draw the same in both shots. Bloom is off (`parity_scene`'s own
-/// setting): a halo clips the bright end to white and would answer this
-/// question with the post pass's soft knee rather than with the sheet.
+/// setting): a halo is a wide blur added over a fine texture, which raises a
+/// pixel's mean without raising its swing, and it lands unevenly along the ramp
+/// because the threshold's knee is steepest where the dark end sits. That is a
+/// real cost of the post pass and worth its own reading; it is not what the
+/// sheet does, which is what this asks.
 #[test]
-fn the_sweep_adds_the_same_light_to_a_dark_color_as_to_a_bright_one() {
+fn the_sweep_is_worth_the_same_contrast_on_a_dark_color_as_on_a_bright_one() {
     const SIZE: [u32; 2] = [256, 256];
     let Some(mut gpu) = Shooter::new(SIZE) else {
         return;
@@ -970,36 +985,43 @@ fn the_sweep_adds_the_same_light_to_a_dark_color_as_to_a_bright_one() {
         shared.len(),
     );
 
-    let added = |(steady, swept): &(Vec<u8>, Vec<Vec<u8>>)| -> f64 {
+    // Michelson contrast over one cycle, in the light a pixel actually carries:
+    // `L*` back through its own curve, so the ratio is a ratio of luminance
+    // rather than of a perceptual coordinate that is already a cube root of it.
+    let luminance = |l_star: f64| ((l_star + 16.0) / 116.0).powi(3);
+    let contrast = |(steady, swept): &(Vec<u8>, Vec<Vec<u8>>)| -> f64 {
         let sum: f64 = shared
             .iter()
             .map(|&i| {
                 let base = lightness(&steady[i * 4..i * 4 + 4]);
-                let peak = swept
-                    .iter()
-                    .map(|f| lightness(&f[i * 4..i * 4 + 4]))
-                    .fold(base, f64::max);
-                peak - base
+                let ls = swept.iter().map(|f| lightness(&f[i * 4..i * 4 + 4]));
+                let (mut hi, mut lo) = (base, base);
+                for l in ls {
+                    hi = hi.max(l);
+                    lo = lo.min(l);
+                }
+                let (hi, lo) = (luminance(hi), luminance(lo));
+                (hi - lo) / (hi + lo).max(1e-9)
             })
             .sum();
         sum / shared.len() as f64
     };
-    let (dim_lift, lit_lift) = (added(&dim), added(&lit));
-    eprintln!("peak adds L* {dim_lift:.1} to the ramp's dark end, {lit_lift:.1} to its bright end");
-    // A quarter, against a reading of 19.7%. A fifth is the tempting round
-    // number and it is the wrong one: it clears the measurement by a third of a
-    // percentage point, which is not margin but a coincidence, and the first
-    // driver whose rasteriser rounds a ring edge differently would fail a test
-    // about color science for a reason that has nothing to do with it. What is
-    // left to pin is the size of the win — the mix this replaces reads better
-    // than 2x apart, so a quarter still separates the two models, which is all
-    // a bound here can honestly do.
-    let spread = (dim_lift - lit_lift).abs() / dim_lift.max(lit_lift);
+    let (dim_c, lit_c) = (contrast(&dim), contrast(&lit));
+    eprintln!(
+        "one cycle is worth contrast {dim_c:.3} on the ramp's dark end, {lit_c:.3} on its \
+         bright end"
+    );
+    // A tenth, against a reading of 3% over the whole ramp. Wider than the
+    // measurement by enough for a rasteriser to disagree about a ring edge, and
+    // nowhere near wide enough to admit the model this replaces: an added light
+    // reads 28% apart on these same two colors, so the bound separates them
+    // several times over, which is what a bound here is for.
+    let spread = (dim_c - lit_c).abs() / dim_c.max(lit_c);
     assert!(
-        spread < 0.25,
-        "a peak added L* {dim_lift:.1} to the ramp's dark end but {lit_lift:.1} to its \
-         bright end ({:.0}% apart): the sheet is lifting one end of the ramp harder \
-         than the other, which is what an added light exists to hold down",
+        spread < 0.10,
+        "one cycle was worth contrast {dim_c:.3} on the ramp's dark end but {lit_c:.3} on \
+         its bright end ({:.0}% apart): the sheet is a different size depending on which \
+         note it is passing over, which is what one exposure everywhere exists to hold down",
         spread * 100.0,
     );
 }
@@ -1007,31 +1029,33 @@ fn the_sweep_adds_the_same_light_to_a_dark_color_as_to_a_bright_one() {
 /// A ring keeps its color under a peak — the sweep lights it rather than
 /// bleaching it, and lights it rather than turning it some other color.
 ///
-/// The half of the added light that shows. An addition leaves the gaps BETWEEN
-/// the channels where they were, where a mix toward white shrinks all three
-/// toward each other: across the ramp the mix leaves 15% of a color's chroma at
-/// every point, an addition between 44% and all of it. A ring going pale grey
-/// reads as the octave color failing rather than as light passing over it,
-/// which is most of why the sheet was hard to see on the ramp's dark end at
-/// all — down there a lerp toward white has far more color to take than
-/// brightness to give.
+/// This is what an exposure gets that neither model before it could. A multiply
+/// scales all three channels by ONE gain, which in linear light is a pure
+/// luminance scale, so the color slides along its own chromaticity and both
+/// halves of "keeps its color" hold at once. A mix toward white holds hue and
+/// leaves 15% of the chroma at every point on the ramp — bleached rather than
+/// lit. An addition holds the channel gaps until a channel saturates and then
+/// swings the hue 15 degrees at the ramp's bright end, because a clip lifts the
+/// channels with room past the one without.
 ///
-/// BOTH ends, because they fail differently and only one of them can fail below
-/// the knee. The dark end has headroom in every channel and keeps essentially
-/// all of its color. The bright end's top channel saturates, so past Intensity
-/// 0.39 a peak goes on lifting the channels with room and stops lifting the one
-/// without: that costs chroma AND swings the hue, which is the artifact an
-/// addition has and the mix does not — a lerp moves all three channels
-/// proportionally, so it holds the hue while it drains it. Measuring only the
-/// dark end would be checking the property exactly where it cannot fail.
+/// So the chroma claim here is not that enough survives but that NONE is lost:
+/// the proxy reads 0.270 steady against 0.423 at the peak on the dark end and
+/// 0.263 against 0.337 on the bright one. It rises because the proxy is a
+/// channel spread and a gain scales the gaps along with the channels; what
+/// matters is the direction, and a bleach is the one thing that cannot happen.
 ///
-/// Hue as well as chroma for the same reason: chroma that survives a rotated
-/// hue is a ring that has changed color rather than one that has lit up, and a
-/// max-minus-min reading cannot tell those apart. The chroma proxy is the
-/// spread between a pixel's channels, which is not a perceptual chroma and does
-/// not need to be — it is zero exactly when the color is grey, it moves
-/// monotonically with how far from grey the color is, and every shot is read
-/// the same way.
+/// BOTH ends, because they fail differently and only one of them can fail. The
+/// dark end has room above it and takes the sweep as light. The bright end's
+/// top channel has little, so `shimmer_light` slides the swing down and it
+/// takes the sweep partly as shade — the same ratio either way, which is the
+/// point, and the case where a clip would otherwise be waiting.
+///
+/// Hue as well as chroma, because chroma that survives a rotated hue is a ring
+/// that has changed color rather than one that has lit up, and a max-minus-min
+/// reading cannot tell those apart. The chroma proxy is the spread between a
+/// pixel's channels, which is not a perceptual chroma and does not need to be —
+/// it is zero exactly when the color is grey, it moves monotonically with how
+/// far from grey the color is, and every shot is read the same way.
 #[test]
 fn a_ring_keeps_its_color_under_a_sweep_peak() {
     const SIZE: [u32; 2] = [256, 256];
@@ -1042,19 +1066,19 @@ fn a_ring_keeps_its_color_under_a_sweep_peak() {
         harmonigraph_scene::ViewConfig::default().pitch_gradient,
     );
     // One pair of bounds for both ends rather than a number dialled per end:
-    // the bright end is what they are set from, since it is the end that clips,
-    // and a per-end figure would let a retune that started bleaching the dark
-    // end pass by being compared against itself.
+    // the bright end is what they are set from, since it is the end with no
+    // room above it, and a per-end figure would let a retune that started
+    // bleaching the dark end pass by being compared against itself.
     //
-    // The gap between the two ends is the measurement worth reading here, and
-    // it is wide: the dark end keeps 99.6% of its chroma and moves 0.5 degrees,
-    // the bright end keeps 73% and moves 15. Both bounds sit past the bright
-    // end's figure with room for a rasteriser to disagree about a ring edge,
-    // and nowhere near enough room for a bigger `SHIMMER_LIFT` — which is the
-    // failure they exist to catch, since raising it buys light by taking hue
-    // from exactly one end of the ramp.
-    const KEEPS_CHROMA: f64 = 0.55;
-    const HUE_SWING: f64 = 20.0;
+    // The chroma bound is 1 — none lost — where the added light this replaces
+    // needed 0.55 to pass at all, and the hue bound is 5 degrees where that
+    // needed 20. Both are the model's own guarantee rather than a tuning: one
+    // gain across three channels cannot move a hue or drain a chroma, so what
+    // is left for these to measure is the compositing under the ring, which is
+    // where the bright end's 2.2 degrees comes from. A model that went back to
+    // lifting the channels separately would fail both on the first peak.
+    const KEEPS_CHROMA: f64 = 1.0;
+    const HUE_SWING: f64 = 5.0;
 
     let ends = [("dark", lut[0]), ("bright", lut[harmonigraph_scene::PITCH_LUT_N - 1])];
     for (end, color) in ends {
@@ -1097,9 +1121,10 @@ fn a_ring_keeps_its_color_under_a_sweep_peak() {
             "{end} end: chroma {base:.3} steady, {peak:.3} at the peak; hue moves {swing:.1} deg"
         );
         assert!(
-            peak > base * KEEPS_CHROMA,
+            peak >= base * KEEPS_CHROMA,
             "at the ramp's {end} end a peak left {peak:.3} of the ring's {base:.3} chroma: \
-             the sheet is bleaching the color out rather than adding light to it",
+             the sheet is bleaching the color out rather than adding light to it, which \
+             one gain across three channels cannot do",
         );
         assert!(
             swing < HUE_SWING,
@@ -1327,22 +1352,21 @@ fn the_shimmers_speed_and_width_reach_the_picture_and_only_speed_carries_the_clo
     }
 }
 
-/// The mark rings' sweep reaches the slice WHOLE — both of a band's terms,
-/// not just the bright one.
+/// The mark rings' sweep reaches the slice WHOLE — both halves of a band's
+/// swing, not just the bright one.
 ///
-/// A band carries added light AND a dip in coverage, and the dip is what gives
-/// it a body to travel through (see `SHIMMER_TROUGH`). The ring takes both. The
-/// slice that ring names has to take both as well, or one mark is lit by two
-/// different lights: the annulus dipping between bands while the wedge it
-/// points at only ever brightens.
+/// A band is an exposure that runs above AND below the layer's own color
+/// (`shimmer_light`), and the dark half is what gives it a body to travel
+/// through. The ring takes both. The slice that ring names has to take both as
+/// well, or one mark is lit by two different lights: the annulus dipping
+/// between bands while the wedge it points at only ever brightens.
 ///
 /// The dip is the half a plausible wiring drops, which is why it is measured
-/// rather than assumed. `shimmer_terms` hands back a pair whose two terms
-/// disagree about what "no sheet here" means — 0 is the smallest lift, 1 the
-/// LARGEST coverage — so a slice blended toward the sheet by anything but the
-/// identity pair keeps its coverage pinned near 1 while brightening perfectly
-/// well, and the shimmer looks right everywhere except in the one term nobody
-/// checks.
+/// rather than assumed. The slice takes the sheet through a SWING scaled by how
+/// much of the pixel is a wedge some ring points at, and a wiring that scaled
+/// the band's shape instead would leave the slice sitting at a phase rather
+/// than at rest — brightening perfectly well while never dipping, and looking
+/// right everywhere except in the half nobody checks.
 #[test]
 fn the_mark_sheet_reaches_the_slice_whole() {
     const SIZE: [u32; 2] = [256, 256];
@@ -1461,14 +1485,28 @@ fn shimmer_intensity_scales_the_sweep_and_bottoms_out_at_the_steady_layer() {
         "half intensity is indistinguishable from full or from off; the bar is \
          a switch rather than a depth",
     );
-    // ...and it is a depth in the direction the name says: with the band over
-    // the node, more intensity is more light.
-    let (dim, mid, bright) = (total_light(&steady), total_light(&half), total_light(&full));
-    eprintln!("light at intensity 0/0.5/1: {dim}/{mid}/{bright}");
+    // ...and it is a depth in the direction the name says: a deeper setting
+    // takes the picture FURTHER from its steady self.
+    //
+    // Departure rather than added light, because an exposure fitted to the
+    // layer's headroom does not promise light in both directions and should not
+    // be asked for it. Where a color has room the sheet adds light; where it has
+    // none — this fixture's ring colors sit at the top of a channel, the ramp's
+    // do not — the same setting is the same RATIO taken as shade instead, so
+    // total light falls with intensity there while the sweep gets deeper. That
+    // is the bar working, and a total-light reading would call it broken.
+    let departure = |shot: &[u8]| -> f64 {
+        shot.chunks(4)
+            .zip(steady.chunks(4))
+            .map(|(a, b)| (lightness(a) - lightness(b)).abs())
+            .sum()
+    };
+    let (dim, mid, deep) = (departure(&steady), departure(&half), departure(&full));
+    eprintln!("the sweep departs from steady by {dim:.0}/{mid:.0}/{deep:.0} at intensity 0/0.5/1");
     assert!(
-        dim < mid && mid < bright,
-        "light did not climb with intensity ({dim}, {mid}, {bright}): a band over \
-         the node has to brighten it more the deeper the sweep is",
+        dim < mid && mid < deep,
+        "the sweep did not deepen with intensity ({dim:.0}, {mid:.0}, {deep:.0}): a band \
+         over the node has to move it further the deeper the sweep is",
     );
 }
 
@@ -1480,13 +1518,21 @@ fn shimmer_intensity_scales_the_sweep_and_bottoms_out_at_the_steady_layer() {
 /// normal. Each pixel's shimmer is read as the RATIO of its light to the same
 /// pixel's light with the mode Off, which cancels everything the node draws —
 /// the gaps between sectors, the rings, the glow falling off — and leaves the
-/// sweep alone. That ratio crosses 1 exactly where a band's edge is: above it
-/// under a band (lit), below it between bands (the coverage trough). So
-/// counting crossings counts band edges, with no threshold picked to suit the
-/// answer.
+/// sweep alone. A band edge is where that ratio crosses the profile's OWN mean,
+/// so counting crossings counts band edges, with no threshold picked to suit
+/// the answer.
 ///
-/// A deadband either side of 1 keeps a bin that is merely quiet from reading
-/// as a crossing; bins with little paint in them are dropped outright.
+/// The mean and not 1, which is where this used to look for the crossing. The
+/// sheet is an exposure fitted to each layer's headroom, so where a color has
+/// no room above it — this fixture's ring colors sit at the top of a channel —
+/// the whole sweep is shade and the ratio never reaches 1 at all. Counting
+/// crossings of 1 there finds a profile entirely on one side of the line and
+/// reports no bands in a picture full of them. The mean rides wherever the
+/// sweep put the profile and asks the question the test is actually about,
+/// which is how many bands fit across one node.
+///
+/// A deadband either side of the mean keeps a bin that is merely quiet from
+/// reading as a crossing; bins with little paint in them are dropped outright.
 #[test]
 fn a_tight_width_puts_several_bands_across_one_node() {
     const SIZE: [u32; 2] = [256, 256];
@@ -1534,6 +1580,13 @@ fn a_tight_width_puts_several_bands_across_one_node() {
         // node covers a fraction of the frame, and the empty ground either
         // side of it would otherwise contribute a ratio of 0/0.
         let floor = lit.iter().max().copied().unwrap_or(0) / 8;
+        let ratios: Vec<f64> = lit
+            .iter()
+            .zip(&here)
+            .filter(|(l, _)| **l >= floor.max(1))
+            .map(|(l, h)| *h as f64 / *l as f64)
+            .collect();
+        let mean = ratios.iter().sum::<f64>() / ratios.len().max(1) as f64;
         let mut crossings = 0;
         let mut above: Option<bool> = None;
         for (l, h) in lit.iter().zip(&here) {
@@ -1541,9 +1594,9 @@ fn a_tight_width_puts_several_bands_across_one_node() {
                 continue;
             }
             let ratio = *h as f64 / *l as f64;
-            let now = if ratio > 1.01 {
+            let now = if ratio > mean * 1.01 {
                 Some(true)
-            } else if ratio < 0.99 {
+            } else if ratio < mean * 0.99 {
                 Some(false)
             } else {
                 None
@@ -3689,4 +3742,5 @@ fn a_label_adds_no_light_through_the_bloom() {
         (at / 4) / SCENE_SIZE[0] as usize,
     );
 }
+
 
