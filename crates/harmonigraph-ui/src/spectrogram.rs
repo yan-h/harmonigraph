@@ -79,6 +79,67 @@ fn quantized(pixels: f32) -> f32 {
     (pixels / PANE_QUANTUM).ceil() * PANE_QUANTUM
 }
 
+/// Rows the live image is capped at while its style is MOVING — a wheel or
+/// drag rewriting the pitch range, the Level window or a palette bar on every
+/// frame of itself, or the Span crossing a slab rung. Each of those frames
+/// restarts the ring, and a restart's compose is rows x slabs — so the rows,
+/// the one axis the picture can afford to lose for a moment, are half of what
+/// the gesture trades away; the other half is the wide rows' read, which goes
+/// from the power mean to a plain max ([`RowRead::Max`]), because zoomed out
+/// the mean's cost is in the buckets and holds whatever the row count. The
+/// short image is stretched over the same pane by the sampler, so the zoom
+/// stays smooth and the picture goes a little soft and a shade bright in the
+/// floor; [`STYLE_SETTLE`] after the style stops moving, one build at full
+/// quality sharpens it again.
+///
+/// Four quanta of [`PANE_QUANTUM`], so a pane short enough to build this many
+/// rows anyway loses no height at all — it still takes the coarse READ, which
+/// is the part of the trade its zoomed-out frames need.
+pub(crate) const GESTURE_ROWS: usize = 4 * PANE_QUANTUM as usize;
+
+/// Seconds the full-resolution style must hold still before the image is
+/// rebuilt at full height. Short enough that letting go of a zoom reads as
+/// the picture snapping into focus; long enough that a wheel's notches, which
+/// arrive as separate frames tens of milliseconds apart, stay inside one
+/// gesture instead of paying a full-height rebuild between every pair.
+pub(crate) const STYLE_SETTLE: f64 = 0.2;
+
+/// The full-resolution [`ColumnStyle`] a surface last built toward, and when
+/// it last CHANGED — what decides whether a frame sits inside a style gesture
+/// and should build at [`GESTURE_ROWS`].
+///
+/// Fed the style of the FULL plan, never the degraded one: the degraded
+/// plan's rows differ from the full plan's by construction, so watching what
+/// was built would read as a style that never stops moving.
+pub(crate) struct StyleMotion {
+    style: ColumnStyle,
+    changed_at: f64,
+}
+
+impl StyleMotion {
+    /// Observe this frame's full-resolution style at time `t` (egui's input
+    /// clock): whether it is still inside a gesture — it changed this frame,
+    /// or within [`STYLE_SETTLE`] before it.
+    ///
+    /// First sight of a surface is a fresh pane, not a gesture, so it builds
+    /// at full height straight away.
+    pub(crate) fn observe(slot: &mut Option<StyleMotion>, style: &ColumnStyle, t: f64) -> bool {
+        match slot {
+            Some(m) if m.style == *style => t - m.changed_at < STYLE_SETTLE,
+            Some(m) => {
+                m.style = style.clone();
+                m.changed_at = t;
+                true
+            }
+            None => {
+                *slot =
+                    Some(StyleMotion { style: style.clone(), changed_at: t - STYLE_SETTLE });
+                false
+            }
+        }
+    }
+}
+
 /// The live grid's finest rung, in analysis intervals — see [`live_slab`].
 ///
 /// TWO, not one: the column grid and the slab grid share a period on the ladder
@@ -200,15 +261,28 @@ static ROW_WEIGHT: std::sync::LazyLock<[f32; 256]> = std::sync::LazyLock::new(||
 pub(crate) enum RowRead {
     /// A power mean over `from..to` (always at least one bucket wide).
     Mean { from: usize, to: usize },
+    /// A plain MAX over the same run — the read a COARSE image's wide rows
+    /// take (see [`bins_for`]). One branchless pass, against the mean's two
+    /// passes, weight table and logarithm; zoomed out the runs jointly cover
+    /// the whole spectrum whatever the row count, so this is what keeps a
+    /// gesture frame's compose flat in the buckets. What it costs is the
+    /// floor: a max of N draws sits above their typical value by an amount
+    /// that grows with N, which is exactly the zoom-dependence
+    /// [`ROW_MEAN_ORDER`](crate::panes::spectral::spectrogram::ROW_MEAN_ORDER)
+    /// exists to remove — tolerable for the frames of a gesture, never in a
+    /// settled image.
+    Max { from: usize, to: usize },
     /// Between `lo` and the bucket above it, `f` of the way up.
     Lerp { lo: usize, f: f32 },
 }
 
 impl RowRead {
-    /// This row's value from one stored column, in the dB the column holds —
-    /// which is also the domain the ramp reads, so interpolating in it is
-    /// interpolating exactly what will be drawn.
-    fn of(self, db: &harmonigraph_core::spectrogram::ColumnDb) -> BucketDb {
+    /// This row's value from one stored run of buckets — a raw column, or a
+    /// slab the grid has MAXed columns into — in the dB the buckets hold, which
+    /// is also the domain the ramp reads, so interpolating in it is
+    /// interpolating exactly what will be drawn. `db` is a whole spectrum,
+    /// [`SPECTRUM_BINS`] long.
+    fn of(self, db: &[BucketDb]) -> BucketDb {
         match self {
             RowRead::Mean { from, to } => {
                 let run = &db[from..to];
@@ -230,6 +304,7 @@ impl RowRead {
                 // 255 steps lands on 0 rather than wrapping.
                 top.saturating_sub(steps.round() as u8)
             }
+            RowRead::Max { from, to } => db[from..to].iter().copied().max().unwrap_or(0),
             RowRead::Lerp { lo, f } => {
                 let (a, b) = (db[lo], db[(lo + 1).min(SPECTRUM_BINS - 1)]);
                 (f32::from(a) + (f32::from(b) - f32::from(a)) * f).round() as BucketDb
@@ -359,6 +434,12 @@ pub(crate) struct SpectrogramRing {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ColumnStyle {
     rows: usize,
+    /// Whether the wide rows read [`RowRead::Max`] rather than the power mean
+    /// — a COARSE image, built mid-gesture. The two reads draw different
+    /// floors from the same buckets, so a coarse column carried into a
+    /// settled frame would leave texels sitting a few dB high; in the style,
+    /// the settle is a restart like any other.
+    coarse: bool,
     bucket_bits: u64,
     scale_min_bits: u32,
     scale_span_bits: u32,
@@ -461,7 +542,7 @@ impl ColumnStyle {
     /// Which field of this differs from `other`, or `None` if none does — the
     /// first found, since one is enough to say where to look.
     fn differs(&self, other: &ColumnStyle) -> Option<Restart> {
-        if self.rows != other.rows {
+        if self.rows != other.rows || self.coarse != other.coarse {
             Some(Restart::Rows)
         } else if self.bucket_bits != other.bucket_bits {
             Some(Restart::Slab)
@@ -478,6 +559,7 @@ impl ColumnStyle {
 
     pub(crate) fn new(
         rows: usize,
+        coarse: bool,
         bucket: f64,
         scale_min: f32,
         scale_span: f32,
@@ -486,6 +568,7 @@ impl ColumnStyle {
         // Floats as bit patterns, so equality is exact and free of NaN quirks.
         ColumnStyle {
             rows,
+            coarse,
             bucket_bits: bucket.to_bits(),
             scale_min_bits: scale_min.to_bits(),
             scale_span_bits: scale_span.to_bits(),
@@ -607,6 +690,10 @@ pub(crate) struct PaneView {
     pub(crate) cfg: SpectrumConfig,
     /// The whole-song (offline playhead) layout rather than the live window.
     pub(crate) whole: bool,
+    /// Build the COARSE image a moving style gets: wide rows read
+    /// [`RowRead::Max`], and the caller has already capped `max_rows` at
+    /// [`GESTURE_ROWS`]. See [`StyleMotion`].
+    pub(crate) coarse: bool,
 }
 
 /// Which stored columns a frame draws — the other half of a [`Plan`]'s inputs.
@@ -673,8 +760,14 @@ impl Plan {
         };
         // The heatmap's pixels are a pure function of these; if none has moved
         // since the uploaded texture was built, building it again is dead work.
-        let style =
-            ColumnStyle::new(rows, bucket, view.scale.min_midi, view.scale.span, &view.cfg);
+        let style = ColumnStyle::new(
+            rows,
+            view.coarse,
+            bucket,
+            view.scale.min_midi,
+            view.scale.span,
+            &view.cfg,
+        );
         let key = crate::SpectrogramKey::new(
             style,
             columns.first,
@@ -692,7 +785,15 @@ impl Plan {
 /// mean or by interpolation depending on which is finer — see [`RowRead`]. A
 /// bucket of slack on each side lets the filtering carry the visible range
 /// cleanly to its edges.
-pub(crate) fn bins_for(rows: usize, scale: &PitchScale) -> Vec<Bin> {
+///
+/// `coarse` swaps the wide rows' power mean for a plain [`RowRead::Max`] —
+/// half of what a moving style trades away, beside the row cap
+/// ([`GESTURE_ROWS`]), and the half that matters zoomed out, where the mean's
+/// cost is in the buckets rather than the rows. It must match the
+/// [`Plan`] the image is built for: the two reads draw different pictures, so
+/// the flag lives in [`ColumnStyle`] and a coarse-painted column can never be
+/// carried into a settled frame.
+pub(crate) fn bins_for(rows: usize, scale: &PitchScale, coarse: bool) -> Vec<Bin> {
     let bin_semis = 1.0 / BINS_PER_SEMITONE as f32;
     let margin = (bin_semis / scale.span).min(0.5);
     let bucket_of = |t: f32| {
@@ -711,7 +812,8 @@ pub(crate) fn bins_for(rows: usize, scale: &PitchScale) -> Vec<Bin> {
             let t = 0.5 * (t0 + t1);
             let midi = scale.min_midi + t * scale.span;
             let read = if last > idx {
-                RowRead::Mean { from: idx, to: (last + 1).min(SPECTRUM_BINS) }
+                let (from, to) = (idx, (last + 1).min(SPECTRUM_BINS));
+                if coarse { RowRead::Max { from, to } } else { RowRead::Mean { from, to } }
             } else {
                 // Narrower than a bucket: read between the two whose centers
                 // straddle this row's center. A bucket's center sits half a
@@ -741,21 +843,23 @@ pub(crate) fn build(
     bins: &[Bin],
 ) -> Option<TexLayout> {
     let (bucket, cfg) = (plan.bucket, view.cfg);
-    // Aggregate the in-window columns into one image column per depth pixel by
-    // a FIXED time grid, MAX within each slab (which keeps a short note's peak
-    // and pins it against the scroll — see `aggregate_rows`).
-    let reads: Vec<RowRead> = bins.iter().map(|b| b.read).collect();
+    // Aggregate the in-window columns into one slab per depth pixel by a FIXED
+    // time grid, MAX within each slab (which keeps a short note's peak and pins
+    // it against the scroll — see `aggregate_slabs`). Slabs stay in BUCKET
+    // space here: the rows read them below, at compose time, so the fold is
+    // blind to the pitch axis and a zoom or pan of it re-reads this grid
+    // instead of re-walking the store.
     let (centers, power) = match whole {
         // Offline whole-song: a fixed column set, already cached after the first
         // frame — a plain batch aggregate.
-        Some(ws) => aggregate_rows(ws.columns.iter(), &reads, bucket),
+        Some(ws) => aggregate_slabs(ws.columns.iter(), bucket),
         // Live: fold only the new column(s) into the kept slab grid instead of
         // rescanning the whole window every rebuild. `history` and the
         // aggregator are disjoint fields of `spectrum`.
         None => {
             let hist = &spectrum.history;
             let agg = spectrum.spectrogram[surface].agg.get_or_insert_with(SpectrogramAgg::new);
-            agg.window(hist, plan.first, bucket, &reads, plan.capacity)
+            agg.window(hist, plan.first, bucket, plan.capacity)
         }
     };
     let (w, h) = (centers.len(), bins.len());
@@ -806,47 +910,65 @@ pub(crate) fn build(
 }
 
 /// Group `columns` (oldest first) into time-slabs of `bucket` seconds, taking
-/// the MAX over each slab of whatever each output row read from it (`reads`
-/// gives how a row draws from the source buckets). Returns each slab's center
-/// time and a flat row-major power grid (`rows * nb`).
+/// each bucket's MAX over the columns that landed in the slab. Returns each
+/// slab's center time and a flat slab-major grid of whole spectra
+/// (`slabs * SPECTRUM_BINS`).
 ///
-/// The two axes aggregate DIFFERENTLY, and the asymmetry is the point. Time
-/// takes a plain max, because a spectrogram cell answers "was there anything
-/// here" and averaging a brief loud column with the silence either side answers
-/// "not much" — a slab spans a few columns of a heavily OVERLAPPED stream (95%
-/// at the live rate, and 84% even where
+/// The slabs stay in BUCKET space — the display rows read them at compose time
+/// ([`fill_column_into`]), not here. That order is what makes the grid a thing
+/// worth keeping: it depends on nothing but the slab width, so the pitch axis
+/// can zoom, pan or change its row count and the fold is untouched. The two
+/// axes still aggregate DIFFERENTLY, and the asymmetry is still the point.
+/// Time takes a plain max, because a spectrogram cell answers "was there
+/// anything here" and averaging a brief loud column with the silence either
+/// side answers "not much" — a slab spans a few columns of a heavily
+/// OVERLAPPED stream (95% at the live rate, and 84% even where
 /// [`WholeSong`](crate::WholeSong) stretches the hop for a three-minute take),
 /// so the max is over near-copies of one measurement rather than over a
 /// distribution. Pitch takes a power mean instead ([`RowRead`]), because a row
 /// zoomed out spans a dozen INDEPENDENT buckets, and the max of a dozen samples
 /// of a noise floor is a function of how many were drawn.
 ///
+/// Maxing the buckets FIRST and reading the rows from the result is not the
+/// same picture as reading each column and maxing the answers — a mean over a
+/// slab's maxed buckets can only come out at or above the max of the per-column
+/// means, and a lerp across a maxed pair is not the max of the lerps. The
+/// difference lives entirely inside one slab, between columns that are
+/// near-copies of one measurement (the same overlap argument as the max
+/// itself), where it is a fraction of a dB; what it buys is the fold's
+/// independence from the rows, which is the whole cost of a pitch gesture.
+///
 /// The slab a column lands in is `floor(time / bucket)` — a function of
 /// absolute time alone, so it doesn't move as columns scroll off the far end
 /// of the ring. That, plus MAX (rather than dropping samples), is what stops a
 /// short, bright note from flickering: its peak is kept and stays in one
 /// slowly-scrolling slab instead of blinking in and out with the sampling.
-fn aggregate_rows<'a>(
+fn aggregate_slabs<'a>(
     columns: impl Iterator<Item = &'a crate::SpectrogramColumn>,
-    reads: &[RowRead],
     bucket: f64,
 ) -> (Vec<f64>, Vec<BucketDb>) {
     let mut grid = SlabGrid::default();
     for col in columns {
-        grid.fold(col, reads, bucket);
+        grid.fold(col, bucket);
     }
     (grid.centers, grid.power)
 }
 
 /// The growing slab grid the spectrogram image is built from: `centers[i]` is
-/// slab `i`'s center time and `power` is the flat row-major `[slab][bin]` MAX
-/// grid (`slab * nb + bin`). [`fold`](SlabGrid::fold) is the single per-column
-/// step both [`aggregate_rows`] (batch, from scratch) and [`SpectrogramAgg`]
+/// slab `i`'s center time and `power` is the flat slab-major
+/// `[slab][source bucket]` MAX grid (`slab * SPECTRUM_BINS + bucket`).
+/// [`fold`](SlabGrid::fold) is the single per-column step both
+/// [`aggregate_slabs`] (batch, from scratch) and [`SpectrogramAgg`]
 /// (incremental, live) drive — so the two can never disagree.
 ///
+/// A slab is a whole SPECTRUM, not a column of display rows. The rows read the
+/// grid at compose time, so nothing here knows the pitch scale or the row
+/// count — which is what lets a pitch gesture re-read a grid that is already
+/// folded instead of re-walking the store on every frame of itself.
+///
 /// Held in the same dB bytes the columns are stored in: MAX is order-preserving
-/// under the encoding, so aggregating in it is exact, and the grid — which is
-/// rebuilt and cloned every frame — stays a quarter the size.
+/// under the encoding, so aggregating in it is exact, and folding a column is
+/// an elementwise byte max the compiler vectorizes.
 #[derive(Default, Clone)]
 struct SlabGrid {
     centers: Vec<f64>,
@@ -868,8 +990,8 @@ impl SlabGrid {
     /// the column ran BACKWARDS in time relative to the current slab — batch
     /// ignores the result (it just starts a fresh row, as before), while the
     /// incremental aggregator treats it as a broken invariant and rebuilds.
-    fn fold(&mut self, col: &crate::SpectrogramColumn, reads: &[RowRead], bucket: f64) -> bool {
-        let nb = reads.len();
+    fn fold(&mut self, col: &crate::SpectrogramColumn, bucket: f64) -> bool {
+        let nb = SPECTRUM_BINS;
         let key = (col.time / bucket).floor() as i64;
         let forward = match self.cur_key {
             Some(k) if k == key => true,
@@ -915,31 +1037,39 @@ impl SlabGrid {
             }
         };
         let base = self.power.len() - nb;
-        for (k, read) in reads.iter().enumerate() {
-            let v = read.of(&col.db);
-            if v > self.power[base + k] {
-                self.power[base + k] = v;
-            }
+        // Branchless, so the loop vectorizes: with the compare written as a
+        // branch this is the whole cost of a refold, byte by byte.
+        for (kept, &fresh) in self.power[base..].iter_mut().zip(col.db.iter()) {
+            *kept = (*kept).max(fresh);
         }
         forward
     }
 }
 
-/// Live-only incremental spectrogram aggregation. `aggregate_rows` re-scans
+/// Live-only incremental spectrogram aggregation. `aggregate_slabs` re-scans
 /// EVERY in-window column on each ~20 Hz rebuild — O(columns-in-window), which
 /// grows with the roll Span and is the residual creep the texture cache didn't
 /// remove. This keeps the slab grid across frames instead: a rebuild folds only
 /// the newly-arrived column(s) and drops the scrolled-out front, so its cost is
 /// O(new columns), independent of how much history has accumulated.
 ///
-/// It reproduces `aggregate_rows` over the columns AS THEY ARRIVED: the shared
+/// The grid's one layout input is the slab width. The pitch axis — its range,
+/// its row count, which buckets a row reads — is applied downstream, at
+/// compose time, so a pitch zoom or pan re-reads a grid that is already folded
+/// and never comes here. That is not incidental: a pitch drag moves its scale
+/// on every frame of itself, and when the rows were folded in it re-walked the
+/// whole retention each of those frames — 46 ms at the default Span on a
+/// full-height 2x pane, and past 100 ms at long ones, measured.
+///
+/// It reproduces `aggregate_slabs` over the columns AS THEY ARRIVED: the shared
 /// [`SlabGrid::fold`] gives identical slab values, and the window is served from
-/// the same first slab batch would start at. A layout change (bucket/bins), a
-/// backward transport jump, or a window that jumped outside the kept grid falls
-/// back to a full rebuild — each of which is just `aggregate_rows` again, so
-/// correctness never rides on the fast path alone. The offline whole-song path
-/// does NOT use this (its column set is fixed and already cached after the first
-/// frame).
+/// the same first slab batch would start at. A slab-width change (the Span
+/// crossing a ladder rung), a backward transport jump, or a window that jumped
+/// outside the kept grid falls back to a full rebuild — each of which is just
+/// `aggregate_slabs` again, so correctness never rides on the fast path alone;
+/// and the refold is an elementwise byte max per column, a few milliseconds
+/// even over the whole store. The offline whole-song path does NOT use this
+/// (its column set is fixed and already cached after the first frame).
 ///
 /// **A folded slab is never recomputed, even when the store re-writes the
 /// columns behind it.** Columns arrive in time order, so no future column can
@@ -948,10 +1078,10 @@ impl SlabGrid {
 /// `SpectrumHistory`'s finest tier, columns are MAX-merged in pairs and re-timed
 /// to their midpoint as they age. Re-deriving an old slab from the merged store
 /// therefore answers a slightly different question than folding the raw columns
-/// did (a merged pair lands in one slab rather than straddling two, and a
-/// [`RowRead::Lerp`] row interpolating across a maxed-together pair is not the
-/// max of the two interpolations) — so the two disagree, and this keeps what it
-/// folded from the finer data rather than re-reading the coarser.
+/// did — a merged pair lands in one slab rather than straddling two, smearing
+/// its energy across a boundary the raw columns respected — so the two
+/// disagree, and this keeps what it folded from the finer data rather than
+/// re-reading the coarser.
 ///
 /// That is also what the offline renderer sees: [`crate::WholeSong`] analyses a
 /// take into raw columns and never merges them, so a grid built from raw columns
@@ -965,7 +1095,6 @@ impl SlabGrid {
 pub(crate) struct SpectrogramAgg {
     grid: SlabGrid,
     bucket_bits: u64,
-    reads: Vec<RowRead>,
     /// Time of the newest column already folded; the next update folds only
     /// columns past it.
     last_time: f64,
@@ -973,7 +1102,7 @@ pub(crate) struct SpectrogramAgg {
     /// of this type, and every condition guarding it can only ever ADD a reason
     /// to fall back — so without a count, a guard that quietly always fires
     /// would still pass every correctness test here and simply hand back the
-    /// `aggregate_rows` cost this exists to avoid.
+    /// `aggregate_slabs` cost this exists to avoid.
     ///
     /// Compiled in rather than test-only, and read out by the performance
     /// overlay: a fallback is invisible from inside the DAW, where the picture
@@ -993,7 +1122,6 @@ impl SpectrogramAgg {
         SpectrogramAgg {
             grid: SlabGrid::default(),
             bucket_bits: 0,
-            reads: Vec::new(),
             last_time: f64::NEG_INFINITY,
             rebuilds: 0,
         }
@@ -1014,7 +1142,6 @@ impl SpectrogramAgg {
         history: &crate::SpectrumHistory,
         first: usize,
         bucket: f64,
-        reads: &[RowRead],
         keep: usize,
     ) {
         self.rebuilds += 1;
@@ -1025,11 +1152,9 @@ impl SpectrogramAgg {
         let cutoff = ((newest / bucket).floor() - keep as f64 + 1.0) * bucket;
         let start = history.partition_point(|c| c.time < cutoff).min(first);
         for col in history.iter_from(start) {
-            self.grid.fold(col, reads, bucket);
+            self.grid.fold(col, bucket);
         }
         self.bucket_bits = bucket.to_bits();
-        self.reads.clear();
-        self.reads.extend_from_slice(reads);
         self.last_time = history.back().map_or(f64::NEG_INFINITY, |c| c.time);
     }
 
@@ -1042,12 +1167,11 @@ impl SpectrogramAgg {
         history: &crate::SpectrumHistory,
         first: usize,
         bucket: f64,
-        reads: &[RowRead],
         keep: usize,
     ) -> (Vec<f64>, Vec<BucketDb>) {
         let target = history.get(first).map(|c| (c.time / bucket).floor() as i64);
         let newest = history.back().map_or(f64::NEG_INFINITY, |c| c.time);
-        let layout_same = self.bucket_bits == bucket.to_bits() && self.reads == reads;
+        let layout_same = self.bucket_bits == bucket.to_bits();
         // The fast path is valid only when: the layout is unchanged, we have a
         // prior grid, time hasn't gone backwards, and the window's first slab
         // still sits inside the grid we kept (front..=back). Anything else is a
@@ -1063,13 +1187,13 @@ impl SpectrogramAgg {
             );
 
         if !can_increment {
-            self.rebuild(history, first, bucket, reads, keep);
+            self.rebuild(history, first, bucket, keep);
         } else {
             // Fold only columns newer than the last we folded.
             let start = history.partition_point(|c| c.time <= self.last_time);
             let mut forward = true;
             for col in history.iter_from(start) {
-                if !self.grid.fold(col, reads, bucket) {
+                if !self.grid.fold(col, bucket) {
                     forward = false;
                     break;
                 }
@@ -1077,10 +1201,10 @@ impl SpectrogramAgg {
             }
             if !forward {
                 // A mid-stream backward jump broke the grid; rebuild clean.
-                self.rebuild(history, first, bucket, reads, keep);
+                self.rebuild(history, first, bucket, keep);
             }
         }
-        self.view(history, first, bucket, reads, target, keep)
+        self.view(history, first, bucket, target, keep)
     }
 
     /// The window as the display reads it, taken from the kept grid: every slab
@@ -1117,11 +1241,10 @@ impl SpectrogramAgg {
         history: &crate::SpectrumHistory,
         first: usize,
         bucket: f64,
-        reads: &[RowRead],
         target: Option<i64>,
         keep: usize,
     ) -> (Vec<f64>, Vec<BucketDb>) {
-        let nb = reads.len();
+        let nb = SPECTRUM_BINS;
         // One mark per slab, which the hold loop at the bottom relies on to
         // index `held` by the same offset it indexes `centers` by. The three
         // arrays are grown together by `fold` and trimmed together below, and
@@ -1160,11 +1283,8 @@ impl SpectrogramAgg {
             if (c.time / bucket).floor() as i64 != t {
                 break;
             }
-            for (k, read) in reads.iter().enumerate() {
-                let v = read.of(&c.db);
-                if v > power[k] {
-                    power[k] = v;
-                }
+            for (kept, &fresh) in power[..nb].iter_mut().zip(c.db.iter()) {
+                *kept = (*kept).max(fresh);
             }
         }
         // A HELD slab is a copy of the one before it, so pruning the first slab
@@ -1399,7 +1519,7 @@ fn write_ring(
         // whatever the allocation held.
         let fresh = SpectrogramRing::restarted(capacity, style, first_key);
         let pixels = restart_pixels(&fresh, tex_w, h, first_key, last_key, |i, out| {
-            fill_column_into(&shades, &power[i * h..(i + 1) * h], out)
+            fill_column_into(&shades, bins, slab_of(power, i), out)
         });
         let image = egui::ColorImage::new([tex_w, h], pixels);
         match &mut spectrum.spectrogram[surface].tex {
@@ -1432,7 +1552,7 @@ fn write_ring(
     let forward = ring.written_through.max(first_key)..=last_key;
     for key in back.chain(forward) {
         let i = (key - first_key) as usize;
-        fill_column_into(&shades, &power[i * h..(i + 1) * h], &mut scratch);
+        fill_column_into(&shades, bins, slab_of(power, i), &mut scratch);
         let image = egui::ColorImage::new([1, h], scratch.clone());
         let x = ring.x_of(key);
         tex.set_partial([x, 0], image.clone(), opts);
@@ -1453,7 +1573,7 @@ fn write_ring(
     // instead (see [`u_drawn`]) — which leaves nothing past the last slab's
     // centre ever sampled.
     {
-        fill_column_into(&shades, &power[..h], &mut scratch);
+        fill_column_into(&shades, bins, slab_of(power, 0), &mut scratch);
         let image = egui::ColorImage::new([1, h], scratch.clone());
         let x = ring.x_of(first_key - 1);
         tex.set_partial([x, 0], image.clone(), opts);
@@ -1548,15 +1668,24 @@ impl Shades {
     }
 }
 
+/// Slab `i`'s spectrum inside a flat slab-major grid — the slice every
+/// composer hands to [`fill_column_into`].
+fn slab_of(power: &[BucketDb], i: usize) -> &[BucketDb] {
+    &power[i * SPECTRUM_BINS..(i + 1) * SPECTRUM_BINS]
+}
+
 /// One slab's column of the heatmap, bottom (lowest bin) first — the pixels
 /// [`fill_pixels`] would put in that column, for a build that writes columns
-/// one at a time.
+/// one at a time. `slab` is the slab's whole spectrum; each row reads its own
+/// run of it here, at compose time, which is the step that knows the pitch
+/// axis. This is where a repaint's per-texel cost now lives, and it is the
+/// cost a restyle pays INSTEAD of re-walking the store.
 ///
 /// Into a caller-owned buffer: a restart paints a thousand columns, and a fresh
 /// `Vec` each was a thousand allocations of a few kilobytes inside one frame.
-fn fill_column_into(shades: &Shades, slab: &[BucketDb], out: &mut Vec<Color32>) {
+fn fill_column_into(shades: &Shades, bins: &[Bin], slab: &[BucketDb], out: &mut Vec<Color32>) {
     out.clear();
-    out.extend(slab.iter().enumerate().map(|(r, &p)| shades.at(r, p)));
+    out.extend(bins.iter().enumerate().map(|(r, b)| shades.at(r, b.read.of(slab))));
 }
 
 /// One cell's 0..1 loudness from its stored byte, evaluated directly — the
@@ -1593,9 +1722,10 @@ pub(crate) fn bin_level_for_test(cfg: &SpectrumConfig, bucket: BucketDb, midi: f
 }
 
 /// The heatmap image, row-major `pixel(x = slab, y = bin)` at `[y * w + x]`,
-/// with `y = 0` the lowest bin. `power` is the flat `w * bins.len()` grid from
-/// [`aggregate_rows`]. Opaque throughout — silence is the ramp's dark end, so
-/// the plane is filled rather than see-through.
+/// with `y = 0` the lowest bin. `power` is the flat `w * SPECTRUM_BINS` grid
+/// from [`aggregate_slabs`], each slab a whole spectrum its rows read here.
+/// Opaque throughout — silence is the ramp's dark end, so the plane is filled
+/// rather than see-through.
 fn fill_pixels(cfg: &SpectrumConfig, w: usize, bins: &[Bin], power: &[BucketDb]) -> Vec<Color32> {
     let h = bins.len();
     let shades = Shades::new(cfg, bins);
@@ -1604,13 +1734,13 @@ fn fill_pixels(cfg: &SpectrumConfig, w: usize, bins: &[Bin], power: &[BucketDb])
     // taken a whole column at a time it misses cache on every texel — the same
     // cost [`restart_pixels`] tiles away, and for the same reason. A tile of
     // slabs writes each row in one contiguous run, while the slabs it reads
-    // advance a byte at a time down their own columns.
+    // advance down their own columns.
     for x0 in (0..w).step_by(TRANSPOSE_TILE) {
         let x1 = (x0 + TRANSPOSE_TILE).min(w);
-        for y in 0..h {
+        for (y, bin) in bins.iter().enumerate() {
             let base = y * w;
             for x in x0..x1 {
-                pixels[base + x] = shades.at(y, power[x * h + y]);
+                pixels[base + x] = shades.at(y, bin.read.of(slab_of(power, x)));
             }
         }
     }
@@ -1641,7 +1771,7 @@ mod tests {
     /// the drag bug survived a test named after the drag.
     fn style_for(rows: usize, bucket: f64, span: f64, scale: &PitchScale) -> ColumnStyle {
         let cfg = SpectrumConfig { roll_seconds: span as f32, ..SpectrumConfig::default() };
-        ColumnStyle::new(rows, bucket, scale.min_midi, scale.span, &cfg)
+        ColumnStyle::new(rows, false, bucket, scale.min_midi, scale.span, &cfg)
     }
 
     /// A column at `time` with the given (bin, power) energy, rest silent.
@@ -1692,7 +1822,7 @@ mod tests {
 
                 let curve = 10.0
                     * crate::panes::spectral::spectrogram::power_mean(&powers).max(1e-30).log10();
-                let heat = db_of(RowRead::Mean { from: 0, to: run_len }.of(&col.db));
+                let heat = db_of(RowRead::Mean { from: 0, to: run_len }.of(&col.db[..]));
                 assert!(
                     (curve - heat).abs() <= 2.0 * step,
                     "a run of {run_len}: curve {curve:.3} dB, heatmap {heat:.3} dB",
@@ -1743,7 +1873,7 @@ mod tests {
                     db_of(if by_max {
                         column.db[i..j].iter().copied().max().unwrap()
                     } else {
-                        RowRead::Mean { from: i, to: j }.of(&column.db)
+                        RowRead::Mean { from: i, to: j }.of(&column.db[..])
                     })
                 })
                 .sum::<f32>()
@@ -1765,9 +1895,9 @@ mod tests {
             col(0.02, &[(5, 1.0)]), // the short note
             col(0.04, &[(5, 0.002)]),
         ];
-        let (centers, power) = aggregate_rows(cols.iter(), &[RowRead::Mean { from: 5, to: 6 }], 1.0);
+        let (centers, power) = aggregate_slabs(cols.iter(), 1.0);
         assert_eq!(centers.len(), 1, "one slab of width 1.0 s holds all three");
-        assert_eq!(power[0], q(1.0), "the short note's peak survives");
+        assert_eq!(power[5], q(1.0), "the short note's peak survives");
     }
 
     /// A stall in the analyzer leaves a hole in the column stream — switching
@@ -1782,11 +1912,12 @@ mod tests {
         // Two columns a second apart, in quarter-second slabs: four slabs of
         // silence between them.
         let cols = [col(0.0, &[(5, 1.0)]), col(1.0, &[(5, 0.5)])];
-        let (centers, power) = aggregate_rows(cols.iter(), &[RowRead::Mean { from: 5, to: 6 }], 0.25);
+        let (centers, power) = aggregate_slabs(cols.iter(), 0.25);
         assert_eq!(centers.len(), 5, "one row per slab, silent ones included");
-        assert_eq!(power[0], q(1.0), "the column before the gap");
-        assert_eq!(&power[1..4], [0, 0, 0], "the gap reads as silence, not as a smear");
-        assert_eq!(power[4], q(0.5), "the column after it");
+        let at = |slab: usize| power[slab * SPECTRUM_BINS + 5];
+        assert_eq!(at(0), q(1.0), "the column before the gap");
+        assert_eq!([at(1), at(2), at(3)], [0, 0, 0], "the gap reads as silence, not as a smear");
+        assert_eq!(at(4), q(0.5), "the column after it");
         // Evenly spaced centers are exactly what the texture mapping assumes.
         for pair in centers.windows(2) {
             assert!((pair[1] - pair[0] - 0.25).abs() < 1e-9, "slabs must stay uniform: {centers:?}");
@@ -1801,10 +1932,10 @@ mod tests {
     fn a_single_missed_slab_holds_instead_of_going_black() {
         // Columns half a second apart in quarter-second slabs: one slab empty.
         let cols = [col(0.0, &[(5, 1.0)]), col(0.5, &[(5, 0.5)])];
-        let (centers, power) = aggregate_rows(cols.iter(), &[RowRead::Mean { from: 5, to: 6 }], 0.25);
+        let (centers, power) = aggregate_slabs(cols.iter(), 0.25);
         assert_eq!(centers.len(), 3, "the empty slab still gets its row");
-        assert_eq!(power[1], q(1.0), "and holds the column before it");
-        assert_eq!(power[2], q(0.5));
+        assert_eq!(power[SPECTRUM_BINS + 5], q(1.0), "and holds the column before it");
+        assert_eq!(power[2 * SPECTRUM_BINS + 5], q(0.5));
     }
 
     /// Time running backwards (a transport jump) starts a fresh row rather
@@ -1813,9 +1944,9 @@ mod tests {
     #[test]
     fn columns_going_back_in_time_still_get_a_row() {
         let cols = [col(10.0, &[(5, 1.0)]), col(1.0, &[(5, 0.5)])];
-        let (centers, power) = aggregate_rows(cols.iter(), &[RowRead::Mean { from: 5, to: 6 }], 0.25);
+        let (centers, power) = aggregate_slabs(cols.iter(), 0.25);
         assert_eq!(centers.len(), 2);
-        assert_eq!(power[1], q(0.5), "the rewound column landed in its own row");
+        assert_eq!(power[SPECTRUM_BINS + 5], q(0.5), "the rewound column landed in its own row");
     }
 
     #[test]
@@ -1824,17 +1955,18 @@ mod tests {
         // are present — otherwise scrolling would shift it and it would shimmer.
         // A note at t=2.6 sits in slab floor(2.6)=2.
         let with_old = [col(0.1, &[(0, 0.1)]), col(2.6, &[(0, 0.5)])];
-        let (c_full, _) = aggregate_rows(with_old.iter(), &[RowRead::Mean { from: 0, to: 1 }], 1.0);
+        let (c_full, _) = aggregate_slabs(with_old.iter(), 1.0);
         let just_note = [col(2.6, &[(0, 0.5)])];
-        let (c_scrolled, _) = aggregate_rows(just_note.iter(), &[RowRead::Mean { from: 0, to: 1 }], 1.0);
+        let (c_scrolled, _) = aggregate_slabs(just_note.iter(), 1.0);
         assert!(c_full.contains(&2.5), "slab center is 2.5 with old columns");
         assert!(c_scrolled.contains(&2.5), "and still 2.5 after they scroll off");
     }
 
     #[test]
     fn fill_pixels_places_energy_at_the_right_slab_and_bin() {
-        // Two slabs, three bins. Put a loud value in slab x=1, bin y=2 and
-        // check it lands at pixel [y*w + x] and nowhere else is bright.
+        // Two slabs, three bins. Put a loud value in the bucket only bin y=2
+        // reads, in slab x=1, and check it lands at pixel [y*w + x] and nowhere
+        // else is bright.
         let cfg = SpectrumConfig::default();
         let w = 2;
         let bins = [
@@ -1842,8 +1974,8 @@ mod tests {
             Bin { read: RowRead::Mean { from: 11, to: 12 }, midi: 41.0, t: 0.2 },
             Bin { read: RowRead::Mean { from: 12, to: 13 }, midi: 42.0, t: 0.3 },
         ];
-        let mut power = vec![0; w * bins.len()]; // row-major [slab][bin]
-        power[bins.len() + 2] = q(1.0); // slab 1, bin 2 loud
+        let mut power = vec![0; w * SPECTRUM_BINS]; // slab-major [slab][bucket]
+        power[SPECTRUM_BINS + 12] = q(1.0); // slab 1, bucket 12: bin 2's read
         let px = fill_pixels(&cfg, w, &bins, &power);
         let lum = |c: Color32| c.r() as u32 + c.g() as u32 + c.b() as u32;
         let loud = px[2 * w + 1]; // y=2, x=1
@@ -2044,21 +2176,14 @@ mod tests {
     }
 
     /// The incremental aggregator must produce EXACTLY what a from-scratch
-    /// `aggregate_rows` over the window would, at every step — otherwise the
+    /// `aggregate_slabs` over the window would, at every step — otherwise the
     /// live spectrogram would drift from what the batch/offline path draws. This
     /// walks a column stream with same-slab clusters, a one-slab jitter gap
     /// (hold-previous), a multi-slab gap (zeros), steady scroll (so `first`
     /// advances and the front trims), a ring trim (so indices shift), and a
     /// bucket change (a forced rebuild), comparing byte-for-byte each step.
-    /// Both row kinds are in play, since the two paths share one `RowRead::of`
-    /// but reach it from different loops.
     #[test]
     fn incremental_aggregation_matches_batch_step_for_step() {
-        let reads = [
-            RowRead::Mean { from: 4, to: 6 },
-            RowRead::Mean { from: 6, to: 10 },
-            RowRead::Lerp { lo: 10, f: 0.25 },
-        ];
         let bucket = 0.25;
         let window_span = 1.0;
         // Exercises: cluster (0.30, 0.31), 1-slab gap (0.55->0.80 is 1 apart;
@@ -2078,16 +2203,16 @@ mod tests {
             history.trim_older_than(t - (window_span + 0.5));
             let oldest = t - window_span;
             let first = history.partition_point(|c| c.time < oldest).saturating_sub(1);
-            let inc = agg.window(&history, first, bucket, &reads, KEEP);
-            let bat = aggregate_rows(history.iter_from(first), &reads, bucket);
+            let inc = agg.window(&history, first, bucket, KEEP);
+            let bat = aggregate_slabs(history.iter_from(first), bucket);
             assert_eq!(inc, bat, "incremental != batch at step {i} (t={t})");
         }
 
         // A layout change (new bucket) must fall back to a rebuild — still exact.
         let now = *times.last().unwrap();
         let first = history.partition_point(|c| c.time < now - window_span).saturating_sub(1);
-        let inc = agg.window(&history, first, 0.4, &reads, KEEP);
-        let bat = aggregate_rows(history.iter_from(first), &reads, 0.4);
+        let inc = agg.window(&history, first, 0.4, KEEP);
+        let bat = aggregate_slabs(history.iter_from(first), 0.4);
         assert_eq!(inc, bat, "incremental != batch after a bucket change");
     }
 
@@ -2106,7 +2231,6 @@ mod tests {
     /// and slab `t + 1` empty.
     #[test]
     fn a_held_empty_slab_leaves_the_window_with_the_slab_it_copied() {
-        let reads = [RowRead::Mean { from: 4, to: 6 }];
         let bucket = 0.25;
         // Slab 0 holds three columns, slab 1 is EMPTY (a one-slab gap, so `fold`
         // holds the previous), slab 2 holds one.
@@ -2118,14 +2242,14 @@ mod tests {
         // nothing has scrolled out of it yet.
         for (&t, &e) in times.iter().zip(&energy) {
             history.push(col(t, &[(4, e)]));
-            let _ = agg.window(&history, 0, bucket, &reads, KEEP);
+            let _ = agg.window(&history, 0, bucket, KEEP);
         }
         let rebuilds = agg.rebuilds();
 
         // Now the window starts at the column at 0.10 — index 2 — so the two
         // louder columns sharing its slab have fallen out of it.
-        let inc = agg.window(&history, 2, bucket, &reads, KEEP);
-        let bat = aggregate_rows(history.iter_from(2), &reads, bucket);
+        let inc = agg.window(&history, 2, bucket, KEEP);
+        let bat = aggregate_slabs(history.iter_from(2), bucket);
         assert_eq!(agg.rebuilds(), rebuilds, "a rebuild would explain it away");
         assert_eq!(inc, bat, "slab 1 holds the out-of-window column at 0.00");
 
@@ -2134,7 +2258,7 @@ mod tests {
         // you conclude the fast path was to blame; it is the pair that settles
         // that the bug is in the hold itself.
         let mut fresh = SpectrogramAgg::new();
-        assert_eq!(fresh.window(&history, 2, bucket, &reads, KEEP), bat, "and after a rebuild");
+        assert_eq!(fresh.window(&history, 2, bucket, KEEP), bat, "and after a rebuild");
     }
 
     /// A held slab's MARK has to scroll out of the grid with the slab it
@@ -2158,7 +2282,6 @@ mod tests {
     /// one-slab gap, and a retention the fixture outgrows.
     #[test]
     fn the_held_marks_are_trimmed_with_the_slabs_they_describe() {
-        let reads = [RowRead::Mean { from: 4, to: 6 }];
         let bucket = 0.25;
         // Three slabs — a retention the run below outgrows on its last column,
         // unlike [`KEEP`].
@@ -2172,7 +2295,7 @@ mod tests {
         let mut agg = SpectrogramAgg::new();
         for (&t, &e) in times.iter().zip(&energy) {
             history.push(col(t, &[(4, e)]));
-            let _ = agg.window(&history, 0, bucket, &reads, KEPT);
+            let _ = agg.window(&history, 0, bucket, KEPT);
         }
         // The last column opened slab 4 with slab 3 empty behind it, taking the
         // grid to five slabs and forcing its first trim: two off the front, and
@@ -2186,8 +2309,8 @@ mod tests {
 
         // Read from the column at 0.65 — index 4 — so the two louder columns
         // sharing its slab have fallen out of the window and are pruned.
-        let inc = agg.window(&history, 4, bucket, &reads, KEPT);
-        let bat = aggregate_rows(history.iter_from(4), &reads, bucket);
+        let inc = agg.window(&history, 4, bucket, KEPT);
+        let bat = aggregate_slabs(history.iter_from(4), bucket);
         assert_eq!(agg.rebuilds(), rebuilds, "a rebuild would explain it away");
         assert_eq!(inc, bat, "the held slab carries the PRUNED value forward");
     }
@@ -2200,9 +2323,8 @@ mod tests {
     /// their MIDPOINT time (`SpectrogramColumn::absorb`), which rewrites history
     /// the grid has ALREADY folded. Batch over the store AS IT NOW STANDS can
     /// therefore see something else entirely — the merged column falls in a slab
-    /// neither original was folded into, and a [`RowRead::Lerp`] row reads ACROSS
-    /// two buckets that the merge has already maxed together
-    /// (`max(lerp(a), lerp(b)) != lerp(max(a, b))`) — so THAT is not the
+    /// neither original was folded into, carrying both originals' energy across
+    /// a slab boundary the raw columns respected — so THAT is not the
     /// comparison to hold this to.
     ///
     /// What it must equal is batch over the columns AS THEY ARRIVED, which is
@@ -2212,13 +2334,11 @@ mod tests {
     /// the merged ones the store holds, so the comparison starts past it.
     #[test]
     fn incremental_aggregation_matches_the_raw_columns_across_a_tier_merge() {
-        // The `Mean` row spans buckets 10 and 11 for the same reason the `Lerp`
-        // row straddles them: they alternate, so a merge that has already maxed
-        // the pair together reads differently from the two columns it stands
-        // for, and a mean is no more commutative with that max than a lerp is.
-        // Reading a constant pair instead — bucket 4, which never moves —
-        // demonstrates nothing about a mean.
-        let reads = [RowRead::Mean { from: 10, to: 12 }, RowRead::Lerp { lo: 10, f: 0.5 }];
+        // Buckets 10 and 11 alternate between adjacent columns, so a merged
+        // pair holds both loud where each original held one — a slab refolded
+        // from the merged store reads differently from the slab the raw
+        // columns built. A constant bucket — 4, which never moves — would
+        // demonstrate nothing.
         let bucket = 0.25;
         let interval = 0.008; // SpectrumState::FFT_INTERVAL, the live column rate.
         // Long enough that nothing scrolls out: the whole run stays in window,
@@ -2241,19 +2361,18 @@ mod tests {
             raw.push(col(t, &energy));
 
             let first = history.partition_point(|c| c.time < t - window_span).saturating_sub(1);
-            let inc = agg.window(&history, first, bucket, &reads, KEEP);
+            let inc = agg.window(&history, first, bucket, KEEP);
             // Comparing every step would be O(columns^2); check often enough to
             // catch the crossing itself, and either side of it.
             let near_merge = i + 8 >= crate::SpectrumHistory::FINE_COLUMNS;
             if near_merge || i % 256 == 0 || i + 1 == columns {
                 let t0 = history.get(first).map_or(0, |c| (c.time / bucket).floor() as i64);
                 let in_window = raw.iter().filter(|c| (c.time / bucket).floor() as i64 >= t0);
-                let want = aggregate_rows(in_window, &reads, bucket);
+                let want = aggregate_slabs(in_window, bucket);
                 assert_eq!(inc.0, want.0, "slab centers diverged at column {i} (t={t})");
-                let nb = reads.len();
                 assert_eq!(
-                    inc.1[nb..],
-                    want.1[nb..],
+                    inc.1[SPECTRUM_BINS..],
+                    want.1[SPECTRUM_BINS..],
                     "incremental != the raw columns at column {i} (t={t})",
                 );
             }
@@ -2272,7 +2391,6 @@ mod tests {
     /// after half a minute of playback and never coming back.
     #[test]
     fn a_long_window_keeps_the_fast_path_once_the_store_starts_merging() {
-        let reads = [RowRead::Mean { from: 4, to: 6 }, RowRead::Lerp { lo: 10, f: 0.5 }];
         let interval = 0.008;
         // Past the finest tier's reach (FINE_COLUMNS * interval, ~16.4 s), which
         // is the line the old guard broke at, and out to a Span the pane really
@@ -2289,9 +2407,9 @@ mod tests {
             let (a, b) = if i % 2 == 0 { (1.0, 0.0) } else { (0.0, 1.0) };
             history.push(col(t, &[(4, 0.5), (10, a), (11, b)]));
             let first = history.partition_point(|c| c.time < t - window_span).saturating_sub(1);
-            let (centers, power) = agg.window(&history, first, bucket, &reads, KEEP);
+            let (centers, power) = agg.window(&history, first, bucket, KEEP);
             // The window it serves is still the right shape and length.
-            assert_eq!(power.len(), centers.len() * reads.len(), "grid shape at column {i}");
+            assert_eq!(power.len(), centers.len() * SPECTRUM_BINS, "grid shape at column {i}");
             assert!(
                 centers.len() <= LIVE_SLAB_CAP as usize + 2,
                 "the served window grew past the Span at column {i}: {} slabs",
@@ -2309,7 +2427,6 @@ mod tests {
     /// values would pass just the same with the optimization switched off.
     #[test]
     fn a_short_window_keeps_the_fast_path_across_merges() {
-        let reads = [RowRead::Mean { from: 4, to: 6 }, RowRead::Lerp { lo: 10, f: 0.5 }];
         let bucket = 0.25;
         let interval = 0.008;
         // Two seconds against the finest tier's ~16, so the window stays well
@@ -2325,9 +2442,9 @@ mod tests {
             history.push(col(t, &[(4, 0.5), (10, a), (11, b)]));
 
             let first = history.partition_point(|c| c.time < t - window_span).saturating_sub(1);
-            let inc = agg.window(&history, first, bucket, &reads, KEEP);
+            let inc = agg.window(&history, first, bucket, KEEP);
             if i % 256 == 0 || i + 1 == columns {
-                let bat = aggregate_rows(history.iter_from(first), &reads, bucket);
+                let bat = aggregate_slabs(history.iter_from(first), bucket);
                 assert_eq!(inc, bat, "incremental != batch at column {i} (t={t})");
             }
         }
@@ -2356,6 +2473,7 @@ mod tests {
             scale,
             cfg: SpectrumConfig::default(),
             whole,
+            coarse: false,
         };
         let columns = Columns { first: 3, len: 400, newest: 12.0 };
         let plan = |v: &PaneView| Plan::new(v, &columns);
@@ -2454,7 +2572,6 @@ mod tests {
     /// It is the two layers under it that must turn a miss into O(one column).
     #[test]
     fn no_cache_layer_falls_back_as_the_window_scrolls() {
-        let reads = [RowRead::Mean { from: 4, to: 6 }, RowRead::Lerp { lo: 10, f: 0.5 }];
         let interval = crate::AudioSpectrum::FFT_INTERVAL;
 
         // Every FFT window the pane offers, by the lag it gives a column: a
@@ -2495,13 +2612,12 @@ mod tests {
                         // Exactly what `draw_spectrogram` asks for each frame.
                         let first =
                             history.partition_point(|c| c.time < now - span).saturating_sub(1);
-                        let (centers, _) =
-                            agg.window(&history, first, bucket, &reads, planned);
+                        let (centers, _) = agg.window(&history, first, bucket, planned);
                         let visible = centers.len();
                         let first_key = (centers[0] / bucket).floor() as i64;
                         let last_key = first_key + visible as i64 - 1;
                         let capacity = ring_capacity(planned, visible);
-                        let style = style_for(reads.len(), bucket, span, &SWEEP_SCALE);
+                        let style = style_for(2, bucket, span, &SWEEP_SCALE);
 
                         // And exactly what `write_ring` then decides.
                         if ring.as_ref().is_none_or(|r| {
@@ -2539,12 +2655,10 @@ mod tests {
     ///
     /// Now a rebuild refills the retention behind the window, and the ring
     /// paints the revealed slabs rather than starting over — so a zoom costs a
-    /// re-layout only where the slab width actually changes, at a rung.
-    ///
-    /// The exception is a PITCH zoom, which moves `reads` on every frame and so
-    /// re-folds on every frame. That one wants time and pitch aggregated
-    /// separately, which is a larger change and not made here; it is left
-    /// unasserted rather than pinned, so fixing it does not fail this.
+    /// re-layout only where the slab width actually changes, at a rung. A
+    /// PITCH zoom does not reach the aggregator at all — the grid is in bucket
+    /// space, and the pitch axis is applied at compose time — which
+    /// `a_pitch_gesture_never_reaches_the_aggregator` below holds on its own.
     #[test]
     fn a_gesture_costs_a_layout_at_its_boundaries_not_a_frame() {
         let interval = crate::AudioSpectrum::FFT_INTERVAL;
@@ -2553,7 +2667,6 @@ mod tests {
         let planned = cols + RING_HEADROOM;
         let scale = PitchScale { min_midi: 40.0, max_midi: 88.0, span: 48.0 };
         let rows = 64;
-        let reads: Vec<RowRead> = bins_for(rows, &scale).iter().map(|b| b.read).collect();
 
         // A gesture: what Span it asks for on its `n`th frame, and the
         // re-layouts it is allowed over the whole run.
@@ -2586,7 +2699,7 @@ mod tests {
                 let bucket = live_slab(span, cols);
                 let style = style_for(rows, bucket, span, &scale);
                 let first = history.partition_point(|c| c.time < now - span).saturating_sub(1);
-                let (centers, _) = agg.window(&history, first, bucket, &reads, planned);
+                let (centers, _) = agg.window(&history, first, bucket, planned);
                 let first_key = (centers[0] / bucket).floor() as i64;
                 let last_key = first_key + centers.len() as i64 - 1;
                 let capacity = ring_capacity(planned, centers.len());
@@ -2610,6 +2723,80 @@ mod tests {
                 "{name}: {restarts} ring restarts over {frames} frames, not {allowed}",
             );
         }
+    }
+
+    /// The gesture detector: a style CHANGE opens a gesture, the gesture holds
+    /// for [`STYLE_SETTLE`] past the last change, and first sight of a surface
+    /// is a fresh pane rather than a gesture — so an opened editor draws sharp
+    /// straight away, and only an actually-moving bar trades quality for rate.
+    #[test]
+    fn the_style_settles_after_holding_still() {
+        let cfg = SpectrumConfig::default();
+        let a = ColumnStyle::new(100, false, 0.1, 40.0, 48.0, &cfg);
+        let b = ColumnStyle::new(100, false, 0.1, 41.0, 48.0, &cfg);
+        let mut slot = None;
+        assert!(!StyleMotion::observe(&mut slot, &a, 10.0), "first sight is not a gesture");
+        assert!(StyleMotion::observe(&mut slot, &b, 10.1), "a change opens one");
+        assert!(
+            StyleMotion::observe(&mut slot, &b, 10.1 + STYLE_SETTLE * 0.5),
+            "and it holds while the settle has not passed",
+        );
+        assert!(
+            !StyleMotion::observe(&mut slot, &b, 10.1 + STYLE_SETTLE * 1.01),
+            "held still past the settle, the image sharpens",
+        );
+        assert!(!StyleMotion::observe(&mut slot, &b, 20.0), "quiet frames stay settled");
+        assert!(StyleMotion::observe(&mut slot, &a, 21.0), "the next change opens a new one");
+    }
+
+    /// A pitch gesture — the range zoomed or panned a frame at a time — must
+    /// repaint the image WITHOUT re-walking the store: the ring restarts, since
+    /// the pixels really are all different, while the aggregator's grid, which
+    /// is in bucket space, is carried untouched. That split is what holds the
+    /// gesture's cost to a compose. When the rows were folded in, every frame
+    /// of it re-folded the whole retention — 46 ms at the default Span on a
+    /// full-height 2x pane, measured — and only the rebuild counter can see the
+    /// difference, since the refold draws the same picture.
+    #[test]
+    fn a_pitch_gesture_never_reaches_the_aggregator() {
+        let interval = crate::AudioSpectrum::FFT_INTERVAL;
+        let cols = LIVE_SLAB_CAP as usize;
+        let planned = cols + RING_HEADROOM;
+        let span = 12.0;
+        let bucket = live_slab(span, cols);
+
+        let mut history = crate::SpectrumHistory::default();
+        let mut agg = SpectrogramAgg::new();
+        let mut ring: Option<SpectrogramRing> = None;
+        let mut restarts = 0u32;
+        let frames = ((span + 5.0) / interval) as usize;
+        for i in 0..frames {
+            let t = i as f64 * interval;
+            history.push(col(t, &[(4, 0.5), (10, 1.0)]));
+            // The zoom: the range closes in a little further each frame,
+            // exactly as the wheel delivers it.
+            let scale = PitchScale {
+                min_midi: 40.0 + 0.01 * i as f32,
+                max_midi: 88.0,
+                span: 48.0 - 0.01 * i as f32,
+            };
+            let first = history.partition_point(|c| c.time < t - span).saturating_sub(1);
+            let (centers, _) = agg.window(&history, first, bucket, planned);
+            let style = style_for(64, bucket, span, &scale);
+            let first_key = (centers[0] / bucket).floor() as i64;
+            let last_key = first_key + centers.len() as i64 - 1;
+            let capacity = ring_capacity(planned, centers.len());
+            if ring
+                .as_ref()
+                .is_none_or(|r| r.carries(capacity, &style, first_key, last_key).is_some())
+            {
+                restarts += 1;
+                ring = Some(SpectrogramRing::restarted(capacity, style.clone(), first_key));
+            }
+            ring.as_mut().expect("just restarted").wrote(first_key, last_key);
+        }
+        assert_eq!(restarts, frames as u32, "a moved pitch range must repaint");
+        assert_eq!(agg.rebuilds(), 1, "a pitch gesture re-walked the store");
     }
 
     /// Resizing the pane must not re-lay the grid on every PIXEL of the drag.
@@ -2636,6 +2823,7 @@ mod tests {
             scale,
             cfg: SpectrumConfig::default(),
             whole: false,
+            coarse: false,
         };
         let columns = Columns { first: 3, len: 4000, newest: 12.0 };
         // What a re-layout is, from each cache's point of view: the aggregator
@@ -2684,7 +2872,6 @@ mod tests {
     /// back to slabs the window did not want a frame ago.
     #[test]
     fn dragging_the_span_holds_the_grid_between_ladder_steps() {
-        let reads = [RowRead::Mean { from: 4, to: 6 }, RowRead::Lerp { lo: 10, f: 0.5 }];
         let interval = crate::AudioSpectrum::FFT_INTERVAL;
         let lag = 0.5 * 8192.0 / 48000.0;
         let cols = LIVE_SLAB_CAP as usize;
@@ -2726,10 +2913,10 @@ mod tests {
             };
 
             let bucket = live_slab(span, cols);
-            let style = style_for(reads.len(), bucket, span, &SWEEP_SCALE);
+            let style = style_for(2, bucket, span, &SWEEP_SCALE);
             widths.insert((bucket * 1e6).round() as i64); // microseconds, to compare exactly
             let first = history.partition_point(|c| c.time < now - span).saturating_sub(1);
-            let (centers, _) = agg.window(&history, first, bucket, &reads, planned);
+            let (centers, _) = agg.window(&history, first, bucket, planned);
             let first_key = (centers[0] / bucket).floor() as i64;
             let last_key = first_key + centers.len() as i64 - 1;
             let capacity = ring_capacity(planned, centers.len());
@@ -2789,6 +2976,7 @@ mod tests {
                     scale,
                     cfg,
                     whole: false,
+                    coarse: false,
                 },
                 &columns,
             )
@@ -2819,7 +3007,7 @@ mod tests {
         let cfg = SpectrumConfig::default();
         let style =
             |rows, bucket, min, span, cfg: &SpectrumConfig| {
-                ColumnStyle::new(rows, bucket, min, span, cfg)
+                ColumnStyle::new(rows, false, bucket, min, span, cfg)
             };
         let base_style = || style(100, 0.1, 40.0, 48.0, &cfg);
         let base = || crate::SpectrogramKey::new(base_style(), 3, 200, 5.0, false);
@@ -2834,6 +3022,9 @@ mod tests {
             assert_ne!(crate::SpectrogramKey::new(s, 3, 200, 5.0, false), base());
         };
         styled(style(101, 0.1, 40.0, 48.0, &cfg)); // rows
+        // The coarse read: a gesture image's wide rows are a max, not the
+        // mean, so its floor sits high — the settle must repaint, not carry.
+        styled(ColumnStyle::new(100, true, 0.1, 40.0, 48.0, &cfg));
         styled(style(100, 0.2, 40.0, 48.0, &cfg)); // slab width
         styled(style(100, 0.1, 41.0, 48.0, &cfg)); // pitch range, low end
         styled(style(100, 0.1, 40.0, 49.0, &cfg)); // pitch range, span
@@ -3001,18 +3192,22 @@ mod tests {
         let bins = [
             Bin { read: RowRead::Mean { from: 0, to: 1 }, midi: 40.0, t: 0.0 },
             Bin { read: RowRead::Mean { from: 1, to: 2 }, midi: 52.0, t: 0.5 },
-            Bin { read: RowRead::Mean { from: 2, to: 3 }, midi: 64.0, t: 1.0 },
+            Bin { read: RowRead::Lerp { lo: 1, f: 0.25 }, midi: 64.0, t: 1.0 },
         ];
-        let h = bins.len();
-        // Two slabs of three bins, slab-major: [slab][bin].
-        let power = [q(1e-3), q(0.0), q(1e-6), q(4e-2), q(1e-5), q(0.0)];
-        let w = power.len() / h;
+        // Two slabs, each a whole spectrum with its first buckets lit.
+        let w = 2;
+        let mut power = vec![0; w * SPECTRUM_BINS];
+        for (slab, levels) in [[1e-3f32, 0.0, 1e-6], [4e-2, 1e-5, 0.0]].iter().enumerate() {
+            for (b, &p) in levels.iter().enumerate() {
+                power[slab * SPECTRUM_BINS + b] = q(p);
+            }
+        }
 
         let whole = fill_pixels(&cfg, w, &bins, &power);
         let shades = Shades::new(&cfg, &bins);
         let mut column = Vec::new();
         for slab in 0..w {
-            fill_column_into(&shades, &power[slab * h..(slab + 1) * h], &mut column);
+            fill_column_into(&shades, &bins, slab_of(&power, slab), &mut column);
             for (y, pixel) in column.iter().enumerate() {
                 assert_eq!(*pixel, whole[y * w + slab], "slab {slab}, bin {y}");
             }
@@ -3057,7 +3252,7 @@ mod tests {
         let ctx = egui::Context::default();
         let mut spectrum = crate::AudioSpectrum::default();
         let scale = SWEEP_SCALE;
-        let bins = bins_for(4, &scale);
+        let bins = bins_for(4, &scale, false);
         let h = bins.len();
         let cfg = SpectrumConfig::default();
         let bucket = 0.05;
@@ -3065,15 +3260,17 @@ mod tests {
         let capacity = 32usize;
         let tex_w = capacity * 2;
 
-        // A distinct, reproducible column per slab key, so a texel holding its
-        // NEIGHBOUR is a value mismatch rather than a shape one.
+        // A distinct, reproducible slab spectrum per key, so a texel holding
+        // its NEIGHBOUR is a value mismatch rather than a shape one.
         let power_of = |key: i64| -> Vec<BucketDb> {
-            (0..h).map(|b| ((key * 13 + b as i64 * 29).rem_euclid(200) + 30) as BucketDb).collect()
+            (0..SPECTRUM_BINS)
+                .map(|b| ((key * 13 + b as i64 * 29).rem_euclid(200) + 30) as BucketDb)
+                .collect()
         };
         let shades = Shades::new(&cfg, &bins);
         let expect = |key: i64| {
             let mut out = Vec::new();
-            fill_column_into(&shades, &power_of(key), &mut out);
+            fill_column_into(&shades, &bins, &power_of(key), &mut out);
             out
         };
 
@@ -3095,7 +3292,7 @@ mod tests {
 
         let run = |spectrum: &mut crate::AudioSpectrum, first: i64, last: i64| {
             let n = (last - first + 1) as usize;
-            let mut power = Vec::with_capacity(n * h);
+            let mut power = Vec::with_capacity(n * SPECTRUM_BINS);
             for key in first..=last {
                 power.extend(power_of(key));
             }
@@ -3153,6 +3350,7 @@ mod tests {
             capacity,
             style: ColumnStyle {
                 rows: 3,
+                coarse: false,
                 bucket_bits: 0.1f64.to_bits(),
                 scale_min_bits: 40.0f32.to_bits(),
                 scale_span_bits: 48.0f32.to_bits(),
@@ -3188,6 +3386,7 @@ mod tests {
             capacity: 8,
             style: ColumnStyle {
                 rows: 3,
+                coarse: false,
                 bucket_bits: 0.1f64.to_bits(),
                 scale_min_bits: 40.0f32.to_bits(),
                 scale_span_bits: 48.0f32.to_bits(),
@@ -3435,5 +3634,119 @@ mod tests {
             "{differing} of {total} texels differ (worst {worst} level) — the table is \
              meant to stand in for the mapping, not to approximate it",
         );
+    }
+
+    /// Scratch harness for the zoom-performance audit: prints where a zoom
+    /// frame's milliseconds go, at pane-realistic sizes. Not an assertion.
+    /// Run by hand, in release:
+    /// `cargo test -p harmonigraph-ui --release timing_zoom -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn timing_zoom_costs() {
+        use std::time::Instant;
+
+        let interval = crate::AudioSpectrum::FFT_INTERVAL;
+        // A Retina pane: ~700 points of pitch axis at 2x, quantized as the plan
+        // quantizes it.
+        let rows = 1408usize;
+        let target_cols = 1024usize;
+        let keep = target_cols + RING_HEADROOM;
+
+        // Zoomed out (the full axis: every read a Mean) and zoomed in
+        // (12 semitones: every read a Lerp).
+        let full = PitchScale { min_midi: 16.0, max_midi: 135.0, span: 119.0 };
+        let tight = PitchScale { min_midi: 57.0, max_midi: 69.0, span: 12.0 };
+
+        for (label, window_s) in [("12s", 12.0f64), ("120s", 120.0), ("600s", 600.0)] {
+            let bucket = live_slab(window_s, target_cols);
+            // Fill the store as playback would, far enough back to cover the
+            // retention a rebuild reaches (capped by the store's own reach).
+            let span_needed = keep as f64 * bucket * 1.1 + 5.0;
+            let n = (span_needed / interval) as usize;
+            let mut history = crate::SpectrumHistory::default();
+            let mut phase = 0.0f32;
+            for i in 0..n {
+                let mut power = [0.0f32; SPECTRUM_BINS];
+                for h in 1usize..8 {
+                    let idx = ((h * 500) as f32 + 300.0 * (phase * h as f32).sin()) as usize
+                        % SPECTRUM_BINS;
+                    power[idx] = 0.1 / h as f32;
+                }
+                for (b, p) in power.iter_mut().enumerate() {
+                    *p += 1e-9 * (1.0 + ((b * 7 + i) % 13) as f32);
+                }
+                phase += 0.01;
+                history.push(crate::SpectrogramColumn::from_power(i as f64 * interval, &power));
+            }
+            let newest = history.back().unwrap().time;
+            let first =
+                history.partition_point(|c| c.time < newest - window_s).saturating_sub(1);
+
+            for (scale_label, scale) in [("out", &full), ("in", &tight)] {
+                let t0 = Instant::now();
+                let bins_full = bins_for(rows, scale, false);
+                let bins_ms = t0.elapsed().as_secs_f64() * 1000.0;
+
+                // The refold a bucket change pays: every call a full rebuild.
+                let mut agg = SpectrogramAgg::new();
+                let t0 = Instant::now();
+                let mut w = 0usize;
+                for i in 0..6 {
+                    let b = if i % 2 == 0 { bucket } else { bucket * 2.0 };
+                    let (centers, _) = agg.window(&history, first, b, keep);
+                    w = centers.len();
+                }
+                let refold_ms = t0.elapsed().as_secs_f64() * 1000.0 / 6.0;
+                assert!(agg.rebuilds() >= 6, "each call should have rebuilt");
+
+                // Steady state for contrast: nothing new to fold — what remains
+                // is view()'s per-frame clone of the window.
+                let (centers, power) = agg.window(&history, first, bucket, keep);
+                let t0 = Instant::now();
+                for _ in 0..20 {
+                    let _ = agg.window(&history, first, bucket, keep);
+                }
+                let steady_ms = t0.elapsed().as_secs_f64() * 1000.0 / 20.0;
+
+                // The pixel compose a ring restart pays — every frame of a
+                // pitch or Level gesture, at the gesture's row count — with the
+                // GPU upload on top, in the renderer's own timing.
+                let cfg = SpectrumConfig::default();
+                let capacity = ring_capacity(keep, centers.len());
+                let first_key = (centers[0] / bucket).floor() as i64;
+                let last_key = first_key + centers.len() as i64 - 1;
+                let compose = |bins: &[Bin]| {
+                    let style = style_for(bins.len(), bucket, window_s, scale);
+                    let h = bins.len();
+                    let t0 = Instant::now();
+                    let mut sink = 0usize;
+                    for _ in 0..6 {
+                        let shades = Shades::new(&cfg, bins);
+                        let ring = SpectrogramRing::restarted(capacity, style.clone(), first_key);
+                        let px =
+                            restart_pixels(&ring, capacity * 2, h, first_key, last_key, |i, out| {
+                                fill_column_into(&shades, bins, slab_of(&power, i), out)
+                            });
+                        sink += px.len();
+                    }
+                    (t0.elapsed().as_secs_f64() * 1000.0 / 6.0, sink)
+                };
+                let (full_ms, _) = compose(&bins_full);
+                let bins_gesture = bins_for(GESTURE_ROWS, scale, true);
+                let (gesture_ms, _) = compose(&bins_gesture);
+
+                // What a refold actually walks: from the retention cutoff (or
+                // the window's first column, whichever is older) to the back.
+                let cutoff = ((newest / bucket).floor() - keep as f64 + 1.0) * bucket;
+                let start = history.partition_point(|c| c.time < cutoff).min(first);
+                println!(
+                    "{label:>5} {scale_label:>4}: cols_folded={:<5} slabs={w:<5} | \
+                     refold {refold_ms:5.2} ms | compose {full_ms:5.2} ms at {rows} rows, \
+                     {gesture_ms:5.2} ms at {GESTURE_ROWS} | steady {steady_ms:5.2} ms | \
+                     bins_for {bins_ms:4.2} ms",
+                    history.len() - start,
+                );
+            }
+        }
     }
 }
