@@ -81,6 +81,10 @@ const VOICE_PT: (f32, f32) = (2.0, 4.0);
 /// a share of it. The turns abut, so the overhang runs into the octaves either
 /// side — kept small for that reason, since a long tick would read as the note
 /// claiming energy an octave away.
+///
+/// It is also a term in the FIT: [`Spiral::new`] reserves a whole reach at each
+/// end of the range rather than half a track, because the top note's mark is
+/// what reaches nearest the pane edge and the pane's painter clips.
 const VOICE_OVERHANG: f32 = 0.25;
 
 /// Where a MIDI pitch lands in the pane.
@@ -115,14 +119,21 @@ impl Spiral {
         let r_out = (rect.width().min(rect.height()) * 0.5 - MARGIN_PT).max(1.0);
         let hole = r_out * INNER_HOLE;
         let octaves = (max_midi - min_midi) / 12.0;
-        // Half a track is reserved at each end, so the innermost turn's inner
-        // edge lands on the hole and the outermost turn's outer edge on
-        // `r_out`: `dr * octaves + 2 * (dr / 2) = r_out - hole`. Solving it
-        // here rather than clamping afterwards is what keeps a range narrower
-        // than one octave — where a single fat arc is the honest picture —
-        // inside the pane instead of spilling over both edges.
-        let dr = (r_out - hole) / (octaves + 1.0);
-        Spiral { centre: rect.center(), r0: hole + dr * 0.5, dr, min_midi, max_midi }
+        // A note's full REACH is reserved at each end, not half a track: the
+        // mark a sounding note draws is the one thing here that stands out past
+        // the track it sits on, so a fit that reserved only the track puts the
+        // top note's mark over the pane edge, where the clipping painter cuts
+        // it off. `a_notes_mark_stays_inside_the_pane` is what holds this.
+        //
+        // So `dr * octaves + 2 * reach = r_out - hole` with
+        // `reach = dr / 2 * (1 + VOICE_OVERHANG)`, which solves for `dr`
+        // directly. Solving rather than clamping afterwards is what makes
+        // `r0 > 0` a property of the fit rather than a case to catch, and it
+        // holds the hole at a constant SHARE of the disc, so zooming the pitch
+        // range in does not eat it.
+        let dr = (r_out - hole) / (octaves + 1.0 + VOICE_OVERHANG);
+        let r0 = hole + dr * 0.5 * (1.0 + VOICE_OVERHANG);
+        Spiral { centre: rect.center(), r0, dr, min_midi, max_midi }
     }
 
     /// The unit vector pointing out of the centre at `midi`'s pitch class. C is
@@ -148,9 +159,21 @@ impl Spiral {
         self.dr * 0.5
     }
 
-    /// The drawn annulus, inner and outer radius.
-    fn annulus(&self) -> (f32, f32) {
-        (self.radius(self.min_midi) - self.half(), self.radius(self.max_midi) + self.half())
+    /// How far a sounding note's mark stands out from the track's centre. Wider
+    /// than [`half`](Self::half) by [`VOICE_OVERHANG`], and the fit reserves it
+    /// at both ends of the range.
+    fn reach(&self) -> f32 {
+        self.half() * (1.0 + VOICE_OVERHANG)
+    }
+
+    /// The disc's bounds, inner and outer radius: everything this pane draws
+    /// lies between these two, marks included.
+    ///
+    /// The track itself stops fractionally inside them — the fit reserves a
+    /// note's whole reach at each end — so this is what the pane OCCUPIES
+    /// rather than where the spectrum is painted.
+    fn bounds(&self) -> (f32, f32) {
+        (self.radius(self.min_midi) - self.reach(), self.radius(self.max_midi) + self.reach())
     }
 }
 
@@ -197,7 +220,7 @@ fn strip(
     // past one step per bucket the extra vertices carry no new reading, and the
     // full range is 3828 buckets, so the cap is what holds the mesh at a few
     // thousand vertices however large the pane is.
-    let (r_in, r_out) = spiral.annulus();
+    let (r_in, r_out) = spiral.bounds();
     let arc = std::f32::consts::PI * (r_in + r_out) * span / 12.0;
     let cap = (span * BINS_PER_SEMITONE as f32).max(MIN_STEPS);
     let steps = (arc / SEGMENT_PT).clamp(MIN_STEPS, cap) as usize;
@@ -244,7 +267,7 @@ fn strip(
 /// makes — a hairline across a picture costs the picture nothing, and the
 /// picture is unreadable without knowing which way round it goes.
 fn rays(painter: &egui::Painter, spiral: &Spiral) {
-    let (r_in, r_out) = spiral.annulus();
+    let (r_in, r_out) = spiral.bounds();
     for pc in 0..12 {
         let fade = if pc == 0 { RAY_FADE.0 } else { RAY_FADE.1 };
         let dir = spiral.ray(pc as f32);
@@ -277,7 +300,7 @@ fn voices(painter: &egui::Painter, spiral: &Spiral, state: &SharedState, now: f6
     // property of the view and the frame, and rebuilding it per voice would
     // read as if it could vary between them.
     let env = state.view.envelope(&state.frame_params);
-    let reach = spiral.half() * (1.0 + VOICE_OVERHANG);
+    let reach = spiral.reach();
     for voice in sounding {
         let strength = voice.activation(now, &env);
         if strength <= 0.0 || voice.pitch < spiral.min_midi || voice.pitch > spiral.max_midi {
@@ -376,7 +399,7 @@ mod tests {
         // of an octave as well as at ten.
         for (low, high) in [(36.0, 96.0), (15.5, 135.1), (60.0, 61.0), (60.0, 72.0)] {
             let s = spiral(low, high);
-            let (r_in, r_out) = s.annulus();
+            let (r_in, r_out) = s.bounds();
             let half_pane = PANE.width().min(PANE.height()) * 0.5;
             assert!(r_in > 0.0, "{low}..{high} drew the innermost turn through the centre");
             assert!(
@@ -386,6 +409,39 @@ mod tests {
             // And the hole is a share of the disc rather than a fixed inset,
             // so zooming in does not eat it.
             assert!((r_in / r_out - INNER_HOLE).abs() < 1e-3, "{low}..{high}: hole drifted");
+        }
+    }
+
+    /// A sounding note's mark is inside the pane, at the top of the range and
+    /// at the bottom of it.
+    ///
+    /// The mark is the only painted thing that reaches past the track it sits
+    /// on, so it is the only one whose extent the disc's own fit does not
+    /// already answer for — and the pane paints through a clipping painter, so
+    /// what overruns is cut off rather than merely tight. Landscape as well as
+    /// square because the fit is driven by the SHORT side: a 16:9 frame is
+    /// where the outermost turn sits closest to an edge.
+    #[test]
+    fn a_notes_mark_stays_inside_the_pane() {
+        let frames = [
+            ("square", egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 900.0))),
+            ("1080p", egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1920.0, 1080.0))),
+            ("docked", PANE),
+        ];
+        for (name, rect) in frames {
+            for (low, high) in [(60.0f32, 84.0f32), (36.0, 96.0), (15.5, 135.1)] {
+                let cfg = SpectrumConfig { low_midi: low, high_midi: high, ..Default::default() };
+                let s = Spiral::new(rect, &cfg);
+                for pitch in [s.min_midi, s.max_midi] {
+                    for end in [s.at(pitch, -s.reach()), s.at(pitch, s.reach())] {
+                        assert!(
+                            rect.contains(end),
+                            "{name} {low}..{high}: a mark at {pitch} reaches {end:?}, \
+                             outside the pane {rect:?}",
+                        );
+                    }
+                }
+            }
         }
     }
 
