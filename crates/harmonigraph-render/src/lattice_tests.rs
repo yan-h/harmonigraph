@@ -1029,26 +1029,26 @@ fn the_sweep_is_worth_the_same_contrast_on_a_dark_color_as_on_a_bright_one() {
 /// A ring keeps its color under a peak — the sweep lights it rather than
 /// bleaching it, and lights it rather than turning it some other color.
 ///
-/// This is what an exposure gets that neither model before it could. A multiply
-/// scales all three channels by ONE gain, which in linear light is a pure
-/// luminance scale, so the color slides along its own chromaticity and both
-/// halves of "keeps its color" hold at once. A mix toward white holds hue and
-/// leaves 15% of the chroma at every point on the ramp — bleached rather than
-/// lit. An addition holds the channel gaps until a channel saturates and then
-/// swings the hue 15 degrees at the ramp's bright end, because a clip lifts the
-/// channels with room past the one without.
+/// HUE is what the sheet holds and chroma is what it spends, and the two bounds
+/// below are that trade written down rather than one property measured twice.
 ///
-/// So the chroma claim here is not that enough survives but that NONE is lost:
-/// the proxy reads 0.270 steady against 0.423 at the peak on the dark end and
-/// 0.263 against 0.337 on the bright one. It rises because the proxy is a
-/// channel spread and a gain scales the gaps along with the channels; what
-/// matters is the direction, and a bleach is the one thing that cannot happen.
+/// A crest that overflows a channel is desaturated toward the grey of its own
+/// light, not clipped. Mixing all three channels toward one value moves them
+/// together, so their order survives and the color pales along its own hue; a
+/// per-channel clip stops the full channel and lets the others climb past it,
+/// which turns the color as it brightens. At Intensity 1 that is the whole
+/// difference: 0.7 and 5.0 degrees here against the addition's 0.5 and 15.3.
 ///
-/// BOTH ends, because they fail differently and only one of them can fail. The
-/// dark end has room above it and takes the sweep as light. The bright end's
-/// top channel has little, so `shimmer_light` slides the swing down and it
-/// takes the sweep partly as shade — the same ratio either way, which is the
-/// point, and the case where a clip would otherwise be waiting.
+/// The chroma goes the other way and is meant to. The addition keeps 99.6% and
+/// 73%; this keeps 88% and 57%, because a uniform sheet wants the ramp's bright
+/// end near `L*` 90 and the gamut has almost no chroma to offer that hue up
+/// there. The bound is what the trade is allowed to cost, and it sits well
+/// clear of the mix toward white this is not — that leaves 15% at every point
+/// on the ramp, which is a bleach rather than a highlight.
+///
+/// BOTH ends, because they spend differently. The dark end has light to give
+/// and pays little. The bright end has none and pays most of what is paid,
+/// which is where a bound set on the dark end alone would measure nothing.
 ///
 /// Hue as well as chroma, because chroma that survives a rotated hue is a ring
 /// that has changed color rather than one that has lit up, and a max-minus-min
@@ -1070,15 +1070,16 @@ fn a_ring_keeps_its_color_under_a_sweep_peak() {
     // room above it, and a per-end figure would let a retune that started
     // bleaching the dark end pass by being compared against itself.
     //
-    // The chroma bound is 1 — none lost — where the added light this replaces
-    // needed 0.55 to pass at all, and the hue bound is 5 degrees where that
-    // needed 20. Both are the model's own guarantee rather than a tuning: one
-    // gain across three channels cannot move a hue or drain a chroma, so what
-    // is left for these to measure is the compositing under the ring, which is
-    // where the bright end's 2.2 degrees comes from. A model that went back to
-    // lifting the channels separately would fail both on the first peak.
-    const KEEPS_CHROMA: f64 = 1.0;
-    const HUE_SWING: f64 = 5.0;
+    // Half the chroma, against a reading of 57% at the end that pays; and 8
+    // degrees of hue, against 5.0 there, where the addition this replaces needs
+    // 20 to pass at all. The hue bound is the one doing the work — it sits three
+    // times inside the addition's 15.3, so a model that went back to clipping
+    // the channels separately fails it on the first peak. The chroma bound is a
+    // BUDGET rather than a guarantee: it says the sheet may pale a bright crest
+    // and may not bleach one, with the mix toward white's 15% at every point on
+    // the ramp as the far side of that line.
+    const KEEPS_CHROMA: f64 = 0.5;
+    const HUE_SWING: f64 = 8.0;
 
     let ends = [("dark", lut[0]), ("bright", lut[harmonigraph_scene::PITCH_LUT_N - 1])];
     for (end, color) in ends {
@@ -1123,8 +1124,8 @@ fn a_ring_keeps_its_color_under_a_sweep_peak() {
         assert!(
             peak >= base * KEEPS_CHROMA,
             "at the ramp's {end} end a peak left {peak:.3} of the ring's {base:.3} chroma: \
-             the sheet is bleaching the color out rather than adding light to it, which \
-             one gain across three channels cannot do",
+             the sheet is bleaching the color out rather than paling a crest of it, and \
+             the budget for that is half",
         );
         assert!(
             swing < HUE_SWING,

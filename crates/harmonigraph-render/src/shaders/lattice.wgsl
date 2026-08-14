@@ -565,23 +565,27 @@ fn shimmer_sharpness() -> f32 {
 // A multiply and not an addition, and that is what the sheet MEANS rather than
 // how it is arithmetically spelled. The values here are gamma-encoded — the
 // targets are UNORM and nothing decodes on the way in — so a multiply here is a
-// multiply in linear light too, which is a pure luminance scale: it slides a
-// color along its own chromaticity, holding hue AND saturation exactly, at
-// every phase and on every color. That is what light falling on a surface does,
-// and it is the one model of the three that needs no gamut decision, because
-// scaling a color that is in gamut cannot take it out of one.
+// multiply in linear light too, which is a pure luminance scale: while it fits,
+// it slides a color along its own chromaticity, holding hue and saturation
+// exactly at every phase. That is what light falling on a surface does, and it
+// is the model that keeps the sheet ONE SIZE, because a ratio is the same ratio
+// on every color where an amount of light is not.
 //
-// The two it replaces each give up one half of that. A mix toward white holds
-// hue and drains chroma to 15% at every point on the ramp — a ring under a peak
-// is bleached rather than lit, and on a dark saturated color bleaching is most
-// of what there is to see. An addition holds the channel GAPS instead, which is
-// the same thing until a channel saturates: 0.4 of added light fits the
+// It does not always fit, and `shimmer_light` is where that is dealt with: a
+// crest with nowhere left to go pales toward white rather than clipping. So the
+// honest claim is that hue is held — 0.7 and 5.0 degrees across the ramp's two
+// ends at Intensity 1 — and that chroma is what a bright crest spends, keeping
+// 88% and 57%.
+//
+// The two it replaces spend it worse. A mix toward white drains chroma to 15%
+// at EVERY point on the ramp, bright crest or dark trough alike — a ring under
+// a peak is bleached rather than lit, and on a dark saturated color bleaching is
+// most of what there is to see. An addition holds the channel GAPS instead,
+// which is the same thing until a channel saturates: 0.4 of added light fits the
 // headroom of exactly one color on the default ramp, so the other 63 clip at
 // Intensity 1, and a clip is asymmetric — the channels with room go on rising
 // and the one without does not. That costs chroma AND swings the hue 15 degrees
-// at the ramp's bright end, which a lerp does not do. Nothing clips here: the
-// swing is fitted to the headroom in `shimmer_light`, so the hue moves 0.2
-// degrees across the whole ramp instead.
+// at the ramp's bright end, which a lerp does not do.
 //
 // The SIZE is in contrast, which is the currency a texture this fine is seen
 // in, and choosing it is the whole of what this constant decides. An addition
@@ -591,19 +595,58 @@ fn shimmer_sharpness() -> f32 {
 // end to 0.367 at its bright one, a 29% decline. A moving texture is read by
 // that ratio and not by the `L*` difference, which is why the sheet reads
 // weaker on the ramp's bright half however uniform its added light is. One
-// exposure everywhere makes the ratio the constant instead: 0.436 to 0.460, a
-// 5% spread. The trade is exactly the other way round — the `L*` a peak adds
-// now runs 16.8 to 28.2 — and that is the right way round for what the eye is
+// exposure everywhere makes the ratio the constant instead, at a 13% spread of
+// its own. The trade is the other way round — the `L*` a peak adds now varies
+// where it used to hold — and that is the right way round for what the eye is
 // doing here. Both halves are measured in
 // `the_sweep_is_worth_the_same_contrast_on_a_dark_color_as_on_a_bright_one` and
 // `a_ring_keeps_its_color_under_a_sweep_peak`.
 //
-// 0.87 is where a peak at the fresh view's Intensity is worth what the added
+// 0.873 is where a peak at the fresh view's Intensity is worth what the added
 // light it replaces was worth at mid-ramp, so a view saved against the old
-// model carries its setting over at about the size it was dialled at. 0.869
-// matches there exactly and 0.885 matches at Intensity 1; one constant cannot
-// do both, and the fresh view's own setting is the one worth landing on.
-const SHIMMER_EXPOSURE: f32 = 0.87;
+// model carries its setting over at about the size it was dialled at.
+const SHIMMER_EXPOSURE: f32 = 0.873;
+// The most LIGHT a crest may ask for, as the luma of the layer under it. Where
+// a swing would take a layer past this, it slides down until the crest lands
+// here instead (see `shimmer_light`).
+//
+// This is the knob on a three-way trade with no free corner, because the sRGB
+// gamut is what sets it: a sheet can be one size everywhere, leave the troughs
+// alone, and keep the color — any two, never all three. The ramp's bright end
+// sits at `L*` 68 and one uniform peak wants it near 90, where the gamut leaves
+// that hue almost no chroma to be at. Something gives, and this says what.
+//
+// Measured across the default ramp at the fresh view's Intensity, against the
+// added light this replaces (which darkens 5.0, spreads 29%, keeps 80% of the
+// chroma and swings 6.0 degrees). The first three rows are a fixed FRACTION of
+// the shortfall taken as slide instead, which is the other shape this could
+// have; the ceiling is the rest:
+//
+//                    darkens by   spread   worst chroma   worst hue
+//   quarter-slide       4.3 L*      11%        29%           3.2
+//   half-slide          8.3 L*       8%        65%           2.5
+//   full slide         15.2 L*       3%       112%           0.3
+//   ceiling 0.95        3.8 L*      13%        25%           3.6
+//   ceiling 0.90       10.1 L*      15%        43%           3.6
+//
+// A ceiling and not a fraction, because a fraction does not know how big the
+// swing is and this does. At the TOP of the Intensity bar the quarter-slide
+// blows out — 0% of the chroma left and 41 degrees of hue, no better than the
+// addition's 37 — where the ceiling still holds 12% and 6.4 degrees, because
+// it goes on sliding exactly as far as the growing swing needs. One constant
+// that behaves at both ends of a bar beats one tuned for the middle of it.
+//
+// 0.95 is nearly the whole of what the trough can be spared: at it, every color
+// on the ramp but the very brightest darkens by NOTHING at all, and that one by
+// 3.8 — less than the coverage dip this replaces took from all of them. What it
+// costs is the chroma at a bright note's crest, which the gamut will not give
+// up for free, and lowering the ceiling is how to buy it back: 0.90 doubles the
+// chroma left at the ramp's top and takes 6.9 `L*` off its troughs to do it.
+const SHIMMER_CEILING: f32 = 0.95;
+// sRGB's own luminance row, for the ceiling above and the desaturation below.
+// Weighted rather than a plain mean so a blown yellow pales toward the white
+// its own light names, rather than toward a grey darker than it started.
+const SHIMMER_LUMA: vec3<f32> = vec3<f32>(0.2126, 0.7152, 0.0722);
 // How much of that exposure this view asks for (u.misc8.z, the Intensity bar).
 // One number scaling one thing, where the model this replaces had a brightness
 // and a coverage fade to keep in step: the sheet is one shape at every setting,
@@ -768,27 +811,37 @@ fn shimmer_terms(mode: u32, field: vec2<f32>, footprint: f32) -> vec2<f32> {
 // The layer's color under the sheet: `rgb` scaled by the gain the pair from
 // `shimmer_terms` asks for at this fragment.
 //
-// The headroom fit is the whole of the gamut handling, and it is what a
-// multiply gets for free that an addition cannot. A crest may not take the top
-// channel past 1, so where a color has less room above it than the swing asks
-// for, the swing SLIDES DOWN rather than clipping at the top: a sliding swing
-// is the same RATIO between its crest and its trough, which is what keeps the
-// sheet one size across the whole ramp, where a clipped one is not.
+// The gamut handling, and the whole of it: a crest may not take a channel past
+// 1, and this is what happens instead of the clip an addition takes there.
 //
-// It slides only as far as it has to, and where nothing forces it the trough
-// sits at the layer's own color — so a sheet is light ADDED wherever there is
-// room for light, which is the look this shares with the addition it replaces,
-// and turns to shade only as the room runs out. That is the ramp's bright half
-// and the near-white octave ghost, and a color already at white takes the whole
-// swing as shade, which is the case the coverage dip used to exist for.
-// Centring the swing instead — so the sheet's average exposure is 1 everywhere
-// — makes the mean uniform too, and costs more than it is worth: a white ghost
-// then averages 0.67 of its own light and the picture DIMS as Intensity rises,
-// which is not what a bar of that name can do.
+// Two things share the shortfall. The swing SLIDES DOWN, but only so far as
+// `SHIMMER_CEILING` asks — which costs the troughs some light and nothing else,
+// since a slid swing is the same RATIO between crest and trough and so still
+// one size. And whatever crest still overflows a channel is DESATURATED toward
+// the grey of its own light rather than clipped, which costs that crest some
+// chroma and buys back the light the slide gave up.
 //
-// Read for its top channel alone, and read per LAYER rather than once per
-// fragment: a near-white ghost and a ramp color have different room, and one
-// fit for both would clip whichever it was not measured on.
+// The ceiling is read against the layer's own light, never below it: a layer
+// already brighter than the ceiling is not asked to be dimmer than it draws, it
+// simply has nowhere up to go and takes the whole swing as shade. That is what
+// keeps this continuous as the swing closes on zero, where a fixed ceiling
+// would step a near-white layer down the moment a mode was switched on.
+//
+// The desaturation is the smaller move of the two and it is worth being exact
+// about why it is not a clip. A per-channel clip stops the channel that is
+// full and lets the others go on rising, so the color turns as it brightens —
+// 15 degrees of hue at the ramp's bright end, which is #235. Mixing all three
+// toward one grey moves them TOGETHER: the order of the channels is preserved,
+// because mixing toward a constant is monotone, so the color pales toward white
+// along its own hue instead of rotating away from it. `t` is the least mix that
+// brings the top channel back to 1, so nothing is paled further than it must
+// be, and the result reads as a highlight blowing out rather than as a ring
+// changing color.
+//
+// `rgb` is read per LAYER rather than once per fragment: a near-white octave
+// ghost and a ramp color have different room, and one fit for both would clip
+// whichever it was not measured on. A ghost has almost none, which is the case
+// the coverage dip used to exist for — an added light could not move it at all.
 //
 // The early return is the identity, and it has to be exact rather than nearly
 // so: Off and Intensity 0 both arrive here as a swing of 0, and every layer
@@ -799,11 +852,25 @@ fn shimmer_light(rgb: vec3<f32>, terms: vec2<f32>) -> vec3<f32> {
     if a <= 0.0 {
         return rgb;
     }
-    // The floor keeps the log finite on a black layer, which has no headroom
-    // worth measuring and no light to lose either.
-    let top = max(max(max(rgb.r, rgb.g), rgb.b), 1e-4);
-    let slide = min(0.0, -log(top) - a);
-    return rgb * exp(slide + a * terms.y);
+    // The floor keeps the log finite on a black layer, which has no light to
+    // lose and nowhere it needs sliding to.
+    let lit = max(dot(rgb, SHIMMER_LUMA), 1e-4);
+    let slide = min(0.0, log(max(SHIMMER_CEILING, lit) / lit) - a);
+    let v = rgb * exp(slide + a * terms.y);
+    let over = max(max(v.r, v.g), v.b);
+    if over <= 1.0 {
+        return v;
+    }
+    // The least mix toward grey that brings the full channel back to 1. Mixing
+    // all three toward one value moves them TOGETHER, so their order — and with
+    // it the hue — survives, where a per-channel clip stops the full one and
+    // lets the others climb past it, which is the 15 degrees in #235.
+    let grey = dot(v, SHIMMER_LUMA);
+    let t = clamp((over - 1.0) / max(over - grey, 1e-4), 0.0, 1.0);
+    // The final clamp answers the one case the mix cannot: a swing asking for
+    // more light than the display has puts `grey` itself past 1, and white is
+    // the honest end of that.
+    return min(mix(v, vec3<f32>(grey), t), vec3<f32>(1.0));
 }
 
 // ---- Outer octave layer ----------------------------------------------------

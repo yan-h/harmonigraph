@@ -379,21 +379,22 @@ pub struct ViewConfig {
     /// nearly was — still read weaker on the ramp's bright half, because equal
     /// added light is not equal contrast up there.
     ///
-    /// It is also the setting that stops costing the color anything. Scaling all
-    /// three channels by one gain slides a color along its own chromaticity, so
-    /// hue and saturation hold at every setting and at every phase; an addition
-    /// clips in whichever channel is already highest, which drains chroma and
-    /// swings the ramp's bright end 15 degrees of hue, and a mix toward white
-    /// leaves 15% of the chroma everywhere.
+    /// What it costs is CHROMA at a crest, and what it holds is hue. Scaling all
+    /// three channels by one gain slides a color along its own chromaticity, and
+    /// where the crest runs out of room it pales toward white rather than
+    /// clipping — all three channels moving together, so the color keeps its
+    /// hue while it loses some of its colorfulness. Across the ramp's two ends
+    /// at 1 that is 0.7 and 5.0 degrees of hue, against 88% and 57% of the
+    /// chroma. An addition clips in whichever channel is already highest, which
+    /// holds more chroma (99.6% and 73%) and swings the hue three times as far
+    /// (15.3 degrees); a mix toward white leaves 15% of the chroma everywhere,
+    /// at a trough as much as at a crest.
     ///
     /// 0 is the layer drawing exactly as it does unshimmered, from a bar rather
-    /// than from the mode. Upward there is one thing to know: where a color has
-    /// room above it the sweep reads as light added, and where it has none the
-    /// same setting is the same ratio taken as SHADE between crests instead —
-    /// the sheet slides down to fit rather than clipping at the top. So a deeper
-    /// setting always deepens the sweep, but on a color already near the top of
-    /// a channel it deepens downward, and the picture there gets darker between
-    /// bands rather than brighter under them.
+    /// than from the mode. Upward the sweep is light ADDED: the troughs sit at
+    /// the layer's own color and stay there, and only the very brightest colors
+    /// on the ramp give any of that up, sliding a few points of `L*` to keep
+    /// their crests a color rather than a white flash.
     ///
     /// What the light costs is real at any setting, and it is the point of
     /// the bar: under a strong band an indicator says "an octave sounds here"
