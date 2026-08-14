@@ -1042,16 +1042,15 @@ fn the_sweep_is_worth_the_same_contrast_on_a_dark_color_as_on_a_bright_one() {
 ///
 /// The budgets are the measured shape of that trade, with room for a
 /// rasteriser to disagree over ring edges and none for a regression. The slide
-/// engages where a color's luma — in the scale the shader's arithmetic runs
-/// on, which is brighter than the same values read as encoded sRGB — clears
-/// `SHIMMER_CEILING / e^swing`, about 0.40 at this fixture's Intensity of 1.
-/// The default ramp crosses that in its upper half: the dark end (luma 0.33)
-/// pays nothing and is held to rounding, mid-ramp (0.45) measures 3.7 `L*`,
-/// and the bright end (0.64) measures 15 — the real price of one uniform
-/// swing on a bright color under a hard gamut, and several times what the
-/// ramp's encoded reading suggests. `SHIMMER_CEILING`'s comment carries the
-/// trade; this pins its measured cost so a retune moves a number here rather
-/// than a picture only.
+/// engages where a color's luma — the shader's dot over the STORED values,
+/// not over their decoded light — clears `SHIMMER_CEILING / e^swing`, about
+/// 0.40 at this fixture's Intensity of 1. The default ramp crosses that in
+/// its upper half: the dark end (luma 0.33) pays nothing and is held to
+/// rounding, mid-ramp (0.45) measures 3.7 `L*`, and the bright end (0.64)
+/// measures 15 — the encoded-domain slide compounded through the display
+/// transfer, and several times what a calibration in decoded light predicts.
+/// `SHIMMER_CEILING`'s comment carries the trade; this pins its measured cost
+/// so a retune moves a number here rather than a picture only.
 #[test]
 fn between_peaks_the_layer_sits_at_its_own_color() {
     const SIZE: [u32; 2] = [256, 256];

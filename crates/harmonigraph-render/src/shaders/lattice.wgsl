@@ -620,10 +620,13 @@ const SHIMMER_EXPOSURE: f32 = 0.873;
 //
 // Measured across the default ramp at the fresh view's Intensity, against an
 // added light (which darkens 5.0, spreads 29%, keeps 80% of the chroma and
-// swings 6.0 degrees). The figures read the ramp AS ENCODED sRGB — a darker
-// reading than the scale this arithmetic runs on, so every row's trough cost
-// is understated on screen and what the table carries is the comparison
-// between shapes, not the prices. The first three rows are a fixed FRACTION
+// swings 6.0 degrees). The trough figures model `lit` as the DECODED colors'
+// linear luminance (bright end 0.38, which clears the slide threshold for one
+// color); the shader dots the stored encoded values themselves (bright end
+// 0.64), and its slide compounds through the display transfer into a deeper
+// ratio in light — so every row's trough cost runs higher on screen than its
+// figure says, and what the table carries is the comparison between shapes,
+// not the prices. The first three rows are a fixed FRACTION
 // of the shortfall taken as slide instead, which is the other shape this
 // could have; the ceiling is the rest:
 //
