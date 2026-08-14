@@ -937,10 +937,10 @@ fn lifted_pixels(a: &Shots, b: &Shots) -> Vec<usize> {
 /// bright one — the ratio between a crest and its trough, which is the currency
 /// a texture this fine is seen in.
 ///
-/// The currency is the claim, and it is a different one from the claim this
-/// test used to make. An added light is near-uniform in the `L*` it ADDS — 21.6
-/// to 22.4 across the ramp here, a 13% spread — and that was the property it
-/// was tuned for; but the crest-to-trough RATIO under it falls from 0.514 at
+/// The currency is the claim. An added light is near-uniform in the `L*` it
+/// ADDS — 21.6 to 22.4 across the ramp here, a 13% spread — which is the
+/// property such a sheet is tuned to hold; but the crest-to-trough RATIO
+/// under it falls from 0.514 at
 /// the ramp's dark end to 0.369 at its bright one, a 28% decline, and with the
 /// fresh view's bloom on it is a 35% one. A moving texture is read by that
 /// ratio rather than by the difference, which is why the sheet reads weaker on
@@ -949,8 +949,9 @@ fn lifted_pixels(a: &Shots, b: &Shots) -> Vec<usize> {
 /// taken deliberately, and the reason `SHIMMER_EXPOSURE` is a gain rather than
 /// an amount.
 ///
-/// The bound is a tenth where the old claim's was a quarter, because this is
-/// the property the model HOLDS rather than the one it approximates: a multiply
+/// The bound is a tenth where an added light's could bear no better than a
+/// quarter, because this is the property the model HOLDS rather than one it
+/// approximates: a multiply
 /// is one ratio by construction, and what is left to vary is the layers under
 /// the rings that the sheet does not touch. Measured at 3% over the ramp with
 /// bloom off and 7% with it on.
@@ -1013,7 +1014,7 @@ fn the_sweep_is_worth_the_same_contrast_on_a_dark_color_as_on_a_bright_one() {
     );
     // A tenth, against a reading of 3% over the whole ramp. Wider than the
     // measurement by enough for a rasteriser to disagree about a ring edge, and
-    // nowhere near wide enough to admit the model this replaces: an added light
+    // nowhere near wide enough to admit the additive model: an added light
     // reads 28% apart on these same two colors, so the bound separates them
     // several times over, which is what a bound here is for.
     let spread = (dim_c - lit_c).abs() / dim_c.max(lit_c);
@@ -1159,7 +1160,7 @@ fn a_ring_keeps_its_color_under_a_sweep_peak() {
     // bleaching the dark end pass by being compared against itself.
     //
     // Half the chroma, against a reading of 57% at the end that pays; and 8
-    // degrees of hue, against 5.0 there, where the addition this replaces needs
+    // degrees of hue, against 5.0 there, where an addition needs
     // 20 to pass at all. The hue bound is the one doing the work — it sits three
     // times inside the addition's 15.3, so a model that went back to clipping
     // the channels separately fails it on the first peak. The chroma bound is a
@@ -1614,9 +1615,9 @@ fn shimmer_intensity_scales_the_sweep_and_bottoms_out_at_the_steady_layer() {
 /// so counting crossings counts band edges, with no threshold picked to suit
 /// the answer.
 ///
-/// The mean and not 1, which is where this used to look for the crossing. The
-/// sheet is an exposure fitted to each layer's headroom, so where a color has
-/// no room above it — this fixture's ring colors sit at the top of a channel —
+/// The mean and not 1. The sheet is an exposure fitted to each layer's
+/// headroom, so where a color has no room above it — this fixture's ring
+/// colors sit at the top of a channel —
 /// the whole sweep is shade and the ratio never reaches 1 at all. Counting
 /// crossings of 1 there finds a profile entirely on one side of the line and
 /// reports no bands in a picture full of them. The mean rides wherever the

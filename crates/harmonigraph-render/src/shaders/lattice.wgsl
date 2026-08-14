@@ -577,7 +577,7 @@ fn shimmer_sharpness() -> f32 {
 // ends at Intensity 1 — and that chroma is what a bright crest spends, keeping
 // 88% and 57%.
 //
-// The two it replaces spend it worse. A mix toward white drains chroma to 15%
+// The two other shapes spend it worse. A mix toward white drains chroma to 15%
 // at EVERY point on the ramp, bright crest or dark trough alike — a ring under
 // a peak is bleached rather than lit, and on a dark saturated color bleaching is
 // most of what there is to see. An addition holds the channel GAPS instead,
@@ -590,21 +590,21 @@ fn shimmer_sharpness() -> f32 {
 // The SIZE is in contrast, which is the currency a texture this fine is seen
 // in, and choosing it is the whole of what this constant decides. An addition
 // is near-uniform in the `L*` it ADDS — 20.8 to 23.9 across the ramp at the
-// fresh view's Intensity, a 13% spread, and the property it was tuned for — but
-// the ratio between a crest and its trough falls from 0.508 at the ramp's dark
-// end to 0.367 at its bright one, a 29% decline. A moving texture is read by
-// that ratio and not by the `L*` difference, which is why the sheet reads
-// weaker on the ramp's bright half however uniform its added light is. One
-// exposure everywhere makes the ratio the constant instead, at a 13% spread of
-// its own. The trade is the other way round — the `L*` a peak adds now varies
-// where it used to hold — and that is the right way round for what the eye is
-// doing here. Both halves are measured in
+// fresh view's Intensity, a 13% spread, which is the property an addition is
+// tuned to hold — but the ratio between a crest and its trough falls from
+// 0.508 at the ramp's dark end to 0.367 at its bright one, a 29% decline. A
+// moving texture is read by that ratio and not by the `L*` difference, which
+// is why such a sheet reads weaker on the ramp's bright half however uniform
+// its added light is. One exposure everywhere makes the ratio the constant
+// instead, at a 13% spread of its own. The trade runs the other way — the
+// `L*` a peak is worth varies so the ratio can hold — and that is the right
+// way round for what the eye is doing here. Both halves are measured in
 // `the_sweep_is_worth_the_same_contrast_on_a_dark_color_as_on_a_bright_one` and
 // `a_ring_keeps_its_color_under_a_sweep_peak`.
 //
-// 0.873 is where a peak at the fresh view's Intensity is worth what the added
-// light it replaces was worth at mid-ramp, so a view saved against the old
-// model carries its setting over at about the size it was dialled at.
+// 0.873 sizes a peak at the fresh view's Intensity to what an added-light
+// sheet is worth at mid-ramp, so a saved view's Intensity keeps meaning about
+// the size it was dialled at.
 const SHIMMER_EXPOSURE: f32 = 0.873;
 // The most LIGHT a crest may ask for, as the luma of the layer under it. Where
 // a swing would take a layer past this, it slides down until the crest lands
@@ -660,7 +660,7 @@ const SHIMMER_CEILING: f32 = 0.95;
 // its own light names, rather than toward a grey darker than it started.
 const SHIMMER_LUMA: vec3<f32> = vec3<f32>(0.2126, 0.7152, 0.0722);
 // How much of that exposure this view asks for (u.misc8.z, the Intensity bar).
-// One number scaling one thing, where the model this replaces had a brightness
+// One number scaling one thing, where an added-light model has a brightness
 // and a coverage fade to keep in step: the sheet is one shape at every setting,
 // and 0 leaves `shimmer_light` returning the layer exactly as it draws
 // unshimmered — from the bar rather than from the mode.
@@ -753,14 +753,14 @@ fn shimmer_pattern(mode: u32, p: vec2<f32>, d: vec2<f32>, n: vec2<f32>) -> f32 {
 // to its crest, and where in that swing this fragment sits, 0 at a trough and 1
 // at a crest. `shimmer_light` is what turns the pair into a color.
 //
-// ONE term where this used to hand back a brightness and a coverage scale, and
-// the reason the pair existed is gone with the addition. An added light clips
-// at white and an octave ghost is already nearly there, so the ghost would
-// barely move on color alone and the dip had to be an opacity's job; an
-// exposure moves a near-white ghost as readily as a dark ring, because it is a
-// ratio rather than an amount. Coverage is now the layer's own, untouched by
-// the sheet, which is what keeps `paint_reach` exact: nothing here can make a
-// layer cover more than it did, since it no longer touches coverage at all.
+// ONE term, where an added-light sheet needs two — a brightness and a
+// coverage scale. An added light clips at white and an octave ghost is
+// already nearly there, so on color alone the ghost would barely move and its
+// dip has to be an opacity's job; an exposure moves a near-white ghost as
+// readily as a dark ring, because it is a ratio rather than an amount.
+// Coverage is the layer's own, untouched by the sheet, which is what keeps
+// `paint_reach` exact: nothing here can make a layer cover more than it does
+// steady, since the sheet never touches coverage at all.
 //
 // A swing of 0 in mode 0, which `shimmer_light` reads as the identity, so a
 // caller applies it unconditionally and Off stays byte-for-byte the look it
@@ -852,8 +852,9 @@ fn shimmer_terms(mode: u32, field: vec2<f32>, footprint: f32) -> vec2<f32> {
 //
 // `rgb` is read per LAYER rather than once per fragment: a near-white octave
 // ghost and a ramp color have different room, and one fit for both would clip
-// whichever it was not measured on. A ghost has almost none, which is the case
-// the coverage dip used to exist for — an added light could not move it at all.
+// whichever it was not measured on. A ghost has almost none — the case an
+// added light cannot move at all, and the reason an additive sheet needs the
+// coverage dip this model does without.
 //
 // The early return is the identity, and it has to be exact rather than nearly
 // so: Off and Intensity 0 both arrive here as a swing of 0, and every layer
@@ -1525,7 +1526,7 @@ fn node_paint(in: VsOut) -> vec4<f32> {
     // its own here -- `shimmer_terms` returns a zero swing when the pattern is
     // Off, so the scale is a no-op either way.
     let glyph_shimmer = vec2<f32>(mark_shimmer.x * mark_slice, mark_shimmer.y);
-    // No clamp at white here, where the added light this replaces needed one:
+    // No clamp at white here, where an added light needs one:
     // `shimmer_light` fits its crest to the layer's own headroom, so the top
     // channel lands AT 1 and never past it. That guarantee is what the layers
     // below rely on, and they rely on it exactly -- each one premultiplies its
