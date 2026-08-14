@@ -1813,8 +1813,8 @@ fn every_level_number_sits_on_the_side_its_peaks_reach() {
 #[test]
 fn a_level_number_with_no_room_is_not_written() {
     // A ceiling dragged to half a dB above a rung, so the topmost ruling sits
-    // hard against it — reachable on the Level bar, and the case the flip that
-    // used to be here existed for.
+    // hard against it with too little room left for a number — reachable
+    // wherever the Level bar lands.
     let cfg = level_cfg(-60.0, -29.5);
     let grid = level_grid(&cfg, 400.0, 60.0);
     let ruled: Vec<f32> = grid.iter().map(|r| r.db).collect();
