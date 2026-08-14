@@ -65,7 +65,7 @@ fn default_background() -> (u8, u8, u8) {
 
 /// The layouts you get by name. Deliberately few: these are the two
 /// arrangements the panes were designed around, plus each pane alone.
-pub const PRESETS: [&str; 4] = ["side-by-side", "stacked", "lattice", "spectral"];
+pub const PRESETS: [&str; 5] = ["side-by-side", "stacked", "lattice", "spectral", "spiral"];
 
 impl Layout {
     /// A preset by name, or `None` if it isn't one.
@@ -91,6 +91,10 @@ impl Layout {
             ],
             "lattice" => vec![full(Pane::Lattice)],
             "spectral" => vec![full(Pane::Spectral)],
+            // The spiral is a DISC, so it takes what it is given and centres
+            // itself in it; a composition wanting it beside something else is a
+            // hand-written `.ron`, which is what the `.ron` is for.
+            "spiral" => vec![full(Pane::Spiral)],
             _ => return None,
         };
         Some(Layout { background: default_background(), margin: 0.0, gap: 8.0, panes })

@@ -94,6 +94,22 @@ pub(crate) fn render_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) 
                 // its type small, as the render will.
                 super::spectral::spectral_pane(&mut child, state, now, 1);
             }
+            // Unreachable, and here for the match rather than for the picture:
+            // this preview composes `Layout::split`, which places the lattice
+            // and the spectral pane and nothing else, so the Video panel cannot
+            // preview a spiral at all. The `spiral` layout preset is
+            // render-only, and a frame that wants one beside something else is
+            // a hand-written `.ron`.
+            //
+            // Drawn rather than left as a `todo!()` so that whatever reaches
+            // here if `Layout::split` ever grows a spiral gets the pane instead
+            // of a panic inside the host. It needs no texture slot of its own
+            // the way the Spectral pane above does: it reads the analyzer's
+            // current buckets straight and holds nothing between frames.
+            Pane::Spiral => {
+                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+                super::spiral::spiral_pane(&mut child, state, now);
+            }
             Pane::Lattice => preview_lattice(ui, rect, state, now),
         }
     }

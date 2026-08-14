@@ -566,7 +566,14 @@ pub(crate) fn default_dock() -> DockState<panes::Tab> {
     // and beside it alike. Drag it wherever from here — egui_dock docks it
     // freely, and the orientation stays where it was set rather than following
     // the shape the pane lands in.
-    surface.split_right(lattice, 0.72, vec![panes::Tab::Spectral]);
+    //
+    // Spiral shares that leaf rather than taking room of its own, and is the
+    // second tab there so the Analyzer is still what opens (egui_dock makes tab
+    // index 0 active). The two are one analyzer drawn two ways off one
+    // `SpectrumConfig`, so they are alternatives to switch between rather than
+    // pictures to watch at once — and a disc wants a square, which is the one
+    // shape a tall column beside the lattice is not.
+    surface.split_right(lattice, 0.72, vec![panes::Tab::Spectral, panes::Tab::Spiral]);
     dock
 }
 
@@ -677,21 +684,27 @@ impl SharedState {
     /// console (the offline renderer) has to say so itself, and the return
     /// value is what lets it.
     ///
-    /// Refusing an older blob rather than migrating it is safe because no
-    /// older blob can reach this build THROUGH THE HOST. The version reached 2
-    /// on 2026-07-23; the plugin's `CLAP_ID` and `VST3_CLASS_ID` changed on
-    /// 2026-07-26, three days later. A project saved before the version bump
-    /// therefore names a plugin identity this binary does not claim, so the
+    /// Refusing an older blob rather than migrating it is cheap for the DEEP
+    /// past because none of it can reach this build THROUGH THE HOST. The
+    /// version reached 2 on 2026-07-23; the plugin's `CLAP_ID` and
+    /// `VST3_CLASS_ID` changed on 2026-07-26, three days later. A project saved
+    /// before that names a plugin identity this binary does not claim, so the
     /// host never loads us into that slot and its state never arrives here.
+    ///
+    /// Every bump SINCE has no such gate under it, and this is the ordinary
+    /// case rather than the exception: a project saved by yesterday's build
+    /// carries yesterday's identity, arrives here, and is refused whole. That
+    /// is a real project opening at defaults, which is the price of the floor
+    /// and is why it is loud.
     ///
     /// That argument covers the editor and nothing else, and this has two
     /// other callers with no identity gate behind them: the offline renderer
     /// reading a `.take` header, and the standalone reading its `app.ron`. A
     /// take is an archive — `harmonigraph-take` refuses only takes from the
     /// FUTURE — so an old one opens and hands its `ui_state` straight here.
-    /// That case is live rather than hypothetical: the floor is 3, and a take
-    /// recorded before it was raised carries a version-2 blob that is refused
-    /// whole, so the video renders at the default camera, view, spectrum AND
+    /// That case is live rather than hypothetical: a take recorded before the
+    /// floor was last raised carries a below-floor blob that is refused whole,
+    /// so the video renders at the default camera, view, spectrum AND
     /// frame rather than the ones it was recorded with. The floor is mirrored
     /// in [`render_config_from_persist`] so the two doors into one blob at
     /// least agree, and a refused take renders wholly at defaults rather than a
@@ -793,10 +806,17 @@ fn default_ui_scale() -> f32 {
 /// A bump costs the whole blob, not the dock alone: `load_persist` refuses
 /// anything below this outright, so camera, view, spectrum and render settings
 /// all fall back to defaults with it. That is what lets a format change be
-/// made outright rather than shimmed, and it is why raising this means
-/// changing the plugin ids again (see [`SharedState::load_persist`], which
-/// sets out what the id change bought and which of its callers the argument
-/// covers).
+/// made outright rather than shimmed.
+///
+/// What it costs is a real project's settings, and the cost is paid rather
+/// than avoided. The plugin ids gate everything below version 2 — a project
+/// that old names an identity this binary does not claim, so its state never
+/// arrives — but NOTHING gates a blob one bump behind, which is what a project
+/// saved by the previous build carries. Changing the ids again would buy that
+/// gate back at the price of orphaning every project that loads the plugin,
+/// which is the worse trade; the refusal is made audible instead. See
+/// [`SharedState::load_persist`], which sets out both halves and which of its
+/// callers each covers.
 ///
 /// 2: Tuning and Frame merged into one tab. A version-1 layout has both, and
 /// they now name the same variant — kept as the floor's worked example, since
@@ -821,7 +841,14 @@ fn default_ui_scale() -> f32 {
 /// parses and draws, and without a bump it would open with no Display tab —
 /// camera, note styling and analyzer knobs all unreachable, nothing said, and
 /// no mechanism to re-add a missing tab but "Reset layout".
-pub(crate) const UI_PERSIST_VERSION: u32 = 4;
+///
+/// 5: the Spiral pane added (#342). The only ADDITION in this list, and it is
+/// the quiet half of 3 and 4 on its own: nothing in a version-4 blob names a
+/// variant this build has dropped, so it parses and draws perfectly — with no
+/// Spiral tab anywhere in it, and no way to add one but "Reset layout". A tab
+/// that exists in the binary and in no project is the same silent break from
+/// the other direction, so it is the same floor that answers it.
+pub(crate) const UI_PERSIST_VERSION: u32 = 5;
 
 /// On-disk format of [`SharedState::save_persist`]. Bump thoughtfully; a
 /// failed deserialize silently falls back to defaults.

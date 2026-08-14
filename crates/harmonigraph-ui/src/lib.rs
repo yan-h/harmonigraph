@@ -547,7 +547,7 @@ fn learned_axes(
 
 /// A pane that stands on its own, outside the dock.
 ///
-/// Only the two *views* are here. The settings panes edit state that a
+/// Only the *views* are here. The settings panes edit state that a
 /// non-interactive renderer cannot change and a viewer should not see, so
 /// they are deliberately unreachable this way.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -556,6 +556,8 @@ pub enum Pane {
     Lattice,
     /// The spectrum, voice bars and piano roll.
     Spectral,
+    /// The same spectrum wound onto a chroma spiral.
+    Spiral,
 }
 
 /// Draw one pane's body into `ui`, filling it, with no dock or tab bar.
@@ -570,6 +572,7 @@ pub fn draw_pane(ui: &mut egui::Ui, pane: Pane, state: &mut SharedState, now: f6
         // One spectrogram per frame offline, so texture slot 0. Text sizes
         // itself off the pane, here as everywhere.
         Pane::Spectral => panes::spectral::spectral_pane(ui, state, now, 0),
+        Pane::Spiral => panes::spiral::spiral_pane(ui, state, now),
     }
 }
 

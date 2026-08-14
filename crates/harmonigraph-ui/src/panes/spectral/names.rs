@@ -58,22 +58,73 @@ use crate::{theme, SharedState};
 /// `spectral::name_zoom`.
 ///
 /// Rebased by 1.3 from the 9.5 it was drawn at before the Name size bar
-/// existed, that being where the bar settled once there was one; every length
-/// below moved with it, since they are the spacing AROUND type of this size
-/// and were being scaled by the same bar.
+/// existed, that being where the bar settled once there was one. [`LABEL_PAD`]
+/// and [`REPEAT_GAP`] moved with it and still ride the same scale, being the
+/// clear space this type demands around itself. [`LABEL_INSET`] does NOT: it
+/// was rebased along with them, and is no longer a spacing quoted against this
+/// size at all.
 pub(super) const LABEL_PT: f32 = 12.35;
 
 /// Points the name is set in from the end of the ribbon it is anchored to,
 /// along the time axis. Enough that the letter is not touching the end it
 /// starts from.
 ///
-/// Scaled with the type, like every other length here — the scale the pane
-/// hands down carries the pitch zoom, the user's bar and the pane's own size,
-/// and a spacing left in fixed points would be the same air on a pane half the
-/// size as on one twice it. The Render preview and the video it previews are
-/// where that shows worst: the render diverging from the pane the look was
-/// dialled in on is the one thing this codebase most wants it not to do.
+/// A distance on the SCREEN, and the one length here that does not go up with
+/// the type ([`NameScale::air`] carries it, not the type's own half of that
+/// pair). The pitch zoom grows a name in
+/// proportion so that it keeps its footing on a ribbon that is growing too —
+/// but the gap between the ribbon's end and the letter is not part of the
+/// picture being magnified, it is the join between the name and the thing it
+/// names. Scaled along with everything else it opens as the range closes: a
+/// name set 2.6 points off its note at the whole axis sits 13 off it at the
+/// two-octave floor, so from a reader's side the names slide down the roll for
+/// as long as the zoom is being dragged — a movement the music did not make.
+///
+/// It pins the BOX, and the box is not all the way to the ink. What a reader
+/// sees still opens with the zoom, by the amount [`name_extent`] overestimates
+/// the name plus the letter's own left bearing, both of which scale with the
+/// type. Measured through a real context at `ppp` 2, from the anchor to the
+/// drawn `C` of a bare name — box, galley, ink:
+///
+/// | zoom | box | galley | ink |
+/// |------|------|--------|------|
+/// | 1    | 2.60 | 3.34   | 3.84 |
+/// | 2.23 | 2.60 | 4.25   | 5.78 |
+/// | 5    | 2.60 | 6.31   | 9.32 |
+///
+/// So this takes out the larger term and leaves 5.5 points of creep across the
+/// zoom where there were 15.9. Closing the rest means anchoring on measured ink
+/// the way the axis labels do ([`ink_inset`](crate::text::ink_inset)), which
+/// wants the drawn width rather than the estimate — issue #349 holds the
+/// measurements and the two candidates.
+///
+/// What it still scales by is the PANE, which is not the same concession. The
+/// Render preview draws this pane a fraction of the size the offline render
+/// draws it, and the two have to be one picture at two sizes — so a gap left at
+/// flat points would be a small share of a name's height in the video and most
+/// of one in the preview it is dialled in on, which is the divergence this
+/// codebase least wants.
 const LABEL_INSET: f32 = 2.6;
+
+/// The two scales a name is laid out by, and the pitch zoom is what parts
+/// them.
+///
+/// One struct rather than two arguments because they are the same size in every
+/// picture that is not zoomed, so a call passing one for the other draws
+/// correctly at the dialled view and wrongly everywhere else — a swap that a
+/// look at the default pane cannot see.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct NameScale {
+    /// What the TYPE is set at, as a multiple of [`LABEL_PT`]: the pane's own
+    /// size, the user's bar and the pitch zoom, all three. Everything measured
+    /// in the type's own terms rides on it — the boxes, and the room the
+    /// thinning hands out.
+    pub(super) label: f32,
+    /// What a clear space fixed on the SCREEN is scaled by: the pane's own size
+    /// and nothing else. See [`LABEL_INSET`], which is the whole of what it
+    /// carries.
+    pub(super) air: f32,
+}
 
 /// What a monospace glyph advances, and a line box stands, as fractions of the
 /// font size — and the clear space a name demands around itself, in points.
@@ -301,13 +352,16 @@ pub(super) struct NoteLabel {
 
 /// Every name this frame draws, already thinned to the ones that fit — empty
 /// when the setting is off or the pane has kept no roll region to draw in.
+///
+/// The two scales it lays names out by part company at the pitch zoom — see
+/// [`NameScale`].
 pub(super) fn plan(
     state: &SharedState,
     axes: &Axes,
     scale: &PitchScale,
     split: f32,
     now: f64,
-    label_scale: f32,
+    scales: NameScale,
 ) -> Vec<NoteLabel> {
     let cfg = &state.spectrum_config;
     // Names label RIBBONS, so they need ribbons. With the roll hidden there is
@@ -322,15 +376,15 @@ pub(super) fn plan(
     let anchor = Anchor::of(&time, cfg);
     let roll = state.roll();
 
-    let size = LABEL_PT * label_scale;
+    let size = LABEL_PT * scales.label;
     // One point of the depth axis, in seconds of take. A name's reach is a
     // length on the screen and the thinning measures in TIME, so this is the
     // rate between them — one number, the time axis being linear across the
     // region.
     let seconds_per_point = time.seconds_per_point(axes);
-    let gap = (REPEAT_GAP * label_scale) as f64 * seconds_per_point;
+    let gap = (REPEAT_GAP * scales.label) as f64 * seconds_per_point;
     let room = |name: &NoteName| {
-        depth_extent(axes, name, size, label_scale) as f64 * seconds_per_point + gap
+        depth_extent(axes, name, size, scales.label) as f64 * seconds_per_point + gap
     };
     // Which way a name lies through TIME from where it is anchored: back over
     // the ribbon behind a leading edge, forward over the ribbon ahead of an
@@ -439,7 +493,7 @@ pub(super) fn plan(
     let toward_near = grow.dot(axes.dir_depth()) < 0.0;
     let place = |edge: &Edge, name: &NoteName| {
         let (t, d) = (scale.t_of(edge.pitch), time.depth_of(edge.time));
-        let rect = label_rect(axes, grow, t, d, name, size, label_scale);
+        let rect = label_rect(axes, grow, t, d, name, size, scales);
         if !toward_near {
             return rect;
         }
@@ -721,7 +775,9 @@ fn anchor_edge(note: &RollNote, now: f64, anchor: Anchor) -> Edge {
 /// — puts its mark column PAST the end it is anchored to, over whatever the
 /// picture holds beyond it. Measured on a 300pt pane at `LABEL_PT`: a bare `C`
 /// clears it by 0.65pt, `C♯` crosses by 3.4pt, `B♭↓` by 9.0pt, the widest
-/// spelling by 17.2pt, and it scales with the pitch zoom.
+/// spelling by 17.2pt. The pitch zoom makes it worse than proportionally,
+/// since the marks grow with the type and [`LABEL_INSET`] does not: what the
+/// inset buys back is the same 2.6 points at five times the size.
 ///
 /// The two constraints cannot both hold while [`draw_stacked_name`] typesets the
 /// marks after the letter: pinning the letter fixes the box's near edge and lets
@@ -738,7 +794,7 @@ fn label_rect(
     d: f32,
     name: &NoteName,
     size: f32,
-    label_scale: f32,
+    scales: NameScale,
 ) -> egui::Rect {
     let extent = name_extent(name, size);
     // How far the box reaches the way it grows: text always runs across the
@@ -751,7 +807,7 @@ fn label_rect(
     let bare = NoteName { letter: name.letter, sharps: 0, syntonic_commas: 0, septimal_commas: 0 };
     let letter_extent = name_extent(&bare, size);
     let letter_along = (letter_extent.x * grow.x).abs() + (letter_extent.y * grow.y).abs();
-    let inset = LABEL_INSET * label_scale;
+    let inset = LABEL_INSET * scales.air;
     // `grow.x + grow.y` is its own sign: +1 forward (the box grows the screen's
     // own way), -1 backward. Backward is where the letter and the box disagree
     // on which end is "first" -- see above.
@@ -761,7 +817,7 @@ fn label_rect(
         along * 0.5
     };
     let centre = axes.at(p, d) + grow * (inset + growth);
-    egui::Rect::from_center_size(centre, extent).expand(LABEL_PAD * label_scale)
+    egui::Rect::from_center_size(centre, extent).expand(LABEL_PAD * scales.label)
 }
 
 /// What a name covers, estimated from the sizes its pieces are laid out at.
@@ -994,6 +1050,21 @@ mod tests {
         max: egui::pos2(310.0, 20.0 + super::super::axes::REFERENCE_PITCH_LEN),
     };
 
+    /// The dialled size: the type at its built-in [`LABEL_PT`] and the air in
+    /// front of it at its built-in [`LABEL_INSET`].
+    ///
+    /// A SCALE, not a pane — the pane the tests below hand it ([`PANE`]) would
+    /// derive 100/860 for both. Saying one number and meaning both is what
+    /// almost every test here wants, since almost none of them are about the
+    /// zoom that parts the two.
+    const FLAT: NameScale = NameScale { label: 1.0, air: 1.0 };
+
+    /// A pane zoomed in: the names drawn `label` times their built-in size on a
+    /// picture whose own size has not changed, so the air stays put.
+    fn zoomed(label: f32) -> NameScale {
+        NameScale { label, air: 1.0 }
+    }
+
     fn on(time: f64, note: u8) -> NoteEvent {
         NoteEvent { time, channel: 0, note, kind: NoteEventKind::On { velocity: 0.8 } }
     }
@@ -1047,7 +1118,7 @@ mod tests {
         let max_midi = cfg.high_midi.max(min_midi + crate::PITCH_RANGE_MIN_SPAN);
         let scale = PitchScale { min_midi, max_midi, span: max_midi - min_midi };
         let split = super::super::axes::spectrum_share(cfg);
-        plan(state, &axes, &scale, split, now, 1.0)
+        plan(state, &axes, &scale, split, now, FLAT)
     }
 
     /// A phrase dense enough that its names have to compete for room: three
@@ -1081,8 +1152,9 @@ mod tests {
             let state = state_at(now);
             let cfg = state.spectrum_config;
             let split = super::super::axes::spectrum_share(&cfg);
+            let axes = Axes::new(BIG, &cfg);
             let labels =
-                plan(&state, &Axes::new(BIG, &cfg), &scale_of(&state), split, now, label_scale);
+                plan(&state, &axes, &scale_of(&state), split, now, zoomed(label_scale));
             for label in labels {
                 let key = (label.name.to_string(), (label.at * 1000.0).round() as i64);
                 seen.entry(key).or_default().push(frame);
@@ -1130,7 +1202,7 @@ mod tests {
         for frame in 0..480 {
             let now = start + frame as f64 / 60.0;
             feed(&mut state, &mut next, now);
-            for label in plan(&state, &axes, &scale_of(&state), split, now, 1.0) {
+            for label in plan(&state, &axes, &scale_of(&state), split, now, FLAT) {
                 seen.entry((label.name.to_string(), (label.at * 1000.0).round() as i64))
                     .or_default()
                     .push(frame);
@@ -1165,7 +1237,8 @@ mod tests {
         let state = phrase(f64::NEG_INFINITY);
         let cfg = state.spectrum_config;
         let split = super::super::axes::spectrum_share(&cfg);
-        let placed = plan(&state, &Axes::new(BIG, &cfg), &scale_of(&state), split, 20.0, ZOOMED);
+        let axes = Axes::new(BIG, &cfg);
+        let placed = plan(&state, &axes, &scale_of(&state), split, 20.0, zoomed(ZOOMED));
         let on_pane = state
             .tracker
             .roll()
@@ -1240,6 +1313,74 @@ mod tests {
         assert!(rect.max.x < axes.at(0.5, 0.8).x, "growing back into the note, not past it");
     }
 
+    /// A name stands the same distance off the end it is written on however
+    /// far the pitch range is zoomed in.
+    ///
+    /// The zoom grows a name in proportion, so that it keeps its footing on a
+    /// ribbon which is growing by the same factor
+    /// ([`name_zoom`](super::super::axes::name_zoom)) — and the gap in front of
+    /// it went up with the rest, which is a name sliding down its own roll for
+    /// as long as the range is being dragged. The type still follows the zoom;
+    /// the join between the name and the note does not. See [`LABEL_INSET`].
+    ///
+    /// Measured to the estimated ink and not to the box [`label_rect`] returns,
+    /// the two differing by [`LABEL_PAD`] — clear space the thinning asks for,
+    /// which does scale with the type. (The pad is not invisible everywhere: a
+    /// name held off the near edge is clamped by its PADDED corner, so a
+    /// just-struck note's name at the onset anchor stands the pad clear of the
+    /// now-line. It is invisible here, where nothing is clamped.)
+    ///
+    /// The estimate, note, and not the glyph egui draws — those part company by
+    /// a margin that still follows the zoom, which
+    /// [`a_names_drawn_ink_creeps_only_by_the_estimates_own_error`] measures and
+    /// [`LABEL_INSET`] explains.
+    ///
+    /// Both growth directions, since which one a name has is the anchor's and
+    /// not the orientation's — every orientation draws both (see [`Anchor`]).
+    #[test]
+    fn a_name_keeps_its_distance_from_its_note_through_the_zoom() {
+        let cfg = SpectrumConfig::default();
+        let axes = Axes::new(PANE, &cfg);
+        let name = NoteName { letter: 'C', sharps: 0, syntonic_commas: 0, septimal_commas: 0 };
+        let anchor = axes.at(0.5, 0.5);
+        for grow in [axes.dir_depth(), -axes.dir_depth()] {
+            for zoom in [1.0, 2.23, 5.0] {
+                let size = LABEL_PT * zoom;
+                let rect = label_rect(&axes, grow, 0.5, 0.5, &name, size, zoomed(zoom));
+                let ink = egui::Rect::from_center_size(rect.center(), name_extent(&name, size));
+                // The end of the ink nearest the anchor, measured the way the
+                // box grows — so this names no screen side and reads the same
+                // in both directions.
+                let reach = |p: egui::Pos2| (p - anchor).dot(grow);
+                let gap = reach(ink.min).min(reach(ink.max));
+                assert!(
+                    (gap - LABEL_INSET).abs() < 0.01,
+                    "growing {grow:?} at zoom {zoom}: the name sits {gap} off its note, not \
+                     {LABEL_INSET}",
+                );
+            }
+        }
+    }
+
+    /// ...and the pane is the one thing that DOES move it, because the Render
+    /// preview and the video it previews have to be one picture at two sizes.
+    #[test]
+    fn a_name_keeps_its_distance_as_a_fraction_of_the_pane() {
+        let cfg = SpectrumConfig::default();
+        let axes = Axes::new(PANE, &cfg);
+        let name = NoteName { letter: 'C', sharps: 0, syntonic_commas: 0, septimal_commas: 0 };
+        let anchor = axes.at(0.5, 0.5);
+        let grow = axes.dir_depth();
+        let gap = |air: f32| {
+            let rect = label_rect(&axes, grow, 0.5, 0.5, &name, LABEL_PT, NameScale { label: 1.0, air });
+            let ink = egui::Rect::from_center_size(rect.center(), name_extent(&name, LABEL_PT));
+            let reach = |p: egui::Pos2| (p - anchor).dot(grow);
+            reach(ink.min).min(reach(ink.max))
+        };
+        assert!((gap(0.5) - LABEL_INSET * 0.5).abs() < 0.01, "half a pane, half the air");
+        assert!((gap(2.0) - LABEL_INSET * 2.0).abs() < 0.01, "twice the pane, twice the air");
+    }
+
     /// The LETTER lands in the same place whether or not its name carries an
     /// accidental — in every orientation, not only the ones where the box
     /// happens to grow the same way the letter is typeset.
@@ -1266,8 +1407,8 @@ mod tests {
             let cfg = SpectrumConfig { orientation, ..SpectrumConfig::default() };
             let axes = Axes::new(PANE, &cfg);
             for grow in [axes.dir_depth(), -axes.dir_depth()] {
-                let plain_rect = label_rect(&axes, grow, 0.5, 0.5, &plain, 12.0, 1.0);
-                let sharp_rect = label_rect(&axes, grow, 0.5, 0.5, &sharp, 12.0, 1.0);
+                let plain_rect = label_rect(&axes, grow, 0.5, 0.5, &plain, 12.0, FLAT);
+                let sharp_rect = label_rect(&axes, grow, 0.5, 0.5, &sharp, 12.0, FLAT);
                 assert!(
                     (plain_rect.min.x - sharp_rect.min.x).abs() < 0.01,
                     "{orientation:?} growing {grow:?}: C's letter at {} but C♯'s at {}",
@@ -1297,7 +1438,7 @@ mod tests {
             .iter()
             .map(|&name| NoteLabel {
                 name,
-                rect: label_rect(&axes, axes.dir_depth(), 0.5, 0.5, &name, LABEL_PT, 1.0),
+                rect: label_rect(&axes, axes.dir_depth(), 0.5, 0.5, &name, LABEL_PT, FLAT),
                 #[cfg(test)]
                 at: 0.0,
             })
@@ -2408,4 +2549,61 @@ mod tests {
         );
     }
 
+    /// What a reader actually sees, read off the glyphs [`draw`] queues through
+    /// a real context rather than off the box that placed them: the drawn ink
+    /// still opens with the zoom, and by no more than [`name_extent`]'s own
+    /// error plus the letter's bearing.
+    ///
+    /// [`a_name_keeps_its_distance_from_its_note_through_the_zoom`] is the same
+    /// question asked of the arithmetic, and it CANNOT see this: substitute
+    /// `label_rect`'s own centre into it and the extent cancels, so it holds for
+    /// any extent function whatsoever. This is the one that would notice
+    /// [`GLYPH_ADVANCE`] drifting from the face the tree ships.
+    ///
+    /// The bound is what the split is worth, not what the picture wants. It is
+    /// well under the 15.9 points of creep the same measurement gives with the
+    /// inset scaled by the type, and well over the zero it would give with the
+    /// ink anchored the way the axis labels anchor theirs — issue #349.
+    #[test]
+    fn a_names_drawn_ink_creeps_only_by_the_estimates_own_error() {
+        const PPP: f32 = 2.0;
+        let cfg = SpectrumConfig::default();
+        let axes = Axes::new(PANE, &cfg);
+        let name = NoteName { letter: 'C', sharps: 0, syntonic_commas: 0, septimal_commas: 0 };
+        let anchor = axes.at(0.5, 0.5);
+        let ctx = themed_at(PPP);
+        let ink_at = |zoom: f32| {
+            let size = LABEL_PT * zoom;
+            let scales = NameScale { label: zoom, air: 1.0 };
+            let rect = label_rect(&axes, axes.dir_depth(), 0.5, 0.5, &name, size, scales);
+            let label = NoteLabel { name, rect, at: 0.0 };
+            let mut batch = crate::text::TextBatch::default();
+            let _ = frame_full(&ctx, SCREEN, |ui| {
+                draw(ui.painter(), std::slice::from_ref(&label), zoom, &mut batch)
+            });
+            let piece = batch
+                .pieces()
+                .iter()
+                .find(|p| p.text == "C")
+                .unwrap_or_else(|| panic!("no C drawn at zoom {zoom}"));
+            // The box's near edge and the ink's, from the ribbon end. The first
+            // is what LABEL_INSET pins; the second is what is read.
+            let box_edge = rect.center().x - name_extent(&name, size).x * 0.5;
+            (box_edge - anchor.x, piece.ink.left() - anchor.x)
+        };
+
+        let (dialled_box, dialled_ink) = ink_at(1.0);
+        let (floor_box, floor_ink) = ink_at(5.0);
+        // The box holds exactly, which is the invariant this file states.
+        assert!((dialled_box - LABEL_INSET).abs() < 0.01, "box at the dialled zoom: {dialled_box}");
+        assert!((floor_box - LABEL_INSET).abs() < 0.01, "box at the two-octave floor: {floor_box}");
+        // The ink does not, and the gap between the two claims is the estimate's
+        // error. A tightened GLYPH_ADVANCE, or ink-level anchoring, shrinks
+        // this; nothing should ever grow it.
+        let creep = floor_ink - dialled_ink;
+        assert!(
+            (0.0..=6.0).contains(&creep),
+            "the drawn ink moves {creep} points across the zoom ({dialled_ink} -> {floor_ink})",
+        );
+    }
 }

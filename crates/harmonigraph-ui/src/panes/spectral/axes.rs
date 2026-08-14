@@ -169,6 +169,10 @@ pub(super) const REFERENCE_PITCH_LEN: f32 = 860.0;
 /// [`REFERENCE_PITCH_LEN`], the user's bar for that kind of text, and — for
 /// the note names alone — the pitch zoom.
 ///
+/// The names carry a second number that is not a text size at all — the air
+/// they keep in front of them, which takes the first factor alone, so that the
+/// spacing stays put while the type it stands next to grows.
+///
 /// The markings come out snapped onto the size ladder, since they change only
 /// with the pane and a snapped size is one fewer entry in egui's font atlas.
 /// The names do not: they follow the pitch zoom, and quantizing a size that
@@ -178,20 +182,39 @@ pub(super) const REFERENCE_PITCH_LEN: f32 = 860.0;
 pub(super) struct TextScales {
     /// The axis marking labels.
     pub(super) markings: f32,
-    /// The name written on each ribbon.
-    pub(super) names: f32,
+    /// The name written on each ribbon: its type, and separately the air it
+    /// keeps in front of it.
+    ///
+    /// The pair is nested rather than laid out as two fields here so that it
+    /// has exactly ONE construction site, in [`text_scales`], with each half
+    /// beside the expression that computes it. They are both `f32` and they are
+    /// equal in any picture that is not zoomed, so a second site assembling
+    /// them would be a swap that draws correctly at the dialled view and
+    /// wrongly everywhere else — see [`NameScale`](super::names::NameScale).
+    pub(super) names: super::names::NameScale,
 }
 
 pub(super) fn text_scales(cfg: &crate::SpectrumConfig, axes: &Axes, span: f32, ppp: f32) -> TextScales {
     let pane = axes.pitch_len() / REFERENCE_PITCH_LEN;
     TextScales {
         markings: crate::text::snap_scale(pane * cfg.marking_scale, MARKING_PT, ppp),
-        // NOT snapped, unlike the markings above: this is the one size here
-        // that follows a zoom, and a zoom is continuous. It is snapped for
-        // RASTERIZING where it is drawn (`names::draw`), which is what keeps
-        // the atlas bounded without quantizing the picture -- see
-        // `crate::text::TextBatch::magnified`.
-        names: pane * cfg.note_name_scale * name_zoom(span),
+        names: super::names::NameScale {
+            // NOT snapped, unlike the markings above: this is the one size here
+            // that follows a zoom, and a zoom is continuous. It is snapped for
+            // RASTERIZING where it is drawn (`names::draw`), which is what
+            // keeps the atlas bounded without quantizing the picture -- see
+            // `crate::text::TextBatch::magnified`.
+            label: pane * cfg.note_name_scale * name_zoom(span),
+            // The pane alone. Neither the zoom nor the user's bar reaches it:
+            // how big a name is drawn is a question about the picture it is
+            // written over, and the picture grows with the zoom; how far it
+            // stands off the end of the ribbon it names is a question about the
+            // reader's eye, which does not. The pane is the one factor common
+            // to both, and has to be, or the Render preview and the video it
+            // previews would set their names different distances off their
+            // notes -- see REFERENCE_PITCH_LEN.
+            air: pane,
+        },
     }
 }
 
@@ -241,12 +264,26 @@ pub(crate) fn loudness_db(cfg: &crate::SpectrumConfig, power_db: f32, midi: f32)
 /// table to it byte for byte.
 pub(crate) fn loudness_raw(cfg: &crate::SpectrumConfig, power_db: f32, midi: f32) -> f32 {
     let db = power_db - cfg.tilt * (midi - TILT_PIVOT_MIDI) / 12.0;
-    // Never trust the pair to be ordered or apart, exactly as the pitch range
-    // is not trusted: the bar can't produce a collapsed one, a hand-edited
-    // state blob can, and dividing by its zero span paints NaN geometry that
-    // takes the editor — and with it the host — down.
-    let ceiling = cfg.ceiling_db.max(cfg.floor_db + crate::LEVEL_RANGE_MIN_SPAN);
-    (db - cfg.floor_db) / (ceiling - cfg.floor_db)
+    let (floor, ceiling) = level_window(cfg);
+    (db - floor) / (ceiling - floor)
+}
+
+/// The dB window the depth axis spans: the Level bar's floor, and a ceiling
+/// held at least [`LEVEL_RANGE_MIN_SPAN`](crate::LEVEL_RANGE_MIN_SPAN) above
+/// it.
+///
+/// Never trust the pair to be ordered or apart, exactly as the pitch range is
+/// not trusted: the bar can't produce a collapsed one, a hand-edited state blob
+/// can, and dividing by its zero span paints NaN geometry that takes the editor
+/// — and with it the host — down.
+///
+/// One function rather than the pair read twice, because the curve's height and
+/// the [`level_grid`] ruled across it are the same axis measured two ways. A
+/// grid settling its own idea of where the ceiling is would rule -20 dB
+/// somewhere the curve does not put it, which is the one failure a grid cannot
+/// survive: it is drawn to be trusted over what it is drawn on.
+pub(crate) fn level_window(cfg: &crate::SpectrumConfig) -> (f32, f32) {
+    (cfg.floor_db, cfg.ceiling_db.max(cfg.floor_db + crate::LEVEL_RANGE_MIN_SPAN))
 }
 
 /// The pane's abstract drawing plane, and how it lands on screen.
@@ -550,6 +587,242 @@ pub(super) fn frequency_grid(scale: &PitchScale, pitch_len: f32) -> Vec<Ruling> 
         }
     }
     rulings
+}
+
+/// The dB steps the level grid may be ruled at, closest first — an analyzer's
+/// 1-2-5 series carried across decades, the same discipline
+/// [`frequency_grid`] rules the other axis by.
+///
+/// A ladder rather than the one step, because the level axis is the one axis
+/// on this pane whose SPAN is dialled: the Level bar and the drag across the
+/// spectrum move the window between 12 dB and 100 dB while the pane it is drawn
+/// on stays the size it is. At the wide end a 10 dB step on a short analyzer
+/// closes to a wash, and at the narrow end it rules a single line across a whole
+/// picture, which is a grid that has stopped measuring anything.
+pub(super) const LEVEL_STEPS_DB: [f32; 7] = [1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0];
+
+/// Which rung of [`LEVEL_STEPS_DB`] the grid is ruled at wherever it fits, and
+/// the step it names: **10 dB**.
+///
+/// This is the ladder's home rather than a starting guess. The search below
+/// leaves it only when the pane forces the move — coarser when 10 dB lines
+/// would crowd, finer when they would stand too far apart to measure the
+/// picture between them — so an analyzer at any ordinary size is ruled in tens.
+///
+/// Only the RULINGS start here. The numbers start from whatever the rulings
+/// settled on and thin from there (see [`level_grid`]), because the question
+/// they answer is a different one: a line needs room to be a line, and a number
+/// needs room to be read.
+pub(super) const LEVEL_STEP: usize = 3;
+
+/// The closest two level rulings may be drawn, in points — the ABSOLUTE floor,
+/// under the type-relative one below.
+///
+/// Wider air than the frequency ladder's [`MIN_RULING_GAP_PT`], and the reason
+/// is what the two grids are FOR. Frequency rulings crowd at the top of every
+/// decade because the ladder is even in frequency and the axis is not, so a
+/// crowded stretch is information — it says where the ladder restarts. The
+/// level grid is even in the unit its axis is linear in, so its lines are
+/// equally spaced by construction and a crowded one says nothing at all: it is
+/// simply a mesh laid across the picture, closing into texture. Coarsening to
+/// the next rung keeps it a set of lines.
+pub(super) const MIN_LEVEL_GAP_PT: f32 = 12.0;
+
+/// What share of a NUMBER's own room two rulings are also held apart by, on top
+/// of [`MIN_LEVEL_GAP_PT`].
+///
+/// This is what makes the grid coarsen as the type grows and not only as the
+/// pane shrinks, and the two are the same problem: what makes a number hard to
+/// attribute to a line is its size against the line SEPARATION, so the
+/// separation has to answer to the size. A grid that only watched the pane
+/// would rule tens under numbers set large enough to span three of them.
+///
+/// A half, so wherever the ladder has a rung at twice the step — which is every
+/// rung of a 1-2-5 ladder except the 2 — the numbers land on every ruling or
+/// every second one, and at most one unnumbered line stands between two
+/// numbers. That is the ambiguity the stronger ink then settles outright (see
+/// `RULING_FADE`); past it the grid coarsens instead.
+pub(super) const NUMBERED_LINE_SHARE: f32 = 0.5;
+
+/// The furthest apart two level rulings may stand before the grid is
+/// subdivided, in points.
+///
+/// The bound the ZOOM needs. Closing the Level window to its 12 dB minimum
+/// leaves a 10 dB step with one line to rule across the whole analyzer, which
+/// brackets the picture rather than measuring it — the reading a grid exists
+/// for is the one BETWEEN its lines, and there is no between with one line. Set
+/// where a 10 dB step stops being a measure of what is drawn across it; below
+/// this the ladder subdivides to 5 dB and then 2, and the tens keep the
+/// numbers.
+pub(super) const MAX_LEVEL_GAP_PT: f32 = 160.0;
+
+/// Most rulings the level grid will return.
+///
+/// Not a look — it is what keeps a hand-edited state blob from turning a draw
+/// into a hundred-million-shape loop. The Level bar and `sanitize` hold the
+/// window inside 100 dB, where the ladder's finest rung yields a hundred lines;
+/// a blob that names a floor of -1e9 gets a bounded, meaningless grid instead of
+/// a hung editor.
+const MAX_LEVEL_RULINGS: i32 = 128;
+
+/// One level ruled across the pitch axis — a rung of the volume grid, running
+/// perpendicular to [`frequency_grid`]'s rulings.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct LevelRuling {
+    /// Where it falls on the level axis, `0..1` from the window's floor to its
+    /// ceiling. The pane scales this by its depth budget, which is what makes a
+    /// ruling land exactly where the curve reaching that level lands.
+    pub(super) level: f32,
+    /// The level itself, in the dB the Level bar is quoted in.
+    pub(super) db: f32,
+    /// Carries a number — and, because it does, the stronger of the pane's two
+    /// ruling inks.
+    ///
+    /// Counted UP FROM THE LOWEST ruling rather than off the round dB values,
+    /// so the bottom of the scale is always named: it is the one level a reader
+    /// cannot infer from the others, every number above it being measured from
+    /// somewhere. Numbering the round multiples instead leaves the lowest line
+    /// bare exactly when the numbers thin, which is when the axis most needs its
+    /// bottom stated.
+    pub(super) numbered: bool,
+}
+
+/// The level ladder the analyzer rules and numbers, floor to ceiling: every
+/// 10 dB where that fits ([`LEVEL_STEP`]), coarser where the rulings would
+/// crowd and finer where they would stand too far apart to measure the picture
+/// between them (see [`LEVEL_STEPS_DB`]).
+///
+/// `level_len` is what the LEVEL axis spans in points — the spectrum's depth
+/// budget, not the whole depth axis — and `label_room` the closest two numbers
+/// may be set, which the pane measures off the type it is about to draw them in.
+/// BOTH densities are decided from those two lengths alone, so the grid answers
+/// a pane resize, a Level zoom and a Marking-size change by one rule. The
+/// rulings answer to the type as well as to the pane (see
+/// [`NUMBERED_LINE_SHARE`]): a number is hard to attribute when it is large
+/// against the line separation, and coarsening the lines is the half of that the
+/// numbers cannot fix for themselves.
+///
+/// The FLOOR is ruled where it lands on the ladder, and being the lowest rung
+/// it is then always numbered — so a window of -60 to -20 states its own bottom
+/// rather than trailing off after -50 and leaving the reader to work out where
+/// the scale ends. Where the floor does not land on a rung there is nothing
+/// round to write, and the lowest ruling above it is what carries the number
+/// instead.
+///
+/// Joined, that rung falls exactly on the now-line, which draws over it at full
+/// strength — so what it costs is one covered shape and no ink, against a number
+/// that would otherwise point at nothing. Standing alone the spectrum has no
+/// now-line and the rung is its baseline, which is the line it should have had.
+///
+/// The CEILING is not ruled at either. It is the edge the picture stops at,
+/// already stated by the pane ending there, and it is the end the frequency
+/// numbers ride along (see [`label_anchor`]) — so a number on it is written into
+/// the one corner of this pane that is already spoken for.
+///
+/// What the numbers mean is the window's own dB, which is the reading the Level
+/// bar is quoted in and the one the curve is drawn against. With a Tilt dialled
+/// in that is not the raw dB of the bucket under it — the tilt is a slope the
+/// display SUBTRACTS per octave (see [`loudness_raw`]), so a ruling is one level
+/// of the tilted picture and the untilted dB it stands for slides with pitch.
+/// That is the axis the pane actually has: the alternative is a grid that bends
+/// across the pitch axis, drawn against a curve that does not bend with it.
+pub(super) fn level_grid(
+    cfg: &crate::SpectrumConfig,
+    level_len: f32,
+    label_room: f32,
+) -> Vec<LevelRuling> {
+    let (floor, ceiling) = level_window(cfg);
+    let span = ceiling - floor;
+    // The same guard `frequency_grid` opens with, against the same NaN: `span`
+    // is what a level's position divides by, and egui panics on NaN geometry.
+    // A zero-length axis is not a crash so much as nothing to rule.
+    if !span.is_finite() || span <= 0.0 || !level_len.is_finite() || level_len <= 0.0 {
+        return Vec::new();
+    }
+    let gap = |step: f32| step / span * level_len;
+
+    // Down the ladder while the rulings crowd, then up it while they stand too
+    // far apart.
+    //
+    // Ordinarily one of the two runs and the other finds nothing to do. They can
+    // BOTH run, and the order is what settles it when they do: type large enough
+    // that `closest` passes `MAX_LEVEL_GAP_PT` asks for a rung the sparse bound
+    // will not have, and the second loop walks back off it. The sparse bound
+    // wins because losing it costs a rung so coarse it rules nothing across the
+    // picture, where losing the other costs a crowded grid under numbers that
+    // thin hard — and a grid that rules nothing is not a grid.
+    // `the_sparse_bound_wins_where_the_type_wants_more_room_than_the_axis_has`
+    // holds the case, which is off the end of what any real Marking size
+    // reaches.
+    let closest = MIN_LEVEL_GAP_PT.max(label_room * NUMBERED_LINE_SHARE);
+    let mut rung = LEVEL_STEP;
+    while rung + 1 < LEVEL_STEPS_DB.len() && gap(LEVEL_STEPS_DB[rung]) < closest {
+        rung += 1;
+    }
+    while rung > 0 && gap(LEVEL_STEPS_DB[rung]) > MAX_LEVEL_GAP_PT {
+        rung -= 1;
+    }
+    let step = LEVEL_STEPS_DB[rung];
+
+    // The numbers go on a MULTIPLE of that step, never a rung beside it: a
+    // label wants more room than a line and gets it by numbering one line in
+    // two or five, which is the one way of thinning that cannot leave a number
+    // written where no line was drawn. The ladder is 1-2-5, so the multiples of
+    // a rung are themselves rungs and every step stays a round dB number.
+    //
+    // The FINEST multiple with room, so the numbers are as dense as the type
+    // allows rather than pinned to tens. Both directions of the zoom need that:
+    // the Level window closed to 12 dB has one ten in it, which is a number and
+    // no axis, and a tall analyzer ruled in fives has the room to name them.
+    let divides = |s: f32| ((s / step) - (s / step).round()).abs() < 1e-3;
+    let mut labels = step;
+    for &candidate in LEVEL_STEPS_DB.iter().filter(|&&s| s >= step && divides(s)) {
+        labels = candidate;
+        if gap(candidate) >= label_room {
+            break;
+        }
+    }
+
+    // Multiples of the step across the window, taken as whole counts so the
+    // ladder is the same set of levels wherever the window has been dragged to,
+    // rather than a phase of it. The floor is IN when it lands on one and the
+    // ceiling is always out — see the ends above.
+    let rungs = floor / step;
+    let first = if (rungs - rungs.round()).abs() < 1e-4 {
+        rungs.round() as i32
+    } else {
+        rungs.floor() as i32 + 1
+    };
+    let last = ((ceiling / step).ceil() as i32 - 1).min(first + MAX_LEVEL_RULINGS - 1);
+    // ...and the numbers every `stride` rulings COUNTED UP FROM THE LOWEST, so
+    // the bottom of the scale is named whatever the window has been dragged to.
+    // Numbering the round multiples of `labels` instead reads the same on a
+    // window whose floor happens to sit on the ladder and leaves the lowest line
+    // bare on every other one — the -60..-20 default among them, where numbers
+    // every 20 dB would name -40 and nothing else.
+    let stride = (labels / step).round().max(1.0) as i32;
+    (first..=last)
+        .map(|k| {
+            let db = k as f32 * step;
+            let level = (db - floor) / span;
+            // Every number is set on the CEILING side of its ruling, so the one
+            // end that can run out of room is that one — and a ruling can sit
+            // hard against it, the ceiling being wherever the Level bar was
+            // dragged rather than a rung. A number with no room there is not
+            // written rather than set somewhere else: which side they sit on is
+            // what makes a column of them readable at a glance, and one number
+            // in the picture answering to a different rule costs more than the
+            // number is worth.
+            //
+            // The lowest rung is exempt, because the bottom of the scale is
+            // stated whatever it costs — and it is the ruling FURTHEST from the
+            // ceiling, so the exemption only ever fires on an analyzer too small
+            // to hold a single number.
+            let numbered = (k - first) % stride == 0
+                && (k == first || (1.0 - level) * level_len >= label_room);
+            LevelRuling { level, db, numbered }
+        })
+        .collect()
 }
 
 /// Maps take time to a depth fraction on the shared time axis (the region the
