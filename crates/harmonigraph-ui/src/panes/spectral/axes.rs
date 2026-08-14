@@ -241,12 +241,26 @@ pub(crate) fn loudness_db(cfg: &crate::SpectrumConfig, power_db: f32, midi: f32)
 /// table to it byte for byte.
 pub(crate) fn loudness_raw(cfg: &crate::SpectrumConfig, power_db: f32, midi: f32) -> f32 {
     let db = power_db - cfg.tilt * (midi - TILT_PIVOT_MIDI) / 12.0;
-    // Never trust the pair to be ordered or apart, exactly as the pitch range
-    // is not trusted: the bar can't produce a collapsed one, a hand-edited
-    // state blob can, and dividing by its zero span paints NaN geometry that
-    // takes the editor — and with it the host — down.
-    let ceiling = cfg.ceiling_db.max(cfg.floor_db + crate::LEVEL_RANGE_MIN_SPAN);
-    (db - cfg.floor_db) / (ceiling - cfg.floor_db)
+    let (floor, ceiling) = level_window(cfg);
+    (db - floor) / (ceiling - floor)
+}
+
+/// The dB window the depth axis spans: the Level bar's floor, and a ceiling
+/// held at least [`LEVEL_RANGE_MIN_SPAN`](crate::LEVEL_RANGE_MIN_SPAN) above
+/// it.
+///
+/// Never trust the pair to be ordered or apart, exactly as the pitch range is
+/// not trusted: the bar can't produce a collapsed one, a hand-edited state blob
+/// can, and dividing by its zero span paints NaN geometry that takes the editor
+/// — and with it the host — down.
+///
+/// One function rather than the pair read twice, because the curve's height and
+/// the [`level_grid`] ruled across it are the same axis measured two ways. A
+/// grid settling its own idea of where the ceiling is would rule -20 dB
+/// somewhere the curve does not put it, which is the one failure a grid cannot
+/// survive: it is drawn to be trusted over what it is drawn on.
+pub(crate) fn level_window(cfg: &crate::SpectrumConfig) -> (f32, f32) {
+    (cfg.floor_db, cfg.ceiling_db.max(cfg.floor_db + crate::LEVEL_RANGE_MIN_SPAN))
 }
 
 /// The pane's abstract drawing plane, and how it lands on screen.
@@ -384,6 +398,12 @@ impl Axes {
     /// growing in those same directions. One helper covers both
     /// orientations: the growth direction is read off the axes rather
     /// than case-matched per side.
+    ///
+    /// A ZERO offset centres the label on that axis instead of growing either
+    /// way — what a label naming the line it sits on wants, and the level
+    /// numbers are set that way (see [`level_grid`]). `f32::signum` cannot say
+    /// it, since it answers +1 for +0.0; the sign is taken by hand for exactly
+    /// that reason.
     pub(super) fn text_anchor(
         &self,
         p: f32,
@@ -393,7 +413,8 @@ impl Axes {
     ) -> (egui::Pos2, egui::Align2) {
         let (pu, du) = (self.dir_pitch(), self.dir_depth());
         let pos = self.at(p, d) + pu * along + du * into;
-        let grow = pu * along.signum() + du * into.signum();
+        let sign = |v: f32| if v == 0.0 { 0.0 } else { v.signum() };
+        let grow = pu * sign(along) + du * sign(into);
         let axis = |v: f32| {
             if v > 0.5 {
                 egui::Align::Min
@@ -550,6 +571,169 @@ pub(super) fn frequency_grid(scale: &PitchScale, pitch_len: f32) -> Vec<Ruling> 
         }
     }
     rulings
+}
+
+/// The dB steps the level grid may be ruled at, closest first — an analyzer's
+/// 1-2-5 series carried across decades, the same discipline
+/// [`frequency_grid`] rules the other axis by.
+///
+/// A ladder rather than the one step, because the level axis is the one axis
+/// on this pane whose SPAN is dialled: the Level bar and the drag across the
+/// spectrum move the window between 12 dB and 100 dB while the pane it is drawn
+/// on stays the size it is. At the wide end a 10 dB step on a short analyzer
+/// closes to a wash, and at the narrow end it rules a single line across a whole
+/// picture, which is a grid that has stopped measuring anything.
+pub(super) const LEVEL_STEPS_DB: [f32; 7] = [1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0];
+
+/// Which rung of [`LEVEL_STEPS_DB`] the grid is ruled at wherever it fits, and
+/// the step it names: **10 dB**.
+///
+/// This is the ladder's home rather than a starting guess. The search below
+/// leaves it only when the pane forces the move — coarser when 10 dB lines
+/// would crowd, finer when they would stand too far apart to measure the
+/// picture between them — so an analyzer at any ordinary size is ruled in tens.
+///
+/// Only the RULINGS start here. The numbers start from whatever the rulings
+/// settled on and thin from there (see [`level_grid`]), because the question
+/// they answer is a different one: a line needs room to be a line, and a number
+/// needs room to be read.
+pub(super) const LEVEL_STEP: usize = 3;
+
+/// The closest two level rulings may be drawn, in points.
+///
+/// Wider air than the frequency ladder's [`MIN_RULING_GAP_PT`], and the reason
+/// is what the two grids are FOR. Frequency rulings crowd at the top of every
+/// decade because the ladder is even in frequency and the axis is not, so a
+/// crowded stretch is information — it says where the ladder restarts. The
+/// level grid is even in the unit its axis is linear in, so its lines are
+/// equally spaced by construction and a crowded one says nothing at all: it is
+/// simply a mesh laid across the picture, closing into texture. Coarsening to
+/// the next rung keeps it a set of lines.
+pub(super) const MIN_LEVEL_GAP_PT: f32 = 12.0;
+
+/// The furthest apart two level rulings may stand before the grid is
+/// subdivided, in points.
+///
+/// The bound the ZOOM needs. Closing the Level window to its 12 dB minimum
+/// leaves a 10 dB step with one line to rule across the whole analyzer, which
+/// brackets the picture rather than measuring it — the reading a grid exists
+/// for is the one BETWEEN its lines, and there is no between with one line. Set
+/// where a 10 dB step stops being a measure of what is drawn across it; below
+/// this the ladder subdivides to 5 dB and then 2, and the tens keep the
+/// numbers.
+pub(super) const MAX_LEVEL_GAP_PT: f32 = 160.0;
+
+/// Most rulings the level grid will return.
+///
+/// Not a look — it is what keeps a hand-edited state blob from turning a draw
+/// into a hundred-million-shape loop. The Level bar and `sanitize` hold the
+/// window inside 100 dB, where the ladder's finest rung yields a hundred lines;
+/// a blob that names a floor of -1e9 gets a bounded, meaningless grid instead of
+/// a hung editor.
+const MAX_LEVEL_RULINGS: i32 = 128;
+
+/// One level ruled across the pitch axis — a rung of the volume grid, running
+/// perpendicular to [`frequency_grid`]'s rulings.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct LevelRuling {
+    /// Where it falls on the level axis, `0..1` from the window's floor to its
+    /// ceiling. The pane scales this by its depth budget, which is what makes a
+    /// ruling land exactly where the curve reaching that level lands.
+    pub(super) level: f32,
+    /// The level itself, in the dB the Level bar is quoted in.
+    pub(super) db: f32,
+    /// Carries a number. A coarser multiple of the ruling step, so the numbers
+    /// thin on their own account without ever leaving one written beside no
+    /// line.
+    pub(super) numbered: bool,
+}
+
+/// The level ladder the analyzer rules and numbers, floor to ceiling: every
+/// 10 dB where that fits ([`LEVEL_STEP`]), coarser where the rulings would
+/// crowd and finer where they would stand too far apart to measure the picture
+/// between them (see [`LEVEL_STEPS_DB`]).
+///
+/// `level_len` is what the LEVEL axis spans in points — the spectrum's depth
+/// budget, not the whole depth axis — and `label_room` the closest two numbers
+/// may be set centre to centre, which the pane measures off the type it is about
+/// to draw them in. Both densities are decided from those two lengths alone, so
+/// the grid answers a pane resize and a Level zoom by the same rule.
+///
+/// The ENDS are not ruled. Both are already drawn, and by lines that say more
+/// than a ruling would: the floor is where every quiet bucket stands, which
+/// joined is the now-line itself, and the ceiling is the edge the pane stops at.
+/// A ruling on either is a second line over a line already there.
+///
+/// What the numbers mean is the window's own dB, which is the reading the Level
+/// bar is quoted in and the one the curve is drawn against. With a Tilt dialled
+/// in that is not the raw dB of the bucket under it — the tilt is a slope the
+/// display SUBTRACTS per octave (see [`loudness_raw`]), so a ruling is one level
+/// of the tilted picture and the untilted dB it stands for slides with pitch.
+/// That is the axis the pane actually has: the alternative is a grid that bends
+/// across the pitch axis, drawn against a curve that does not bend with it.
+pub(super) fn level_grid(
+    cfg: &crate::SpectrumConfig,
+    level_len: f32,
+    label_room: f32,
+) -> Vec<LevelRuling> {
+    let (floor, ceiling) = level_window(cfg);
+    let span = ceiling - floor;
+    // The same guard `frequency_grid` opens with, against the same NaN: `span`
+    // is what a level's position divides by, and egui panics on NaN geometry.
+    // A zero-length axis is not a crash so much as nothing to rule.
+    if !span.is_finite() || span <= 0.0 || !level_len.is_finite() || level_len <= 0.0 {
+        return Vec::new();
+    }
+    let gap = |step: f32| step / span * level_len;
+
+    // Down the ladder while the rulings crowd, then up it while they stand too
+    // far apart. Only one of the two can run: the gap grows with the rung, so
+    // reaching the minimum leaves it under the maximum by construction.
+    let mut rung = LEVEL_STEP;
+    while rung + 1 < LEVEL_STEPS_DB.len() && gap(LEVEL_STEPS_DB[rung]) < MIN_LEVEL_GAP_PT {
+        rung += 1;
+    }
+    while rung > 0 && gap(LEVEL_STEPS_DB[rung]) > MAX_LEVEL_GAP_PT {
+        rung -= 1;
+    }
+    let step = LEVEL_STEPS_DB[rung];
+
+    // The numbers go on a MULTIPLE of that step, never a rung beside it: a
+    // label wants more room than a line and gets it by numbering one line in
+    // two or five, which is the one way of thinning that cannot leave a number
+    // written where no line was drawn. The ladder is 1-2-5, so the multiples of
+    // a rung are themselves rungs and every step stays a round dB number.
+    //
+    // The FINEST multiple with room, so the numbers are as dense as the type
+    // allows rather than pinned to tens. Both directions of the zoom need that:
+    // the Level window closed to 12 dB has one ten in it, which is a number and
+    // no axis, and a tall analyzer ruled in fives has the room to name them.
+    let divides = |s: f32| ((s / step) - (s / step).round()).abs() < 1e-3;
+    let mut labels = step;
+    for &candidate in LEVEL_STEPS_DB.iter().filter(|&&s| s >= step && divides(s)) {
+        labels = candidate;
+        if gap(candidate) >= label_room {
+            break;
+        }
+    }
+
+    // Multiples of the step strictly INSIDE the window — see the ends above.
+    // Taken as whole counts so the ladder is the same set of levels wherever
+    // the window has been dragged to, rather than a phase of it.
+    let first = (floor / step).floor() as i32 + 1;
+    let last = ((ceiling / step).ceil() as i32 - 1).min(first + MAX_LEVEL_RULINGS - 1);
+    (first..=last)
+        .map(|k| {
+            let db = k as f32 * step;
+            // A number is also dropped where its own body would hang off the
+            // end of the axis it is measuring. The ceiling end is where the
+            // frequency numbers ride (see `label_anchor`) and the floor end is
+            // the now-line, so an overhang is not empty margin at either.
+            let numbered = ((db / labels) - (db / labels).round()).abs() < 1e-3
+                && (ceiling - db).min(db - floor) / span * level_len >= label_room * 0.5;
+            LevelRuling { level: (db - floor) / span, db, numbered }
+        })
+        .collect()
 }
 
 /// Maps take time to a depth fraction on the shared time axis (the region the

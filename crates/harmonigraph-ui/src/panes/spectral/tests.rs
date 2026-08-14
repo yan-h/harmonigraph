@@ -883,6 +883,232 @@ fn a_collapsed_range_rules_nothing() {
     }
 }
 
+/// A level window, as the two Level values the pane reads.
+fn level_cfg(floor: f32, ceiling: f32) -> SpectrumConfig {
+    SpectrumConfig { floor_db: floor, ceiling_db: ceiling, ..Default::default() }
+}
+
+fn ruled_db(cfg: &SpectrumConfig, level_len: f32, room: f32) -> Vec<f32> {
+    level_grid(cfg, level_len, room).iter().map(|r| r.db).collect()
+}
+
+fn numbered_db(cfg: &SpectrumConfig, level_len: f32, room: f32) -> Vec<f32> {
+    level_grid(cfg, level_len, room).iter().filter(|r| r.numbered).map(|r| r.db).collect()
+}
+
+/// The volume grid is a ladder of tens: every 10 dB of the Level window, and
+/// neither END of it, both of which are already drawn by lines that say more.
+#[test]
+fn the_volume_grid_rules_every_ten_decibels() {
+    // The default window (-60..-20) on an axis with comfortable room for a 10 dB
+    // step, so nothing is coarsened or subdivided — that is the next test.
+    let cfg = level_cfg(-60.0, -20.0);
+    assert_eq!(ruled_db(&cfg, 400.0, 60.0), vec![-50.0, -40.0, -30.0]);
+
+    // Whole tens, not a phase of the window: dragged to an off-ten floor the
+    // ladder stays on the round numbers rather than sliding with the edge.
+    assert_eq!(ruled_db(&level_cfg(-63.0, -21.0), 400.0, 60.0), vec![-60.0, -50.0, -40.0, -30.0]);
+
+    // Low to high, on the axis, and each level exactly where the window puts it.
+    let grid = level_grid(&cfg, 400.0, 60.0);
+    assert!(grid.windows(2).all(|w| w[0].level < w[1].level), "the ladder came back out of order");
+    for ruling in &grid {
+        assert!((0.0..=1.0).contains(&ruling.level), "a ruling landed off the axis");
+        let want = (ruling.db - cfg.floor_db) / (cfg.ceiling_db - cfg.floor_db);
+        assert!(
+            (ruling.level - want).abs() < 1e-6,
+            "{} dB was placed at {}",
+            ruling.db,
+            ruling.level,
+        );
+    }
+}
+
+/// A ruling and the curve agree about where a level is — the whole case for
+/// drawing a grid over a picture at all.
+///
+/// Read back through `loudness`, which is what the curve's own height is mapped
+/// by, rather than by re-deriving the window here: a grid settling its own idea
+/// of the ceiling would rule -30 dB somewhere the curve does not put it, and be
+/// wrong in the one way a grid cannot survive.
+#[test]
+fn a_ruling_lands_where_the_curve_reaching_that_level_lands() {
+    let cfg = level_cfg(-60.0, -20.0);
+    for ruling in level_grid(&cfg, 400.0, 60.0) {
+        // At the tilt's own pivot, where the slope takes nothing.
+        let height = loudness(&cfg, power_at(ruling.db), TILT_PIVOT_MIDI);
+        assert!(
+            (height - ruling.level).abs() < 1e-4,
+            "{} dB is ruled at {} and drawn at {height}",
+            ruling.db,
+            ruling.level,
+        );
+    }
+}
+
+/// Density follows the zoom in both directions: the Level window closed to its
+/// minimum subdivides below 10 dB rather than ruling a single line across the
+/// picture, and a window opened wide on a short analyzer coarsens rather than
+/// closing to a wash.
+#[test]
+fn the_volume_grid_follows_the_level_zoom_in_both_directions() {
+    let gaps = |cfg: &SpectrumConfig, level_len: f32| -> Vec<f32> {
+        let (floor, ceiling) = level_window(cfg);
+        level_grid(cfg, level_len, 60.0)
+            .windows(2)
+            .map(|w| (w[1].db - w[0].db) / (ceiling - floor) * level_len)
+            .collect()
+    };
+
+    // Zoomed IN to the narrowest window the Level bar allows. A 10 dB step has
+    // one line to give here, which brackets the picture instead of measuring it.
+    let tight = level_cfg(-32.0, -20.0);
+    assert_eq!(ruled_db(&tight, 40.0 * crate::LEVEL_RANGE_MIN_SPAN / 12.0, 60.0).len(), 1,
+        "a 40-point axis has room for nothing finer");
+    let zoomed = ruled_db(&tight, 400.0, 60.0);
+    assert_eq!(zoomed, vec![-30.0, -28.0, -26.0, -24.0, -22.0], "the ladder did not subdivide");
+
+    // Zoomed OUT to the whole legal range on a short analyzer, where a 10 dB
+    // step would rule ten lines into 100 points.
+    let wide = level_cfg(-100.0, 0.0);
+    assert_eq!(ruled_db(&wide, 100.0, 60.0), vec![-80.0, -60.0, -40.0, -20.0], "nothing coarsened");
+
+    // And whatever it settled on, the lines are far enough apart to read as
+    // lines and close enough to measure between — at every window the two
+    // controls can reach.
+    for floor in [-100.0, -60.0, -32.0, -12.5] {
+        for ceiling in [-20.0, -0.5, 0.0] {
+            let cfg = level_cfg(floor, ceiling);
+            for level_len in [40.0, 100.0, 300.0, 900.0] {
+                for gap in gaps(&cfg, level_len) {
+                    assert!(
+                        gap >= MIN_LEVEL_GAP_PT,
+                        "{floor}..{ceiling} on {level_len} points ruled {gap} points apart",
+                    );
+                }
+                // The sparse bound binds only where the ladder has a finer rung
+                // left to take: below 1 dB there is nothing to subdivide to.
+                let grid = level_grid(&cfg, level_len, 60.0);
+                let step = grid.windows(2).map(|w| w[1].db - w[0].db).next();
+                if step.is_some_and(|s| s > LEVEL_STEPS_DB[0]) {
+                    for gap in gaps(&cfg, level_len) {
+                        assert!(
+                            gap <= MAX_LEVEL_GAP_PT,
+                            "{floor}..{ceiling} on {level_len} points left a {gap}-point hole",
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Ten is where the RULINGS live. The numbers start from whatever the rulings
+/// settled on and are as dense as the type allows from there — which is the
+/// only rule that survives both ends of the Level zoom.
+#[test]
+fn the_numbers_are_as_dense_as_the_type_allows() {
+    assert_eq!(LEVEL_STEPS_DB[LEVEL_STEP], 10.0, "the volume grid's home step is 10 dB");
+    let cfg = level_cfg(-60.0, -20.0);
+
+    // Room to spare: every ruling is numbered, and they are tens.
+    assert_eq!(numbered_db(&cfg, 400.0, 60.0), ruled_db(&cfg, 400.0, 60.0));
+    assert_eq!(numbered_db(&cfg, 400.0, 60.0), vec![-50.0, -40.0, -30.0]);
+
+    // Squeezed, the numbers thin and the rulings do not — a grid that kept its
+    // lines and dropped every other number, rather than a coarser grid.
+    let cramped = numbered_db(&cfg, 200.0, 80.0);
+    assert_eq!(ruled_db(&cfg, 200.0, 80.0), vec![-50.0, -40.0, -30.0], "the lines coarsened too");
+    assert_eq!(cramped, vec![-40.0], "the numbers did not thin");
+
+    // On an axis long enough that the lines subdivide to fives, the numbers
+    // follow them down rather than staying on the tens: there is room, and a
+    // number the reader has to count lines to reach is a number withheld.
+    let ruled = ruled_db(&cfg, 900.0, 60.0);
+    assert!(ruled.contains(&-45.0), "a 900-point axis kept a 10 dB step: {ruled:?}");
+    assert_eq!(numbered_db(&cfg, 900.0, 60.0), ruled);
+
+    // ...and closed to the narrowest window the Level bar allows, the numbers
+    // reach 2 dB. Pinned to tens this axis would carry exactly one number.
+    let tight = level_cfg(-32.0, -20.0);
+    assert_eq!(numbered_db(&tight, 400.0, 60.0), vec![-30.0, -28.0, -26.0, -24.0, -22.0]);
+}
+
+/// A number is only ever written beside a line that was drawn, and never
+/// closer to the next number than the type it is set in.
+///
+/// Thinning by NUMBERING one line in two or five is what buys that: it is the
+/// one way of making room that cannot leave a number sitting on nothing.
+#[test]
+fn a_level_number_always_has_its_own_ruling() {
+    for (floor, ceiling) in [(-60.0, -20.0), (-100.0, 0.0), (-32.0, -20.0), (-63.0, -21.0)] {
+        let cfg = level_cfg(floor, ceiling);
+        for level_len in [40.0, 100.0, 300.0, 900.0] {
+            for room in [20.0, 60.0, 140.0] {
+                let grid = level_grid(&cfg, level_len, room);
+                let ruled: Vec<f32> = grid.iter().map(|r| r.db).collect();
+                let numbered: Vec<f32> =
+                    grid.iter().filter(|r| r.numbered).map(|r| r.db).collect();
+                for db in &numbered {
+                    assert!(ruled.contains(db), "{db} dB was numbered and never ruled");
+                }
+                let (floor, ceiling) = level_window(&cfg);
+                let apart = |a: f32, b: f32| (b - a) / (ceiling - floor) * level_len;
+                for pair in numbered.windows(2) {
+                    assert!(
+                        apart(pair[0], pair[1]) >= room,
+                        "{} and {} came out {} points apart, under {room}",
+                        pair[0],
+                        pair[1],
+                        apart(pair[0], pair[1]),
+                    );
+                }
+                // ...and no number hangs off either end of the axis it
+                // measures: the ceiling end is where the frequency numbers
+                // ride, and the floor end is the now-line.
+                for db in &numbered {
+                    let clear = apart(floor, *db).min(apart(*db, ceiling));
+                    assert!(
+                        clear >= room * 0.5,
+                        "{db} dB sits {clear} points from an end of the axis",
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// A NaN or zero-length level axis — which the bars cannot produce and a
+/// hand-edited state blob can — rules nothing at all. The window's span is what
+/// a level's position divides by, so any ruling it kept would be placed at a
+/// NaN, and egui panics on NaN geometry.
+#[test]
+fn a_collapsed_level_window_rules_nothing() {
+    for cfg in [level_cfg(f32::NAN, -20.0), level_cfg(-60.0, f32::NAN), level_cfg(-60.0, -20.0)] {
+        for level_len in [0.0, -10.0, f32::NAN] {
+            assert!(
+                level_grid(&cfg, level_len, 60.0).is_empty(),
+                "a level axis of {level_len} points was ruled",
+            );
+        }
+    }
+    let nan_floor = level_cfg(f32::NAN, -20.0);
+    assert!(level_grid(&nan_floor, 400.0, 60.0).is_empty(), "a NaN floor was ruled");
+
+    // A NaN CEILING is repaired rather than refused, and the repair is not this
+    // function's: `f32::max` takes the other arm, so `level_window` hands back
+    // the minimum span and the grid rules it. That the curve is drawn through
+    // the same repair is the whole point — a grid that refused what the curve
+    // still draws would leave the picture unmeasured exactly where it is wrong.
+    let repaired = level_cfg(-60.0, f32::NAN);
+    assert_eq!(level_window(&repaired), (-60.0, -60.0 + crate::LEVEL_RANGE_MIN_SPAN));
+    assert!(!level_grid(&repaired, 400.0, 60.0).is_empty());
+
+    // The Level bar cannot collapse the window — `level_window` holds the pair
+    // apart — so an ordered one always has something to rule.
+    assert!(!level_grid(&level_cfg(-20.0, -20.0), 400.0, 60.0).is_empty());
+}
+
 /// With the roll off, the spectrum gets the whole depth axis — the
 /// layout the voice-bar/curve calibration was set up against.
 #[test]
@@ -1385,6 +1611,90 @@ fn the_rulings_go_under_the_spectrum_and_stop_at_the_now_line() {
     }
 }
 
+/// The volume rulings cross the pitch axis end to end, at the depth the level
+/// they name is drawn at — perpendicular to the frequency ladder, and under the
+/// picture with it.
+///
+/// Checked in every orientation for the same reason the frequency ladder is:
+/// which screen direction "across the pitch axis" means is exactly what the
+/// pane's four turns change, and a grid drawn along a hardcoded screen axis is
+/// right in one of them and lies flat along the wrong one in the other three —
+/// where it would be indistinguishable from the frequency grid it is supposed
+/// to cross.
+#[test]
+fn the_volume_rulings_cross_the_pitch_axis_under_the_spectrum() {
+    for orientation in EVERY_ORIENTATION {
+        let cfg = SpectrumConfig { orientation, ..Default::default() };
+        let rect = reference_pane();
+        let axes = Axes::new(rect, &cfg);
+        let split = spectrum_share(&cfg);
+        let budget = plot_budget(split, axes.depth_len());
+
+        let want = level_grid(&cfg, budget * axes.depth_len(), 60.0);
+        assert_eq!(want.len(), 3, "the default window is ruled in tens: -50, -40, -30");
+
+        let (levels, slabs) = painted_levels(rect, cfg);
+        assert_eq!(levels.len(), want.len(), "{orientation:?} ruled a different ladder");
+        assert!(!slabs.is_empty(), "{orientation:?}: the tone drew no spectrum to be behind");
+        assert!(
+            levels.last().unwrap().index < slabs[0],
+            "{orientation:?}: a level is painted over the spectrum's fill",
+        );
+
+        for (ruling, want) in levels.iter().zip(&want) {
+            // Clean across the pitch axis: one end at each end of it.
+            let pitch: Vec<f32> = ruling.points.iter().map(|p| axes.pitch_at(*p)).collect();
+            assert!(
+                pitch.iter().any(|t| t.abs() < 1e-3)
+                    && pitch.iter().any(|t| (t - 1.0).abs() < 1e-3),
+                "{orientation:?}: a level covers pitch {pitch:?} rather than 0..1",
+            );
+            // ...at ONE depth, and the depth the curve reaching that level is
+            // drawn at. Joined, the spectrum is mirrored so its ceiling sits at
+            // the outer edge and its floor on the now-line.
+            let depth: Vec<f32> = ruling.points.iter().map(|p| axes.depth_at(*p)).collect();
+            assert!(
+                (depth[0] - depth[1]).abs() < 1e-3,
+                "{orientation:?}: a level runs from depth {} to {}",
+                depth[0],
+                depth[1],
+            );
+            let drawn = split - want.level * budget;
+            assert!(
+                (depth[0] - drawn).abs() < 1e-3,
+                "{orientation:?}: {} dB was ruled at depth {} rather than {drawn}",
+                want.db,
+                depth[0],
+            );
+            assert!(
+                (-1e-3..=split + 1e-3).contains(&depth[0]),
+                "{orientation:?}: a level reaches depth {}, past the now-line at {split}",
+                depth[0],
+            );
+        }
+    }
+}
+
+/// Whole-song playhead mode rules no levels either — it draws no spectrum for a
+/// level to measure, and a ruling drawn anyway would be baked into every frame
+/// of a `--playhead` export.
+#[test]
+fn whole_song_mode_rules_no_levels() {
+    let mut state = fresh();
+    state.spectrum_config.orientation = SpectralOrientation::Left;
+    state.whole_song = Some(crate::WholeSong {
+        start: 0.0,
+        span: 2.0,
+        columns: Vec::new(),
+        roll: state.tracker.roll().clone(),
+    });
+    let out = painted_pane(WIDE, &mut state, 1.0);
+    let ruled = out.shapes.iter().any(|s| {
+        matches!(&s.shape, egui::Shape::LineSegment { stroke, .. } if is_ruling(stroke.color))
+    });
+    assert!(!ruled, "a whole-song frame ruled a grid across a pane with no spectrum on it");
+}
+
 /// The stronger ink goes on the decade boundaries and nowhere else.
 ///
 /// Pinned as a MAPPING — which pitches got which weight — rather than as two
@@ -1450,10 +1760,21 @@ fn whole_song_mode_rules_no_frequencies() {
     assert!(!ruled, "a whole-song frame ruled a frequency across a pane with no spectrum on it");
 }
 
-/// Whether a stroke color is one of the two a frequency ruling is drawn in.
+/// Whether a stroke color is one of the two a ruling — of either grid — is
+/// drawn in.
 fn is_ruling(color: egui::Color32) -> bool {
     color == theme::hairline().gamma_multiply(RULING_FADE.0)
         || color == theme::hairline().gamma_multiply(RULING_FADE.1)
+}
+
+/// Whether a painted segment is a FREQUENCY ruling rather than a level one.
+///
+/// Read off the geometry, because the two grids share an ink by design (see
+/// [`RULING_FADE`]) and a color test cannot separate them: a frequency ruling
+/// stands at one pitch and runs down the depth axis, a level ruling crosses the
+/// pitch axis at one depth.
+fn rules_a_frequency(axes: &Axes, points: [egui::Pos2; 2]) -> bool {
+    (axes.pitch_at(points[0]) - axes.pitch_at(points[1])).abs() < 1e-3
 }
 
 /// One frequency ruling as it came off the painter: where in the shape list
@@ -1472,10 +1793,11 @@ fn painted_rulings(
     cfg: SpectrumConfig,
 ) -> (Vec<PaintedRuling>, Vec<usize>) {
     let strong = theme::hairline().gamma_multiply(RULING_FADE.0);
+    let axes = Axes::new(rect, &cfg);
     let (mut rulings, mut slabs) = (Vec::new(), Vec::new());
     for (i, shape) in paint_tone(rect, cfg).into_iter().enumerate() {
         let egui::Shape::LineSegment { points, stroke } = shape else { continue };
-        if is_ruling(stroke.color) {
+        if is_ruling(stroke.color) && rules_a_frequency(&axes, points) {
             rulings.push(PaintedRuling { index: i, points, strong: stroke.color == strong });
         } else if stroke.color.a() == 210 {
             // The spectrum's own slabs — the one thing on the pane drawn in a
@@ -1484,6 +1806,21 @@ fn painted_rulings(
         }
     }
     (rulings, slabs)
+}
+
+/// The same frame's LEVEL rulings, in paint order.
+fn painted_levels(rect: egui::Rect, cfg: SpectrumConfig) -> (Vec<PaintedRuling>, Vec<usize>) {
+    let axes = Axes::new(rect, &cfg);
+    let (mut levels, mut slabs) = (Vec::new(), Vec::new());
+    for (i, shape) in paint_tone(rect, cfg).into_iter().enumerate() {
+        let egui::Shape::LineSegment { points, stroke } = shape else { continue };
+        if is_ruling(stroke.color) && !rules_a_frequency(&axes, points) {
+            levels.push(PaintedRuling { index: i, points, strong: false });
+        } else if stroke.color.a() == 210 {
+            slabs.push(i);
+        }
+    }
+    (levels, slabs)
 }
 
 /// The readout names its own unit, and switches to kHz where an analyzer

@@ -25,15 +25,16 @@ pub(super) use settings::spectrum_settings_pane;
 use crate::{theme, SharedState};
 use crate::panes::nearest_visible_node;
 use axes::{
-    frequency_grid, label_anchor, loudness, plot_budget, spectrum_share, text_scales, Axes,
-    PitchScale, TimeAxis, LABEL_GAP_PT, MARKING_PT, PROFILE_PT,
+    frequency_grid, label_anchor, level_grid, loudness, plot_budget, spectrum_share, text_scales,
+    Axes, PitchScale, TimeAxis, LABEL_GAP_PT, LABEL_INSET_PT, MARKING_PT, PROFILE_PT,
 };
 use gestures::{drag_split, drag_zoom};
 use egui::Sense;
 
-/// How faint a frequency ruling is drawn against [`theme::hairline`], the
-/// pane's quietest line already: a decade boundary first, every other step of
-/// the ladder second.
+/// How faint a ruling is drawn against [`theme::hairline`], the pane's
+/// quietest line already: a frequency decade boundary first, every other
+/// ruling — the rest of the frequency ladder, and the whole of the volume grid
+/// crossing it — second.
 ///
 /// Two weights rather than one, and the DECADE is what earns the stronger one.
 /// A log axis draws every decade at the same length, so nothing in the spacing
@@ -42,9 +43,38 @@ use egui::Sense;
 /// lines that inexplicably bunch up. The numbered marks do not need it: they
 /// carry a number, which is a stronger signal than any weight of line.
 ///
+/// That same argument is what leaves the volume grid on ONE weight. It is even
+/// in the unit its axis is linear in, so there is no step-size change for a
+/// heavier line to disclose, and the two grids drawn at one weight read as a
+/// single mesh under the picture rather than as two rulers arguing about which
+/// is the measurement.
+///
 /// Both stay quieter than the now-line, which is the one line on this pane that
 /// divides two pictures rather than measuring one.
 const RULING_FADE: (f32, f32) = (0.85, 0.45);
+
+/// The closest two level numbers may be set, centre to centre, in points along
+/// the DEPTH axis — the axis they are stacked on, and the one
+/// [`level_grid`] thins them against.
+///
+/// Measured off the type about to draw them rather than assumed, because both
+/// things it turns on move. The markings follow the pane's size; and which way
+/// the depth axis runs is the orientation's to say, so a number stacked along a
+/// horizontal depth axis is spaced by its WIDTH and one stacked down a vertical
+/// axis by its height — which on this pane's type differ by more than a factor
+/// of two. Projecting the galley onto the depth direction asks that question
+/// once instead of case-matching four layouts.
+///
+/// The widest label the ladder can produce, since the type is monospaced and the
+/// window bottoms out at [`LEVEL_MIN_DB`](crate::LEVEL_MIN_DB): four characters.
+/// Plus [`LABEL_GAP_PT`] on each side, which is the reach of the halo every
+/// label here carries — the rims are what touch first, not the ink.
+fn level_label_room(painter: &egui::Painter, axes: &Axes, font: &egui::FontId) -> f32 {
+    let galley =
+        painter.layout_no_wrap("-100".to_owned(), font.clone(), egui::Color32::PLACEHOLDER);
+    let (size, depth) = (galley.size(), axes.dir_depth());
+    size.x * depth.x.abs() + size.y * depth.y.abs() + LABEL_GAP_PT * 2.0
+}
 
 /// Three views of the same music over one shared MIDI-pitch axis: the
 /// audio spectrum as a curve (FFT of the input bus, every partial at its
@@ -125,6 +155,10 @@ pub(crate) fn spectral_pane(
     // Everything this pane sets text at, decided once from the range it just
     // settled on: the markings hold their size, the names follow the zoom.
     let text = text_scales(&cfg, &axes, scale.span, painter.ctx().pixels_per_point());
+    // Settled here rather than where the labels are drawn, because the volume
+    // grid asks how much room a number takes before it decides which of its
+    // lines get one.
+    let marking_font = egui::FontId::monospace(MARKING_PT * text.markings);
     // dB depth mapping: the Analyzer section's ceiling tops out where the profile
     // line lands ON the pane's edge (see `plot_budget`) and its floor sets the
     // bottom. Tilt is the conventional reference slope (negative), so the display
@@ -142,6 +176,13 @@ pub(crate) fn spectral_pane(
     // they stand on, and which screen edge that is flips with the mirroring
     // above — see `label_anchor` for both.
     let (label_d, label_into) = label_anchor(split);
+    // Where a level sits on the pane: the level axis runs 0 (the floor, the
+    // baseline the curve stands on) to 1 (the ceiling its peaks reach) over the
+    // spectrum's depth budget, mirrored by `sd` exactly as the curve is. One
+    // mapping for the grid and the numbers, so a ruling lands where a peak of
+    // that level lands and the number on it is the number the curve is read
+    // against.
+    let level_d = |level: f32| sd(level * budget);
 
     // A uniform dark bed under the whole spectrogram region, so it reads as one
     // surface. The heatmap mesh only covers the depths that actually have
@@ -168,6 +209,19 @@ pub(crate) fn spectral_pane(
     // is a frequency.
     let grid = frequency_grid(&scale, axes.pitch_len());
 
+    // ...and one level ladder crossing it, ruled every 10 dB wherever a 10 dB
+    // step fits the analyzer it is drawn on (see `level_grid`). The two grids
+    // answer the two questions the pane is read for — WHERE in the spectrum a
+    // band sits, and HOW LOUD it is — and the second had no answer at all
+    // beyond the Level bar's two end values, which are numbers about the pane
+    // rather than marks on it.
+    //
+    // Measured against the spectrum's depth BUDGET rather than its whole share:
+    // that is the length the curve's own ceiling is mapped onto, so a ruling
+    // and a peak of the same level are drawn at one place.
+    let level_len = budget * axes.depth_len();
+    let levels = level_grid(&cfg, level_len, level_label_room(&painter, &axes, &marking_font));
+
     // The rulings, before anything is drawn over them: they are what the
     // picture sits ON rather than lines across it, which is what makes a grid
     // affordable here at all — over the spectrum's fill or the roll's ribbons
@@ -192,6 +246,19 @@ pub(crate) fn spectral_pane(
             painter.line_segment(
                 [axes.at(ruling.t, 0.0), axes.at(ruling.t, split)],
                 egui::Stroke::new(1.0, theme::hairline().gamma_multiply(fade)),
+            );
+        }
+        // The volume grid, clean across the pitch axis — every ruling the full
+        // width of the picture it measures, where a frequency ruling covers the
+        // spectrum's share of the depth axis. Between them they mesh the
+        // spectrum's region and nothing else, on the same argument: they are
+        // what the curve stands on, and a level ruled on past the now-line
+        // would be a statement about loudness laid across a heatmap that reads
+        // its own.
+        for level in &levels {
+            painter.line_segment(
+                axes.across_pitch(level_d(level.level)),
+                egui::Stroke::new(1.0, theme::hairline().gamma_multiply(RULING_FADE.1)),
             );
         }
     }
@@ -403,7 +470,6 @@ pub(crate) fn spectral_pane(
     // over a bright spectrogram slab, or over the spectrum's own fill, has no
     // contrast to rely on at all.
     let mut labels = crate::text::TextBatch::default();
-    let marking_font = egui::FontId::monospace(MARKING_PT * text.markings);
     // Which way the label's own edge faces its ruling: back down the pitch
     // axis, since the anchor above offsets it up that axis and it grows the
     // same way.
@@ -415,6 +481,37 @@ pub(crate) fn spectral_pane(
         // the facing edge comes back off it, and `LABEL_GAP_PT` is what a
         // reader measures rather than a floor under it.
         let pos = pos + facing * crate::text::ink_inset(&painter, &label, &marking_font, facing);
+        labels.text(
+            &painter,
+            pos,
+            align,
+            label,
+            marking_font.clone(),
+            theme::text_dim(),
+            theme::well(),
+        );
+    }
+    // The level numbers, up the high-pitch end of the analyzer — the one end
+    // of the pitch axis where a column of numbers crosses nothing it is not
+    // measuring. Written where the frequency numbers are not: those ride the
+    // depth axis' far edge and read ACROSS the pitch axis, so the two columns
+    // meet only in the corner between them, and a number there is dropped by
+    // `level_grid`'s own clearance rather than allowed to overlap.
+    //
+    // Set ON their rulings rather than beside them (the zero `into`, which
+    // `text_anchor` reads as centred): the ladder is even, so a number between
+    // two lines belongs to neither by any spacing argument, where a number
+    // straddling its own line can only be read one way.
+    let level_facing = axes.dir_pitch();
+    for level in levels.iter().filter(|level| level.numbered) {
+        let label = format!("{}", level.db);
+        let (pos, align) =
+            axes.text_anchor(1.0, level_d(level.level), -LABEL_INSET_PT, 0.0);
+        // The inset a reader measures is from the pane's edge to the digits,
+        // so the font's air on that side comes off it — the same correction
+        // the frequency labels make against their rulings.
+        let inset = crate::text::ink_inset(&painter, &label, &marking_font, level_facing);
+        let pos = pos + level_facing * inset;
         labels.text(
             &painter,
             pos,
