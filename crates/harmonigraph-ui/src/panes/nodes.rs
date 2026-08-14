@@ -335,11 +335,11 @@ fn shimmer_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                      trough beside it. The same RATIO wherever it lands, so a peak \
                      reads as strongly on a high note's bright color as on a low \
                      note's dark one. 0 draws the layer exactly as it is \
-                     unshimmered; 1 is the tuned depth. Between peaks the layer \
-                     sits at its own color rather than dimming; what a peak spends \
-                     instead is color, paling toward white on a note with no room \
-                     left to brighten -- an indicator under a strong one says an \
-                     octave sounds without saying which",
+                     unshimmered; 1 is the tuned depth. Darker notes hold their \
+                     color between peaks; the brightest have no room to swing up, \
+                     so their peaks pale toward white and their troughs darken \
+                     instead -- an indicator under a strong one says an octave \
+                     sounds without saying which",
                 );
             ValueBar::new(&mut view.shimmer_softness, 0.0..=1.0, "Softness")
                 .show(ui)

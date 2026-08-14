@@ -391,10 +391,12 @@ pub struct ViewConfig {
     /// at a trough as much as at a crest.
     ///
     /// 0 is the layer drawing exactly as it does unshimmered, from a bar rather
-    /// than from the mode. Upward the sweep is light ADDED: the troughs sit at
-    /// the layer's own color and stay there, and only the very brightest colors
-    /// on the ramp give any of that up, sliding a few points of `L*` to keep
-    /// their crests a color rather than a white flash.
+    /// than from the mode. Where the display leaves the swing room, the whole
+    /// of it goes upward: the troughs sit at the layer's own color and stay
+    /// there. Where a color is too bright for that, the swing slides down to
+    /// keep its crest a color rather than a white flash, and the troughs pay
+    /// for the slide — nothing below the middle of the default ramp, about 15
+    /// `L*` of standing shade at its bright end at 1.
     ///
     /// What the light costs is real at any setting, and it is the point of
     /// the bar: under a strong band an indicator says "an octave sounds here"

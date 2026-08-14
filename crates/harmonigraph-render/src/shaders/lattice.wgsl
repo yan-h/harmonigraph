@@ -613,14 +613,19 @@ const SHIMMER_EXPOSURE: f32 = 0.873;
 // This is the knob on a three-way trade with no free corner, because the sRGB
 // gamut is what sets it: a sheet can be one size everywhere, leave the troughs
 // alone, and keep the color — any two, never all three. The ramp's bright end
-// sits at `L*` 68 and one uniform peak wants it near 90, where the gamut leaves
-// that hue almost no chroma to be at. Something gives, and this says what.
+// carries a luma of 0.64 in the scale this arithmetic runs on, and one uniform
+// peak wants half again more light than the display has — and what room there
+// is near white leaves that hue almost no chroma to be at. Something gives,
+// and this says what.
 //
-// Measured across the default ramp at the fresh view's Intensity, against the
-// added light this replaces (which darkens 5.0, spreads 29%, keeps 80% of the
-// chroma and swings 6.0 degrees). The first three rows are a fixed FRACTION of
-// the shortfall taken as slide instead, which is the other shape this could
-// have; the ceiling is the rest:
+// Measured across the default ramp at the fresh view's Intensity, against an
+// added light (which darkens 5.0, spreads 29%, keeps 80% of the chroma and
+// swings 6.0 degrees). The figures read the ramp AS ENCODED sRGB — a darker
+// reading than the scale this arithmetic runs on, so every row's trough cost
+// is understated on screen and what the table carries is the comparison
+// between shapes, not the prices. The first three rows are a fixed FRACTION
+// of the shortfall taken as slide instead, which is the other shape this
+// could have; the ceiling is the rest:
 //
 //                    darkens by   spread   worst chroma   worst hue
 //   quarter-slide       4.3 L*      11%        29%           3.2
@@ -636,12 +641,16 @@ const SHIMMER_EXPOSURE: f32 = 0.873;
 // it goes on sliding exactly as far as the growing swing needs. One constant
 // that behaves at both ends of a bar beats one tuned for the middle of it.
 //
-// 0.95 is nearly the whole of what the trough can be spared: at it, every color
-// on the ramp but the very brightest darkens by NOTHING at all, and that one by
-// 3.8 — less than the coverage dip this replaces took from all of them. What it
-// costs is the chroma at a bright note's crest, which the gamut will not give
-// up for free, and lowering the ceiling is how to buy it back: 0.90 doubles the
-// chroma left at the ramp's top and takes 6.9 `L*` off its troughs to do it.
+// 0.95 leaves the slide engaged over the ramp's upper half. The swing fits
+// under the ceiling up to a luma of CEILING / e^swing — about 0.40 at
+// Intensity 1 — so below that a trough IS the steady layer; mid-ramp (0.45)
+// pays about 4 `L*` of trough for its crest, and the bright end (0.64) pays
+// about 15, most of its swing arriving as shade.
+// `between_peaks_the_layer_sits_at_its_own_color` pins those three measured
+// readings. What the slide buys is the crest staying a color — what a bright
+// crest still cannot take as light it gives up as chroma — and moving the
+// ceiling trades the two across the board: lower is darker troughs and more
+// chroma kept at the top of the ramp.
 const SHIMMER_CEILING: f32 = 0.95;
 // sRGB's own luminance row, for the ceiling above and the desaturation below.
 // Weighted rather than a plain mean so a blown yellow pales toward the white
