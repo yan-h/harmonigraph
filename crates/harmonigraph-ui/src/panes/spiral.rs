@@ -412,6 +412,102 @@ mod tests {
         }
     }
 
+    /// A tone lands on its own pitch class, and the disc is not one flat
+    /// colour.
+    ///
+    /// The only test here that runs the strip against a NON-EMPTY spectrum, and
+    /// the reason it has to exist: every other fixture builds `fresh()`, whose
+    /// analyzer has no samples, so `display` answers `None` and the level
+    /// closure returns 0.0 at every step. Without this, the bucket lookup, the
+    /// bucket-run slice, `power_mean`, `loudness` and `cell_color` are reached
+    /// by nothing at all, and the picture's whole colour path reads as covered
+    /// while being untested.
+    ///
+    /// Two claims, because either alone passes on a broken pane: the peak is at
+    /// the right PITCH (a strip built in the wrong order fails this) and it is
+    /// in the right DIRECTION on screen (an angle map that is not
+    /// `frac(midi/12)` fails this, and would otherwise draw a perfectly
+    /// plausible spiral).
+    ///
+    /// What it does not pin is the ORDER of the power mean — a single-bucket
+    /// read would still put the peak here. That choice is argued in `strip`'s
+    /// own comment and is shared with the Spectral pane, whose
+    /// `power_mean` tests hold it.
+    #[test]
+    fn a_tone_lands_on_its_own_pitch_class() {
+        let mut state = fresh();
+        state.spectrum_config.low_midi = 60.0;
+        state.spectrum_config.high_midi = 96.0;
+        // 1 kHz, the tilt's own pivot, so the slope takes nothing off the level
+        // and the peak is the tone's alone.
+        let sr = 48_000.0;
+        let samples: Vec<f32> =
+            (0..48_000).map(|i| (std::f32::consts::TAU * 1_000.0 * i as f32 / sr).sin()).collect();
+        let cfg = state.spectrum_config;
+        state.spectrum.push_samples(&samples, 1, sr, 1.0, &cfg);
+        let tone_midi = 69.0 + 12.0 * (1_000.0f32 / 440.0).log2();
+
+        let meshes: Vec<egui::Mesh> = painted(&mut state, 1.0)
+            .into_iter()
+            .filter_map(|s| match s {
+                egui::Shape::Mesh(m) => Some((*m).clone()),
+                _ => None,
+            })
+            .collect();
+        let mesh = meshes.first().expect("the strip is a mesh");
+
+        let lum = |c: egui::Color32| c.r() as u32 + c.g() as u32 + c.b() as u32;
+        let shades: std::collections::HashSet<[u8; 4]> =
+            mesh.vertices.iter().map(|v| v.color.to_array()).collect();
+        assert!(
+            shades.len() > 4,
+            "the strip is {} shade(s) — the level path never ran",
+            shades.len(),
+        );
+
+        let (peak, _) = mesh
+            .vertices
+            .iter()
+            .enumerate()
+            .max_by_key(|(_, v)| lum(v.color))
+            .expect("the strip has vertices");
+        // Two vertices per step, and the steps run min_midi..max_midi in order.
+        let steps = mesh.vertices.len() / 2 - 1;
+        let s = Spiral::new(PANE, &cfg);
+        let at_peak = s.min_midi + (s.max_midi - s.min_midi) * (peak / 2) as f32 / steps as f32;
+        // Half a semitone, and it is the peak's PLATEAU that sets the floor
+        // under this rather than the analyzer: a colour is quantized to 8 bits
+        // a channel, so the vertices either side of a peak share one exact
+        // colour and which of them comes back as the maximum is arbitrary
+        // within the run. Still two orders tighter than any wrong pitch
+        // mapping, the axis being three octaves wide.
+        const NEAR: f32 = 0.5;
+        assert!(
+            (at_peak - tone_midi).abs() < NEAR,
+            "the brightest bucket is at MIDI {at_peak}, not the tone's {tone_midi}",
+        );
+
+        // ...and it is drawn on that pitch's own ray, which is the claim the
+        // pitch alone cannot make. The same tolerance as an angle: a semitone
+        // is a twelfth of a turn, so half of one is 15 degrees.
+        //
+        // The expected direction is written out from the geometry rather than
+        // taken from [`Spiral::ray`]. Asking `ray` where the tone should be and
+        // then checking it is drawn there is a comparison of `ray` with itself,
+        // which passes at any winding at all — this test read `ray` on both
+        // sides and went on passing with the turn set to a THIRTEENTH of an
+        // octave.
+        let angle = std::f32::consts::TAU * (tone_midi / 12.0).fract();
+        let want = egui::vec2(angle.sin(), -angle.cos());
+        let got = (mesh.vertices[peak].pos - s.centre).normalized();
+        let sin = want.x * got.y - want.y * got.x;
+        assert!(
+            sin.abs() < (std::f32::consts::TAU * NEAR / 12.0).sin() && want.dot(got) > 0.0,
+            "the peak is {} degrees off the tone's ray",
+            sin.asin().to_degrees(),
+        );
+    }
+
     /// A sounding note's mark is inside the pane, at the top of the range and
     /// at the bottom of it.
     ///
