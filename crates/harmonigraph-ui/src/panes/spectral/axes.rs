@@ -346,25 +346,6 @@ impl Axes {
         (self.at(0.0, 1.0) - self.at(0.0, 0.0)).normalized()
     }
 
-    /// Which sign of a depth offset runs BACK along the screen's own axis —
-    /// leftward where depth is horizontal, upward where it is vertical.
-    ///
-    /// The one thing on this pane that has to be said about the SCREEN rather
-    /// than about an axis, and it is here for that reason rather than in the
-    /// layer that wants it. Type runs left to right and sits on its baseline
-    /// however the pane has been turned, so "set the end of the number against
-    /// its line, not the minus sign that opens it" names a screen direction and
-    /// nothing else — where every other placement on this pane is a statement
-    /// about pitch or depth and turns with them.
-    pub(super) fn depth_back(&self) -> f32 {
-        let depth = self.dir_depth();
-        if depth.x + depth.y > 0.0 {
-            -1.0
-        } else {
-            1.0
-        }
-    }
-
     /// A line clean across the pitch axis at depth `d` — the shape of the
     /// roll's "now" line and the divider.
     pub fn across_pitch(&self, d: f32) -> [egui::Pos2; 2] {
@@ -790,11 +771,23 @@ pub(super) fn level_grid(
     (first..=last)
         .map(|k| {
             let db = k as f32 * step;
-            LevelRuling {
-                level: (db - floor) / span,
-                db,
-                numbered: (k - first) % stride == 0,
-            }
+            let level = (db - floor) / span;
+            // Every number is set on the CEILING side of its ruling, so the one
+            // end that can run out of room is that one — and a ruling can sit
+            // hard against it, the ceiling being wherever the Level bar was
+            // dragged rather than a rung. A number with no room there is not
+            // written rather than set somewhere else: which side they sit on is
+            // what makes a column of them readable at a glance, and one number
+            // in the picture answering to a different rule costs more than the
+            // number is worth.
+            //
+            // The lowest rung is exempt, because the bottom of the scale is
+            // stated whatever it costs — and it is the ruling FURTHEST from the
+            // ceiling, so the exemption only ever fires on an analyzer too small
+            // to hold a single number.
+            let numbered = (k - first) % stride == 0
+                && (k == first || (1.0 - level) * level_len >= label_room);
+            LevelRuling { level, db, numbered }
         })
         .collect()
 }

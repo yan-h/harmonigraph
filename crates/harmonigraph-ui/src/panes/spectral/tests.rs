@@ -1769,61 +1769,70 @@ fn the_lowest_level_is_inked_as_a_numbered_one() {
     }
 }
 
-/// A level number is set against the END of its own digits — back along the
-/// screen, so the reader meets a digit at the line and not the minus sign that
-/// opens the number.
+/// Every level number sits on the side of its ruling that the analyzer is on —
+/// left of the line where the analyzer runs down the left of the pane, right
+/// where it runs down the right, above where it lies along the top.
 ///
-/// A statement about TYPE, not about the axes, which is what makes it the one
-/// placement on this pane that does not turn with the layout: text runs left to
-/// right and sits on its baseline in all four. So the number grows up-and-left
-/// of its ruling in every orientation, where anything read off the level axis
-/// would put it on the loud side in two of them and the quiet side in the other
-/// two.
+/// One rule covers all four because the spectrum MIRRORS to meet the now-line:
+/// the end its peaks reach is the outer edge in every layout, so "the side the
+/// analyzer is on" and "the side its peaks reach" are the same side, and only
+/// the second is expressible without naming a screen edge. Checked against the
+/// pane's own geometry rather than against a hardcoded direction, which is the
+/// only way the claim means anything in four orientations.
 #[test]
-fn a_level_number_is_set_against_the_end_of_its_digits() {
+fn every_level_number_sits_on_the_side_its_peaks_reach() {
     for orientation in EVERY_ORIENTATION {
-        let axes = axes(reference_pane(), orientation);
-        // A ruling in the middle of the axis, where neither end is near enough
-        // to force the number to the other side of its line.
-        let into = level_label_into(&axes, true, 0.5, 400.0, 40.0);
-        let grows = axes.dir_depth() * into;
-        assert!(
-            grows.x <= 0.0 && grows.y <= 0.0 && grows.length() > 0.0,
-            "{orientation:?}: the number grows {grows:?}, not back along the screen",
-        );
+        let cfg = SpectrumConfig { orientation, ..Default::default() };
+        let axes = Axes::new(reference_pane(), &cfg);
+        for split in [spectrum_share(&cfg), 1.0] {
+            let joined = split < 1.0;
+            let budget = plot_budget(split, axes.depth_len());
+            let sd = |d: f32| if joined { split - d } else { d };
+
+            // Where the analyzer is, in the pane's own terms: from the level its
+            // curve stands on to the level its peaks reach.
+            let outward = axes.at(1.0, sd(budget)) - axes.at(1.0, sd(0.0));
+            let grows = axes.dir_depth() * level_label_into(joined);
+            assert!(
+                grows.dot(outward) > 0.0,
+                "{orientation:?} joined={joined}: the number grows {grows:?}, \
+                 where the analyzer runs {outward:?}",
+            );
+            // ...and beside the line, not across it.
+            assert!(grows.length() > 0.0, "{orientation:?}: the number straddles its ruling");
+        }
     }
 }
 
-/// ...and flips to the other side of its line rather than hang off the end of
-/// the axis it measures.
+/// A number with no room on that side is not written, rather than set on the
+/// other one — the side is what makes a column of them readable at a glance.
 ///
-/// Which ruling is at risk turns with the layout, because the spectrum mirrors
-/// to meet the now-line: the number grows toward the ceiling in half the
-/// orientations and toward the floor in the other half, and an overhang lands
-/// in the frequency numbers at one end and over the now-line at the other.
+/// The ceiling is the end that can run out, being wherever the Level bar was
+/// dragged rather than a rung, so a ruling can sit hard against it. The lowest
+/// rung is exempt: the bottom of the scale is stated whatever it costs.
 #[test]
-fn a_level_number_with_no_room_flips_to_the_other_side_of_its_line() {
-    for orientation in EVERY_ORIENTATION {
-        let axes = axes(reference_pane(), orientation);
-        for joined in [true, false] {
-            let middle = level_label_into(&axes, joined, 0.5, 400.0, 40.0);
-            // The two extremes of the axis; whichever one the number grows
-            // toward is the one with nothing left to hold it.
-            let (low, high) = (
-                level_label_into(&axes, joined, 0.02, 400.0, 40.0),
-                level_label_into(&axes, joined, 0.98, 400.0, 40.0),
-            );
-            assert!(
-                (low == -middle) ^ (high == -middle),
-                "{orientation:?} joined={joined}: {} of the two ends flipped",
-                u8::from(low == -middle) + u8::from(high == -middle),
-            );
-            // A number that fits on the preferred side never flips, however
-            // close to an end it sits — the flip is about room, not position.
-            assert_eq!(level_label_into(&axes, joined, 0.02, 400.0, 1.0), middle);
-            assert_eq!(level_label_into(&axes, joined, 0.98, 400.0, 1.0), middle);
-        }
-    }
+fn a_level_number_with_no_room_is_not_written() {
+    // A ceiling dragged to half a dB above a rung, so the topmost ruling sits
+    // hard against it — reachable on the Level bar, and the case the flip that
+    // used to be here existed for.
+    let cfg = level_cfg(-60.0, -29.5);
+    let grid = level_grid(&cfg, 400.0, 60.0);
+    let ruled: Vec<f32> = grid.iter().map(|r| r.db).collect();
+    assert_eq!(ruled, vec![-60.0, -50.0, -40.0, -30.0], "the ladder is not the one this tests");
+    assert_eq!(
+        numbered_db(&cfg, 400.0, 60.0),
+        vec![-60.0, -50.0, -40.0],
+        "a number was written into the {} points left above the topmost ruling",
+        (1.0 - grid.last().unwrap().level) * 400.0,
+    );
+
+    // The floor keeps its number however tight the axis: it is the ruling
+    // furthest from the ceiling, so it never wants for room in the first place.
+    assert!(grid[0].numbered, "the bottom of the scale went unnamed");
+    let squeezed = level_grid(&cfg, 100.0, 100.0);
+    assert_eq!(squeezed.len(), 2, "this wants an axis tight enough to thin hard");
+    assert!(squeezed[0].numbered, "...and unnamed on an axis with room for one number");
+    assert!(!squeezed[1].numbered);
 }
 
 /// Whole-song playhead mode rules no levels either — it draws no spectrum for a

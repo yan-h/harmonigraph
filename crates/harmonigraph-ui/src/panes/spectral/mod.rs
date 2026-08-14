@@ -73,44 +73,36 @@ const RULING_FADE: (f32, f32) = (0.85, 0.45);
 /// Plus [`LABEL_GAP_PT`] on each side, which is the reach of the halo every
 /// label here carries — the rims are what touch first, not the ink.
 fn level_label_room(painter: &egui::Painter, axes: &Axes, font: &egui::FontId) -> f32 {
-    level_reach(painter, axes, font, "-100") + LABEL_GAP_PT * 2.0
-}
-
-/// How far a level number reaches along the DEPTH axis — its width where that
-/// axis runs horizontally, its height where it runs down the pane.
-fn level_reach(painter: &egui::Painter, axes: &Axes, font: &egui::FontId, label: &str) -> f32 {
     let galley =
-        painter.layout_no_wrap(label.to_owned(), font.clone(), egui::Color32::PLACEHOLDER);
+        painter.layout_no_wrap("-100".to_owned(), font.clone(), egui::Color32::PLACEHOLDER);
     let (size, depth) = (galley.size(), axes.dir_depth());
-    size.x * depth.x.abs() + size.y * depth.y.abs()
+    size.x * depth.x.abs() + size.y * depth.y.abs() + LABEL_GAP_PT * 2.0
 }
 
 /// Which side of its ruling a level number is set on, as the depth offset
-/// [`Axes::text_anchor`] takes.
+/// [`Axes::text_anchor`] takes: the side the analyzer's own peaks reach, always.
 ///
-/// Back along the screen's own axis by preference ([`Axes::depth_back`]), which
-/// is what puts the END of the number against the line rather than the minus
-/// sign that opens it — and flipped to the other side where that end of the
-/// level axis is too near to hold the digits. Only ever the extreme ruling in
-/// the preferred direction can flip, and which extreme that is turns with the
-/// layout: overhanging the ceiling end it would cross into the frequency
-/// numbers riding there, and the floor end, over the now-line and into the
-/// heatmap.
+/// Which is to say the side the ANALYZER is on. The spectrum owns one end of the
+/// depth axis and hands the rest to the roll, so with the analyzer down the left
+/// of the pane its numbers sit left of their lines, down the right they sit
+/// right, along the top they sit above. That falls out of one rule rather than
+/// four, because the spectrum MIRRORS to meet the now-line: the end its peaks
+/// reach is the outer edge in every layout, and the end they stand on is the
+/// boundary with the roll.
 ///
-/// `level` is the ruling's own `0..1` place on the axis, `level_len` the axis
-/// in points, and `reach` what the number spans along it.
-fn level_label_into(axes: &Axes, joined: bool, level: f32, level_len: f32, reach: f32) -> f32 {
-    let into = LABEL_GAP_PT * axes.depth_back();
-    // Growing along +depth runs toward the FLOOR where the spectrum is mirrored
-    // to meet the now-line, and toward the ceiling where it stands alone.
-    let clear = |into: f32| {
-        let toward_ceiling = if joined { into < 0.0 } else { into > 0.0 };
-        if toward_ceiling { 1.0 - level } else { level }
-    };
-    if clear(into) * level_len < reach && clear(-into) * level_len >= reach {
-        -into
+/// The alternative is to choose per number — nearest edge, or whichever side has
+/// room — and it reads worse than the case it fixes. A column of numbers is
+/// scanned as a column, so one of them answering to a different rule stops the
+/// eye at exactly the number that is hardest to place. Where the room genuinely
+/// is not there, [`level_grid`] declines to write the number at all.
+fn level_label_into(joined: bool) -> f32 {
+    // Joined, the spectrum is mirrored: the ceiling sits at the SMALLER depth,
+    // so growing toward it runs back down the axis. Standing alone it is the
+    // far end and the offset runs forward.
+    if joined {
+        -LABEL_GAP_PT
     } else {
-        into
+        LABEL_GAP_PT
     }
 }
 
@@ -534,24 +526,17 @@ pub(crate) fn spectral_pane(
     // of the pitch axis where a column of numbers crosses nothing it is not
     // measuring. Written where the frequency numbers are not: those ride the
     // depth axis' far edge and read ACROSS the pitch axis, so the two columns
-    // meet only in the corner between them, and a number there is dropped by
-    // `level_grid`'s own clearance rather than allowed to overlap.
+    // meet only in the corner between them.
     //
-    // Set BESIDE their rulings, and on the side that puts the end of the number
-    // against the line rather than the minus sign that opens it — so what the
-    // reader's eye meets at the line is a digit, and the number reads as
-    // pointing at it. That is a fact about type rather than about this pane's
-    // axes (see `Axes::depth_back`), which is why the offset is taken back along
-    // the SCREEN and holds through all four turns.
-    //
-    // Straddling the line is what this replaces: the ruling ran through the
-    // middle of the digits, cutting the number it was supposed to be named by.
+    // Set BESIDE their rulings rather than across them — a ruling through the
+    // middle of the digits cuts the number it is supposed to be named by — and
+    // always on the same side of them, the one the analyzer's peaks reach (see
+    // `level_label_into`).
     let level_edge = axes.dir_pitch();
     let level_depth = axes.dir_depth();
+    let into = level_label_into(joined);
     for level in levels.iter().filter(|level| level.numbered) {
         let label = format!("{}", level.db);
-        let reach = level_reach(&painter, &axes, &marking_font, &label);
-        let into = level_label_into(&axes, joined, level.level, level_len, reach);
         let (pos, align) = axes.text_anchor(1.0, level_d(level.level), -LABEL_INSET_PT, into);
         // Two corrections, on the two axes the anchor offsets along: the inset a
         // reader measures runs from the pane's edge to the digits, and the gap
