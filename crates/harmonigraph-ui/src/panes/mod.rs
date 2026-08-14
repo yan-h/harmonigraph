@@ -118,7 +118,7 @@ impl Tab {
     /// Whether this tab is a PICTURE — a pane that paints its own surface edge
     /// to edge — rather than a list of controls.
     ///
-    /// A method rather than the `matches!` it replaces because more than one
+    /// A method rather than a `matches!` at each site, because more than one
     /// site asks (the scroll bars and the body margin below), and a new picture
     /// pane that slips past one of them draws with a scroll area around it or a
     /// border of chrome inside it, neither of which fails anything: it just
