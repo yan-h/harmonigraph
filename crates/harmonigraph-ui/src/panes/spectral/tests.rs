@@ -92,6 +92,13 @@ fn names_follow_the_pitch_zoom_and_markings_hold_still() {
         at(24.0).names,
         "and the two bars are independent",
     );
+
+    // The air a name keeps in front of it answers to neither: it is a distance
+    // on the screen, and the zoom that grows the type is exactly what it must
+    // not follow — see `names::LABEL_INSET`.
+    assert_eq!(at(FULL_PITCH_SPAN).names_air, at(crate::PITCH_RANGE_MIN_SPAN).names_air);
+    let louder = SpectrumConfig { note_name_scale: 2.0, ..SpectrumConfig::default() };
+    assert_eq!(text_scales(&louder, &axes, 24.0, 2.0).names_air, at(24.0).names_air);
 }
 
 /// A pane at the size these sizes were chosen at, so a test about anything
@@ -122,6 +129,11 @@ fn text_shrinks_with_the_pane() {
     let shrunk = text_scales(&cfg, &small, 48.0, 2.0);
     assert!((shrunk.names / docked.names - 0.5).abs() < 0.02);
     assert!((shrunk.markings / docked.markings - 0.5).abs() < 0.02);
+    // The air in front of a name too, and this is the whole reason it is a
+    // scale rather than flat points: the preview and the video are one picture
+    // at two sizes, so a name has to stand off its note by the same fraction of
+    // the pane in both.
+    assert!((shrunk.names_air / docked.names_air - 0.5).abs() < 0.02);
     // ...and at the reference pane the bars read what they say.
     assert!((docked.markings - 1.0).abs() < 0.02, "{}", docked.markings);
 }
