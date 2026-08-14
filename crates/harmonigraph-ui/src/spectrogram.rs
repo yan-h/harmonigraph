@@ -3076,15 +3076,28 @@ mod tests {
         assert_eq!(*base().style(), base_style());
 
         // Every field of the STYLE recolours or re-reads every column, so the
-        // ring cannot carry a texture across a change to any of them.
+        // ring cannot carry a texture across a change to any of them — asked
+        // through `differs` as well as through the derived equality, because
+        // `differs` is a hand-kept match inside the shared struct: a clause
+        // deleted there fails no equality assertion, and the ring's carry
+        // decision is the one that reads it.
         let styled = |s: ColumnStyle| {
             assert_ne!(s, base_style(), "the ring would carry a stale texture forward");
+            assert!(
+                base_style().differs(&s).is_some(),
+                "carries() would keep a texture this change invalidates",
+            );
             assert_ne!(crate::SpectrogramKey::new(s, 3, 200, 5.0, false), base());
         };
         styled(style(101, 0.1, 40.0, 48.0, &cfg)); // rows
         // The coarse read: a gesture image's wide rows are a max, not the
         // mean, so its floor sits high — the settle must repaint, not carry.
-        styled(ColumnStyle::new(100, true, 0.1, 40.0, 48.0, &cfg));
+        // On a pane short enough that the gesture never caps its rows, this
+        // flag is the ONLY field the settle moves, so it is additionally
+        // pinned to the reason `differs` files it under.
+        let coarse = ColumnStyle::new(100, true, 0.1, 40.0, 48.0, &cfg);
+        assert_eq!(base_style().differs(&coarse), Some(Restart::Rows));
+        styled(coarse);
         styled(style(100, 0.2, 40.0, 48.0, &cfg)); // slab width
         styled(style(100, 0.1, 41.0, 48.0, &cfg)); // pitch range, low end
         styled(style(100, 0.1, 40.0, 49.0, &cfg)); // pitch range, span
