@@ -852,9 +852,9 @@ fn the_persist_blob_carries_exactly_these_top_level_keys() {
 /// one layer down); this covers the whole section being absent.
 ///
 /// No blob this build WROTE is in that shape: `render` entered [`UiPersist`]
-/// two days before [`UI_PERSIST_VERSION`] last moved, so a saved project
-/// missing the section is below the floor and refused whole before its
-/// `#[serde(default)]` is ever consulted.
+/// before [`UI_PERSIST_VERSION`] was raised past the versions that predate it,
+/// so a saved project missing the section is below the floor and refused whole
+/// before its `#[serde(default)]` is ever consulted.
 ///
 /// A HAND-AUTHORED blob is the reachable case, and it is a supported one, not
 /// a curiosity: `harmonigraph-offline --ui-state FILE` substitutes a file for
@@ -1167,11 +1167,11 @@ fn a_blob_with_a_nonsense_heatmap_gradient_loads_at_a_drawable_one() {
 
 #[test]
 fn a_blob_older_than_the_version_floor_is_refused_whole() {
-    // Versions below UI_PERSIST_VERSION cannot reach a real editor: the
-    // plugin's CLAP/VST3 ids changed three days after the version last moved,
-    // so a project old enough to carry one names an identity this binary does
-    // not claim. Refusing it here is what lets the migrations for those
-    // formats be deleted rather than carried forever.
+    // The refusal is what lets the migrations for older formats be deleted
+    // rather than carried forever, and it costs a real project its settings:
+    // the plugin's CLAP/VST3 ids gate everything below version 2, but nothing
+    // gates a blob one bump behind, which a project saved by the previous build
+    // is. See `load_persist` for why that price is paid rather than shimmed.
     let mut state = fresh();
     state.camera.yaw = 1.23;
     state.view.extent_sevens = 3;
