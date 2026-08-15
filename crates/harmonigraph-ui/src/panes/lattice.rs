@@ -43,12 +43,22 @@ pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64)
     }
     if response.double_clicked() {
         // Reset orbit/zoom, but keep the chosen projection: that's a view
-        // preference, not a navigation state.
+        // preference, not a navigation state. Home is the ORIGIN of the
+        // lattice, so the window's center goes back with the camera —
+        // otherwise a double-click on a scrolled view resets the camera into
+        // the middle of wherever it had scrolled to, which is not a reset.
         state.camera = Camera {
             projection: state.camera.projection,
             ..Default::default()
         };
+        state.view.center_threes = 0;
+        state.view.center_fives = 0;
     }
+    // The window's center follows the camera, so scrolling never leaves the
+    // reach the note names are chosen out of behind. Here rather than inside
+    // each gesture: it is idempotent, and one call cannot be the one a new
+    // gesture forgets. The interactive copy only — it writes shared state.
+    state.view.follow_camera(&mut state.camera);
 
     let background = state.background;
     let stats = Some(state.instruments.lattice_stats.clone());
@@ -80,10 +90,22 @@ pub(crate) fn draw_lattice(
     response: Option<&egui::Response>,
     stats: Option<std::sync::Arc<harmonigraph_render::LatticeStats>>,
 ) {
+    // The lattice this pane shows, which is a different window from the one
+    // the pane beside it shows and from the one the names are chosen out of —
+    // see `ViewConfig::scrolled`. Derived here, per copy and per frame, and
+    // never written back: the docked pane and the Video tab's preview both
+    // reach this function every frame at their own aspects.
+    let view = state.view.scrolled(&state.camera, rect.width() / rect.height().max(1.0));
+    // The overlay's node count, from the one place it exists. The docked copy
+    // alone writes it — see `SharedState::drawn_nodes`, and the `response`
+    // argument's own doc for why that flag is what identifies it.
+    if response.is_some() {
+        state.drawn_nodes = view.visible_count();
+    }
     let mut scene = derive_scene(
         &state.tracker,
         &state.tuning,
-        &state.view,
+        &view,
         &state.frame_params,
         state.camera,
         // Only the interactive copy has a hover to show: the preview's
@@ -126,8 +148,8 @@ pub(crate) fn draw_lattice(
     // so anything meant to sit ON TOP of the names has to be a second batch
     // rather than a later call into this one.
     let mut batch = crate::text::TextBatch::default();
-    if state.view.show_labels {
-        draw_node_labels(ui, rect, &scene, &state.view, &mut batch);
+    if view.show_labels {
+        draw_node_labels(ui, rect, &scene, &view, &mut batch);
     }
     // The badge is laid out here, before the names are handed over, though it
     // is DRAWN after them. Laying text out is what rasterizes glyphs into
@@ -637,7 +659,11 @@ mod tests {
         tracks(Camera::DEFAULT_DISTANCE, dialled);
         tracks(Camera::DEFAULT_DISTANCE * 0.5, dialled * 2.0);
         tracks(Camera::DEFAULT_DISTANCE * 2.0, dialled * 0.5);
-        tracks(Camera::DEFAULT_DISTANCE * 4.0, dialled * 0.25);
+        // The factor-of-four rung is taken zoomed IN rather than out: the far
+        // end of the zoom is `MAX_DISTANCE`, twice the default framing, and a
+        // distance past it is not a smaller label but the same one — the scale
+        // is read through the range the camera is navigable in.
+        tracks(Camera::DEFAULT_DISTANCE * 0.25, dialled * 4.0);
         // And the ladder is really there: a walk of nudges each too small to
         // see costs a handful of sizes to rasterize rather than one apiece.
         //
