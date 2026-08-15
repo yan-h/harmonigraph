@@ -293,7 +293,7 @@ fn resizing_the_analyzer_resizes_the_spectrogram_and_not_the_spectrum() {
     // the divider cuts — runs along the column's WIDTH, which is what a wider
     // window gives it more of.
     let pane = |state: &crate::SharedState| {
-        crate::pane_body(state, &crate::panes::Tab::Spectral)
+        pane_body(state, &crate::panes::Tab::Spectral)
             .expect("the Spectral pane should be visible in the default dock")
     };
     let handle = egui::Id::new(("spectral-split", 0usize));

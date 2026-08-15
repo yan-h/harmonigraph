@@ -1,6 +1,11 @@
-//! The performance overlay: a small corner HUD over the editor showing the
-//! frame rate, the process's memory, and the workload driving them — enough
-//! to see at a glance whether the plugin is working the machine hard.
+//! The performance overlay: a small HUD over the editor showing the frame
+//! rate, the process's memory, and the workload driving them — enough to see
+//! at a glance whether the plugin is working the machine hard.
+//!
+//! Where it sits is the user's, and nothing else's: it opens in the editor's
+//! bottom-right corner and is DRAGGED from there to wherever it is wanted,
+//! which is the only thing that ever moves it (see [`draw_overlay`]). The
+//! position outlives the session — `SharedState::perf_pos`.
 //!
 //! The picture is the whole of this module: which rows the HUD shows, and how
 //! they are painted. Everything the numbers are MADE of — the windows and
@@ -23,7 +28,7 @@
 
 use harmonigraph_perf::{memory_readout, PerfStats, Stage, BUILD_TAG, STAGES};
 
-/// Points between the overlay and the corner it sits in.
+/// Points between the overlay and the editor's corner it opens in.
 const OVERLAY_INSET: f32 = 8.0;
 
 /// The overlay's rows: `(depth, label, value, peak)`.
@@ -140,14 +145,35 @@ fn overlay_rows(perf: &PerfStats, detail: bool) -> Vec<(u8, &'static str, String
     rows
 }
 
-/// Draw the overlay in the top-right corner of `area` — a picture pane's
-/// body, or the editor clear of the tab bar when neither is on screen (see
-/// `perf_overlay_area`, which is where the choice and its reasons live). A
-/// floating, non-interactive panel so it never steals clicks from the view
-/// under it.
+/// The build row, laid out to `width` — the HUD's own grid width, so naming
+/// the build cannot widen the HUD.
+///
+/// Split out to take the tag as an ARGUMENT: `BUILD_TAG` is stamped from the
+/// branch this compiles on, so the wrap is only exercised at all on a branch
+/// whose name happens to be long. Nothing about the layout is decided here,
+/// which is why it can be handed a tag nobody would ever build under.
+fn tag_line(
+    ctx: &egui::Context,
+    tag: &str,
+    font: &egui::FontId,
+    color: egui::Color32,
+    width: f32,
+) -> std::sync::Arc<egui::Galley> {
+    ctx.fonts_mut(|f| f.layout(format!("build  {tag}"), font.clone(), color, width))
+}
+
+/// Draw the overlay over `editor`, at `pos` — dragging it writes the new
+/// position back through that handle, and nothing else in the tree moves it.
+///
+/// `None` is "never dragged", and only then does the HUD have a position of
+/// anyone else's choosing: the editor's bottom-right corner, inset, and read
+/// off the editor ALONE — no pane, no tab bar, nothing about the arrangement
+/// underneath it. That is where it OPENS, not where it belongs: the first drag
+/// makes the position the user's and it is honoured from then on.
 pub(crate) fn draw_overlay(
     ctx: &egui::Context,
-    area: egui::Rect,
+    editor: egui::Rect,
+    pos: &mut Option<egui::Pos2>,
     perf: &PerfStats,
     detail: bool,
 ) {
@@ -175,20 +201,6 @@ pub(crate) fn draw_overlay(
 
     let rows = overlay_rows(perf, detail);
 
-    // Painted straight onto a foreground layer rather than assembled from
-    // widgets inside an Area.
-    //
-    // The Area was already `interactable(false)`, which is enough to keep it
-    // out of `layer_id_at` — but every `ui.label` inside it still registered a
-    // widget rect, and those win the pointer regardless. The result was a dead
-    // zone the size of the HUD in the corner of the lattice: no scroll-to-zoom
-    // and no drag-to-orbit under it, for as long as the overlay was up. A
-    // readout that changes the thing it is measuring is worse than no readout.
-    // Nothing below allocates a widget, so nothing can take the pointer.
-    let painter = ctx.layer_painter(egui::LayerId::new(
-        egui::Order::Foreground,
-        egui::Id::new("perf_overlay"),
-    ));
     let layout = |text: &str, font: &egui::FontId, color: egui::Color32| {
         ctx.fonts_mut(|f| f.layout_no_wrap(text.to_owned(), font.clone(), color))
     };
@@ -284,18 +296,15 @@ pub(crate) fn draw_overlay(
     // Its OWN line rather than a row in the grid above: the tag is identity,
     // not a measurement, and a long branch name in the value column would
     // widen BOTH columns for every row. And WRAPPED to the width the grid
-    // already needs, so it cannot widen the HUD either — the overlay has to
-    // fit inside the analyzer pane, which is not always wide, and a branch
-    // name is arbitrarily long. A long one costs a second line, where there is
+    // already needs, so it cannot widen the HUD either: a branch name is
+    // arbitrarily long, and a HUD as wide as one is a slab across the picture
+    // it is measuring. A long one costs a second line instead, where there is
     // room to spare.
     let grid_width = lines
         .iter()
         .map(|parts| parts.iter().map(|(x, g)| x + g.rect.width()).fold(0.0f32, f32::max))
         .fold(0.0f32, f32::max);
-    let tag = ctx.fonts_mut(|f| {
-        f.layout(format!("build  {BUILD_TAG}"), mono.clone(), dim, grid_width)
-    });
-    lines.push(vec![(0.0, tag)]);
+    lines.push(vec![(0.0, tag_line(ctx, BUILD_TAG, &mono, dim, grid_width))]);
 
     let row_gap = 1.0 * scale;
     let width = lines
@@ -309,48 +318,92 @@ pub(crate) fn draw_overlay(
         + row_gap * lines.len().saturating_sub(1) as f32;
 
     let margin = egui::vec2(8.0, 6.0) * scale;
-    // Top-RIGHT of `area`, and clamped to it so a pane too narrow to hold the
-    // overlay shows its left edge rather than pushing the numbers off screen.
-    //
-    // Placed outright rather than anchored. Anchoring existed because a
-    // widget-built overlay only learns its own width after laying out, and the
-    // right edge has to stay put as the numbers change width underneath it.
-    // Measuring the galleys up front settles the size before anything is
-    // drawn, so the position is simply known.
-    // ...and never wider than the pane it hangs in. Clamping the left edge is
-    // not enough on its own: this is painted on a foreground layer whose clip
-    // is the whole screen, so nothing else stops a readout wider than its pane
-    // from crossing the separator and covering the settings column — including
-    // the collapse arrow at the left of every tab bar, which is the control
-    // that brings a folded pane back, and the thing the overlay's placement
-    // exists to stay off. The analyzer is the narrowest pane the default dock
-    // has, and a sideways fold can drive the window to its floor without anyone
-    // dragging it there.
-    //
-    // A readout too wide for its pane is cut off rather than moved or dropped.
-    // At a window that narrow no arrangement of it is readable, and the numbers
-    // are worth less than the controls underneath them.
+    // Sized from the galleys, which are measured before anything is drawn, so
+    // the HUD is placed outright rather than anchored: an Area told where its
+    // top-left goes, at a size it already knows.
     let size = egui::vec2(width, height) + margin * 2.0;
     let inset = OVERLAY_INSET * scale;
-    let size = egui::vec2(size.x.min((area.width() - inset * 2.0).max(0.0)), size.y);
-    let origin = egui::pos2(
-        (area.right() - inset - size.x).max(area.left()),
-        area.top() + inset,
+    // Where an undragged HUD opens — this function's docs say why it is this
+    // corner, and why it is a starting point rather than a rule.
+    let home = egui::pos2(
+        editor.right() - inset - size.x,
+        editor.bottom() - inset - size.y,
     );
-    let plate = egui::Rect::from_min_size(origin, size);
-    painter.rect_filled(plate, 4.0 * scale, egui::Color32::from_black_alpha(0xC0));
-    // The rows are laid out at their own width, which the clamp above does not
-    // change, so the plate is what holds them in.
-    let painter = painter.with_clip_rect(plate);
 
-    let mut y = origin.y + margin.y;
-    for parts in lines {
-        let row_height =
-            parts.iter().map(|(_, g)| g.rect.height()).fold(0.0f32, f32::max);
-        for (dx, galley) in parts {
-            painter.galley(egui::pos2(origin.x + margin.x + dx, y), galley, bright);
-        }
-        y += row_height + row_gap;
+    // Held inside the editor here, against the size measured THIS frame,
+    // rather than by the Area's own `constrain_to`. An Area measures its
+    // containment against the size it held last frame, so the frame a HUD
+    // loses twenty rows — the breakdown switched off — it is shoved that block
+    // of rows clear of the corner and snaps back on the next. The size is in
+    // hand right here, so the clamp is exact on the frame it happens.
+    //
+    // The clamp is on what is DRAWN and never on what is stored: a HUD pushed
+    // in by a window too small to hold it where it was dropped goes back there
+    // once the window has the room again.
+    let inside = |p: egui::Pos2| {
+        egui::pos2(
+            p.x.clamp(editor.left(), (editor.right() - size.x).max(editor.left())),
+            p.y.clamp(editor.top(), (editor.bottom() - size.y).max(editor.top())),
+        )
+    };
+    let at = inside(pos.unwrap_or(home));
+
+    // An Area, so the plate can be dragged. It registers exactly ONE widget
+    // rect — its own — because `allocate_space` takes layout room without
+    // interacting, and that is the difference that matters: assembled out of
+    // `ui.label`s, every row would register a rect of its own and win the
+    // pointer, and the HUD would be a dead zone for the lattice's
+    // scroll-to-zoom and drag-to-orbit whether or not anyone ever dragged it.
+    // It takes the pointer over the plate and nowhere else, and the way out
+    // from under it is the drag itself.
+    //
+    // The move is this function's rather than the Area's `movable`, which
+    // would place the plate from a position the clamp above never sees.
+    let area = egui::Area::new(egui::Id::new("perf_overlay"))
+        .order(egui::Order::Foreground)
+        .sense(egui::Sense::drag())
+        .fade_in(false)
+        // An Area constrains itself by DEFAULT, so this is the line that hands
+        // the clamp above its job rather than an omission — left on, the stale
+        // size wins and `inside` never decides anything.
+        .constrain(false)
+        .current_pos(at)
+        .show(ctx, |ui| {
+            // What `constrain_to` used to cover: a HUD too big for the window
+            // is cut off at the editor's edge rather than drawn over whatever
+            // is outside it.
+            ui.set_clip_rect(ui.clip_rect().intersect(editor));
+            let (_, plate) = ui.allocate_space(size);
+            let painter = ui.painter();
+            painter.rect_filled(plate, 4.0 * scale, egui::Color32::from_black_alpha(0xC0));
+
+            let mut y = plate.top() + margin.y;
+            for parts in lines {
+                let row_height =
+                    parts.iter().map(|(_, g)| g.rect.height()).fold(0.0f32, f32::max);
+                for (dx, galley) in parts {
+                    painter.galley(egui::pos2(plate.left() + margin.x + dx, y), galley, bright);
+                }
+                y += row_height + row_gap;
+            }
+        })
+        .response
+        .on_hover_and_drag_cursor(egui::CursorIcon::Grab);
+
+    // Written back only while it is dragged, so an untouched HUD goes on
+    // opening at `home` — and follows the corner as the window resizes —
+    // while a placed one is left exactly where it was put.
+    let grabbed_at = egui::Id::new("perf_overlay_grab");
+    if area.dragged() {
+        // Where the gesture started plus its whole travel, rather than a sum
+        // of per-frame deltas: egui calls a press a drag only once it has
+        // moved past a click's slop, and those first points are in the total
+        // but in no frame's delta. Stored UNCLAMPED, so a pointer that leaves
+        // the editor mid-gesture keeps the plate under it on the way back.
+        let from = ctx.data_mut(|data| *data.get_temp_mut_or::<egui::Pos2>(grabbed_at, at));
+        *pos = Some(from + area.total_drag_delta().unwrap_or_default());
+    } else {
+        ctx.data_mut(|data| data.remove::<egui::Pos2>(grabbed_at));
     }
 }
 
@@ -591,6 +644,41 @@ mod tests {
             );
         }
     }
+    /// The build tag wraps rather than widening the HUD, at any branch name.
+    ///
+    /// A branch name is arbitrarily long and the tag is the one row not sized
+    /// by the grid, so it is the one line that can push the HUD out to a slab
+    /// across the picture. Held with a tag far longer than anything that would
+    /// really be built, because the real [`BUILD_TAG`] is whatever branch this
+    /// compiles on: pinned against that, the assertion passes on a short name
+    /// whether or not the wrap is there at all, which is how this stopped
+    /// being checked.
+    #[test]
+    fn the_build_tag_wraps_instead_of_widening_the_hud() {
+        let ctx = crate::tests::probe::themed();
+        let font = egui::FontId::monospace(11.0);
+        let grid = 160.0;
+        let long = "worktree-a-branch-name-nobody-would-type-but-git-will-take @0123456";
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let tag = tag_line(ui.ctx(), long, &font, egui::Color32::WHITE, grid);
+            assert!(
+                tag.rect.width() <= grid,
+                "a {} pt tag ran past the {grid} pt grid: {:?}",
+                long.len(),
+                tag.rect,
+            );
+            assert!(tag.rect.height() > font.size, "a wrapped tag takes more than one line");
+            // ...and a tag that FITS is left on one line rather than broken up
+            // for the sake of it.
+            let short = tag_line(ui.ctx(), "main @0123456", &font, egui::Color32::WHITE, grid);
+            assert!(
+                short.rect.height() < tag.rect.height(),
+                "a tag that fits should stay on one line: {:?}",
+                short.rect,
+            );
+        });
+    }
+
     /// Labels and values must not collide, whatever the rows are called.
     ///
     /// The label column was a hardcoded seven characters until a row named
@@ -634,10 +722,19 @@ mod tests {
             Workload { animating: true, ..Default::default() },
         );
 
-        let output = ctx.run_ui(
-            egui::RawInput { screen_rect: Some(area), ..Default::default() },
-            |ui| draw_overlay(ui.ctx(), area, &perf, true), // detail on: the widest case
-        );
+        // TWO passes, and the second is the one read: an Area's opening pass
+        // is a sizing pass, which lays the contents out to measure them and
+        // paints nothing. The HUD is drawn from the pass after.
+        let mut pos = None;
+        let mut frame = || {
+            ctx.run_ui(
+                egui::RawInput { screen_rect: Some(area), ..Default::default() },
+                // Detail on: the widest case.
+                |ui| draw_overlay(ui.ctx(), area, &mut pos, &perf, true),
+            )
+        };
+        frame();
+        let output = frame();
         let mut texts: Vec<(egui::Rect, String)> = output
             .shapes
             .iter()

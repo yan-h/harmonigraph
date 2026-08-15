@@ -10,6 +10,23 @@ use crate::*;
 
 pub(super) use super::probe::{fresh, press};
 
+/// A docked tab's drawn surface, or `None` when it is not on screen — which
+/// is how a suite aims a gesture at a pane it can only name.
+///
+/// `viewport` is the tab BODY; the picture panes drop their margin, so it is
+/// exactly the drawn surface. `Rect::NOTHING` until the dock has laid out once
+/// (a first frame, or a freshly loaded layout) — and STALE while the leaf is
+/// collapsed, which is why the flag is checked rather than the rect: a folded
+/// leaf keeps the viewport it had when it was open.
+pub(super) fn pane_body(state: &SharedState, tab: &panes::Tab) -> Option<egui::Rect> {
+    let path = state.workspace.dock.find_tab(tab)?;
+    let egui_dock::Node::Leaf(leaf) = &state.workspace.dock[path.surface][path.node] else {
+        return None;
+    };
+    (!leaf.collapsed && leaf.active == path.tab && leaf.viewport.is_positive())
+        .then_some(leaf.viewport)
+}
+
 #[derive(Default)]
 pub(super) struct RecordingBackend {
     pub(super) sets: std::cell::RefCell<Vec<(params::ParamKey, f32)>>,
@@ -186,13 +203,11 @@ impl DockHarness {
     /// Left, the default orientation, runs depth rightward.
     pub(super) fn spectral_grab_at(&self, state: &SharedState, depth: f32) -> egui::Pos2 {
         // Asked of the Spectral pane BY NAME, so a dock that has taken it off
-        // screen trips this rather than aiming the drag somewhere else.
-        // `perf_overlay_area` answers the same question and is the wrong
-        // oracle for it: it now falls back to the Lattice pane's body, which
-        // is a perfectly good rect that a drag orbits the camera in — the
-        // grab would land in the wrong pane and the test would fail three
-        // asserts later, naming the analyzer.
-        let rect = crate::pane_body(state, &panes::Tab::Spectral)
+        // screen trips this rather than aiming the drag somewhere else — at
+        // the Lattice's body, say, which is a perfectly good rect that a drag
+        // orbits the camera in, so the grab would land in the wrong pane and
+        // the test would fail three asserts later, naming the analyzer.
+        let rect = pane_body(state, &panes::Tab::Spectral)
             .expect("the Spectral pane should be visible in the default dock");
         rect.lerp_inside(egui::vec2(depth, 0.5))
     }

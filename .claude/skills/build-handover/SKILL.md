@@ -74,12 +74,13 @@ branch with its `worktree-` prefix stripped, so it is exactly the argument
 `./load-plugin.sh <branch>` takes. It is stamped at compile time by
 `crates/harmonigraph-perf/build.rs`. The overlay carrying it ships OFF, so reading
 the tag takes one tick first: **System pane → Performance → Performance overlay**.
-Then it is in the corner of the Analyzer pane — or of the Lattice, which is where
-the overlay goes when the Analyzer is folded or off screen.
+It opens in the editor's bottom-right corner and is DRAGGED from there, so
+wherever it was last left is where it is — no session can say which corner to
+look in.
 
-A session handing over a build should say so rather than say "look at the
-corner", because an empty corner is exactly what a swap that did not happen also
-looks like.
+A session handing over a build should say what the tag will read rather than say
+"look at the overlay", because a HUD that says nothing new is exactly what a swap
+that did not happen also looks like.
 
 This exists because a swap can silently not have happened: no reactivate, a build
 that landed in a different worktree, the wrong branch named, or a build that
