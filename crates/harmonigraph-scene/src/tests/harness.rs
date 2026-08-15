@@ -11,7 +11,7 @@ pub(super) fn scene_of(
     frame: &FrameParams,
     now: f64,
 ) -> Scene {
-    derive_scene(tracker, tuning, view, frame, Camera::default(), None, now)
+    derive_scene(tracker, tuning, view, &view.reach(), frame, Camera::default(), None, now)
 }
 
 /// [`ViewConfig::default`] with the note envelope pinned flat: a straight-line

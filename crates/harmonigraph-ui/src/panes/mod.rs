@@ -306,26 +306,32 @@ pub(super) fn display_note_name(
     pos.respell(tempered).note_name()
 }
 
-/// The visible lattice node whose pitch class most closely matches `pc`
-/// under the current tuning (several can match when the tolerance is wide).
+/// The node in `window` whose pitch class most closely matches `pc` under the
+/// current tuning (several can match when the tolerance is wide).
 ///
-/// The question is "is this PLAYED pitch on the lattice, and where", and
-/// every pane that asks it uses this, so they can't disagree: the Notes
-/// pane's node column, and the analyzer's red band for a voice with no node
-/// to light. `Tuning::tolerance` is load-bearing in both — a note off every
-/// node is a note the lattice cannot show, and saying so is the point.
+/// The question is "is this PLAYED pitch on the lattice, and where", and every
+/// pane that asks it uses this, so they can't disagree: the Notes pane's node
+/// column, and the analyzer's red band for a voice with no node to light.
+/// `Tuning::tolerance` is load-bearing in both — a note off every node is a
+/// note the lattice cannot show, and saying so is the point.
+///
+/// `window` is [`SharedState::shown`](crate::SharedState::shown) for both of
+/// them, which is the picture's own window and not the view's reach. Taking a
+/// window rather than a view is what makes that a choice a caller has to make
+/// rather than one it can fall into.
 ///
 /// One neighbour is close enough to be reached for by mistake and does not
 /// want the tolerance: [`names`](crate::panes::spectral::names)'s `naming_node`
-/// takes the same played
-/// pitch but asks what to CALL it, where a collapsed equal temperament makes
-/// the choice AMONG matches the whole problem rather than an afterthought.
-pub(super) fn nearest_visible_node(
-    view: &harmonigraph_scene::ViewConfig,
+/// takes the same played pitch but asks what to CALL it, where a collapsed
+/// equal temperament makes the choice AMONG matches the whole problem rather
+/// than an afterthought.
+pub(super) fn nearest_shown_node(
+    window: &harmonigraph_scene::DrawnWindow,
     tuning: &harmonigraph_core::Tuning,
     pc: harmonigraph_core::PitchClass,
 ) -> Option<harmonigraph_core::LatticePos> {
-    view.visible_positions()
+    window
+        .positions()
         .filter(|&pos| tuning.matches(pc, tuning.pitch_class(pos)))
         .min_by_key(|&pos| pc.distance_to(tuning.pitch_class(pos)))
 }

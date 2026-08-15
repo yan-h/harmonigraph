@@ -6,7 +6,7 @@ use crate::camera::Camera;
 use crate::color::{idle_color, pitch_lut_color, pitch_ramp_lut};
 use crate::octaves::octave_layout;
 use crate::trail::TrailField;
-use crate::view::{FrameParams, ViewConfig};
+use crate::view::{DrawnWindow, FrameParams, ViewConfig};
 use crate::{
     lattice_to_world, EdgeInstance, NodeInstance, Pulse, Scene,
     MARK_DELAY_MAX, NODE_RADIUS_FACTOR, OCTAVE_SLOTS,
@@ -153,20 +153,28 @@ fn marks(
 
 /// Build the frame's scene. `hovered` comes from last frame's picking (the
 /// usual immediate-mode one-frame latency, invisible in practice).
+///
+/// `window` is which nodes to build and `view` is how they look — the split
+/// that lets two panes draw one view at two aspects. It is the pane's own
+/// ([`ViewConfig::scrolled`]); handing it the view's naming
+/// [`reach`](ViewConfig::reach) instead draws a picture that is subtly the
+/// wrong size, which is why the two are different types.
+#[allow(clippy::too_many_arguments)]
 pub fn derive_scene(
     tracker: &NoteTracker,
     tuning: &Tuning,
     view: &ViewConfig,
+    window: &DrawnWindow,
     frame: &FrameParams,
     camera: Camera,
     hovered: Option<LatticePos>,
     now: f64,
 ) -> Scene {
-    let mut nodes = Vec::with_capacity(view.visible_count());
+    let mut nodes = Vec::with_capacity(window.count());
     // Kept parallel to `nodes` for the trail, which matches remembered
     // pitches against every node afterwards and would otherwise have to
     // recompute each node's pitch class to do it.
-    let mut node_pcs = Vec::with_capacity(view.visible_count());
+    let mut node_pcs = Vec::with_capacity(window.count());
     let center = view.center();
     // What a node with no voice on it is colored: read by nothing that draws
     // while it stays that way -- an idle node paints no pixel -- so this is
@@ -295,7 +303,7 @@ pub fn derive_scene(
         })
         .collect();
 
-    for pos in view.visible_positions() {
+    for pos in window.positions() {
         let node_pc = tuning.pitch_class(pos);
         let node_cents = node_pc.to_cents();
         // The octaves of THIS pitch class nearest the center pitch, which is
@@ -493,7 +501,7 @@ pub fn derive_scene(
         field.apply(&mut nodes, &node_pcs, tuning);
     }
 
-    let grid = derive_grid(view, &nodes);
+    let grid = derive_grid(view, window, &nodes);
 
     // Core/outer geometry policy: the core is a plain radius the shader
     // reads (0 = off), with solidity riding alongside; the outer band is
@@ -588,32 +596,20 @@ const GRID_LIT_OPACITY: f32 = 0.85;
 /// visibly, by being the same site a step apart, and the line would only
 /// say so twice. Lit or not, a link keeps the lattice's own color — it says
 /// where a note hangs from, not what the note is.
-pub(crate) fn derive_grid(view: &ViewConfig, nodes: &[NodeInstance]) -> Vec<EdgeInstance> {
+pub(crate) fn derive_grid(
+    view: &ViewConfig,
+    window: &DrawnWindow,
+    nodes: &[NodeInstance],
+) -> Vec<EdgeInstance> {
     let inset = view.spacing * NODE_RADIUS_FACTOR * view.grid_inset.max(0.0);
     let base = crate::skin::grid_line();
-    // `nodes` is exactly `view.visible_positions()` in order: a dense
-    // row-major grid (threes outer, fives, sevens inner). So a neighbor's
-    // index is plain offset arithmetic — no per-frame HashMap build and no
-    // hashing per lookup. Returns None for positions outside the window. The
-    // explicit per-axis bounds are what keep an out-of-range delta from
-    // aliasing onto a different node's slot.
-    let min_threes = view.center_threes - view.extent_threes;
-    let min_fives = view.center_fives - view.extent_fives;
-    let min_sevens = view.center_sevens - view.extent_sevens;
-    let span_fives = 2 * view.extent_fives + 1;
-    let span_sevens = 2 * view.extent_sevens + 1;
+    // `nodes` is exactly `window.positions()` in order, so a neighbor's index
+    // is plain offset arithmetic — no per-frame HashMap build and no hashing
+    // per lookup. `index_of` is that arithmetic and owns the bounds check with
+    // it, which is what keeps an out-of-range step on one axis from aliasing
+    // onto a different node's slot.
     let node_at = |p: LatticePos| -> Option<&NodeInstance> {
-        let (dt, df, ds) = (p.threes - min_threes, p.fives - min_fives, p.sevens - min_sevens);
-        if dt < 0
-            || df < 0
-            || ds < 0
-            || dt > 2 * view.extent_threes
-            || df > 2 * view.extent_fives
-            || ds > 2 * view.extent_sevens
-        {
-            return None;
-        }
-        nodes.get(((dt * span_fives + df) * span_sevens + ds) as usize)
+        window.index_of(p).and_then(|i| nodes.get(i))
     };
     // Upper bound: three +1 axis-steps per node.
     let mut grid = Vec::with_capacity(nodes.len() * 3);
@@ -665,15 +661,9 @@ pub(crate) fn derive_grid(view: &ViewConfig, nodes: &[NodeInstance]) -> Vec<Edge
                 // one nearer home flips with the side of the axis, and so
                 // does which direction "beyond" runs.
                 let (beyond, toward_home) = if p.sevens >= view.center_sevens {
-                    (
-                        p.sevens + 1..=view.center_sevens + view.extent_sevens,
-                        view.center_sevens..=p.sevens,
-                    )
+                    (p.sevens + 1..=window.max.sevens, view.center_sevens..=p.sevens)
                 } else {
-                    (
-                        view.center_sevens - view.extent_sevens..=p.sevens,
-                        p.sevens + 1..=view.center_sevens,
-                    )
+                    (window.min.sevens..=p.sevens, p.sevens + 1..=view.center_sevens)
                 };
                 // Inclusive of the link's own near end: a note directly on
                 // top of a sounding one needs no line at all.

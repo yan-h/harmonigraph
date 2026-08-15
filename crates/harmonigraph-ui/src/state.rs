@@ -8,7 +8,7 @@ use egui_dock::{DockState, NodeIndex};
 use harmonigraph_core::{Comma, LatticePos, NoteTracker, PitchClass, Tuning};
 use harmonigraph_perf::{PerfStats, ShellTimings};
 use harmonigraph_render::wgpu::TextureFormat;
-use harmonigraph_scene::{Camera, FrameParams, ViewConfig};
+use harmonigraph_scene::{Camera, DrawnWindow, FrameParams, ViewConfig};
 
 use crate::{fold, panes, text};
 use crate::{AudioSpectrum, RenderConfig, RenderProgress, SpectrumConfig, WholeSong};
@@ -111,21 +111,36 @@ pub struct SharedState {
     /// it wrote a node the pointer had only landed near. Nothing outside
     /// [`crate::panes::lattice`] should write this.
     pub hovered: Option<LatticePos>,
-    /// How many nodes the docked lattice built last frame — the perf
-    /// overlay's node count.
+    /// The block of lattice the docked pane drew LAST frame, for the readers
+    /// that have to say what the picture is showing — the analyzer's red "off
+    /// the lattice" band, the Notes pane's node column, and the name a pitch
+    /// gets when the reach cannot spell it. `None` until a lattice pane has
+    /// drawn one; [`shown`](Self::shown) is what to read, and it falls back to
+    /// the view's reach.
     ///
     /// Reported rather than computed from the view, because the view holds no
-    /// number to compute it from: the drawn window is derived per pane from
-    /// that pane's own aspect
-    /// ([`harmonigraph_scene::ViewConfig::scrolled`]), so the only place the
-    /// count exists is inside the draw that built it.
+    /// window to compute it from: it is derived per pane from that pane's own
+    /// aspect ([`harmonigraph_scene::ViewConfig::scrolled`]), so the only
+    /// place it exists is inside the draw that built it.
+    ///
+    /// LAST frame's, and that is what makes it safe to read from another pane:
+    /// the dock draws its panes in whatever order the user has arranged them,
+    /// so a band asking about THIS frame would answer from the reach or from
+    /// the window depending on where the lattice sits in the layout. A frame
+    /// of lag on a window that only moves with the camera is invisible; an
+    /// answer that changes with the dock arrangement is not.
     ///
     /// The DOCKED copy alone. The Video tab's preview is a second lattice at
-    /// a second aspect, and reporting its count as the lattice's would make
-    /// the overlay's number jump with a tab that is not the one being
-    /// measured — the same argument that keeps the preview out of the GPU
-    /// timing slot.
-    pub drawn_nodes: usize,
+    /// a second aspect, and letting it publish would make these answers jump
+    /// with a tab that is not the one being read — the same argument that
+    /// keeps the preview out of the GPU timing slot.
+    pub drawn: Option<DrawnWindow>,
+    /// What the docked lattice has published so far THIS frame, rotated into
+    /// [`drawn`](Self::drawn) by `begin_frame`. The perf overlay's node count
+    /// reads it directly, because that read happens after every pane has
+    /// drawn and a diagnostic holding its last good reading is the one that
+    /// misleads.
+    pub drawn_this_frame: Option<DrawnWindow>,
     pub console: Console,
     /// Surface format of the shell's swapchain; the lattice render pipeline
     /// must match it.
@@ -610,7 +625,8 @@ impl SharedState {
             frame_params: FrameParams::default(),
             camera: Camera::default(),
             hovered: None,
-            drawn_nodes: 0,
+            drawn: None,
+            drawn_this_frame: None,
             console: Console::default(),
             target_format,
             background: harmonigraph_scene::skin::panel_color(),
@@ -958,6 +974,27 @@ pub fn render_config_from_persist(serialized: &str) -> Option<RenderConfig> {
 }
 
 impl SharedState {
+    /// The block of lattice the picture is currently showing, which is what
+    /// every "is this pitch on the lattice" question has to be asked of.
+    ///
+    /// Three panes ask it and they must agree, because they are all describing
+    /// the same picture: the analyzer's red band says a sounding note has no
+    /// node, the Notes pane's column says which node, and the analyzer's name
+    /// falls back to equal temperament when there is none. Asking the view's
+    /// REACH instead — which is what they all did — makes them contradict what
+    /// the lattice is drawing, because the drawn window is the camera's and
+    /// runs wider than the reach under everything but cabinet: at 16:9, fully
+    /// zoomed out, perspective draws 73% of its nodes outside it, so a lit
+    /// node could wear a red band down the spectrum.
+    ///
+    /// The reach is the fallback rather than the answer, for the frame before
+    /// the first lattice draw and for a layout with no lattice pane in it at
+    /// all. There is no picture to describe there, and the reach is the only
+    /// window that does not depend on one.
+    pub fn shown(&self) -> DrawnWindow {
+        self.drawn.unwrap_or_else(|| self.view.reach())
+    }
+
     /// Tell the state what ground the lattice is being composited over (see
     /// the `background` field). Takes sRGB bytes, the form every shell
     /// already has its background color in, so no shell needs glam to say it.

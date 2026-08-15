@@ -41,7 +41,7 @@ pub use octaves::{
     MIN_EXTRA_SIZE, MIN_SPAN, OCTAVE_SLOTS, PITCH_CEIL, PITCH_FLOOR,
 };
 pub use style::{Gradient, Pulse, SevensLabel};
-pub use view::{FrameParams, ViewConfig};
+pub use view::{DrawnWindow, FrameParams, ViewConfig};
 
 use glam::{Vec3, Vec4};
 use harmonigraph_core::LatticePos;
@@ -67,21 +67,29 @@ const NODE_RADIUS_FACTOR: f32 = 0.25;
 /// Which is worth being exact about, because it is the whole reason this
 /// exists. Tilt a camera toward the sheet's own plane and the sheet goes
 /// edge-on: the far half of an unbounded plane is genuinely on screen, in a
-/// band a few pixels tall. Orthographic at the pitch limit asks for half a
-/// million nodes that way, perspective for ten million. There is nothing to
+/// band a few pixels tall. At the pitch limit on a 16:9 pane with the sheets
+/// on, orthographic asks for 261837 nodes that way and perspective for
+/// 604989; swept over the whole camera space a flat perspective window runs to
+/// 26 million at 16:9 and past three billion at 2.4:1. There is nothing to
 /// draw there and no window that would be right.
 ///
 /// Cabinet has no such camera — it faces the sheet by construction, whatever
 /// the orbit says — so its window is bounded at every setting, and this sits
-/// above the largest one a pane of ordinary shape reaches: 19809 nodes, at
+/// above the largest one a pane of ordinary shape reaches: 19251 nodes, at
 /// 3:1, fully zoomed out, nine sheets deep, at cavalier scale. Bounded is not
 /// the same as under the cap, and the difference is measured rather than
-/// assumed — past about 3.5:1 with full depth cabinet does reach this, and
+/// assumed — past about 3.3:1 with full depth cabinet does reach this, and
 /// there is a pane that gets there without hand-editing anything, since
 /// `Layout::split` will give the lattice a fifth of a 21:9 frame. What the
-/// trim costs there is 160 nodes at 4:1 and 4366 at 6:1, off all four edges.
-/// A cap that covered it would have to be three times this one, for a band of
-/// lattice eight steps tall.
+/// trim costs there is 5634 nodes at 4:1 and 15912 at 6:1, off all four
+/// edges. A cap that covered it would have to be twice this one, for a band
+/// of lattice eight steps tall.
+///
+/// Cabinet's figures are the same under a window with bounds of its own as
+/// under the mirrored one it replaced — measured equal at every aspect, depth
+/// and shear, because a cabinet camera's view of the sheet is symmetric about
+/// the origin to begin with. It is perspective that the bounds save, and they
+/// save it 2.7x at a middling tilt.
 ///
 /// The cost it is holding: `derive_scene` with ten voices held takes 0.02ms
 /// over 273 nodes, 0.06ms over 875 (a 16:9 pane fully zoomed out, flat), and

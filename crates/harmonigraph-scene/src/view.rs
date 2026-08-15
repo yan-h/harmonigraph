@@ -17,9 +17,133 @@ const MAX_DRAWN_EXTENT: i32 = 4096;
 /// How far from C the window's center may sit. Nothing musical is out here —
 /// a billion fifths is not a pitch anyone reaches by scrolling — so this is
 /// the bound that keeps `center + extent` inside `i32` for every reader of
-/// [`ViewConfig::visible_positions`], with room to spare for the widest
-/// extent [`MAX_DRAWN_EXTENT`] allows.
+/// [`ViewConfig::reach`], with room to spare for the widest extent
+/// [`MAX_DRAWN_EXTENT`] allows.
 const MAX_CENTER: i32 = 1 << 30;
+
+/// A block of lattice positions, as explicit inclusive bounds.
+///
+/// Two of these are in play and they answer different questions: the DRAWN
+/// window one pane builds from its camera ([`ViewConfig::scrolled`]), and the
+/// naming REACH the whole UI shares ([`ViewConfig::reach`]). A type of their
+/// own is what keeps them apart — #357 passed them as two `ViewConfig`s, and
+/// its own coverage test then projected through the reach while the renderer
+/// drew through the derived window, where the two offsets cancelled and it
+/// passed over a picture with sixty-four holes in it.
+///
+/// Bounds rather than `center ± extent`, because what a camera shows is not
+/// centered on anything. Tilt a perspective camera and the sheet runs away
+/// from the eye on one side and off the bottom of the pane on the other, so a
+/// window forced symmetric about the origin draws a block that is never on
+/// screen: at 40° on a 16:9 pane it asks for 25921 nodes where the camera can
+/// see 9494. Orthographic and cabinet are symmetric already — their rectangles
+/// are square with the view axis — so this axis of the fix is perspective's
+/// alone, and it is worth about 2.7x there.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DrawnWindow {
+    /// Inclusive, in absolute lattice steps from C — not offsets from a
+    /// center, so a reader needs nothing else to know what is in here.
+    pub min: LatticePos,
+    pub max: LatticePos,
+}
+
+impl DrawnWindow {
+    /// Every position in the block, threes outer and sevens inner.
+    ///
+    /// The order is load-bearing: [`index_of`](Self::index_of) inverts it, so
+    /// `derive_grid` can find a neighbour by arithmetic instead of hashing.
+    pub fn positions(&self) -> impl Iterator<Item = LatticePos> {
+        coords::positions_within(
+            self.min.threes..=self.max.threes,
+            self.min.fives..=self.max.fives,
+            self.min.sevens..=self.max.sevens,
+        )
+    }
+
+    /// How many positions [`positions`](Self::positions) yields, so a
+    /// per-frame buffer can preallocate instead of growing through
+    /// reallocations.
+    pub fn count(&self) -> usize {
+        self.span(|p| p.threes) * self.span(|p| p.fives) * self.span(|p| p.sevens)
+    }
+
+    /// Where `pos` lands in [`positions`](Self::positions), or `None` when it
+    /// is outside the block.
+    ///
+    /// Each axis is bounds-checked separately, which is the whole of what
+    /// keeps an out-of-range step on one axis from aliasing onto a different
+    /// node's slot.
+    pub fn index_of(&self, pos: LatticePos) -> Option<usize> {
+        let axis = |v: i32, lo: i32, hi: i32| (v >= lo && v <= hi).then(|| (v - lo) as usize);
+        let t = axis(pos.threes, self.min.threes, self.max.threes)?;
+        let f = axis(pos.fives, self.min.fives, self.max.fives)?;
+        let s = axis(pos.sevens, self.min.sevens, self.max.sevens)?;
+        Some((t * self.span(|p| p.fives) + f) * self.span(|p| p.sevens) + s)
+    }
+
+    pub fn contains(&self, pos: LatticePos) -> bool {
+        self.index_of(pos).is_some()
+    }
+
+    /// One axis's inclusive span, floored at zero so a reversed pair counts as
+    /// empty rather than wrapping a `usize`.
+    fn span(&self, axis: fn(LatticePos) -> i32) -> usize {
+        (axis(self.max) - axis(self.min) + 1).max(0) as usize
+    }
+
+    /// Shrink toward `center` until the block holds no more than
+    /// [`MAX_DRAWN_NODES`], keeping its shape: both sheet axes are scaled by
+    /// the same factor, so a wide window stays wide and the picture loses an
+    /// even border rather than collapsing along one axis.
+    ///
+    /// Toward the CENTER rather than toward the block's own middle, and that
+    /// is the difference between trimming the horizon and trimming the
+    /// picture. `follow_camera` keeps the camera's target within one cell of
+    /// the center, so the center is what the eye is on; under the tilted
+    /// camera that reaches this cap at all, the block's own middle is way out
+    /// in the sub-pixel far field.
+    ///
+    /// Only [`ViewConfig::scrolled`] can reach a block this large, and only
+    /// from a camera the picture is already degenerate under — see
+    /// [`MAX_DRAWN_NODES`] for what the cap is protecting.
+    fn fit_to_node_budget(&mut self, center: LatticePos) {
+        let count = self.count();
+        if count <= MAX_DRAWN_NODES {
+            return;
+        }
+        // Both sheet axes at once, by the square root of how far over budget
+        // the count is — the count goes as their product, so that is the
+        // factor that lands near the cap in one step whatever shape the block
+        // is. The sevens axis is left alone: it is a setting rather than a
+        // consequence of the camera, and it is at most nine sheets.
+        let shrink = (MAX_DRAWN_NODES as f32 / count as f32).sqrt();
+        let pull = |bound: i32, c: i32| c + ((bound - c) as f32 * shrink) as i32;
+        self.min.threes = pull(self.min.threes, center.threes);
+        self.max.threes = pull(self.max.threes, center.threes);
+        self.min.fives = pull(self.min.fives, center.fives);
+        self.max.fives = pull(self.max.fives, center.fives);
+        // The step above lands within a node or two of the cap rather than
+        // exactly on it (each axis carries a `+1` that does not scale), so the
+        // cap is finished by hand — a step at a time off the longer axis, from
+        // whichever of its ends is farther from the center, which is the end
+        // with less on it worth seeing.
+        while self.count() > MAX_DRAWN_NODES {
+            let (lo, hi, c) = if self.span(|p| p.fives) >= self.span(|p| p.threes) {
+                (&mut self.min.fives, &mut self.max.fives, center.fives)
+            } else {
+                (&mut self.min.threes, &mut self.max.threes, center.threes)
+            };
+            if lo == hi {
+                break;
+            }
+            if c - *lo >= *hi - c {
+                *lo += 1;
+            } else {
+                *hi -= 1;
+            }
+        }
+    }
+}
 
 /// Purely-visual settings (not host-automatable parameters). The UI layer
 /// persists these separately from plugin parameters.
@@ -33,9 +157,9 @@ pub struct ViewConfig {
     pub spacing: f32,
     /// How far out along the fifths and thirds axes a played pitch is looked
     /// for a name and a node — the REACH, not a boundary, and not what is
-    /// drawn: see [`visible_positions`](Self::visible_positions) for who reads
-    /// them, and [`scrolled`](Self::scrolled) for the window the picture uses
-    /// instead. The lattice itself has no end along these two.
+    /// drawn: see [`reach`](Self::reach) for who reads them, and
+    /// [`scrolled`](Self::scrolled) for the window the picture uses instead.
+    /// The lattice itself has no end along these two.
     ///
     /// No bars: the drawn window answers to the camera now, so a bar here
     /// would look like it sets how much lattice there is while setting only
@@ -637,18 +761,26 @@ impl ViewConfig {
         self.mark_thickness > 0.0 && (self.mark_melody || self.mark_bass)
     }
 
-    /// This view as one pane's viewport shows it: the same settings with the
-    /// fifths and thirds EXTENTS replaced by what the camera is actually
-    /// looking at, at `aspect`. `derive_scene` is handed the result, and it is
-    /// what makes the sheet scroll without end — pan far enough and the window
-    /// has walked with you, so there is no edge to reach.
+    /// The block of lattice one pane's viewport shows: what the camera is
+    /// actually looking at, at `aspect`. `derive_scene` is handed the result,
+    /// and it is what makes the sheet scroll without end — pan far enough and
+    /// the window has walked with you, so there is no edge to reach.
     ///
-    /// Extents only. The window's center is not this function's to set: the
-    /// block `derive_scene` builds is pinned to the world origin, so a center
-    /// chosen here would relabel the pitches without moving the picture. What
-    /// keeps the picture under the camera is
+    /// A [`DrawnWindow`] and not a second [`ViewConfig`], because it is not a
+    /// view: it says which nodes to build and nothing about how they look, and
+    /// the settings it would otherwise carry a copy of are the ones every pane
+    /// shares. The type is also what keeps it from being handed to a reader
+    /// that wanted the naming [`reach`](Self::reach); see [`DrawnWindow`] for
+    /// the picture that mix-up drew.
+    ///
+    /// The view's CENTER is not this function's to move: the block
+    /// `derive_scene` builds is pinned to the world origin, so a center chosen
+    /// here would relabel the pitches without moving the picture. What keeps
+    /// the picture under the camera is
     /// [`follow_camera`](Self::follow_camera), which moves the center and the
-    /// camera as one.
+    /// camera as one. The bounds here are absolute lattice positions about
+    /// that center, and they are LOPSIDED wherever the camera's view of the
+    /// sheet is — which under perspective is everywhere but dead flat.
     ///
     /// Per DRAW, never written back into the persisted view, and that is the
     /// contract rather than a style: two live copies of the lattice are drawn
@@ -672,20 +804,34 @@ impl ViewConfig {
     /// one camera that does that — and it is a degenerate matrix, not a steep
     /// camera). Drawing the reach window there is a picture; an arbitrary huge
     /// number is a stall.
-    pub fn scrolled(&self, camera: &Camera, aspect: f32) -> ViewConfig {
+    pub fn scrolled(&self, camera: &Camera, aspect: f32) -> DrawnWindow {
+        let center = self.center();
+        let sevens = self.extent_sevens.max(0);
+        let flat = |threes: i32, fives: i32| DrawnWindow {
+            min: LatticePos::new(
+                center.threes - threes,
+                center.fives - fives,
+                center.sevens - sevens,
+            ),
+            max: LatticePos::new(
+                center.threes + threes,
+                center.fives + fives,
+                center.sevens + sevens,
+            ),
+        };
         let spacing = self.spacing;
         // A spacing of zero divides by nothing and a NaN one poisons the
         // rectangle; both leave every step at the same place, where one node
         // is the whole picture there is to draw.
         if spacing.is_nan() || spacing <= 0.0 {
-            return ViewConfig { extent_threes: 0, extent_fives: 0, ..self.clone() };
+            return flat(0, 0);
         }
         // The slab the sheets occupy, in world depth about the home sheet —
         // `lattice_to_world` puts the sevens axis on z, and the window's
         // center sheet is drawn at the origin.
-        let depth = self.extent_sevens.max(0) as f32 * spacing;
+        let depth = sevens as f32 * spacing;
         let Some((min, max)) = camera.visible_world_bounds(aspect, -depth, depth) else {
-            return self.clone();
+            return self.reach();
         };
 
         // Margin enough that a node arrives whole and off-pane rather than
@@ -693,77 +839,68 @@ impl ViewConfig {
         // is drawn beside the node and so reaches onto the pane from a node
         // that is not on it.
         let margin = spacing * (1.0 + NODE_RADIUS_FACTOR);
-        // Measured from the WORLD ORIGIN, not from the rectangle's own center,
-        // and that is the whole of what makes the window right: `derive_scene`
-        // draws every node at `(pos - center) * spacing`, so the block it
-        // builds is always centered on the origin and spans `±extent`
-        // whatever the center says. Moving the center RELABELS which pitches
-        // those positions carry; it does not move the block. An extent taken
-        // from the rectangle's half-width therefore covers the rectangle only
-        // where the rectangle is already centered on the origin — true of
-        // cabinet, which faces the sheet, and false of a tilted camera, whose
-        // rectangle sits several steps to one side. What that cost was is
-        // nodes missing along the far edge, in a picture nowhere near the node
-        // cap: holes, not a trim.
+        // Each end of the rectangle taken on its own, in steps from the WORLD
+        // ORIGIN — which is where `derive_scene` draws the center node, so a
+        // world coordinate divided by the spacing IS an offset from the
+        // center, and the block is anchored where the picture is.
         //
-        // Saturating, so an enormous rectangle lands on `i32::MAX` and is
-        // capped below rather than wrapping to a negative extent. (A NaN
-        // casts to 0, which is a single node — also drawable.)
-        let reach = |lo: f32, hi: f32| {
-            (((lo.abs().max(hi.abs()) + margin) / spacing).ceil() as i32).clamp(0, MAX_DRAWN_EXTENT)
+        // Taking each end separately is the whole of what keeps the block off
+        // the far field. A single extent per axis has to cover the farther end
+        // and then mirrors it onto the nearer one, drawing a second copy of
+        // the far reach behind the camera that no pane ever shows; see
+        // [`DrawnWindow`] for what that costs under perspective.
+        //
+        // Saturating, so an enormous rectangle lands on the extent bound
+        // rather than wrapping. (A NaN casts to 0, which is the center node —
+        // also drawable.)
+        let offset = |world: f32, round: fn(f32) -> f32| {
+            let steps = round(world / spacing);
+            let steps = if steps.is_nan() { 0 } else { steps as i32 };
+            steps.clamp(-MAX_DRAWN_EXTENT, MAX_DRAWN_EXTENT)
         };
-        // World x is the thirds axis and world y the fifths one, which is the
+        // World x is the fifths axis and world y the thirds one, which is the
         // one place that mapping has to be undone rather than applied.
         //
-        // No center is derived here either, for the same reason: it would be
-        // a relabeling the picture cannot show, and it is not free — under a
-        // tilted camera the rectangle's center is a multi-step quantity that
-        // moves with every pan and zoom, so rounding it to a step made the
-        // pitch drawn at a fixed point on screen JUMP a cell, several times
-        // per drag. The center is [`follow_camera`](Self::follow_camera)'s
-        // alone, which moves it and the camera together.
-        let mut view = ViewConfig {
-            extent_fives: reach(min.x, max.x),
-            extent_threes: reach(min.y, max.y),
-            ..self.clone()
+        // No center is derived here, and that is deliberate rather than an
+        // omission: it would be a relabeling the picture cannot show, and it
+        // is not free — under a tilted camera the rectangle's center is a
+        // multi-step quantity that moves with every pan and zoom, so rounding
+        // it to a step made the pitch drawn at a fixed point on screen JUMP a
+        // cell, several times per drag. The center is
+        // [`follow_camera`](Self::follow_camera)'s alone, which moves it and
+        // the camera together. Only the BOUNDS move here.
+        let mut window = DrawnWindow {
+            min: LatticePos::new(
+                center.threes + offset(min.y - margin, f32::floor),
+                center.fives + offset(min.x - margin, f32::floor),
+                center.sevens - sevens,
+            ),
+            max: LatticePos::new(
+                center.threes + offset(max.y + margin, f32::ceil),
+                center.fives + offset(max.x + margin, f32::ceil),
+                center.sevens + sevens,
+            ),
         };
-        view.fit_to_node_budget();
-        view
+        window.fit_to_node_budget(center);
+        window
     }
 
-    /// Shrink the fifths and thirds window until it holds no more than
-    /// [`MAX_DRAWN_NODES`], keeping its shape: both axes are scaled by the
-    /// same factor, so a wide window stays wide and the picture loses an even
-    /// border rather than collapsing along one axis.
+    /// How far out a played pitch is hunted for a spelling and a node, as a
+    /// block — the naming REACH, centered on the camera but sized by the
+    /// setting rather than by any pane.
     ///
-    /// Only [`scrolled`](Self::scrolled) can reach a window this large, and
-    /// only from a camera the picture is already degenerate under — see
-    /// [`MAX_DRAWN_NODES`] for what the cap is protecting.
-    fn fit_to_node_budget(&mut self) {
-        let count = self.visible_count();
-        if count <= MAX_DRAWN_NODES {
-            return;
-        }
-        // Both axes at once, by the square root of how far over budget the
-        // count is — the count goes as their product, so that is the factor
-        // that lands near the cap in one step whatever shape the window is.
-        // The sevens axis is left alone: it is a setting rather than a
-        // consequence of the camera, and it is at most nine sheets.
-        let shrink = (MAX_DRAWN_NODES as f32 / count as f32).sqrt();
-        self.extent_fives = ((self.extent_fives as f32 * shrink) as i32).max(0);
-        self.extent_threes = ((self.extent_threes as f32 * shrink) as i32).max(0);
-        // The step above lands within a node or two of the cap rather than
-        // exactly on it (each axis carries a `+1` that does not scale), so the
-        // cap is finished by hand, off the longer axis. Two turns at most.
-        while self.visible_count() > MAX_DRAWN_NODES
-            && (self.extent_fives > 0 || self.extent_threes > 0)
-        {
-            if self.extent_fives >= self.extent_threes {
-                self.extent_fives -= 1;
-            } else {
-                self.extent_threes -= 1;
-            }
-        }
+    /// Not what is drawn; [`scrolled`](Self::scrolled) is. This is one answer
+    /// the whole UI shares, so that a name does not change under a pan, and it
+    /// is the fallback for the readers that want the picture's window on a
+    /// frame where no lattice pane drew one.
+    pub fn reach(&self) -> DrawnWindow {
+        let center = self.center();
+        let extent = LatticePos::new(
+            self.extent_threes.max(0),
+            self.extent_fives.max(0),
+            self.extent_sevens.max(0),
+        );
+        DrawnWindow { min: center - extent, max: center + extent }
     }
 
     /// Keep the window's center under the camera, moving both together so the
@@ -775,9 +912,9 @@ impl ViewConfig {
     /// depend on it. The block `derive_scene` builds is pinned to the world
     /// origin, so the camera has to be brought back to the origin for there to
     /// be anything in front of it; and the reach the note names are chosen out
-    /// of (see [`visible_positions`](Self::visible_positions)) is centered
-    /// here, so it has to follow or scrolling away would leave every note on
-    /// screen outside the set that can name it.
+    /// of (see [`reach`](Self::reach)) is centered here, so it has to follow
+    /// or scrolling away would leave every note on screen outside the set that
+    /// can name it.
     ///
     /// The x and y axes are carried into the center, which is the pair the
     /// lattice's own sheet runs on. The DEPTH is zeroed instead, and that is
@@ -806,8 +943,8 @@ impl ViewConfig {
             return;
         }
         // Bounded well inside `i32`, because the center is added to an extent
-        // (`visible_positions`) and that sum must not overflow. Saturating the
-        // center instead leaves a target that cannot be reduced — it keeps
+        // (`reach`) and that sum must not overflow. Saturating the center
+        // instead leaves a target that cannot be reduced — it keeps
         // stepping and the center cannot take the step — so the two stop
         // agreeing and the reach comes out EMPTY, which reads as every note
         // being off the lattice, permanently. Clamping the step keeps them in
@@ -834,40 +971,8 @@ impl ViewConfig {
         camera.target.z = 0.0;
     }
 
-    /// Every lattice position within the view's REACH: the window a played
-    /// pitch is given a name and a node out of.
-    ///
-    /// Not what is drawn. The drawn window is the camera's
-    /// ([`scrolled`](Self::scrolled)) and is a different size in every pane,
-    /// where this is one answer the whole UI shares — the analyzer's names,
-    /// its red "off the lattice" band and the Notes pane's node column all ask
-    /// it, and they would contradict each other and themselves if the answer
-    /// moved with a camera.
-    ///
-    /// So it is a reach rather than a boundary: the lattice does not end here,
-    /// this is how far out a spelling is looked for before a pitch counts as
-    /// off it. Centered on the camera (see
-    /// [`follow_camera`](Self::follow_camera)) so scrolling keeps the search
-    /// under what you are looking at, and wide enough that a pitch matching
-    /// nothing inside it matches nothing worth naming.
-    pub fn visible_positions(&self) -> impl Iterator<Item = LatticePos> {
-        coords::positions_within(
-            self.center_threes - self.extent_threes..=self.center_threes + self.extent_threes,
-            self.center_fives - self.extent_fives..=self.center_fives + self.extent_fives,
-            self.center_sevens - self.extent_sevens..=self.center_sevens + self.extent_sevens,
-        )
-    }
-
-    /// How many positions [`visible_positions`](Self::visible_positions)
-    /// yields — the product of each axis's inclusive span — so per-frame
-    /// buffers can preallocate instead of growing through reallocations.
-    pub fn visible_count(&self) -> usize {
-        ((2 * self.extent_threes + 1).max(0) as usize)
-            * ((2 * self.extent_fives + 1).max(0) as usize)
-            * ((2 * self.extent_sevens + 1).max(0) as usize)
-    }
-
-    /// The displayed window's center as a lattice position.
+    /// The window's center as a lattice position: the node drawn at the world
+    /// origin, and what the reach is centered on.
     pub fn center(&self) -> LatticePos {
         LatticePos::new(self.center_threes, self.center_fives, self.center_sevens)
     }
@@ -942,24 +1047,23 @@ impl ViewConfig {
         let fresh = ViewConfig::default();
 
         // The window's own integers, which are the one group here that is not
-        // a float. `visible_count` multiplies the three spans together and
-        // `visible_positions` adds each center to its extent, so a blob
-        // carrying a billion sheets overflows both — and the derived window
-        // now counts nodes on every draw, which puts that arithmetic in the
-        // frame rather than at the edge of it. The sevens extent is held to
-        // what its bar offers.
+        // a float. `DrawnWindow::count` multiplies the three spans together
+        // and `reach` adds each center to its extent, so a blob carrying a
+        // billion sheets overflows both — and the derived window now counts
+        // nodes on every draw, which puts that arithmetic in the frame rather
+        // than at the edge of it. The sevens extent is held to what its bar
+        // offers.
         //
         // The other two are the naming REACH, and they are floored at the
-        // fresh sizing rather than at zero. The reach is sized on what a
-        // cabinet pane draws (see the defaults), the drawn window is derived
-        // per pane from the camera, and nothing structural keeps the two in
-        // step — so a reach from a build that sized it smaller leaves nodes
-        // lit on the lattice that the analyzer answers with its off-lattice
-        // band and the Notes pane with no node at all. No bar sets these, so
-        // there is no dialled-down value to respect and no readout for a
-        // floor to contradict: raising it is the repair that keeps the file
-        // and the picture agreeing.
-        // `a_loaded_view_never_draws_a_node_its_reach_cannot_name` holds it.
+        // fresh sizing rather than at zero. Nothing structural keeps the reach
+        // and the drawn window in step — one is a setting, the other the
+        // camera's — so a reach from a build that sized it smaller makes every
+        // pitch out past it fall to the slower of the two naming paths, and in
+        // a tuning that collapses, to a spelling chosen out of a window it was
+        // never tuned for. No bar sets these, so there is no dialled-down
+        // value to respect and no readout for a floor to contradict: raising
+        // it is free. `a_loaded_view_never_draws_a_node_its_reach_cannot_name`
+        // holds the cabinet case, which is the one the sizing is FOR.
         self.extent_sevens = self.extent_sevens.clamp(0, 4);
         self.extent_threes = self.extent_threes.clamp(fresh.extent_threes, MAX_DRAWN_EXTENT);
         self.extent_fives = self.extent_fives.clamp(fresh.extent_fives, MAX_DRAWN_EXTENT);
@@ -1080,17 +1184,20 @@ impl Default for ViewConfig {
             spacing: 1.0,
             // The naming reach: how far out a played pitch is hunted for a
             // spelling before it counts as off the lattice. Oblong, like the
-            // panes it has to cover — the thirds axis runs across the screen,
-            // so it is the one the drawn window spends its width on.
+            // panes it has to cover — `lattice_to_world` puts the FIFTHS axis
+            // on world x, so that is the one running across the screen and the
+            // one the width is spent on.
             //
             // Sized to hold the whole of what a CABINET pane shows, at every
             // zoom, up to a 16:9 frame — which is the projection this matters
-            // under and the shape a render is. Past that (a 2.4:1 frame at
-            // the zoom limit) a node at the pane's edge can sit outside it,
-            // and reads as off the lattice while it is drawn; the cost of
-            // covering that case is a walk this wide on every played pitch of
-            // every frame, and it buys a name for the corner of a picture
-            // whose nodes are already specks.
+            // under and the shape a render is. It does NOT hold what the other
+            // two draw: a flat 16:9 perspective pane at the zoom limit draws
+            // 3825 nodes against this window's 1025, so most of that picture
+            // is out here. Covering it would mean naming a pitch sixty fifths
+            // out, which is a spelling nobody wants, on a walk this wide per
+            // played pitch per frame. So the reach stays a reach, and the
+            // readers that describe the PICTURE ask the picture's own window
+            // instead — see `SharedState::shown`.
             extent_threes: 12,
             extent_fives: 20,
             // The home sevens sheet alone. A sheet either side (extent 1)

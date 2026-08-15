@@ -103,6 +103,17 @@ impl std::ops::Sub for LatticePos {
     }
 }
 
+impl std::ops::Add for LatticePos {
+    type Output = LatticePos;
+    fn add(self, rhs: LatticePos) -> LatticePos {
+        LatticePos::new(
+            self.threes + rhs.threes,
+            self.fives + rhs.fives,
+            self.sevens + rhs.sevens,
+        )
+    }
+}
+
 /// Iterate every lattice position within the given per-axis extents
 /// (inclusive). The scene layer uses this to enumerate displayable nodes.
 pub fn positions_within(

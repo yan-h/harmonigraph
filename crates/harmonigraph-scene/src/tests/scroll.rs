@@ -57,15 +57,15 @@ fn everything_the_pane_shows_is_in_the_window() {
                 let camera = Camera { projection, distance, ..Camera::default() };
                 let drawn = view.scrolled(&camera, aspect);
                 if projection != Projection::Cabinet
-                    && drawn.visible_count() > MAX_DRAWN_NODES - 512
+                    && drawn.count() > MAX_DRAWN_NODES - 512
                 {
                     continue;
                 }
-                let drawn_set: std::collections::HashSet<_> = drawn.visible_positions().collect();
+                let drawn_set: std::collections::HashSet<_> = drawn.positions().collect();
                 // Wider than any window this camera can produce, so the search
                 // is not the window's own claim about itself.
                 for pos in coords::positions_within(-90..=90, -90..=90, -2..=2) {
-                    let Some(p) = ndc(&camera, &drawn, aspect, pos) else {
+                    let Some(p) = ndc(&camera, &view, aspect, pos) else {
                         continue;
                     };
                     if p.x.abs() > 1.0 || p.y.abs() > 1.0 {
@@ -75,10 +75,9 @@ fn everything_the_pane_shows_is_in_the_window() {
                         drawn_set.contains(&pos),
                         "{projection:?} at aspect {aspect}, distance {distance}: {pos:?} lands \
                          on the pane at {p:?} and is not in the drawn window \
-                         ({}x{} about {:?})",
-                        drawn.extent_threes,
-                        drawn.extent_fives,
-                        drawn.center(),
+                         ({:?}..{:?})",
+                        drawn.min,
+                        drawn.max,
                     );
                 }
             }
@@ -99,7 +98,7 @@ fn everything_the_pane_shows_is_in_the_window() {
 #[test]
 fn a_cabinet_pane_never_draws_a_node_the_reach_cannot_name() {
     let view = ViewConfig::default();
-    let reach: std::collections::HashSet<_> = view.visible_positions().collect();
+    let reach: std::collections::HashSet<_> = view.reach().positions().collect();
     for aspect in [0.6, 1.0, 1.5, 16.0 / 9.0] {
         for distance in [Camera::MIN_DISTANCE, Camera::DEFAULT_DISTANCE, Camera::MAX_DISTANCE] {
             for cabinet_scale in [0.1, 0.6, 1.0] {
@@ -111,9 +110,9 @@ fn a_cabinet_pane_never_draws_a_node_the_reach_cannot_name() {
                 };
                 let drawn = view.scrolled(&camera, aspect);
                 let outside = drawn
-                    .visible_positions()
+                    .positions()
                     .filter(|&pos| {
-                        ndc(&camera, &drawn, aspect, pos)
+                        ndc(&camera, &view, aspect, pos)
                             .is_some_and(|p| p.x.abs() <= 1.0 && p.y.abs() <= 1.0)
                     })
                     .filter(|pos| !reach.contains(pos))
@@ -145,7 +144,7 @@ fn a_cabinet_pane_never_draws_a_node_the_reach_cannot_name() {
 fn a_loaded_view_never_draws_a_node_its_reach_cannot_name() {
     let mut view = ViewConfig { extent_threes: 10, extent_fives: 6, ..ViewConfig::default() };
     view.sanitize();
-    let reach: std::collections::HashSet<_> = view.visible_positions().collect();
+    let reach: std::collections::HashSet<_> = view.reach().positions().collect();
     for aspect in [0.6, 1.0, 1.5, 16.0 / 9.0] {
         for distance in [Camera::MIN_DISTANCE, Camera::DEFAULT_DISTANCE, Camera::MAX_DISTANCE] {
             for cabinet_scale in [0.1, 0.6, 1.0] {
@@ -157,9 +156,9 @@ fn a_loaded_view_never_draws_a_node_its_reach_cannot_name() {
                 };
                 let drawn = view.scrolled(&camera, aspect);
                 let outside = drawn
-                    .visible_positions()
+                    .positions()
                     .filter(|&pos| {
-                        ndc(&camera, &drawn, aspect, pos)
+                        ndc(&camera, &view, aspect, pos)
                             .is_some_and(|p| p.x.abs() <= 1.0 && p.y.abs() <= 1.0)
                     })
                     .filter(|pos| !reach.contains(pos))
@@ -202,7 +201,7 @@ fn a_cabinet_camera_never_reaches_the_node_budget() {
                         distance: Camera::MAX_DISTANCE,
                         ..Camera::default()
                     };
-                    let count = view.scrolled(&camera, aspect).visible_count();
+                    let count = view.scrolled(&camera, aspect).count();
                     assert!(
                         count < MAX_DRAWN_NODES,
                         "a cabinet pane at aspect {aspect}, {sevens} sheets deep, shear \
@@ -231,46 +230,103 @@ fn a_cabinet_camera_never_reaches_the_node_budget() {
 /// Four steps of ring around what shows is comfortably more than the margin
 /// asks for and far less than a window that has stopped tracking the pane.
 ///
-/// Cabinet only, and that is the shape of the thing rather than a gap: the
-/// window is sized from the world origin, because that is where the block it
-/// describes is drawn from, so a camera whose view is NOT centered there
-/// spends its extent reaching back to the origin. Cabinet faces the sheet and
-/// is centered; a tilted camera is not, and the width it then asks for is the
-/// honest cost of covering the pane, not slack.
+/// Each SIDE on its own, which is the half a symmetric window could not be
+/// held to. A `center ± extent` window has to cover the farther side and then
+/// mirrors that reach onto the nearer one, so under any camera whose view of
+/// the sheet is lopsided it draws a second copy of its own far reach where the
+/// pane shows nothing — and the only way to state a bound it could pass was
+/// per-axis, cabinet-only, which is exactly the camera that is symmetric
+/// anyway. Bounds of their own let all three projections be held to what the
+/// pane actually shows, on all four sides.
 #[test]
 fn the_window_is_not_much_wider_than_the_pane() {
     let view = ViewConfig::default();
-    for aspect in ASPECTS {
-        for distance in [Camera::MIN_DISTANCE, Camera::DEFAULT_DISTANCE, Camera::MAX_DISTANCE] {
+    let center = view.center();
+    for projection in PROJECTIONS {
+        for aspect in ASPECTS {
+            for distance in [Camera::MIN_DISTANCE, Camera::DEFAULT_DISTANCE, Camera::MAX_DISTANCE]
             {
-                let projection = Projection::Cabinet;
                 let camera = Camera { projection, distance, ..Camera::default() };
                 let drawn = view.scrolled(&camera, aspect);
-                // The widest lattice step, on either axis, that the pane shows.
-                let mut shown = LatticePos::new(0, 0, 0);
-                for pos in drawn.visible_positions() {
-                    let Some(p) = ndc(&camera, &drawn, aspect, pos) else {
+                // The farthest step, on each side of each axis, the pane shows.
+                let (mut lo, mut hi) = (center, center);
+                for pos in drawn.positions() {
+                    let Some(p) = ndc(&camera, &view, aspect, pos) else {
                         continue;
                     };
                     if p.x.abs() <= 1.0 && p.y.abs() <= 1.0 {
-                        shown.threes = shown.threes.max((pos.threes - drawn.center_threes).abs());
-                        shown.fives = shown.fives.max((pos.fives - drawn.center_fives).abs());
+                        lo = LatticePos::new(
+                            lo.threes.min(pos.threes),
+                            lo.fives.min(pos.fives),
+                            lo.sevens,
+                        );
+                        hi = LatticePos::new(
+                            hi.threes.max(pos.threes),
+                            hi.fives.max(pos.fives),
+                            hi.sevens,
+                        );
                     }
                 }
-                for (drawn_extent, shown_extent, axis) in [
-                    (drawn.extent_threes, shown.threes, "fifths"),
-                    (drawn.extent_fives, shown.fives, "thirds"),
+                for (drawn_edge, shown_edge, side) in [
+                    (drawn.min.threes, lo.threes, "bottom of the thirds"),
+                    (drawn.max.threes, hi.threes, "top of the thirds"),
+                    (drawn.min.fives, lo.fives, "low end of the fifths"),
+                    (drawn.max.fives, hi.fives, "high end of the fifths"),
                 ] {
                     assert!(
-                        drawn_extent <= shown_extent + 4,
-                        "{projection:?} at aspect {aspect}, distance {distance}: the {axis} \
-                         window reaches {drawn_extent} steps out where the pane shows only \
-                         {shown_extent}",
+                        (drawn_edge - shown_edge).abs() <= 4,
+                        "{projection:?} at aspect {aspect}, distance {distance}: the \
+                         {side} window reaches {drawn_edge} where the pane shows only \
+                         {shown_edge}",
                     );
                 }
             }
         }
     }
+}
+
+/// The window is LOPSIDED where the camera's view of the sheet is, which is
+/// the whole of what keeps the far field out of the frame.
+///
+/// Perspective is where this bites: tilt the eye and the sheet runs away from
+/// it on one side and off the bottom of the pane on the other, so the honest
+/// window has one long side and one short one. Sized as `center ± extent` it
+/// has to take the long side twice — the pane never shows the second copy, and
+/// at 40° on a 16:9 pane that is 25921 nodes asked for against 9494 the camera
+/// can see. The cap then rations a budget inflated 2.7x, and starts trimming
+/// nodes the pane really does show.
+///
+/// Stated as the ratio against the mirrored window rather than as a node
+/// count, because the count is the camera's business and the doubling is this
+/// function's.
+#[test]
+fn a_tilted_window_does_not_mirror_its_far_side() {
+    let view = ViewConfig::default();
+    let center = view.center();
+    let mut worst: f64 = 1.0;
+    for pitch_deg in [20.0f32, 40.0, 60.0] {
+        let camera = Camera {
+            projection: Projection::Perspective,
+            pitch: pitch_deg.to_radians(),
+            distance: Camera::MAX_DISTANCE,
+            ..Camera::default()
+        };
+        let drawn = view.scrolled(&camera, 16.0 / 9.0);
+        // What `center ± extent` would have forced: each axis taken to its
+        // farther end and mirrored.
+        let mirror = |lo: i32, hi: i32, c: i32| 2 * (c - lo).max(hi - c) + 1;
+        let mirrored = mirror(drawn.min.threes, drawn.max.threes, center.threes) as f64
+            * mirror(drawn.min.fives, drawn.max.fives, center.fives) as f64;
+        let ratio = mirrored / drawn.count() as f64;
+        assert!(
+            ratio > 1.5,
+            "at pitch {pitch_deg}° the window is {} nodes against {mirrored} mirrored \
+             ({ratio:.2}x) — it is not tracking the lopsided view at all",
+            drawn.count(),
+        );
+        worst = worst.max(ratio);
+    }
+    assert!(worst > 2.5, "the worst mirroring saved is only {worst:.2}x");
 }
 
 /// Scrolling does not run out of lattice: pan a long way and the pane is still
@@ -303,28 +359,31 @@ fn panning_a_long_way_keeps_the_window_full() {
         // and the window is sized from the origin, so a half-cell residual is
         // worth one more step on the far side. What this is guarding is that
         // the size does not GROW with the distance scrolled.
-        for (far_extent, home_extent, axis) in [
-            (far.extent_threes, at_home.extent_threes, "fifths"),
-            (far.extent_fives, at_home.extent_fives, "thirds"),
+        let span = |w: &crate::DrawnWindow, axis: fn(LatticePos) -> i32| -> i32 {
+            axis(w.max) - axis(w.min)
+        };
+        for (far_span, home_span, axis) in [
+            (span(&far, |p| p.threes), span(&at_home, |p| p.threes), "thirds"),
+            (span(&far, |p| p.fives), span(&at_home, |p| p.fives), "fifths"),
         ] {
             assert!(
-                (far_extent - home_extent).abs() <= 1,
-                "{projection:?}: the {axis} window went from {home_extent} to {far_extent} on \
+                (far_span - home_span).abs() <= 1,
+                "{projection:?}: the {axis} window went from {home_span} to {far_span} on \
                  the way out",
             );
         }
         assert!(
-            far.center_fives.abs() > 20 || far.center_threes.abs() > 20,
+            view.center_fives.abs() > 20 || view.center_threes.abs() > 20,
             "{projection:?}: the pan did not move the window far enough to be a test: {:?}",
-            far.center(),
+            view.center(),
         );
         // Nodes are still ON the pane, which is the claim the count above
         // cannot make: a window of the right size, drawn where nobody is
         // looking, is the failure this is here to catch.
         let on_pane = far
-            .visible_positions()
+            .positions()
             .filter(|&pos| {
-                ndc(&camera, &far, aspect, pos)
+                ndc(&camera, &view, aspect, pos)
                     .is_some_and(|p| p.x.abs() <= 1.0 && p.y.abs() <= 1.0)
             })
             .count();
@@ -350,11 +409,11 @@ fn panning_a_long_way_keeps_the_window_full() {
         // sit outside a reach that covers everything actually visible — and
         // a reach sized for THAT is a walk of thousands per played pitch,
         // every frame, to name the corner of a picture nobody is reading.
-        let reach: std::collections::HashSet<_> = view.visible_positions().collect();
+        let reach: std::collections::HashSet<_> = view.reach().positions().collect();
         let outside = far
-            .visible_positions()
+            .positions()
             .filter(|&pos| {
-                ndc(&camera, &far, aspect, pos)
+                ndc(&camera, &view, aspect, pos)
                     .is_some_and(|p| p.x.abs() <= 1.0 && p.y.abs() <= 1.0)
             })
             .filter(|pos| !reach.contains(pos))
@@ -420,16 +479,16 @@ fn the_zoom_limit_lands_near_twenty_steps() {
     let view = ViewConfig::default();
     let camera = Camera { distance: Camera::MAX_DISTANCE, ..Camera::default() };
     let square = view.scrolled(&camera, 1.0);
-    let tall = 2 * square.extent_threes + 1;
+    let tall = square.max.threes - square.min.threes + 1;
     assert!(
         (18..=26).contains(&tall),
-        "fully zoomed out the pane is {tall} steps of fifths tall",
+        "fully zoomed out the pane is {tall} steps of thirds tall",
     );
     // A wider pane gets its extra width, and nothing else: the height is a
     // property of the zoom, the width of the pane.
     let wide = view.scrolled(&camera, 16.0 / 9.0);
-    assert_eq!(wide.extent_threes, square.extent_threes);
-    assert!(wide.extent_fives > square.extent_fives);
+    assert_eq!(wide.max.threes - wide.min.threes, square.max.threes - square.min.threes);
+    assert!(wide.max.fives - wide.min.fives > square.max.fives - square.min.fives);
 }
 
 /// No camera at all draws more than [`MAX_DRAWN_NODES`] — including the ones
@@ -446,7 +505,7 @@ fn no_camera_asks_for_more_than_the_budget() {
             for pitch in [0.0, 1.0, Camera::PITCH_LIMIT] {
                 for distance in [Camera::MIN_DISTANCE, Camera::MAX_DISTANCE] {
                     let camera = Camera { projection, pitch, distance, ..Camera::default() };
-                    let count = view.scrolled(&camera, aspect).visible_count();
+                    let count = view.scrolled(&camera, aspect).count();
                     assert!(
                         count <= MAX_DRAWN_NODES,
                         "{projection:?} at aspect {aspect}, pitch {pitch}, distance {distance} \
@@ -480,19 +539,19 @@ fn a_target_no_gesture_can_reach_still_names_and_draws() {
             view.follow_camera(&mut camera);
         }
         assert!(
-            view.visible_positions().count() > 0,
+            view.reach().positions().count() > 0,
             "target {x:e} left the naming reach empty at center {:?}",
             view.center(),
         );
-        // The sum `visible_positions` builds its ranges from, which is what
-        // wrapped. In debug this test would panic on the overflow instead.
+        // The sum `reach` builds its ranges from, which is what wrapped. In
+        // debug this test would panic on the overflow instead.
         assert!(
             view.center_fives.checked_add(view.extent_fives).is_some()
                 && view.center_threes.checked_add(view.extent_threes).is_some(),
             "target {x:e} left a center that overflows its own extent: {:?}",
             view.center(),
         );
-        assert!(view.scrolled(&camera, 1.5).visible_count() > 0);
+        assert!(view.scrolled(&camera, 1.5).count() > 0);
     }
 }
 
@@ -509,14 +568,46 @@ fn a_nonsense_camera_still_yields_a_drawable_window() {
                 let camera = Camera { target, ..Camera::default() };
                 let drawn = view.scrolled(&camera, aspect);
                 assert!(
-                    drawn.extent_threes >= 0 && drawn.extent_fives >= 0,
-                    "spacing {spacing}, target {target:?}, aspect {aspect} gave a negative \
-                     window: {}x{}",
-                    drawn.extent_threes,
-                    drawn.extent_fives,
+                    drawn.min.threes <= drawn.max.threes && drawn.min.fives <= drawn.max.fives,
+                    "spacing {spacing}, target {target:?}, aspect {aspect} gave an inverted \
+                     window: {:?}..{:?}",
+                    drawn.min,
+                    drawn.max,
                 );
-                assert!(drawn.visible_count() <= MAX_DRAWN_NODES);
+                assert!(drawn.count() <= MAX_DRAWN_NODES);
             }
         }
+    }
+}
+
+/// `index_of` inverts `positions` exactly, on a block that is lopsided on
+/// every axis.
+///
+/// `derive_grid` finds a node's neighbour by arithmetic rather than by
+/// hashing, which is only sound while the two agree — and it is the ONE place
+/// the window's iteration order is load-bearing rather than incidental. A
+/// symmetric block hides a whole class of mistake here, because a min derived
+/// as `-extent` and a span derived as `2 * extent + 1` agree with each other
+/// even when both are wrong about where the block starts.
+#[test]
+fn the_index_of_a_position_is_where_the_walk_puts_it() {
+    let window =
+        DrawnWindow { min: LatticePos::new(-7, -2, -1), max: LatticePos::new(3, 9, 2) };
+    let walked: Vec<_> = window.positions().collect();
+    assert_eq!(walked.len(), window.count(), "the count does not match the walk");
+    for (i, pos) in walked.iter().enumerate() {
+        assert_eq!(window.index_of(*pos), Some(i), "{pos:?} is not at its own index");
+    }
+    // And nothing outside it lands on a slot at all — one step past each face,
+    // which is exactly the step `derive_grid` takes looking for a neighbour.
+    for outside in [
+        LatticePos::new(window.min.threes - 1, 0, 0),
+        LatticePos::new(window.max.threes + 1, 0, 0),
+        LatticePos::new(0, window.min.fives - 1, 0),
+        LatticePos::new(0, window.max.fives + 1, 0),
+        LatticePos::new(0, 0, window.min.sevens - 1),
+        LatticePos::new(0, 0, window.max.sevens + 1),
+    ] {
+        assert_eq!(window.index_of(outside), None, "{outside:?} is outside and was given a slot");
     }
 }

@@ -276,8 +276,8 @@ fn visible_count_matches_visible_positions() {
             ..ViewConfig::default()
         };
         assert_eq!(
-            view.visible_count(),
-            view.visible_positions().count(),
+            view.reach().count(),
+            view.reach().positions().count(),
             "extents ({t}, {f}, {s})"
         );
     }

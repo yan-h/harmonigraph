@@ -650,3 +650,44 @@ fn a_seventh_dragged_clear_of_the_magnet_stays_released() {
         assert_eq!(state.view.marvel, engaged, "a seventh {offset}¢ off the derived one");
     }
 }
+
+/// The window the docked lattice draws reaches the panes that describe the
+/// picture — and reaches them as a WHOLE frame's answer rather than as
+/// whatever had been drawn by the time they were asked.
+///
+/// The dock draws its panes in the order the user has arranged them, so a
+/// band reading this frame's window would answer from the reach or from the
+/// picture depending on where the lattice leaf sits in the layout. `drawn` is
+/// the previous frame's, rotated in `begin_frame`, which is one answer for
+/// every reader whatever the arrangement.
+#[test]
+fn the_window_the_lattice_drew_reaches_the_panes_that_describe_it() {
+    let mut state = fresh();
+    assert!(state.drawn.is_none(), "nothing has drawn yet");
+    assert_eq!(
+        state.shown(),
+        state.view.reach(),
+        "with no picture to describe, the reach is what there is",
+    );
+
+    let mut h = DockHarness::new();
+    h.frame(&mut state, Vec::new());
+    h.frame(&mut state, Vec::new());
+
+    let drawn = state.drawn.expect("the docked lattice published no window");
+    assert_eq!(state.shown(), drawn, "the readers are not being given the picture's window");
+    assert_ne!(
+        drawn,
+        state.view.reach(),
+        "the published window is the reach, so nothing says it came from a camera",
+    );
+    // The docked pane's own, at the docked pane's own aspect — a window a
+    // dock leaf of this shape really produces, not the whole editor's.
+    assert!(
+        drawn.count() < state.view.reach().count(),
+        "the lattice leaf is a fraction of the window, so its cabinet view is \
+         well inside the reach: {} nodes against {}",
+        drawn.count(),
+        state.view.reach().count(),
+    );
+}
