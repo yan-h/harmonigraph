@@ -34,32 +34,13 @@ fn drag_hud(h: &mut DockHarness, state: &mut SharedState, by: egui::Vec2) -> egu
     hud_of(&h.frame(state, vec![]))
 }
 
-/// Nothing in the dock may sit under the HUD's opening spot: a tab bar's
-/// collapse arrow is the control that brings a folded pane back, and the HUD
-/// is painted on a foreground layer over the whole editor.
-fn clear_of_every_tab_bar(state: &SharedState, hud: egui::Rect, what: &str) {
-    for node in state.workspace.dock.main_surface().iter() {
-        let egui_dock::Node::Leaf(leaf) = node else {
-            continue;
-        };
-        let mut bar = leaf.rect;
-        bar.max.y = bar.min.y + crate::theme::TAB_BAR_HEIGHT;
-        assert!(
-            !hud.intersects(bar),
-            "{what}: the HUD covers a tab bar and its collapse arrow: {hud:?} over {bar:?}",
-        );
-    }
-}
-
-/// An overlay nobody has dragged opens in the editor's top-right corner, one
-/// tab bar down — the one placement anything but a drag decides.
+/// An overlay nobody has dragged opens in the editor's bottom-right corner —
+/// the one placement anything but a drag decides.
 ///
-/// The corner is a starting point rather than a policy, and the tab bar it
-/// clears is why it is not simply the corner: dock chrome runs along the top
-/// of the editor, so a HUD hung on the corner outright lands on the settings
-/// column's bar and, with the column folded, on the collapse arrow that brings
-/// it back. Opening on the control that undoes a fold is the worst place on
-/// screen for it.
+/// Read off the EDITOR, and off nothing else. What pane is where, which leaf
+/// is folded, where the tab bars run: none of it is consulted, and that is the
+/// point rather than an omission. The corner is where the HUD opens, not where
+/// it belongs, and a drag is what settles the question for good.
 #[test]
 fn the_perf_overlay_opens_in_the_editors_corner() {
     let mut state = fresh();
@@ -87,10 +68,9 @@ fn the_perf_overlay_opens_in_the_editors_corner() {
         "the HUD should hug the editor's RIGHT edge: {hud:?} in {screen:?}",
     );
     assert!(
-        (hud.top() - (screen.top() + crate::theme::TAB_BAR_HEIGHT + 8.0)).abs() < 1.0,
-        "the HUD should open one tab bar below the editor's top: {hud:?} in {screen:?}",
+        (hud.bottom() - (screen.bottom() - 8.0)).abs() < 1.0,
+        "the HUD should hug the editor's BOTTOM edge: {hud:?} in {screen:?}",
     );
-    clear_of_every_tab_bar(&state, hud, "as it opens");
     // Nothing has placed it, which is what makes the corner a default: the
     // position is written by the drag and by nothing else.
     assert!(state.perf_pos.is_none(), "opening the HUD must not place it");
@@ -129,7 +109,9 @@ fn the_perf_overlay_goes_where_it_is_dragged() {
     h.settle(&mut state);
 
     let before = hud_of(&h.frame(&mut state, vec![]));
-    let by = egui::vec2(-260.0, 190.0);
+    // Up and to the left, which is into the editor from the corner the HUD
+    // opens in — a drag the containment cannot be mistaken for.
+    let by = egui::vec2(-260.0, -190.0);
     let after = drag_hud(&mut h, &mut state, by);
 
     assert!(
@@ -160,7 +142,7 @@ fn folding_a_pane_does_not_move_the_perf_overlay() {
     state.view.show_perf = true;
     let mut h = DockHarness::new();
     h.settle(&mut state);
-    let placed = drag_hud(&mut h, &mut state, egui::vec2(-200.0, 120.0));
+    let placed = drag_hud(&mut h, &mut state, egui::vec2(-200.0, -120.0));
 
     // Both picture panes off screen in turn — the two folds that used to hand
     // the overlay from one pane to the next, and then to the window.

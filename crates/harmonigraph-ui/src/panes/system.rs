@@ -55,7 +55,7 @@ pub(super) fn system_pane(ui: &mut egui::Ui, state: &mut SharedState) {
     ui.checkbox(&mut state.view.show_perf, "Performance overlay").on_hover_text(
         "A HUD with frame rate, the worst recent frame, process memory, and \
          the voice/node workload — to see if the plugin is working the \
-         machine hard. Opens in the top-right corner; drag it anywhere. What \
+         machine hard. Opens in the bottom-right corner; drag it anywhere. What \
          a frame COSTS is under Frame breakdown.",
     );
     if state.view.show_perf {

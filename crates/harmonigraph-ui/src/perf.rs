@@ -3,9 +3,9 @@
 //! at a glance whether the plugin is working the machine hard.
 //!
 //! Where it sits is the user's, and nothing else's: it opens in the editor's
-//! top-right corner and is DRAGGED from there to wherever it is wanted, which
-//! is the only thing that ever moves it (see [`draw_overlay`]). The position
-//! outlives the session — `SharedState::perf_pos`.
+//! bottom-right corner and is DRAGGED from there to wherever it is wanted,
+//! which is the only thing that ever moves it (see [`draw_overlay`]). The
+//! position outlives the session — `SharedState::perf_pos`.
 //!
 //! The picture is the whole of this module: which rows the HUD shows, and how
 //! they are painted. Everything the numbers are MADE of — the windows and
@@ -28,7 +28,7 @@
 
 use harmonigraph_perf::{memory_readout, PerfStats, Stage, BUILD_TAG, STAGES};
 
-/// Points between the overlay and the editor's corner, where it opens.
+/// Points between the overlay and the editor's corner it opens in.
 const OVERLAY_INSET: f32 = 8.0;
 
 /// The overlay's rows: `(depth, label, value, peak)`.
@@ -149,11 +149,10 @@ fn overlay_rows(perf: &PerfStats, detail: bool) -> Vec<(u8, &'static str, String
 /// position back through that handle, and nothing else in the tree moves it.
 ///
 /// `None` is "never dragged", and only then does the HUD have a position of
-/// anyone else's choosing: the editor's top-right corner, one tab bar down so
-/// it opens clear of the chrome along the top rather than on the collapse
-/// arrow that folds a pane back. That is where it OPENS, not where it belongs
-/// — the first drag makes the position the user's and it is honoured from
-/// then on, whatever the dock does underneath it.
+/// anyone else's choosing: the editor's bottom-right corner, inset, and read
+/// off the editor ALONE — no pane, no tab bar, nothing about the arrangement
+/// underneath it. That is where it OPENS, not where it belongs: the first drag
+/// makes the position the user's and it is honoured from then on.
 pub(crate) fn draw_overlay(
     ctx: &egui::Context,
     editor: egui::Rect,
@@ -314,7 +313,7 @@ pub(crate) fn draw_overlay(
     // corner, and why it is a starting point rather than a rule.
     let home = egui::pos2(
         editor.right() - inset - size.x,
-        editor.top() + crate::theme::tab_bar_height(scale) + inset,
+        editor.bottom() - inset - size.y,
     );
 
     // An Area, so the plate can be dragged. It registers exactly ONE widget
