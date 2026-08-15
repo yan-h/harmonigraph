@@ -428,30 +428,34 @@ pub struct SpectrumConfig {
     /// [`note_names_travel`](Self::note_names_travel) for which END of the
     /// ribbon it is written on.
     pub note_names: bool,
-    /// Anchor a name on the note's ONSET rather than on its ribbon's leading
-    /// edge, so it scrolls with the picture from the moment the key goes down
-    /// instead of waiting at the now-line until the key comes up.
+    /// Write a name on the FAR end of its ribbon — the end a reader's eye
+    /// reaches second — rather than on the end that reads first.
     ///
-    /// These are the ribbon's two ENDS, so this moves every name on the pane
-    /// and not only the ones you are holding — a released note's name sits at
-    /// the head of its ribbon or at its tail, a ribbon's length apart. They
-    /// agree at one instant, the one a note is struck at, a ribbon of no length
-    /// having its two ends in one place. Each has a cost worth stating:
+    /// Off, a name goes where a label goes: at the ribbon's leading corner in
+    /// reading order, with the note running away under the rest of it, so the
+    /// gap between the letter and the end it names is the same gap in all four
+    /// orientations. WHICH musical end that is follows from the layout rather
+    /// than from this — see [`Anchor::of`](crate::panes::spectral::names) — and
+    /// so the held-note behaviour does too:
     ///
-    ///   - The leading edge (off) keeps a held note's name still and legible at
-    ///     the now-line for as long as you hold it — but the name then starts
-    ///     moving at the release, which is a jump nothing in the music made,
-    ///     and a drone held longer than the Span never scrolls at all.
-    ///   - The onset (on) pins a name to a take TIME, so it holds its place on
-    ///     the ribbon under it and nothing about it changes at the release. It
-    ///     pays at both edges of the pane: a note still sounding whose onset has
-    ///     scrolled off the far one loses its name, the end it was written on
-    ///     having left, and at the near one a name waits against the roll's own
-    ///     edge until the ribbon is long enough to hold it rather than reaching
-    ///     back over the spectrum.
+    ///   - Spectrum left or on top, time running the screen's own way: the
+    ///     reading-first end is the note's LEADING edge. A held note's name
+    ///     stands still and legible at the now-line for as long as you hold it,
+    ///     and starts moving at the release — a movement nothing in the music
+    ///     made, and a drone held longer than the Span never scrolls at all.
+    ///   - Spectrum right or along the bottom, time running back against it:
+    ///     the reading-first end is the ONSET. The name is pinned to a take
+    ///     time, travelling with the picture from the first frame of the note
+    ///     and unchanged by the release — at the price that a note still
+    ///     sounding whose onset has scrolled off the far edge loses its name,
+    ///     and that a note younger than its own name has the name lying over
+    ///     the spectrum until its ribbon is long enough to hold it.
     ///
-    /// The default is the leading edge, which is the look the naming was
-    /// dialled in at.
+    /// Turning this on asks for the other end, and so for the other of those
+    /// two in whichever orientation the pane is in.
+    ///
+    /// The default is off, which is the look the naming was dialled in at:
+    /// with the spectrum on the left it is the leading edge, exactly as before.
     pub note_names_travel: bool,
     /// Overall size of those names, as a multiple of their built-in size.
     ///
