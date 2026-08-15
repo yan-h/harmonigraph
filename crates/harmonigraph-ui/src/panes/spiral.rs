@@ -287,6 +287,17 @@ impl SpiralView {
     /// Magnify by `factor` about `anchor` — where the pointer is, as an offset
     /// from the point the pane's centre is looking at, in disc radii — so
     /// whatever is under it stays where it is on screen.
+    ///
+    /// Everywhere but the rim, and [`LOOK_MAX`] is why: the look is written
+    /// through [`looking_at`], so where the anchor asks for a look past the rim
+    /// the shortened one is what lands, and the anchored point slides under the
+    /// pointer by the difference. The clamp wins deliberately — the middle of
+    /// the pane always having spiral under it is what keeps the picture findable
+    /// at all, where an anchor held exactly is what makes one gesture feel
+    /// right — so with the rim already centred and the pointer on the outward
+    /// side, a zoom creeps instead of pivoting.
+    /// `a_zoom_at_the_rim_holds_the_look_and_lets_the_anchor_slide` is what pins
+    /// which of the two gives.
     fn zoom_about(&mut self, factor: f32, anchor: egui::Vec2) {
         let zoom = (self.zoom * factor).clamp(ZOOM.0, ZOOM.1);
         // `anchor` is in radii at the CURRENT zoom, so what the look has to
@@ -1701,6 +1712,47 @@ mod tests {
         assert!(
             scrolled(after, at, -30.0).zoom < after.zoom,
             "scrolling down must pull the picture back out",
+        );
+    }
+
+    /// At the rim it is the ANCHOR that gives, not the look: a zoom there keeps
+    /// the pane's centre on the picture and lets what is under the pointer slide.
+    ///
+    /// Which is [`the_wheel_magnifies_about_the_pointer`]'s promise held against
+    /// [`LOOK_MAX`], and the case is reachable rather than theoretical — the rim
+    /// centred and the pointer on the outward side of the pane's centre is where
+    /// any pan that has run out of disc leaves a reader, one notch from a wheel.
+    /// The bound is the one worth keeping: a pane whose middle has no spiral under
+    /// it is a picture only the double-click can find. So this pins the cost rather
+    /// than reporting it.
+    #[test]
+    fn a_zoom_at_the_rim_holds_the_look_and_lets_the_anchor_slide() {
+        // The rim under the pane's centre, and the pointer further out still, so
+        // the zoom asks for a look past the rim and cannot be given one.
+        let before = view(2.0, egui::vec2(0.0, -1.0));
+        assert!((before.look.length() - LOOK_MAX).abs() < 1e-6, "the fixture is not at the rim");
+        let at = PANE.center() + egui::vec2(0.0, -60.0);
+        let after = scrolled(before, at, 30.0);
+        assert!(
+            after.zoom > before.zoom + 0.1,
+            "the wheel never magnified ({} -> {})",
+            before.zoom,
+            after.zoom,
+        );
+        assert!(
+            after.look.length() <= LOOK_MAX + 1e-4,
+            "a zoom at the rim looked {} radii off centre",
+            after.look.length(),
+        );
+        // Pinned exactly, there being nowhere further out for it to go — so it is
+        // the anchored point that moves. The pointer's offset from the centre is a
+        // fixed number of POINTS, and a larger picture makes that fewer disc radii,
+        // so it comes to sit nearer the rim point the pane's centre is held on.
+        assert_eq!(after.look, before.look, "the clamp let the look off the rim");
+        let (was, now) = (under(&before, at), under(&after, at));
+        assert!(
+            now.y > was.y + 1e-2,
+            "the point under the pointer went from {was:?} to {now:?} rather than sliding",
         );
     }
 
