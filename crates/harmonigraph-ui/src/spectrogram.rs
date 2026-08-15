@@ -1915,6 +1915,7 @@ fn fill_pixels(cfg: &SpectrumConfig, w: usize, bins: &[Bin], power: &[BucketDb])
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::panes::spectral::DEPTH_ZOOM_PER_DRAG_POINT;
     use harmonigraph_core::spectrum::SPECTRUM_BINS;
 
     /// Slabs an aggregator is told to keep, where the test is about the values
@@ -3477,6 +3478,96 @@ mod tests {
         // a real bug rather than a cost.
         assert!(reasons.is_empty(), "the drag restarted the ring: {reasons:?}");
         assert_eq!(restarts, 1, "the drag reallocated the ring");
+    }
+
+    /// A Span drag CROSSING ladder rungs refolds once per rung, not once per
+    /// frame.
+    ///
+    /// [`dragging_the_span_holds_the_grid_between_ladder_steps`] stops just
+    /// inside both ends of one rung, so the crossing itself is the regime it
+    /// leaves out — and a crossing is the whole of what a horizontal zoom asks
+    /// of the aggregator. A crossed rung moves `bucket`, and a moved `bucket`
+    /// discards the grid and refolds the retention out of history
+    /// ([`SpectrogramAgg::rebuild`]).
+    ///
+    /// The COUNT is the claim here, because the cost of one is already known:
+    /// `timing_zoom_costs` measures a refold at 0.5-3 ms across the whole Span
+    /// range, which fits inside a 144 Hz frame beside a gesture's coarse
+    /// compose — once. What would not fit is the cascade the slack in
+    /// [`SpectrogramAgg::rebuild`] exists to prevent, where a widening drag
+    /// rebuilds flush to its window and is asked for something older on the
+    /// very next frame. That costs the same 0.5-3 ms EVERY frame for the
+    /// length of the drag, draws the identical picture, and is invisible to
+    /// everything except this counter.
+    ///
+    /// Driven as the pane drives it. The Span is exponential in drag distance
+    /// (`roll_seconds * (-along * DEPTH_ZOOM_PER_DRAG_POINT).exp()`) and the
+    /// rungs are powers of two, so the crossings are EVENLY spaced along the
+    /// drag — one every `ln 2 / DEPTH_ZOOM_PER_DRAG_POINT`, 116 points of
+    /// travel — and a drag pays a bounded few of them however long it lasts.
+    #[test]
+    fn a_span_drag_refolds_once_per_rung_crossed() {
+        let interval = crate::AudioSpectrum::FFT_INTERVAL;
+        let cols = LIVE_SLAB_CAP as usize;
+        let planned = cols + RING_HEADROOM;
+        // Two rungs of travel each way: 50 s sits in the 64 ms rung and 10 s on
+        // the ladder's floor, so a drag between them crosses at 32.768 s and
+        // 16.384 s. Below the floor the width cannot move at all, which is why
+        // the low end is not pushed further.
+        let (hi, lo) = (50.0f64, 10.0f64);
+
+        // Deep enough that the widest rung's retention is history rather than a
+        // store that simply ends: a rebuild reaches `planned` slabs back, which
+        // at this sweep's widest bucket is 66 s.
+        let mut history = crate::SpectrumHistory::default();
+        let settle = planned as f64 * live_slab(hi, cols) + hi;
+        for i in 0..(settle / interval) as usize {
+            history.push(col(i as f64 * interval, &[(4, 0.5), (10, 1.0)]));
+        }
+        let mut now = history.back().expect("filled").time;
+
+        let mut agg = SpectrogramAgg::new();
+        let mut widths = std::collections::BTreeSet::new();
+        // A steady drag on a 144 Hz display: 1.5 points of travel per frame, so
+        // the whole 50 s -> 10 s sweep is 268 points and takes 1.2 s. A
+        // deliberate zoom rather than a flick — and a slower one only adds
+        // frames, never crossings, which is the whole shape of the claim.
+        const FRAME: f64 = 1.0 / 144.0;
+        let step = (-1.5f64 * DEPTH_ZOOM_PER_DRAG_POINT as f64).exp();
+
+        let mut span = hi;
+        let mut frames = 0u32;
+        // Down the range and back up. Widening is the harder direction: it
+        // reaches back to slabs the window did not want a frame ago.
+        for narrowing in [true, false] {
+            loop {
+                span = if narrowing { span * step } else { span / step };
+                if narrowing && span < lo || !narrowing && span > hi {
+                    break;
+                }
+                frames += 1;
+                // Columns arrive on their own clock (125/s), not the frame's.
+                now += FRAME;
+                while history.back().is_none_or(|c| c.time + interval <= now) {
+                    let t = history.back().map_or(0.0, |c| c.time) + interval;
+                    history.push(col(t, &[(4, 0.5), (10, 1.0)]));
+                }
+                let bucket = live_slab(span, cols);
+                widths.insert((bucket * 1e6).round() as i64);
+                let first = history.partition_point(|c| c.time < now - span).saturating_sub(1);
+                let _ = agg.window(&history, first, bucket, planned);
+            }
+        }
+
+        assert_eq!(widths.len(), 3, "the sweep did not cross two rungs: {widths:?} us");
+        assert!(frames > 300, "the sweep never ran: {frames} frames");
+        // The opening build, then one per crossing in each direction. Anything
+        // approaching `frames` is the cascade above.
+        assert_eq!(
+            agg.rebuilds, 5,
+            "a {frames}-frame Span drag across 2 rungs each way refolded {} times",
+            agg.rebuilds,
+        );
     }
 
     /// The same drag as above, with the Span read from where the pane reads it.
