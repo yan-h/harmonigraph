@@ -268,9 +268,11 @@ pub struct SharedState {
     ///
     /// Here rather than in `view` for the reason `ui_scale` above it is: the
     /// overlay is a development instrument over the picture and never part of
-    /// one, so where it was pushed to on this screen must not travel with a
-    /// project into a render. Nothing but [`root_ui`](crate::root_ui) reads
-    /// it, and the offline renderer never draws the HUD at all.
+    /// one, so where it was pushed to on this screen has no business in
+    /// [`ViewConfig`], which is what a recorded frame is composed from. The
+    /// blob itself does travel — a take carries one — but nothing but
+    /// [`root_ui`](crate::root_ui) reads this, and the offline renderer never
+    /// draws the HUD at all, so no render can be composed from it.
     pub perf_pos: Option<egui::Pos2>,
 }
 
@@ -557,11 +559,11 @@ impl CameraPreset {
 /// measured, which is why those panes are sections of the Display tab rather
 /// than tabs of their own.
 ///
-/// Widening the column is what scrolling the TAB BAR would cost, and the
-/// price is charged to the picture twice over: a smaller fraction buys the
-/// bar a narrower window to survive, but it also takes width off the Spectral
-/// pane, which is already within a few points of being narrower than the perf
-/// HUD it has to contain. So the column is not widened on account of the bar.
+/// Widening the column is what scrolling the TAB BAR would cost, and the price
+/// is charged to the picture: a smaller fraction buys the bar a narrower window
+/// to survive, and takes that width straight off the Spectral pane, which is
+/// the narrowest picture the default layout has. So the column is not widened
+/// on account of the bar.
 ///
 /// `every_settings_tab_fits_on_its_tab_bar` (in `tests::shell`, so not linkable
 /// from here) is what checks it — at `DEFAULT_SIZE` and at the window the UI

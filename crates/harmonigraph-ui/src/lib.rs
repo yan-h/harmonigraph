@@ -346,8 +346,8 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     }
 
     // Performance overlay: fold this frame's numbers in and, if it's on, draw
-    // the corner HUD. Interactive path only — the offline renderer never
-    // reaches root_ui, so nothing here touches a recorded frame.
+    // the HUD. Interactive path only — the offline renderer never reaches
+    // root_ui, so nothing here touches a recorded frame.
     //
     // The fallback counts are BORROWED by the costs — how many restart reasons
     // there are is this crate's business and not the model's — so the array
