@@ -1858,6 +1858,43 @@ mod tests {
         assert_eq!(out.zoom, ZOOM.0, "and the floor, which is the whole disc");
     }
 
+    /// A wheel spun at either end of [`ZOOM`] leaves the look exactly where it is:
+    /// where the clamp refuses the magnification, the picture does not travel at
+    /// all.
+    ///
+    /// [`SpiralView::zoom_about`] divides by the CLAMPED zoom for this, so the
+    /// share the magnification changes the unit by is nothing when it changes it by
+    /// nothing. Dividing by the factor the gesture ASKED for instead agrees at
+    /// every zoom the clamp lets through and moves the look on every notch the
+    /// clamp eats — a reader holding the wheel at the ceiling would watch the disc
+    /// walk sideways under a magnification that is not changing, and there is no
+    /// way back but the double-click.
+    ///
+    /// Off-centre pointers, and that is the whole of why this is its own fixture:
+    /// at the pane's own centre the anchor is exactly zero and the look cannot move
+    /// under any formula at all, so
+    /// [`a_gesture_cannot_take_the_framing_off_the_picture`]'s scrolls — which are
+    /// the other two at the clamps — cannot ask it.
+    #[test]
+    fn a_wheel_spun_at_either_end_leaves_the_look_where_it_is() {
+        // Off both axes, so a formula walking one component is caught too.
+        let at = PANE.center() + egui::vec2(70.0, -40.0);
+        // From the centred look and from one already off it: a travel term that
+        // ZEROED the look rather than leaving it alone passes the first.
+        for look in [egui::Vec2::ZERO, egui::vec2(0.3, -0.2)] {
+            // The ceiling spun further in, then the floor spun further out.
+            for (end, points) in [(ZOOM.1, 400.0f32), (ZOOM.0, -400.0)] {
+                let before = view(end, look);
+                let after = scrolled(before, at, points);
+                assert_eq!(after.zoom, end, "a wheel at {end} magnified past it");
+                assert_eq!(
+                    after.look, before.look,
+                    "{points} points of wheel refused at {end} walked the look",
+                );
+            }
+        }
+    }
+
     /// A framing a hand-edited blob can carry — a NaN, an infinity, a zoom out
     /// of range — loads as one the pane can draw.
     ///
