@@ -879,8 +879,8 @@ pub(crate) enum NameLead {
     /// against its ribbon end whatever the spelling costs; the mark column
     /// trails it, and is therefore free to reach PAST the end the name is
     /// anchored to. Measured on a 300pt pane, a `B♭↓` whose growth runs against
-    /// the way its marks are set puts them 6.21 points past that end at the
-    /// dialled size and 40.13 at the two-octave floor. Containing the name
+    /// the way its marks are set puts them 4.81 points past that end at the
+    /// dialled size and 38.73 at the two-octave floor. Containing the name
     /// instead is one edit here -- the union of this ink with the marks' own
     /// quads, rather than this ink alone -- and it buys that back by letting
     /// every marked name's letter sit deeper than a bare one's.

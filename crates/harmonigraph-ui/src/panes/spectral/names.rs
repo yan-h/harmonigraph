@@ -70,8 +70,10 @@ use crate::{theme, SharedState};
 pub(super) const LABEL_PT: f32 = 12.35;
 
 /// Points the name is set in from the end of the ribbon it is anchored to,
-/// along the time axis. Enough that the letter is not touching the end it
-/// starts from.
+/// along the time axis. Enough that the letter reads as standing OFF that end
+/// rather than as touching it — the air is what makes the name a label on the
+/// ribbon instead of another mark along it, and a letter set tight against the
+/// end reads as part of the drawing at the size these are set in.
 ///
 /// A distance on the SCREEN, and the one length here that does not go up with
 /// the type ([`NameScale::air`] carries it, not the type's own half of that
@@ -80,7 +82,7 @@ pub(super) const LABEL_PT: f32 = 12.35;
 /// but the gap between the ribbon's end and the letter is not part of the
 /// picture being magnified, it is the join between the name and the thing it
 /// names. Scaled along with everything else it opens as the range closes: a
-/// name set 2.6 points off its note at the whole axis sits 13 off it at the
+/// name set 4 points off its note at the whole axis sits 20 off it at the
 /// two-octave floor, so from a reader's side the names slide down the roll for
 /// as long as the zoom is being dragged — a movement the music did not make.
 ///
@@ -96,13 +98,13 @@ pub(super) const LABEL_PT: f32 = 12.35;
 ///
 /// | zoom | pinned by the box | pinned by the ink |
 /// |------|-------------------|-------------------|
-/// | 1    | 3.09              | 2.60              |
-/// | 2.23 | 4.13              | 2.60              |
-/// | 5    | 5.61              | 2.60              |
+/// | 1    | 4.49              | 4.00              |
+/// | 2.23 | 5.53              | 4.00              |
+/// | 5    | 7.01              | 4.00              |
 ///
 /// Time running DOWN the pane is the worse of the two, and by a long way: a
-/// line box stands well above its letter, so the same reading there goes 5.93 →
-/// 9.79 → 18.14, better than 12 points of drift where across the pane it is
+/// line box stands well above its letter, so the same reading there goes 7.33 →
+/// 11.19 → 19.54, better than 12 points of drift where across the pane it is
 /// 2.5. The vertical term is [`LINE_HEIGHT`]'s and not [`GLYPH_ADVANCE`]'s,
 /// which is why tightening the advance does nothing for it and pinning the ink
 /// does. See [`marks::NameLead`], where the ink is found, and issue #349.
@@ -113,7 +115,7 @@ pub(super) const LABEL_PT: f32 = 12.35;
 /// flat points would be a small share of a name's height in the video and most
 /// of one in the preview it is dialled in on, which is the divergence this
 /// codebase least wants.
-const LABEL_INSET: f32 = 2.6;
+const LABEL_INSET: f32 = 4.0;
 
 /// The two scales a name is laid out by, and the pitch zoom is what parts
 /// them.
@@ -928,9 +930,9 @@ fn anchor_edge(note: &RollNote, now: f64, anchor: Anchor) -> Edge {
 /// rounding error: a name whose marks are wider than [`LABEL_INSET`] — which is
 /// every marked name — puts its mark column PAST the end it is anchored to,
 /// over whatever the picture holds beyond it. Measured as INK on a 300pt pane,
-/// a `B♭↓` crosses by 6.21 points at the dialled size and 40.13 at the
+/// a `B♭↓` crosses by 4.81 points at the dialled size and 38.73 at the
 /// two-octave floor: the marks grow with the type and [`LABEL_INSET`] does not,
-/// so what the inset buys back is the same 2.6 points at five times the size.
+/// so what the inset buys back is the same 4 points at five times the size.
 ///
 /// The two constraints cannot both hold while [`draw_stacked_name`] typesets the
 /// marks after the letter: leading by the letter holds it still and lets the
@@ -947,12 +949,14 @@ fn anchor_edge(note: &RollNote, now: f64, anchor: Anchor) -> Edge {
 /// of the letter and above it: growth leftward (either horizontal orientation
 /// writing on the far end) sends the mark column back over the anchor, and
 /// growth DOWNWARD — Top's own default — sends the accidental up over it.
-/// Measured at the same pane, `B♭↓`'s ink reaches 6.21 points past
-/// the end growing leftward and 3.45 growing down, against 2.60 clear in the
+/// Measured at the same pane, `B♭↓`'s ink reaches 4.81 points past
+/// the end growing leftward and 2.05 growing down, against 4.00 clear in the
 /// two directions the marks trail into the note. The vertical case merely
 /// LOOKED contained while the box placed the name — a line box stands tall
 /// enough above its letter to hide the mark riding there — and it clears the
-/// end at the dialled size, crossing only once the zoom opens past about 1.4.
+/// end at the dialled size, crossing only once the zoom opens past about 2.2.
+/// That threshold is [`LABEL_INSET`]'s to move and nothing else's: every other
+/// length in the comparison rides the type, so it is proportional to the inset.
 ///
 /// [`draw_stacked_name`]: crate::marks::draw_stacked_name
 fn label_rect(
