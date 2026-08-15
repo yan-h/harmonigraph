@@ -809,8 +809,17 @@ pub(crate) fn mark_key(kind: MarkKind, size: f32, weight: f32, ppp: f32) -> Mark
 /// free (the column already offsets its marks) and it is the one that
 /// survives when the node is small enough that the shape is four pixels.
 ///
-/// Returns how far the lowest thing drawn reaches below `anchor.y` -- ink,
-/// not boxes -- which is what the cents readout hangs off.
+/// Returns how far the lowest thing drawn reaches below the line the stack was
+/// finally laid out on -- ink, not boxes -- which is what the cents readout
+/// hangs off.
+///
+/// That line is `anchor.y` under [`NameLead::Centred`] and only there. A name
+/// LED by its letter is slid before anything is emitted, and for the two
+/// vertical cardinals that slide has a y in it, so the reach a caller gets back
+/// is measured from a line the caller was not told about. Every consumer today
+/// is `Centred` -- the cents readout is the only one, and the roll discards the
+/// value -- so this is a contract to read before adding the next one, not a
+/// defect to go looking for.
 ///
 /// Monospace for in-lattice text: labels align across nodes and match the
 /// technical feel of the readouts.
@@ -1637,27 +1646,6 @@ mod tests {
             (hi - lo) / hi.max(1e-6)
         }
 
-        /// The same coverage with `n` clear pixels added on every side.
-        ///
-        /// What a MARK bitmap carries by construction ([`MARK_BITMAP_PAD`]) and
-        /// a typeset cell does not: egui's atlas cell is the glyph box exactly,
-        /// so a stroke can sit on its edge. The halo reaches four pixels past
-        /// the ink, and against an unpadded cell those stamps read whatever the
-        /// bounds check returns rather than the clear space a glyph on a pane
-        /// actually has around it -- so the rim comes out clipped on the very
-        /// side the walk is sliding toward, and the composite readings
-        /// (`weight`, `smear`) measure the crop as much as the glyph. Padding
-        /// is what lets a letter be read the same way a mark is.
-        fn padded(&self, n: usize) -> Grid {
-            let (w, h) = (self.w + 2 * n, self.h + 2 * n);
-            let mut a = vec![0.0; w * h];
-            for y in 0..self.h {
-                for x in 0..self.w {
-                    a[(y + n) * w + x + n] = self.a[y * self.w + x];
-                }
-            }
-            Grid { w, h, a }
-        }
     }
 
     fn drawn_coverage(kind: MarkKind, size: f32, ppp: f32) -> Grid {
@@ -2036,15 +2024,21 @@ mod tests {
         /// are drawn together, so the sign is the fair bar. Every digit comes
         /// in under it.
         ///
-        /// The GRID is padded, unlike the contrast test above, and the reason
-        /// is in [`Grid::padded`]: `peak` reads the fill alone in the middle of
-        /// the glyph and does not care, `smear` reads the halo and does.
+        /// A typeset cell is read here exactly as a mark bitmap is, with no
+        /// padding between them, and that IS the equal footing rather than a
+        /// gap in it. A mark carries a clear border ([`MARK_BITMAP_PAD`]) and an
+        /// atlas cell is the glyph box exactly, so the two look asymmetric --
+        /// but [`Sheet::tap`] reads outside either grid as nothing, which is the
+        /// clear space a glyph on a pane has around it, and [`walk`]'s window
+        /// already runs six pixels past both. Padding a grid here adds only
+        /// samples that contribute zero to `weight`, `smear` and `ink` alike:
+        /// measured, every digit below reads bit-identically with six pixels of
+        /// margin added. Worth stating because the asymmetry looks like it must
+        /// matter, and a pad put in to answer it would be twenty lines that
+        /// change no number.
         #[test]
         fn a_count_digit_breathes_less_than_the_sign_it_counts() {
             const PPP: f32 = 2.0;
-            // The halo's four pixels, the filter's quarter, and a whole one of
-            // phase -- `walk`'s own window, which is what it has to clear.
-            const PAD: usize = 6;
             let size = roll_mark_size(PPP);
             let composite =
                 |grid: Grid| per_ink(&walk(&Sheet(grid), &TWO_TAP, &TWO_TAP), |r| r.smear);
@@ -2054,7 +2048,7 @@ mod tests {
             // The louder of the two signs a count ever sits beside.
             let bar = sign(MarkKind::Flat).max(sign(MarkKind::Sharp));
             for digit in '0'..='9' {
-                let swing = composite(typeset_coverage(digit, size, PPP).padded(PAD));
+                let swing = composite(typeset_coverage(digit, size, PPP));
                 assert!(
                     swing <= bar,
                     "the count digit `{digit}` swings {:.1}% of its ink at {size:.2}pt against \
