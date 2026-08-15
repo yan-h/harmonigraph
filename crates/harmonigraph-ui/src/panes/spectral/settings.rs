@@ -414,40 +414,46 @@ pub(crate) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
              while it happens and the tongue simply dissolves on the spot.",
         );
     ui.checkbox(&mut cfg.note_names, "Note names").on_hover_text(
-        "Write each note's name on its own ribbon, at the end it is anchored \
-         to — by default the leading edge, so a held note's name waits at the \
-         now-line and travels off with the note when you let go. For reading \
-         the heatmap: a band of energy sits at \
-         some height on an axis marked only in decades of hertz, and the \
-         ribbon over that band is the same note, so naming the ribbon names \
-         the band.\n\n\
+        "Write each note's name on its own ribbon, at the end of it you read \
+         first — the left of the note where time runs across the pane, its \
+         top where time runs down — with the note running away under the rest \
+         of the name. For reading the heatmap: a band of energy sits at some \
+         height on an axis marked only in decades of hertz, and the ribbon \
+         over that band is the same note, so naming the ribbon names the \
+         band.\n\n\
          Names are the lattice's own, in its own hand: the node's spelling \
          with its accidental and comma mark, so a just third reads E- rather \
          than as an E and a cents offset.\n\nWhere repeats of a note come too \
          fast to name each one, the first keeps its name and the next waits \
-         for clear room — except a note you are holding, which is always \
-         named. Needs Note history on: a name labels a ribbon.",
+         for clear room. A note you are HOLDING is named whatever the crowd, \
+         but only where its name is the one waiting at the now-line — with \
+         the spectrum on the right or along the bottom a held note takes its \
+         turn like any other, its name being pinned to the take instead. \
+         Needs Note history on: a name labels a ribbon.",
     );
     ui.add_enabled_ui(cfg.note_names && cfg.show_roll, |ui| {
-        ui.checkbox(&mut cfg.note_names_travel, "Travel from the onset").on_hover_text(
-            "Write the name at the note's ONSET instead, so it starts \
-             scrolling the moment the key goes down rather than waiting at the \
-             now-line until you let go.\n\nThese are the ribbon's two ends, so \
-             this moves every name on the roll and not only the ones you are \
-             holding — a played note's name sits at the head of its ribbon or \
-             at its tail. Anchored at the leading edge a held note's name stays \
-             where you can read it while you play, and then starts moving at \
-             the release — a movement nothing in the music made, and a drone \
-             held longer than the Span never scrolls at all. Anchored at the \
-             onset a name is pinned to a moment of the take: it keeps its place \
-             on the ribbon under it, and the release changes nothing about it. \
-             That costs at both ends of the roll — a note still sounding whose \
-             onset has scrolled off the far edge loses its name, and at the \
-             near edge a name waits against the roll's own boundary until the \
-             ribbon is long enough to hold it, rather than reaching back over \
-             the spectrum.\n\nThe offline render's whole-song layout \
-             is anchored at the onset either way — it lays the take out in \
-             reading order, where the onset IS the leading edge.",
+        ui.checkbox(&mut cfg.note_names_travel, "Name the far end").on_hover_text(
+            "Write the name on the other end of the ribbon — the end you read \
+             SECOND — instead.\n\nThese are the ribbon's two ends, so this \
+             moves every name on the roll and not only the ones you are \
+             holding: a played note's name sits at the head of its ribbon or \
+             at its tail.\n\nWhich musical end reads first is the \
+             orientation's, so this flips with it. With the spectrum on the \
+             LEFT or on TOP the name is on the note's leading edge: a held \
+             note's name stays where you can read it while you play, and then \
+             starts moving at the release — a movement nothing in the music \
+             made, and a drone held longer than the Span never scrolls at all. \
+             With the spectrum on the RIGHT or along the BOTTOM it is on the \
+             onset, pinned to a moment of the take: it travels with the picture \
+             from the first frame of the note and the release changes nothing \
+             about it, at the price that a note still sounding whose onset has \
+             scrolled off the far edge loses its name, and that a note younger \
+             than its own name wears it over the spectrum until its ribbon is \
+             long enough to hold it.\n\nSo this is the switch between those \
+             two, whichever way round the pane has them.\n\nThe offline \
+             render's whole-song layout is anchored at the onset either way: \
+             it lays the take out as a still, and the onset is the one end of \
+             a note that stands in one place there.",
         );
         ValueBar::new(&mut cfg.note_name_scale, crate::SCALE_BAR_RANGE, "Name size")
             .show(ui)
