@@ -3473,6 +3473,88 @@ fn a_silent_lattice_ships_no_nodes_and_still_draws_its_grid() {
     );
 }
 
+/// The ring's floor colour is a picture on every node, so the ring being on
+/// is itself a reason to ship an instance: the cull that drops idle nodes
+/// keeps all of them the moment the annulus is real. Nothing else reaches
+/// that term — the pixel tests above light their nodes, which passes the
+/// cull on activation instead.
+#[test]
+fn an_open_ring_ships_every_idle_node() {
+    let fresh = harmonigraph_scene::ViewConfig::default();
+    let mut scene = idle_scene();
+    assert!(!scene.nodes.is_empty(), "the fixture has to carry idle nodes");
+    scene.spectral.inner = fresh.spectral_ring_inner;
+    scene.spectral.outer = fresh.spectral_ring_outer;
+    let cb = LatticeCallback::from_scene(
+        &scene,
+        LatticeLabels::default(),
+        egui::vec2(256.0, 256.0),
+        wgpu::TextureFormat::Rgba8Unorm,
+        32,
+        None,
+    );
+    assert_eq!(
+        cb.instances.len(),
+        scene.nodes.len(),
+        "with the ring on, a node with nothing else to draw still wears the floor colour",
+    );
+}
+
+/// An audio-lit wedge takes its colour from the analyzer's ramp at ITS OWN
+/// octave's level — not from the node's pitch colour scaled by that level,
+/// which is the band's MIDI logic and the exact scheme confusion the two
+/// tables exist to prevent. The ramp here switches hue at half: a level on
+/// one side paints blue, on the other red, and no colour-times-level path
+/// can flip a hue, so the flip is the shader indexing the ramp.
+#[test]
+fn an_audio_lit_wedge_wears_its_own_levels_ramp_entry() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut gpu) = Shooter::new(SIZE) else {
+        return;
+    };
+
+    let shot_at = |gpu: &mut Shooter, level: f32| -> Vec<u8> {
+        let fresh = harmonigraph_scene::ViewConfig::default();
+        let mut scene = single_marked_node(0, 0);
+        let node = &mut scene.nodes[0];
+        node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
+        node.octaves[harmonigraph_scene::MIDDLE_C_SLOT] = level;
+        // The core off for the same reason ringing_node turns it off: its
+        // glow is light at every radius, and the reading below is the band's.
+        scene.core_radius = 0.0;
+        scene.outer_inner = fresh.outer_inner;
+        scene.outer_outer = fresh.outer_outer;
+        scene.outer_gap = fresh.outer_gap;
+        let mut paint = harmonigraph_scene::SpectralPaint::silent();
+        paint.lit = true;
+        paint.lut = std::array::from_fn(|k| {
+            let t = k as f32 / (harmonigraph_scene::PITCH_LUT_N - 1) as f32;
+            if t < 0.5 {
+                glam::Vec4::new(0.0, 0.0, 1.0, 1.0)
+            } else {
+                glam::Vec4::new(1.0, 0.0, 0.0, 1.0)
+            }
+        });
+        scene.spectral = paint;
+        gpu.shot(&scene)
+    };
+
+    let low = shot_at(&mut gpu, 0.35);
+    let high = shot_at(&mut gpu, 0.85);
+    let sum = |px: &[u8], ch: usize| -> i64 { px.chunks(4).map(|p| p[ch] as i64).sum() };
+    let (blue_low, blue_high) = (sum(&low, 2), sum(&high, 2));
+    let (red_low, red_high) = (sum(&low, 0), sum(&high, 0));
+    eprintln!("low: red {red_low} blue {blue_low}; high: red {red_high} blue {blue_high}");
+    // The margin is a wedge's worth of one channel against antialiasing
+    // fringes; the wedge itself sums in the tens of thousands.
+    const HUE_FLIP: i64 = 5_000;
+    assert!(
+        blue_low > blue_high + HUE_FLIP && red_high > red_low + HUE_FLIP,
+        "crossing the ramp's half did not flip the wedge's hue: the band is not \
+         indexing the analyzer's ramp at the octave's own level",
+    );
+}
+
 /// The target format the callback was built for, so the test above renders
 /// into the one its composite pipeline expects.
 fn format_of(cb: &LatticeCallback) -> wgpu::TextureFormat {
