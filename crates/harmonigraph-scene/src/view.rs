@@ -947,11 +947,22 @@ impl ViewConfig {
         // carrying a billion sheets overflows both — and the derived window
         // now counts nodes on every draw, which puts that arithmetic in the
         // frame rather than at the edge of it. The sevens extent is held to
-        // what its bar offers; the other two are the naming reach, which has
-        // no bar and only has to stay searchable.
+        // what its bar offers.
+        //
+        // The other two are the naming REACH, and they are floored at the
+        // fresh sizing rather than at zero. The reach is sized on what a
+        // cabinet pane draws (see the defaults), the drawn window is derived
+        // per pane from the camera, and nothing structural keeps the two in
+        // step — so a reach from a build that sized it smaller leaves nodes
+        // lit on the lattice that the analyzer answers with its off-lattice
+        // band and the Notes pane with no node at all. No bar sets these, so
+        // there is no dialled-down value to respect and no readout for a
+        // floor to contradict: raising it is the repair that keeps the file
+        // and the picture agreeing.
+        // `a_loaded_view_never_draws_a_node_its_reach_cannot_name` holds it.
         self.extent_sevens = self.extent_sevens.clamp(0, 4);
-        self.extent_threes = self.extent_threes.clamp(0, MAX_DRAWN_EXTENT);
-        self.extent_fives = self.extent_fives.clamp(0, MAX_DRAWN_EXTENT);
+        self.extent_threes = self.extent_threes.clamp(fresh.extent_threes, MAX_DRAWN_EXTENT);
+        self.extent_fives = self.extent_fives.clamp(fresh.extent_fives, MAX_DRAWN_EXTENT);
         self.center_sevens = self.center_sevens.clamp(-MAX_CENTER, MAX_CENTER);
         self.center_threes = self.center_threes.clamp(-MAX_CENTER, MAX_CENTER);
         self.center_fives = self.center_fives.clamp(-MAX_CENTER, MAX_CENTER);
