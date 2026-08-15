@@ -603,12 +603,6 @@ mod tests {
                 .map(|piece| piece.font_size)
                 .fold(0.0f32, f32::max)
         };
-        let dialled = NAME_SIZE * harmonigraph_scene::ViewConfig::default().label_scale;
-        assert_eq!(
-            biggest(Camera::DEFAULT_DISTANCE),
-            dialled,
-            "the default framing is where the sizes are dialled",
-        );
         // Within a rung of the ladder either way. The size follows the camera
         // continuously and is RASTERIZED at the nearest size on offer, which
         // is what keeps a zoom from asking egui for a new one every frame —
@@ -626,6 +620,21 @@ mod tests {
                 "at distance {distance} a name drew at {got}, not within {slack} of {want}",
             );
         };
+        let dialled = NAME_SIZE * harmonigraph_scene::ViewConfig::default().label_scale;
+        // The default framing is where the sizes are dialled: the camera
+        // contributes a factor of 1 there, so the letter is the built-in
+        // through the bar and nothing else.
+        //
+        // To within a rung, like every other distance here, and NOT exactly.
+        // `snap_scale` reproduces a dialled size exactly only at scale 1, where
+        // its ladder is anchored; anywhere else it rounds the nearest rung onto
+        // a whole physical pixel, and whether that lands back on the dialled
+        // number is a property of the number. This one does (a rung of 1.3159
+        // times a 30pt base is 39.478, which rounds to 39, which is 1.3 of the
+        // base again) and 1.25 would not (37.96 rounds to 38 against a dialled
+        // 37.5). Asserting the exact value would pass here and fail on the next
+        // retune of the bar, blaming the camera for the pixel grid.
+        tracks(Camera::DEFAULT_DISTANCE, dialled);
         tracks(Camera::DEFAULT_DISTANCE * 0.5, dialled * 2.0);
         tracks(Camera::DEFAULT_DISTANCE * 2.0, dialled * 0.5);
         tracks(Camera::DEFAULT_DISTANCE * 4.0, dialled * 0.25);
@@ -640,6 +649,13 @@ mod tests {
         // sizes follows the rungs crossed and not the frames drawn — and 24
         // steps of 1% is a quarter more distance, which is 6 rungs of a 4%
         // ladder however the bar is set.
+        //
+        // The bound has one size of slack and it is worth knowing how little:
+        // the walk asks for 7. Strip the rung out of `snap_scale` and leave the
+        // pixel rounding alone and it asks for 9, which is what this catches;
+        // strip both and it asks for 25. So the margin between the promise and
+        // the degradation is a single size, and it is that tight because of the
+        // base and the ppp this fixture uses, not because 8 was picked loosely.
         let mut sizes: Vec<f32> = (0..25)
             .map(|step| biggest(Camera::DEFAULT_DISTANCE * 1.01f32.powi(step)))
             .collect();
