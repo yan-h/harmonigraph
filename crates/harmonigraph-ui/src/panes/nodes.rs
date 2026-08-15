@@ -453,7 +453,11 @@ fn source_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
             SPECTRAL_RANGE_MIN..=SPECTRAL_RANGE_MAX,
             "Range",
         )
-        .display(|cents| format!("{cents:.0}¢"))
+        // A decimal below ten cents: the bar's floor is 0.5¢, and "{:.0}"
+        // would read it out as the zero the floor exists to forbid.
+        .display(|cents| {
+            if cents < 10.0 { format!("{cents:.1}¢") } else { format!("{cents:.0}¢") }
+        })
         .show(ui)
         .on_hover_text(
             "How much of the spectrum one wedge of the audio ring shows, in \
