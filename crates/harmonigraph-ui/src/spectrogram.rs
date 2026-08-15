@@ -2882,6 +2882,27 @@ mod tests {
                 "a change a second after the last one is not a gesture",
             );
         }
+
+        // And the frames AFTER a lone change, which are the ones a settle
+        // window would catch: the same style, held still, inside
+        // `STYLE_SETTLE` of a change that was never a gesture. Answering
+        // these from the settle alone — without asking whether anything was
+        // moving — is a dozen coarse frames and a full-height rebuild behind
+        // them for every palette click.
+        // Every 60 Hz frame strictly inside the settle: the twelfth lands ON
+        // it, which is the boundary the settle's own test already holds.
+        let (last, next) = (&styles[7], &styles[0]);
+        for frame in 1..=11 {
+            let t = 107.0 + f64::from(frame) / 60.0;
+            assert!(t - 107.0 < STYLE_SETTLE, "the sweep stays inside the settle");
+            assert!(
+                !StyleMotion::observe(&mut slot, last, t),
+                "frame {frame} after a lone change is still settled",
+            );
+        }
+        // A second change this soon after the FIRST one would have opened a
+        // gesture; this far past it, the next lone change is sharp too.
+        assert!(!StyleMotion::observe(&mut slot, next, 108.0), "and the next lone change is too");
         // The same changes at a frame's spacing ARE a drag, from the second on.
         let mut slot = None;
         for (i, style) in styles.iter().enumerate() {
