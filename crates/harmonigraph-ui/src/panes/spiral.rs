@@ -1901,10 +1901,10 @@ mod tests {
     /// multiplies arc length, so both caps have to hold or the pane hands the
     /// tessellator eight times the geometry for a picture no smoother.
     ///
-    /// The seam is the half worth pinning — it was uncapped, being one hairline
-    /// where the strip's colour changes along it — and the 1080p frame is where
-    /// it binds: at the fit that frame asks for about two thirds of the cap, and
-    /// magnified it asks for many times it.
+    /// The seam is the half worth pinning — the cap is the only thing bounding its
+    /// step count, it being one hairline where the strip's colour changes along it
+    /// — and the 1080p frame is where it binds: at the fit that frame asks for
+    /// about two thirds of the cap, and magnified it asks for many times it.
     #[test]
     fn a_magnified_disc_is_cut_no_finer_than_the_analyzers_grain() {
         use harmonigraph_core::spectrum::BINS_PER_SEMITONE;
