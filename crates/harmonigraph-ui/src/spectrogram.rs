@@ -2915,14 +2915,26 @@ mod tests {
     /// height: a tall pane keeps half its rows rather than the eleventh of
     /// them a flat cap would leave it, and a pane already shorter than the
     /// floor loses nothing at all.
+    ///
+    /// The bound is asserted UNCONDITIONALLY, which is the whole of what this
+    /// test is for. Written as `stretch <= GESTURE_MAGNIFY || rows >=
+    /// GESTURE_ROWS` it passes against the flat cap it replaces, since the
+    /// floor satisfies the right-hand side at every pane the cap bites on —
+    /// so the sweep would say nothing and the one worked example below it
+    /// would be carrying the property alone.
     #[test]
     fn a_gesture_image_is_never_more_than_a_bounded_stretch() {
+        // Even, as `Plan::new` guarantees: a live pane is a multiple of
+        // `PANE_QUANTUM` and the clamp's floor is 2, so the halving is exact
+        // and the bound holds with no rounding slack to hide in.
         for pane in [2usize, 100, GESTURE_ROWS, 700, 1408, 4096] {
             let rows = gesture_rows(pane);
+            assert_eq!(pane % 2, 0, "{pane}: the fixture must be a pane the plan can produce");
             assert!(rows <= pane, "{pane}: a gesture never builds MORE rows than the pane");
             assert!(
-                rows * GESTURE_MAGNIFY >= pane || rows >= GESTURE_ROWS,
-                "{pane}: {rows} rows is a stretch past the bound",
+                rows * GESTURE_MAGNIFY >= pane,
+                "{pane}: {rows} rows is a {}x stretch, past {GESTURE_MAGNIFY}x",
+                pane as f32 / rows as f32,
             );
             assert!(rows >= pane.min(GESTURE_ROWS), "{pane}: {rows} is under the floor");
         }
