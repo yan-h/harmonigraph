@@ -82,19 +82,20 @@ fn quantized(pixels: f32) -> f32 {
 /// Rows the live image FLOORS at while its style is moving — a wheel or drag
 /// rewriting the pitch range, or the Level window on every frame of itself.
 /// Each of those frames restarts the ring, and a restart's compose is
-/// rows x slabs, so the rows are the SMALLER of the two things a gesture
-/// trades away; the larger is the wide rows' read, which goes from the power
-/// mean to a plain max ([`RowRead::Max`]). See [`GESTURE_MAGNIFY`] for what
-/// each is worth.
+/// rows x slabs, so the rows are the SMALLER of the two things a gesture can
+/// trade away; the larger is the wide rows' read, which goes from the power
+/// mean to a plain max ([`RowRead::Max`]). At the [`GESTURE_MAGNIFY`] of one
+/// the read is the whole trade and this floor never binds — it is where a
+/// magnification above one stops cutting.
 ///
-/// Four quanta of [`PANE_QUANTUM`], so a pane short enough to build this many
-/// rows anyway loses no height at all — it still takes the coarse READ, which
-/// is the part of the trade its zoomed-out frames need.
+/// Four quanta of [`PANE_QUANTUM`] — the height under which a cut buys so
+/// little that a pane is left whole and takes only the coarse READ, which is
+/// the part of the trade its zoomed-out frames need.
 pub(crate) const GESTURE_ROWS: usize = 4 * PANE_QUANTUM as usize;
 
-/// Most a gesture image is MAGNIFIED over the pane it is stretched across:
-/// the short image is sampled up to the pane's own height, so this is how far
-/// the picture is allowed to soften while a gesture runs.
+/// Most a gesture image is MAGNIFIED over the pane it is stretched across: a
+/// short image is sampled up to the pane's own height, so this is how far the
+/// picture is allowed to soften while a gesture runs.
 ///
 /// A bound on the magnification rather than a row count, because the
 /// magnification is what a reader sees. A flat [`GESTURE_ROWS`] cap is a 5.5x
@@ -104,23 +105,27 @@ pub(crate) const GESTURE_ROWS: usize = 4 * PANE_QUANTUM as usize;
 /// line, which is a picture the pitch axis cannot be judged from during the
 /// very gesture that is judging it.
 ///
-/// Two costs little because the ROWS are the cheap half of the trade, which
-/// is worth being exact about: measured over a 1024-slab window on a
+/// ONE, so a gesture builds the pane's own rows and gives up only the read:
+/// the pitch axis stays as sharp under a drag as it is at rest, and what
+/// softens is the floor, which a max over a run reads a few dB above the power
+/// mean. The table it is set from: measured over a 1024-slab window on a
 /// 1408-row pane, a restart zoomed out COMPOSES in 16.0 ms at full rows and
 /// the settled read, 6.9 ms once the read alone goes coarse, 3.8 ms at half
-/// rows with it, and 1.7 ms at [`GESTURE_ROWS`]. The read swap is the 2.3x;
-/// the row cap past half buys the last 2 ms and spends the picture to do it.
+/// rows with it, and 1.7 ms at [`GESTURE_ROWS`]. The read swap is the 2.3x and
+/// 6.9 ms already fits a 60 Hz frame; every row cut past it buys a couple of
+/// milliseconds and spends the axis the gesture is judging to do it.
 /// `timing_parts` is that table.
 ///
 /// It is a table of COMPOSE, and the upload is the term it does not carry:
 /// `timing_parts` ends at [`restart_pixels`], which returns the pixels rather
 /// than uploading them, so the figures above stop where the GPU begins. The
-/// rows are on that side too — a full-width gesture frame's image goes from
-/// 2.1 MB at [`GESTURE_ROWS`] to 5.8 MB here, re-uploaded on every frame of a
-/// drag — and no harness in the tree can time it, since it takes a real
-/// surface. So the number to raise this constant on is a frame rate watched
-/// during a pitch drag on a full-height pane, not another run of the table.
-const GESTURE_MAGNIFY: usize = 2;
+/// rows are on that side too — a full-width gesture frame's image is 11.6 MB
+/// here, against 5.8 MB at a 2x cut and 2.1 MB at [`GESTURE_ROWS`], and it is
+/// re-uploaded on every frame of a drag — and no harness in the tree can time
+/// it, since it takes a real surface. So the number to CUT this constant on is
+/// a frame rate watched during a pitch drag on a full-height pane, not another
+/// run of the table.
+const GESTURE_MAGNIFY: usize = 1;
 
 /// The rows a gesture frame builds for a pane that would settle at `rows`.
 pub(crate) fn gesture_rows(rows: usize) -> usize {
@@ -2922,21 +2927,21 @@ mod tests {
     }
 
     /// The gesture image is a bounded MAGNIFICATION of the pane, not a fixed
-    /// height: a tall pane keeps half its rows rather than the eleventh of
-    /// them a flat cap would leave it, and a pane already shorter than the
-    /// floor loses nothing at all.
+    /// height: at a [`GESTURE_MAGNIFY`] of one the bound is no stretch at all,
+    /// so every pane builds its own rows whatever a flat cap would leave it,
+    /// and one already under the floor is not oversampled to reach it.
     ///
     /// The bound is asserted UNCONDITIONALLY, which is the whole of what this
     /// test is for. Written as `stretch <= GESTURE_MAGNIFY || rows >=
-    /// GESTURE_ROWS` it passes against the flat cap it replaces, since the
-    /// floor satisfies the right-hand side at every pane the cap bites on —
-    /// so the sweep would say nothing and the one worked example below it
-    /// would be carrying the property alone.
+    /// GESTURE_ROWS` it passes against a flat cap as well, since the floor
+    /// satisfies the right-hand side at every pane such a cap bites on — so
+    /// the sweep would say nothing and the worked examples below it would be
+    /// carrying the property alone.
     #[test]
     fn a_gesture_image_is_never_more_than_a_bounded_stretch() {
         // Even, as `Plan::new` guarantees: a live pane is a multiple of
-        // `PANE_QUANTUM` and the clamp's floor is 2, so the halving is exact
-        // and the bound holds with no rounding slack to hide in.
+        // `PANE_QUANTUM` and the clamp's floor is 2, so whatever cut the bound
+        // allows is exact and holds with no rounding slack to hide in.
         for pane in [2usize, 100, GESTURE_ROWS, 700, 1408, 4096] {
             let rows = gesture_rows(pane);
             assert_eq!(pane % 2, 0, "{pane}: the fixture must be a pane the plan can produce");
@@ -2948,8 +2953,8 @@ mod tests {
             );
             assert!(rows >= pane.min(GESTURE_ROWS), "{pane}: {rows} is under the floor");
         }
-        assert_eq!(gesture_rows(1408), 704, "a full-height 2x pane keeps half its rows");
-        assert_eq!(gesture_rows(GESTURE_ROWS), GESTURE_ROWS, "a floor-height pane loses none");
+        assert_eq!(gesture_rows(1408), 1408, "a full-height 2x pane keeps every row");
+        assert_eq!(gesture_rows(100), 100, "and a pane under the floor is not raised to it");
     }
 
     /// A pitch gesture — the range zoomed or panned a frame at a time — must
