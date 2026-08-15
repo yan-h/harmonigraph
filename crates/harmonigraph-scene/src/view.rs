@@ -4,7 +4,6 @@
 
 use crate::style::{Gradient, Pulse, SevensLabel};
 use crate::{Camera, MAX_DRAWN_NODES, NODE_RADIUS_FACTOR};
-use glam::Vec2;
 use harmonigraph_core::{coords, Comma, Envelope, LatticePos, Tempered};
 
 /// Arithmetic guard on a derived extent, not a picture-shaping limit:
@@ -669,10 +668,10 @@ impl ViewConfig {
     /// is drawn at — so it keeps its bar.
     ///
     /// Falls back to this view's own window where the geometry gives no
-    /// rectangle (see [`Camera::visible_world_bounds`]) — a steep perspective
-    /// pitch is the case, where the sheet is edge-on and the span it shows
-    /// really is unbounded. Drawing the reach window there is a picture; an
-    /// arbitrary huge number is a stall.
+    /// rectangle at all (see [`Camera::visible_world_bounds`], which names the
+    /// one camera that does that — and it is a degenerate matrix, not a steep
+    /// camera). Drawing the reach window there is a picture; an arbitrary huge
+    /// number is a stall.
     pub fn scrolled(&self, camera: &Camera, aspect: f32) -> ViewConfig {
         let spacing = self.spacing;
         // A spacing of zero divides by nothing and a NaN one poisons the

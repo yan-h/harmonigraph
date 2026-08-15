@@ -426,6 +426,13 @@ fn pane_body(state: &SharedState, tab: &panes::Tab) -> Option<egui::Rect> {
 pub fn begin_frame(state: &mut SharedState, params: &dyn ParamBackend, now: f64) {
     learn_step(state, params);
 
+    // Cleared here so the count belongs to THIS frame: the lattice reports it
+    // as it builds its window, and a frame where the lattice is not drawn at
+    // all — its leaf collapsed, or laid out too small to draw — reports none
+    // rather than going on showing the last frame that was. A diagnostic that
+    // holds its last good reading is the one that misleads.
+    state.drawn_nodes = 0;
+
     state.tuning = params::tuning_from_params(params);
     // Auto-detect, then lock, one comma at a time and up the primes — the
     // order of `Comma::ALL`, and the order that makes the two identities

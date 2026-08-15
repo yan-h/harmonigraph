@@ -60,10 +60,9 @@ fn lattice_to_world(pos: LatticePos, spacing: f32) -> Vec3 {
 const NODE_RADIUS_FACTOR: f32 = 0.25;
 
 /// The most nodes one drawn window may hold, and the backstop on a lattice
-/// that no longer has a size of its own: with the window derived from the
-/// viewport ([`ViewConfig::scrolled`]), what decides how much work a frame is
-/// became the camera — and for two of the three projections there are cameras
-/// with no bounded answer at all.
+/// with no size of its own: the window is derived from the viewport
+/// ([`ViewConfig::scrolled`]), so what decides how much work a frame is is the
+/// camera — and there are cameras with no bounded answer at all.
 ///
 /// Which is worth being exact about, because it is the whole reason this
 /// exists. Tilt a camera toward the sheet's own plane and the sheet goes
@@ -73,16 +72,20 @@ const NODE_RADIUS_FACTOR: f32 = 0.25;
 /// draw there and no window that would be right.
 ///
 /// Cabinet has no such camera — it faces the sheet by construction, whatever
-/// the orbit says — so its window is bounded at every setting, and this is
-/// sized above the largest one: 19809 nodes, at a 3:1 pane, fully zoomed out,
-/// nine sheets deep, at cavalier scale. Cabinet therefore never reaches this
-/// cap, which matters because cabinet is where scrolling is the way you get
-/// around; under the other two the cap can bite, and what it costs is the
-/// lattice's outer ring in a picture that is already a smear.
+/// the orbit says — so its window is bounded at every setting, and this sits
+/// above the largest one a pane of ordinary shape reaches: 19809 nodes, at
+/// 3:1, fully zoomed out, nine sheets deep, at cavalier scale. Bounded is not
+/// the same as under the cap, and the difference is measured rather than
+/// assumed — past about 3.5:1 with full depth cabinet does reach this, and
+/// there is a pane that gets there without hand-editing anything, since
+/// `Layout::split` will give the lattice a fifth of a 21:9 frame. What the
+/// trim costs there is 160 nodes at 4:1 and 4366 at 6:1, off all four edges.
+/// A cap that covered it would have to be three times this one, for a band of
+/// lattice eight steps tall.
 ///
 /// The cost it is holding: `derive_scene` with ten voices held takes 0.02ms
-/// over 273 nodes (the window's size before it was derived at all), 0.06ms
-/// over 875 (a 16:9 pane fully zoomed out, flat), and 1.2ms over 14877.
+/// over 273 nodes, 0.06ms over 875 (a 16:9 pane fully zoomed out, flat), and
+/// 1.2ms over 14877.
 pub const MAX_DRAWN_NODES: usize = 20480;
 
 /// The longest wait the Delay bar offers before a melody/bass ring starts

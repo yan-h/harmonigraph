@@ -181,17 +181,17 @@ pub(super) fn view_pane(ui: &mut egui::Ui, state: &mut SharedState) {
         });
     }
 
-    // How deep the lattice runs, which is the only one of the three axes still
-    // asked here. The fifths and thirds sheet has no extent to set: it is
-    // unbounded, and what is drawn of it is whatever the pane is looking at
+    // How deep the lattice runs, which is the only one of the three axes asked
+    // here. The fifths and thirds sheet has no extent to set: it is unbounded,
+    // and what is drawn of it is whatever the pane is looking at
     // (`ViewConfig::scrolled`) — pan and the window walks with you. The camera
-    // above is therefore how you get to a part of the lattice, and the bars
-    // that used to say how much of it existed would now be saying nothing.
+    // above is how you get to a part of the lattice, so a bar saying how much
+    // of it exists would be a bar saying nothing.
     //
-    // The sevens axis is different in kind, not just left over: its extent is
-    // how many sheets there ARE, which the pane cannot answer, because a sheet
-    // is not drawn somewhere on screen for the camera to find — it is drawn
-    // over the home one at an offset.
+    // The sevens axis is different in kind rather than merely spared: its
+    // extent is how many sheets there ARE, which the pane cannot answer,
+    // because a sheet is not drawn somewhere on screen for the camera to find
+    // — it is drawn over the home one at an offset.
     section(ui, "Extents");
     for (extent, range, label) in [
         // Ranges must contain the ViewConfig defaults or the bar could never

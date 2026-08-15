@@ -264,10 +264,21 @@ impl Camera {
     /// extremes are at the ends. Cabinet's shear and perspective's spread are
     /// both covered by that, differing only in which end is the wide one.
     ///
-    /// `None` where the geometry has no rectangle to give: under a steep
-    /// perspective pitch the corner lines run nearly ALONG the sheets, and the
-    /// visible span of a sheet genuinely is unbounded there. The caller wants
-    /// its own fallback for that rather than an enormous number.
+    /// `None` where a corner's line lies IN the sheets rather than crossing
+    /// them, so there is no crossing to take as a bound. That is a narrower
+    /// case than it sounds, and it is worth naming precisely rather than as
+    /// "a steep camera": the span tested is the line's reach in world z across
+    /// the whole clip range, which stays around 13 even at the pitch limit
+    /// under perspective. Sweeping 118080 cameras — the full yaw circle, the
+    /// whole pitch range, five aspects, three distances, three projections —
+    /// it is answered for 1232 of them, every one orthographic with yaw within
+    /// a rounding error of a quarter turn.
+    ///
+    /// So this is not what handles the camera whose honest window is
+    /// unbounded; a steep perspective pitch returns a real and enormous
+    /// rectangle, and [`MAX_DRAWN_NODES`](crate::MAX_DRAWN_NODES) is what
+    /// bounds the work there. This one case is the degenerate matrix, and the
+    /// caller wants its own fallback for it.
     pub fn visible_world_bounds(&self, aspect: f32, z_lo: f32, z_hi: f32) -> Option<(Vec2, Vec2)> {
         let inverse = self.view_proj(aspect).inverse();
         // A world point from a clip-space one, perspective divide included —

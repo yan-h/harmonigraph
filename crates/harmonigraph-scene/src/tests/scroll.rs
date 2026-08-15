@@ -128,14 +128,17 @@ fn a_cabinet_pane_never_draws_a_node_the_reach_cannot_name() {
     }
 }
 
-/// No cabinet camera reaches the node budget, at any pane, zoom, depth or
-/// shear — so under the projection this feature is FOR, the cap is a thing
-/// that exists rather than a thing that happens.
+/// No cabinet camera reaches the node budget on a pane of ordinary shape, at
+/// any zoom, depth or shear — so under the projection this feature is FOR, the
+/// cap is a thing that exists rather than a thing that happens.
 ///
-/// It holds because cabinet faces the sheet by construction: the orbit is
-/// ignored, so there is no pitch that lays the lattice edge-on and no camera
-/// whose honest window is unbounded. The other two projections have both, and
-/// this is the guarantee they cannot give.
+/// Ordinary is the load-bearing word, and 3:1 is where the sweep stops because
+/// that is about where the guarantee does. Cabinet's window is bounded at
+/// every setting — it faces the sheet, so no orbit lays the lattice edge-on —
+/// but bounded is not the same as under the cap: past roughly 3.5:1 with full
+/// depth it reaches this one, and `Layout::split` will hand the lattice a
+/// fifth of a 21:9 frame, which is 11.7:1. See [`MAX_DRAWN_NODES`] for what
+/// the trim costs there and why the cap is not simply raised past it.
 #[test]
 fn a_cabinet_camera_never_reaches_the_node_budget() {
     let mut worst = 0;
@@ -229,11 +232,10 @@ fn the_window_is_not_much_wider_than_the_pane() {
 ///
 /// The whole feature in one test, and swept over all three deliberately.
 /// Cabinet is the projection that cannot fail it — its pan runs along the
-/// sheet by construction — so a test that panned only the default camera was
-/// checking the one case that was already right. The other two move the
-/// target through the sheets as well as across them, and left unhandled that
-/// walked the lattice clean off the pane while the frame went on deriving
-/// twenty thousand nodes for it.
+/// sheet by construction — so panning only the default camera would check the
+/// one case that is right for free. The other two move the target through the
+/// sheets as well as across them, which unhandled walks the lattice clean off
+/// the pane while the frame goes on deriving twenty thousand nodes for it.
 #[test]
 fn panning_a_long_way_keeps_the_window_full() {
     let aspect = 16.0 / 9.0;

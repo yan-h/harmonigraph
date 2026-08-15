@@ -114,9 +114,9 @@ pub struct SharedState {
     /// How many nodes the docked lattice built last frame — the perf
     /// overlay's node count.
     ///
-    /// It has to be reported rather than computed from the view, because
-    /// there is no longer a number in the view to compute it from: the drawn
-    /// window is derived per pane from that pane's own aspect
+    /// Reported rather than computed from the view, because the view holds no
+    /// number to compute it from: the drawn window is derived per pane from
+    /// that pane's own aspect
     /// ([`harmonigraph_scene::ViewConfig::scrolled`]), so the only place the
     /// count exists is inside the draw that built it.
     ///
