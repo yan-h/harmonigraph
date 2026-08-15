@@ -871,11 +871,15 @@ fn name_extent(name: &NoteName, size: f32) -> egui::Vec2 {
 /// node names the note, instead of the pitch dropping to a spelling the
 /// lattice is visibly contradicting one pane away.
 ///
-/// The equal-tempered fallback is what is left when neither window has a node
+/// The equal-tempered fallback is what is left when NEITHER window has a node
 /// — still a [`NoteName`], so it draws identically and there is one rendering
-/// path rather than two. It is a real case, and now exactly the case the red
-/// band is drawn for: nothing on the lattice is showing this note, and a note
-/// with no name at all would just look like a bug.
+/// path rather than two. It is a real case, and a narrower one than the red
+/// band's: the band asks the picture alone, so a pitch the reach can spell
+/// while the pane is not drawing it wears a band and still gets its lattice
+/// name. That is the two answering the two different questions they are for —
+/// the band says what is on screen, the name says what the note is called —
+/// and a name that changed under a pan would be the worse of the two to make
+/// agree. A note with no name at all would just look like a bug.
 fn note_name(view: &ViewConfig, shown: &DrawnWindow, tuning: &Tuning, midi: f32) -> NoteName {
     // Cents from C, measured from MIDI 0 (which IS a C) — the same reduction
     // the pane's hover makes before asking the same question.

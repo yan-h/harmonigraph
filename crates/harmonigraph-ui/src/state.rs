@@ -977,15 +977,21 @@ impl SharedState {
     /// The block of lattice the picture is currently showing, which is what
     /// every "is this pitch on the lattice" question has to be asked of.
     ///
-    /// Three panes ask it and they must agree, because they are all describing
-    /// the same picture: the analyzer's red band says a sounding note has no
-    /// node, the Notes pane's column says which node, and the analyzer's name
-    /// falls back to equal temperament when there is none. Asking the view's
-    /// REACH instead — which is what they all did — makes them contradict what
-    /// the lattice is drawing, because the drawn window is the camera's and
-    /// runs wider than the reach under everything but cabinet: at 16:9, fully
+    /// Two readers ask it and they must agree, because they are describing the
+    /// same picture: the analyzer's red band says a sounding note has no node,
+    /// and the Notes pane's column says which node. Asking the view's REACH
+    /// instead — which is what they both did — makes them contradict what the
+    /// lattice is drawing, because the drawn window is the camera's and runs
+    /// wider than the reach under everything but cabinet: at 16:9, fully
     /// zoomed out, perspective draws 73% of its nodes outside it, so a lit
     /// node could wear a red band down the spectrum.
+    ///
+    /// The analyzer's NAME is a third reader and asks differently on purpose —
+    /// the reach first, this only where the reach comes up empty — so a name
+    /// does not move under a pan. The two answers are allowed to differ, and
+    /// where they do the picture is what wears the band: a pitch the reach can
+    /// spell but the pane is not drawing is named and banded at once. See
+    /// [`note_name`](crate::panes::spectral::names).
     ///
     /// The reach is the fallback rather than the answer, for the frame before
     /// the first lattice draw and for a layout with no lattice pane in it at
