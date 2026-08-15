@@ -202,6 +202,18 @@ pub struct SharedState {
     /// is what a project saves and a take renders from, and a length in POINTS
     /// is a fact about the window this session happens to be open in.
     pub(crate) spectrum_hold: panes::spectral::SpectrumHold,
+    /// How the Spiral pane is FRAMED — how far its disc is magnified past the
+    /// fit, and which point of it the pane is looking at (persisted; see
+    /// [`panes::spiral::SpiralView`]).
+    ///
+    /// Beside `spectrum_config` rather than inside it, because the two answer
+    /// different questions about one analyzer: that says what is being shown —
+    /// pitch range, level window, tilt, gradient — and both panes read it whole,
+    /// which is what makes "loud" and "high" mean the same thing in each. This
+    /// says how closely one of the two pictures is being looked at, and is the
+    /// lattice's [`camera`](Self::camera) with a disc in front of it rather than
+    /// a lattice.
+    pub spiral_view: panes::spiral::SpiralView,
     /// Offline playhead render: the whole take's spectrogram laid out
     /// statically with a playhead at `now`, instead of the live scrolling
     /// window. `Some` only in the offline renderer. Runtime-only, never
@@ -250,6 +262,18 @@ pub struct SharedState {
     /// only thing that reads it, and the offline renderer never reaches
     /// there.
     pub ui_scale: f32,
+    /// Where the performance overlay's top-left corner sits, in editor
+    /// points. Persisted; `None` until the HUD is dragged, which is the only
+    /// thing that ever writes it (see [`crate::perf::draw_overlay`]).
+    ///
+    /// Here rather than in `view` for the reason `ui_scale` above it is: the
+    /// overlay is a development instrument over the picture and never part of
+    /// one, so where it was pushed to on this screen has no business in
+    /// [`ViewConfig`], which is what a recorded frame is composed from. The
+    /// blob itself does travel — a take carries one — but nothing but
+    /// [`root_ui`](crate::root_ui) reads this, and the offline renderer never
+    /// draws the HUD at all, so no render can be composed from it.
+    pub perf_pos: Option<egui::Pos2>,
 }
 
 /// The pane layout: the arrangement itself, what each sideways fold is holding,
@@ -260,8 +284,7 @@ pub struct SharedState {
 /// read in one stretch of [`root_ui`](crate::root_ui) — the block that moves
 /// the dock out, hands the fields to [`fold`] as arguments, draws, paints the
 /// rails and writes the dock back — and everything else that touches it takes
-/// one or two members for a stated reason: `pane_body` reads the dock to find
-/// which pane the performance overlay may hang on, `save_persist` and
+/// one or two members for a stated reason: `save_persist` and
 /// `load_persist` carry [`dock`](Self::dock) and [`folds`](Self::folds) because
 /// those two are the members that survive a session, and [`crate::shell`] sets
 /// [`min_window_width`](Self::min_window_width) on the way in and spends
@@ -536,11 +559,11 @@ impl CameraPreset {
 /// measured, which is why those panes are sections of the Display tab rather
 /// than tabs of their own.
 ///
-/// Widening the column is what scrolling the TAB BAR would cost, and the
-/// price is charged to the picture twice over: a smaller fraction buys the
-/// bar a narrower window to survive, but it also takes width off the Spectral
-/// pane, which is already within a few points of being narrower than the perf
-/// HUD it has to contain. So the column is not widened on account of the bar.
+/// Widening the column is what scrolling the TAB BAR would cost, and the price
+/// is charged to the picture: a smaller fraction buys the bar a narrower window
+/// to survive, and takes that width straight off the Spectral pane, which is
+/// the narrowest picture the default layout has. So the column is not widened
+/// on account of the bar.
 ///
 /// `every_settings_tab_fits_on_its_tab_bar` (in `tests::shell`, so not linkable
 /// from here) is what checks it — at `DEFAULT_SIZE` and at the window the UI
@@ -639,12 +662,14 @@ impl SharedState {
             spectrum: AudioSpectrum::default(),
             spectrum_config: SpectrumConfig::default(),
             spectrum_hold: panes::spectral::SpectrumHold::default(),
+            spiral_view: panes::spiral::SpiralView::default(),
             whole_song: None,
             workspace: Workspace::default(),
             display_sections: panes::display::DisplaySections::default(),
             instruments: Instruments::default(),
             fps_cap: None,
             ui_scale: default_ui_scale(),
+            perf_pos: None,
         }
     }
 
@@ -677,9 +702,11 @@ impl SharedState {
             view: self.view.clone(),
             camera_presets: self.camera_presets.clone(),
             spectrum: self.spectrum_config,
+            spiral: self.spiral_view,
             render: self.take.render_config.clone(),
             fps_cap: self.fps_cap,
             ui_scale: self.ui_scale,
+            perf_pos: self.perf_pos,
         })
         .unwrap_or_default()
     }
@@ -820,6 +847,12 @@ impl SharedState {
         }
         self.spectrum_config = persist.spectrum;
         self.spectrum_config.sanitize();
+        // The Spiral pane's framing, repaired for the reason the camera beside it
+        // is: it multiplies the geometry that pane paints, and a NaN out of a
+        // hand-edited blob is a panic in egui's tessellator rather than a wrong
+        // picture.
+        self.spiral_view = persist.spiral;
+        self.spiral_view.sanitize();
         self.take.render_config = persist.render;
         self.take.render_config.sanitize();
         self.fps_cap = persist.fps_cap;
@@ -828,6 +861,12 @@ impl SharedState {
         // would take a hand-edited 5.0 down to the top of the range while
         // the bar went on saying 500%.
         self.ui_scale = crate::theme::sane_ui_scale(persist.ui_scale);
+        // A hand-edited NaN is dropped rather than honoured, on the grounds
+        // the spiral framing above is repaired on: it positions drawn
+        // geometry, and NaN geometry is a panic inside egui's tessellator. A
+        // dropped position opens the HUD where an undragged one opens, which
+        // is a place the user can see it and drag it from.
+        self.perf_pos = persist.perf_pos.filter(|pos| pos.is_finite());
         true
     }
 }
@@ -925,6 +964,10 @@ pub(crate) struct UiPersist {
     pub(crate) camera_presets: Vec<CameraPreset>,
     #[serde(default)]
     pub(crate) spectrum: SpectrumConfig,
+    /// The Spiral pane's framing, beside the analyzer settings both panes share
+    /// — see [`SharedState::spiral_view`] for why it is not one of them.
+    #[serde(default)]
+    pub(crate) spiral: panes::spiral::SpiralView,
     #[serde(default)]
     pub(crate) render: RenderConfig,
     /// A missing cap reads as uncapped.
@@ -938,6 +981,10 @@ pub(crate) struct UiPersist {
     /// state, so it defaults its fields one at a time and requires `panes`.
     #[serde(default = "default_ui_scale")]
     pub(crate) ui_scale: f32,
+    /// Where the performance overlay was dragged to; a blob without one opens
+    /// it where an undragged HUD opens. See [`SharedState::perf_pos`].
+    #[serde(default)]
+    pub(crate) perf_pos: Option<egui::Pos2>,
 }
 
 /// Parse just the render settings out of a persisted UI-state blob — so the

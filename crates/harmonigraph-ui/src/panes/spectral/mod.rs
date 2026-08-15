@@ -22,6 +22,12 @@ mod settings;
 
 pub(super) use settings::spectrum_settings_pane;
 pub(crate) use gestures::{hold_spectrum, SpectrumHold};
+/// The wheel's gain, shared with the [`spiral`](super::spiral) pane so that one
+/// wheel over one analyzer drawn two ways spins at one rate — see
+/// [`ZOOM_PER_SCROLL_POINT`](gestures::ZOOM_PER_SCROLL_POINT) for the rate and
+/// [`navigate`](super::spiral::navigate) for why the two panes do different
+/// things with it.
+pub(crate) use gestures::ZOOM_PER_SCROLL_POINT;
 /// The Span drag's gain, reached by `spectrogram`'s
 /// `a_span_drag_refolds_once_per_rung_crossed` so that its fixture drags at the
 /// rate the pane drags at rather than at a copy of it — the whole claim there

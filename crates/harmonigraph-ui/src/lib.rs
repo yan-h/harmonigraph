@@ -46,6 +46,12 @@ pub use config::{
     SpectralOrientation, SpectrogramPreset, SpectrumConfig, SpectrumWindow, SCALE_BAR_RANGE,
     TILT_STEPS,
 };
+// The Spiral pane's framing, which is `SharedState::spiral_view`'s type. `panes`
+// is private, so a public field of a type from in there is a field nothing
+// outside can name, read into a variable or construct — which puts it on the
+// footing `SpectrumConfig` above and `harmonigraph_scene::Camera` already have,
+// those being the two fields its own doc measures itself against.
+pub use panes::spiral::SpiralView;
 // The render settings live in `harmonigraph-take` because they are take
 // payload: a take carries the frame it was composed at, so a re-render
 // reproduces that framing rather than whatever the editor is set to now.
@@ -340,8 +346,8 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     }
 
     // Performance overlay: fold this frame's numbers in and, if it's on, draw
-    // the corner HUD. Interactive path only — the offline renderer never
-    // reaches root_ui, so nothing here touches a recorded frame.
+    // the HUD. Interactive path only — the offline renderer never reaches
+    // root_ui, so nothing here touches a recorded frame.
     //
     // The fallback counts are BORROWED by the costs — how many restart reasons
     // there are is this crate's business and not the model's — so the array
@@ -365,54 +371,17 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
         },
     );
     if state.view.show_perf {
+        // The whole editor, which is the region the HUD may be dragged around
+        // in — where inside it the HUD sits is the user's, and `perf_pos` is
+        // where that answer lives.
         perf::draw_overlay(
             ui.ctx(),
-            perf_overlay_area(state, ui.max_rect(), ui_scale),
+            ui.max_rect(),
+            &mut state.perf_pos,
             &state.instruments.perf,
             state.view.show_perf_detail,
         );
     }
-}
-
-/// Where the performance overlay hangs its top-right corner: the Spectral
-/// pane's body, so the HUD sits over the spectrogram rather than over the
-/// lattice, which is the picture being watched.
-///
-/// The Lattice's body when the analyzer is not on screen — another tab
-/// selected in its leaf, or the leaf folded away — so the overlay never
-/// strands itself on a pane nobody can see. A tab BODY either way, and that
-/// is the point rather than a detail of which pane: dock chrome lives along
-/// the top of the window, so the HUD hung on the window instead lands ON it,
-/// over the settings column's tab bar and, with the column folded, over the
-/// collapse arrow that brings a pane back. Covering the control that undoes
-/// the fold is the worst place on screen for it, and it is exactly where
-/// folding the analyzer would otherwise put it.
-///
-/// `editor` is the last resort, for a dock with neither picture on screen,
-/// and is inset past the tab bar on the same grounds.
-fn perf_overlay_area(state: &SharedState, editor: egui::Rect, scale: f32) -> egui::Rect {
-    pane_body(state, &panes::Tab::Spectral)
-        .or_else(|| pane_body(state, &panes::Tab::Lattice))
-        .unwrap_or_else(|| {
-            let mut area = editor;
-            area.min.y += theme::tab_bar_height(scale);
-            area
-        })
-}
-
-/// A docked tab's drawn surface, or `None` when it is not on screen.
-fn pane_body(state: &SharedState, tab: &panes::Tab) -> Option<egui::Rect> {
-    let path = state.workspace.dock.find_tab(tab)?;
-    let egui_dock::Node::Leaf(leaf) = &state.workspace.dock[path.surface][path.node] else {
-        return None;
-    };
-    // `viewport` is the tab BODY; the picture panes drop their margin, so it
-    // is exactly the drawn surface. `Rect::NOTHING` until the dock has laid
-    // out once (a first frame, or a freshly loaded layout) — and STALE while
-    // the leaf is collapsed, which is why the flag is checked rather than the
-    // rect: a folded leaf keeps the viewport it had when it was open.
-    (!leaf.collapsed && leaf.active == path.tab && leaf.viewport.is_positive())
-        .then_some(leaf.viewport)
 }
 
 /// Everything that must happen once per frame before any pane draws:
