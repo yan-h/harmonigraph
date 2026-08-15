@@ -163,6 +163,12 @@ pub struct SharedState {
     /// The Spectral pane's settings (the Display tab's Analyzer section;
     /// persisted).
     pub spectrum_config: SpectrumConfig,
+    /// What the analyzer's divider is holding while its pane is resized — the
+    /// spectrum keeps its size and the spectrogram takes the difference. See
+    /// [`panes::spectral::SpectrumHold`]. Runtime-only: it holds a length in
+    /// POINTS, which is a fact about the window this session is open in and not
+    /// about the look a project saves.
+    pub(crate) spectrum_hold: panes::spectral::SpectrumHold,
     /// Offline playhead render: the whole take's spectrogram laid out
     /// statically with a playhead at `now`, instead of the live scrolling
     /// window. `Some` only in the offline renderer. Runtime-only, never
@@ -597,6 +603,7 @@ impl SharedState {
             take: TakeState::default(),
             spectrum: AudioSpectrum::default(),
             spectrum_config: SpectrumConfig::default(),
+            spectrum_hold: panes::spectral::SpectrumHold::default(),
             whole_song: None,
             workspace: Workspace::default(),
             display_sections: panes::display::DisplaySections::default(),

@@ -268,3 +268,54 @@ fn the_divider_still_wins_the_drag_over_the_pane_behind_it() {
     // them leaves the other as a way through.
     assert_eq!(after.ceiling_db, before.ceiling_db, "nor zoom the Level, on the other side");
 }
+
+/// The analyzer's PANE resizing resizes its spectrogram and leaves the
+/// spectrum the size it was — the same claim the pane's own suite makes about
+/// `hold_spectrum`, made here through the real dock, where the resize arrives
+/// as a window that changed rather than as a number handed to the hold.
+///
+/// Which is the layer that could go wrong on its own: the hold is applied at
+/// the dock's tab dispatch, from the size the tab body is about to hand the
+/// pane, and nothing in the pane would notice if that size were a frame stale
+/// or the body's rather than the picture's. A spectrum measured off the drawn
+/// pane says it landed.
+#[test]
+fn resizing_the_analyzer_resizes_the_spectrogram_and_not_the_spectrum() {
+    let mut state = fresh();
+    let mut h = DockHarness::new();
+    h.settle(&mut state);
+    // Left is the default orientation, so the analyzer's depth axis — the one
+    // the divider cuts — runs along the column's WIDTH, which is what a wider
+    // window gives it more of.
+    let depth = |state: &crate::SharedState| {
+        crate::pane_body(state, &crate::panes::Tab::Spectral)
+            .expect("the Spectral pane should be visible in the default dock")
+            .width()
+    };
+    let spectrum = |state: &crate::SharedState| {
+        (1.0 - state.spectrum_config.roll_fraction) * depth(state)
+    };
+    let (was, dialled) = (depth(&state), spectrum(&state));
+
+    h.screen.max.x += 400.0;
+    h.settle(&mut state);
+    let (now, kept) = (depth(&state), spectrum(&state));
+    assert!(now > was + 20.0, "the analyzer's pane should have grown ({was} -> {now})");
+    assert!((kept - dialled).abs() < 1.0, "the spectrum went {dialled} -> {kept}");
+    // The spectrogram is where the growth went, all of it.
+    let far = now - kept;
+    assert!(
+        (far - (was - dialled) - (now - was)).abs() < 1.0,
+        "the spectrogram got {far} of a pane that gained {}", now - was,
+    );
+
+    // And back: a window returned to its size returns the picture to its own.
+    h.screen.max.x -= 400.0;
+    h.settle(&mut state);
+    assert!(
+        (depth(&state) - was).abs() < 0.5 && (spectrum(&state) - dialled).abs() < 1.0,
+        "back at {} points the spectrum is {}, not the {dialled} it started at",
+        depth(&state),
+        spectrum(&state),
+    );
+}

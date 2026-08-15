@@ -316,6 +316,14 @@ pub struct SpectrumConfig {
     /// spectrum). 0 hides it; 1 gives the whole pane to the roll. Set by
     /// dragging the divider in the Spectral pane itself
     /// (`panes::spectral::gestures::drag_split`) — there is no bar for it.
+    ///
+    /// A share rather than a length in points, and that is what makes one
+    /// setting compose the same picture on the docked pane, the Video tab's
+    /// preview and an export at any resolution. What it costs is that a resized
+    /// pane would otherwise stretch BOTH regions, including the curve whose
+    /// height is its dB window — so the docked pane re-derives this on a resize
+    /// to keep the spectrum's own size (`panes::spectral::hold_spectrum`), and
+    /// the value here is the answer for the size the pane is now.
     pub roll_fraction: f32,
     /// Seconds of history the roll's depth spans.
     pub roll_seconds: f32,

@@ -21,6 +21,7 @@ pub(crate) mod spectrogram;
 mod settings;
 
 pub(super) use settings::spectrum_settings_pane;
+pub(crate) use gestures::{hold_spectrum, SpectrumHold};
 
 use crate::{theme, SharedState};
 use crate::panes::nearest_visible_node;
