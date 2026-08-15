@@ -953,8 +953,8 @@ mod tests {
         assert!(both.spectral.ring_draws(), "the ring's annulus is empty with the toggle on");
         assert!(!both.spectral.lit, "the ring relit the nodes, which is the other toggle's job");
         // The saw really is in the grid the ring reads. A count of loud
-        // buckets rather than a node count, because the reading is no longer
-        // per node: the ring is a window onto this one table, and what a given
+        // buckets rather than a node count, because the reading is not per
+        // node: the ring is a window onto this one table, and what a given
         // node shows of it is the shader's arithmetic (pinned on the GPU by
         // `the_audio_ring_reads_the_spectrum_around_each_octave`).
         let loud = both.spectral.levels.iter().filter(|&&level| level > 128).count();

@@ -315,8 +315,8 @@ mod tests {
         // just-tuned note lands ON its node rather than near it.
         state.tuning = harmonigraph_core::Tuning::just();
         // #351's reading conditions, and the reason this probe exists. Its
-        // "pull the extents in" is a ZOOM here: since #357 the drawn window is
-        // whatever the camera is looking at, and the extents set the naming
+        // "pull the extents in" is a ZOOM here: the drawn window is whatever
+        // the camera is looking at, and the extents set the naming
         // reach rather than the picture's edge — so the way to have fewer
         // nodes on screen is to look at fewer of them. The floor is the other
         // half, and it is unchanged: at −60 dB the comma neighbours haze over
