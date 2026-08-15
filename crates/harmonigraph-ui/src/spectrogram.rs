@@ -4384,6 +4384,95 @@ mod tests {
         }
     }
 
+    /// Scratch: whether the compose's row read scales across cores. Not an
+    /// assertion.
+    ///
+    /// The read is ~60% of a settled compose (`timing_mean_log`), and it is the
+    /// term a gesture's frames and its opening full-quality frame BOTH pay, so
+    /// it is the only candidate that helps whichever of the two is the symptom.
+    /// It is also embarrassingly parallel over columns: each writes its own
+    /// `h`-slice of the tile [`restart_pixels`] transposes, reading a slab
+    /// nothing else writes.
+    ///
+    /// What that is worth is a machine question rather than an arithmetic one —
+    /// this box is 6 performance cores and 2 efficiency ones, so the useful
+    /// figure is where the curve flattens, not the core count. Bare
+    /// `thread::scope` per call, which charges every run a spawn a pool would
+    /// not; read the shape, and treat the high-thread columns as a floor on
+    /// what a pool would reach.
+    ///
+    /// It comes out at about **2.5x** across all four rows — a dependent load
+    /// per bucket does not scale with cores the way arithmetic would. Quote the
+    /// RATIOS and not the absolutes: a busy machine moves the one-thread
+    /// baseline by 2x, which is the same warning #363 carries.
+    ///
+    /// The figure that matters most here is not a ratio at all. In one clean
+    /// run the settled zoomed-out build is 17.7 ms and the gesture-rows coarse
+    /// one is 4.8 ms, both SERIAL — so building a gesture's first frame coarse
+    /// is a 3.7x cut where parallelising that same build is 2.5x, and it costs
+    /// no threads inside the host process. Threads are what is left AFTER that,
+    /// and they are worth about 2.7 ms on each of a gesture's own frames.
+    ///
+    /// `cargo test -p harmonigraph-ui --release timing_compose_scaling -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn timing_compose_scaling() {
+        use std::time::Instant;
+
+        let full = PitchScale { min_midi: 16.0, max_midi: 135.0, span: 119.0 };
+        let tight = PitchScale { min_midi: 57.0, max_midi: 69.0, span: 12.0 };
+        let cfg = SpectrumConfig::default();
+        // The slab count a 12 s Span cuts a full-width 2x pane into.
+        let w = 752usize;
+
+        // Every bucket populated, so no run is degenerate and no read is
+        // skipped — the cost is the same either way, and this keeps it honest.
+        let mut power = vec![0u8; w * SPECTRUM_BINS];
+        for (i, v) in power.iter_mut().enumerate() {
+            *v = (30 + (i * 31) % 190) as u8;
+        }
+
+        let rows = 1408usize;
+        for (label, scale, h_rows, coarse) in [
+            ("settled out", &full, rows, false),
+            ("settled  in", &tight, rows, false),
+            ("gesture out", &full, gesture_rows(rows), true),
+            ("gesture  in", &tight, gesture_rows(rows), true),
+        ] {
+            let bins = bins_for(h_rows, scale, coarse);
+            let h = bins.len();
+            let shades = Shades::new(&cfg, &bins);
+            let mut tile = vec![Color32::BLACK; w * h];
+            let mut base = 0.0f64;
+            let mut line = format!("{label} {h:>4} rows:");
+            for threads in [1usize, 2, 4, 6, 8] {
+                let per = w.div_ceil(threads);
+                let t0 = Instant::now();
+                for _ in 0..8 {
+                    std::thread::scope(|s| {
+                        for (t, chunk) in tile.chunks_mut(per * h).enumerate() {
+                            let (bins, shades, power) = (&bins, &shades, &power);
+                            s.spawn(move || {
+                                for c in 0..chunk.len() / h {
+                                    let slab = slab_of(power, t * per + c);
+                                    for (r, b) in bins.iter().enumerate() {
+                                        chunk[c * h + r] = shades.at(r, b.read.of(slab));
+                                    }
+                                }
+                            });
+                        }
+                    });
+                }
+                let ms = t0.elapsed().as_secs_f64() * 1000.0 / 8.0;
+                if threads == 1 {
+                    base = ms;
+                }
+                line += &format!("  {threads}t {ms:5.2} ms ({:.2}x)", base / ms);
+            }
+            println!("{line}");
+        }
+    }
+
     /// Scratch: where [`RowRead::Mean`] spends a settled compose, and the
     /// answer that the `log2` is NOT where. Not an assertion.
     ///
