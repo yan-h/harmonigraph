@@ -318,12 +318,15 @@ pub struct SpectrumConfig {
     /// (`panes::spectral::gestures::drag_split`) — there is no bar for it.
     ///
     /// A share rather than a length in points, and that is what makes one
-    /// setting compose the same picture on the docked pane, the Video tab's
-    /// preview and an export at any resolution. What it costs is that a resized
-    /// pane would otherwise stretch BOTH regions, including the curve whose
-    /// height is its dB window — so the docked pane re-derives this on a resize
-    /// to keep the spectrum's own size (`panes::spectral::hold_spectrum`), and
-    /// the value here is the answer for the size the pane is now.
+    /// setting compose the same picture at every size it is drawn at — the
+    /// Video tab's preview and an export at any resolution alike.
+    ///
+    /// It is the DIAL, and nothing derives it: the docked pane holds the
+    /// spectrum's own size across a resize by drawing at a share of its own
+    /// (`panes::spectral::hold_spectrum`), and deliberately leaves this where
+    /// the drag left it. A render composes from what was dialled rather than
+    /// from whatever size the editor window happened to be at when the take was
+    /// recorded.
     pub roll_fraction: f32,
     /// Seconds of history the roll's depth spans.
     pub roll_seconds: f32,

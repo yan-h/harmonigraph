@@ -163,11 +163,14 @@ pub struct SharedState {
     /// The Spectral pane's settings (the Display tab's Analyzer section;
     /// persisted).
     pub spectrum_config: SpectrumConfig,
-    /// What the analyzer's divider is holding while its pane is resized — the
-    /// spectrum keeps its size and the spectrogram takes the difference. See
-    /// [`panes::spectral::SpectrumHold`]. Runtime-only: it holds a length in
-    /// POINTS, which is a fact about the window this session is open in and not
-    /// about the look a project saves.
+    /// Where the analyzer's divider stands on the DOCKED pane as that pane is
+    /// resized — the spectrum keeps its size and the spectrogram takes the
+    /// difference. See [`panes::spectral::SpectrumHold`].
+    ///
+    /// Runtime-only, and it is the answer rather than the setting: the dial
+    /// itself stays in [`spectrum_config`](Self::spectrum_config), because that
+    /// is what a project saves and a take renders from, and a length in POINTS
+    /// is a fact about the window this session happens to be open in.
     pub(crate) spectrum_hold: panes::spectral::SpectrumHold,
     /// Offline playhead render: the whole take's spectrogram laid out
     /// statically with a playhead at `now`, instead of the live scrolling

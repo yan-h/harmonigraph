@@ -26,10 +26,10 @@ pub(crate) use gestures::{hold_spectrum, SpectrumHold};
 use crate::{theme, SharedState};
 use crate::panes::nearest_visible_node;
 use axes::{
-    frequency_grid, label_anchor, level_grid, loudness, plot_budget, spectrum_share, text_scales,
+    frequency_grid, label_anchor, level_grid, loudness, plot_budget, text_scales,
     Axes, PitchScale, TimeAxis, LABEL_GAP_PT, LABEL_INSET_PT, MARKING_PT, PROFILE_PT,
 };
-use gestures::{drag_split, drag_zoom};
+use gestures::{drag_split, drag_zoom, spectrum_split};
 use egui::Sense;
 
 /// How faint a ruling is drawn against [`theme::hairline`], the pane's
@@ -161,16 +161,26 @@ pub(crate) fn spectral_pane(
     // where it has been dragged shut (`roll_fraction` 0 or 1) — otherwise
     // shutting it would be one-way. Whole-song has no divider: the spectrum
     // isn't drawn at all there.
+    // Where the divider stands as the frame opens: the dial, or the docked
+    // pane's hold on the spectrum's size (see `spectrum_split`). Both gestures
+    // take it rather than reading the config themselves, so the band a hand
+    // grabs is the line the picture shows.
+    let at_split = spectrum_split(state, surface);
     let divider = (!whole_song && (cfg.show_roll || cfg.show_spectrogram))
-        .then(|| drag_split(ui, &axes, state, surface));
-    drag_zoom(ui, &axes, &response, state, surface);
+        .then(|| drag_split(ui, &axes, state, surface, at_split));
+    drag_zoom(ui, &axes, &response, state, surface, at_split);
     // Re-snapshot: the two drags above just wrote `roll_fraction`, the pitch
     // range, the Span or the level ceiling, and everything below has to be this
     // frame's values, not the ones from before the drag. The ceiling is the
     // sharpest case — it is what `loudness` maps through, so a stale copy would
     // draw the curve and the heatmap a frame behind the hand dragging them.
+    //
+    // The split is re-read for the same reason and answers it by itself: a drag
+    // has just moved the dial out from under the hold, which `spectrum_split`
+    // reads as the hold no longer describing this picture — so the divider
+    // follows the pointer this frame, and the hold re-takes it on the next.
     let cfg = state.spectrum_config;
-    let split = if whole_song { 0.0 } else { spectrum_share(&cfg) };
+    let split = if whole_song { 0.0 } else { spectrum_split(state, surface) };
 
     // The axis: absolute pitch, linear in MIDI note = logarithmic in
     // frequency, so every octave gets equal room and every note draws at
