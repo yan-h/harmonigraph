@@ -58,8 +58,11 @@ whatever renderer the worktree happens to hold into the one slot the plugin
 spawns, so the editor gets the new build and exports keep coming out drawn by
 an old one, with nothing on screen saying so. PR #340's lead landed in the
 editor and was missing from every render for exactly this reason. The loader
-now warns when the renderer it is installing is much older than the plugin
-beside it, but the warning is a backstop, not the contract — build both.
+warns when the renderer it is installing predates the branch's HEAD — against
+HEAD rather than against the plugin dylib beside it, which is the tempting
+comparison and the wrong one, since two artifacts built from one source state
+are routinely minutes apart. The warning is a backstop, not the contract —
+build both.
 
 Then end your message telling Yan it's `loadable via ./load-plugin.sh
 <branch>`, and name the tag the overlay will show (see the `build-handover`

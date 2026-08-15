@@ -49,10 +49,12 @@ export comes back drawn the old way. PR #340's lead is the worked example: it
 was live in the editor within minutes and absent from every mp4 for hours.
 
 Which is why the build line in `CLAUDE.md` names both packages. `load-plugin.sh`
-warns when the renderer it installs is much older than the plugin beside it,
-and prints the age of the one it is leaving in place when a worktree built no
-renderer at all — but a warning during a load is a backstop for a build that
-should have happened.
+warns when the renderer it installs predates the branch's HEAD — the same
+"matches the last commit" test the table applies to the dylib, and NOT a
+comparison against the plugin beside it, which flags matched pairs as often as
+mismatched ones — and prints the age of the one it is leaving in place when a
+worktree built no renderer at all. But a warning during a load is a backstop
+for a build that should have happened.
 
 To check the live pair directly, without a render:
 
