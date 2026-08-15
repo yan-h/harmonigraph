@@ -4384,6 +4384,92 @@ mod tests {
         }
     }
 
+    /// Scratch: where [`RowRead::Mean`] spends a settled compose, and the
+    /// answer that the `log2` is NOT where. Not an assertion.
+    ///
+    /// The `log2` is the inviting target — one per ROW per COLUMN, 1408 x 752
+    /// of them on a full-height 2x pane, and the answer is quantized to a `u8`
+    /// step the moment it lands, so the accuracy a libm call buys is thrown
+    /// away before anything reads it. Standing a bit-trick in its place is
+    /// worth **1.16x** on this loop, 10.0 ms to 8.7 ms across a full-width
+    /// pane's columns. That is not a frame, and it is the whole of what
+    /// removing the call could ever pay, so the careful version — a version
+    /// that has to argue its error stays inside the rounding — is not worth
+    /// writing.
+    ///
+    /// What the same figure says instead is where the loop DOES go: 10.0 ms of
+    /// a 16.5 ms compose (`timing_zoom_costs`, 12 s zoomed out) is this read,
+    /// and inside it the cost is the `ROW_WEIGHT[top - v]` gather and its sum —
+    /// a dependent load per bucket, over runs that jointly cover the whole
+    /// spectrum whatever the row count. That does not vectorize, which is why
+    /// the coarse [`RowRead::Max`] rather than a faster mean is what a gesture
+    /// trades down to.
+    ///
+    /// `cargo test -p harmonigraph-ui --release timing_mean_log -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn timing_mean_log() {
+        use std::time::Instant;
+
+        // log2 on (0, 1] to about 0.002, which is 0.003 of a stored step —
+        // below the rounding this feeds, so the picture is the question this
+        // does NOT have to answer to bound the timing.
+        fn fast_log2(x: f32) -> f32 {
+            let bits = x.to_bits();
+            let exp = ((bits >> 23) & 0xFF) as i32 - 127;
+            let mant = f32::from_bits((bits & 0x007F_FFFF) | 0x3F80_0000);
+            exp as f32 + ((-0.344845 * mant + 2.024658) * mant - 1.674873)
+        }
+
+        let full = PitchScale { min_midi: 16.0, max_midi: 135.0, span: 119.0 };
+        let bins = bins_for(1408, &full, false);
+        let means =
+            bins.iter().filter(|b| matches!(b.read, RowRead::Mean { .. })).count();
+        // A slab with something in every bucket, so no run is degenerate.
+        let mut slab = [0u8; SPECTRUM_BINS];
+        for (i, v) in slab.iter_mut().enumerate() {
+            *v = (40 + (i * 7) % 180) as u8;
+        }
+
+        // The shipping arithmetic, and the same with the call swapped out.
+        let run = |log: fn(f32) -> f32| {
+            let t0 = Instant::now();
+            let mut sink = 0u32;
+            for _ in 0..200 {
+                for b in &bins {
+                    let (from, to) = match b.read {
+                        RowRead::Mean { from, to } => (from, to),
+                        _ => continue,
+                    };
+                    let r = &slab[from..to];
+                    let top = r.iter().copied().max().unwrap_or(0);
+                    if r.len() < 2 {
+                        sink += u32::from(top);
+                        continue;
+                    }
+                    let sum: f32 = r.iter().map(|&v| ROW_WEIGHT[usize::from(top - v)]).sum();
+                    let steps = -log(sum / r.len() as f32) * ROW_MEAN_STEPS;
+                    sink += u32::from(top.saturating_sub(steps.round() as u8));
+                }
+            }
+            (t0.elapsed().as_secs_f64() * 1000.0 / 200.0, sink)
+        };
+        let (real_ms, a) = run(f32::log2);
+        let (fast_ms, b) = run(fast_log2);
+        println!(
+            "{means} Mean rows of {}: libm {real_ms:.3} ms/column, bit-trick {fast_ms:.3} \
+             ms/column ({:.2}x) | sinks {a} {b}",
+            bins.len(),
+            real_ms / fast_ms,
+        );
+        // Scaled to the column count a full-width pane composes.
+        println!(
+            "  over 752 slabs: {:.1} ms -> {:.1} ms",
+            real_ms * 752.0,
+            fast_ms * 752.0
+        );
+    }
+
     /// Scratch harness for the zoom-performance audit: prints where a zoom
     /// frame's milliseconds go, at pane-realistic sizes. Not an assertion.
     /// Run by hand, in release:
