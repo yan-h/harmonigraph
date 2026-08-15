@@ -114,12 +114,12 @@ harmonigraph-perf        the performance overlay's instrumentation, with no
                          which a windowed shell fills in and this averages.
                          The overlay that DRAWS it is harmonigraph-ui.
 harmonigraph-ui          egui_dock pane shell: Lattice / Tuning / Display /
-                         Console / Spectral / Notes / Video / System tabs under
-                         src/panes/, where Display carries the Color & light,
-                         View, Nodes, Labels, Grid and Analyzer settings as
-                         collapsible sections rather than tabs. SharedState
-                         (the lattice's hovered node), ParamBackend trait
-                         abstracting "where params live".
+                         Console / Spectral / Spiral / Notes / Video / System
+                         tabs under src/panes/, where Display carries the
+                         Color & light, View, Nodes, Labels, Grid and Analyzer
+                         settings as collapsible sections rather than tabs.
+                         SharedState (the lattice's hovered node),
+                         ParamBackend trait abstracting "where params live".
 harmonigraph-take        the recorded input to a visualization: note events and
                          parameter automation on the audio clock, plus the
                          settings a render is composed from. Linked into the
