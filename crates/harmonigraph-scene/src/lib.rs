@@ -122,6 +122,21 @@ pub const MAX_DRAWN_NODES: usize = 20480;
 /// instrument rather than more of this one.
 pub const MARK_DELAY_MAX: f32 = 1.0;
 
+/// The narrowest and widest the spectral kernel can be set to
+/// ([`ViewConfig::spectral_width`]), in cents — the bar's two ends, and what
+/// `sanitize` holds a hand-edited view to.
+///
+/// The floor is a tenth of an analyzer bucket (3.125¢), which is as narrow as
+/// asking is worth: below it the kernel sits inside one bucket and the fold is
+/// reading a single 3.125¢ column of the spectrum, which is precisely the
+/// exposure the whole design avoids. The ceiling is a comfortable quarter-tone,
+/// wide enough to take in a tempered seventh's 31¢ miss with room over — past
+/// that the kernel starts admitting the NEXT lattice node's partials as well as
+/// this one's, and the constellation smears into a glow.
+pub const SPECTRAL_WIDTH_MIN: f32 = 1.0;
+/// See [`SPECTRAL_WIDTH_MIN`].
+pub const SPECTRAL_WIDTH_MAX: f32 = 50.0;
+
 /// Samples in the pitch->color lookup EVERYTHING pitch-colored reads: the
 /// disc, the trail and the piano roll on the CPU, the octave glyphs and their
 /// glow in the shader. The shader mirrors this length, and `harmonigraph-render`

@@ -33,6 +33,9 @@ pub mod notes;
 /// before rendering. The "Video" tab.
 pub mod render;
 pub mod spectral;
+// Not a pane — a post-pass the Lattice pane runs — but it is made of two of
+// them, and its own docs say so.
+pub mod spectral_fold;
 pub mod spiral;
 pub mod system;
 pub mod tuning;
