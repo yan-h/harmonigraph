@@ -3051,6 +3051,78 @@ mod tests {
         assert!(folds <= 8, "a horizontal drag re-folds {folds} times, not a handful");
     }
 
+    /// The two-step plan a gesture frame is built through, which
+    /// `draw_spectrogram` runs and no other test reaches: the FULL plan
+    /// decides the rows, [`gesture_rows`] cuts them, and the second plan
+    /// builds the short image.
+    ///
+    /// It has to land on the same rows on every frame of the gesture. The cut
+    /// is taken against the full plan each frame precisely so that it cannot
+    /// compound — fed its own previous answer it walks 704 -> 352 -> 256 down
+    /// to the floor over the frames of one drag, softening the picture the
+    /// longer the drag runs and restarting the ring on every frame of the way
+    /// down, which is the cost the gesture path exists to avoid.
+    #[test]
+    fn every_frame_of_a_gesture_plans_the_same_short_image() {
+        let columns = Columns { first: 3, len: 4000, newest: 12.0 };
+        // A pane under the floor, one between, and the full-height 2x pane —
+        // as points, which is what a pane is measured in.
+        for pitch_len in [120.0f32, 350.0, 704.0] {
+            let mut planned = std::collections::BTreeSet::new();
+            // Ten frames of a pitch drag: the scale moves every frame, the
+            // pane does not.
+            for frame in 0..10 {
+                let (min_midi, span) = (40.0 + frame as f32 * 0.5, 48.0 - frame as f32 * 0.9);
+                let view = |coarse: bool, max_rows: usize| PaneView {
+                    ppp: 2.0,
+                    max_rows,
+                    pitch_len,
+                    depth_len: 800.0,
+                    window: 30.0,
+                    scale: PitchScale { min_midi, max_midi: min_midi + span, span },
+                    cfg: SpectrumConfig::default(),
+                    whole: false,
+                    coarse,
+                };
+                // Exactly the pair of calls `draw_spectrogram` makes.
+                let full = Plan::new(&view(false, 8192), &columns);
+                let short = Plan::new(&view(true, gesture_rows(full.rows)), &columns);
+
+                assert_eq!(short.rows, gesture_rows(full.rows), "the cut reached the plan");
+                assert!(
+                    short.rows * GESTURE_MAGNIFY >= full.rows,
+                    "{pitch_len} pt: {} rows under {} is past the bound",
+                    short.rows,
+                    full.rows,
+                );
+                assert!(short.rows >= full.rows.min(GESTURE_ROWS), "under the floor");
+                planned.insert((full.rows, short.rows));
+            }
+            assert_eq!(
+                planned.len(),
+                1,
+                "{pitch_len} pt: the row count moved during the gesture: {planned:?}",
+            );
+        }
+        // And the floor case is a real one at these sizes rather than an
+        // argument: a 120 pt pane at 2x loses no rows at all.
+        let short = Plan::new(
+            &PaneView {
+                ppp: 2.0,
+                max_rows: 8192,
+                pitch_len: 120.0,
+                depth_len: 800.0,
+                window: 30.0,
+                scale: PitchScale { min_midi: 40.0, max_midi: 88.0, span: 48.0 },
+                cfg: SpectrumConfig::default(),
+                whole: false,
+                coarse: false,
+            },
+            &columns,
+        );
+        assert_eq!(gesture_rows(short.rows), short.rows, "a pane under the floor keeps its rows");
+    }
+
     /// Dragging the Span must not re-lay the grid on every frame of the drag.
     ///
     /// This is what [`live_slab`]'s ladder is for. A slab width taken straight
