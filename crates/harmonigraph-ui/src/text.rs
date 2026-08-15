@@ -259,9 +259,22 @@ const MAX_GLYPH_PX: f32 = 512.0;
 /// The learn badge still flushes, being chrome ABOUT the pane rather than
 /// something in the picture.
 pub(crate) const LATTICE_LEARN: u64 = 0;
+/// The spiral's rim names. ONE, where the analyzer has one per surface,
+/// because the spiral is drawn at most once in a frame: the dock holds one tab
+/// per pane, and the Video panel's preview composes `Layout::split`, which
+/// places no spiral at all. A hand-written offline layout with two spirals in
+/// it would want a second — the same assumption `draw_pane` already makes
+/// about the analyzer's texture slot.
+pub(crate) const SPIRAL_NAMES: u64 = 1;
 /// The analyzer's, one per surface (docked, then the preview).
+///
+/// LAST, and every constant above it: this is the one id here that is a
+/// function, so it is the only one whose range grows on its own. A constant
+/// placed inside that range collides with nothing until a surface is added and
+/// then collides in silence, which is why a new id goes above this line rather
+/// than after the number it happens to hand out today.
 pub(crate) fn spectral_labels(surface: usize) -> u64 {
-    1 + surface as u64
+    2 + surface as u64
 }
 
 /// One glyph as the mirror identifies it: its size, its character, and the
@@ -1508,14 +1521,20 @@ mod tests {
     /// lands wherever the second's was. The ids are hand-numbered and the
     /// analyzer's run from a base, which is what makes adding one a renumber
     /// rather than an append.
+    ///
+    /// Swept well past the two surfaces that exist, because the analyzer's is
+    /// the one id here that is a FUNCTION and a hand-written list of the
+    /// surfaces alive today cannot fail on the thing that makes it one: a
+    /// constant standing inside the run it hands out collides with nothing
+    /// until a surface is added, and then collides silently. Sweeping is what
+    /// holds the constants clear of that run rather than clear of `{0, 1}`.
+    const SURFACES: usize = 8;
     #[test]
     fn every_batch_drawn_in_a_frame_has_an_id_of_its_own() {
-        let ids = [
-            LATTICE_LEARN,
-            // The docked analyzer, then the Video pane's preview copy.
-            spectral_labels(0),
-            spectral_labels(1),
-        ];
+        let ids: Vec<u64> = [LATTICE_LEARN, SPIRAL_NAMES]
+            .into_iter()
+            .chain((0..SURFACES).map(spectral_labels))
+            .collect();
         let distinct: std::collections::HashSet<u64> = ids.iter().copied().collect();
         assert_eq!(distinct.len(), ids.len(), "two batches share an id: {ids:?}");
     }

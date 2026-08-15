@@ -192,8 +192,8 @@ pub(crate) fn draw_lattice(
 /// not one shared across all of them: the lattice's 0/1 and the roll's do
 /// not have to, and do not, mean the same live copy. `crate::text`'s
 /// `spectral_labels` is a THIRD, unrelated space — a text batch's flush id,
-/// not a GPU pane id — offset by one to leave room for its own
-/// `LATTICE_LEARN`.
+/// not a GPU pane id — offset to leave room for the constants that space
+/// hands out before it, `LATTICE_LEARN` and `SPIRAL_NAMES`.
 pub(crate) fn pane_id(surface: usize) -> u64 {
     surface as u64
 }
