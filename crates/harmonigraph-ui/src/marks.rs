@@ -814,12 +814,13 @@ pub(crate) fn mark_key(kind: MarkKind, size: f32, weight: f32, ppp: f32) -> Mark
 /// hangs off.
 ///
 /// That line is `anchor.y` under [`NameLead::Centred`] and only there. A name
-/// LED by its letter is slid before anything is emitted, and for the two
-/// vertical cardinals that slide has a y in it, so the reach a caller gets back
-/// is measured from a line the caller was not told about. Every consumer today
-/// is `Centred` -- the cents readout is the only one, and the roll discards the
-/// value -- so this is a contract to read before adding the next one, not a
-/// defect to go looking for.
+/// LED by its letter is slid before anything is emitted, and that slide has a y
+/// in it for any direction that is not flat -- both vertical cardinals, and
+/// every ray the spiral places a name on but two -- so the reach a caller gets
+/// back is measured from a line the caller was not told about. Every consumer
+/// of the VALUE is `Centred`: the cents readout is the only one, and the roll
+/// and the spiral both discard it. So this is a contract to read before adding
+/// the next one, not a defect to go looking for.
 ///
 /// Monospace for in-lattice text: labels align across nodes and match the
 /// technical feel of the readouts.
@@ -870,8 +871,20 @@ pub(crate) enum NameLead {
     /// The whole name centred on the point, box and all.
     Centred,
     /// The LETTER's ink flush against the point, the name running the way this
-    /// direction points -- one of the four screen cardinals, which is what the
-    /// callers have ([`Axes::dir_depth`](crate::panes::spectral::axes::Axes)).
+    /// direction points -- ANY screen direction, and the two callers use it
+    /// both ways: the roll hands it a pitch axis
+    /// ([`Axes::dir_depth`](crate::panes::spectral::axes::Axes)), which is one
+    /// of the four cardinals, and the spiral hands it a pitch class's own ray,
+    /// which is any angle on the circle.
+    ///
+    /// Nothing here has to name a screen side to do it. `stacked_name` slides
+    /// the layout by the LEAST projection of the letter's ink onto this
+    /// direction, taken over the ink box's four corners, which puts the ink
+    /// against the plane through the anchor at right angles to it. On a
+    /// cardinal that plane is a box edge and the slide reads the letter's side
+    /// bearing; on a diagonal it is a corner that touches, so the gap a reader
+    /// sees along the direction is the one asked for and the gap either side of
+    /// it is wider.
     ///
     /// The letter and not the whole name, and that is the trade issue #151
     /// holds rather than an oversight. A reader lines a column of names up by
