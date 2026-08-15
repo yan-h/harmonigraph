@@ -446,10 +446,17 @@ pub(crate) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
              With the spectrum on the RIGHT or along the BOTTOM it is on the \
              onset, pinned to a moment of the take: it travels with the picture \
              from the first frame of the note and the release changes nothing \
-             about it, at the price that a note held longer than the Span runs \
-             out of onset to travel with and parks its name on the far edge, \
-             and that a note younger than its own name wears it over the \
-             spectrum until its ribbon is long enough to hold it.\n\nSo this is \
+             about it, at the price that a note held longer than the Span \
+             carries its name off the far edge with its onset and scrolls the \
+             rest of its ribbon unnamed, and that a note younger than its own \
+             name wears it over the spectrum until its ribbon is long enough to \
+             hold it.\n\nEither way a name keeps the same small gap from the \
+             end it is written on: it leaves the picture when that end does, \
+             rather than waiting on the edge while its own note scrolls out \
+             from under it. The one thing that holds a name off that gap is \
+             the pane's outer edge, and only with the Roll/Analyzer split \
+             dragged so far that a young note's name has no analyzer left to \
+             lie over.\n\nSo this is \
              the switch between those \
              two, whichever way round the pane has them.\n\nThe offline \
              render's whole-song layout is anchored at the onset either way: \
