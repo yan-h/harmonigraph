@@ -82,9 +82,10 @@ fn quantized(pixels: f32) -> f32 {
 /// Rows the live image FLOORS at while its style is moving — a wheel or drag
 /// rewriting the pitch range, or the Level window on every frame of itself.
 /// Each of those frames restarts the ring, and a restart's compose is
-/// rows x slabs, so the rows are half of what the gesture trades away; the
-/// other half is the wide rows' read, which goes from the power mean to a
-/// plain max ([`RowRead::Max`]).
+/// rows x slabs, so the rows are the SMALLER of the two things a gesture
+/// trades away; the larger is the wide rows' read, which goes from the power
+/// mean to a plain max ([`RowRead::Max`]). See [`GESTURE_MAGNIFY`] for what
+/// each is worth.
 ///
 /// Four quanta of [`PANE_QUANTUM`], so a pane short enough to build this many
 /// rows anyway loses no height at all — it still takes the coarse READ, which
@@ -103,13 +104,22 @@ pub(crate) const GESTURE_ROWS: usize = 4 * PANE_QUANTUM as usize;
 /// line, which is a picture the pitch axis cannot be judged from during the
 /// very gesture that is judging it.
 ///
-/// Two is close to free because the ROWS are the cheap half of the trade,
-/// which is worth being exact about: measured over a 1024-slab window on a
-/// 1408-row pane, a restart zoomed out costs 16.0 ms at full rows and the
-/// settled read, 6.9 ms once the read alone goes coarse, 3.8 ms at half rows
-/// with it, and 1.7 ms at [`GESTURE_ROWS`]. The read swap is the 2.3x; the
-/// row cap past half buys the last 2 ms and spends the picture to do it.
+/// Two costs little because the ROWS are the cheap half of the trade, which
+/// is worth being exact about: measured over a 1024-slab window on a
+/// 1408-row pane, a restart zoomed out COMPOSES in 16.0 ms at full rows and
+/// the settled read, 6.9 ms once the read alone goes coarse, 3.8 ms at half
+/// rows with it, and 1.7 ms at [`GESTURE_ROWS`]. The read swap is the 2.3x;
+/// the row cap past half buys the last 2 ms and spends the picture to do it.
 /// `timing_parts` is that table.
+///
+/// It is a table of COMPOSE, and the upload is the term it does not carry:
+/// `timing_parts` ends at [`restart_pixels`], which returns the pixels rather
+/// than uploading them, so the figures above stop where the GPU begins. The
+/// rows are on that side too — a full-width gesture frame's image goes from
+/// 2.1 MB at [`GESTURE_ROWS`] to 5.8 MB here, re-uploaded on every frame of a
+/// drag — and no harness in the tree can time it, since it takes a real
+/// surface. So the number to raise this constant on is a frame rate watched
+/// during a pitch drag on a full-height pane, not another run of the table.
 const GESTURE_MAGNIFY: usize = 2;
 
 /// The rows a gesture frame builds for a pane that would settle at `rows`.
