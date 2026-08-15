@@ -227,11 +227,11 @@ pub(crate) fn draw_spectrogram(
     };
     let mut plan = Plan::new(&view, &columns);
 
-    // While the style is moving — a pitch wheel, a Level drag, a palette bar,
-    // the Span crossing a slab rung — every frame restarts the ring, so the
-    // frame builds the COARSE image instead: rows capped and stretched over
-    // the same pane, and wide rows reading a plain max (see
-    // [`crate::spectrogram::GESTURE_ROWS`] and
+    // While the style is moving — a pitch wheel, a Level drag, a palette bar —
+    // every frame restarts the ring, so the frame builds the COARSE image
+    // instead: rows down to a bounded magnification of the pane and stretched
+    // back over it, and wide rows reading a plain max (see
+    // [`gesture_rows`](crate::spectrogram::gesture_rows) and
     // [`RowRead::Max`](crate::spectrogram::RowRead)). One build at full
     // quality sharpens it once the style has held still — a frame nothing
     // else schedules when no audio is flowing and the pointer has let go, so
@@ -249,7 +249,9 @@ pub(crate) fn draw_spectrogram(
             crate::spectrogram::STYLE_SETTLE,
         ));
         view.coarse = true;
-        view.max_rows = view.max_rows.min(crate::spectrogram::GESTURE_ROWS);
+        // Against the rows the FULL plan settled on, so the bound is on the
+        // stretch a reader sees rather than on what the texture would take.
+        view.max_rows = crate::spectrogram::gesture_rows(plan.rows);
         plan = Plan::new(&view, &columns);
     }
 
