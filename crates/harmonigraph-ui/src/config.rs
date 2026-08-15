@@ -446,10 +446,10 @@ pub struct SpectrumConfig {
     ///   - Spectrum right or along the bottom, time running back against it:
     ///     the reading-first end is the ONSET. The name is pinned to a take
     ///     time, travelling with the picture from the first frame of the note
-    ///     and unchanged by the release — at the price that a note still
-    ///     sounding whose onset has scrolled off the far edge loses its name,
-    ///     and that a note younger than its own name has the name lying over
-    ///     the spectrum until its ribbon is long enough to hold it.
+    ///     and unchanged by the release — at the price that a note held longer
+    ///     than the Span runs out of onset to travel with and parks its name on
+    ///     the far edge, and that a note younger than its own name has the name
+    ///     lying over the spectrum until its ribbon is long enough to hold it.
     ///
     /// Turning this on asks for the other end, and so for the other of those
     /// two in whichever orientation the pane is in.
