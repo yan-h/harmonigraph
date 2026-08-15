@@ -282,7 +282,10 @@ fn panning_a_long_way_keeps_the_window_full() {
                     .is_some_and(|p| p.x.abs() <= 1.0 && p.y.abs() <= 1.0)
             })
             .count();
-        assert!(on_pane > 100, "{projection:?}: only {on_pane} nodes are on the pane after panning");
+        assert!(
+            on_pane > 100,
+            "{projection:?}: only {on_pane} nodes are on the pane after panning",
+        );
 
         // The target is left inside one cell of the origin on EVERY axis. The
         // depth is the one that would otherwise grow without bound, since a
