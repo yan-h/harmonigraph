@@ -1915,6 +1915,7 @@ fn fill_pixels(cfg: &SpectrumConfig, w: usize, bins: &[Bin], power: &[BucketDb])
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::panes::spectral::DEPTH_ZOOM_PER_DRAG_POINT;
     use harmonigraph_core::spectrum::SPECTRUM_BINS;
 
     /// Slabs an aggregator is told to keep, where the test is about the values
@@ -3479,6 +3480,168 @@ mod tests {
         assert_eq!(restarts, 1, "the drag reallocated the ring");
     }
 
+    /// A Span drag CROSSING ladder rungs refolds once per rung, not once per
+    /// frame.
+    ///
+    /// [`dragging_the_span_holds_the_grid_between_ladder_steps`] stops just
+    /// inside both ends of one rung, so the crossing itself is the regime it
+    /// leaves out — and a crossing is the whole of what a horizontal zoom asks
+    /// of the aggregator. A crossed rung moves `bucket`, and a moved `bucket`
+    /// discards the grid and refolds the retention out of history
+    /// ([`SpectrogramAgg::rebuild`]).
+    ///
+    /// The COUNT is the claim here, because the cost of one is already known:
+    /// `timing_zoom_costs` measures a refold at 0.5-3 ms across the whole Span
+    /// range, which fits inside a 144 Hz frame beside a gesture's coarse
+    /// compose — once. What would not fit is the cascade the slack in
+    /// [`SpectrogramAgg::rebuild`] exists to prevent, where a widening drag
+    /// rebuilds flush to its window and is asked for something older on the
+    /// very next frame. That costs the same 0.5-3 ms EVERY frame for the
+    /// length of the drag, draws the identical picture, and is invisible to
+    /// everything except this counter.
+    ///
+    /// Driven as the pane drives it. The Span is exponential in drag distance
+    /// (`roll_seconds * (-along * DEPTH_ZOOM_PER_DRAG_POINT).exp()`) and the
+    /// rungs are powers of two, so the crossings are EVENLY spaced along the
+    /// drag — one every `ln 2 / DEPTH_ZOOM_PER_DRAG_POINT`, 116 points of
+    /// travel.
+    ///
+    /// The bound is on a drag that TRAVELS, and only on that. Distance is the
+    /// whole of what limits the count here, so a Span that stops moving stops
+    /// being bounded by anything this test says:
+    /// [`a_span_dithering_across_a_rung_refolds_every_frame`] is the same
+    /// aggregator, parked, refolding on every frame instead.
+    #[test]
+    fn a_span_drag_refolds_once_per_rung_crossed() {
+        let interval = crate::AudioSpectrum::FFT_INTERVAL;
+        let cols = LIVE_SLAB_CAP as usize;
+        let planned = cols + RING_HEADROOM;
+        // Two rungs of travel each way: 50 s sits in the 64 ms rung and 10 s on
+        // the ladder's floor, so a drag between them crosses at 32.768 s and
+        // 16.384 s. Below the floor the width cannot move at all, which is why
+        // the low end is not pushed further.
+        let (hi, lo) = (50.0f64, 10.0f64);
+
+        // Deep enough that the widest rung's retention is history rather than a
+        // store that simply ends: a rebuild reaches `planned` slabs back, which
+        // at this sweep's widest bucket is 66 s.
+        let mut history = crate::SpectrumHistory::default();
+        let settle = planned as f64 * live_slab(hi, cols) + hi;
+        for i in 0..(settle / interval) as usize {
+            history.push(col(i as f64 * interval, &[(4, 0.5), (10, 1.0)]));
+        }
+        let mut now = history.back().expect("filled").time;
+
+        let mut agg = SpectrogramAgg::new();
+        let mut widths = std::collections::BTreeSet::new();
+        // A steady drag on a 144 Hz display: 1.5 points of travel per frame, so
+        // the whole 50 s -> 10 s sweep is 268 points and takes 1.2 s. A
+        // deliberate zoom rather than a flick — and a slower one only adds
+        // frames, never crossings, which is the whole shape of the claim.
+        const FRAME: f64 = 1.0 / 144.0;
+        let step = (-1.5f64 * DEPTH_ZOOM_PER_DRAG_POINT as f64).exp();
+
+        let mut span = hi;
+        let mut frames = 0u32;
+        // Down the range and back up. Widening is the harder direction: it
+        // reaches back to slabs the window did not want a frame ago.
+        for narrowing in [true, false] {
+            loop {
+                span = if narrowing { span * step } else { span / step };
+                if narrowing && span < lo || !narrowing && span > hi {
+                    break;
+                }
+                frames += 1;
+                // Columns arrive on their own clock (125/s), not the frame's.
+                now += FRAME;
+                while history.back().is_none_or(|c| c.time + interval <= now) {
+                    let t = history.back().map_or(0.0, |c| c.time) + interval;
+                    history.push(col(t, &[(4, 0.5), (10, 1.0)]));
+                }
+                let bucket = live_slab(span, cols);
+                widths.insert((bucket * 1e6).round() as i64);
+                let first = history.partition_point(|c| c.time < now - span).saturating_sub(1);
+                let _ = agg.window(&history, first, bucket, planned);
+            }
+        }
+
+        assert_eq!(widths.len(), 3, "the sweep did not cross two rungs: {widths:?} us");
+        assert!(frames > 300, "the sweep never ran: {frames} frames");
+        // The opening build, then one per crossing in each direction. Anything
+        // approaching `frames` is the cascade above.
+        assert_eq!(
+            agg.rebuilds, 5,
+            "a {frames}-frame Span drag across 2 rungs each way refolded {} times",
+            agg.rebuilds,
+        );
+    }
+
+    /// A Span sitting ON a rung boundary refolds every frame, because the
+    /// ladder has no hysteresis.
+    ///
+    /// [`a_span_drag_refolds_once_per_rung_crossed`] bounds a drag that TRAVELS.
+    /// This is the other regime, and it is not a corner: [`live_slab`] re-decides
+    /// the rung from the window alone on every frame, so a Span parked within one
+    /// drag-point of a boundary alternates its slab width for as long as the hand
+    /// holds still. One point is 0.6% of the Span, which a resting finger clears
+    /// on tremor alone.
+    ///
+    /// Both caches then miss together, which is what makes it expensive rather
+    /// than merely frequent: `bucket` is the aggregator's one layout input AND a
+    /// [`ColumnStyle`] field, so every frame pays a full refold and a full
+    /// recompose — the cascade the test above shows a travelling drag avoids.
+    ///
+    /// Asserted as the cost it is rather than as a bug, since nothing here fixes
+    /// it. What would is hysteresis in [`live_slab`] — holding the current rung
+    /// until the window is some way past the boundary — and that is shipping-code
+    /// work with its own picture question, since the rung then depends on which
+    /// side the Span arrived from.
+    #[test]
+    fn a_span_dithering_across_a_rung_refolds_every_frame() {
+        let interval = crate::AudioSpectrum::FFT_INTERVAL;
+        let cols = LIVE_SLAB_CAP as usize;
+        let planned = cols + RING_HEADROOM;
+        // The boundary between the 32 ms and 64 ms rungs: `live_slab` steps up
+        // exactly where the window stops fitting in `cols` slabs.
+        let boundary = 0.032 * cols as f64;
+        let step = (-(DEPTH_ZOOM_PER_DRAG_POINT as f64)).exp();
+
+        let mut history = crate::SpectrumHistory::default();
+        let settle = planned as f64 * 0.064 + boundary;
+        for i in 0..(settle / interval) as usize {
+            history.push(col(i as f64 * interval, &[(4, 0.5), (10, 1.0)]));
+        }
+        let mut now = history.back().expect("filled").time;
+
+        let mut agg = SpectrogramAgg::new();
+        let mut widths = std::collections::BTreeSet::new();
+        const FRAME: f64 = 1.0 / 144.0;
+        // One point of tremor either way, alternating: the hand is still and the
+        // Span is not.
+        let mut frames = 0u32;
+        for i in 0..300 {
+            let span = if i % 2 == 0 { boundary * step } else { boundary / step };
+            frames += 1;
+            now += FRAME;
+            while history.back().is_none_or(|c| c.time + interval <= now) {
+                let t = history.back().map_or(0.0, |c| c.time) + interval;
+                history.push(col(t, &[(4, 0.5), (10, 1.0)]));
+            }
+            let bucket = live_slab(span, cols);
+            widths.insert((bucket * 1e6).round() as i64);
+            let first = history.partition_point(|c| c.time < now - span).saturating_sub(1);
+            let _ = agg.window(&history, first, bucket, planned);
+        }
+
+        assert_eq!(widths.len(), 2, "the dither did not straddle a rung: {widths:?} us");
+        // Every frame but the first, which is the opening build.
+        assert_eq!(
+            agg.rebuilds, frames,
+            "a Span parked on a rung boundary refolded {} times in {frames} frames",
+            agg.rebuilds,
+        );
+    }
+
     /// The same drag as above, with the Span read from where the pane reads it.
     ///
     /// [`dragging_the_span_holds_the_grid_between_ladder_steps`] sweeps a span
@@ -4291,6 +4454,234 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Scratch: whether the compose's row read scales across cores. Not an
+    /// assertion.
+    ///
+    /// The read is about two thirds of a settled compose (`timing_mean_log`, a
+    /// floor on the share), and it is the
+    /// term a gesture's frames and its opening full-quality frame BOTH pay, so
+    /// it is the only candidate that helps whichever of the two is the symptom.
+    /// It is also embarrassingly parallel over columns: each writes its own
+    /// `h`-slice of the tile [`restart_pixels`] transposes, reading a slab
+    /// nothing else writes.
+    ///
+    /// What that is worth is a machine question rather than an arithmetic one —
+    /// this box is 6 performance cores and 2 efficiency ones, so the useful
+    /// figure is where the curve flattens, not the core count. Bare
+    /// `thread::scope` per call, which charges every run a spawn a pool would
+    /// not; read the shape, and treat the high-thread columns as a floor on
+    /// what a pool would reach.
+    ///
+    /// It comes out at about **2.5x** across all four rows — a dependent load
+    /// per bucket does not scale with cores the way arithmetic would. Quote the
+    /// RATIOS and not the absolutes: a busy machine moves the one-thread
+    /// baseline by 2x, which is the same warning #363 carries.
+    ///
+    /// The figure that matters most here is not a ratio at all. In one clean
+    /// run the settled zoomed-out build is 17.7 ms and the gesture-rows coarse
+    /// one is 4.8 ms, both SERIAL — so building a gesture's first frame coarse
+    /// is a 3.7x cut where parallelising that same build is 2.5x, and it costs
+    /// no threads inside the host process. Threads are what is left AFTER that,
+    /// and they are worth about 2.7 ms on each of a gesture's own frames.
+    ///
+    /// `cargo test -p harmonigraph-ui --release timing_compose_scaling -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn timing_compose_scaling() {
+        use std::time::Instant;
+
+        let full = PitchScale { min_midi: 16.0, max_midi: 135.0, span: 119.0 };
+        let tight = PitchScale { min_midi: 57.0, max_midi: 69.0, span: 12.0 };
+        let cfg = SpectrumConfig::default();
+        // The slab count a 12 s Span cuts a full-width 2x pane into.
+        let w = 752usize;
+
+        // Every bucket populated, so no run is degenerate and no read is
+        // skipped — the cost is the same either way, and this keeps it honest.
+        let mut power = vec![0u8; w * SPECTRUM_BINS];
+        for (i, v) in power.iter_mut().enumerate() {
+            *v = (30 + (i * 31) % 190) as u8;
+        }
+
+        let rows = 1408usize;
+        for (label, scale, h_rows, coarse) in [
+            ("settled out", &full, rows, false),
+            ("settled  in", &tight, rows, false),
+            ("gesture out", &full, gesture_rows(rows), true),
+            ("gesture  in", &tight, gesture_rows(rows), true),
+        ] {
+            let bins = bins_for(h_rows, scale, coarse);
+            let h = bins.len();
+            let shades = Shades::new(&cfg, &bins);
+            let mut tile = vec![Color32::BLACK; w * h];
+            let mut base = 0.0f64;
+            let mut line = format!("{label} {h:>4} rows:");
+            for threads in [1usize, 2, 4, 6, 8] {
+                let per = w.div_ceil(threads);
+                let t0 = Instant::now();
+                for _ in 0..8 {
+                    std::thread::scope(|s| {
+                        for (t, chunk) in tile.chunks_mut(per * h).enumerate() {
+                            let (bins, shades, power) = (&bins, &shades, &power);
+                            s.spawn(move || {
+                                for c in 0..chunk.len() / h {
+                                    let slab = slab_of(power, t * per + c);
+                                    for (r, b) in bins.iter().enumerate() {
+                                        chunk[c * h + r] = shades.at(r, b.read.of(slab));
+                                    }
+                                }
+                            });
+                        }
+                    });
+                }
+                let ms = t0.elapsed().as_secs_f64() * 1000.0 / 8.0;
+                if threads == 1 {
+                    base = ms;
+                }
+                line += &format!("  {threads}t {ms:5.2} ms ({:.2}x)", base / ms);
+            }
+            println!("{line}");
+        }
+    }
+
+    /// Scratch: where [`RowRead::Mean`] spends a settled compose, and the
+    /// answer that the `log2` is NOT where. Not an assertion.
+    ///
+    /// The `log2` is the inviting target — one per ROW per COLUMN, 1408 x 752
+    /// of them on a full-height 2x pane, and the answer is quantized to a `u8`
+    /// step the moment it lands, so the accuracy a libm call buys is thrown
+    /// away before anything reads it. Standing a bit-trick in its place is
+    /// worth **1.20x** on the loop. That is not a frame, and it is the whole of
+    /// what removing the call could ever pay, so the careful version — one that
+    /// has to argue its error stays inside the rounding — is not worth writing.
+    ///
+    /// What the same run says instead is where the loop DOES go: the shipping
+    /// read is 10.7 ms of the 16.5 ms compose `timing_zoom_costs` measures at
+    /// these dimensions, about two thirds of it. Read that share as a FLOOR
+    /// rather than as a number — one slab is read here over and over, so the
+    /// buckets sit in L1 throughout, where the compose it is scaled against
+    /// walks 752 distinct slabs, some 2.9 MB, once each. The in-situ read can
+    /// only be dearer, which moves the share up and leaves the ratios alone,
+    /// since every arm shares the residency.
+    ///
+    /// And a lead this was not looking for: the hand-copied arm beats
+    /// [`RowRead::of`] by **1.35x** on byte-identical output, which is 2.8 ms of
+    /// a full-quality compose sitting in codegen rather than in arithmetic. Both
+    /// walk the same run and take the same branch; what differs is that one is a
+    /// call and the other is not. That is worth someone's afternoon before any
+    /// of the threading in `timing_compose_scaling`, because it costs no picture
+    /// and no host threads — but it is a lead and not a result, since nothing
+    /// here has looked at what the compiler actually emits.
+    ///
+    /// Inside the read the cost is the `ROW_WEIGHT[top - v]` gather and its sum —
+    /// a dependent load per bucket, over runs that jointly cover the whole
+    /// spectrum whatever the row count. That does not vectorize, which is why
+    /// the coarse [`RowRead::Max`] rather than a faster mean is what a gesture
+    /// trades down to.
+    ///
+    /// `cargo test -p harmonigraph-ui --release timing_mean_log -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn timing_mean_log() {
+        use std::time::Instant;
+
+        // log2 on (0, 1] to about 0.002, which is 0.003 of a stored step —
+        // below the rounding this feeds, so the picture is the question this
+        // does NOT have to answer to bound the timing.
+        fn fast_log2(x: f32) -> f32 {
+            let bits = x.to_bits();
+            let exp = ((bits >> 23) & 0xFF) as i32 - 127;
+            let mant = f32::from_bits((bits & 0x007F_FFFF) | 0x3F80_0000);
+            exp as f32 + ((-0.344845 * mant + 2.024658) * mant - 1.674873)
+        }
+
+        let full = PitchScale { min_midi: 16.0, max_midi: 135.0, span: 119.0 };
+        let bins = bins_for(1408, &full, false);
+        let means =
+            bins.iter().filter(|b| matches!(b.read, RowRead::Mean { .. })).count();
+        // A slab with something in every bucket, so no run is degenerate.
+        let mut slab = [0u8; SPECTRUM_BINS];
+        for (i, v) in slab.iter_mut().enumerate() {
+            *v = (40 + (i * 7) % 180) as u8;
+        }
+
+        // The baseline goes through [`RowRead::of`] itself. A copy of the
+        // arithmetic would read identically and measure whatever it had drifted
+        // into: this bench's conclusion is a RATIO against the shipping mean, so
+        // a baseline that is merely a good imitation of it answers a question
+        // nobody asked. Only the swapped arm below is a copy, and only because
+        // there is no way to reach inside `of` to replace the call.
+        let shipping = || {
+            let t0 = Instant::now();
+            let mut sink = 0u32;
+            for _ in 0..200 {
+                for b in &bins {
+                    if matches!(b.read, RowRead::Mean { .. }) {
+                        sink += u32::from(b.read.of(&slab));
+                    }
+                }
+            }
+            (t0.elapsed().as_secs_f64() * 1000.0 / 200.0, sink)
+        };
+        let swapped = |log: fn(f32) -> f32| {
+            let t0 = Instant::now();
+            let mut sink = 0u32;
+            for _ in 0..200 {
+                for b in &bins {
+                    let (from, to) = match b.read {
+                        RowRead::Mean { from, to } => (from, to),
+                        _ => continue,
+                    };
+                    let r = &slab[from..to];
+                    let top = r.iter().copied().max().unwrap_or(0);
+                    if r.len() < 2 {
+                        sink += u32::from(top);
+                        continue;
+                    }
+                    let sum: f32 = r.iter().map(|&v| ROW_WEIGHT[usize::from(top - v)]).sum();
+                    let steps = -log(sum / r.len() as f32) * ROW_MEAN_STEPS;
+                    sink += u32::from(top.saturating_sub(steps.round() as u8));
+                }
+            }
+            (t0.elapsed().as_secs_f64() * 1000.0 / 200.0, sink)
+        };
+        // Three arms, because two questions are being asked and one pair cannot
+        // answer both. The SHARE of a compose has to be read off the shipping
+        // path; the worth of the `log2` has to be read off a pair that differs
+        // in the call and in nothing else. Reading the log2 ratio against the
+        // shipping arm instead would credit it with the copy's own margin.
+        // Interleaved rounds, each arm scored by its BEST. One pass of an arm is
+        // some 20 us, which is short enough that a scheduler decision or a walk
+        // onto an efficiency core outweighs the thing being measured — run in
+        // sequence and scored by a single reading, these three swap order
+        // between runs. The minimum is the run that was not interrupted, and
+        // interleaving keeps a slow patch of machine from landing on one arm.
+        let (mut ship_ms, mut libm_ms, mut fast_ms) = (f64::MAX, f64::MAX, f64::MAX);
+        let (mut a, mut b, mut c) = (0, 0, 0);
+        for _ in 0..9 {
+            let s = shipping();
+            let l = swapped(f32::log2);
+            let f = swapped(fast_log2);
+            (ship_ms, libm_ms, fast_ms) =
+                (ship_ms.min(s.0), libm_ms.min(l.0), fast_ms.min(f.0));
+            (a, b, c) = (s.1, l.1, f.1);
+        }
+        assert_eq!((a, b), (b, c), "the three arms must compute the same column");
+        println!(
+            "{means} Mean rows of {}: shipping {ship_ms:.3} | copy+libm {libm_ms:.3} | \
+             copy+bit-trick {fast_ms:.3} ms/column",
+            bins.len(),
+        );
+        println!(
+            "  log2 is worth {:.2}x (copy vs copy) | the COPY beats `RowRead::of` by \
+             {:.2}x on identical output",
+            libm_ms / fast_ms,
+            ship_ms / libm_ms,
+        );
+        // Scaled to the column count a full-width pane composes.
+        println!("  over 752 slabs: shipping {:.1} ms", ship_ms * 752.0);
     }
 
     /// Scratch harness for the zoom-performance audit: prints where a zoom

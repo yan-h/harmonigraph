@@ -15,8 +15,10 @@
 //! written ON each ribbon, at one of its ends. The heatmap band under a
 //! ribbon is the same note, so naming the ribbon names the band.
 //!
-//! WHICH end is a setting, and the only thing it decides is what a name does
-//! while the key is still down — see [`Anchor`], which holds the trade.
+//! WHICH end is the layout's first and a setting's second: a name goes on the
+//! end that READS first, so the gap a reader measures — letter to ribbon end —
+//! is the same gap in all four orientations, and the setting asks for the
+//! other end. See [`Anchor::of`], which holds the trade.
 //!
 //! EVERY note, not one per pitch. The alternative — name a pitch the first
 //! time it is played and rule a line forward to carry it — reads well on paper
@@ -36,9 +38,12 @@
 //! when what is wanted is which node it IS — and for a just third, `E-` says
 //! it where "E +14\u{a2}" does not.
 //!
-//! Geometry comes from [`Axes`] like everything else in
-//! the pane, so names turn and flip with it and nothing here names a screen
-//! side.
+//! Geometry comes from [`Axes`] like everything else in the pane, so names turn
+//! and flip with it. One thing here does name a screen side, and only one:
+//! which END of a ribbon a name is written on ([`Anchor::of`]), because a name
+//! is a word and a word is read from its own left however the picture under it
+//! is turned. Everything downstream of that choice — the box, the growth, the
+//! clamp — reads the direction it hands back and names no side of its own.
 
 use std::collections::HashMap;
 
@@ -65,8 +70,10 @@ use crate::{theme, SharedState};
 pub(super) const LABEL_PT: f32 = 12.35;
 
 /// Points the name is set in from the end of the ribbon it is anchored to,
-/// along the time axis. Enough that the letter is not touching the end it
-/// starts from.
+/// along the time axis. Enough that the letter reads as standing OFF that end
+/// rather than as touching it — the air is what makes the name a label on the
+/// ribbon instead of another mark along it, and a letter set tight against the
+/// end reads as part of the drawing at the size these are set in.
 ///
 /// A distance on the SCREEN, and the one length here that does not go up with
 /// the type ([`NameScale::air`] carries it, not the type's own half of that
@@ -75,7 +82,7 @@ pub(super) const LABEL_PT: f32 = 12.35;
 /// but the gap between the ribbon's end and the letter is not part of the
 /// picture being magnified, it is the join between the name and the thing it
 /// names. Scaled along with everything else it opens as the range closes: a
-/// name set 2.6 points off its note at the whole axis sits 13 off it at the
+/// name set 4 points off its note at the whole axis sits 20 off it at the
 /// two-octave floor, so from a reader's side the names slide down the roll for
 /// as long as the zoom is being dragged — a movement the music did not make.
 ///
@@ -91,13 +98,13 @@ pub(super) const LABEL_PT: f32 = 12.35;
 ///
 /// | zoom | pinned by the box | pinned by the ink |
 /// |------|-------------------|-------------------|
-/// | 1    | 3.09              | 2.60              |
-/// | 2.23 | 4.13              | 2.60              |
-/// | 5    | 5.61              | 2.60              |
+/// | 1    | 4.49              | 4.00              |
+/// | 2.23 | 5.53              | 4.00              |
+/// | 5    | 7.01              | 4.00              |
 ///
 /// Time running DOWN the pane is the worse of the two, and by a long way: a
-/// line box stands well above its letter, so the same reading there goes 5.93 →
-/// 9.79 → 18.14, better than 12 points of drift where across the pane it is
+/// line box stands well above its letter, so the same reading there goes 7.33 →
+/// 11.19 → 19.54, better than 12 points of drift where across the pane it is
 /// 2.5. The vertical term is [`LINE_HEIGHT`]'s and not [`GLYPH_ADVANCE`]'s,
 /// which is why tightening the advance does nothing for it and pinning the ink
 /// does. See [`marks::NameLead`], where the ink is found, and issue #349.
@@ -108,7 +115,7 @@ pub(super) const LABEL_PT: f32 = 12.35;
 /// flat points would be a small share of a name's height in the video and most
 /// of one in the preview it is dialled in on, which is the divergence this
 /// codebase least wants.
-const LABEL_INSET: f32 = 2.6;
+const LABEL_INSET: f32 = 4.0;
 
 /// The two scales a name is laid out by, and the pitch zoom is what parts
 /// them.
@@ -523,22 +530,35 @@ pub(super) fn plan(
     // growing the way [`grow`] points. The two callers below differ in what
     // they do with the box, never in how it is measured.
     //
-    // A box growing toward the now-line is held off the roll's near edge. A
-    // note is younger than its own name for the first fraction of a second of
-    // it, and at the onset anchor there is no ribbon yet to lie over: the name
-    // reaches past that edge and over the SPECTRUM, which is another picture —
-    // the one this refuses to write names over at all when the roll is shut.
-    // So it sits against the edge and travels as soon as its ribbon is long
-    // enough to hold it, which is its own length of scrolling and no more; a
-    // name that came and went instead would blink at every note played, and one
-    // that started deeper would not be at the onset it names.
+    // A box growing toward the now-line is held on the PANE, and that is the
+    // only thing it is held off. A note is younger than its own name for the
+    // first fraction of a second of it, so a name written on the end that
+    // reaches the present has no ribbon under it yet and lies over whatever is
+    // in front of the note — which, that being the now-line side, is the
+    // SPECTRUM.
+    //
+    // It is allowed to. The gap between a letter and the end it is written on
+    // is what a reader measures a name by, and holding that gap through the
+    // first moments of a note is worth more than keeping the two pictures off
+    // each other for those moments: a name stopped at the divider instead sits
+    // still while its own note scrolls out from under it, which is a movement
+    // the music did not make, and it does it at the one instant the eye is on
+    // the note. The name is drawn last of everything on the pane and haloed
+    // (see [`draw`]), so what it crosses onto it stays legible over.
+    //
+    // Past the pane's own edge there is nothing to see — the batch is clipped
+    // to the pane, and a neighbouring pane is not this one's to draw in — so
+    // that edge is where the clamp stands: the name sits against it and travels
+    // as soon as its ribbon is long enough to hold it, which is its own length
+    // of scrolling and no more. A name that came and went instead would blink
+    // at every note played, and one that started deeper would not be at the end
+    // it names.
     //
     // What is clamped is the box DRAWN, not the anchor's time: a note's cell
     // and its reach are the music's, and must not move with what the pane had
-    // room to show. Measured along `grow` and against the edge at the name's
-    // own pitch, so no screen side is named and a box growing the other way —
-    // every name at the leading edge, and every name in the whole-song layout —
-    // can never be caught by it.
+    // room to show. Measured along `grow` and against the pane edge at the
+    // name's own pitch, so no screen side is named and a box growing the other
+    // way can never be caught by it.
     let toward_near = grow.dot(axes.dir_depth()) < 0.0;
     let place = |edge: &Edge, name: &NoteName| {
         let (t, d) = (scale.t_of(edge.pitch), time.depth_of(edge.time));
@@ -555,27 +575,27 @@ pub(super) fn plan(
         // The leading corner's reach past the edge: the box's centre projected
         // onto `grow`, plus half of what it spans that way.
         let span = (rect.width() * grow.x).abs() + (rect.height() * grow.y).abs();
-        let over = (rect.center() - axes.at(t, split)).dot(grow) + span * 0.5;
+        let over = (rect.center() - axes.at(t, 0.0)).dot(grow) + span * 0.5;
         if over > 0.0 {
             // Both, by the same vector: what the clamp does is hold the name
             // off an edge, and a name is its ink as much as its box.
             //
             // What it measures is still the BOX, which is looser than the ink
             // by however much line box a letter does not fill — so a clamped
-            // name stands further off the edge than it strictly needs to, and
-            // the slack is the depth axis's. Time running across the pane, the
-            // box's depth is the name's width and the two agree: measured, the
-            // ink stands 8.12 points inside the divider either way. Time
-            // running down it, the box's depth is a whole line box against a
-            // letter's cap height, and the ink stands 18.01 points in where
-            // placing it by that box put it at 14.18.
+            // name stands further inside the edge than it strictly needs to,
+            // and the slack is the depth axis's. Time running across the pane,
+            // the box's depth is the name's width and the two agree: measured,
+            // the ink stands 8.12 points in either way. Time running down it,
+            // the box's depth is a whole line box against a letter's cap
+            // height, and the ink stands 18.01 points in where placing it by
+            // that box put it at 14.18.
             //
             // Left standing, because closing it means clamping on the ink and
             // `plan` has no painter to measure ink with — the same constraint
             // that makes `name_extent` an estimate in the first place. It errs
-            // toward the roll, so it can only ever withhold a few points of
+            // into the pane, so it can only ever withhold a few points of
             // travel from a name too young to have a ribbon yet; it cannot put
-            // one over the spectrum.
+            // one off the edge.
             (rect.translate(-grow * over), lead - grow * over)
         } else {
             (rect, lead)
@@ -727,18 +747,21 @@ struct Edge {
 /// under one than under the other — a released note's name at the head of its
 /// ribbon or at its tail, a ribbon's length apart. What differs is not only
 /// where a name starts but whether it MOVES: a leading edge tracks `now` while
-/// the key is down and an onset never moves at all, which is the question the
-/// two are answering.
+/// the key is down and an onset never moves at all.
 ///
 /// They do agree at one instant, and it is the instant a note is struck: a
-/// ribbon of no length has its two ends in one place, at the now-line. So the
-/// setting decides what happens to a name AFTER that, and every name is at the
-/// same place at the moment it appears either way.
+/// ribbon of no length has its two ends in one place, at the now-line. So which
+/// end a name is on decides what happens to it AFTER that, and every name is at
+/// the same place at the moment it appears either way.
+///
+/// Which of the two a pane uses is [`of`](Self::of)'s, and it is not the
+/// setting's alone: the orientation picks the end that READS first and the
+/// setting asks for the other one — with the whole-song layout outside both,
+/// on the onset always.
 #[derive(Clone, Copy, PartialEq)]
 enum Anchor {
-    /// The end that comes first in reading order: the low-depth end, which is
-    /// the pane's now-line side in every orientation (the side
-    /// [`SpectralOrientation`](crate::SpectralOrientation) is named for).
+    /// The end that touches the now-line: the low-depth end live, which is the
+    /// side [`SpectralOrientation`](crate::SpectralOrientation) is named for.
     ///
     /// While the key is down the note keeps reaching the present, so this edge
     /// IS the now-line: the name sits still there, at the head of a ribbon
@@ -746,6 +769,8 @@ enum Anchor {
     /// travelling at the release. A name you can read in one place while you
     /// play, at the price of a movement the music did not make and of a drone
     /// whose name never scrolls at all.
+    ///
+    /// Live only — see [`of`](Self::of) for why a static layout cannot use it.
     Leading,
     /// The onset — the moment the key went down, wherever the layout puts it.
     ///
@@ -755,18 +780,83 @@ enum Anchor {
     /// onset has scrolled off the far edge, which loses its name while it is
     /// still sounding.
     ///
-    /// The whole-song layout has no other option — it lays the take out in
-    /// reading order, where the onset is also the leading edge, and nothing
-    /// there tracks `now` at all.
+    /// The whole-song layout has no other option, for a reason that is about
+    /// the TAKE rather than about reading order — see [`of`](Self::of).
     Onset,
 }
 
 impl Anchor {
+    /// The end a reader's eye reaches FIRST — the pane's left where time runs
+    /// across it, its top where time runs down it — unless
+    /// [`note_names_travel`](crate::SpectrumConfig::note_names_travel) asks for
+    /// the other one.
+    ///
+    /// This is the one place in this file that names a screen side, and it is
+    /// forced to: a name is a WORD, and a word is read from its own left
+    /// whatever the picture under it is doing. So a name belongs on the end of
+    /// its ribbon that comes first, with the note running away under the rest
+    /// of it — mirror the picture and the geometry mirrors, but the reading
+    /// does not, and a name on the other end reads out of its note instead of
+    /// into it. What a reader measures is the gap between the letter and the
+    /// end it starts from, and that gap is the same one in every orientation
+    /// only if this is.
+    ///
+    /// WHICH end reads first is the orientation's: live, depth is AGE, so a
+    /// ribbon's shallow end is its newest — the leading edge — and it is drawn
+    /// at the pane's left or top where time runs the screen's own way, at the
+    /// right or the bottom where it runs back against it
+    /// ([`SpectralOrientation::is_time_reversed`]). So the reading-first end is
+    /// the leading edge in the two orientations that agree with the screen and
+    /// the onset in the two that do not.
+    ///
+    /// So what the setting DOES depends on the orientation, and saying that
+    /// plainly is better than the alternative: with the spectrum on the left a
+    /// name is on the leading edge by default and waits at the now-line while
+    /// you hold a key, and with it on the right the same default is the onset
+    /// and the name travels from the first frame. The two pictures are both
+    /// still reachable in every orientation — the setting is what reaches the
+    /// other one — and it is the GEOMETRY that is held fixed across the four
+    /// rather than the held-note behaviour, because the geometry is what a
+    /// reader sees on every note rather than only on the one under their
+    /// finger.
+    ///
+    /// **The whole-song layout is outside all of it, and takes the ONSET in
+    /// every orientation.** Reading order would name the note's stop in the two
+    /// reversed ones, and a stop is not a fact about the take the way an onset
+    /// is: a note the recording never released stops at `stop(now)`, which is
+    /// the PLAYHEAD, so its name would ride the sweep across a picture that is
+    /// otherwise a still. The thinning cannot hold that. It hands out names by
+    /// grid cell (see [`Lane`]) and an anchor that walks through cell after
+    /// cell is offered a name in one and refused in the next, which is a name
+    /// blinking on and off for the length of a rendered video — the very defect
+    /// the held-note exemption exists to prevent live, arriving where that
+    /// exemption cannot help because nothing in a still picture scrolls away
+    /// from anything. The onset is fixed for every note the take contains, so
+    /// it is the one end a static layout can anchor to at all.
+    ///
+    /// [`SpectralOrientation::is_time_reversed`]:
+    ///     crate::SpectralOrientation::is_time_reversed
     fn of(time: &TimeAxis, cfg: &crate::SpectrumConfig) -> Anchor {
-        if time.whole_song() || cfg.note_names_travel {
+        if time.whole_song() {
+            return Anchor::Onset;
+        }
+        let reads_first = if cfg.orientation.is_time_reversed() {
             Anchor::Onset
         } else {
             Anchor::Leading
+        };
+        if cfg.note_names_travel {
+            reads_first.other()
+        } else {
+            reads_first
+        }
+    }
+
+    /// The ribbon's other end.
+    fn other(self) -> Anchor {
+        match self {
+            Anchor::Leading => Anchor::Onset,
+            Anchor::Onset => Anchor::Leading,
         }
     }
 }
@@ -843,18 +933,18 @@ fn anchor_edge(note: &RollNote, now: f64, anchor: Anchor) -> Edge {
 /// back by the width of the mark column, and that is exactly the ground the
 /// ink covers.
 ///
-/// WHICH growth a name has is the anchor's and not the orientation's (see
-/// [`Anchor`]), so every orientation has a backward case in it: Right's
-/// leftward time at the leading edge, and Left's own at the onset, where the
-/// box grows back toward the now-line.
+/// WHICH growth a name has is the setting's and not the orientation's: a name
+/// on the end that reads first grows the screen's own way in all four
+/// orientations (that is what reading first MEANS — see [`Anchor::of`]), and a
+/// name on the far end grows backward in all four.
 ///
 /// What that costs is worth stating at its real size, because it is not a
 /// rounding error: a name whose marks are wider than [`LABEL_INSET`] — which is
 /// every marked name — puts its mark column PAST the end it is anchored to,
 /// over whatever the picture holds beyond it. Measured as INK on a 300pt pane,
-/// a `B♭↓` crosses by 6.21 points at the dialled size and 40.13 at the
+/// a `B♭↓` crosses by 4.81 points at the dialled size and 38.73 at the
 /// two-octave floor: the marks grow with the type and [`LABEL_INSET`] does not,
-/// so what the inset buys back is the same 2.6 points at five times the size.
+/// so what the inset buys back is the same 4 points at five times the size.
 ///
 /// The two constraints cannot both hold while [`draw_stacked_name`] typesets the
 /// marks after the letter: leading by the letter holds it still and lets the
@@ -868,14 +958,17 @@ fn anchor_edge(note: &RollNote, now: f64, anchor: Anchor) -> Edge {
 /// It is not the Right orientation's alone, which is how #151 first read, and
 /// the spilling case is not the one the growth's sign picks out. What spills is
 /// whichever direction the MARKS run against, and they always run to the right
-/// of the letter and above it: growth leftward (Right's leading edge) sends the
-/// mark column back over the anchor, and growth DOWNWARD sends the accidental
-/// up over it. Measured at the same pane, `B♭↓`'s ink reaches 6.21 points past
-/// the end growing leftward and 3.45 growing down, against 2.60 clear in the
+/// of the letter and above it: growth leftward (either horizontal orientation
+/// writing on the far end) sends the mark column back over the anchor, and
+/// growth DOWNWARD — Top's own default — sends the accidental up over it.
+/// Measured at the same pane, `B♭↓`'s ink reaches 4.81 points past
+/// the end growing leftward and 2.05 growing down, against 4.00 clear in the
 /// two directions the marks trail into the note. The vertical case merely
 /// LOOKED contained while the box placed the name — a line box stands tall
 /// enough above its letter to hide the mark riding there — and it clears the
-/// end at the dialled size, crossing only once the zoom opens past about 1.4.
+/// end at the dialled size, crossing only once the zoom opens past about 2.2.
+/// That threshold is [`LABEL_INSET`]'s to move and nothing else's: every other
+/// length in the comparison rides the type, so it is proportional to the inset.
 ///
 /// [`draw_stacked_name`]: crate::marks::draw_stacked_name
 fn label_rect(
@@ -1220,8 +1313,9 @@ mod tests {
         turned(range, span, SpectralOrientation::Left)
     }
 
-    /// The same pane with the names anchored on their onsets — the "Travel
-    /// from the onset" setting, and [`Anchor::Onset`] in the live layout.
+    /// The same pane with the names anchored on their onsets — the "Name the
+    /// far end" setting, which in this Left-facing fixture is the onset and in
+    /// a reversed orientation would be the leading edge.
     fn travelling(range: f32, span: f32) -> SharedState {
         let mut state = state(range, span);
         state.spectrum_config.note_names_travel = true;
@@ -1786,6 +1880,15 @@ mod tests {
     /// note. Read by projecting onto the depth axis, since nothing here may
     /// name a screen side, and swept over [`SpectralOrientation::ALL`] so a
     /// fifth orientation cannot skip it.
+    ///
+    /// WHICH end each pass expects is [`Anchor::of`]'s rule restated: reading
+    /// order picks one and the setting asks for the other, so the two swap in a
+    /// reversed orientation. Restating it is the point — a mapping hardcoded
+    /// here would agree with the code in half the sweep and be checked by
+    /// neither assertion, both of which only bracket the name between the
+    /// ribbon's ends. The gap asserted last is what makes it bite: written on
+    /// the wrong end, a name stands a ribbon's length from the one it is
+    /// measured against rather than [`LABEL_INSET`].
     #[test]
     fn a_name_lies_over_its_own_ribbon_at_either_anchor() {
         // A plain `C`, whose box does not overrun its anchor: a name carrying
@@ -1810,7 +1913,11 @@ mod tests {
                 let axes = Axes::new(square, &state.spectrum_config);
                 let t = scale_of(&state).t_of(60.0);
                 let (head, onset) = (axes.at(t, 0.4), axes.at(t, 0.8));
-                let (anchor, other) = if travel { (onset, head) } else { (head, onset) };
+                // The leading edge reads first where time runs the screen's own
+                // way, the onset where it runs back against it; the setting
+                // asks for the other end of whichever that is.
+                let on_head = orientation.is_time_reversed() == travel;
+                let (anchor, other) = if on_head { (head, onset) } else { (onset, head) };
                 let toward = (other - anchor).normalized();
                 let reach = (placed[0].rect.center() - anchor).dot(toward);
                 assert!(
@@ -1823,54 +1930,214 @@ mod tests {
                     "{orientation:?}, travel {travel}: the name overruns the far end of \
                      its own ribbon",
                 );
-            }
-        }
-    }
-
-    /// No name ever reaches back over the SPECTRUM, at either anchor.
-    ///
-    /// A name anchored at the onset grows toward the now-line, and a note
-    /// younger than its own name has no ribbon to fill it — so the box reaches
-    /// past the roll's near edge and over the spectrum's curve, which is
-    /// another picture entirely and the thing [`plan`] refuses to draw names
-    /// over at all when the roll is shut.
-    ///
-    /// Every other fixture in this file gives the roll the whole pane
-    /// (`roll_fraction: 1.0`, so `split` is 0 and the near edge is the pane's
-    /// own), which is exactly where this cannot be seen: the overrun falls off
-    /// the pane and the painter clips it. This one keeps the fresh 0.55.
-    #[test]
-    fn a_name_never_reaches_back_over_the_spectrum() {
-        for travel in [false, true] {
-            let mut state = state(24.0, 10.0);
-            state.spectrum_config.roll_fraction = 0.55; // the fresh value
-            state.spectrum_config.note_names_travel = travel;
-            state.tracker.handle_event(on(5.0, 60));
-
-            let axes = Axes::new(PANE, &state.spectrum_config);
-            let split = super::super::axes::spectrum_share(&state.spectrum_config);
-            // Left: depth is x with the now-line at the roll's near edge, so
-            // the spectrum owns everything left of it.
-            let edge = axes.at(0.5, split).x;
-            // Struck this instant, then a moment later: the box is longer than
-            // the ribbon under it for as long as it takes the onset to scroll
-            // its own length.
-            for now in [5.0, 5.05, 5.1, 5.2] {
-                let placed = labels(&state, now);
-                assert_eq!(placed.len(), 1, "travel {travel} at {now}s");
+                let gap = (placed[0].lead - anchor).dot(toward);
                 assert!(
-                    placed[0].rect.min.x >= edge,
-                    "travel {travel} at {now}s: the name reaches to {} where the roll \
-                     only begins at {edge}, so it is drawn over the spectrum",
-                    placed[0].rect.min.x,
+                    (gap - LABEL_INSET).abs() < 0.01,
+                    "{orientation:?}, travel {travel}: the letter stands {gap} off the end \
+                     it is written on, not {LABEL_INSET} — so it is on the other end",
                 );
             }
         }
     }
 
+    /// A name reaches over the SPECTRUM rather than let go of the end it is
+    /// written on — and stops at the pane's own edge, which is the only thing
+    /// that does hold it.
+    ///
+    /// A name written on the end that reaches the present grows toward the
+    /// now-line, and a note younger than its own name has no ribbon yet to fill
+    /// it, so the box crosses the divider and lies over the spectrum's curve.
+    /// That is the picture: the gap between the letter and the end it names is
+    /// what a reader reads a name by, and a name stopped at the divider instead
+    /// would stand still for those first moments while its own note scrolled
+    /// out from under it.
+    ///
+    /// What still holds it is the PANE, past which the batch is clipped and the
+    /// picture is another pane's. Every other fixture in this file gives the
+    /// roll the whole pane (`roll_fraction: 1.0`, so `split` is 0 and the two
+    /// edges are the same line), which is exactly where the two cannot be told
+    /// apart. This one keeps the fresh 0.55 to part them.
+    #[test]
+    fn a_name_crosses_the_spectrum_but_never_leaves_the_pane() {
+        // The crossing, at the anchor that grows toward the now-line: Left's
+        // far end, which is the onset.
+        let mut state = travelling(24.0, 10.0);
+        state.spectrum_config.roll_fraction = 0.55; // the fresh value
+        state.tracker.handle_event(on(5.0, 60));
+
+        let axes = Axes::new(PANE, &state.spectrum_config);
+        let split = super::super::axes::spectrum_share(&state.spectrum_config);
+        // Left: depth is x with the now-line at the roll's near edge, so the
+        // spectrum owns everything left of it, and the pane's own edge is the
+        // far side of that.
+        let divider = axes.at(0.5, split).x;
+        let struck = labels(&state, 5.0);
+        assert_eq!(struck.len(), 1);
+        assert!(
+            struck[0].rect.min.x < divider,
+            "struck this instant, the name starts at {} rather than crossing the divider \
+             at {divider} onto the spectrum",
+            struck[0].rect.min.x,
+        );
+        // ...and it holds its gap from the onset from that first frame, which
+        // is the whole reason it is allowed to cross.
+        for now in [5.0, 5.05, 5.1, 5.2] {
+            let placed = labels(&state, now);
+            assert_eq!(placed.len(), 1, "at {now}s");
+            let time = TimeAxis::new(&state, split, now);
+            let onset = axes.at(scale_of(&state).t_of(60.0), time.depth_of(5.0));
+            let gap = (placed[0].lead - onset).dot(placed[0].grow);
+            assert!(
+                (gap - LABEL_INSET).abs() < 0.01,
+                "at {now}s the name stands {gap} off its onset, not {LABEL_INSET}",
+            );
+        }
+
+        // The pane's edge, where the whole depth axis is the roll's and there
+        // is nothing between the now-line and the outside.
+        let mut state = travelling(24.0, 10.0);
+        state.tracker.handle_event(on(5.0, 60));
+        for now in [5.0, 5.05, 5.1, 5.2] {
+            let placed = labels(&state, now);
+            assert_eq!(placed.len(), 1, "at {now}s");
+            assert!(
+                placed[0].rect.min.x >= PANE.left(),
+                "at {now}s the name reaches to {} where the pane only begins at {}",
+                placed[0].rect.min.x,
+                PANE.left(),
+            );
+        }
+
+        // ...and the same edge in a REVERSED orientation with a spectrum
+        // present, which is the case the two above cannot tell apart: with the
+        // roll given all but a sliver of the axis the analyzer is narrower than
+        // a name, so a name struck this instant crosses what there is of it and
+        // meets the pane. `split` is 0.02 here rather than 0, so a clamp still
+        // measuring against the divider would leave the name 6 points out.
+        let mut state = turned(24.0, 10.0, SpectralOrientation::Right);
+        state.spectrum_config.roll_fraction = 0.98;
+        state.tracker.handle_event(on(5.0, 60));
+        let axes = Axes::new(PANE, &state.spectrum_config);
+        let split = super::super::axes::spectrum_share(&state.spectrum_config);
+        let t = scale_of(&state).t_of(60.0);
+        let divider = axes.at(t, split).x;
+        let placed = labels(&state, 5.0);
+        assert_eq!(placed.len(), 1);
+        assert!(
+            placed[0].rect.max.x <= PANE.right() + 0.01,
+            "the name reaches to {} where the pane ends at {}",
+            placed[0].rect.max.x,
+            PANE.right(),
+        );
+        assert!(
+            placed[0].rect.max.x > divider,
+            "the clamp pulled the name back onto the roll at {} rather than leaving it \
+             over what analyzer there is, past {divider}",
+            placed[0].rect.max.x,
+        );
+    }
+
+    /// With the spectrum on the RIGHT, a name keeps its gap from the note's
+    /// LEFT end — the onset there — from the note's very first frame, and
+    /// travels with it from that frame on.
+    ///
+    /// This is the mirror of what the Left orientation does with the leading
+    /// edge, and it is the point of choosing the anchor by reading order: the
+    /// distance a reader measures, letter to ribbon end, is one distance in
+    /// both. It costs the crossing — at the strike the onset IS the now-line,
+    /// so the name is written wholly over the analyzer and slides off it as the
+    /// note scrolls away.
+    #[test]
+    fn with_the_spectrum_on_the_right_a_name_holds_the_notes_left_end() {
+        let mut state = turned(24.0, 10.0, SpectralOrientation::Right);
+        state.spectrum_config.roll_fraction = 0.55; // the fresh value
+        state.tracker.handle_event(on(5.0, 60));
+
+        let axes = Axes::new(PANE, &state.spectrum_config);
+        let split = super::super::axes::spectrum_share(&state.spectrum_config);
+        let t = scale_of(&state).t_of(60.0);
+        // Right: time runs leftward, so the analyzer owns everything right of
+        // the divider and the note grows away from it.
+        let divider = axes.at(t, split).x;
+
+        let struck = labels(&state, 5.0);
+        assert_eq!(said(&struck), ["C"]);
+        assert!(
+            struck[0].lead.x >= divider,
+            "struck this instant, the name's letter is at {} rather than out on the \
+             analyzer past {divider}",
+            struck[0].lead.x,
+        );
+
+        let mut previous = f32::INFINITY;
+        for now in [5.0, 5.1, 5.4, 6.0, 8.0] {
+            let placed = labels(&state, now);
+            assert_eq!(placed.len(), 1, "at {now}s");
+            let time = TimeAxis::new(&state, split, now);
+            let onset = axes.at(t, time.depth_of(5.0));
+            let gap = (placed[0].lead - onset).dot(placed[0].grow);
+            assert!(
+                (gap - LABEL_INSET).abs() < 0.01,
+                "at {now}s the name stands {gap} off the note's left end, not {LABEL_INSET}",
+            );
+            assert!(
+                placed[0].lead.x < previous,
+                "at {now}s the name is at {} rather than left of where it was ({previous})",
+                placed[0].lead.x,
+            );
+            previous = placed[0].lead.x;
+        }
+    }
+
+    /// Whichever end of a ribbon READS first is the end named, in every
+    /// orientation — and the name stands the same [`LABEL_INSET`] off it, with
+    /// the note running away under the rest of the name.
+    ///
+    /// The sweep is the point: this is the one thing in the module that names a
+    /// screen side, so it is asked of all four rather than of the two a person
+    /// happens to use, and a fifth orientation cannot skip it.
+    #[test]
+    fn a_name_is_written_on_the_end_that_reads_first() {
+        for orientation in SpectralOrientation::ALL {
+            let mut state = turned(24.0, 10.0, orientation);
+            state.tracker.handle_event(on(2.0, 60));
+            state.tracker.handle_event(off(6.0, 60));
+
+            // Square, so the same pane serves the vertical orientations.
+            let square = egui::Rect { min: egui::pos2(10.0, 20.0), max: egui::pos2(310.0, 320.0) };
+            let placed = labels_in(&state, 10.0, square);
+            assert_eq!(placed.len(), 1, "{orientation:?}");
+
+            // The ribbon's two ends — the release 4s back, the onset 8s back —
+            // and the way a reader's eye runs over the pane: rightward where
+            // time is across it, downward where time runs down it.
+            let axes = Axes::new(square, &state.spectrum_config);
+            let t = scale_of(&state).t_of(60.0);
+            let (head, onset) = (axes.at(t, 0.4), axes.at(t, 0.8));
+            let reading = if orientation.is_time_vertical() {
+                egui::vec2(0.0, 1.0)
+            } else {
+                egui::vec2(1.0, 0.0)
+            };
+            let (first, second) =
+                if (head - onset).dot(reading) < 0.0 { (head, onset) } else { (onset, head) };
+
+            let lead = placed[0].lead;
+            let gap = (lead - first).dot(reading);
+            assert!(
+                (gap - LABEL_INSET).abs() < 0.01,
+                "{orientation:?}: the letter stands {gap} off the end that reads first, \
+                 not {LABEL_INSET}",
+            );
+            assert!(
+                (lead - second).dot(reading) < 0.0,
+                "{orientation:?}: the name is written on the end that reads SECOND",
+            );
+        }
+    }
+
     /// The ink [`plan`] finally puts on the pane stands [`LABEL_INSET`] off the
-    /// ribbon end — and, where the clamp fires, stays on the roll's side of the
-    /// divider.
+    /// ribbon end — and, where the clamp fires, stays on the pane.
     ///
     /// Everything else that reads the drawn glyphs builds its [`NoteLabel`] by
     /// hand, which means it restates `plan`'s own arithmetic rather than
@@ -1880,14 +2147,14 @@ mod tests {
     /// one that goes end to end, so it is the one that fails.
     ///
     /// The second half is the clamp's, and it is the half a box cannot answer.
-    /// A name at the onset anchor is held off the roll's near edge while its
-    /// note is younger than its own name, and it is the BOX that is measured
-    /// against that edge; the ink inside it is what a reader sees crossing onto
-    /// the spectrum. `a_name_never_reaches_back_over_the_spectrum` asserts on
-    /// the box, so a lead left uncorrected there draws the letter over the
-    /// analyzer with that test still green.
+    /// A name growing toward the now-line is held on the pane while its note is
+    /// younger than its own name, and it is the BOX that is measured against
+    /// that edge; the ink inside it is what a reader sees leaving the picture.
+    /// `a_name_crosses_the_spectrum_but_never_leaves_the_pane` asserts on the
+    /// box, so a lead left uncorrected there draws the letter off the pane with
+    /// that test still green.
     #[test]
-    fn the_ink_plan_places_stands_off_its_ribbon_and_inside_the_roll() {
+    fn the_ink_plan_places_stands_off_its_ribbon_and_inside_the_pane() {
         const PPP: f32 = 2.0;
         let ctx = themed_at(PPP);
         // The letter's ink, drawn exactly as the pane draws it, projected onto
@@ -1923,14 +2190,12 @@ mod tests {
             "the drawn letter stands {gap} off the end it is written on, not {LABEL_INSET}",
         );
 
-        // Clamped: struck this instant at the onset anchor, so the name is
-        // longer than the ribbon under it and is held off the near edge.
+        // Clamped: struck this instant at the far anchor, so the name is longer
+        // than the ribbon under it and is held on the pane. The roll has the
+        // whole depth axis here (`roll_fraction` 1.0), so the pane's own edge
+        // is where the now-line is and there is nothing between them.
         let mut state = travelling(24.0, 10.0);
-        state.spectrum_config.roll_fraction = 0.55; // the fresh value
         state.tracker.handle_event(on(5.0, 60));
-        let axes = Axes::new(PANE, &state.spectrum_config);
-        let split = super::super::axes::spectrum_share(&state.spectrum_config);
-        let edge = axes.at(0.5, split).x;
         for now in [5.0, 5.05, 5.1] {
             let placed = labels(&state, now);
             assert_eq!(placed.len(), 1, "at {now}s");
@@ -1940,10 +2205,11 @@ mod tests {
             });
             let ink = batch.pieces().iter().find(|p| p.text == "C").expect("a C drawn").ink;
             assert!(
-                ink.left() >= edge,
-                "at {now}s the drawn letter reaches to {} where the roll only begins at \
-                 {edge}, so it is written over the spectrum",
+                ink.left() >= PANE.left(),
+                "at {now}s the drawn letter reaches to {} where the pane only begins at \
+                 {}, so it is written off it",
                 ink.left(),
+                PANE.left(),
             );
         }
     }
@@ -2212,9 +2478,10 @@ mod tests {
         }
     }
 
-    /// The offline whole-song layout lays the take out in reading order, so a
-    /// ribbon's leading edge is its ONSET there rather than its release — the
-    /// one place the two layouts disagree about which end that is.
+    /// The offline whole-song layout names a ribbon at its ONSET rather than
+    /// at its release, in every orientation — the one place the anchor is not
+    /// the orientation's to decide. See [`Anchor::of`] for why a still picture
+    /// has only the one end it can anchor to.
     #[test]
     fn whole_song_names_a_ribbon_at_its_onset() {
         let mut state = state(24.0, 10.0);
@@ -2281,22 +2548,38 @@ mod tests {
     fn a_whole_song_render_thins_a_sounding_note_like_any_other() {
         // Two strikes of one pitch too close for both names, the second still
         // sounding — the case the exemption used to hand a name to.
-        let mut state = state(24.0, 10.0);
-        state.tracker.handle_event(on(1.0, 60));
-        state.tracker.handle_event(off(1.05, 60));
-        state.tracker.handle_event(on(1.1, 60));
-        let roll = state.tracker.roll().clone();
-        state.whole_song =
-            Some(crate::WholeSong { columns: Vec::new(), roll, start: 0.0, span: 10.0 });
+        //
+        // Swept over every orientation, because a note the take never released
+        // is live in EVERY frame of a render: a layout that anchored these
+        // names on the leading edge would put that note's name on the playhead,
+        // where it both takes the exemption and moves under it.
+        for orientation in SpectralOrientation::ALL {
+            let mut state = turned(24.0, 10.0, orientation);
+            state.tracker.handle_event(on(1.0, 60));
+            state.tracker.handle_event(off(1.05, 60));
+            state.tracker.handle_event(on(1.1, 60));
+            let roll = state.tracker.roll().clone();
+            state.whole_song =
+                Some(crate::WholeSong { columns: Vec::new(), roll, start: 0.0, span: 10.0 });
 
-        // The playhead inside the second note, then well past where it would
-        // have ended: the same one name, in the same place, throughout.
-        let inside = labels(&state, 1.5);
-        assert_eq!(inside.len(), 1, "thinned, exactly as a released pair would be");
-        for now in [3.0, 6.0, 9.0] {
-            let later = labels(&state, now);
-            assert_eq!(said(&later), said(&inside), "the playhead moved a name at {now}s");
-            assert_eq!(later[0].rect.min.x, inside[0].rect.min.x);
+            // The playhead inside the second note, then well past where it
+            // would have ended: the same one name, in the same place,
+            // throughout.
+            let inside = labels(&state, 1.5);
+            assert_eq!(
+                inside.len(),
+                1,
+                "{orientation:?}: thinned, exactly as a released pair would be",
+            );
+            for now in [3.0, 6.0, 9.0] {
+                let later = labels(&state, now);
+                assert_eq!(
+                    said(&later),
+                    said(&inside),
+                    "{orientation:?}: the playhead moved a name at {now}s",
+                );
+                assert_eq!(later[0].rect.min, inside[0].rect.min, "{orientation:?} at {now}s");
+            }
         }
     }
 

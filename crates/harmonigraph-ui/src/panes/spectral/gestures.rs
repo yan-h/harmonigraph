@@ -261,7 +261,7 @@ const ZOOM_PER_SCROLL_POINT: f32 = 0.008;
 /// same gain — its whole
 /// 12..60 dB sweep against the default -60 dB floor is ~270 points — because a
 /// dB window has less room to travel, not because it is dialled differently.
-const DEPTH_ZOOM_PER_DRAG_POINT: f32 = 0.006;
+pub(crate) const DEPTH_ZOOM_PER_DRAG_POINT: f32 = 0.006;
 
 /// How far a drag must lean along the depth axis before it is a zoom rather
 /// than a pitch pan, in points. Panning is the default — the axes do NOT both
