@@ -106,10 +106,18 @@ const SEAM_SEGMENT_PT: f32 = 6.0;
 /// because a dot filling its track leaves nothing of the track showing either
 /// side of it, which is what makes it read as sitting on one.
 ///
-/// The floor is for the thinnest tracks the pane can draw, where the share
-/// alone would take the dot under a point across. [`Spiral::reach`] caps it
-/// from above, so the fit's own reservation still covers whatever this asks
-/// for.
+/// The floor keeps a dot legible on the thinnest tracks the pane can draw. It
+/// is a length in POINTS and so carries no term for the track at all, which
+/// makes it the one term here that can spend the share's own argument: at the
+/// Analyzer's full range it takes the dot over from the share below a pane of
+/// about 277 points, and by 200 the dot is 98% of its track.
+///
+/// [`Spiral::dot`] clamps it to half the track for that reason. What the clamp
+/// gives up is the "under 1.0" above — a dot on a small enough pane fills the
+/// turn it sits on — and what it keeps is the half of the argument that cannot
+/// be given up, that the dot does not cross into the turns either side to say
+/// which turn it is on. `a_notes_dot_sits_inside_its_own_turn` is what holds
+/// this.
 const DOT: (f32, f32) = (0.7, 3.0);
 
 /// How much of the dot's radius is the dark backing ringing it.
@@ -274,11 +282,16 @@ impl Spiral {
     /// The dot a sounding note is marked with: its whole radius, backing
     /// included, and the coloured fill inside that. See [`DOT`].
     ///
-    /// Capped at the [`reach`](Self::reach) the fit reserves, which is the one
-    /// bound that is not a matter of taste: past it the top note's dot is over
-    /// the disc's edge, in the band the names are placed in.
+    /// Capped at HALF the track, which is the bound that is not a matter of
+    /// taste: a dot past it crosses into the octaves either side, and which
+    /// turn the note is on is what the dot is drawn to say. It answers the fit
+    /// as well, being the tighter of the two — [`reach`](Self::reach) is the
+    /// same half a whole [`VOICE_OVERHANG`] wider, so a dot held inside its own
+    /// turn is inside the disc without asking. What the cap binds on is the
+    /// floor in [`DOT`], which is a length in points and would otherwise draw a
+    /// dot a quarter wider than the track on a small enough pane.
     fn dot(&self) -> (f32, f32) {
-        let backed = (self.half() * DOT.0).max(DOT.1).min(self.reach());
+        let backed = (self.half() * DOT.0).max(DOT.1).min(self.half());
         // The fill is never under half the dot, so a track thin enough to
         // shrink the mark below two rings' worth still has a fill to carry the
         // note's colour — which is the half of the pair that says WHICH note
@@ -878,6 +891,44 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    /// A note's dot never grows wider than the track it sits on.
+    ///
+    /// Which turn a note is on is the whole of what the dot is there to say,
+    /// and a dot wider than its track has crossed into the octaves either
+    /// side to say it — the picture [`DOT`]'s share is held under 1.0 to
+    /// avoid. The share cannot break this on its own; the FLOOR can, being a
+    /// length in points with no term for the track in it at all, so the sizes
+    /// worth asking are the small ones, at the range that makes tracks
+    /// thinnest.
+    ///
+    /// Small SQUARE panes rather than `FRAMES`: the fit is driven by the short
+    /// side, so a square is the cheapest way to name a short side, and the
+    /// ones here run from where the floor first takes over down to the width
+    /// of a docked column split three ways.
+    #[test]
+    fn a_notes_dot_sits_inside_its_own_turn() {
+        // The fresh Analyzer range, which is the ~10 octaves that makes a
+        // track thin enough for any of this to bind.
+        let cfg = SpectrumConfig::default();
+        for side in [400.0f32, 300.0, 277.0, 250.0, 200.0, 160.0, 134.0, 120.0] {
+            let rect = egui::Rect::from_min_size(egui::pos2(20.0, 30.0), egui::vec2(side, side));
+            let s = Spiral::new(rect, &cfg);
+            let (backed, fill) = s.dot();
+            assert!(
+                backed <= s.half(),
+                "a {side}pt pane draws a dot {} across on a {} track",
+                2.0 * backed,
+                s.dr,
+            );
+            // And the coloured fill is still inside its own backing, so the
+            // pair reads as a dot with an edge rather than as one flat disc.
+            assert!(
+                fill > 0.0 && fill < backed,
+                "a {side}pt pane fills {fill} of a {backed} dot",
+            );
         }
     }
 
