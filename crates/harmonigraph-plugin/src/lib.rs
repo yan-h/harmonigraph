@@ -610,15 +610,15 @@ mod tests {
 
     /// The project's saved settings have to reach the analyzer with no editor
     /// ever constructed, which is the whole of issue #324: `params.ui_state` is
-    /// where the host puts them, `Editor::spawn`'s window-build closure was its
-    /// only reader, and the plugin analyzes audio from the moment it is
-    /// instantiated.
+    /// where the host puts them, the editor's window-build closure is the only
+    /// other reader of that field, and the plugin analyzes audio from the moment
+    /// it is instantiated.
     ///
     /// Driven through the REAL spawned thread and the real `params` field —
-    /// nothing here calls [`Plugin::editor`] — because the wiring between those
-    /// two is precisely the thing that did not exist. The unit tests one file
-    /// over cover what the adopt DECIDES; this covers that it is reachable at
-    /// all from where a host writes.
+    /// nothing here calls [`Plugin::editor`] — because that pairing IS the
+    /// claim. A `Restore` handed any other `RwLock<String>` satisfies every unit
+    /// test one file over and reaches nothing a host ever writes. Those cover
+    /// what the adopt decides; this covers that it is reachable at all.
     #[test]
     fn a_projects_saved_window_reaches_the_analyzer_with_no_editor_built() {
         use harmonigraph_ui::SpectrumWindow;

@@ -148,9 +148,15 @@ impl Drop for BackgroundAnalyzer {
 ///
 /// One consequence, and it is a harmless one: the first round after every
 /// editor session adopts the blob that session's `Drop` wrote, which is a
-/// reload of the state's own save. Nothing in the state moves — `save_persist`
-/// reads exactly the fields `load_persist` writes — and it costs one RON round
-/// trip per window close, where a window close is already spending one.
+/// reload of the state's own save. That blob is a FIXED POINT of the round
+/// trip, so the round that takes it moves nothing — `save_persist` reads back
+/// every field `load_persist` writes that a shut window has any reader for, and
+/// `a_reloaded_save_leaves_the_state_where_it_was` is what holds the two calls
+/// to that. The two writes it does NOT read back, the fold dial and the comma
+/// verdicts, are frame-scoped: only a draw reads either, no draw is running,
+/// and every window build resets both through `Opening` regardless. What it
+/// costs is one RON round trip per window close, where a window close is
+/// already spending one.
 struct Restore {
     /// The host's field, shared with the plugin and with the editor.
     blob: Arc<RwLock<String>>,
@@ -549,10 +555,11 @@ mod tests {
     /// open is exactly what this thread exists to cover.
     ///
     /// Asserted on [`AudioSpectrum::column_lag`] — half the analysis window —
-    /// rather than on the config, because the config is where the setting
-    /// already got to and the analyzer is where it did not. Nothing but
-    /// `push_samples` carries one to the other, so a fix that loaded the blob
-    /// after the drain would satisfy the config assertion alone.
+    /// rather than on the config, because the two are a step apart and only the
+    /// second one is the picture. Nothing but `push_samples` carries the setting
+    /// across that step, so a load placed after the drain satisfies an assertion
+    /// on the config and still analyzes the round's own audio at the window the
+    /// blob replaced.
     ///
     /// [`AudioSpectrum::column_lag`]: harmonigraph_ui::AudioSpectrum::column_lag
     #[test]
@@ -625,6 +632,69 @@ mod tests {
             h.configured_window(),
             SpectrumWindow::Fast,
             "the second blob was never read: the thread adopts once and then stops looking",
+        );
+    }
+
+    /// An EMPTY blob is a project with nothing saved, not a broken one. A
+    /// plugin whose editor has never been opened carries one, and a host can
+    /// hand it to a live instance — loading such a project over this one with
+    /// the window shut. Read as a blob it would put `persist ignored — the blob
+    /// did not parse` on the console, which is the noise the emptiness check
+    /// exists to keep off it.
+    ///
+    /// Reached only from a mirror that already holds something: against a fresh
+    /// one the check is indistinguishable from the same-blob check beside it,
+    /// which is what every other test here exercises.
+    #[test]
+    fn an_empty_blob_is_a_project_with_nothing_saved() {
+        use harmonigraph_ui::SpectrumWindow;
+
+        let mut h = harness();
+        h.restore(&blob_with_window(SpectrumWindow::Precise));
+        h.tick();
+
+        h.restore("");
+        h.tick();
+
+        assert_eq!(
+            h.shared.lock().ui.console.lines().filter(|l| l.contains("persist ignored")).count(),
+            0,
+            "an empty blob was read as a broken one",
+        );
+        // And nothing was reset to defaults on the strength of it: an empty
+        // field says the other project saved nothing, not that this one should
+        // forget what it has.
+        assert_eq!(h.configured_window(), SpectrumWindow::Precise);
+    }
+
+    /// What makes the round after every window close harmless: the blob
+    /// `LatticeEditorHandle::drop` writes is a fixed point of the round trip, so
+    /// adopting it moves nothing. Asserted on the SAVE either side rather than
+    /// on named fields, because the claim is about every persisted field at once
+    /// and a list here would go stale the moment one is added.
+    #[test]
+    fn a_reloaded_save_leaves_the_state_where_it_was() {
+        use harmonigraph_ui::SpectrumWindow;
+
+        let mut h = harness();
+        // Dialled away from the defaults, the way a session leaves a state —
+        // otherwise a load that reset a field to its default would pass.
+        {
+            let ui = &mut h.shared.lock().ui;
+            ui.spectrum_config.window = SpectrumWindow::Precise;
+            ui.spectrum_config.floor_db = -72.0;
+            ui.fps_cap = Some(90.0);
+        }
+        // What the close writes into `params.ui_state`.
+        let saved = harmonigraph_ui::shell::close(&h.shared.lock().ui);
+        h.restore(&saved);
+
+        h.tick();
+
+        assert_eq!(
+            harmonigraph_ui::shell::close(&h.shared.lock().ui),
+            saved,
+            "reloading a state's own save moved something in it",
         );
     }
 
