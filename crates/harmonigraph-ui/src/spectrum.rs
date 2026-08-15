@@ -93,8 +93,8 @@ pub(crate) struct SpectrogramSurface {
     /// rebuild count; see
     /// [`SpectrogramAgg::rebuilds`](crate::spectrogram::SpectrogramAgg::rebuilds).
     pub(crate) restarts: [u32; crate::spectrogram::Restart::COUNT],
-    /// Whether the style is mid-gesture, which is when the image is built
-    /// short and stretched — see
+    /// Whether the style is mid-gesture, which is when the image is built with
+    /// the coarse read — see
     /// [`StyleMotion`](crate::spectrogram::StyleMotion). Like the aggregator,
     /// it describes the style stream rather than the texture, so it survives
     /// [`release_texture`](Self::release_texture).
