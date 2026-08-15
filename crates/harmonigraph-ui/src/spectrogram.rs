@@ -4459,7 +4459,8 @@ mod tests {
     /// Scratch: whether the compose's row read scales across cores. Not an
     /// assertion.
     ///
-    /// The read is ~60% of a settled compose (`timing_mean_log`), and it is the
+    /// The read is about two thirds of a settled compose (`timing_mean_log`, a
+    /// floor on the share), and it is the
     /// term a gesture's frames and its opening full-quality frame BOTH pay, so
     /// it is the only candidate that helps whichever of the two is the symptom.
     /// It is also embarrassingly parallel over columns: each writes its own
@@ -4552,15 +4553,29 @@ mod tests {
     /// of them on a full-height 2x pane, and the answer is quantized to a `u8`
     /// step the moment it lands, so the accuracy a libm call buys is thrown
     /// away before anything reads it. Standing a bit-trick in its place is
-    /// worth **1.16x** on this loop, 10.0 ms to 8.7 ms across a full-width
-    /// pane's columns. That is not a frame, and it is the whole of what
-    /// removing the call could ever pay, so the careful version — a version
-    /// that has to argue its error stays inside the rounding — is not worth
-    /// writing.
+    /// worth **1.20x** on the loop. That is not a frame, and it is the whole of
+    /// what removing the call could ever pay, so the careful version — one that
+    /// has to argue its error stays inside the rounding — is not worth writing.
     ///
-    /// What the same figure says instead is where the loop DOES go: 10.0 ms of
-    /// a 16.5 ms compose (`timing_zoom_costs`, 12 s zoomed out) is this read,
-    /// and inside it the cost is the `ROW_WEIGHT[top - v]` gather and its sum —
+    /// What the same run says instead is where the loop DOES go: the shipping
+    /// read is 10.7 ms of the 16.5 ms compose `timing_zoom_costs` measures at
+    /// these dimensions, about two thirds of it. Read that share as a FLOOR
+    /// rather than as a number — one slab is read here over and over, so the
+    /// buckets sit in L1 throughout, where the compose it is scaled against
+    /// walks 752 distinct slabs, some 2.9 MB, once each. The in-situ read can
+    /// only be dearer, which moves the share up and leaves the ratios alone,
+    /// since every arm shares the residency.
+    ///
+    /// And a lead this was not looking for: the hand-copied arm beats
+    /// [`RowRead::of`] by **1.35x** on byte-identical output, which is 2.8 ms of
+    /// a full-quality compose sitting in codegen rather than in arithmetic. Both
+    /// walk the same run and take the same branch; what differs is that one is a
+    /// call and the other is not. That is worth someone's afternoon before any
+    /// of the threading in `timing_compose_scaling`, because it costs no picture
+    /// and no host threads — but it is a lead and not a result, since nothing
+    /// here has looked at what the compiler actually emits.
+    ///
+    /// Inside the read the cost is the `ROW_WEIGHT[top - v]` gather and its sum —
     /// a dependent load per bucket, over runs that jointly cover the whole
     /// spectrum whatever the row count. That does not vectorize, which is why
     /// the coarse [`RowRead::Max`] rather than a faster mean is what a gesture
@@ -4592,8 +4607,25 @@ mod tests {
             *v = (40 + (i * 7) % 180) as u8;
         }
 
-        // The shipping arithmetic, and the same with the call swapped out.
-        let run = |log: fn(f32) -> f32| {
+        // The baseline goes through [`RowRead::of`] itself. A copy of the
+        // arithmetic would read identically and measure whatever it had drifted
+        // into: this bench's conclusion is a RATIO against the shipping mean, so
+        // a baseline that is merely a good imitation of it answers a question
+        // nobody asked. Only the swapped arm below is a copy, and only because
+        // there is no way to reach inside `of` to replace the call.
+        let shipping = || {
+            let t0 = Instant::now();
+            let mut sink = 0u32;
+            for _ in 0..200 {
+                for b in &bins {
+                    if matches!(b.read, RowRead::Mean { .. }) {
+                        sink += u32::from(b.read.of(&slab));
+                    }
+                }
+            }
+            (t0.elapsed().as_secs_f64() * 1000.0 / 200.0, sink)
+        };
+        let swapped = |log: fn(f32) -> f32| {
             let t0 = Instant::now();
             let mut sink = 0u32;
             for _ in 0..200 {
@@ -4615,20 +4647,41 @@ mod tests {
             }
             (t0.elapsed().as_secs_f64() * 1000.0 / 200.0, sink)
         };
-        let (real_ms, a) = run(f32::log2);
-        let (fast_ms, b) = run(fast_log2);
+        // Three arms, because two questions are being asked and one pair cannot
+        // answer both. The SHARE of a compose has to be read off the shipping
+        // path; the worth of the `log2` has to be read off a pair that differs
+        // in the call and in nothing else. Reading the log2 ratio against the
+        // shipping arm instead would credit it with the copy's own margin.
+        // Interleaved rounds, each arm scored by its BEST. One pass of an arm is
+        // some 20 us, which is short enough that a scheduler decision or a walk
+        // onto an efficiency core outweighs the thing being measured — run in
+        // sequence and scored by a single reading, these three swap order
+        // between runs. The minimum is the run that was not interrupted, and
+        // interleaving keeps a slow patch of machine from landing on one arm.
+        let (mut ship_ms, mut libm_ms, mut fast_ms) = (f64::MAX, f64::MAX, f64::MAX);
+        let (mut a, mut b, mut c) = (0, 0, 0);
+        for _ in 0..9 {
+            let s = shipping();
+            let l = swapped(f32::log2);
+            let f = swapped(fast_log2);
+            (ship_ms, libm_ms, fast_ms) =
+                (ship_ms.min(s.0), libm_ms.min(l.0), fast_ms.min(f.0));
+            (a, b, c) = (s.1, l.1, f.1);
+        }
+        assert_eq!((a, b), (b, c), "the three arms must compute the same column");
         println!(
-            "{means} Mean rows of {}: libm {real_ms:.3} ms/column, bit-trick {fast_ms:.3} \
-             ms/column ({:.2}x) | sinks {a} {b}",
+            "{means} Mean rows of {}: shipping {ship_ms:.3} | copy+libm {libm_ms:.3} | \
+             copy+bit-trick {fast_ms:.3} ms/column",
             bins.len(),
-            real_ms / fast_ms,
+        );
+        println!(
+            "  log2 is worth {:.2}x (copy vs copy) | the COPY beats `RowRead::of` by \
+             {:.2}x on identical output",
+            libm_ms / fast_ms,
+            ship_ms / libm_ms,
         );
         // Scaled to the column count a full-width pane composes.
-        println!(
-            "  over 752 slabs: {:.1} ms -> {:.1} ms",
-            real_ms * 752.0,
-            fast_ms * 752.0
-        );
+        println!("  over 752 slabs: shipping {:.1} ms", ship_ms * 752.0);
     }
 
     /// Scratch harness for the zoom-performance audit: prints where a zoom
