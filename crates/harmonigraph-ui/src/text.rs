@@ -263,6 +263,13 @@ pub(crate) const LATTICE_LEARN: u64 = 0;
 pub(crate) fn spectral_labels(surface: usize) -> u64 {
     1 + surface as u64
 }
+/// The spiral's rim names. ONE, where the analyzer has one per surface,
+/// because the spiral is drawn at most once in a frame: the dock holds one tab
+/// per pane, and the Video panel's preview composes `Layout::split`, which
+/// places no spiral at all. A hand-written offline layout with two spirals in
+/// it would want a second — the same assumption `draw_pane` already makes
+/// about the analyzer's texture slot.
+pub(crate) const SPIRAL_NAMES: u64 = 3;
 
 /// One glyph as the mirror identifies it: its size, its character, and the
 /// TEXEL it was found at.
@@ -1515,6 +1522,7 @@ mod tests {
             // The docked analyzer, then the Video pane's preview copy.
             spectral_labels(0),
             spectral_labels(1),
+            SPIRAL_NAMES,
         ];
         let distinct: std::collections::HashSet<u64> = ids.iter().copied().collect();
         assert_eq!(distinct.len(), ids.len(), "two batches share an id: {ids:?}");
