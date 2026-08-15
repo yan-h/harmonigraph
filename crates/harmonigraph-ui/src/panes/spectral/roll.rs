@@ -408,6 +408,13 @@ pub(super) fn note_instances(
     // against. What every screen-space length here (the ink overhang) is
     // converted through.
     let per_point = time.seconds_per_point(axes);
+    // One POINT of depth back from the present moment, signed: what a length
+    // in points is multiplied by to move a box INTO THE PAST. Read off the
+    // mapping rather than assumed, because the two modes run time opposite ways
+    // along this axis — the live window pins `now` to the near edge and scrolls
+    // history outward, while the whole-song layout starts the take at that edge
+    // and runs it forward.
+    let into_past = time.depth_of_unclamped(now - per_point) - time.depth_of_unclamped(now);
     let ink_seconds = if time.whole_song() { 0.0 } else { f64::from(ink_px) * per_point };
     let edge = oldest - ink_seconds;
     // Across pitch there is no margin to be had at the NOTE's level, and that
@@ -466,6 +473,68 @@ pub(super) fn note_instances(
         let zero_span = span_px <= 1e-6;
         let stretch =
             if zero_span { 1.0 } else { (2.0 * min_half_depth / span_px).max(1.0) };
+        // What the note covers either side of its own midpoint once drawn, in
+        // points: the floor where it is too brief to have a length of its own,
+        // its own half span where it is long enough to draw honestly.
+        let half_true = 0.5 * span_px;
+        let half_drawn = half_true.max(min_half_depth);
+        // Where the note's own stop sits, in points into the past from `now`.
+        // Negative only for a note that has not been played yet, which is
+        // something only the whole-song layout has.
+        let stop_px = ((now - note.stop(now)) / per_point) as f32;
+        // The floor may lengthen a note into the past; it may not carry ink
+        // into the FUTURE, past the moment the picture calls now.
+        //
+        // A note still sounding is where that bites hardest, because its stop
+        // IS `now`, which is exactly where the now-line is drawn: a floor
+        // centered on it puts half of itself on the SPECTRUM's side of the
+        // join, under an opaque one-point hairline. On the 2x display the
+        // plugin is used on, the floor is one point and the line covers the
+        // whole of it, so a just-pressed note is invisible until it has
+        // scrolled clear — at a long Span still true a second later, and the
+        // floor exists precisely so that "a note was played" stays visible. At
+        // 1x the floor is two points against the same line and what survives is
+        // half a point of note color stranded on the far side of it, a dash
+        // detached from its own ribbon in the spectrum's territory. A render
+        // draws at that density whenever its frame is no wider than
+        // `default_scale`'s reference, or `--scale 1` is asked for.
+        //
+        // A CLAMP rather than a re-anchoring, and the difference is the whole
+        // of why this is one expression. The centering is right everywhere it
+        // does not cross the line, and a note's box is left on its own midpoint
+        // for as long as the floor fits behind `now` — so this binds by
+        // exactly the overshoot and by nothing else, and lets go continuously
+        // as the note scrolls clear.
+        //
+        // Measured from the note's own STOP rather than gated on whether the
+        // key is still down, and that is not a generalization for its own sake:
+        // a gate would spend the whole clamp in the single frame the key comes
+        // up, snapping a staccato note back across the line by half a floor and
+        // handing #239 straight back to every note short enough to need the
+        // floor at all. The stop moves continuously through the release, so
+        // this does too.
+        //
+        // What it costs is an onset reading up to one floor OLDER than it is —
+        // the same overstatement the floor already makes about a note's LENGTH,
+        // and the truer of the two statements either way: a note has not
+        // sounded into the future, and drawing it as though it had is what put
+        // ink on the spectrum's side of the boundary to begin with.
+        //
+        // A note whose stop is AHEAD of now is left alone, which is the
+        // whole-song layout's case and not a live one. That layout draws the
+        // take's future as well as its past, so a note the playhead has not
+        // reached has not been played and belongs where it is; clamping it
+        // would drag the rest of the take onto the playhead and pop each note
+        // forward as the sweep passed it.
+        //
+        // The LEAD still crosses, and is measured from the clamped end: that is
+        // a distance a setting asks for, drawn as a tongue that fades out, and
+        // not a floor's rounding landing in the middle of the analyzer.
+        let shift = if stop_px >= 0.0 {
+            (half_drawn - half_true - stop_px).max(0.0) * into_past
+        } else {
+            0.0
+        };
         // How much lead this note still owns: all of it while the key is down,
         // and whatever its release has left once it is up. Per note and decided
         // once for it, since every segment of a note releases together.
@@ -494,7 +563,11 @@ pub(super) fn note_instances(
             // the note's midpoint, so a brief note reads half the floor either
             // side of the moment it was rather than being pushed off it in one
             // direction, and the segments keep their proportions inside it.
-            let (d0, d1) = (mid + (d0 - mid) * stretch, mid + (d1 - mid) * stretch);
+            // Then `shift`, which takes back however much of that centering
+            // would have landed past `now` — nothing, for a note far enough
+            // from the line to have the room. See it above.
+            let (d0, d1) =
+                (mid + (d0 - mid) * stretch + shift, mid + (d1 - mid) * stretch + shift);
             let (a0, a1) = (scale.t_of(p0), scale.t_of(p1));
 
             // Whether this segment carries a lead at all — which is not the
@@ -951,6 +1024,11 @@ mod tests {
     /// cannot say how long anything was held. Short enough, and it is the
     /// floor, and the note still sits on its own midpoint rather than being
     /// pushed off it in one direction.
+    ///
+    /// The note here is FINISHED, which is what makes the midpoint the moment
+    /// it was. A note still sounding has its midpoint half a floor into the
+    /// analyzer instead, and is the one case the centering is wrong for — see
+    /// [`a_sounding_note_is_floored_into_the_past_alone`].
     #[test]
     fn a_brief_note_is_floored_at_the_length_it_can_scroll_without_flickering() {
         // A 10 s span across 300 points of depth, of which the roll takes its
@@ -1017,6 +1095,240 @@ mod tests {
             (brief.center[0] - want.x).abs() < 0.01 && (brief.center[1] - want.y).abs() < 0.01,
             "the floored note sits at {:?}, not on its own mid-time {want:?}",
             brief.center,
+        );
+    }
+
+    /// Where an instance's box lands along the DEPTH axis, in points from the
+    /// region's near edge, as `(low, high)`.
+    ///
+    /// Which END of time each of those is depends on the mode, and the callers
+    /// say so rather than this: the live window runs the past outward from the
+    /// near edge, so `low` is the end at the now-line; the whole-song layout
+    /// runs the take forward from that edge, so `low` is the earlier end.
+    ///
+    /// Read through [`Axes`] rather than off a screen coordinate, because the
+    /// pane can be turned any of four ways and none of them is a screen side.
+    fn depth_from_edge(axes: &Axes, split: f32, inst: &RollInstance) -> (f32, f32) {
+        let origin = axes.at(0.0, 0.0);
+        let center = egui::pos2(inst.center[0], inst.center[1]);
+        let mid = (center - origin).dot(axes.dir_depth()) - split * axes.depth_len();
+        (mid - inst.half_extent[1], mid + inst.half_extent[1])
+    }
+
+    /// The floor grows a note that is still SOUNDING into the past alone, so
+    /// none of it is drawn on the spectrum's side of the now-line.
+    ///
+    /// Such a note's leading end is `now`, which is where the line is drawn, so
+    /// a floor centered on it lands half of itself under an opaque one-point
+    /// hairline. On the 2x display the plugin is used on the two are the same
+    /// width and a just-pressed note is invisible; at 1x the floor is twice the
+    /// line and what survives is a dash of note color detached from its own
+    /// ribbon, in the spectrum's territory. Issue #239 has both measured.
+    ///
+    /// Both ends are asserted, and the trailing one is not a formality: a clamp
+    /// that bought the clearance by SHORTENING the note would satisfy the
+    /// leading end and give back the visibility the floor exists for.
+    #[test]
+    fn a_sounding_note_is_floored_into_the_past_alone() {
+        // Lead at 0. A sounding note's tongue reaches well past the line at the
+        // default (a quarter of the analyzer), which would be the ink standing
+        // clear here — and this is about what the FLOOR draws, which is what
+        // the line covers.
+        let held = |ppp: f32, span: f32, dt: f64| {
+            let mut state = fresh();
+            state.spectrum_config.orientation = SpectralOrientation::Left;
+            state.spectrum_config.roll_seconds = span;
+            state.spectrum_config.roll_lead = 0.0;
+            state.spectrum_config.low_midi = 48.0;
+            state.spectrum_config.high_midi = 84.0;
+            state.tracker.handle_event(NoteEvent::on(0.0, 0, 60, 1.0));
+            let cfg = &state.spectrum_config;
+            let axes = Axes::new(PANE, cfg);
+            let scale = PitchScale { min_midi: 48.0, max_midi: 84.0, span: 36.0 };
+            let split = super::super::axes::spectrum_share(cfg);
+            let ins = note_instances(&axes, &scale, &state, split, dt, ppp);
+            depth_from_edge(&axes, split, one(&ins))
+        };
+
+        // A 12 s Span, where the floor is spent inside a frame, and a 10 min
+        // one, where a note is still under the floor a second after the press —
+        // which is the case the floor is carrying on its own.
+        for ppp in [1.0_f32, 2.0] {
+            let floor = MIN_LENGTH_DEVICE_PX / ppp;
+            for (span, dt) in [(12.0_f32, 0.0_f64), (600.0, 0.0), (600.0, 1.0)] {
+                let (leading, trailing) = held(ppp, span, dt);
+                assert!(
+                    leading > -1e-3,
+                    "{ppp}x, Span {span}, {dt}s after the press: the note reaches \
+                     {leading} pt onto the spectrum's side of the now-line",
+                );
+                assert!(
+                    (trailing - floor).abs() < 1e-3,
+                    "{ppp}x, Span {span}, {dt}s after the press: {trailing} pt of note \
+                     stands past the now-line, not the floor's {floor}",
+                );
+            }
+        }
+
+        // Long enough to draw honestly, and the clamp has nothing to do: the
+        // leading end is the note's own stop, which is `now` and so the line,
+        // and the length is the note's rather than the floor's.
+        let (leading, trailing) = held(2.0, 12.0, 4.0);
+        assert!(leading.abs() < 1e-3, "a held note starts {leading} pt off the now-line");
+        assert!(trailing > 4.0 * MIN_LENGTH_DEVICE_PX, "a 4 s note was floored: {trailing} pt");
+    }
+
+    /// The clearance survives the key coming up: a note keeps its ink off the
+    /// spectrum's side of the line while it scrolls away, rather than snapping
+    /// back across it the frame it is released.
+    ///
+    /// This is what makes the clamp a clamp instead of a gate on whether the
+    /// key is down. A gate spends its whole correction in one frame — the note
+    /// is clear of the line while sounding and half a floor over it immediately
+    /// after — which hands #239 back to every note short enough to need the
+    /// floor, staccato playing at a long Span being the ordinary case rather
+    /// than a corner of one.
+    #[test]
+    fn a_notes_clearance_survives_the_key_coming_up() {
+        // A 10 min Span, where a 50 ms tap is far under the floor and takes
+        // nearly two seconds of scrolling to earn its own length.
+        let mut state = fresh();
+        state.spectrum_config.orientation = SpectralOrientation::Left;
+        state.spectrum_config.roll_seconds = 600.0;
+        state.spectrum_config.roll_lead = 0.0;
+        state.spectrum_config.low_midi = 48.0;
+        state.spectrum_config.high_midi = 84.0;
+        state.tracker.handle_event(NoteEvent::on(0.0, 0, 60, 1.0));
+        state.tracker.handle_event(NoteEvent::off(0.05, 0, 60));
+
+        let cfg = &state.spectrum_config;
+        let axes = Axes::new(PANE, cfg);
+        let scale = PitchScale { min_midi: 48.0, max_midi: 84.0, span: 36.0 };
+        let split = super::super::axes::spectrum_share(cfg);
+        let at = |now: f64| {
+            let ins = note_instances(&axes, &scale, &state, split, now, 2.0);
+            depth_from_edge(&axes, split, one(&ins))
+        };
+
+        // Across the release and well past it. The key comes up at 0.05, so the
+        // second sample is the frame a gate would have let go on.
+        let mut previous = at(0.05).0;
+        for step in 0..40 {
+            let now = 0.05 + f64::from(step) * 0.05;
+            let (leading, trailing) = at(now);
+            assert!(
+                leading > -1e-3,
+                "{now}s: the note reaches {leading} pt onto the spectrum's side of the \
+                 now-line, {:.2}s after the key came up",
+                now - 0.05,
+            );
+            assert!(trailing > leading, "{now}s: the box collapsed");
+            // Into the past, never back toward the line, and never by more than
+            // the roll scrolled between the two frames — a jump is the snap
+            // this test exists for, whichever direction it is in.
+            let scrolled = 0.05
+                / super::super::axes::TimeAxis::new(&state, split, now)
+                    .seconds_per_point(&axes);
+            assert!(
+                leading >= previous - 1e-3 && leading - previous <= scrolled as f32 + 1e-3,
+                "{now}s: the note's near end jumped from {previous} pt to {leading}",
+            );
+            previous = leading;
+        }
+    }
+
+    /// The clamp is on a note the picture has already reached, not on every box
+    /// against the playhead. The whole-song layout draws the take's future as
+    /// well as its past, so a note that has not been played yet belongs where it
+    /// is — clamping every box would drag the rest of the take onto the playhead
+    /// and pop each note forward as the sweep passed it.
+    #[test]
+    fn the_whole_song_layout_keeps_drawing_the_take_ahead_of_the_playhead() {
+        let mut state = fresh();
+        state.spectrum_config.orientation = SpectralOrientation::Left;
+        state.spectrum_config.low_midi = 48.0;
+        state.spectrum_config.high_midi = 84.0;
+        // The whole take at once, the way the offline renderer lays it out: a
+        // brief note that is over well before the playhead reaches it, so the
+        // floor is what draws it and there is a clamp to get wrong.
+        state.tracker.handle_event(NoteEvent::on(6.0, 0, 60, 1.0));
+        state.tracker.handle_event(NoteEvent::off(6.02, 0, 60));
+        let roll = state.tracker.roll().clone();
+        state.whole_song =
+            Some(crate::WholeSong { columns: Vec::new(), roll, start: 0.0, span: 10.0 });
+
+        let cfg = &state.spectrum_config;
+        let axes = Axes::new(PANE, cfg);
+        let scale = PitchScale { min_midi: 48.0, max_midi: 84.0, span: 36.0 };
+        // The mode gives the roll the whole depth axis; there is no spectrum
+        // beside it to leave room for.
+        let split = 0.0;
+        let ins = note_instances(&axes, &scale, &state, split, 1.0, 2.0);
+        let (low, high) = depth_from_edge(&axes, split, one(&ins));
+
+        // Depth runs forward in time here, so the note sits on its own
+        // mid-time: 6.01 of the take's 10 seconds, over 300 points of axis.
+        // Against the MIDPOINT and to a tolerance well inside half a floor,
+        // because the two answers this is separating — centered, or dragged
+        // onto the playhead — differ by exactly what the floor added.
+        let want = 6.01 / 10.0 * axes.depth_len();
+        let mid = (low + high) * 0.5;
+        assert!(
+            (mid - want).abs() < 0.05,
+            "a note six seconds into the take was drawn at {mid} pt, not {want} — \
+             a clamp meant for a note already played has pulled it toward the playhead",
+        );
+    }
+
+    /// Which way the clamp moves a note in the whole-song layout, with margin.
+    ///
+    /// That layout runs time FORWARD from the near edge while the live window
+    /// runs it backward, so the direction the floor grows into is read off the
+    /// mapping rather than assumed. The sign is the whole of that reading, and
+    /// nothing else in the suite would notice it flipped: the live tests cannot
+    /// see it, and a released note far from the playhead is not clamped at all.
+    ///
+    /// A note ending ON the playhead is the case that pins it. Floored, its box
+    /// is half a floor longer than the note in each direction; clamped the right
+    /// way it ends on the playhead, and clamped the wrong way it reaches a whole
+    /// floor past it, into a part of the take that has not been played.
+    #[test]
+    fn the_whole_song_clamp_grows_a_note_back_toward_the_takes_start() {
+        let mut state = fresh();
+        state.spectrum_config.orientation = SpectralOrientation::Left;
+        state.spectrum_config.low_midi = 48.0;
+        state.spectrum_config.high_midi = 84.0;
+        state.tracker.handle_event(NoteEvent::on(6.0, 0, 60, 1.0));
+        state.tracker.handle_event(NoteEvent::off(6.02, 0, 60));
+        let roll = state.tracker.roll().clone();
+        state.whole_song =
+            Some(crate::WholeSong { columns: Vec::new(), roll, start: 0.0, span: 10.0 });
+
+        let cfg = &state.spectrum_config;
+        let axes = Axes::new(PANE, cfg);
+        let scale = PitchScale { min_midi: 48.0, max_midi: 84.0, span: 36.0 };
+        let split = 0.0;
+        // The playhead exactly on the note's release, where the clamp binds by
+        // the whole of what the floor added.
+        let now = 6.02;
+        let ins = note_instances(&axes, &scale, &state, split, now, 2.0);
+        let (low, high) = depth_from_edge(&axes, split, one(&ins));
+
+        let playhead = (now / 10.0) as f32 * axes.depth_len();
+        let floor = MIN_LENGTH_DEVICE_PX / 2.0;
+        assert!(
+            high < playhead + 1e-3,
+            "the note reaches {high} pt, past the playhead at {playhead} — the floor \
+             grew it into the take's future, so `into_past` has the wrong sign here",
+        );
+        assert!(
+            (high - playhead).abs() < 1e-3,
+            "the note ends at {high} pt rather than on the playhead at {playhead}",
+        );
+        assert!(
+            (high - low - floor).abs() < 1e-3,
+            "the note is {} pt long, not the floor's {floor}",
+            high - low,
         );
     }
 
@@ -1630,6 +1942,16 @@ mod tests {
     /// mesh, never snapped — slid smoothly underneath, so the notes read as
     /// jittering against it. Four frames a fraction of a pixel apart must
     /// move the note by that same fraction each time, not by 0 then 1.
+    ///
+    /// Measured on a note well past the LENGTH FLOOR, and the fixture checks
+    /// that rather than trusting the Span. A sounding note still under the
+    /// floor does not scroll at all — its leading end is `now`, which is the
+    /// now-line, and the floor stands in for a length it has not reached, so
+    /// the box is pinned there until it has one (see
+    /// [`a_sounding_note_is_floored_into_the_past_alone`]). A fixture straddling
+    /// that crossover reads the transition as a snap and fails for a reason
+    /// that has nothing to do with rounding. At the default 180 s Span a point
+    /// is over a second, which puts the crossover a second in.
     #[test]
     fn a_scrolling_note_moves_sub_pixel_rather_than_in_whole_pixel_jumps() {
         let mut state = fresh();
@@ -1646,8 +1968,14 @@ mod tests {
             let note = one(&notes);
             egui::pos2(note.center[0], note.center[1])
         };
+        let from = 5.0;
+        assert!(
+            one(&instances(&state, from)).half_extent[1] > MIN_LENGTH_DEVICE_PX / PPP,
+            "the fixture sits on the length floor, where the note is pinned rather \
+             than scrolling, and the crossover would read as a snap",
+        );
         let moves: Vec<f32> = (0..4)
-            .map(|i| at(1.0 + step * (i + 1) as f64) - at(1.0 + step * i as f64))
+            .map(|i| at(from + step * (i + 1) as f64) - at(from + step * i as f64))
             .map(|d| d.length())
             .collect();
         for step in &moves {

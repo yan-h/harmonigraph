@@ -263,11 +263,12 @@ fn zoom_by_scales_distance_and_clamps() {
 }
 
 #[test]
-fn visible_count_matches_visible_positions() {
-    // `visible_count` is a `Vec::with_capacity` hint; it must equal the
-    // number `visible_positions` actually enumerates, including the
-    // degenerate cases where a non-positive extent collapses an axis to
-    // empty.
+fn the_reachs_count_matches_the_reachs_positions() {
+    // `DrawnWindow::count` is a `Vec::with_capacity` hint; it must equal the
+    // number `positions` actually enumerates. A non-positive extent is in the
+    // sweep because `reach` floors each one at zero, so it collapses that axis
+    // to the center node rather than to nothing — which is the case the count
+    // has to agree with rather than the empty one it used to be.
     for &(t, f, s) in &[(0, 0, 0), (2, 1, 0), (3, 3, 3), (1, 0, 4), (-1, 2, 0)] {
         let view = ViewConfig {
             extent_threes: t,
@@ -276,8 +277,8 @@ fn visible_count_matches_visible_positions() {
             ..ViewConfig::default()
         };
         assert_eq!(
-            view.visible_count(),
-            view.visible_positions().count(),
+            view.reach().count(),
+            view.reach().positions().count(),
             "extents ({t}, {f}, {s})"
         );
     }

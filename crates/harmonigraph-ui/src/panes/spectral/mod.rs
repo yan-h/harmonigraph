@@ -24,7 +24,7 @@ pub(super) use settings::spectrum_settings_pane;
 pub(crate) use gestures::{hold_spectrum, SpectrumHold};
 
 use crate::{theme, SharedState};
-use crate::panes::nearest_visible_node;
+use crate::panes::window_shows_node;
 use axes::{
     frequency_grid, label_anchor, level_grid, loudness, plot_budget, text_scales,
     Axes, PitchScale, TimeAxis, LABEL_GAP_PT, LABEL_INSET_PT, MARKING_PT, PROFILE_PT,
@@ -411,20 +411,20 @@ pub(crate) fn spectral_pane(
         }
     }
 
-    // Notes sounding at a pitch the visible lattice has no node for, flagged
-    // as a red band down the spectrum at that pitch. The lattice shows nothing
-    // for such a note by definition, so this pane is where you would otherwise
-    // never learn one was playing — and the band says it in the spectrum's own
-    // territory, where there is room for it, instead of recoloring the note
-    // and costing you the one thing the ribbon's color is for. Same
-    // `nearest_visible_node` match the Notes pane and the lattice use.
+    // Notes sounding at a pitch the lattice has no node for, flagged as a red
+    // band down the spectrum at that pitch. The lattice shows nothing for such
+    // a note — by construction, since this asks the same window it drew — so
+    // this pane is where you would otherwise never learn one was playing, and
+    // the band says it in the spectrum's own territory, where there is room
+    // for it, instead of recoloring the note and costing you the one thing the
+    // ribbon's color is for. Same match the Notes pane
+    // uses, over the same window.
     if split > 0.0 && !whole_song {
+        let shown = state.shown();
         let mut voices: Vec<&harmonigraph_core::Voice> = state
             .tracker
             .voices()
-            .filter(|v| {
-                nearest_visible_node(&state.view, &state.tuning, v.pitch_class).is_none()
-            })
+            .filter(|v| !window_shows_node(&shown, &state.tuning, v.pitch_class))
             .collect();
         // Translucent bands accumulate where they overlap, so the paint
         // order is part of the picture. The tracker's own order is stable —

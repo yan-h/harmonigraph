@@ -3,7 +3,7 @@
 
 use crate::widgets::button_row;
 use crate::{theme, SharedState};
-use super::{display_note_name, nearest_visible_node, KEY_NAMES};
+use super::{display_note_name, nearest_shown_node, KEY_NAMES};
 
 pub(super) fn console_pane(ui: &mut egui::Ui, state: &mut SharedState) {
     button_row(ui, |ui| {
@@ -57,8 +57,11 @@ pub(super) fn notes_pane(ui: &mut egui::Ui, state: &mut SharedState) {
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
+            // The window the lattice is drawing, so a voice lit on a node
+            // is never listed as having none.
+            let shown = state.shown();
             for voice in voices {
-                let node = nearest_visible_node(&state.view, &state.tuning, voice.pitch_class)
+                let node = nearest_shown_node(&shown, &state.tuning, voice.pitch_class)
                     .map(|pos| display_note_name(pos, state.view.tempered()).to_string());
                 let line = format!(
                     "{name:<4} {oct:>4} {cents:>8.2}\u{a2}  {node:<7} {ch:>2}",

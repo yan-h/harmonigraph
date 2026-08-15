@@ -43,7 +43,7 @@
 use std::collections::HashMap;
 
 use harmonigraph_core::{LatticePos, NoteName, PitchClass, RollNote, Tuning};
-use harmonigraph_scene::ViewConfig;
+use harmonigraph_scene::{DrawnWindow, ViewConfig};
 
 use crate::marks;
 use super::axes::{Axes, PitchScale, TimeAxis};
@@ -234,7 +234,7 @@ struct Occupancy {
 ///
 /// Every measurement below is taken with the sevens axis OPEN
 /// (`extent_sevens: 1`), which is not where a fresh view starts — the captured
-/// default opens flat, and `visible_positions` then yields the home sheet
+/// default opens flat, and the naming reach then holds the home sheet
 /// alone, so no roll name carries a septimal mark and `E♯-5↓` above is not one
 /// of the spellings on offer. The defects are about lattices with depth, which
 /// is the case worth stating them for; opening the sevens axis is what
@@ -500,10 +500,13 @@ pub(super) fn plan(
     // the name for its marks, and each of those builds a String. Per class
     // that is a few allocations a frame; per note it would be thousands.
     let mut names: HashMap<PitchClass, (NoteName, f64)> = HashMap::new();
+    // Read once for the whole pass, so every name on the pane is chosen out of
+    // one window even if a lattice pane redraws between two of them.
+    let shown = state.shown();
     let naming = |pitch: f32, names: &mut HashMap<PitchClass, (NoteName, f64)>| {
         let class = PitchClass::from_cents(pitch.rem_euclid(12.0) * 100.0);
         *names.entry(class).or_insert_with(|| {
-            let name = note_name(&state.view, &state.tuning, pitch);
+            let name = note_name(&state.view, &shown, &state.tuning, pitch);
             (name, room(&name))
         })
     };
@@ -916,26 +919,44 @@ fn name_extent(name: &NoteName, size: f32) -> egui::Vec2 {
 /// No octave number, because a lattice node is a pitch class and wears none
 /// either — and the octave is already said by where the name sits on the axis.
 ///
-/// The fallback, for a pitch the visible lattice has no node for, is the
-/// equal-tempered spelling — still a [`NoteName`], so it draws identically and
-/// there is one rendering path rather than two. It is a real case: the pane
-/// already flags notes sounding off the lattice with a band down the spectrum,
-/// and a note with no name at all would just look like a bug.
-fn note_name(view: &ViewConfig, tuning: &Tuning, midi: f32) -> NoteName {
+/// The REACH is asked first and the picture's own window
+/// ([`SharedState::shown`](crate::SharedState::shown)) only where the reach
+/// comes back empty, which is what keeps two things true at once. A name is
+/// stable: the reach is the same block whatever the camera is doing, so
+/// panning and zooming do not respell a note that was already named, and the
+/// walk is over a thousand positions rather than the twenty thousand a drawn
+/// window can reach — per played pitch, per frame. And a name agrees with the
+/// picture: where the lattice is drawing a node the reach cannot spell, that
+/// node names the note, instead of the pitch dropping to a spelling the
+/// lattice is visibly contradicting one pane away.
+///
+/// The equal-tempered fallback is what is left when NEITHER window has a node
+/// — still a [`NoteName`], so it draws identically and there is one rendering
+/// path rather than two. It is a real case, and a narrower one than the red
+/// band's: the band asks the picture alone, so a pitch the reach can spell
+/// while the pane is not drawing it wears a band and still gets its lattice
+/// name. That is the two answering the two different questions they are for —
+/// the band says what is on screen, the name says what the note is called —
+/// and a name that changed under a pan would be the worse of the two to make
+/// agree. A note with no name at all would just look like a bug.
+fn note_name(view: &ViewConfig, shown: &DrawnWindow, tuning: &Tuning, midi: f32) -> NoteName {
     // Cents from C, measured from MIDI 0 (which IS a C) — the same reduction
     // the pane's hover makes before asking the same question.
     let pc = PitchClass::from_cents(midi.rem_euclid(12.0) * 100.0);
-    match naming_node(view, tuning, pc) {
+    let reach = view.reach();
+    match naming_node(&reach, view, tuning, pc)
+        .or_else(|| naming_node(shown, view, tuning, pc))
+    {
         Some(pos) => crate::panes::display_note_name(pos, view.tempered()),
         None => equal_tempered_name(midi),
     }
 }
 
-/// The visible node to name a pitch by: the closest match, and among matches
-/// equally close the one that spells most plainly.
+/// The node in `window` to name a pitch by: the closest match, and among
+/// matches equally close the one that spells most plainly.
 ///
 /// Its own function rather than
-/// [`nearest_visible_node`](crate::panes::nearest_visible_node), which it otherwise
+/// [`nearest_shown_node`](crate::panes::nearest_shown_node), which it otherwise
 /// mirrors exactly, because of the tiebreak — and the tiebreak matters only
 /// where that function has nothing to go on.
 ///
@@ -954,8 +975,14 @@ fn note_name(view: &ViewConfig, tuning: &Tuning, midi: f32) -> NoteName {
 /// Left where it is rather than pushed into the shared function because the
 /// shared one answers "which node do I light", where any of a collapsed set
 /// will do, and this one answers "what do I call it", where they differ.
-fn naming_node(view: &ViewConfig, tuning: &Tuning, pc: PitchClass) -> Option<LatticePos> {
-    view.visible_positions()
+fn naming_node(
+    window: &DrawnWindow,
+    view: &ViewConfig,
+    tuning: &Tuning,
+    pc: PitchClass,
+) -> Option<LatticePos> {
+    window
+        .positions()
         .filter(|&pos| tuning.matches(pc, tuning.pitch_class(pos)))
         .min_by_key(|&pos| {
             (
@@ -2156,12 +2183,46 @@ mod tests {
                 center_threes: centre,
                 ..harmonigraph_scene::ViewConfig::default()
             };
-            note_name(&view, &equal, 60.0).to_string()
+            note_name(&view, &view.reach(), &equal, 60.0).to_string()
         };
         assert_eq!(named(0), "C");
         for centre in [-2, -1, 1, 2] {
             assert_eq!(named(centre), "C", "panned to {centre}, middle C is still C");
         }
+    }
+
+    /// A pitch the reach cannot spell but the PICTURE has a node for is named
+    /// off that node, not off equal temperament.
+    ///
+    /// The fallback exists for a note nothing on the lattice is showing, which
+    /// is the case the red band is drawn for — so where the lattice is
+    /// visibly lighting a node, taking it would put the analyzer's name and
+    /// the node's own label in disagreement one pane apart.
+    #[test]
+    fn a_pitch_the_picture_shows_is_named_off_the_picture() {
+        let view = harmonigraph_scene::ViewConfig::default();
+        let just = harmonigraph_core::Tuning::just();
+        // A node past the reach, and the pitch that sounds it.
+        let far = harmonigraph_core::LatticePos::new(0, 25, 0);
+        assert!(!view.reach().contains(far));
+        let midi = 60.0 + just.pitch_class(far).to_cents() / 100.0;
+
+        let equal_tempered = note_name(&view, &view.reach(), &just, midi).to_string();
+        assert_eq!(
+            equal_tempered,
+            equal_tempered_name(midi).to_string(),
+            "with only the reach to ask, this pitch has no lattice spelling at all",
+        );
+
+        let window = harmonigraph_scene::DrawnWindow {
+            min: harmonigraph_core::LatticePos::new(-2, -2, 0),
+            max: harmonigraph_core::LatticePos::new(2, 30, 0),
+        };
+        assert_eq!(
+            note_name(&view, &window, &just, midi).to_string(),
+            crate::panes::display_note_name(far, view.tempered()).to_string(),
+            "the picture is drawing this node and the name ignored it",
+        );
     }
 
     /// The tritone is a genuine tie — six fifths up spells F♯, six down spells
@@ -2174,7 +2235,7 @@ mod tests {
     fn a_tie_between_two_spellings_is_broken_by_a_rule_not_by_iteration_order() {
         let view = harmonigraph_scene::ViewConfig::default();
         let equal = harmonigraph_core::Tuning::default();
-        assert_eq!(note_name(&view, &equal, 66.0).to_string(), "F\u{266F}");
+        assert_eq!(note_name(&view, &view.reach(), &equal, 66.0).to_string(), "F\u{266F}");
     }
 
     /// A name at one pitch never suppresses a name at another, however close on
@@ -2355,7 +2416,7 @@ mod tests {
     fn a_collapsed_tuning_names_a_pitch_plainly_rather_than_from_the_corner() {
         let view = harmonigraph_scene::ViewConfig::default();
         let equal = harmonigraph_core::Tuning::default();
-        let name = |midi| note_name(&view, &equal, midi).to_string();
+        let name = |midi| note_name(&view, &view.reach(), &equal, midi).to_string();
 
         assert_eq!(name(60.0), "C", "the origin, not a remote spelling of it");
         assert_eq!(name(67.0), "G", "a fifth up");
@@ -2413,7 +2474,7 @@ mod tests {
         // A view with depth, so off-sheet nodes are candidates at all.
         let view = harmonigraph_scene::ViewConfig { extent_sevens: 1, ..Default::default() };
         let equal = harmonigraph_core::Tuning::default();
-        let name = |midi| note_name(&view, &equal, midi).to_string();
+        let name = |midi| note_name(&view, &view.reach(), &equal, midi).to_string();
 
         // Every one of these has an equal-tempered twin one sevens step off,
         // nearer the origin, that would win on distance alone.

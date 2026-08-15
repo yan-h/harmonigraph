@@ -27,7 +27,7 @@ use crate::{HarmonigraphParams, PluginParamBackend};
 /// and DX12. If the lattice pane ever panics with a pipeline/surface format
 /// mismatch on some exotic setup, this is the knob (the real fix is
 /// upstreaming RenderState access in egui-baseview).
-const ASSUMED_SURFACE_FORMAT: harmonigraph_render::wgpu::TextureFormat =
+pub(crate) const ASSUMED_SURFACE_FORMAT: harmonigraph_render::wgpu::TextureFormat =
     harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm;
 
 /// Editor size on first open, in logical pixels.
@@ -97,8 +97,12 @@ pub struct EditorShared {
     /// would read one channel as two.
     audio_channels: Arc<AtomicU32>,
     /// Crate-visible because [`crate::background`] shares this state with the
-    /// frame — it logs a failure to start into the same console, and its tests
-    /// read back the history it filled.
+    /// frame, and shares more of it than a drainer would need: it applies the
+    /// host's restored blob through this field WHOLE — dock, camera, view and
+    /// every setting, off the GUI thread, while the window is shut (see
+    /// [`crate::background`], and `Restore` there) — as well as logging a
+    /// failure to start into the same console. Its tests read back the history
+    /// it filled.
     pub(crate) ui: SharedState,
     /// GUI clock epoch; audio event times are mapped onto this clock.
     start: Instant,

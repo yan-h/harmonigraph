@@ -6,7 +6,8 @@ use super::axes::*;
 use super::gestures::*;
 use super::settings::*;
 use crate::tests::probe::{
-    events_into, fresh, frame_into, painted_full, painted_into, press, themed, themed_at,
+    events_into, fresh, frame_full, frame_into, painted_full, painted_into, press, themed,
+    themed_at,
 };
 use crate::{SpectralOrientation, SpectrumConfig};
 use harmonigraph_core::{NoteEvent, NoteEventKind};
@@ -1736,6 +1737,65 @@ fn the_strip_holds_its_leading_sliver_instead_of_reading_round_the_ring() {
     assert_eq!(us.iter().filter(|u| **u == far).count(), 2, "the data quad bends: {us:?}");
 }
 
+/// A big pane at a high density must not upload a texture the context has
+/// already said it will not take.
+///
+/// The pane draws through two contexts that disagree about the limit: an
+/// editor's reports the wgpu device's 8192, and a bare `egui::Context` — the
+/// offline renderer's, and every test's — reports egui's own 2048 default. At
+/// 2048 the slab count alone put the image `2 * (1024 + 8)` = 2064 texels
+/// across and `Context::load_texture` asserted on the upload, taking the frame
+/// with it. Issues #333 and #335 are that panic, reached from the profiling
+/// harness at exactly the geometry below.
+///
+/// A whole frame rather than [`Plan`](crate::spectrogram::Plan) arithmetic,
+/// because the arithmetic is only half the claim: what panicked was the
+/// UPLOAD, and only a real context holds a real limit to check against. The
+/// plan's own sweep is `no_pane_plans_an_image_past_what_the_gpu_takes`.
+#[test]
+fn a_large_pane_at_a_high_density_uploads_a_texture_the_context_takes() {
+    // The profiling harness's own picture pane, which is where this was found:
+    // one pane filling a 1000x900 point window at 2x, no dock.
+    const BODY: egui::Vec2 = egui::vec2(1000.0, 900.0);
+    let mut state = fresh();
+    state.spectrum_config.orientation = SpectralOrientation::Left;
+    state.spectrum_config.show_spectrogram = true;
+    // The long end of the Span, where the window holds the most slabs.
+    state.spectrum_config.roll_seconds = 180.0;
+    let mut bins = [0.0f32; harmonigraph_core::spectrum::SPECTRUM_BINS];
+    bins[harmonigraph_core::spectrum::SPECTRUM_BINS / 3] = 0.8;
+    for i in 0..400 {
+        state.spectrum.push_history(90.0 + f64::from(i) * 0.1, &bins);
+    }
+    let ctx = themed_at(2.0);
+    // ONE frame, and the count is a claim: `begin_pass` takes the pending zoom
+    // factor and derives `pixels_per_point` from it within the same pass
+    // (egui's `context.rs`), so this frame is already at 2x and is the frame
+    // that builds and uploads. A second would only hit the cache — same
+    // columns, same style, same key — and would hide a first frame that had
+    // quietly drawn at 1x and reached nothing.
+    let _ = frame_full(&ctx, BODY, |ui| spectral_pane(ui, &mut state, 130.0, 0));
+    let limit = ctx.input(|i| i.max_texture_side);
+    let size = state.spectrum.spectrogram[0].tex.as_ref().expect("a heatmap was uploaded").size();
+    assert!(
+        size[0] <= limit && size[1] <= limit,
+        "a {}x{} heatmap on a context whose limit is {limit}",
+        size[0],
+        size[1],
+    );
+    // And that it got there by SATURATING the cap rather than by being a pane
+    // too small to reach it. Without this the test passes for the wrong reason
+    // the day a default moves: at `roll_fraction` 0.2 this pane plans 400
+    // slabs for an 816-texel image, clears the limit by a mile, and exercises
+    // none of the clamp it exists to hold. One quantum of slack, since the
+    // ceiling is a slab count and the pane's own rounding sits under it.
+    assert!(
+        size[0] as f32 > limit as f32 - crate::spectrogram::PANE_QUANTUM,
+        "a {} texel image is not near the {limit} ceiling — this pane no longer saturates it",
+        size[0],
+    );
+}
+
 /// The heatmap image is sized in DEVICE PIXELS, not points. It is stretched
 /// over the pane by the GPU, so sizing it in points builds it at the
 /// display's density divided by the scale factor and then upsamples — on a
@@ -1940,6 +2000,78 @@ fn an_off_lattice_note_gets_a_band_down_the_spectrum() {
     };
     assert_eq!(bands(0.0), 0, "a plain C has a node, so nothing to flag");
     assert_eq!(bands(0.5), 1, "half a semitone sharp has none");
+}
+
+/// A note the lattice is LIGHTING is never flagged as off it, however far out
+/// the node sits.
+///
+/// The band asks what the picture shows, and the picture is the camera's
+/// window rather than the naming reach. The two are sized apart and the drawn
+/// one is much the wider — at 16:9, fully zoomed out, a perspective pane draws
+/// 73% of its nodes outside the reach — so asking the reach put a red band
+/// down the spectrum for a note lit on screen, with the Notes pane showing no
+/// node for it and the analyzer naming it in equal temperament. That needs a
+/// tuning where distinct positions are distinct pitches to see: the default
+/// 12-TET lattice collapses, and a match turns up within six fifths whatever
+/// you play.
+#[test]
+fn a_note_lit_on_the_lattice_is_not_flagged_off_it() {
+    // The window a zoomed-out perspective pane really draws, and a node at its
+    // own far edge: inside the picture, outside the reach.
+    let view = harmonigraph_scene::ViewConfig::default();
+    let camera = harmonigraph_scene::Camera {
+        projection: harmonigraph_scene::Projection::Perspective,
+        distance: harmonigraph_scene::Camera::MAX_DISTANCE,
+        ..Default::default()
+    };
+    let window = view.scrolled(&camera, 16.0 / 9.0);
+    // Whichever edge of the picture has left the reach — which one that is
+    // depends on where the default camera is pointed, and the disagreement is
+    // the same at any of them.
+    let far = [
+        harmonigraph_core::LatticePos::new(0, window.min.fives, 0),
+        harmonigraph_core::LatticePos::new(0, window.max.fives, 0),
+        harmonigraph_core::LatticePos::new(window.min.threes, 0, 0),
+        harmonigraph_core::LatticePos::new(window.max.threes, 0, 0),
+    ]
+    .into_iter()
+    .find(|&pos| window.contains(pos) && !view.reach().contains(pos))
+    .expect("a zoomed-out perspective pane draws nothing the reach cannot name");
+
+    let bands = |shown: Option<harmonigraph_scene::DrawnWindow>| {
+        let mut state = fresh();
+        state.tuning = harmonigraph_core::Tuning::just();
+        state.spectrum_config.orientation = SpectralOrientation::Left;
+        state.spectrum_config.low_midi = 55.0;
+        state.spectrum_config.high_midi = 73.0;
+        state.frame_params.fade_time = 0.0;
+        state.drawn = shown;
+        // Bent onto that node's own pitch exactly, which is what a retuned
+        // keyboard or an MPE part does and the only way to sound one.
+        let cents = state.tuning.pitch_class(far).to_cents();
+        state.tracker.handle_event(NoteEvent::on(0.0, 0, 60, 1.0));
+        state.tracker.handle_event(NoteEvent {
+            time: 0.0,
+            channel: 0,
+            note: 60,
+            kind: NoteEventKind::Tuning { semitones: cents / 100.0 },
+        });
+        let out = painted_pane(WIDE, &mut state, 0.05);
+        let want = theme::warning_text().gamma_multiply(0.3);
+        out.shapes
+            .into_iter()
+            .filter(|s| matches!(&s.shape, egui::Shape::Rect(r) if r.fill == want))
+            .count()
+    };
+
+    // No lattice pane has drawn, so the reach is all there is to go on — and
+    // it cannot reach this node.
+    assert_eq!(bands(None), 1, "with only the reach to ask, the note reads as off the lattice");
+    assert_eq!(
+        bands(Some(window)),
+        0,
+        "the lattice is lighting this note and the band says it is not there",
+    );
 }
 
 /// The axis labels carry a rim, like the lattice's node names. What sits
