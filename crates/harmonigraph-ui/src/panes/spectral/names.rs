@@ -1868,6 +1868,15 @@ mod tests {
     /// note. Read by projecting onto the depth axis, since nothing here may
     /// name a screen side, and swept over [`SpectralOrientation::ALL`] so a
     /// fifth orientation cannot skip it.
+    ///
+    /// WHICH end each pass expects is [`Anchor::of`]'s rule restated: reading
+    /// order picks one and the setting asks for the other, so the two swap in a
+    /// reversed orientation. Restating it is the point — a mapping hardcoded
+    /// here would agree with the code in half the sweep and be checked by
+    /// neither assertion, both of which only bracket the name between the
+    /// ribbon's ends. The gap asserted last is what makes it bite: written on
+    /// the wrong end, a name stands a ribbon's length from the one it is
+    /// measured against rather than [`LABEL_INSET`].
     #[test]
     fn a_name_lies_over_its_own_ribbon_at_either_anchor() {
         // A plain `C`, whose box does not overrun its anchor: a name carrying
@@ -1892,7 +1901,11 @@ mod tests {
                 let axes = Axes::new(square, &state.spectrum_config);
                 let t = scale_of(&state).t_of(60.0);
                 let (head, onset) = (axes.at(t, 0.4), axes.at(t, 0.8));
-                let (anchor, other) = if travel { (onset, head) } else { (head, onset) };
+                // The leading edge reads first where time runs the screen's own
+                // way, the onset where it runs back against it; the setting
+                // asks for the other end of whichever that is.
+                let on_head = orientation.is_time_reversed() == travel;
+                let (anchor, other) = if on_head { (head, onset) } else { (onset, head) };
                 let toward = (other - anchor).normalized();
                 let reach = (placed[0].rect.center() - anchor).dot(toward);
                 assert!(
@@ -1904,6 +1917,12 @@ mod tests {
                     reach < (other - anchor).length(),
                     "{orientation:?}, travel {travel}: the name overruns the far end of \
                      its own ribbon",
+                );
+                let gap = (placed[0].lead - anchor).dot(toward);
+                assert!(
+                    (gap - LABEL_INSET).abs() < 0.01,
+                    "{orientation:?}, travel {travel}: the letter stands {gap} off the end \
+                     it is written on, not {LABEL_INSET} — so it is on the other end",
                 );
             }
         }
@@ -1976,6 +1995,34 @@ mod tests {
                 PANE.left(),
             );
         }
+
+        // ...and the same edge in a REVERSED orientation with a spectrum
+        // present, which is the case the two above cannot tell apart: with the
+        // roll given all but a sliver of the axis the analyzer is narrower than
+        // a name, so a name struck this instant crosses what there is of it and
+        // meets the pane. `split` is 0.02 here rather than 0, so a clamp still
+        // measuring against the divider would leave the name 6 points out.
+        let mut state = turned(24.0, 10.0, SpectralOrientation::Right);
+        state.spectrum_config.roll_fraction = 0.98;
+        state.tracker.handle_event(on(5.0, 60));
+        let axes = Axes::new(PANE, &state.spectrum_config);
+        let split = super::super::axes::spectrum_share(&state.spectrum_config);
+        let t = scale_of(&state).t_of(60.0);
+        let divider = axes.at(t, split).x;
+        let placed = labels(&state, 5.0);
+        assert_eq!(placed.len(), 1);
+        assert!(
+            placed[0].rect.max.x <= PANE.right() + 0.01,
+            "the name reaches to {} where the pane ends at {}",
+            placed[0].rect.max.x,
+            PANE.right(),
+        );
+        assert!(
+            placed[0].rect.max.x > divider,
+            "the clamp pulled the name back onto the roll at {} rather than leaving it \
+             over what analyzer there is, past {divider}",
+            placed[0].rect.max.x,
+        );
     }
 
     /// With the spectrum on the RIGHT, a name keeps its gap from the note's
