@@ -236,6 +236,31 @@ work is better run in sequence, and variants of a single decision (three
 takes on one fade) are better as one session producing several builds to
 compare than as three branches to reconcile.
 
+## Never lock your own worktree by hand
+
+The harness locks a worktree when a session enters it and unlocks it when
+the session exits, so there is nothing for a session to do here. Every
+releaser in the system — both harness exit paths, the startup sweep, and
+`.claude/reclaim-worktrees.sh` — recognises a lock only by the shape of
+its reason string:
+
+```
+claude session <name> (pid <n> start <date>)
+```
+
+A reason that does not match that belongs to nobody, and all of them are
+right to leave it alone rather than guess at whose it is. That makes a
+hand-written lock the one lock here that NOTHING can release: it stands
+until a human runs `git worktree unlock`, and while it stands the worktree
+is invisible to both tiers of the reclaim script — `target/debug` is never
+pruned out of it and the worktree itself is never removable. The instance
+that produced this rule pinned 2.2G behind a lock that only a human could
+clear (#369).
+
+So don't run `git worktree lock`. If a reason ever does turn up, the string
+has to carry `(pid $$ start ...)` in exactly the format above, or it never
+comes back.
+
 ## Permissions a worktree session needs go in `.claude/settings.json`
 
 `.claude/settings.local.json` is gitignored, so a fresh worktree never gets a
