@@ -426,6 +426,44 @@ pub struct ViewConfig {
     /// third's 5th harmonic sits 13.7¢ off the node it belongs to and a
     /// harmonic seventh 31¢ off.
     pub spectral_width: f32,
+    /// Draw a second ring on every node, inside the octave band, lit from the
+    /// analyzer's spectrum: which sine waves are sounding at each of this
+    /// node's octaves ([`NodeInstance::spectral_octaves`](crate::NodeInstance)).
+    ///
+    /// An ADDITION rather than a source switch, which is what makes it a
+    /// different picture from [`spectral_light`](Self::spectral_light) rather
+    /// than a second way of asking for it: MIDI keeps everything it draws —
+    /// the node body, the octave band, the melody and bass rings — and the
+    /// measurement is a ring of its own. The two rings share the wheel, so a
+    /// held note's wedge and the partial that should be sounding it sit at the
+    /// SAME angle and agreement between intent and sound is one glance down a
+    /// radius.
+    ///
+    /// Inside the band rather than outside because of which disagreement is
+    /// common: energy at a pitch class with no note held — every partial above
+    /// a played chord's roots — happens constantly, and a held note with
+    /// nothing sounding at it is rare. The common case is the one that gets
+    /// the inner ring, where a busy ring of small wedges is contained by the
+    /// band around it rather than fringing the node.
+    ///
+    /// Off fresh, and with it off the picture is exactly the MIDI one. Both
+    /// this and `spectral_light` on is redundant rather than wrong: the band
+    /// and the ring then draw the same measurement at two radii.
+    pub spectral_ring: bool,
+    /// The audio ring's inner and outer radius, in the same quad UV units as
+    /// the octave band's own ([`outer_inner`](Self::outer_inner)) and clamped
+    /// to a visible span by `derive_scene`.
+    ///
+    /// Fresh, they sit in the empty annulus between the core disc (which ends
+    /// at 0.256) and the melody ring (which starts at 0.531), with a gap
+    /// either side, so the ring reads as a layer of its own rather than as a
+    /// fringe on the core or a second mark ring. Settings rather than
+    /// constants because that annulus is itself a setting: a dialled-up core
+    /// or a band pulled inward closes it, and the ring has to be movable
+    /// without a recompile.
+    pub spectral_ring_inner: f32,
+    /// See [`spectral_ring_inner`](Self::spectral_ring_inner).
+    pub spectral_ring_outer: f32,
     // ---- Note envelope ---------------------------------------------------
     // How a note ARRIVES and how it LEAVES, for every layer of the node at
     // once. The DURATION of both is the host-automatable Fade param and lives
@@ -1249,6 +1287,20 @@ impl ViewConfig {
         self.spectral_width = finite_or(self.spectral_width, fresh.spectral_width)
             .clamp(crate::SPECTRAL_WIDTH_MIN, crate::SPECTRAL_WIDTH_MAX);
 
+        // The audio ring's radii, against the same hole. They are a RADIUS
+        // each rather than a divisor, so a non-finite one costs less than the
+        // width above — but it costs the whole ring silently: the shader's
+        // radial coverage comes out NaN, every wedge multiplies away, and the
+        // ring simply is not there while the bar reads out a number. Only the
+        // range is repaired here; which of the two is the larger is
+        // `derive_scene`'s, exactly as it is for the octave band, since that
+        // is a question about the PICTURE and the bar is free to be dragged
+        // through it.
+        self.spectral_ring_inner =
+            finite_or(self.spectral_ring_inner, fresh.spectral_ring_inner).clamp(0.0, 1.0);
+        self.spectral_ring_outer =
+            finite_or(self.spectral_ring_outer, fresh.spectral_ring_outer).clamp(0.0, 1.0);
+
         self.shimmer_speed = finite_or(self.shimmer_speed, fresh.shimmer_speed);
         self.shimmer_width = finite_or(self.shimmer_width, fresh.shimmer_width);
         self.shimmer_intensity = finite_or(self.shimmer_intensity, fresh.shimmer_intensity);
@@ -1391,6 +1443,18 @@ impl Default for ViewConfig {
             // Narrow, for the just-tuned material this is aimed at — see the
             // field.
             spectral_width: 10.0,
+            // Off, for the same reason: the MIDI picture is the one the plugin
+            // opens on, and a second ring on every node is a reading to ask
+            // for.
+            spectral_ring: false,
+            // Centred in the annulus the fresh core and the fresh melody ring
+            // leave between them — 0.256 to 0.531 — with about a fifteenth of
+            // the node clear either side. The gaps are what make it a third
+            // ring rather than a thick edge on the core: the eye reads the
+            // three bands (core, audio, octaves) as separate the moment none
+            // of them touches.
+            spectral_ring_inner: 0.32,
+            spectral_ring_outer: 0.47,
             // Near enough a square law (the exponent lands at 2.05): enough
             // that a release leaves promptly and settles instead of sliding
             // out at one rate, and not so much that the tail is over before

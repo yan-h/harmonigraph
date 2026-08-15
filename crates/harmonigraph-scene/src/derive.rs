@@ -9,7 +9,7 @@ use crate::trail::TrailField;
 use crate::view::{DrawnWindow, FrameParams, ViewConfig};
 use crate::{
     lattice_to_world, EdgeInstance, NodeInstance, Pulse, Scene,
-    MARK_DELAY_MAX, NODE_RADIUS_FACTOR, OCTAVE_SLOTS,
+    MARK_DELAY_MAX, NODE_RADIUS_FACTOR, OCTAVE_SLOTS, SPECTRAL_RING_MIN_SPAN,
 };
 use glam::Vec4;
 use harmonigraph_core::{HeldEnd, LatticePos, NoteTracker, Time, Tuning, VoiceState};
@@ -476,6 +476,12 @@ pub fn derive_scene(
             activation,
             departing,
             octaves,
+            // Dark: this crate reads no audio, and the Lattice pane's fold is
+            // what fills it where the view asks for the ring. A scene derived
+            // and drawn without that pass — the tests here, a shell that never
+            // opens an analyzer — draws the MIDI picture and no ring, which is
+            // the right answer for all of them.
+            spectral_octaves: [0.0; OCTAVE_SLOTS],
             hovered: hovered == Some(pos),
             on_home: pos.sevens == view.center_sevens,
             scale,
@@ -515,6 +521,18 @@ pub fn derive_scene(
     // well short of that.
     let outer_gap = view.outer_gap.clamp(0.0, 0.4);
     let mark_thickness = view.mark_thickness.clamp(0.0, 0.4);
+    // The audio ring, on the same policy as the band above and with the
+    // toggle answered here: OFF is an empty annulus, which is what the shader
+    // reads as "no ring" — so the flag reaches the picture as geometry and
+    // there is no second place for the two to disagree. The min span is what
+    // keeps a dragged-through pair drawing something rather than collapsing to
+    // a line the width of the drag.
+    let (spectral_inner, spectral_outer) = if view.spectral_ring {
+        let inner = view.spectral_ring_inner.clamp(0.0, 1.0 - SPECTRAL_RING_MIN_SPAN);
+        (inner, view.spectral_ring_outer.clamp(inner + SPECTRAL_RING_MIN_SPAN, 1.0))
+    } else {
+        (0.0, 0.0)
+    };
 
     Scene {
         nodes,
@@ -526,6 +544,8 @@ pub fn derive_scene(
         outer_inner,
         outer_outer,
         outer_gap,
+        spectral_inner,
+        spectral_outer,
         octave_layout,
         grid,
         grid_thickness: view.grid_thickness.clamp(0.0, 8.0),

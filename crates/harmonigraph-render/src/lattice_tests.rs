@@ -292,6 +292,14 @@ fn parity_scene() -> Scene {
             // and labels are the UI crate's text pass, not the lattice pass.
             departing: false,
             octaves,
+            // The audio ring is OFF in the fixture every other test builds on,
+            // and the radii below say so too. It is a whole layer more light
+            // in the middle of the node, and the sweep and mark measurements
+            // here are sized against the picture without it;
+            // `the_audio_ring_draws_inside_the_band_on_the_bands_own_angles`
+            // and the early-out parity's own `ringing` fixture are where it
+            // is turned on.
+            spectral_octaves: [0.0; harmonigraph_scene::OCTAVE_SLOTS],
             hovered: i == 1,
             on_home: i % 2 == 0,
             // The off-sheet half draws small and knocks out, so the
@@ -356,6 +364,10 @@ fn parity_scene() -> Scene {
         outer_inner: 0.545,
         outer_outer: 0.795,
         outer_gap: 0.12,
+        // An empty annulus: the ring off, matching the dark second word on
+        // every node above.
+        spectral_inner: 0.0,
+        spectral_outer: 0.0,
         // The plain circular division: this scene is about how the draw
         // paths composite, so the indicators are the ones every other
         // setting is a departure from.
@@ -1248,6 +1260,9 @@ fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
         // Held at full, so neither end of the envelope is running.
         departing: false,
         octaves,
+        // No audio: this fixture is the mark rings' and the sweep's, and the
+        // ring is a layer they are not about.
+        spectral_octaves: [0.0; harmonigraph_scene::OCTAVE_SLOTS],
         hovered: false,
         on_home: true,
         scale: 1.0,
@@ -1331,6 +1346,175 @@ fn melody_bass_marks_are_visible_as_rings_around_the_band() {
     assert!(
         differing_pixels(&split, &melody) > 0 && differing_pixels(&split, &bass_only) > 0,
         "a both-ends mark is indistinguishable from a single-ended one"
+    );
+}
+
+/// One node with both rings at the radii a FRESH view puts them at, lighting
+/// `held` on the octave band and `sounding` on the audio ring.
+///
+/// The fresh radii rather than the fixture's, because the claim below is about
+/// the shipped picture: that the ring lands in the space the core and the
+/// melody ring leave, on a node nobody has dialled. The core is the one thing
+/// turned off — its glow is light at every radius the measurements read, and
+/// what is being measured is where two annuli are.
+fn ringing_node(held: Option<usize>, sounding: Option<usize>) -> Scene {
+    let fresh = harmonigraph_scene::ViewConfig::default();
+    let mut scene = single_marked_node(0, 0);
+    let node = &mut scene.nodes[0];
+    node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
+    // Fully present whatever is lit, so the band's ghost ring is the same in
+    // every shot and drops out of the differences below.
+    node.activation = 1.0;
+    if let Some(slot) = held {
+        node.octaves[slot] = 1.0;
+    }
+    if let Some(slot) = sounding {
+        node.spectral_octaves[slot] = 1.0;
+    }
+    scene.core_radius = 0.0;
+    scene.outer_inner = fresh.outer_inner;
+    scene.outer_outer = fresh.outer_outer;
+    scene.outer_gap = fresh.outer_gap;
+    scene.spectral_inner = fresh.spectral_ring_inner;
+    scene.spectral_outer = fresh.spectral_ring_outer;
+    scene
+}
+
+/// Per-pixel brightness of one shot less another's — how a wedge is separated
+/// from the ghost ring it is drawn over, both shots carrying the same ghosts.
+fn light_over(shot: &[u8], base: &[u8]) -> Vec<f64> {
+    shot.chunks(4)
+        .zip(base.chunks(4))
+        .map(|(a, b)| (brightness(a) - brightness(b)).max(0) as f64)
+        .collect()
+}
+
+/// Where a shot's light sits about the center of the FRAME, which is about
+/// where a node at the world origin draws.
+///
+/// "About" is all it has to be. Every claim below compares two of these, and
+/// both are read from the same place with the node in the same spot, so a
+/// center a few pixels out moves them together and cancels — which is what
+/// keeps this from needing the camera's projection written out a second time.
+struct Light {
+    /// Total brightness; 0 when nothing drew.
+    weight: f64,
+    /// The nearest and furthest a pixel worth seeing sits from that center, in
+    /// pixels.
+    near: f64,
+    far: f64,
+    /// The direction of the brightness-weighted centroid, in radians on the
+    /// image's own axes — every claim compares two of these, so which way the
+    /// screen's y runs never has to be settled.
+    angle: f64,
+}
+
+/// How bright a pixel must be to count toward [`Light::near`]/[`Light::far`]:
+/// past a wedge's antialiased fringe, which trails off over a couple of levels
+/// and would otherwise put the extent a pixel either way.
+const RING_LIT: f64 = 24.0;
+
+fn light_about_center(weights: &[f64], size: [u32; 2]) -> Light {
+    let (cx, cy) = ((size[0] - 1) as f64 / 2.0, (size[1] - 1) as f64 / 2.0);
+    let (mut weight, mut near, mut far) = (0.0, f64::INFINITY, 0.0f64);
+    let (mut sx, mut sy) = (0.0, 0.0);
+    for (i, &w) in weights.iter().enumerate() {
+        if w <= 0.0 {
+            continue;
+        }
+        let x = (i % size[0] as usize) as f64 - cx;
+        let y = (i / size[0] as usize) as f64 - cy;
+        weight += w;
+        sx += w * x;
+        sy += w * y;
+        if w >= RING_LIT {
+            let r = x.hypot(y);
+            near = near.min(r);
+            far = far.max(r);
+        }
+    }
+    Light { weight, near, far, angle: sy.atan2(sx) }
+}
+
+/// The short way round between two angles, in degrees.
+fn angle_apart(a: f64, b: f64) -> f64 {
+    let d = (a - b).rem_euclid(std::f64::consts::TAU);
+    d.min(std::f64::consts::TAU - d).to_degrees()
+}
+
+/// The audio ring draws INSIDE the octave band, on the band's own angles: one
+/// slot's wedge stands at one angle in both rings, which is the whole reading
+/// — "is anything sounding at the octave I am holding" as a glance down a
+/// radius, and a lit wedge with nothing outside it as an overtone of something
+/// else.
+///
+/// Pixels rather than a reading of the two calls, because the agreement is
+/// geometric: both rings walk `oct_sector` off one `OctRing`, and the failure
+/// this catches is a second ring drawn on ITS own idea of where a slot is —
+/// which compiles, validates, and reads as a picture that is subtly lying.
+#[test]
+fn the_audio_ring_draws_inside_the_band_on_the_bands_own_angles() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut gpu) = Shooter::new(SIZE) else {
+        return;
+    };
+    // Two octaves the fresh wheel draws on a C node — five slices centered on
+    // middle C, so slots 3..=7 — two octaves apart, which at 72 degrees an
+    // octave is well clear of any fringe.
+    const UP: usize = harmonigraph_scene::MIDDLE_C_SLOT;
+    const DOWN: usize = harmonigraph_scene::MIDDLE_C_SLOT - 2;
+
+    let base = gpu.shot(&ringing_node(None, None));
+    let wedge = |gpu: &mut Shooter, held, sounding| {
+        light_about_center(&light_over(&gpu.shot(&ringing_node(held, sounding)), &base), SIZE)
+    };
+
+    let band = wedge(&mut gpu, Some(UP), None);
+    let ring = wedge(&mut gpu, None, Some(UP));
+    assert!(ring.weight > 0.0, "the audio ring drew nothing at all");
+    assert!(band.weight > 0.0, "the octave band drew nothing, so there is nothing to compare");
+    eprintln!(
+        "band {:.1}..{:.1} px at {:.1}°; ring {:.1}..{:.1} px at {:.1}°",
+        band.near,
+        band.far,
+        band.angle.to_degrees(),
+        ring.near,
+        ring.far,
+        ring.angle.to_degrees(),
+    );
+    // Inside, and clear of it: the ring's outermost lit pixel is nearer the
+    // center than the band's innermost. A gap of at least a couple of pixels
+    // at this size, so a ring that merely failed to overlap by a fraction of
+    // one does not read as the design's "visible gap either side".
+    assert!(
+        ring.far + 2.0 < band.near,
+        "the ring reaches {:.1} px against a band starting at {:.1}",
+        ring.far,
+        band.near,
+    );
+    // ...and the two stand at ONE angle.
+    let apart = angle_apart(ring.angle, band.angle);
+    assert!(apart < 6.0, "the same octave sits {apart:.1}° apart in the two rings");
+
+    // A different octave is a different angle in both — or the check above
+    // would pass just as well for a ring pinned to one place on the node.
+    let band_down = wedge(&mut gpu, Some(DOWN), None);
+    let ring_down = wedge(&mut gpu, None, Some(DOWN));
+    let moved = angle_apart(ring_down.angle, ring.angle);
+    assert!(moved > 60.0, "two octaves apart moved the ring's wedge only {moved:.1}°");
+    let apart = angle_apart(ring_down.angle, band_down.angle);
+    assert!(apart < 6.0, "the lower octave sits {apart:.1}° apart in the two rings");
+
+    // The ring OFF draws nothing, whatever the node's audio word holds: the
+    // empty annulus is how the toggle reaches the shader, so this is the
+    // "exactly today's picture" claim in its smallest form.
+    let mut off = ringing_node(None, Some(UP));
+    off.spectral_inner = 0.0;
+    off.spectral_outer = 0.0;
+    assert_eq!(
+        differing_pixels(&gpu.shot(&off), &base),
+        0,
+        "a node with audio on it drew something with the ring switched off",
     );
 }
 
@@ -2958,6 +3142,10 @@ fn idle_scene() -> Scene {
     for (i, node) in scene.nodes.iter_mut().enumerate() {
         node.activation = 0.0;
         node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
+        // Silent in BOTH channels: the audio ring is a second way for a node
+        // to have something to paint, so an idle fixture that left it lit
+        // would be asking the cull to drop a node that draws.
+        node.spectral_octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
         node.melody_slots = 0;
         node.bass_slots = 0;
         node.melody_level = 0.0;
@@ -3019,6 +3207,35 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         scene.pulse_marks = harmonigraph_scene::Pulse::Bands;
         scene
     };
+    // The audio ring on, which has two early-outs of its own: the annulus
+    // skip inside `spectral_ring`, and the idle branch's second octave word.
+    // Both are answers about a layer NO other fixture here draws — the ring
+    // is off in `parity_scene` — so without this the two switches would be
+    // compiled and never compared.
+    let ringing = || {
+        let mut scene = parity_scene();
+        scene.spectral_inner = 0.20;
+        scene.spectral_outer = 0.38;
+        for (i, node) in scene.nodes.iter_mut().enumerate() {
+            // Lit where the node's own wheel reaches, so the wedges are drawn
+            // rather than clamped to a slot the ring has no slice for.
+            node.spectral_octaves = std::array::from_fn(|slot| {
+                if slot % 3 == i % 3 { 0.3 + 0.2 * (i % 4) as f32 } else { 0.0 }
+            });
+        }
+        // ...and a node with audio and nothing else, which is the idle
+        // branch's new case: no activation, no marks, and a ring to draw.
+        let mut silent = scene.nodes[0];
+        silent.activation = 0.0;
+        silent.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
+        silent.melody_slots = 0;
+        silent.bass_slots = 0;
+        silent.melody_level = 0.0;
+        silent.bass_level = 0.0;
+        silent.world_pos.x += 0.9;
+        scene.nodes.push(silent);
+        scene
+    };
     // No all-idle fixture: an idle node paints nothing, so the cull ships
     // none of them and the comparison would be two empty images. What the
     // idle branch does is now pinned by
@@ -3028,6 +3245,7 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         ("lit", parity_scene()),
         ("fat core", fat_core()),
         ("shimmering", shimmering()),
+        ("ringing", ringing()),
     ] {
         let cb = LatticeCallback::from_scene(
             &scene,

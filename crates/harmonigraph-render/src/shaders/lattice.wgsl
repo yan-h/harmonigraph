@@ -62,10 +62,15 @@ struct Uniforms {
     // reads as a plate sitting ON the picture rather than a hole THROUGH it.
     background: vec4<f32>,
     // The wheel. x: octaves one turn is cut into; y: the MIDI pitch at the top
-    // of every node; z, w unused.
+    // of every node.
     // Which SLOTS a node draws, and how far its ring is turned, are derived
     // per node from these — both depend on the node's pitch class, so there is
     // no one answer to send.
+    // z/w: the audio ring's inner and outer radius, in quad UV units, both 0
+    // when the ring is off. Beside the wheel because the ring IS the wheel at
+    // smaller radii — same slices, same angles, same table of boundaries —
+    // with the levels coming off the instance's second octave word instead of
+    // its first.
     misc7: vec4<f32>,
     // The shimmer's knobs. x: how FAR the bands have travelled, in world
     // units, already reduced onto one cycle of the pattern — a clock and a
@@ -193,6 +198,12 @@ struct Instance {
     @location(2) params: vec3<f32>,
     // Per-octave activation, 8 bits per slot, little-endian packed.
     @location(3) octaves: vec3<u32>,
+    // The same packing, measured from the AUDIO: how much power the analyzer
+    // reads at each of this node's octaves. Drawn as the audio ring, inside
+    // the band, on the same slices — so a held note's wedge and the partial
+    // that should be sounding it stand at one angle. All zeros with the ring
+    // off, which is also when the radii above are empty.
+    @location(5) spectral: vec3<u32>,
     // The node's pitch class in cents (0..1200). It both PLACES the octave
     // indicators and COLORS them, off the one quantity: each indicator's
     // octave has a pitch, that octave's C plus this, and the indicator sits
@@ -223,6 +234,7 @@ struct VsOut {
     @location(1) color: vec4<f32>,
     @location(2) params: vec3<f32>,
     @location(3) @interpolate(flat) octaves: vec3<u32>,
+    @location(5) @interpolate(flat) spectral: vec3<u32>,
     @location(4) @interpolate(flat) cents: f32,
     @location(6) @interpolate(flat) marks: vec2<u32>,
     @location(7) @interpolate(flat) melody_color: vec4<f32>,
@@ -289,6 +301,7 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
     out.color = inst.color;
     out.params = inst.params;
     out.octaves = inst.octaves;
+    out.spectral = inst.spectral;
     out.cents = inst.cents;
     out.marks = inst.marks;
     out.melody_color = inst.melody_color;
@@ -1013,6 +1026,71 @@ fn pitch_lut_color(pitch: f32) -> vec3<f32> {
     return mix(u.pitch_lut[i0].rgb, u.pitch_lut[i1].rgb, f - floor(f));
 }
 
+// ---- The audio ring --------------------------------------------------------
+// A second ring of the same wedges, INSIDE the octave band, lit from the
+// analyzer's spectrum (`Instance::spectral`) rather than from the keys. The
+// band says which octaves are held; this says which are sounding, and the two
+// are drawn at once so neither can be mistaken for the other.
+//
+// The same slices, off the same `OctRing`: a wedge's angle means the absolute
+// pitch it means everywhere else, so a held octave and a measured partial at
+// that octave stand at ONE angle and agreement is a glance down a radius. What
+// is its own is the radius — u.misc7.z/w, an annulus the fresh view puts in
+// the gap the core and the melody ring leave — and the levels, which come off
+// the instance's second octave word.
+//
+// No ghost backdrop, which is the one place this departs from the band. There
+// the ghosts carry the ring's shape around a lit node, so a lone octave still
+// reads as a whole note. Here they would say a measurement had been taken at
+// every octave of every node the keys light, which is the exact claim this
+// ring is drawn separately in order NOT to make. What sounds draws; the rest
+// of the annulus is empty.
+
+// The ring's inner and outer radius in quad UV units, both 0 when it is off.
+fn spectral_radii() -> vec2<f32> {
+    return vec2<f32>(u.misc7.z, u.misc7.w);
+}
+
+// Coverage and color of the audio ring at this fragment: `w` how much of the
+// pixel its strongest wedge covers, `xyz` that wedge's color. NOT
+// premultiplied — the caller composites it against the octave layer, and a
+// layer picked BY coverage needs the color the coverage belongs to.
+fn spectral_ring(in: VsOut, oct: OctRing, d: f32, aa: f32) -> vec4<f32> {
+    let radii = spectral_radii();
+    // Off, or an annulus dialled inside out: nothing to draw either way.
+    if radii.y <= radii.x {
+        return vec4<f32>(0.0);
+    }
+    // The ring is a narrow annulus in a billboard reaching QUAD_MARGIN, so
+    // most fragments are outside it — and the whole slot walk below answers
+    // zero for every one of them. The same skip the band's own loop takes.
+    let band = glyph_band(d, radii.x, radii.y, aa);
+    if EARLY_OUT && band <= 0.0 {
+        return vec4<f32>(0.0);
+    }
+    var cov = 0.0;
+    var rgb = vec3<f32>(0.0);
+    for (var i = 0u; i < oct_span(); i = i + 1u) {
+        let slot = oct.base + i32(i);
+        let level = oct_slot_level(in.spectral, slot);
+        if level <= 0.0 {
+            continue;
+        }
+        // `outer_glyph` whole: the sector's own edges and the same constant
+        // gap between neighbours, so one rhythm of slices runs through both
+        // rings instead of each drawing its own.
+        let c = outer_glyph(slot, oct, in.uv, band, aa) * level;
+        if c > cov {
+            cov = c;
+            // The ramp at that octave's own pitch, which is exactly what a lit
+            // octave is painted with on the band and what the disc is colored
+            // by: loud looks the same wherever it is drawn.
+            rgb = pitch_lut_color(oct_slot_pitch(slot, in.cents));
+        }
+    }
+    return vec4<f32>(rgb, cov);
+}
+
 // ---- The core's color ------------------------------------------------------
 // An active disc is one calm shape carrying every sounding octave's color at
 // once, laid around it by angle. There is no second paint to switch to: the
@@ -1309,18 +1387,24 @@ fn node_paint(in: VsOut) -> vec4<f32> {
 
     // An idle node paints NOTHING — no disc (presence gates it), no glow, no
     // glyphs (a ghost needs presence too), no mark rings (their own levels
-    // gate them), no knockout (it fades with the note), and no marker of its
-    // own: the grid's gap around the position is what says a node is there.
-    // Everything below still computes all of that and multiplies it away,
-    // which on a lattice where most nodes are idle most of the time is most
-    // of the fragment work in the frame. The three levels and the octave word
-    // are exactly the terms those gates read, so this branch discards what
-    // the full path would have discarded, not an approximation of it.
+    // gate them), no audio ring (its own word gates it), no knockout (it fades
+    // with the note), and no marker of its own: the grid's gap around the
+    // position is what says a node is there. Everything below still computes
+    // all of that and multiplies it away, which on a lattice where most nodes
+    // are idle most of the time is most of the fragment work in the frame. The
+    // three levels and the two octave words are exactly the terms those gates
+    // read, so this branch discards what the full path would have discarded,
+    // not an approximation of it.
+    //
+    // The AUDIO word is what makes a spectrally lit node survive this: it
+    // carries no activation and no mark, so a node the keys never touched is
+    // idle by every other term here and would be dropped with its ring on it.
     if EARLY_OUT
         && in.params.x <= 0.0
         && in.params.y <= 0.0
         && in.params.z <= 0.0
         && (in.octaves.x | in.octaves.y | in.octaves.z) == 0u
+        && (in.spectral.x | in.spectral.y | in.spectral.z) == 0u
     {
         discard;
     }
@@ -1537,6 +1621,22 @@ fn node_paint(in: VsOut) -> vec4<f32> {
     // but to 1.2 times whatever fraction of the pixel it covers, and the ring
     // would grow a bright fringe on its half-covered edges under every peak.
     glyph_rgb = shimmer_light(glyph_rgb, glyph_shimmer);
+
+    // The audio ring, over the octave layer. A layer of its own, and radially
+    // disjoint from the band above and the mark rings below, so the four bands
+    // of a node — core, audio ring, octave band, marks — simply stack outward.
+    // OVER rather than under so that a hand-dialled pair of radii that does
+    // overlap the band still shows the measurement: the band's own reading is
+    // drawn twice over in that case (its wedge and its ghost), and the
+    // spectrum's is not drawn anywhere else.
+    //
+    // After the shimmer, and deliberately outside it: the sheet belongs to the
+    // marks and the slices they point at, and light crossing a measurement
+    // would be a brightness nobody asked the analyzer for.
+    let audio = spectral_ring(in, oct, d, aa);
+    glyph_rgb = (audio.rgb * audio.w + glyph_rgb * glyph * (1.0 - audio.w))
+        / max(audio.w + glyph * (1.0 - audio.w), 1e-4);
+    glyph = audio.w + glyph * (1.0 - audio.w);
 
     // Melody/bass rings, bracketing the octave band: melody inside, bass
     // outside — the ring's radius echoes where its note sits in the chord.

@@ -16,7 +16,7 @@ use crate::widgets::{button_row, choice_row, OctaveStrip, RangeBar, ValueBar};
 use crate::SharedState;
 use harmonigraph_scene::{
     Pulse, ViewConfig, MARK_DELAY_MAX, MIN_EXTRA_SIZE, PITCH_CEIL, PITCH_FLOOR,
-    SPECTRAL_WIDTH_MAX, SPECTRAL_WIDTH_MIN,
+    SPECTRAL_RING_MIN_SPAN, SPECTRAL_WIDTH_MAX, SPECTRAL_WIDTH_MIN,
 };
 
 /// The sounding-note controls: what lights a node at all, then the whole note
@@ -358,8 +358,8 @@ fn shimmer_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     });
 }
 
-/// Source: what lights a node at all — which notes are HELD, or which sine
-/// waves are SOUNDING.
+/// Source: what lights a node at all — which notes are HELD, which sine waves
+/// are SOUNDING, or both at once.
 ///
 /// First in the pane, and above even the note-wide settings, because it is the
 /// one control here that changes what every other one is ABOUT: Fade, the core,
@@ -368,6 +368,13 @@ fn shimmer_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
 /// section body, where `section`'s leading rule would sit directly under the
 /// Display pane's own Nodes header. (The View and Analyzer section bodies, and
 /// the Tuning and System panes, open the same way.)
+///
+/// Two independent boxes rather than a three-way choice row, because they are
+/// not three states of one thing: the first REPLACES what lights a node, the
+/// second ADDS a ring beside it, and each is worth having with the other off.
+/// Both on is redundant — the ring then draws what the band already draws —
+/// and harmless, which is a cheaper thing to explain than a row that hides one
+/// of the readings behind the other.
 fn source_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     ui.heading("Source");
     ui.checkbox(&mut view.spectral_light, "Light from audio")
@@ -381,10 +388,21 @@ fn source_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
              octaves those partials are in. It REPLACES the notes rather than \
              joining them, and with no audio flowing the lattice is dark",
         );
-    // Inert with the source off, like every other gated bar in the pane: the
+    ui.checkbox(&mut view.spectral_ring, "Audio ring")
+        .on_hover_text(
+            "Draw what the analyzer hears as a second ring inside the octave \
+             band, leaving the MIDI picture alone: the band says which octaves \
+             are HELD, the ring which are SOUNDING. Both rings use the same \
+             wheel, so a note and the partial that should be sounding it stand \
+             at the same angle — a held octave with nothing lit inside it is a \
+             note the sound is not making, and a lit wedge with nothing held \
+             outside it is an overtone of something else",
+        );
+    // Inert with both sources off, like every other gated bar in the pane: the
     // kernel is the fold's own, so with nothing folding there is nothing for it
-    // to be the width of.
-    ui.add_enabled_ui(view.spectral_light, |ui| {
+    // to be the width of. Live for EITHER, since the ring and the replaced
+    // lighting are two readings of the one fold and this is its one width.
+    ui.add_enabled_ui(view.spectral_light || view.spectral_ring, |ui| {
         ValueBar::new(
             &mut view.spectral_width,
             SPECTRAL_WIDTH_MIN..=SPECTRAL_WIDTH_MAX,
@@ -400,6 +418,28 @@ fn source_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
              intonation, where partials land dead on the nodes; equal-tempered \
              material wants it wider, a tempered third's 5th harmonic sitting \
              13.7 ¢ off its node and a 7th harmonic 31 ¢",
+        );
+    });
+    // Where the ring sits, as one control over its two radii — the same shape
+    // as the octave band's own Band bar, because it is the same question about
+    // a second annulus. Fresh it lands in the gap the core and the melody ring
+    // leave; a dialled-up core or a band pulled inward closes that gap, and
+    // this is what moves the ring out of the way.
+    ui.add_enabled_ui(view.spectral_ring, |ui| {
+        RangeBar::new(
+            &mut view.spectral_ring_inner,
+            &mut view.spectral_ring_outer,
+            0.0..=1.0,
+            "Ring",
+        )
+        .min_span(SPECTRAL_RING_MIN_SPAN)
+        .show(ui)
+        .on_hover_text(
+            "The audio ring's inner and outer radius, in the same units as the \
+             octave Band. Drag between the handles to move the whole ring in \
+             or out; fresh it sits in the clear space between the core and the \
+             melody ring, with a gap either side so the three read as separate \
+             layers",
         );
     });
 }

@@ -278,7 +278,12 @@ struct Uniforms {
     /// how far its ring is turned to put them on their pitches — so the shader
     /// derives them per node from these two.
     ///
-    /// z unused (a retired slot rather than a repack, like `misc3.w`); w unused.
+    /// z/w: the audio ring's inner and outer radius in quad UV units
+    /// (`Scene::spectral_inner` / `::spectral_outer`), both 0 when the ring is
+    /// off — the shader draws nothing for an empty annulus, so the toggle
+    /// reaches it as geometry. They ride here rather than in a slot of their
+    /// own because the ring is the same wheel at smaller radii: the shader
+    /// reads the span and the center beside them for every wedge it draws.
     misc7: [f32; 4],
     /// The shimmer's knobs (see
     /// `Scene::shimmer_speed`). x: how far the sheet has travelled, in world
@@ -329,6 +334,12 @@ struct GpuInstance {
     /// Per-octave activation, 8 bits per slot, little-endian packed
     /// (slot 0 = lowest byte of the first word).
     octaves: [u32; 3],
+    /// The same packing for the AUDIO ring's levels (see
+    /// `NodeInstance::spectral_octaves`) — a second channel rather than a
+    /// second meaning for the one above, which is what lets both be drawn at
+    /// once. All zeros with the ring off, and then the shader's idle branch
+    /// reads it as it reads the MIDI word.
+    spectral_octaves: [u32; 3],
     /// The node's pitch class in cents (0..1200). It both PLACES the octave
     /// indicators and COLORS them, off the one quantity: an indicator's
     /// octave has a pitch, that octave's C plus this, and the indicator sits
@@ -355,16 +366,19 @@ impl GpuInstance {
     const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
         array_stride: std::mem::size_of::<GpuInstance>() as u64,
         step_mode: wgpu::VertexStepMode::Instance,
-        // Locations 5 and 9 are absent, not renumbered: they carried the
-        // home-sheet flag and the trail level, both read only by the idle
-        // marker the nodes no longer draw. The macro names each location and
-        // takes each OFFSET from the sequence, so dropping two entries shrinks
-        // the stride to match the struct without moving the rest off their
-        // numbers — which is what keeps this list and lattice.wgsl's
-        // `Instance` readable side by side.
+        // Location 9 is absent, not renumbered: it carried the trail level,
+        // read only by the idle marker the nodes no longer draw. The macro
+        // names each location and takes each OFFSET from the sequence, so a
+        // dropped entry shrinks the stride to match the struct without moving
+        // the rest off their numbers — which is what keeps this list and
+        // lattice.wgsl's `Instance` readable side by side. That is also why 5
+        // — freed by the same retirement, the home-sheet flag — is listed
+        // BETWEEN 3 and 4 rather than in numeric order: the sequence is the
+        // struct's field order, and the audio ring's word sits beside the MIDI
+        // one it parallels.
         attributes: &wgpu::vertex_attr_array![
             0 => Float32x3, 1 => Float32x4, 2 => Float32x3, 3 => Uint32x3,
-            4 => Float32, 6 => Uint32x2,
+            5 => Uint32x3, 4 => Float32, 6 => Uint32x2,
             7 => Float32x4, 8 => Float32x4, 10 => Float32x2
         ],
     };
@@ -657,6 +671,7 @@ impl LatticeCallback {
                 color: n.color.to_array(),
                 params: [n.activation, n.melody_level, n.bass_level],
                 octaves: pack_octaves(&n.octaves),
+                spectral_octaves: pack_octaves(&n.spectral_octaves),
                 cents: n.cents,
                 marks: [n.melody_slots, n.bass_slots],
                 melody_color: n.melody_color.to_array(),
@@ -688,6 +703,7 @@ impl LatticeCallback {
                 || g.params[1] > 0.0
                 || g.params[2] > 0.0
                 || (g.octaves[0] | g.octaves[1] | g.octaves[2]) != 0
+                || (g.spectral_octaves[0] | g.spectral_octaves[1] | g.spectral_octaves[2]) != 0
         };
         // Where a node's own label goes, per node: after everything drawn up
         // to and including that node, counted over the KEPT instances. Not its
@@ -757,7 +773,12 @@ impl LatticeCallback {
                 misc5: [scene.grid_thickness, 0.0, scene.outer_gap, scene.mark_thickness],
                 misc6: [0.0, 0.0, scene.sevens_soft, scene.pulse_marks.shader_index() as f32],
                 background: scene.background.to_array(),
-                misc7: [scene.octave_layout.span as f32, scene.octave_layout.center, 0.0, 0.0],
+                misc7: [
+                    scene.octave_layout.span as f32,
+                    scene.octave_layout.center,
+                    scene.spectral_inner,
+                    scene.spectral_outer,
+                ],
                 misc8: [
                     scene.shimmer_slide(),
                     scene.shimmer_width,

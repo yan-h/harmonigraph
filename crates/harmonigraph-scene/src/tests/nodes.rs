@@ -974,3 +974,89 @@ fn a_lit_octave_indicator_stands_for_the_pitch_it_is_drawn_at() {
         "the ring is coloured for a slot the indicator is not drawn at",
     );
 }
+
+/// The fresh audio ring sits in CLEAR SPACE: the annulus the core disc and the
+/// melody ring leave between them, with a visible gap at each end.
+///
+/// Arithmetic on the fresh values rather than a picture, because that is what
+/// the gaps are — the melody ring's inner edge is the band's inner radius less
+/// the layer's padding and the ring's own thickness, and the core ends at its
+/// radius. Written out here so that retuning any of those four moves this
+/// test, which is the point: the ring is placed against them and nothing in
+/// its own two fields knows they exist.
+#[test]
+fn the_fresh_audio_ring_sits_clear_of_the_core_and_the_melody_ring() {
+    let view = ViewConfig::default();
+    // Where the melody ring starts, from the shader's own construction: the
+    // band's inner radius, back one padding to the ring's outer edge, and back
+    // its thickness to its inner one.
+    let melody_inner = view.outer_inner - view.outer_gap - view.mark_thickness;
+    // A gap a reader can see, not merely a positive number. A twentieth of the
+    // node's radius is about the padding inside the octave layer (0.052
+    // fresh), which is the rhythm the rest of the node is spaced on.
+    const CLEAR: f32 = 0.05;
+    assert!(
+        view.spectral_ring_inner - view.core_radius > CLEAR,
+        "the ring starts at {} against a core ending at {}, which is not a gap",
+        view.spectral_ring_inner,
+        view.core_radius,
+    );
+    assert!(
+        melody_inner - view.spectral_ring_outer > CLEAR,
+        "the ring ends at {} against a melody ring starting at {melody_inner}",
+        view.spectral_ring_outer,
+    );
+}
+
+/// The ring's radii reach the picture as an annulus that can be drawn — or, if
+/// the ring is off, as an empty one, which is how the toggle reaches the
+/// shader at all.
+///
+/// The pairs below are the ones no bar can produce: a blob's NaN (which walks
+/// through a `clamp` untouched, every comparison against it being false), an
+/// infinity, a pair dialled inside out, and a pair off both ends of the range.
+/// What each must come back as is an annulus with a visible span, because the
+/// alternative is a ring that silently is not there while the bar reads out a
+/// number.
+#[test]
+fn a_hand_edited_audio_ring_still_draws_an_annulus() {
+    for (inner, outer) in [
+        (f32::NAN, 0.4),
+        (0.3, f32::NAN),
+        (f32::INFINITY, f32::NEG_INFINITY),
+        (0.6, 0.2),
+        (-3.0, 9.0),
+        (0.98, 0.99),
+    ] {
+        let mut view = ViewConfig {
+            spectral_ring: true,
+            spectral_ring_inner: inner,
+            spectral_ring_outer: outer,
+            ..plain_view()
+        };
+        view.sanitize();
+        let scene = scene_of(&sounding(), &Tuning::just(), &view, &plain_frame(), 0.5);
+        assert!(
+            scene.spectral_inner.is_finite() && scene.spectral_outer.is_finite(),
+            "({inner}, {outer}) reached the shader as ({}, {})",
+            scene.spectral_inner,
+            scene.spectral_outer,
+        );
+        assert!(
+            scene.spectral_outer - scene.spectral_inner >= SPECTRAL_RING_MIN_SPAN - 1e-6,
+            "({inner}, {outer}) drew a ring {} wide",
+            scene.spectral_outer - scene.spectral_inner,
+        );
+        assert!(
+            scene.spectral_outer <= 1.0,
+            "({inner}, {outer}) put the ring's outer edge at {}, off the node",
+            scene.spectral_outer,
+        );
+    }
+
+    // Off is an empty annulus, and it is the ONLY thing that says so
+    // downstream: the flag itself does not reach the shader.
+    let view = ViewConfig { spectral_ring: false, ..plain_view() };
+    let scene = scene_of(&sounding(), &Tuning::just(), &view, &plain_frame(), 0.5);
+    assert_eq!((scene.spectral_inner, scene.spectral_outer), (0.0, 0.0));
+}

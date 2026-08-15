@@ -331,6 +331,65 @@ impl Fold {
     }
 }
 
+/// Give `scene` whatever the view asks the analyzer for: the MIDI lighting
+/// REPLACED ([`ViewConfig::spectral_light`](harmonigraph_scene::ViewConfig)),
+/// a second ring of measured octaves ADDED beside it
+/// ([`ViewConfig::spectral_ring`](harmonigraph_scene::ViewConfig)), or both.
+///
+/// One entry point over one fold, which is what makes "both" cost what one
+/// costs: the fold is a convolution over the whole 3828-bucket grid and knows
+/// nothing about which channel is going to read it, so measuring it per
+/// consumer would pay for the spectrum twice to draw one frame of it.
+///
+/// With neither asked for, nothing here runs at all — not even the read of
+/// [`AudioSpectrum::display`](crate::AudioSpectrum::display) — so the fresh
+/// picture is exactly the picture with this pass absent.
+pub(crate) fn apply(scene: &mut Scene, state: &SharedState, now: f64) {
+    let lighting = state.view.spectral_light;
+    let ring = state.view.spectral_ring;
+    if !lighting && !ring {
+        return;
+    }
+    let width = state.view.spectral_width;
+    let fold = state.spectrum.display(now).map(|levels| Fold::measure(levels, width));
+    if lighting {
+        light_from_spectrum(scene, state, fold.as_ref());
+    }
+    if ring {
+        fill_ring(scene, state, fold.as_ref());
+    }
+}
+
+/// Fill every node's audio ring: how loud each of its octaves is SOUNDING,
+/// beside the MIDI channel saying which are held.
+///
+/// The MIDI half of the node is not touched — not its level, not its wedges,
+/// not its colour, not its gutter — which is the whole difference from
+/// [`light_from_spectrum`] and the whole of what makes the two readings
+/// comparable on one node. The ring is drawn on the same wheel at smaller
+/// radii (`Scene::spectral_inner`), so a held octave's wedge and the partial
+/// that should be sounding it stand at one angle.
+///
+/// Through the same [`loudness`] curve as everything else the analyzer draws,
+/// so a wedge as bright here as one on the Spectral pane is the same power.
+/// Nothing to zero out when the audio stops: `derive_scene` hands over a dark
+/// ring every frame, and this only ever writes light into it.
+fn fill_ring(scene: &mut Scene, state: &SharedState, fold: Option<&Fold>) {
+    let Some(fold) = fold else { return };
+    let cfg = state.spectrum_config;
+    let layout = scene.octave_layout;
+    for node in &mut scene.nodes {
+        let light = fold.node(&layout, node.cents);
+        if light.total <= 0.0 {
+            continue;
+        }
+        for (slot, level) in node.spectral_octaves.iter_mut().enumerate() {
+            let pitch = layout.slot_pitch(slot as i32, node.cents);
+            *level = loudness(&cfg, light.octaves[slot], pitch);
+        }
+    }
+}
+
 /// Relight `scene`'s nodes from the analyzer instead of from MIDI.
 ///
 /// A post-pass over a scene derived exactly as it always is, which is the whole
@@ -349,15 +408,14 @@ impl Fold {
 /// had to settle for the tilt, and a one-octave node comes out the colour that
 /// octave would have been.
 ///
-/// No audio flowing is DARK rather than a fallback to MIDI. A source toggle
-/// that quietly handed the lattice back when the input went quiet would read as
-/// the toggle failing, and the input going quiet is the one thing the picture
+/// No audio flowing is DARK rather than a fallback to MIDI — `fold` is `None`,
+/// and every node is cleared before it is consulted. A source toggle that
+/// quietly handed the lattice back when the input went quiet would read as the
+/// toggle failing, and the input going quiet is the one thing the picture
 /// should say plainly.
-pub(crate) fn light_from_spectrum(scene: &mut Scene, state: &SharedState, now: f64) {
+fn light_from_spectrum(scene: &mut Scene, state: &SharedState, fold: Option<&Fold>) {
     let cfg = state.spectrum_config;
     let gutter = state.view.sevens_gutter.clamp(0.0, 0.5);
-    let width = state.view.spectral_width;
-    let fold = state.spectrum.display(now).map(|levels| Fold::measure(levels, width));
     let layout = scene.octave_layout;
     for node in &mut scene.nodes {
         node.activation = 0.0;
@@ -368,7 +426,7 @@ pub(crate) fn light_from_spectrum(scene: &mut Scene, state: &SharedState, now: f
         // a trail is the MIDI history's — see `label_strength`.
         node.departing = false;
         node.gutter = 0.0;
-        let Some(fold) = &fold else { continue };
+        let Some(fold) = fold else { continue };
         let light = fold.node(&layout, node.cents);
         if light.total <= 0.0 {
             continue;
@@ -689,7 +747,7 @@ mod tests {
         // full-scale tone, which is a whisper against the default 60 dB window
         // and is the "dim floor" the design admits to rather than nothing at
         // all — the honest answer, since those frequencies really are sounding.
-        for pos in ViewConfig::default().visible_positions() {
+        for pos in ViewConfig::default().reach().positions() {
             let got = hiss.db(NARROW, pos);
             assert!(
                 got < tone - 20.0,
@@ -757,36 +815,40 @@ mod tests {
         }
     }
 
-    /// The toggle REPLACES. Held keys light nothing once the source is audio,
-    /// and audio lights nodes no key is down for — the two halves of "never a
-    /// blend", each of which a version that merely ADDED the fold would pass
-    /// half of.
+    /// A scene derived exactly as the Lattice pane derives it, then handed to
+    /// the fold — which reads the view's own toggles for what to do with it,
+    /// so a test says which picture it is asking for by setting them.
+    fn scene_of(state: &SharedState) -> Scene {
+        let mut scene = derive_scene(
+            &state.tracker,
+            &state.tuning,
+            &state.view,
+            &state.view.reach(),
+            &state.frame_params,
+            state.camera,
+            None,
+            1.0,
+        );
+        apply(&mut scene, state, 1.0);
+        scene
+    }
+
+    /// The source toggle REPLACES. Held keys light nothing once the source is
+    /// audio, and audio lights nodes no key is down for — the two halves of
+    /// "never a blend", each of which a version that merely ADDED the fold
+    /// would pass half of.
     #[test]
     fn the_audio_source_replaces_the_keys() {
-        let scene = |state: &SharedState, spectral: bool| {
-            let mut scene = derive_scene(
-                &state.tracker,
-                &state.tuning,
-                &state.view,
-                &state.frame_params,
-                state.camera,
-                None,
-                1.0,
-            );
-            if spectral {
-                light_from_spectrum(&mut scene, state, 1.0);
-            }
-            scene
-        };
         let lit = |scene: &Scene| scene.nodes.iter().filter(|n| n.activation > 0.0).count();
 
         // A key down and nothing sounding.
         let mut state = fresh();
         state.frame_params.fade_time = 0.0;
         state.tracker.handle_event(NoteEvent::on(0.0, 0, 60, 1.0));
-        assert!(lit(&scene(&state, false)) > 0, "the keys light the lattice");
+        assert!(lit(&scene_of(&state)) > 0, "the keys light the lattice");
+        state.view.spectral_light = true;
         assert_eq!(
-            lit(&scene(&state, true)),
+            lit(&scene_of(&state)),
             0,
             "a held key lit the lattice with the source set to audio",
         );
@@ -797,8 +859,88 @@ mod tests {
         state.spectrum_config.smoothing = 0.0;
         let cfg = state.spectrum_config;
         state.spectrum.push_samples(&sawtooth(48.0), 1, SR, 1.0, &cfg);
-        assert_eq!(lit(&scene(&state, false)), 0, "nothing is held, so MIDI lights nothing");
-        assert!(lit(&scene(&state, true)) > 0, "audio lit no node at all");
+        assert_eq!(lit(&scene_of(&state)), 0, "nothing is held, so MIDI lights nothing");
+        state.view.spectral_light = true;
+        assert!(lit(&scene_of(&state)) > 0, "audio lit no node at all");
+    }
+
+    /// The RING adds, where the source toggle replaces: it fills a channel of
+    /// its own and leaves every MIDI answer exactly as `derive_scene` wrote it,
+    /// which is what lets one node carry both readings at once.
+    ///
+    /// A held C4 with a C3 saw sounding, so the two channels have something to
+    /// disagree about: the keys light one pitch class, the saw lights six.
+    #[test]
+    fn the_ring_lights_beside_the_keys_rather_than_instead_of_them() {
+        let mut state = fresh();
+        state.frame_params.fade_time = 0.0;
+        state.spectrum_config.smoothing = 0.0;
+        state.tracker.handle_event(NoteEvent::on(0.0, 0, 60, 1.0));
+        let cfg = state.spectrum_config;
+        state.spectrum.push_samples(&sawtooth(48.0), 1, SR, 1.0, &cfg);
+
+        let midi = scene_of(&state);
+        state.view.spectral_ring = true;
+        let both = scene_of(&state);
+
+        let mut ringed = 0;
+        for (was, now) in midi.nodes.iter().zip(&both.nodes) {
+            let at = was.lattice_pos;
+            assert_eq!(now.activation, was.activation, "{at:?} changed how lit it is");
+            assert_eq!(now.octaves, was.octaves, "{at:?} lost its held octaves");
+            assert_eq!(now.color, was.color, "{at:?} was repainted");
+            assert_eq!(now.gutter, was.gutter, "{at:?} changed what it clears");
+            assert_eq!(now.melody_slots, was.melody_slots, "{at:?} lost its melody mark");
+            assert!(
+                was.spectral_octaves.iter().all(|&l| l == 0.0),
+                "{at:?} carried a ring with the ring off",
+            );
+            if now.spectral_octaves.iter().any(|&l| l > 0.0) {
+                ringed += 1;
+            }
+        }
+        // The constellation, not one node: a saw lights its own class and the
+        // five the harmonic series reaches. A floor rather than a count,
+        // because the comma neighbours of each of those light too — which is
+        // the analyzer's resolution and #351's measurement, not this claim.
+        // A saw lights every node in the window at the fresh Level floor, and
+        // that is the panel's own limit rather than the ring's: above about
+        // 4 kHz a saw's harmonics are closer together than the lattice's pitch
+        // classes, so every class really is sounding up there, and the wheel's
+        // outermost slice — which everything past the wheel's top folds onto —
+        // carries it. Raising the Analyzer's floor is what thins it (#381).
+        eprintln!("{ringed} of {} nodes carry a ring", both.nodes.len());
+        assert!(ringed >= 6, "the saw lit {ringed} rings, fewer than its six harmonic nodes");
+    }
+
+    /// Both toggles at once is the redundant display rather than a broken one:
+    /// the band and the ring then carry the same measurement at two radii.
+    /// Worth pinning because the two passes write through one fold, and a
+    /// second consumer sharing a measurement is exactly where one of them ends
+    /// up reading a half-filled one.
+    #[test]
+    fn both_sources_at_once_draw_the_same_measurement_twice() {
+        let mut state = fresh();
+        state.spectrum_config.smoothing = 0.0;
+        let cfg = state.spectrum_config;
+        state.spectrum.push_samples(&sawtooth(48.0), 1, SR, 1.0, &cfg);
+        state.view.spectral_light = true;
+        state.view.spectral_ring = true;
+
+        let scene = scene_of(&state);
+        let mut checked = 0;
+        for node in &scene.nodes {
+            if node.activation <= 0.0 {
+                continue;
+            }
+            assert_eq!(
+                node.spectral_octaves, node.octaves,
+                "{:?} drew two different readings of one spectrum",
+                node.lattice_pos,
+            );
+            checked += 1;
+        }
+        assert!(checked > 0, "nothing was lit, so the comparison proves nothing");
     }
 
     /// Only the LIGHTING is replaced: the geometry, the wheel, the grid and the
@@ -819,6 +961,7 @@ mod tests {
                 &state.tracker,
                 &state.tuning,
                 &state.view,
+                &state.view.reach(),
                 &state.frame_params,
                 state.camera,
                 None,
@@ -827,7 +970,8 @@ mod tests {
         };
         let derived = derive();
         let mut relit = derive();
-        light_from_spectrum(&mut relit, &state, 1.0);
+        let fold = state.spectrum.display(1.0).map(|levels| Fold::measure(levels, NARROW));
+        light_from_spectrum(&mut relit, &state, fold.as_ref());
 
         assert_eq!(relit.grid.len(), derived.grid.len(), "the grid was rebuilt");
         assert_eq!(relit.octave_layout, derived.octave_layout, "the wheel moved");
