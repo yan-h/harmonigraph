@@ -1768,11 +1768,13 @@ fn a_large_pane_at_a_high_density_uploads_a_texture_the_context_takes() {
         state.spectrum.push_history(90.0 + f64::from(i) * 0.1, &bins);
     }
     let ctx = themed_at(2.0);
-    // Twice: `set_pixels_per_point` lands on the following frame, so the first
-    // is still at 1x and cannot reach the limit at all.
-    for _ in 0..2 {
-        let _ = frame_full(&ctx, BODY, |ui| spectral_pane(ui, &mut state, 130.0, 0));
-    }
+    // ONE frame, and the count is a claim: `begin_pass` takes the pending zoom
+    // factor and derives `pixels_per_point` from it within the same pass
+    // (egui's `context.rs`), so this frame is already at 2x and is the frame
+    // that builds and uploads. A second would only hit the cache — same
+    // columns, same style, same key — and would hide a first frame that had
+    // quietly drawn at 1x and reached nothing.
+    let _ = frame_full(&ctx, BODY, |ui| spectral_pane(ui, &mut state, 130.0, 0));
     let limit = ctx.input(|i| i.max_texture_side);
     let size = state.spectrum.spectrogram[0].tex.as_ref().expect("a heatmap was uploaded").size();
     assert!(
@@ -1780,6 +1782,17 @@ fn a_large_pane_at_a_high_density_uploads_a_texture_the_context_takes() {
         "a {}x{} heatmap on a context whose limit is {limit}",
         size[0],
         size[1],
+    );
+    // And that it got there by SATURATING the cap rather than by being a pane
+    // too small to reach it. Without this the test passes for the wrong reason
+    // the day a default moves: at `roll_fraction` 0.2 this pane plans 400
+    // slabs for an 816-texel image, clears the limit by a mile, and exercises
+    // none of the clamp it exists to hold. One quantum of slack, since the
+    // ceiling is a slab count and the pane's own rounding sits under it.
+    assert!(
+        size[0] as f32 > limit as f32 - crate::spectrogram::PANE_QUANTUM,
+        "a {} texel image is not near the {limit} ceiling — this pane no longer saturates it",
+        size[0],
     );
 }
 

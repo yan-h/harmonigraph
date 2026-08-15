@@ -87,11 +87,14 @@ pub(crate) const MIN_BUCKET: f64 = crate::AudioSpectrum::FFT_INTERVAL * COLUMNS_
 /// is the crash.
 fn slab_ceiling(max_side: usize, whole: bool) -> usize {
     let ceiling = if whole {
-        // The one slab in hand described above. It bounds the fold only
-        // because the columns arrive oldest-first, which is
-        // [`aggregate_slabs`]'s stated precondition: fed a column that runs
-        // BACKWARDS the grid starts a fresh slab rather than merging, and no
-        // count taken from the span can bound that.
+        // The one slab in hand described above — and this arm bounds the PLAN
+        // rather than the image, which on this path are not the same number.
+        // The whole-song build folds every column it is given
+        // ([`aggregate_slabs`] over `WholeSong::columns`) rather than the ones
+        // inside `window`, and gives every elapsed slab a row, so a column set
+        // reaching past the window makes the image wider than any count taken
+        // from the span. Bounding that belongs where the fold is, not here —
+        // issue #367.
         max_side.saturating_sub(1)
     } else {
         // [`RING_HEADROOM`] for the ring's own slabs, and two more for
@@ -123,7 +126,7 @@ fn slab_ceiling(max_side: usize, whole: bool) -> usize {
 /// same trade [`PaneView`] makes by sizing in pixels rather than points. Sixty
 /// four turns a 600-pixel drag into ten re-layouts instead of six hundred, and
 /// leaves the image at most 9% taller than a 700-pixel pane needs.
-const PANE_QUANTUM: f32 = 64.0;
+pub(crate) const PANE_QUANTUM: f32 = 64.0;
 
 /// A pane measurement in device pixels, rounded up to [`PANE_QUANTUM`].
 fn quantized(pixels: f32) -> f32 {
@@ -1546,9 +1549,10 @@ fn ring_capacity(planned: usize, visible: usize) -> usize {
 /// end); the rest is margin, and `ring_capacity`'s body leans on the whole
 /// eight. Each costs TWO texel columns, since every column is written twice
 /// (see [`SpectrogramRing`]) — so a full-width pane's texture is
-/// `2 * (1024 + 8)` = 2064 texels across, and that doubling is why
-/// [`slab_ceiling`] holds the live slab count under HALF of what the GPU takes
-/// rather than under all of it.
+/// `2 * (1024 + 8)` = 2064 texels across wherever the GPU is large enough to
+/// hold it — and that doubling is why [`slab_ceiling`] holds the live slab
+/// count under HALF of what the GPU takes rather than under all of it. Under a
+/// ceiling that bites, the cap is the ceiling's and this width follows it down.
 const RING_HEADROOM: usize = 8;
 
 /// Compose a whole ring texture: every column of the run at its own texel and
@@ -2770,6 +2774,14 @@ mod tests {
         // longer than the plan expected, so a window that put more slabs on
         // screen than `target_cols` would widen the texture past the ceiling
         // with the plan's own arithmetic still looking correct.
+        //
+        // The whole-song arm is WEAKER than the live one, and knowing which is
+        // which matters: `bucket` is `window / target_cols` floored at
+        // [`MIN_BUCKET`], so this expression is `target_cols + 1` by
+        // construction and the arm pins the ceiling's off-by-one and nothing
+        // else. It cannot see the real whole-song width, which comes from
+        // folding [`WholeSong`](crate::WholeSong)'s own columns rather than
+        // from `window` — see [`slab_ceiling`].
         let tex_width = |p: &Plan, whole: bool, win: f64| {
             let visible = (win / p.bucket).floor() as usize + 1;
             if whole { visible } else { 2 * ring_capacity(p.capacity, visible) }
