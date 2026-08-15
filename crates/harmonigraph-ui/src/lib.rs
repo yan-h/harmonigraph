@@ -46,6 +46,12 @@ pub use config::{
     SpectralOrientation, SpectrogramPreset, SpectrumConfig, SpectrumWindow, SCALE_BAR_RANGE,
     TILT_STEPS,
 };
+// The Spiral pane's framing, which is `SharedState::spiral_view`'s type. `panes`
+// is private, so a public field of a type from in there is a field nothing
+// outside can name, read into a variable or construct — which puts it on the
+// footing `SpectrumConfig` above and `harmonigraph_scene::Camera` already have,
+// those being the two fields its own doc measures itself against.
+pub use panes::spiral::SpiralView;
 // The render settings live in `harmonigraph-take` because they are take
 // payload: a take carries the frame it was composed at, so a re-render
 // reproduces that framing rather than whatever the editor is set to now.
