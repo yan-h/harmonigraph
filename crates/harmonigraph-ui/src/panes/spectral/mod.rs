@@ -22,6 +22,12 @@ mod settings;
 
 pub(super) use settings::spectrum_settings_pane;
 pub(crate) use gestures::{hold_spectrum, SpectrumHold};
+/// The Span drag's gain, reached by `spectrogram`'s
+/// `a_span_drag_refolds_once_per_rung_crossed` so that its fixture drags at the
+/// rate the pane drags at rather than at a copy of it — the whole claim there
+/// is about how far a drag travels between ladder rungs, which this sets.
+#[cfg(test)]
+pub(crate) use gestures::DEPTH_ZOOM_PER_DRAG_POINT;
 
 use crate::{theme, SharedState};
 use crate::panes::window_shows_node;
