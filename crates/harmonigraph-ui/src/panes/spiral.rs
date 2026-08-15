@@ -158,7 +158,10 @@ const VOICE_OVERHANG: f32 = 0.25;
 /// pitch zoom both. These stand outside the picture, like an axis label, and
 /// the only thing that can crowd them is the band they are set in: they take
 /// their dialled size wherever it fits and scale with the band where it does
-/// not, which on a docked pane is everywhere.
+/// not, which is on any pane whose short side is under about 395 points —
+/// [`NAME_BAND_SHARE`] against the whole of [`NAME_BAND_PT`] is where that
+/// number comes from. A dock split two ways sits above it and a dock split
+/// three ways below.
 const NAME_PT: f32 = 12.35;
 
 /// The band reserved OUTSIDE the disc for those names: the air between the
@@ -637,15 +640,22 @@ mod tests {
 
     const SCREEN: egui::Vec2 = egui::vec2(500.0, 500.0);
 
-    /// The three shapes of frame anything about FITTING has to hold in: the
+    /// The four shapes of frame anything about FITTING has to hold in: the
     /// square a render can be, the 16:9 one it usually is — where the fit's
-    /// short side is the height and the disc sits closest to an edge — and the
-    /// docked pane, which is small enough that the name band is capped by its
-    /// share rather than by its point size.
-    const FRAMES: [(&str, egui::Rect); 3] = [
+    /// short side is the height and the disc sits closest to an edge — the
+    /// docked pane, and a column narrow enough to cap the name band by its
+    /// SHARE of the radius rather than by its point size.
+    ///
+    /// That last one is a separate frame because `PANE` is not it and misses
+    /// by five points: the share binds below a short side of about 395, and a
+    /// 400-point pane takes the point size. Every frame above "cramped" draws
+    /// its names at exactly their dialled size, so without it nothing here
+    /// reaches [`Spiral::name_scale`]'s other answer at all.
+    const FRAMES: [(&str, egui::Rect); 4] = [
         ("square", egui::Rect { min: egui::pos2(0.0, 0.0), max: egui::pos2(900.0, 900.0) }),
         ("1080p", egui::Rect { min: egui::pos2(0.0, 0.0), max: egui::pos2(1920.0, 1080.0) }),
         ("docked", PANE),
+        ("cramped", egui::Rect { min: egui::pos2(20.0, 30.0), max: egui::pos2(320.0, 330.0) }),
     ];
 
     fn spiral(low: f32, high: f32) -> Spiral {
@@ -1051,25 +1061,46 @@ mod tests {
     /// about one direction on it: a name is set square to the screen whatever
     /// ray it stands on, so the room it needs past the disc is different at
     /// every angle and only a full chromatic asks all of them.
+    ///
+    /// Every frame rather than the docked one, because the band is what holds
+    /// the names in and the band is not one size: below a short side of about
+    /// 395 points it is capped by its share of the radius and the whole thing
+    /// scales, so the frames are what ask whether a name still fits the band
+    /// once the band is the thing that shrank.
     #[test]
     fn every_sounding_pitch_class_is_named_on_the_rim() {
-        let mut state = fresh();
-        state.spectrum_config.low_midi = 48.0;
-        state.spectrum_config.high_midi = 84.0;
-        for note in 60..72 {
-            state.tracker.handle_event(NoteEvent::on(0.0, 0, note, 1.0));
+        for (name, rect) in FRAMES {
+            let mut state = fresh();
+            state.spectrum_config.low_midi = 48.0;
+            state.spectrum_config.high_midi = 84.0;
+            for note in 60..72 {
+                state.tracker.handle_event(NoteEvent::on(0.0, 0, note, 1.0));
+            }
+            let (batch, spiral) = rim_names(&state, rect, 0.1);
+            assert_eq!(batch.pieces().len(), 12, "{name}: twelve pitch classes, twelve names");
+            // Nothing a name is made of leaves the pane — letters and drawn
+            // marks alike, which are cut from two different sheets and meet
+            // nowhere but here. What holds this is the band `Spiral::new`
+            // reserves; the pane paints through a clipping painter, so an
+            // overrun is cut off rather than merely tight.
+            for ink in name_ink(&batch) {
+                assert!(
+                    rect.contains_rect(ink),
+                    "{name}: a name covers {ink:?}, outside the pane {rect:?}",
+                );
+            }
+            the_letters_stand_clear_of_the_disc(name, &batch, &spiral);
         }
-        let (batch, spiral) = rim_names(&state, PANE, 0.1);
-        assert_eq!(batch.pieces().len(), 12, "twelve pitch classes, twelve names");
-        // Nothing a name is made of leaves the pane — letters and drawn marks
-        // alike, which are cut from two different sheets and meet nowhere but
-        // here. What holds this is the band `Spiral::new` reserves; the pane
-        // paints through a clipping painter, so an overrun is cut off rather
-        // than merely tight.
-        for ink in name_ink(&batch) {
-            assert!(PANE.contains_rect(ink), "a name covers {ink:?}, outside the pane {PANE:?}");
-        }
-        // And the LETTER stands clear of the disc, so no name is laid over the
+    }
+
+    /// The half of [`every_sounding_pitch_class_is_named_on_the_rim`] that is
+    /// about the DISC rather than the pane.
+    fn the_letters_stand_clear_of_the_disc(
+        name: &str,
+        batch: &crate::text::TextBatch,
+        spiral: &Spiral,
+    ) {
+        // The LETTER stands clear of the disc, so no name is laid over the
         // spectrum it is there to help read. Asked of the letter alone because
         // that is what the placement promises: the mark column is stacked
         // around the letter rather than along the ray, and a comma sign drops
@@ -1079,7 +1110,7 @@ mod tests {
             let near = piece.ink.distance_to_pos(spiral.centre);
             assert!(
                 near >= r_out,
-                "the name {:?} reaches in to {near}, over a disc {r_out} across",
+                "{name}: the name {:?} reaches in to {near}, over a disc {r_out} across",
                 piece.text,
             );
         }
@@ -1118,6 +1149,7 @@ mod tests {
     /// disc is one size and does not breathe as notes come and go.
     #[test]
     fn the_name_band_is_reserved_whether_or_not_anything_sounds() {
+        let mut scaled = 0;
         for (name, rect) in FRAMES {
             let cfg = SpectrumConfig { low_midi: 36.0, high_midi: 96.0, ..Default::default() };
             let s = Spiral::new(rect, &cfg);
@@ -1135,6 +1167,14 @@ mod tests {
                 "{name}: the band is {} points wide",
                 s.band,
             );
+            if s.name_scale() < 1.0 {
+                scaled += 1;
+            }
         }
+        // And at least one frame is on the far side of the cap, so the scaled
+        // band is a path this suite runs rather than one it describes. Every
+        // frame sat at exactly the dialled size once, and the fixture said
+        // otherwise in its own doc.
+        assert!(scaled > 0, "no frame here is small enough for the share to bind");
     }
 }
