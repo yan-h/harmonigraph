@@ -444,14 +444,12 @@ pub(super) fn plan(
     // onset. See [`name_span`].
     let backward = anchor == Anchor::Leading;
     // ...and which way it lies on SCREEN, which is the same fact in the other
-    // currency: whichever end the name is on, it runs from there INTO the note,
-    // so the sign is the one the layout gives that end's depth. Live, the
-    // leading edge is a ribbon's shallow end and the onset its deep one;
-    // whole-song, where depth is take time rather than age, they trade places.
-    let grow = if (anchor == Anchor::Onset) == time.whole_song() {
-        axes.dir_depth()
-    } else {
+    // currency: from the ribbon's head the name runs into the picture (with
+    // increasing depth), from its onset back out toward the now-line.
+    let grow = if anchor == Anchor::Onset && !time.whole_song() {
         -axes.dir_depth()
+    } else {
+        axes.dir_depth()
     };
 
     // How far back of the window the sweep has to read. NOT the whole roll,
@@ -757,8 +755,9 @@ struct Edge {
 /// the same place at the moment it appears either way.
 ///
 /// Which of the two a pane uses is [`of`](Self::of)'s, and it is not the
-/// setting's alone: the layout picks the end that READS first and the setting
-/// asks for the other one.
+/// setting's alone: the orientation picks the end that READS first and the
+/// setting asks for the other one — with the whole-song layout outside both,
+/// on the onset always.
 #[derive(Clone, Copy, PartialEq)]
 enum Anchor {
     /// The end that touches the now-line: the low-depth end live, which is the
@@ -771,9 +770,7 @@ enum Anchor {
     /// play, at the price of a movement the music did not make and of a drone
     /// whose name never scrolls at all.
     ///
-    /// Whole-song it is the note's STOP, which that layout lays out as its
-    /// deepest end — the take running from the render's start into depth
-    /// rather than from `now` into the past.
+    /// Live only — see [`of`](Self::of) for why a static layout cannot use it.
     Leading,
     /// The onset — the moment the key went down, wherever the layout puts it.
     ///
@@ -782,6 +779,9 @@ enum Anchor {
     /// it sits, not whether the thinning kept it. The price is a note whose
     /// onset has scrolled off the far edge, which loses its name while it is
     /// still sounding.
+    ///
+    /// The whole-song layout has no other option, for a reason that is about
+    /// the TAKE rather than about reading order — see [`of`](Self::of).
     Onset,
 }
 
@@ -801,18 +801,13 @@ impl Anchor {
     /// end it starts from, and that gap is the same one in every orientation
     /// only if this is.
     ///
-    /// WHICH end reads first composes two facts about the layout, and neither
-    /// alone answers it:
-    ///
-    ///   - What depth MEANS. Live it is age, so the shallow end of a ribbon is
-    ///     its newest — the leading edge. Whole-song it is take time, so the
-    ///     shallow end is the earliest — the onset.
-    ///   - Which way depth runs on screen. Reversed
-    ///     ([`SpectralOrientation::is_time_reversed`]), the shallow end is at
-    ///     the right or the bottom, so it is the DEEP end that reads first.
-    ///
-    /// The two compose by agreement: where they agree the reading-first end is
-    /// the leading edge, and where exactly one of them holds it is the onset.
+    /// WHICH end reads first is the orientation's: live, depth is AGE, so a
+    /// ribbon's shallow end is its newest — the leading edge — and it is drawn
+    /// at the pane's left or top where time runs the screen's own way, at the
+    /// right or the bottom where it runs back against it
+    /// ([`SpectralOrientation::is_time_reversed`]). So the reading-first end is
+    /// the leading edge in the two orientations that agree with the screen and
+    /// the onset in the two that do not.
     ///
     /// So what the setting DOES depends on the orientation, and saying that
     /// plainly is better than the alternative: with the spectrum on the left a
@@ -825,13 +820,30 @@ impl Anchor {
     /// reader sees on every note rather than only on the one under their
     /// finger.
     ///
+    /// **The whole-song layout is outside all of it, and takes the ONSET in
+    /// every orientation.** Reading order would name the note's stop in the two
+    /// reversed ones, and a stop is not a fact about the take the way an onset
+    /// is: a note the recording never released stops at `stop(now)`, which is
+    /// the PLAYHEAD, so its name would ride the sweep across a picture that is
+    /// otherwise a still. The thinning cannot hold that. It hands out names by
+    /// grid cell (see [`Lane`]) and an anchor that walks through cell after
+    /// cell is offered a name in one and refused in the next, which is a name
+    /// blinking on and off for the length of a rendered video — the very defect
+    /// the held-note exemption exists to prevent live, arriving where that
+    /// exemption cannot help because nothing in a still picture scrolls away
+    /// from anything. The onset is fixed for every note the take contains, so
+    /// it is the one end a static layout can anchor to at all.
+    ///
     /// [`SpectralOrientation::is_time_reversed`]:
     ///     crate::SpectralOrientation::is_time_reversed
     fn of(time: &TimeAxis, cfg: &crate::SpectrumConfig) -> Anchor {
-        let reads_first = if cfg.orientation.is_time_reversed() == time.whole_song() {
-            Anchor::Leading
-        } else {
+        if time.whole_song() {
+            return Anchor::Onset;
+        }
+        let reads_first = if cfg.orientation.is_time_reversed() {
             Anchor::Onset
+        } else {
+            Anchor::Leading
         };
         if cfg.note_names_travel {
             reads_first.other()
@@ -2475,22 +2487,38 @@ mod tests {
     fn a_whole_song_render_thins_a_sounding_note_like_any_other() {
         // Two strikes of one pitch too close for both names, the second still
         // sounding — the case the exemption used to hand a name to.
-        let mut state = state(24.0, 10.0);
-        state.tracker.handle_event(on(1.0, 60));
-        state.tracker.handle_event(off(1.05, 60));
-        state.tracker.handle_event(on(1.1, 60));
-        let roll = state.tracker.roll().clone();
-        state.whole_song =
-            Some(crate::WholeSong { columns: Vec::new(), roll, start: 0.0, span: 10.0 });
+        //
+        // Swept over every orientation, because a note the take never released
+        // is live in EVERY frame of a render: a layout that anchored these
+        // names on the leading edge would put that note's name on the playhead,
+        // where it both takes the exemption and moves under it.
+        for orientation in SpectralOrientation::ALL {
+            let mut state = turned(24.0, 10.0, orientation);
+            state.tracker.handle_event(on(1.0, 60));
+            state.tracker.handle_event(off(1.05, 60));
+            state.tracker.handle_event(on(1.1, 60));
+            let roll = state.tracker.roll().clone();
+            state.whole_song =
+                Some(crate::WholeSong { columns: Vec::new(), roll, start: 0.0, span: 10.0 });
 
-        // The playhead inside the second note, then well past where it would
-        // have ended: the same one name, in the same place, throughout.
-        let inside = labels(&state, 1.5);
-        assert_eq!(inside.len(), 1, "thinned, exactly as a released pair would be");
-        for now in [3.0, 6.0, 9.0] {
-            let later = labels(&state, now);
-            assert_eq!(said(&later), said(&inside), "the playhead moved a name at {now}s");
-            assert_eq!(later[0].rect.min.x, inside[0].rect.min.x);
+            // The playhead inside the second note, then well past where it
+            // would have ended: the same one name, in the same place,
+            // throughout.
+            let inside = labels(&state, 1.5);
+            assert_eq!(
+                inside.len(),
+                1,
+                "{orientation:?}: thinned, exactly as a released pair would be",
+            );
+            for now in [3.0, 6.0, 9.0] {
+                let later = labels(&state, now);
+                assert_eq!(
+                    said(&later),
+                    said(&inside),
+                    "{orientation:?}: the playhead moved a name at {now}s",
+                );
+                assert_eq!(later[0].rect.min, inside[0].rect.min, "{orientation:?} at {now}s");
+            }
         }
     }
 
