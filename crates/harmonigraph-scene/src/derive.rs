@@ -8,7 +8,7 @@ use crate::octaves::octave_layout;
 use crate::trail::TrailField;
 use crate::view::{DrawnWindow, FrameParams, ViewConfig};
 use crate::{
-    lattice_to_world, EdgeInstance, NodeInstance, Pulse, Scene,
+    lattice_to_world, EdgeInstance, NodeInstance, Pulse, Scene, SpectralPaint,
     MARK_DELAY_MAX, NODE_RADIUS_FACTOR, OCTAVE_SLOTS,
 };
 use glam::Vec4;
@@ -526,6 +526,9 @@ pub fn derive_scene(
         outer_inner,
         outer_outer,
         outer_gap,
+        // The MIDI picture, whole: nothing here reads audio, so the audio
+        // channel arrives empty and the Lattice pane's fold is what fills it.
+        spectral: SpectralPaint::silent(),
         octave_layout,
         grid,
         grid_thickness: view.grid_thickness.clamp(0.0, 8.0),

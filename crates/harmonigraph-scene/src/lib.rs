@@ -17,6 +17,8 @@
 //! - [`camera`] — [`Camera`], [`Projection`], and the [`Projector`] used
 //!   for label placement and picking.
 //! - [`color`] — the pitch ramp every note is colored off, and the idle color.
+//! - [`spectral`] — the lattice's audio channel, and the second of the two
+//!   colour schemes the plugin has (the analyzer's, by loudness).
 //! - [`skin`] — the static palette the UI and renderer share.
 //! - [`trail`] — a quiet mark on the nodes the music has already been to.
 //!
@@ -28,6 +30,7 @@ pub mod color;
 pub mod derive;
 pub mod octaves;
 pub mod skin;
+pub mod spectral;
 pub mod style;
 pub mod trail;
 pub mod view;
@@ -39,6 +42,10 @@ pub use octaves::{
     clamp_center, clamp_wheel, octave_layout, OctaveLayout, Ring, DEFAULT_CENTER, DEFAULT_COUNT,
     DEFAULT_EXTRA_BLEND, DEFAULT_EXTRA_SIZE, MAX_EXTRAS, MAX_SPAN, MIDDLE_C_SLOT, MIN_COUNT,
     MIN_EXTRA_SIZE, MIN_SPAN, OCTAVE_SLOTS, PITCH_CEIL, PITCH_FLOOR,
+};
+pub use spectral::{
+    bucket_pitch, SpectralLevels, SpectralPaint, SPECTRAL_AXIS, SPECTRAL_BUCKETS,
+    SPECTRAL_BUCKETS_PER_SEMITONE, SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN,
 };
 pub use style::{Gradient, Pulse, SevensLabel};
 pub use view::{DrawnWindow, FrameParams, ViewConfig};
@@ -126,16 +133,28 @@ pub const MARK_DELAY_MAX: f32 = 1.0;
 /// ([`ViewConfig::spectral_width`]), in cents — the bar's two ends, and what
 /// `sanitize` holds a hand-edited view to.
 ///
-/// The floor is a tenth of an analyzer bucket (3.125¢), which is as narrow as
-/// asking is worth: below it the kernel sits inside one bucket and the fold is
-/// reading a single 3.125¢ column of the spectrum, which is precisely the
-/// exposure the whole design avoids. The ceiling is a comfortable quarter-tone,
+/// The floor is a third of an analyzer bucket (3.125¢), which is as narrow as
+/// asking is worth: at 1¢ the kernel already sits inside one bucket, reading a
+/// single 3.125¢ column of the spectrum — precisely the exposure the whole
+/// design avoids — and narrower buys nothing a column does not already give.
+/// The ceiling is a comfortable quarter-tone,
 /// wide enough to take in a tempered seventh's 31¢ miss with room over — past
 /// that the kernel starts admitting the NEXT lattice node's partials as well as
 /// this one's, and the constellation smears into a glow.
 pub const SPECTRAL_WIDTH_MIN: f32 = 1.0;
 /// See [`SPECTRAL_WIDTH_MIN`].
 pub const SPECTRAL_WIDTH_MAX: f32 = 50.0;
+
+/// The thinnest the audio ring may be dialled, in quad UV units
+/// ([`ViewConfig::spectral_ring_inner`]/[`ViewConfig::spectral_ring_outer`]):
+/// the Ring bar's own floor, and the span [`SpectralPaint::new`] opens a
+/// hand-edited or inverted pair back out to.
+///
+/// The same floor the octave band's bar keeps, because the two are read the
+/// same way — a wedge whose radial extent is a hairline says nothing about how
+/// loud it is, whichever ring it is on. A ring dialled to nothing is not a way
+/// of turning it off either; the checkbox is.
+pub const SPECTRAL_RING_MIN_SPAN: f32 = 0.05;
 
 /// Samples in the pitch->color lookup EVERYTHING pitch-colored reads: the
 /// disc, the trail and the piano roll on the CPU, the octave glyphs and their
@@ -383,6 +402,20 @@ pub struct Scene {
     /// Padding inside the octave layer (see [`ViewConfig::outer_gap`]):
     /// sector-to-sector and band-to-mark-ring alike. Already clamped.
     pub outer_gap: f32,
+    /// The lattice's AUDIO channel: what the analyzer measured, where the
+    /// ring that draws it sits, and the ramp every audio-lit element on the
+    /// node is painted from (see [`spectral`]).
+    ///
+    /// [`SpectralPaint::silent`] from [`derive_scene`], because nothing in
+    /// this crate reads audio; `harmonigraph-ui`'s `panes::spectral_fold` is
+    /// the one pass that fills it, and a scene drawn without that pass is the
+    /// MIDI picture alone.
+    ///
+    /// By value, with the analyzer's GRID boxed inside it: the grid is the
+    /// only part big enough to be worth an allocation, and holding the whole
+    /// struct behind a pointer would make replacing it an allocation a frame
+    /// per pane for the sake of the kilobyte of ramp beside it.
+    pub spectral: SpectralPaint,
     /// The pitch axis the octave indicators are drawn on (see [`octaves`]):
     /// how many octaves one turn of a node covers, which pitch sits at the top
     /// of it, and how the circle is shared out between them. ONE set of widths

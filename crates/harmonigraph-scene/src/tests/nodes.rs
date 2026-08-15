@@ -974,3 +974,66 @@ fn a_lit_octave_indicator_stands_for_the_pitch_it_is_drawn_at() {
         "the ring is coloured for a slot the indicator is not drawn at",
     );
 }
+
+/// The fresh audio ring sits in CLEAR SPACE: the annulus the core disc and the
+/// melody ring leave between them, with a visible gap at each end.
+///
+/// Arithmetic on the fresh values rather than a picture, because that is what
+/// the gaps are — the melody ring's inner edge is the band's inner radius less
+/// the layer's padding and the ring's own thickness, and the core ends at its
+/// radius. Written out here so that retuning any of those four moves this
+/// test, which is the point: the ring is placed against them and nothing in
+/// its own two fields knows they exist.
+#[test]
+fn the_fresh_audio_ring_sits_clear_of_the_core_and_the_melody_ring() {
+    let view = ViewConfig::default();
+    // Where the melody ring starts, from the shader's own construction: the
+    // band's inner radius, back one padding to the ring's outer edge, and back
+    // its thickness to its inner one.
+    let melody_inner = view.outer_inner - view.outer_gap - view.mark_thickness;
+    // A gap a reader can see, not merely a positive number. A twentieth of the
+    // node's radius is about the padding inside the octave layer (0.052
+    // fresh), which is the rhythm the rest of the node is spaced on.
+    const CLEAR: f32 = 0.05;
+    assert!(
+        view.spectral_ring_inner - view.core_radius > CLEAR,
+        "the ring starts at {} against a core ending at {}, which is not a gap",
+        view.spectral_ring_inner,
+        view.core_radius,
+    );
+    assert!(
+        melody_inner - view.spectral_ring_outer > CLEAR,
+        "the ring ends at {} against a melody ring starting at {melody_inner}",
+        view.spectral_ring_outer,
+    );
+}
+
+/// A scene derived here draws NO audio, whatever the view asks for.
+///
+/// Nothing in this crate reads an analyzer, so the ring's radii, the frequency
+/// ramp and the grid it reads are the Lattice pane's to fill
+/// (`panes::spectral_fold`), and `derive_scene` answers the one state in which
+/// none of them is consulted. The alternative is what makes this worth a test:
+/// a `derive_scene` that honoured the toggle would hand every shell that draws
+/// a lattice without an analyzer — a test here, an offline layout with no
+/// audio, a standalone harness — a ring of unmeasured silence painted off a
+/// ramp nobody supplied.
+///
+/// (Where the clamps live now, and what a hand-edited pair comes back as, is
+/// `spectral::tests::a_hand_edited_audio_ring_still_draws_an_annulus`, beside
+/// the constructor that does the clamping.)
+#[test]
+fn a_scene_derived_without_an_analyzer_carries_no_audio() {
+    let view = ViewConfig {
+        spectral_ring: true,
+        spectral_light: true,
+        ..plain_view()
+    };
+    let scene = scene_of(&sounding(), &Tuning::just(), &view, &plain_frame(), 0.5);
+    assert!(!scene.spectral.ring_draws(), "a derived scene drew a ring with no analyzer behind it");
+    assert!(!scene.spectral.lit, "a derived scene claimed its nodes were lit from audio");
+    assert!(
+        scene.spectral.levels.iter().all(|&level| level == 0),
+        "a derived scene carried a spectrum reading",
+    );
+}

@@ -229,4 +229,184 @@ mod tests {
         assert_eq!(value.b, 1.0);
         assert_eq!(value.a, 1.0);
     }
+
+    /// Which of the lattice's three readings a shot is of: the MIDI picture
+    /// alone, the audio ring over it at a given Range, or the nodes themselves
+    /// lit from the analyzer.
+    #[derive(Clone, Copy)]
+    enum Shot {
+        Midi,
+        Ring(f32),
+        Lit,
+    }
+
+    /// A sawtooth at MIDI `midi`, one second of it: every harmonic to Nyquist
+    /// at amplitude 1/k, which is the signal the whole spectral-lattice family
+    /// is judged on — its constellation is PREDICTED by the harmonic series
+    /// rather than measured (see `panes::spectral_fold`'s own tests).
+    fn sawtooth(midi: f32, rate: f32) -> Vec<f32> {
+        let f = harmonigraph_core::spectrum::midi_to_hz(midi);
+        (0..rate as usize)
+            .map(|i| {
+                let t = i as f32 / rate;
+                let mut sum = 0.0;
+                let mut k = 1.0f32;
+                while k * f < rate * 0.45 {
+                    sum += (std::f32::consts::TAU * k * f * t).sin() / k;
+                    k += 1.0;
+                }
+                sum
+            })
+            .collect()
+    }
+
+    /// The audio ring's picture, written to `target/scratch/` — the only way
+    /// to LOOK at this change without the DAW.
+    ///
+    /// A probe: it asserts nothing, because what it produces is a judgement
+    /// (#381's verdict is Yan's, at the plugin). It is kept, and kept
+    /// `#[ignore]`d, because the reading conditions are the expensive part
+    /// rather than the plumbing — #351 measured that the fresh extents draw a
+    /// C3 saw as a haze of comma neighbours, so a picture taken at them says
+    /// nothing about the ring, and the two settings below (extents 4 × 3, the
+    /// Analyzer's floor at −35 dB) are what make the constellation legible.
+    /// Rebuilding those from the issue costs more than the rest of this put
+    /// together.
+    ///
+    /// ```text
+    /// cargo test -p harmonigraph-offline -- --ignored --nocapture audio_ring
+    /// ```
+    ///
+    /// Same note held as sounding, so both readings are on screen at once: the
+    /// held C3 lights its own node's band, and the ring inside it reads the
+    /// saw's own spectrum around each of that node's octaves.
+    ///
+    /// The RANGE sweep is what the fresh value was chosen against, and it is
+    /// the reason this writes more than two shots: the setting decides whether
+    /// a wedge is a zoom on the node's own pitch or a copy of the whole wheel,
+    /// and the two ends look nothing alike.
+    #[test]
+    #[ignore = "a probe: writes PNGs and asserts nothing"]
+    fn the_audio_ring_draws_a_picture() {
+        use harmonigraph_ui::{draw_pane, Layout, SharedState};
+
+        const SIZE: [u32; 2] = [1200, 1000];
+        // Retina-ish, so the wedges and the note names are resolved rather
+        // than aliased — this is a picture to be looked at, not a fixture to
+        // be measured.
+        const PPP: f32 = 2.0;
+        const RATE: f32 = 48_000.0;
+        // A second in: long enough that the analyzer's window is full of the
+        // steady spectrum rather than of its own attack.
+        const NOW: f64 = 1.0;
+
+        let Some(mut renderer) = Renderer::new(SIZE) else {
+            eprintln!("no usable GPU adapter; nothing rendered");
+            return;
+        };
+        let context = egui::Context::default();
+        harmonigraph_ui::theme::apply_theme(&context);
+        context.set_pixels_per_point(PPP);
+
+        let layout = Layout::preset("lattice").expect("the lattice preset");
+        let mut state = SharedState::new(FORMAT);
+        state.set_background(layout.background);
+        // Just intonation, which is what the panel is aimed at: a partial of a
+        // just-tuned note lands ON its node rather than near it.
+        state.tuning = harmonigraph_core::Tuning::just();
+        // #351's reading conditions, and the reason this probe exists. Its
+        // "pull the extents in" is a ZOOM here: the drawn window is whatever
+        // the camera is looking at, and the extents set the naming
+        // reach rather than the picture's edge — so the way to have fewer
+        // nodes on screen is to look at fewer of them. The floor is the other
+        // half, and it is unchanged: at −60 dB the comma neighbours haze over
+        // the constellation.
+        state.view.extent_threes = 4;
+        state.view.extent_fives = 3;
+        state.spectrum_config.floor_db = -35.0;
+        // The display's EMA is the Analyzer's Smoothing control. Off here so
+        // the picture is the spectrum of the second that was pushed rather
+        // than a function of how many hops this fixture happened to feed.
+        state.spectrum_config.smoothing = 0.0;
+        // Fully lit at once: an envelope would put the MIDI half of the
+        // picture part way through its arrival.
+        state.frame_params.fade_time = 0.0;
+        state.tracker.handle_event(harmonigraph_core::NoteEvent::on(0.0, 0, 48, 1.0));
+        let cfg = state.spectrum_config;
+        state.spectrum.push_samples(&sawtooth(48.0, RATE), 1, RATE, NOW, &cfg);
+
+        let points = egui::vec2(SIZE[0] as f32 / PPP, SIZE[1] as f32 / PPP);
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, points);
+        let placements = layout.resolve(points);
+        let background = egui::Color32::from_rgb(
+            layout.background.0,
+            layout.background.1,
+            layout.background.2,
+        );
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/scratch");
+        std::fs::create_dir_all(&dir).expect("a scratch directory");
+
+        // Two distances, because the two questions are asked at different
+        // ones. Whether the constellation READS is a question about a screen
+        // full of nodes; whether the ring sits clear of the core and the
+        // melody ring, and what one wedge is actually showing, is one about a
+        // single node — and at reading distance a wedge is a dozen pixels.
+        //
+        // The Range sweep runs at both, because the setting trades exactly
+        // between them: narrow is legible close up and a smear at distance,
+        // and the octave end is one picture repeated on every node, which only
+        // shows on a screen full of them.
+        //
+        // `Light from audio` rides along at both distances, because it is the
+        // OTHER half of the frequency colour scheme: the band and the bodies
+        // painted by level off the analyzer's ramp rather than by pitch off
+        // the lattice's, which is a thing to look at rather than to assert.
+        let fresh_range = state.view.spectral_ring_range;
+        let mut shots: Vec<(f32, &str, Shot)> = Vec::new();
+        for (zoom, at) in [(2.5f32, ""), (9.0, "-close")] {
+            shots.push((zoom, at, Shot::Midi));
+            for range in [50.0f32, fresh_range, 600.0, 1200.0] {
+                shots.push((zoom, at, Shot::Ring(range)));
+            }
+            shots.push((zoom, at, Shot::Lit));
+        }
+
+        let home = state.camera;
+        for (zoom, at, shot) in shots {
+            let source = match shot {
+                Shot::Midi => "audio-ring-off".to_string(),
+                Shot::Lit => "light-from-audio".to_string(),
+                Shot::Ring(range) => {
+                    state.view.spectral_ring_range = range;
+                    format!("audio-ring-{range:.0}c")
+                }
+            };
+            state.view.spectral_ring = matches!(shot, Shot::Ring(_));
+            state.view.spectral_light = matches!(shot, Shot::Lit);
+            // From the fresh camera each time: the pane pans the view's center
+            // with the camera, so a zoom applied on top of the last one would
+            // compound.
+            state.camera = home;
+            state.camera.zoom_by(zoom);
+            let output = context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    time: Some(NOW),
+                    ..Default::default()
+                },
+                |ui| {
+                    for (pane, rect) in &placements {
+                        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(*rect));
+                        draw_pane(&mut child, *pane, &mut state, NOW);
+                    }
+                },
+            );
+            let primitives = context.tessellate(output.shapes, PPP);
+            let bytes = renderer.render(&primitives, &output.textures_delta, PPP, background);
+            let path = dir.join(format!("{source}{at}.png"));
+            image::save_buffer(&path, &bytes, SIZE[0], SIZE[1], image::ExtendedColorType::Rgba8)
+                .expect("write the png");
+            eprintln!("{}", path.canonicalize().unwrap_or(path.clone()).display());
+        }
+    }
 }
