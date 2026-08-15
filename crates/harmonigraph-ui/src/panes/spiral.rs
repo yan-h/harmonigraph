@@ -590,6 +590,20 @@ fn navigate(ui: &egui::Ui, response: &egui::Response, fit: &Spiral, view: &mut S
         return;
     }
     let out = fit.bounds().1;
+    if response.dragged() {
+        // Spent BEFORE the zoom below, and a frame can carry both — a trackpad
+        // hands over two fingers sliding while they spread routinely. A drag is
+        // spent in the radius the picture the hand moved OVER was drawn at, which
+        // is the framing before this frame's zoom, so it goes first. The zoom then
+        // anchors on the pointer, and `slide` leaves `zoom` alone, so the anchor
+        // below is the same offset either way round and holds whatever the drag has
+        // just brought under the cursor. Spending the drag after the zoom instead
+        // spends it twice: the anchor is read from `pointer_hover_pos`, which is
+        // where the pointer is once this frame's motion has been applied, so the
+        // drag is already inside it.
+        view.slide(response.drag_delta() / (out * view.zoom));
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+    }
     if let Some((scroll, pinch)) = super::zoom_gesture(ui, response) {
         // The Analyzer's own rate, quoted rather than picked afresh: one wheel
         // over one analyzer drawn two ways, so a notch closes each picture by
@@ -610,12 +624,6 @@ fn navigate(ui: &egui::Ui, response: &egui::Response, fit: &Spiral, view: &mut S
                 .map_or(egui::Vec2::ZERO, |p| (p - fit.centre) / (out * view.zoom));
             view.zoom_about(factor, anchor);
         }
-    }
-    if response.dragged() {
-        // Read after the zoom above, since a frame can carry both and the drag's
-        // gain is in the radius the picture is at now.
-        view.slide(response.drag_delta() / (out * view.zoom));
-        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
     }
 }
 
@@ -992,6 +1000,33 @@ mod tests {
                 }],
             );
         }
+        state.spiral_view
+    }
+
+    /// The framing ONE frame carrying both a drag and a pinch leaves behind: the
+    /// press and the frame before it exactly as [`dragged`] takes them, then a
+    /// single frame delivering the motion and the pinch factor together.
+    ///
+    /// `egui::Event::Zoom` rather than a ctrl-held wheel, because a wheel is
+    /// smoothed over the frames after it and this fixture is about one frame: the
+    /// event multiplies `zoom_delta` in the pass it arrives in, so the drag and
+    /// the magnification land in the same call to [`navigate`].
+    fn dragged_and_pinched(
+        start: SpiralView,
+        from: egui::Pos2,
+        delta: egui::Vec2,
+        pinch: f32,
+    ) -> SpiralView {
+        let mut state = fresh();
+        state.spiral_view = start;
+        let ctx = themed();
+        frame(&ctx, &mut state, vec![egui::Event::PointerMoved(from)]);
+        frame(&ctx, &mut state, vec![egui::Event::PointerMoved(from), press(from, true)]);
+        frame(
+            &ctx,
+            &mut state,
+            vec![egui::Event::PointerMoved(from + delta), egui::Event::Zoom(pinch)],
+        );
         state.spiral_view
     }
 
@@ -1701,6 +1736,48 @@ mod tests {
             travel.x < 0.0 && travel.y > 0.0,
             "the look travelled {travel:?} for a drag of {delta:?}",
         );
+    }
+
+    /// A frame carrying both a drag and a pinch spends the drag ONCE: the point
+    /// grabbed at the press is still under the pointer where the drag ends, and
+    /// the magnification is the pinch's own.
+    ///
+    /// Both at once is what a trackpad hands over routinely — two fingers sliding
+    /// while they spread — and it is the only case where the ORDER [`navigate`]
+    /// reads the two gestures in is visible. The pinch is anchored on
+    /// `pointer_hover_pos`, which is where the pointer is once this frame's motion
+    /// has been applied, so the drag is already inside the anchor; a drag spent on
+    /// top of a framing that anchor has already zoomed is spent twice, and the
+    /// picture lands the drag times whatever the zoom changed the unit by past
+    /// where the hand left it.
+    ///
+    /// Both directions of pinch, from a zoom with room to move either way: the
+    /// error is the drag times one minus the zoom factor, so it changes sign
+    /// across a pinch of 1 and a single direction would leave half of it unasked.
+    #[test]
+    fn a_frame_carrying_a_drag_and_a_pinch_spends_the_drag_once() {
+        let from = PANE.center() + egui::vec2(-30.0, 20.0);
+        let delta = egui::vec2(60.0, -45.0);
+        for pinch in [0.5f32, 2.0] {
+            let before = view(3.0, egui::Vec2::ZERO);
+            let after = dragged_and_pinched(before, from, delta, pinch);
+            // The pinch reached the pane at all, and neither end of [`ZOOM`]
+            // clamped it — a refused zoom has no unit change to double-count and
+            // would let the claim below pass on the bug.
+            assert!(
+                (after.zoom - before.zoom * pinch).abs() < 1e-3,
+                "a pinch of {pinch} left the zoom at {} rather than {}",
+                after.zoom,
+                before.zoom * pinch,
+            );
+            let (grabbed, landed) = (under(&before, from), under(&after, from + delta));
+            assert!(
+                (grabbed - landed).length() < 1e-4,
+                "pinch {pinch}: the point grabbed at {grabbed:?} was carried to {landed:?}, \
+                 {} radii off",
+                (grabbed - landed).length(),
+            );
+        }
     }
 
     /// A drag moves the framing and nothing else. In particular not the pitch
