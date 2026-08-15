@@ -336,11 +336,11 @@ fn spectrum_history_reaches_the_retention_cap() {
     // And it fits in a budget worth calling an optimization: the fixed-rate
     // f32 ring needed 160 MB to reach a third as far.
     //
-    // 15 -> 30 MB was bought deliberately, and by the DISPLAY rather than by
-    // reach: `LIVE_SLAB_CAP` doubled to 1024 so the default 12 s span is cut
-    // into slabs as fine as the data, and the tiers have to keep up with the cap
-    // (see COARSE_COLUMNS) — so the cap, the tier size, and this number are one
-    // decision. Reach came along for free.
+    // The 30 MB is bought by the DISPLAY rather than by reach: `LIVE_SLAB_CAP`
+    // is 1024 so that a close-up span is cut into slabs as fine as the data,
+    // and the tiers have to keep up with the cap (see COARSE_COLUMNS) — so the
+    // cap, the tier size, and this number are one decision. Reach comes along
+    // for free.
     let megabytes = SpectrumHistory::max_bytes() as f64 / (1024.0 * 1024.0);
     assert!(megabytes < 32.0, "the full store is {megabytes:.1} MB");
 }
