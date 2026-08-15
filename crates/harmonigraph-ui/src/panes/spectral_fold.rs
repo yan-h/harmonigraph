@@ -1109,6 +1109,26 @@ mod tests {
         Some(x.round() as usize)
     }
 
+    /// Ticking the box before any audio has flowed is the design's most
+    /// contentious accepted consequence: every node wears the ring at the
+    /// ramp's floor, saying "nothing sounds here" rather than nothing. So the
+    /// no-audio path has to keep the annulus real and the grid at zero — a
+    /// vanishing ring would read as the toggle not taking.
+    #[test]
+    fn the_ring_draws_its_floor_before_any_audio_flows() {
+        let mut state = fresh();
+        state.view.spectral_ring = true;
+        let scene = scene_of(&state);
+        assert!(
+            scene.spectral.ring_draws(),
+            "with no audio flowing the ring vanished instead of wearing the floor",
+        );
+        assert!(
+            scene.spectral.levels.iter().all(|&level| level == 0),
+            "a grid nothing fed reads a level other than the floor",
+        );
+    }
+
     /// A probe at a bucket's own centre reads that bucket, not a blend of it
     /// and its neighbour: the reader subtracts the grid's half-bucket offset
     /// exactly as `bucket_pitch`, `grid_bucket` and the shader's `spectrum_at`
