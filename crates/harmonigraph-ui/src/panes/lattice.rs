@@ -584,6 +584,13 @@ mod tests {
     /// half-height is `distance * tan(fov/2)` — so it has to double the type
     /// too. Read off the largest piece each frame laid out, which is the note
     /// name: the marks and the cents line are sized off it.
+    ///
+    /// The size at the default framing is `NAME_SIZE` through the fresh view's
+    /// own Name size, rather than the constant bare: the bar is a multiple of
+    /// the built-in and a fresh view does not open at 1, so quoting the
+    /// constant alone would pin the picture to a bar position nobody starts
+    /// from. What the test is about is the RATIO the camera moves it by, and
+    /// that is untouched by where the bar sits.
     #[test]
     fn a_label_grows_with_the_camera() {
         // A pane the height the sizes are quoted against, so this is a test
@@ -596,11 +603,6 @@ mod tests {
                 .map(|piece| piece.font_size)
                 .fold(0.0f32, f32::max)
         };
-        assert_eq!(
-            biggest(Camera::DEFAULT_DISTANCE),
-            NAME_SIZE,
-            "the default framing is where the sizes are dialled",
-        );
         // Within a rung of the ladder either way. The size follows the camera
         // continuously and is RASTERIZED at the nearest size on offer, which
         // is what keeps a zoom from asking egui for a new one every frame —
@@ -608,24 +610,61 @@ mod tests {
         let tracks = |distance: f32, want: f32| {
             let got = biggest(distance);
             // Off by at most a rung of the ladder, or half a pixel where that
-            // is coarser — the two grains `snap_scale` quantizes on. A quarter
-            // of a 30pt name is 7.5 pixels on this 1x context, where half a
-            // pixel is a fifteenth of the size and the rung is a thirtieth.
+            // is coarser — the two grains `snap_scale` quantizes on. The rung
+            // is the coarser of the two at every size here but the smallest,
+            // where a quarter of the dialled name is a few pixels on this 1x
+            // context and half a pixel is the wider tolerance of the pair.
             let slack = (0.04 * want).max(0.5);
             assert!(
                 (got - want).abs() <= slack,
                 "at distance {distance} a name drew at {got}, not within {slack} of {want}",
             );
         };
-        tracks(Camera::DEFAULT_DISTANCE * 0.5, NAME_SIZE * 2.0);
-        tracks(Camera::DEFAULT_DISTANCE * 2.0, NAME_SIZE * 0.5);
-        tracks(Camera::DEFAULT_DISTANCE * 4.0, NAME_SIZE * 0.25);
-        // And the ladder is really there: a nudge of the camera too small to
-        // see is not a new size to rasterize.
-        assert_eq!(
-            biggest(Camera::DEFAULT_DISTANCE),
-            biggest(Camera::DEFAULT_DISTANCE * 1.01),
-            "a 1% camera move asked for a size of its own",
+        let dialled = NAME_SIZE * harmonigraph_scene::ViewConfig::default().label_scale;
+        // The default framing is where the sizes are dialled: the camera
+        // contributes a factor of 1 there, so the letter is the built-in
+        // through the bar and nothing else.
+        //
+        // To within a rung, like every other distance here, and NOT exactly.
+        // `snap_scale` reproduces a dialled size exactly only at scale 1, where
+        // its ladder is anchored; anywhere else it rounds the nearest rung onto
+        // a whole physical pixel, and whether that lands back on the dialled
+        // number is a property of the number. This one does (a rung of 1.3159
+        // times a 30pt base is 39.478, which rounds to 39, which is 1.3 of the
+        // base again) and 1.25 would not (37.96 rounds to 38 against a dialled
+        // 37.5). Asserting the exact value would pass here and fail on the next
+        // retune of the bar, blaming the camera for the pixel grid.
+        tracks(Camera::DEFAULT_DISTANCE, dialled);
+        tracks(Camera::DEFAULT_DISTANCE * 0.5, dialled * 2.0);
+        tracks(Camera::DEFAULT_DISTANCE * 2.0, dialled * 0.5);
+        tracks(Camera::DEFAULT_DISTANCE * 4.0, dialled * 0.25);
+        // And the ladder is really there: a walk of nudges each too small to
+        // see costs a handful of sizes to rasterize rather than one apiece.
+        //
+        // Counted over a walk rather than asserted on a single nudge, and the
+        // difference is the rung BOUNDARIES: two sizes 1% apart are usually
+        // one size and are two whenever the pair straddles a boundary, so a
+        // single nudge is a test of where the fresh view's Name size happens
+        // to sit on the ladder. What is actually promised is that the count of
+        // sizes follows the rungs crossed and not the frames drawn — and 24
+        // steps of 1% is a quarter more distance, which is 6 rungs of a 4%
+        // ladder however the bar is set.
+        //
+        // The bound has one size of slack and it is worth knowing how little:
+        // the walk asks for 7. Strip the rung out of `snap_scale` and leave the
+        // pixel rounding alone and it asks for 9, which is what this catches;
+        // strip both and it asks for 25. So the margin between the promise and
+        // the degradation is a single size, and it is that tight because of the
+        // base and the ppp this fixture uses, not because 8 was picked loosely.
+        let mut sizes: Vec<f32> = (0..25)
+            .map(|step| biggest(Camera::DEFAULT_DISTANCE * 1.01f32.powi(step)))
+            .collect();
+        sizes.sort_by(f32::total_cmp);
+        sizes.dedup();
+        assert!(
+            sizes.len() <= 8,
+            "25 camera nudges of 1% asked for {} sizes: {sizes:?}",
+            sizes.len(),
         );
     }
 

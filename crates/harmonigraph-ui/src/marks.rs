@@ -4,16 +4,28 @@
 //! spectral roll's (`panes::spectral::names`), and `crate::text`'s mark
 //! atlas, which packs the rasterized bitmaps into a sheet of their own.
 
-/// The note name's letter, the size the label reads at.
+/// The note name's letter, and the size every other measurement in this file
+/// is quoted against.
 ///
-/// At the framing a fresh view opens at, that is. Every size here is a size at
-/// scale 1, and the scale a label is actually drawn at follows the camera —
-/// see [draw_node_labels](crate::panes::lattice::draw_node_labels).
+/// A size at scale 1, as everything here is. What a label is actually drawn at
+/// follows the camera — see
+/// [draw_node_labels](crate::panes::lattice::draw_node_labels) — and the Labels
+/// section's Name size bar on top of that, so this is NOT the size a fresh view
+/// draws at: that bar opens at
+/// [`label_scale`](harmonigraph_scene::ViewConfig::label_scale)'s default and
+/// the letter lands there.
 ///
-/// 30pt rather than 15, along with everything below that is measured in
-/// points. At 15 the Size bar sits at 2 and never moves, which says the number
-/// is what is wrong rather than that the bar wants using — so the bar reads 1
-/// at the size the lattice is actually looked at.
+/// Which is exactly where the lattice's letter parts company with the spectral
+/// pane's two text sizes, `axes::MARKING_PT` and `names::LABEL_PT`. Those are
+/// requoted whenever their bar settles away from 1, so that the built-in is the
+/// size the pane is read at and a saved view is not a standing correction of
+/// it. Here the built-in is the PROPORTION BASE of a label that has parts:
+/// [`CENTS_SIZE`], [`CENTS_GAP`] and [`LABEL_REACH`] are absolute points quoted
+/// against this letter and only [`MARK_SIZE`] is derived from it, so moving it
+/// means re-proportioning the label by hand and getting the same picture. A
+/// marking and a ribbon name are each one point size with nothing hanging off
+/// them, which is what makes the requote free there and not here — so the
+/// lattice's retune goes on the bar, and this number holds the proportions.
 pub(crate) const NAME_SIZE: f32 = 30.0;
 /// The pane the sizes here are quoted against: 860 points tall, which is what
 /// the lattice gets in the 1512x886 window they were dialled in. A pane half

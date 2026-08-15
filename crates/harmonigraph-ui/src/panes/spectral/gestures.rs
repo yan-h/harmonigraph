@@ -252,9 +252,13 @@ const ZOOM_PER_SCROLL_POINT: f32 = 0.008;
 /// dB window, and a hand that had to learn two gains for one movement would be
 /// learning the code's seam rather than the pane's.
 ///
-/// Sized on the time axis, which is the wider range of the two: from the 12 s
-/// default, ~410 points of drag toward the past reaches 1 s and ~650 the other
-/// way reaches 600 s. The level range is shorter at the same gain — its whole
+/// Sized on the time axis, which is the wider range of the two: the whole
+/// 1 s..600 s sweep is ~1070 points of drag, and the three-minute default sits
+/// near its long end — ~870 points toward the past reach 1 s, ~200 the other
+/// way reach 600 s. The travel is lopsided because the default is, not because
+/// the gain is: most of what a drag has to reach from there is the close-up,
+/// which is the direction it is reached for. The level range is shorter at the
+/// same gain — its whole
 /// 12..60 dB sweep against the default -60 dB floor is ~270 points — because a
 /// dB window has less room to travel, not because it is dialled differently.
 const DEPTH_ZOOM_PER_DRAG_POINT: f32 = 0.006;
