@@ -3504,7 +3504,13 @@ mod tests {
     /// (`roll_seconds * (-along * DEPTH_ZOOM_PER_DRAG_POINT).exp()`) and the
     /// rungs are powers of two, so the crossings are EVENLY spaced along the
     /// drag — one every `ln 2 / DEPTH_ZOOM_PER_DRAG_POINT`, 116 points of
-    /// travel — and a drag pays a bounded few of them however long it lasts.
+    /// travel.
+    ///
+    /// The bound is on a drag that TRAVELS, and only on that. Distance is the
+    /// whole of what limits the count here, so a Span that stops moving stops
+    /// being bounded by anything this test says:
+    /// [`a_span_dithering_across_a_rung_refolds_every_frame`] is the same
+    /// aggregator, parked, refolding on every frame instead.
     #[test]
     fn a_span_drag_refolds_once_per_rung_crossed() {
         let interval = crate::AudioSpectrum::FFT_INTERVAL;
@@ -3566,6 +3572,72 @@ mod tests {
         assert_eq!(
             agg.rebuilds, 5,
             "a {frames}-frame Span drag across 2 rungs each way refolded {} times",
+            agg.rebuilds,
+        );
+    }
+
+    /// A Span sitting ON a rung boundary refolds every frame, because the
+    /// ladder has no hysteresis.
+    ///
+    /// [`a_span_drag_refolds_once_per_rung_crossed`] bounds a drag that TRAVELS.
+    /// This is the other regime, and it is not a corner: [`live_slab`] re-decides
+    /// the rung from the window alone on every frame, so a Span parked within one
+    /// drag-point of a boundary alternates its slab width for as long as the hand
+    /// holds still. One point is 0.6% of the Span, which a resting finger clears
+    /// on tremor alone.
+    ///
+    /// Both caches then miss together, which is what makes it expensive rather
+    /// than merely frequent: `bucket` is the aggregator's one layout input AND a
+    /// [`ColumnStyle`] field, so every frame pays a full refold and a full
+    /// recompose — the cascade the test above shows a travelling drag avoids.
+    ///
+    /// Asserted as the cost it is rather than as a bug, since nothing here fixes
+    /// it. What would is hysteresis in [`live_slab`] — holding the current rung
+    /// until the window is some way past the boundary — and that is shipping-code
+    /// work with its own picture question, since the rung then depends on which
+    /// side the Span arrived from.
+    #[test]
+    fn a_span_dithering_across_a_rung_refolds_every_frame() {
+        let interval = crate::AudioSpectrum::FFT_INTERVAL;
+        let cols = LIVE_SLAB_CAP as usize;
+        let planned = cols + RING_HEADROOM;
+        // The boundary between the 32 ms and 64 ms rungs: `live_slab` steps up
+        // exactly where the window stops fitting in `cols` slabs.
+        let boundary = 0.032 * cols as f64;
+        let step = (-(DEPTH_ZOOM_PER_DRAG_POINT as f64)).exp();
+
+        let mut history = crate::SpectrumHistory::default();
+        let settle = planned as f64 * 0.064 + boundary;
+        for i in 0..(settle / interval) as usize {
+            history.push(col(i as f64 * interval, &[(4, 0.5), (10, 1.0)]));
+        }
+        let mut now = history.back().expect("filled").time;
+
+        let mut agg = SpectrogramAgg::new();
+        let mut widths = std::collections::BTreeSet::new();
+        const FRAME: f64 = 1.0 / 144.0;
+        // One point of tremor either way, alternating: the hand is still and the
+        // Span is not.
+        let mut frames = 0u32;
+        for i in 0..300 {
+            let span = if i % 2 == 0 { boundary * step } else { boundary / step };
+            frames += 1;
+            now += FRAME;
+            while history.back().is_none_or(|c| c.time + interval <= now) {
+                let t = history.back().map_or(0.0, |c| c.time) + interval;
+                history.push(col(t, &[(4, 0.5), (10, 1.0)]));
+            }
+            let bucket = live_slab(span, cols);
+            widths.insert((bucket * 1e6).round() as i64);
+            let first = history.partition_point(|c| c.time < now - span).saturating_sub(1);
+            let _ = agg.window(&history, first, bucket, planned);
+        }
+
+        assert_eq!(widths.len(), 2, "the dither did not straddle a rung: {widths:?} us");
+        // Every frame but the first, which is the opening build.
+        assert_eq!(
+            agg.rebuilds, frames,
+            "a Span parked on a rung boundary refolded {} times in {frames} frames",
             agg.rebuilds,
         );
     }
