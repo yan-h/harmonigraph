@@ -6,7 +6,8 @@ use super::axes::*;
 use super::gestures::*;
 use super::settings::*;
 use crate::tests::probe::{
-    events_into, fresh, frame_into, painted_full, painted_into, press, themed, themed_at,
+    events_into, fresh, frame_full, frame_into, painted_full, painted_into, press, themed,
+    themed_at,
 };
 use crate::{SpectralOrientation, SpectrumConfig};
 use harmonigraph_core::{NoteEvent, NoteEventKind};
@@ -1734,6 +1735,52 @@ fn the_strip_holds_its_leading_sliver_instead_of_reading_round_the_ring() {
     assert!(far < hold, "the data quad spans no time at all");
     assert_eq!(us.iter().filter(|u| **u == hold).count(), 6, "not one flat leading quad: {us:?}");
     assert_eq!(us.iter().filter(|u| **u == far).count(), 2, "the data quad bends: {us:?}");
+}
+
+/// A big pane at a high density must not upload a texture the context has
+/// already said it will not take.
+///
+/// The pane draws through two contexts that disagree about the limit: an
+/// editor's reports the wgpu device's 8192, and a bare `egui::Context` — the
+/// offline renderer's, and every test's — reports egui's own 2048 default. At
+/// 2048 the slab count alone put the image `2 * (1024 + 8)` = 2064 texels
+/// across and `Context::load_texture` asserted on the upload, taking the frame
+/// with it. Issues #333 and #335 are that panic, reached from the profiling
+/// harness at exactly the geometry below.
+///
+/// A whole frame rather than [`Plan`](crate::spectrogram::Plan) arithmetic,
+/// because the arithmetic is only half the claim: what panicked was the
+/// UPLOAD, and only a real context holds a real limit to check against. The
+/// plan's own sweep is `no_pane_plans_an_image_past_what_the_gpu_takes`.
+#[test]
+fn a_large_pane_at_a_high_density_uploads_a_texture_the_context_takes() {
+    // The profiling harness's own picture pane, which is where this was found:
+    // one pane filling a 1000x900 point window at 2x, no dock.
+    const BODY: egui::Vec2 = egui::vec2(1000.0, 900.0);
+    let mut state = fresh();
+    state.spectrum_config.orientation = SpectralOrientation::Left;
+    state.spectrum_config.show_spectrogram = true;
+    // The long end of the Span, where the window holds the most slabs.
+    state.spectrum_config.roll_seconds = 180.0;
+    let mut bins = [0.0f32; harmonigraph_core::spectrum::SPECTRUM_BINS];
+    bins[harmonigraph_core::spectrum::SPECTRUM_BINS / 3] = 0.8;
+    for i in 0..400 {
+        state.spectrum.push_history(90.0 + f64::from(i) * 0.1, &bins);
+    }
+    let ctx = themed_at(2.0);
+    // Twice: `set_pixels_per_point` lands on the following frame, so the first
+    // is still at 1x and cannot reach the limit at all.
+    for _ in 0..2 {
+        let _ = frame_full(&ctx, BODY, |ui| spectral_pane(ui, &mut state, 130.0, 0));
+    }
+    let limit = ctx.input(|i| i.max_texture_side);
+    let size = state.spectrum.spectrogram[0].tex.as_ref().expect("a heatmap was uploaded").size();
+    assert!(
+        size[0] <= limit && size[1] <= limit,
+        "a {}x{} heatmap on a context whose limit is {limit}",
+        size[0],
+        size[1],
+    );
 }
 
 /// The heatmap image is sized in DEVICE PIXELS, not points. It is stretched

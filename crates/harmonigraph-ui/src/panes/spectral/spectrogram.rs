@@ -199,9 +199,13 @@ pub(crate) fn draw_spectrogram(
         return;
     }
 
+    // What the GPU will take, on either side. The floor is against a context
+    // that reports something unusable rather than against any real device.
+    let max_side = painter.ctx().input(|i| i.max_texture_side).max(64);
     let mut view = PaneView {
         ppp: painter.ctx().pixels_per_point().max(1.0),
-        max_rows: painter.ctx().input(|i| i.max_texture_side).max(64),
+        max_side,
+        max_rows: max_side,
         pitch_len: axes.pitch_len(),
         depth_len: time.region_depth_len(axes),
         window: time.window(),
