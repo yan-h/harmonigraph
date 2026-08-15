@@ -2021,6 +2021,7 @@ fn a_real_held_chord_shows_its_melody_and_bass_marks() {
             &tracker,
             &Tuning::default(),
             &ViewConfig { mark_melody: marks, mark_bass: marks, ..base.clone() },
+            &base.reach(),
             // No envelope: every layer of a node eases in from its note-on
             // over the Fade, so under a real one t=0 is the instant nothing
             // is drawn yet and any later sample is a fraction. What is
@@ -2882,6 +2883,7 @@ fn sheets_draw_back_to_front_along_the_sevens_axis() {
             &harmonigraph_core::NoteTracker::new(),
             &harmonigraph_core::Tuning::default(),
             &view,
+            &view.reach(),
             &FrameParams::default(),
             // Orbited, deliberately: this is the case a plain depth sort
             // gets wrong, because two nodes on one sheet then sit at

@@ -2002,6 +2002,78 @@ fn an_off_lattice_note_gets_a_band_down_the_spectrum() {
     assert_eq!(bands(0.5), 1, "half a semitone sharp has none");
 }
 
+/// A note the lattice is LIGHTING is never flagged as off it, however far out
+/// the node sits.
+///
+/// The band asks what the picture shows, and the picture is the camera's
+/// window rather than the naming reach. The two are sized apart and the drawn
+/// one is much the wider — at 16:9, fully zoomed out, a perspective pane draws
+/// 73% of its nodes outside the reach — so asking the reach put a red band
+/// down the spectrum for a note lit on screen, with the Notes pane showing no
+/// node for it and the analyzer naming it in equal temperament. That needs a
+/// tuning where distinct positions are distinct pitches to see: the default
+/// 12-TET lattice collapses, and a match turns up within six fifths whatever
+/// you play.
+#[test]
+fn a_note_lit_on_the_lattice_is_not_flagged_off_it() {
+    // The window a zoomed-out perspective pane really draws, and a node at its
+    // own far edge: inside the picture, outside the reach.
+    let view = harmonigraph_scene::ViewConfig::default();
+    let camera = harmonigraph_scene::Camera {
+        projection: harmonigraph_scene::Projection::Perspective,
+        distance: harmonigraph_scene::Camera::MAX_DISTANCE,
+        ..Default::default()
+    };
+    let window = view.scrolled(&camera, 16.0 / 9.0);
+    // Whichever edge of the picture has left the reach — which one that is
+    // depends on where the default camera is pointed, and the disagreement is
+    // the same at any of them.
+    let far = [
+        harmonigraph_core::LatticePos::new(0, window.min.fives, 0),
+        harmonigraph_core::LatticePos::new(0, window.max.fives, 0),
+        harmonigraph_core::LatticePos::new(window.min.threes, 0, 0),
+        harmonigraph_core::LatticePos::new(window.max.threes, 0, 0),
+    ]
+    .into_iter()
+    .find(|&pos| window.contains(pos) && !view.reach().contains(pos))
+    .expect("a zoomed-out perspective pane draws nothing the reach cannot name");
+
+    let bands = |shown: Option<harmonigraph_scene::DrawnWindow>| {
+        let mut state = fresh();
+        state.tuning = harmonigraph_core::Tuning::just();
+        state.spectrum_config.orientation = SpectralOrientation::Left;
+        state.spectrum_config.low_midi = 55.0;
+        state.spectrum_config.high_midi = 73.0;
+        state.frame_params.fade_time = 0.0;
+        state.drawn = shown;
+        // Bent onto that node's own pitch exactly, which is what a retuned
+        // keyboard or an MPE part does and the only way to sound one.
+        let cents = state.tuning.pitch_class(far).to_cents();
+        state.tracker.handle_event(NoteEvent::on(0.0, 0, 60, 1.0));
+        state.tracker.handle_event(NoteEvent {
+            time: 0.0,
+            channel: 0,
+            note: 60,
+            kind: NoteEventKind::Tuning { semitones: cents / 100.0 },
+        });
+        let out = painted_pane(WIDE, &mut state, 0.05);
+        let want = theme::warning_text().gamma_multiply(0.3);
+        out.shapes
+            .into_iter()
+            .filter(|s| matches!(&s.shape, egui::Shape::Rect(r) if r.fill == want))
+            .count()
+    };
+
+    // No lattice pane has drawn, so the reach is all there is to go on — and
+    // it cannot reach this node.
+    assert_eq!(bands(None), 1, "with only the reach to ask, the note reads as off the lattice");
+    assert_eq!(
+        bands(Some(window)),
+        0,
+        "the lattice is lighting this note and the band says it is not there",
+    );
+}
+
 /// The axis labels carry a rim, like the lattice's node names. What sits
 /// behind them is a picture — a bright spectrogram slab, the spectrum's
 /// own fill — so plain text has no contrast to rely on, and a label you

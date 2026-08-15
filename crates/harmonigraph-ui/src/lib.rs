@@ -359,7 +359,7 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
         Workload {
             active_voices: state.tracker.voices().count(),
             held_voices: state.tracker.held_count(),
-            visible_nodes: state.drawn_nodes,
+            visible_nodes: state.drawn_this_frame.map_or(0, |w| w.count()),
             render_scale: state.view.render_scale,
             animating,
         },
@@ -426,12 +426,15 @@ fn pane_body(state: &SharedState, tab: &panes::Tab) -> Option<egui::Rect> {
 pub fn begin_frame(state: &mut SharedState, params: &dyn ParamBackend, now: f64) {
     learn_step(state, params);
 
-    // Cleared here so the count belongs to THIS frame: the lattice reports it
-    // as it builds its window, and a frame where the lattice is not drawn at
-    // all — its leaf collapsed, or laid out too small to draw — reports none
-    // rather than going on showing the last frame that was. A diagnostic that
-    // holds its last good reading is the one that misleads.
-    state.drawn_nodes = 0;
+    // Rotated here so the window belongs to a whole frame rather than to a
+    // point in the dock's draw order: the lattice publishes as it builds, and
+    // the panes that describe the picture read the finished answer from the
+    // frame before. Taking it also clears this frame's slot, so a frame where
+    // the lattice is not drawn at all — its leaf collapsed, or laid out too
+    // small to draw — reports no window rather than going on showing the last
+    // one that was. A diagnostic that holds its last good reading is the one
+    // that misleads.
+    state.drawn = state.drawn_this_frame.take();
 
     state.tuning = params::tuning_from_params(params);
     // Auto-detect, then lock, one comma at a time and up the primes — the

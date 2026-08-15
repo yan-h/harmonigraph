@@ -95,17 +95,19 @@ pub(crate) fn draw_lattice(
     // see `ViewConfig::scrolled`. Derived here, per copy and per frame, and
     // never written back: the docked pane and the Video tab's preview both
     // reach this function every frame at their own aspects.
-    let view = state.view.scrolled(&state.camera, rect.width() / rect.height().max(1.0));
-    // The overlay's node count, from the one place it exists. The docked copy
-    // alone writes it — see `SharedState::drawn_nodes`, and the `response`
+    let window = state.view.scrolled(&state.camera, rect.width() / rect.height().max(1.0));
+    // Published for the perf overlay's node count and for the panes that have
+    // to say what the picture shows, from the one place it exists. The docked
+    // copy alone writes it — see `SharedState::drawn`, and the `response`
     // argument's own doc for why that flag is what identifies it.
     if response.is_some() {
-        state.drawn_nodes = view.visible_count();
+        state.drawn_this_frame = Some(window);
     }
     let mut scene = derive_scene(
         &state.tracker,
         &state.tuning,
-        &view,
+        &state.view,
+        &window,
         &state.frame_params,
         state.camera,
         // Only the interactive copy has a hover to show: the preview's
@@ -148,8 +150,8 @@ pub(crate) fn draw_lattice(
     // so anything meant to sit ON TOP of the names has to be a second batch
     // rather than a later call into this one.
     let mut batch = crate::text::TextBatch::default();
-    if view.show_labels {
-        draw_node_labels(ui, rect, &scene, &view, &mut batch);
+    if state.view.show_labels {
+        draw_node_labels(ui, rect, &scene, &state.view, &mut batch);
     }
     // The badge is laid out here, before the names are handed over, though it
     // is DRAWN after them. Laying text out is what rasterizes glyphs into
@@ -507,6 +509,7 @@ mod tests {
             &state.tracker,
             &state.tuning,
             &state.view,
+            &state.view.reach(),
             &state.frame_params,
             state.camera,
             None,
@@ -788,6 +791,7 @@ mod tests {
             &state.tracker,
             &state.tuning,
             &state.view,
+            &state.view.reach(),
             &state.frame_params,
             state.camera,
             None,
@@ -818,6 +822,7 @@ mod tests {
             &state.tracker,
             &state.tuning,
             &state.view,
+            &state.view.reach(),
             &state.frame_params,
             state.camera,
             None,
@@ -865,6 +870,34 @@ mod tests {
             with > without,
             "learn mode should draw the badge for the interactive copy ({with} shapes) but not \
              the non-interactive one ({without} shapes)",
+        );
+    }
+
+    /// Only the interactive copy publishes its window, for the same reason it
+    /// alone reports its node count: the Video tab's preview is a second
+    /// lattice at the RENDER's aspect, so letting it publish would answer
+    /// "what is the picture showing" with a picture the reader is not looking
+    /// at — the analyzer's off-lattice band jumping with a tab beside it.
+    #[test]
+    fn only_the_interactive_copy_publishes_its_window() {
+        let mut state = fresh();
+        let ctx = themed();
+        let screen = egui::vec2(400.0, 400.0);
+        let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(300.0, 300.0));
+
+        let _ = frame_full(&ctx, screen, |ui| {
+            draw_lattice(ui, rect, &mut state, 0.0, 1, glam::Vec4::ZERO, None, None);
+        });
+        assert_eq!(state.drawn_this_frame, None, "the preview published a window");
+
+        let _ = frame_full(&ctx, screen, |ui| {
+            let (_, response) = ui.allocate_exact_size(rect.size(), egui::Sense::hover());
+            draw_lattice(ui, rect, &mut state, 0.0, 0, glam::Vec4::ZERO, Some(&response), None);
+        });
+        assert_eq!(
+            state.drawn_this_frame,
+            Some(state.view.scrolled(&state.camera, 1.0)),
+            "the docked copy published something other than the window it drew",
         );
     }
 

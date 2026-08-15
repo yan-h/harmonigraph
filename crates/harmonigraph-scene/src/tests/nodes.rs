@@ -647,7 +647,7 @@ fn window_center_pans_which_nodes_display() {
         extent_sevens: 0,
         ..ViewConfig::default()
     };
-    let positions: Vec<_> = view.visible_positions().collect();
+    let positions: Vec<_> = view.reach().positions().collect();
     assert_eq!(
         positions,
         vec![
