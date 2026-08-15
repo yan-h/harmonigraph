@@ -91,9 +91,16 @@ const SEAM: (f32, f32) = (0.28, 1.0);
 /// [`SEGMENT_PT`], and it can be. What a straight segment costs a curve is its
 /// sagitta, `s²/8r`, which at this length is hundredths of a point anywhere on
 /// this disc; the strip is cut fine because its COLOUR changes along it, where
-/// the seam is one hairline all the way round. Cut as fine as the strip it
-/// would roughly double what the pane hands the tessellator, to draw the same
-/// curve.
+/// the seam is one hairline all the way round.
+///
+/// What that saves depends on the pane, because the strip's step count is
+/// CAPPED at one step per bucket and this one is not capped at all. At the
+/// fresh range: on a docked pane the seam is under a quarter of the strip's
+/// 3826 steps and cutting it at the strip's grain would roughly double what
+/// the pane hands the tessellator; at 1080p it is two thirds; and at 3840x2160
+/// the seam alone is longer than the capped strip. The sagitta holds at every
+/// one of those, so what grows is a curve already smoother than it needs to be
+/// rather than one going rough.
 const SEAM_SEGMENT_PT: f32 = 6.0;
 
 /// A sounding note's dot: its radius as a share of half the track, and the
