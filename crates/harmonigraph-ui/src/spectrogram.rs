@@ -3118,7 +3118,10 @@ mod tests {
             "held still past the settle, the image sharpens",
         );
         assert!(!StyleMotion::observe(&mut slot, &c, 20.0, false), "quiet frames stay settled");
-        assert!(!StyleMotion::observe(&mut slot, &a, 21.0, false), "and the next lone change is sharp");
+        assert!(
+            !StyleMotion::observe(&mut slot, &a, 21.0, false),
+            "and the next lone change is sharp",
+        );
 
         // A fresh egui context restarts the input clock at zero while the slot
         // lives on (the editor window recreates its context per open; `motion`
