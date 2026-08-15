@@ -91,17 +91,24 @@ impl DrawnWindow {
         (axis(self.max) - axis(self.min) + 1).max(0) as usize
     }
 
-    /// Shrink toward `center` until the block holds no more than
-    /// [`MAX_DRAWN_NODES`], keeping its shape: both sheet axes are scaled by
-    /// the same factor, so a wide window stays wide and the picture loses an
-    /// even border rather than collapsing along one axis.
+    /// Clip the block into [`MAX_DRAWN_NODES`], taking what it loses off the
+    /// end of each axis FARTHER from `center` — the horizon — and leaving the
+    /// end nearer the center where it is.
     ///
-    /// Toward the CENTER rather than toward the block's own middle, and that
-    /// is the difference between trimming the horizon and trimming the
-    /// picture. `follow_camera` keeps the camera's target within one cell of
-    /// the center, so the center is what the eye is on; under the tilted
-    /// camera that reaches this cap at all, the block's own middle is way out
-    /// in the sub-pixel far field.
+    /// Which end is which is the whole of it, because the block is lopsided
+    /// wherever the camera's view of the sheet is. A tilted perspective window
+    /// runs a step or two below the eye and hundreds of steps out to the far
+    /// field, so a trim that scaled both ends by one factor took the same
+    /// FRACTION off each — and a fraction of a near edge already beside the
+    /// center is the whole of it. What that drew is a bald wedge across the
+    /// lower half of the pane with the lattice running on above it:
+    /// `the_budget_trims_the_horizon_not_the_foreground` holds it.
+    ///
+    /// Toward the CENTER rather than toward the block's own middle.
+    /// `follow_camera` keeps the camera's target within one cell of the
+    /// center, so the center is what the eye is on; under the tilted camera
+    /// that reaches this cap at all, the block's own middle is way out in the
+    /// sub-pixel far field.
     ///
     /// Only [`ViewConfig::scrolled`] can reach a block this large, and only
     /// from a camera the picture is already degenerate under — see
@@ -117,16 +124,34 @@ impl DrawnWindow {
         // is. The sevens axis is left alone: it is a setting rather than a
         // consequence of the camera, and it is at most nine sheets.
         let shrink = (MAX_DRAWN_NODES as f32 / count as f32).sqrt();
-        let pull = |bound: i32, c: i32| c + ((bound - c) as f32 * shrink) as i32;
-        self.min.threes = pull(self.min.threes, center.threes);
-        self.max.threes = pull(self.max.threes, center.threes);
-        self.min.fives = pull(self.min.fives, center.fives);
-        self.max.fives = pull(self.max.fives, center.fives);
-        // The step above lands within a node or two of the cap rather than
-        // exactly on it (each axis carries a `+1` that does not scale), so the
-        // cap is finished by hand — a step at a time off the longer axis, from
-        // whichever of its ends is farther from the center, which is the end
-        // with less on it worth seeing.
+        // Spent as a RADIUS about the center that the block is clipped into,
+        // rather than as a scale on each bound: an end already inside the
+        // radius is left alone, so a lopsided block loses its far side and
+        // keeps its near one. On the symmetric block cabinet and orthographic
+        // build, where both ends are the same distance out, the two are the
+        // same arithmetic — which is why their figures did not move.
+        //
+        // It is also the closed form of the loop below: take a step off
+        // whichever end is farther from the center, over and over, and what
+        // you are left with is the block inside a radius.
+        let clip = |lo: &mut i32, hi: &mut i32, c: i32| {
+            let far = (*hi - c).max(c - *lo).max(0);
+            let radius = (far as f32 * shrink) as i32;
+            // Neither end is ever clipped PAST the other. A camera tilted to
+            // the limit puts the whole visible block to one side of the center
+            // (`threes 19..31` at the pitch limit), and clipping its near end
+            // across its far one would leave a window with nothing in it.
+            let near = (*lo).max(c - radius).min(*hi);
+            *hi = (*hi).min(c + radius).max(near);
+            *lo = near;
+        };
+        clip(&mut self.min.threes, &mut self.max.threes, center.threes);
+        clip(&mut self.min.fives, &mut self.max.fives, center.fives);
+        // The step above lands near the cap rather than exactly on it (each
+        // axis carries a `+1` that does not scale, and a lopsided axis keeps
+        // its near side whole), so the cap is finished by hand — a step at a
+        // time off the longer axis, from whichever of its ends is farther from
+        // the center, which is the end with less on it worth seeing.
         while self.count() > MAX_DRAWN_NODES {
             let (lo, hi, c) = if self.span(|p| p.fives) >= self.span(|p| p.threes) {
                 (&mut self.min.fives, &mut self.max.fives, center.fives)
@@ -830,8 +855,28 @@ impl ViewConfig {
         // `lattice_to_world` puts the sevens axis on z, and the window's
         // center sheet is drawn at the origin.
         let depth = sevens as f32 * spacing;
-        let Some((min, max)) = camera.visible_world_bounds(aspect, -depth, depth) else {
+        let Some(sheet) = camera.visible_world_bounds(aspect, -depth, depth) else {
             return self.reach();
+        };
+        // Where the pane shows the sheets all the way to the horizon there is
+        // no far edge to take, and the rectangle's own is a corner's line
+        // extrapolated BACKWARDS through the eye — so its two sides are not
+        // the two sides of anything. Read as edges they say the picture starts
+        // a step or two from the center, which is the foreground missing: at
+        // 52° of pitch the rectangle runs from -3.4 to 557 while the pane is
+        // showing nodes twelve steps the other way.
+        //
+        // Mirrored about the center instead, which has no near side to lose,
+        // and the node budget rations what is left. That is the answer
+        // [`MAX_DRAWN_NODES`] exists to give — there is no window that would
+        // be right here — and it costs the lopsided window nothing, because
+        // the tilts it wins at are all bounded (cabinet always, the other two
+        // out past 45°).
+        let (min, max) = if sheet.bounded {
+            (sheet.min, sheet.max)
+        } else {
+            let mirror = sheet.min.abs().max(sheet.max.abs());
+            (-mirror, mirror)
         };
 
         // Margin enough that a node arrives whole and off-pane rather than

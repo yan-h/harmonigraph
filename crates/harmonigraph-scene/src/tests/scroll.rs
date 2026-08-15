@@ -299,22 +299,31 @@ fn the_window_is_not_much_wider_than_the_pane() {
 /// Stated as the ratio against the mirrored window rather than as a node
 /// count, because the count is the camera's business and the doubling is this
 /// function's.
+///
+/// Held over the tilts where the pane's view of the sheet is BOUNDED, which is
+/// where a lopsided window is a thing that exists. Past about 45° a corner of
+/// the viewport clears the horizon and what the pane shows has no far edge at
+/// all — see [`Camera::visible_world_bounds`] — and there `scrolled` mirrors
+/// on purpose, which the second half of this pins.
 #[test]
 fn a_tilted_window_does_not_mirror_its_far_side() {
     let view = ViewConfig::default();
     let center = view.center();
-    let mut worst: f64 = 1.0;
-    for pitch_deg in [20.0f32, 40.0, 60.0] {
+    // What `center ± extent` would have forced: each axis taken to its
+    // farther end and mirrored.
+    let mirror = |lo: i32, hi: i32, c: i32| 2 * (c - lo).max(hi - c) + 1;
+    let tilted = |pitch_deg: f32| {
         let camera = Camera {
             projection: Projection::Perspective,
             pitch: pitch_deg.to_radians(),
             distance: Camera::MAX_DISTANCE,
             ..Camera::default()
         };
-        let drawn = view.scrolled(&camera, 16.0 / 9.0);
-        // What `center ± extent` would have forced: each axis taken to its
-        // farther end and mirrored.
-        let mirror = |lo: i32, hi: i32, c: i32| 2 * (c - lo).max(hi - c) + 1;
+        view.scrolled(&camera, 16.0 / 9.0)
+    };
+    let mut worst: f64 = 1.0;
+    for pitch_deg in [20.0f32, 40.0] {
+        let drawn = tilted(pitch_deg);
         let mirrored = mirror(drawn.min.threes, drawn.max.threes, center.threes) as f64
             * mirror(drawn.min.fives, drawn.max.fives, center.fives) as f64;
         let ratio = mirrored / drawn.count() as f64;
@@ -327,6 +336,79 @@ fn a_tilted_window_does_not_mirror_its_far_side() {
         worst = worst.max(ratio);
     }
     assert!(worst > 2.5, "the worst mirroring saved is only {worst:.2}x");
+
+    // Past the horizon the mirror is the ANSWER rather than the bug: there is
+    // no far edge to track, and a window that took the rectangle's two sides
+    // for edges would start a step from the center with the foreground gone.
+    let over = tilted(60.0);
+    assert_eq!(
+        (over.max.threes - center.threes, over.max.fives - center.fives),
+        (center.threes - over.min.threes, center.fives - over.min.fives),
+        "a view with no far edge was still drawn as if it had one: {:?}..{:?}",
+        over.min,
+        over.max,
+    );
+}
+
+/// What the node budget trims is the HORIZON, never the foreground.
+///
+/// The sibling above holds that a tilted window is lopsided; this holds that
+/// the cap keeps it that way. A lopsided block has a step or two of near sheet
+/// on one side and hundreds of sub-pixel far field on the other, so a trim
+/// that scales both bounds by one factor takes the same FRACTION off each —
+/// which off a near edge already beside the center is the whole of it. The
+/// picture that draws is a bald wedge across the lower half of the pane with
+/// the lattice running on to the horizon above it: at 52° on a 16:9 pane the
+/// window came out `threes -1..161`, so every node below the center was gone
+/// while 161 steps of far field survived.
+///
+/// Swept over the tilt, which is the axis the rest of this file pins at
+/// `Camera::default`'s 0.3 — and 0.3 is flat enough that no perspective camera
+/// there reaches the cap at all, so the trim these tests exercise is the one
+/// that never runs.
+#[test]
+fn the_budget_trims_the_horizon_not_the_foreground() {
+    // Near enough the center to be the picture rather than the far field: at
+    // the zoom limit the pane is about twenty steps tall all told.
+    const FOREGROUND: i32 = 12;
+    for sevens in [0, 2, 4] {
+        let view = ViewConfig { extent_sevens: sevens, ..ViewConfig::default() };
+        let center = view.center();
+        for pitch in [0.6f32, 0.75, 0.9] {
+            for distance in [Camera::DEFAULT_DISTANCE, Camera::MAX_DISTANCE] {
+                for aspect in ASPECTS {
+                    let camera = Camera {
+                        projection: Projection::Perspective,
+                        pitch,
+                        distance,
+                        ..Camera::default()
+                    };
+                    let drawn = view.scrolled(&camera, aspect);
+                    for pos in coords::positions_within(
+                        center.threes - FOREGROUND..=center.threes + FOREGROUND,
+                        center.fives - FOREGROUND..=center.fives + FOREGROUND,
+                        center.sevens..=center.sevens,
+                    ) {
+                        let Some(p) = ndc(&camera, &view, aspect, pos) else {
+                            continue;
+                        };
+                        if p.x.abs() > 1.0 || p.y.abs() > 1.0 {
+                            continue;
+                        }
+                        assert!(
+                            drawn.contains(pos),
+                            "{sevens} sheets, pitch {pitch}, distance {distance}, aspect \
+                             {aspect}: {pos:?} lands on the pane at {p:?} and the budget \
+                             trimmed it away ({:?}..{:?}, {} nodes)",
+                            drawn.min,
+                            drawn.max,
+                            drawn.count(),
+                        );
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Scrolling does not run out of lattice: pan a long way and the pane is still

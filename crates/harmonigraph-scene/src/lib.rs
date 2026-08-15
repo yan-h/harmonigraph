@@ -32,7 +32,7 @@ pub mod style;
 pub mod trail;
 pub mod view;
 
-pub use camera::{Camera, Projection, Projector};
+pub use camera::{Camera, Projection, Projector, VisibleSheet};
 pub use color::{gradient_color, hue_circle, pitch_lut_color, pitch_ramp_lut, HUE_CIRCLE_N};
 pub use derive::derive_scene;
 pub use octaves::{
@@ -67,11 +67,19 @@ const NODE_RADIUS_FACTOR: f32 = 0.25;
 /// Which is worth being exact about, because it is the whole reason this
 /// exists. Tilt a camera toward the sheet's own plane and the sheet goes
 /// edge-on: the far half of an unbounded plane is genuinely on screen, in a
-/// band a few pixels tall. At the pitch limit on a 16:9 pane with the sheets
-/// on, orthographic asks for 261837 nodes that way and perspective for
-/// 604989; swept over the whole camera space a flat perspective window runs to
-/// 26 million at 16:9 and past three billion at 2.4:1. There is nothing to
+/// band a few pixels tall. At the pitch limit, fully zoomed out, on a 16:9
+/// pane with the sheets on, orthographic asks for 261837 nodes that way and
+/// perspective for 1294821; swept over the whole camera space a flat
+/// perspective window saturates `view`'s `MAX_DRAWN_EXTENT` clamp on both
+/// sheet axes at every aspect, which is 67125249 nodes. There is nothing to
 /// draw there and no window that would be right.
+///
+/// Which is also why a pane whose view of the sheets runs off to the horizon
+/// is drawn about its CENTER rather than out to a far edge: past about 45° of
+/// pitch there is no such edge, and the rectangle
+/// [`Camera::visible_world_bounds`] hands back has one only because a corner's
+/// line was followed backwards through the eye to find it. `scrolled` mirrors
+/// that case and lets this cap ration it — see [`VisibleSheet::bounded`].
 ///
 /// Cabinet has no such camera — it faces the sheet by construction, whatever
 /// the orbit says — so its window is bounded at every setting, and this sits
@@ -89,7 +97,8 @@ const NODE_RADIUS_FACTOR: f32 = 0.25;
 /// under the mirrored one it replaced — measured equal at every aspect, depth
 /// and shear, because a cabinet camera's view of the sheet is symmetric about
 /// the origin to begin with. It is perspective that the bounds save, and they
-/// save it 2.7x at a middling tilt.
+/// save it 2.7x at a middling tilt — at the tilts where the pane's view of the
+/// sheets has a far edge at all, which is every one a lattice is read at.
 ///
 /// The cost it is holding: `derive_scene` with ten voices held takes 0.02ms
 /// over 273 nodes, 0.06ms over 875 (a 16:9 pane fully zoomed out, flat), and

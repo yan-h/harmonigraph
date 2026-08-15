@@ -58,6 +58,30 @@ pub struct Camera {
     pub cabinet_scale: f32,
 }
 
+/// What one pane shows of the sheets, as a world-space rectangle — and
+/// whether that rectangle is the whole of it.
+///
+/// `bounded` is the part worth reading. It is false where a corner of the
+/// viewport looks PAST the sheets: the corner's line meets their plane only
+/// behind the eye, so what the pane shows runs to the horizon and has no far
+/// edge at all. `min`/`max` are then one finite piece of an unbounded wedge
+/// rather than its bounds — the far side is an extrapolation of a line going
+/// the other way, and the NEAR side is a corner that happens to cross, which
+/// is nowhere near the nearest thing on screen. A caller that takes them for
+/// edges draws a window with the foreground cut off; see
+/// [`ViewConfig::scrolled`](crate::ViewConfig::scrolled) for what it does
+/// instead.
+///
+/// Bounded is the ordinary case and the one the rectangle is for: cabinet at
+/// every setting, and perspective and orthographic out to about 0.8 radians of
+/// pitch, which is past the tilt anyone reads a lattice at.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct VisibleSheet {
+    pub min: Vec2,
+    pub max: Vec2,
+    pub bounded: bool,
+}
+
 impl Default for Camera {
     fn default() -> Self {
         Camera {
@@ -275,11 +299,16 @@ impl Camera {
     /// a rounding error of a quarter turn.
     ///
     /// So this is not what handles the camera whose honest window is
-    /// unbounded; a steep perspective pitch returns a real and enormous
-    /// rectangle, and [`MAX_DRAWN_NODES`](crate::MAX_DRAWN_NODES) is what
-    /// bounds the work there. This one case is the degenerate matrix, and the
-    /// caller wants its own fallback for it.
-    pub fn visible_world_bounds(&self, aspect: f32, z_lo: f32, z_hi: f32) -> Option<(Vec2, Vec2)> {
+    /// unbounded — that is [`VisibleSheet::bounded`], and
+    /// [`MAX_DRAWN_NODES`](crate::MAX_DRAWN_NODES) is what bounds the work
+    /// there. This one case is the degenerate matrix, and the caller wants its
+    /// own fallback for it.
+    pub fn visible_world_bounds(
+        &self,
+        aspect: f32,
+        z_lo: f32,
+        z_hi: f32,
+    ) -> Option<VisibleSheet> {
         let inverse = self.view_proj(aspect).inverse();
         // A world point from a clip-space one, perspective divide included —
         // orthographic and cabinet both leave w at 1, so this is a no-op for
@@ -289,6 +318,7 @@ impl Camera {
             (world.w.abs() > 1e-6).then(|| world.truncate() / world.w)
         };
         let (mut min, mut max) = (Vec2::splat(f32::INFINITY), Vec2::splat(f32::NEG_INFINITY));
+        let mut bounded = true;
         for (nx, ny) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
             // wgpu clip depth runs 0 (near) to 1 (far); both constructors in
             // `view_proj` produce it, which is what lets these be literals.
@@ -302,12 +332,21 @@ impl Camera {
                 return None;
             }
             for z in [z_lo, z_hi] {
-                let crossing = (near + (far - near) * ((z - near.z) / span)).truncate();
+                let t = (z - near.z) / span;
+                // Where along the corner's line the sheet is. Outside 0..=1
+                // the line meets the sheet outside the drawn depth — behind
+                // the eye, or past the far plane — so the corner is looking
+                // PAST the sheets and the point below is an extrapolation
+                // rather than anything the pane shows. The extrapolation is
+                // still taken, because the three corners that do cross bound
+                // nothing on their own, but the caller is told.
+                bounded &= (0.0..=1.0).contains(&t);
+                let crossing = (near + (far - near) * t).truncate();
                 min = min.min(crossing);
                 max = max.max(crossing);
             }
         }
-        (min.is_finite() && max.is_finite()).then_some((min, max))
+        (min.is_finite() && max.is_finite()).then_some(VisibleSheet { min, max, bounded })
     }
 
     /// Camera-space right/up axes in world space, for billboarding.
