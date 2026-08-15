@@ -229,9 +229,9 @@ pub(crate) fn draw_spectrogram(
 
     // While the style is moving — a pitch wheel, a Level drag, a palette bar —
     // every frame restarts the ring, so the frame builds the COARSE image
-    // instead: rows down to a bounded magnification of the pane and stretched
-    // back over it, and wide rows reading a plain max (see
-    // [`gesture_rows`](crate::spectrogram::gesture_rows) and
+    // instead: wide rows reading a plain max rather than the power mean, at a
+    // row count [`gesture_rows`](crate::spectrogram::gesture_rows) is free to
+    // cut and does not at the magnification it currently carries (see
     // [`RowRead::Max`](crate::spectrogram::RowRead)). One build at full
     // quality sharpens it once the style has held still — a frame nothing
     // else schedules when no audio is flowing and the pointer has let go, so
@@ -249,8 +249,10 @@ pub(crate) fn draw_spectrogram(
             crate::spectrogram::STYLE_SETTLE,
         ));
         view.coarse = true;
-        // Against the rows the FULL plan settled on, so the bound is on the
-        // stretch a reader sees rather than on what the texture would take.
+        // Against the rows the FULL plan settled on, so a cut would bound the
+        // stretch a reader sees rather than what the texture would take. At
+        // the current magnification this re-clamps `plan.rows` to itself and
+        // is the knob a cut would come back through, not a live reduction.
         view.max_rows = crate::spectrogram::gesture_rows(plan.rows);
         plan = Plan::new(&view, &columns);
     }

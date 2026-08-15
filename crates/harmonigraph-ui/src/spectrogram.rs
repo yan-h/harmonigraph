@@ -82,14 +82,16 @@ fn quantized(pixels: f32) -> f32 {
     (pixels / PANE_QUANTUM).ceil() * PANE_QUANTUM
 }
 
-/// Rows the live image FLOORS at while its style is moving — a wheel or drag
-/// rewriting the pitch range, or the Level window on every frame of itself.
-/// Each of those frames restarts the ring, and a restart's compose is
-/// rows x slabs, so the rows are the SMALLER of the two things a gesture can
-/// trade away; the larger is the wide rows' read, which goes from the power
-/// mean to a plain max ([`RowRead::Max`]). At the [`GESTURE_MAGNIFY`] of one
-/// the read is the whole trade and this floor never binds — it is where a
-/// magnification above one stops cutting.
+/// Where a gesture's row cut stops — INERT at the [`GESTURE_MAGNIFY`] of one,
+/// which cuts nothing for it to stop.
+///
+/// A style moving — a wheel or drag rewriting the pitch range, or the Level
+/// window on every frame of itself — restarts the ring on every frame of
+/// itself, and a restart's compose is rows x slabs, so a gesture has two
+/// things it can trade away: the rows, and the wide rows' read, which goes
+/// from the power mean to a plain max ([`RowRead::Max`]). [`GESTURE_MAGNIFY`]
+/// decides how much of the first is spent, and at one the read is the whole
+/// trade; this is the height a magnification above one would stop cutting at.
 ///
 /// Four quanta of [`PANE_QUANTUM`] — the height under which a cut buys so
 /// little that a pane is left whole and takes only the coarse READ, which is
@@ -111,13 +113,25 @@ pub(crate) const GESTURE_ROWS: usize = 4 * PANE_QUANTUM as usize;
 /// ONE, so a gesture builds the pane's own rows and gives up only the read:
 /// the pitch axis stays as sharp under a drag as it is at rest, and what
 /// softens is the floor, which a max over a run reads a few dB above the power
-/// mean. The table it is set from: measured over a 1024-slab window on a
-/// 1408-row pane, a restart zoomed out COMPOSES in 16.0 ms at full rows and
-/// the settled read, 6.9 ms once the read alone goes coarse, 3.8 ms at half
-/// rows with it, and 1.7 ms at [`GESTURE_ROWS`]. The read swap is the 2.3x and
-/// 6.9 ms already fits a 60 Hz frame; every row cut past it buys a couple of
-/// milliseconds and spends the axis the gesture is judging to do it.
-/// `timing_parts` is that table.
+/// mean.
+///
+/// Set on the ZOOMED-OUT half of `timing_parts`, where a restart is dearest:
+/// measured over a 1024-slab window on a 1408-row pane, one COMPOSES in
+/// 16.0 ms at full rows and the settled read, 6.9 ms once the read alone goes
+/// coarse, 3.8 ms at half rows with it, and 1.7 ms at [`GESTURE_ROWS`]. The
+/// read swap is the 2.3x, 6.9 ms already fits a 60 Hz frame, and the row cut
+/// past it spends the axis the gesture is judging to buy the rest.
+///
+/// The same table's ZOOMED-IN rows invert that split, and a pitch zoom ends
+/// zoomed in, so it is the half to check before moving this. Out there the
+/// rows buy nothing because the runs jointly cover the spectrum whatever the
+/// row count, so the buckets hold the cost; in close each row is narrower than
+/// a bucket, the read is a [`RowRead::Lerp`] either way, and the compose is
+/// rows x slabs — so the read swap buys about 1.1x and the row cut it replaces
+/// bought about 2.3x, the opposite way round. Full rows still fit a 60 Hz
+/// frame at both scales; what a cut back to two would buy is margin in the
+/// zoomed-in half. Run `timing_parts` for both rather than reading the four
+/// figures above as the whole picture.
 ///
 /// It is a table of COMPOSE, and the upload is the term it does not carry:
 /// `timing_parts` ends at [`restart_pixels`], which returns the pixels rather
@@ -149,8 +163,10 @@ pub(crate) const STYLE_SETTLE: f64 = 0.2;
 /// whether a frame sits inside a style gesture and should build coarse.
 ///
 /// Fed the style of the FULL plan, never the degraded one: the degraded
-/// plan's rows differ from the full plan's by construction, so watching what
-/// was built would read as a style that never stops moving.
+/// plan's `coarse` differs from the full plan's by construction, so watching
+/// what was built would read as a style that never stops moving. Its ROWS
+/// would not — [`gesture_rows`] is the identity at the [`GESTURE_MAGNIFY`] of
+/// one — so the coarse flag is the whole of what makes this trap real.
 pub(crate) struct StyleMotion {
     style: ColumnStyle,
     changed_at: f64,
@@ -774,8 +790,9 @@ pub(crate) struct PaneView {
     /// The whole-song (offline playhead) layout rather than the live window.
     pub(crate) whole: bool,
     /// Build the COARSE image a moving style gets: wide rows read
-    /// [`RowRead::Max`], and the caller has already cut `max_rows` to
-    /// [`gesture_rows`]. See [`StyleMotion`].
+    /// [`RowRead::Max`], and the caller has passed `max_rows` through
+    /// [`gesture_rows`] — which cuts nothing at the [`GESTURE_MAGNIFY`] of
+    /// one, so this flag is the whole degradation. See [`StyleMotion`].
     pub(crate) coarse: bool,
 }
 
@@ -870,9 +887,9 @@ impl Plan {
 /// cleanly to its edges.
 ///
 /// `coarse` swaps the wide rows' power mean for a plain [`RowRead::Max`] —
-/// the LARGER half of what a moving style trades away, beside the row cut
-/// ([`gesture_rows`]), and the half that matters zoomed out, where the mean's
-/// cost is in the buckets rather than the rows. It must match the
+/// the whole of what a moving style trades away at the [`GESTURE_MAGNIFY`] of
+/// one, and what it buys is zoomed out, where the mean's cost is in the
+/// buckets rather than the rows. It must match the
 /// [`Plan`] the image is built for: the two reads draw different pictures, so
 /// the flag lives in [`ColumnStyle`] and a coarse-painted column can never be
 /// carried into a settled frame.
@@ -2948,14 +2965,24 @@ mod tests {
     /// so every pane builds its own rows whatever a flat cap would leave it,
     /// and one already under the floor is not oversampled to reach it.
     ///
-    /// The bound is asserted UNCONDITIONALLY, which is the whole of what this
-    /// test is for. Written as `stretch <= GESTURE_MAGNIFY || rows >=
-    /// GESTURE_ROWS` it passes against a flat cap as well, since the floor
-    /// satisfies the right-hand side at every pane such a cap bites on — so
-    /// the sweep would say nothing and the worked examples below it would be
-    /// carrying the property alone.
+    /// The bound is asserted UNCONDITIONALLY, so that it keeps its teeth at a
+    /// magnification that cuts. At one it does NOT have them: `rows == pane`
+    /// makes both the stretch and the floor assertions tautologies, and
+    /// `.max(GESTURE_ROWS)` inside [`gesture_rows`] is extensionally a no-op
+    /// for every `usize` — at or above the floor the max does nothing, below it
+    /// the `.min(rows)` undoes it — so no test can pin [`GESTURE_ROWS`]'s value
+    /// while the magnification is one. The pin below is on the MAGNIFICATION
+    /// instead: raise it and this test fails, which is the prompt to restore
+    /// the arithmetic here and in the doc comments that quote it.
     #[test]
     fn a_gesture_image_is_never_more_than_a_bounded_stretch() {
+        // What the sweep below can and cannot say, made loud rather than left
+        // for a reader to derive from a green run.
+        assert_eq!(
+            GESTURE_MAGNIFY, 1,
+            "the magnification moved: the assertions below went from tautology \
+             to real, and GESTURE_ROWS is pinnable again — rewrite both",
+        );
         // Even, as `Plan::new` guarantees: a live pane is a multiple of
         // `PANE_QUANTUM` and the clamp's floor is 2, so whatever cut the bound
         // allows is exact and holds with no rounding slack to hide in.
@@ -3092,15 +3119,19 @@ mod tests {
 
     /// The two-step plan a gesture frame is built through, which
     /// `draw_spectrogram` runs and no other test reaches: the FULL plan
-    /// decides the rows, [`gesture_rows`] cuts them, and the second plan
-    /// builds the short image.
+    /// decides the rows, [`gesture_rows`] is free to cut them, and the second
+    /// plan builds the degraded image.
     ///
     /// It has to land on the same rows on every frame of the gesture. The cut
     /// is taken against the full plan each frame precisely so that it cannot
-    /// compound — fed its own previous answer it walks 704 -> 352 -> 256 down
-    /// to the floor over the frames of one drag, softening the picture the
-    /// longer the drag runs and restarting the ring on every frame of the way
-    /// down, which is the cost the gesture path exists to avoid.
+    /// compound — fed its own previous answer a magnification above one walks
+    /// the rows down toward the floor over the frames of one drag, softening
+    /// the picture the longer the drag runs and restarting the ring on every
+    /// frame of the way down, which is the cost the gesture path exists to
+    /// avoid. At the [`GESTURE_MAGNIFY`] of one the cut is the identity and so
+    /// idempotent for free, which is why the rows assertions below are weak
+    /// and the `coarse` one carries the test: that flag is the whole of what a
+    /// gesture trades now, so reaching the plan is the property worth pinning.
     #[test]
     fn every_frame_of_a_gesture_plans_the_same_short_image() {
         let columns = Columns { first: 3, len: 4000, newest: 12.0 };
@@ -3135,6 +3166,15 @@ mod tests {
                     full.rows,
                 );
                 assert!(short.rows >= full.rows.min(GESTURE_ROWS), "under the floor");
+                // The degradation itself reached the second plan. Without it
+                // the two styles would be equal, the ring would carry a
+                // settled texture straight through a gesture frame, and every
+                // rows assertion above would still pass.
+                assert_eq!(
+                    full.key.style().differs(short.key.style()),
+                    Some(Restart::Rows),
+                    "{pitch_len} pt: the coarse read did not reach the plan",
+                );
                 planned.insert((full.rows, short.rows));
             }
             assert_eq!(
@@ -3336,9 +3376,12 @@ mod tests {
         styled(style(101, 0.1, 40.0, 48.0, &cfg)); // rows
         // The coarse read: a gesture image's wide rows are a max, not the
         // mean, so its floor sits high — the settle must repaint, not carry.
-        // On a pane short enough that the gesture never caps its rows, this
-        // flag is the ONLY field the settle moves, so it is additionally
-        // pinned to the reason `differs` files it under.
+        // At the `GESTURE_MAGNIFY` of one this flag is the ONLY field the
+        // settle moves, on EVERY pane rather than just a short one, so the
+        // clause reading it in `differs` is the sole thing standing between a
+        // max-painted floor and a settled frame. Additionally pinned to the
+        // reason `differs` files it under, so that clause cannot be pruned as
+        // a duplicate of the rows check beside it.
         let coarse = ColumnStyle::new(100, true, 0.1, 40.0, 48.0, &cfg);
         assert_eq!(base_style().differs(&coarse), Some(Restart::Rows));
         styled(coarse);
