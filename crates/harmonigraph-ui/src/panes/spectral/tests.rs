@@ -496,6 +496,244 @@ fn drag_divider(
     drag_pane(rect, cfg, 1.0 - roll_fraction, delta).roll_fraction
 }
 
+/// A pane `depth` points along its depth axis, whichever screen axis the
+/// orientation puts that on. The other side is fixed: the hold reads one axis
+/// and a test that varied both could not say which it read.
+fn pane_of(orientation: SpectralOrientation, depth: f32) -> egui::Vec2 {
+    if orientation.is_time_vertical() {
+        egui::vec2(200.0, depth)
+    } else {
+        egui::vec2(depth, 200.0)
+    }
+}
+
+/// The two regions in POINTS as the DOCKED pane draws them on a pane with
+/// `depth` points of depth axis — the spectrum, then the spectrogram and
+/// roll's share.
+///
+/// Read through `spectrum_split`, which is what every layer of the pane takes
+/// its boundary from. Reading `roll_fraction` instead would be asking the dial
+/// what the hold answered, and the whole point of the hold is that those two
+/// differ once the pane has been resized.
+fn regions(state: &SharedState, depth: f32) -> (f32, f32) {
+    let split = spectrum_split(state, DOCKED);
+    (split * depth, (1.0 - split) * depth)
+}
+
+/// The surface the hold is kept for — the docked Analyzer pane. Slot 1 is the
+/// Video tab's preview, which composes from the dial alone.
+const DOCKED: usize = 0;
+
+/// A state whose divider has been dialled to the fresh split on a pane
+/// `depth` points deep — the hold's starting point, and the picture every
+/// resize below is measured against.
+fn dialled_at(orientation: SpectralOrientation, depth: f32) -> SharedState {
+    let mut state = fresh();
+    state.spectrum_config.orientation = orientation;
+    hold_spectrum(&mut state, pane_of(orientation, depth));
+    state
+}
+
+/// Resizing the pane leaves the spectrum the size it was dialled at and
+/// gives the spectrogram every point the pane gained — the whole of what
+/// the hold is for.
+///
+/// Every orientation, because which screen axis the depth runs along is the
+/// orientation's to say and a hold that read the other one would keep the
+/// analyzer's size against a resize that never touched it.
+///
+/// Three sizes in sequence rather than one, and they are cumulative on
+/// purpose: the hold writes the config it reads, so a version that took its
+/// own answer for a new dial would drift a little further at every step and
+/// pass a single-resize test.
+#[test]
+fn the_spectrum_keeps_its_size_as_the_pane_grows() {
+    for orientation in EVERY_ORIENTATION {
+        let mut state = dialled_at(orientation, 400.0);
+        let (dialled, _) = regions(&state, 400.0);
+        for depth in [500.0, 800.0, 1600.0] {
+            hold_spectrum(&mut state, pane_of(orientation, depth));
+            let (spectrum, far) = regions(&state, depth);
+            assert!(
+                (spectrum - dialled).abs() < 0.5,
+                "{orientation:?} at {depth}: the spectrum went {dialled} -> {spectrum}",
+            );
+            assert!(
+                (far - (depth - dialled)).abs() < 0.5,
+                "{orientation:?} at {depth}: the far region got {far}, not the whole rest",
+            );
+        }
+    }
+}
+
+/// Shrinking, the same until the far region is down to its floor: the
+/// spectrogram gives way first, and only what it has to.
+#[test]
+fn the_spectrogram_gives_way_down_to_its_floor_and_then_the_spectrum_yields() {
+    let mut state = dialled_at(SpectralOrientation::Left, 400.0);
+    let (dialled, _) = regions(&state, 400.0);
+    // Every point of the squeeze comes off the spectrogram while it has one
+    // to give — 244 points is where the far region reaches its floor with the
+    // spectrum still whole.
+    for depth in [380.0, 300.0, dialled + FAR_REGION_FLOOR_PT] {
+        hold_spectrum(&mut state, pane_of(SpectralOrientation::Left, depth));
+        let (spectrum, far) = regions(&state, depth);
+        assert!((spectrum - dialled).abs() < 0.5, "at {depth}: the spectrum shrank to {spectrum}");
+        assert!(far >= FAR_REGION_FLOOR_PT - 0.5, "at {depth}: the far region is down to {far}");
+    }
+    // Past that the promise is the far region's floor instead, and the
+    // spectrum is what shrinks.
+    for depth in [200.0, 160.0, 120.0] {
+        hold_spectrum(&mut state, pane_of(SpectralOrientation::Left, depth));
+        let (spectrum, far) = regions(&state, depth);
+        assert!(
+            (far - FAR_REGION_FLOOR_PT).abs() < 0.5,
+            "at {depth}: the far region should be held at its floor, got {far}",
+        );
+        assert!(spectrum < dialled, "at {depth}: the spectrum should have yielded, got {spectrum}");
+    }
+    // And squeezed past even that, the split is simply the proportion it was
+    // dialled at — which is what a pane with no hold on it draws at any size.
+    let share = spectrum_share(&dialled_at(SpectralOrientation::Left, 400.0).spectrum_config);
+    for depth in [100.0, 60.0, 20.0] {
+        hold_spectrum(&mut state, pane_of(SpectralOrientation::Left, depth));
+        let (spectrum, _) = regions(&state, depth);
+        assert!(
+            (spectrum / depth - share).abs() < 1e-3,
+            "at {depth}: {spectrum} of {depth} is not the dialled {share} share",
+        );
+    }
+}
+
+/// A pane squeezed past what the hold can keep and opened out again comes
+/// back to the picture it was dialled at, rather than to whatever the squeeze
+/// left it holding.
+///
+/// This is what the hold remembers a DIAL for rather than tracking the last
+/// size it settled: the two are the same everywhere the clamps don't bite,
+/// and where they do, tracking the last size makes every squeeze permanent.
+///
+/// So the squeeze has to go through a depth where a clamp actually MOVES the
+/// split, or the test proves nothing about which of the two is remembered. 200
+/// points is that depth — the far region is at its floor there and the spectrum
+/// has yielded to 136 of the 180 it was dialled at — where the proportional
+/// band under it leaves the split exactly where it started and would pass
+/// against either.
+#[test]
+fn a_pane_squeezed_and_opened_again_comes_back_to_its_picture() {
+    let mut state = dialled_at(SpectralOrientation::Left, 400.0);
+    let dialled = state.spectrum_config.roll_fraction;
+    let (spectrum, _) = regions(&state, 400.0);
+    let squeezed = {
+        hold_spectrum(&mut state, pane_of(SpectralOrientation::Left, 200.0));
+        regions(&state, 200.0)
+    };
+    assert!(
+        (squeezed.0 - spectrum).abs() > 20.0,
+        "a squeeze that leaves the spectrum at {} of {spectrum} points tests nothing",
+        squeezed.0,
+    );
+    for depth in [90.0, 40.0, 200.0] {
+        hold_spectrum(&mut state, pane_of(SpectralOrientation::Left, depth));
+    }
+    hold_spectrum(&mut state, pane_of(SpectralOrientation::Left, 400.0));
+    let (back, _) = regions(&state, 400.0);
+    let split = state.spectrum_config.roll_fraction;
+    assert!(
+        (back - spectrum).abs() < 0.5 && (split - dialled).abs() < 1e-3,
+        "the split came back at {split} holding {back} points, not {dialled} holding {spectrum}",
+    );
+}
+
+/// The divider dialled at the size the pane is NOW is the size that is kept
+/// from then on — the hold follows the last dial, wherever it was made.
+///
+/// Written straight into the config, which is exactly what `drag_split` does
+/// with the pointer: what the hold has to notice is a fraction that moved
+/// under it, not a gesture.
+#[test]
+fn a_divider_dialled_at_the_new_size_is_the_size_that_is_kept() {
+    let mut state = dialled_at(SpectralOrientation::Left, 400.0);
+    hold_spectrum(&mut state, pane_of(SpectralOrientation::Left, 800.0));
+    state.spectrum_config.roll_fraction = 0.5;
+    let (dialled, _) = regions(&state, 800.0);
+    // The frame the dial lands on keeps it exactly: a dial is already the
+    // answer for the pane it was made on.
+    hold_spectrum(&mut state, pane_of(SpectralOrientation::Left, 800.0));
+    assert_eq!(state.spectrum_config.roll_fraction, 0.5, "the dial itself was overwritten");
+    hold_spectrum(&mut state, pane_of(SpectralOrientation::Left, 1600.0));
+    let (spectrum, _) = regions(&state, 1600.0);
+    assert!(
+        (spectrum - dialled).abs() < 0.5,
+        "the hold kept {spectrum} points, not the {dialled} just dialled",
+    );
+}
+
+/// A resize ACROSS the pitch axis is not a resize of anything the split
+/// divides, so the split does not move. The pane is a picture that gets wider
+/// or narrower; where the analyzer hands over to the spectrogram is the other
+/// axis entirely.
+#[test]
+fn resizing_across_the_pitch_axis_leaves_the_split_alone() {
+    for orientation in EVERY_ORIENTATION {
+        let mut state = dialled_at(orientation, 400.0);
+        let before = state.spectrum_config.roll_fraction;
+        for pitch in [50.0, 900.0] {
+            let pane = if orientation.is_time_vertical() {
+                egui::vec2(pitch, 400.0)
+            } else {
+                egui::vec2(400.0, pitch)
+            };
+            hold_spectrum(&mut state, pane);
+            assert_eq!(
+                state.spectrum_config.roll_fraction, before,
+                "{orientation:?}: a {pitch}-point pitch axis moved the split",
+            );
+        }
+    }
+}
+
+/// With no far region there is no divider to hold and nothing to write —
+/// and the dial is not forgotten while the spectrogram is off, so turning it
+/// back on returns the picture it was turned off at rather than whatever the
+/// pane has been resized to since.
+#[test]
+fn a_pane_with_no_far_region_holds_nothing_and_forgets_nothing() {
+    let mut state = dialled_at(SpectralOrientation::Left, 400.0);
+    let (dialled, _) = regions(&state, 400.0);
+    let split = state.spectrum_config.roll_fraction;
+    state.spectrum_config.show_roll = false;
+    state.spectrum_config.show_spectrogram = false;
+    for depth in [800.0, 1600.0] {
+        hold_spectrum(&mut state, pane_of(SpectralOrientation::Left, depth));
+        assert_eq!(
+            state.spectrum_config.roll_fraction, split,
+            "the split moved on a pane that has no divider on it",
+        );
+    }
+    state.spectrum_config.show_spectrogram = true;
+    hold_spectrum(&mut state, pane_of(SpectralOrientation::Left, 1600.0));
+    let (spectrum, _) = regions(&state, 1600.0);
+    assert!(
+        (spectrum - dialled).abs() < 0.5,
+        "the spectrogram came back to {spectrum} points of spectrum, not the {dialled} held",
+    );
+}
+
+/// A pane with no depth yet — the first frame of a dock, or a leaf folded to
+/// its tab bar — writes nothing. The alternative is a division by zero in a
+/// setting that persists.
+#[test]
+fn a_pane_with_no_depth_writes_nothing() {
+    let mut state = dialled_at(SpectralOrientation::Left, 400.0);
+    let split = state.spectrum_config.roll_fraction;
+    for depth in [0.0, -10.0, f32::NAN] {
+        hold_spectrum(&mut state, pane_of(SpectralOrientation::Left, depth));
+        let after = state.spectrum_config.roll_fraction;
+        assert_eq!(after, split, "a {depth}-point pane moved the split");
+    }
+}
+
 /// The pane whose depth axis is its LONG side, for the orientation given —
 /// which is the one a depth gesture has room to run along.
 fn along_depth(orientation: SpectralOrientation) -> egui::Rect {
@@ -2334,6 +2572,94 @@ fn roll_axes_match_what_axes_derives_for_the_same_orientation() {
             [a.dir_depth().x, a.dir_depth().y],
             roll.depth_dir,
             "{orientation:?}: Axes::dir_depth disagrees with roll.rs's RollAxes::depth_dir",
+        );
+    }
+}
+
+/// A divider dragged shut STAYS shut when the pane is resized. Shutting the
+/// far region is a state to sit in — the pane keeps the handle grabbable at the
+/// edge precisely so it is not one-way — and a hold that kept the spectrum's
+/// points against it would re-open a region that was closed on purpose, on
+/// nothing but a window drag.
+///
+/// The other end is not symmetric and needs no guard: a spectrum dragged shut
+/// has no length to keep, so every size draws it shut.
+#[test]
+fn a_divider_dragged_shut_stays_shut_through_a_resize() {
+    for (shut, name) in [(0.0, "the far region"), (1.0, "the spectrum")] {
+        let mut state = fresh();
+        state.spectrum_config.roll_fraction = shut;
+        let split_at = |state: &mut SharedState, depth| {
+            hold_spectrum(state, pane_of(SpectralOrientation::Left, depth));
+            spectrum_split(state, DOCKED)
+        };
+        let before = split_at(&mut state, 275.0);
+        for depth in [385.0, 1000.0, 120.0] {
+            let after = split_at(&mut state, depth);
+            assert_eq!(after, before, "{name} shut re-opened at {depth} points");
+        }
+    }
+}
+
+/// Turning the pane over re-dials rather than spending a length measured down
+/// the pane on the way across it.
+///
+/// The Now-line control says which side the spectrum sits on and nothing about
+/// how much of the pane it gets, so a flip that also resized the spectrum would
+/// be a second setting hidden in the first — and on the analyzer's own column,
+/// 207 points across against 676 down, "the same points" on the other axis is
+/// the spectrum going from just under half the pane to an eighth of it.
+#[test]
+fn turning_the_pane_over_re_dials_rather_than_carrying_points_across() {
+    // The default dock's analyzer column, 207 across by 676 down.
+    let column = egui::vec2(207.0, 676.0);
+    let mut state = fresh();
+    state.spectrum_config.orientation = SpectralOrientation::Left;
+    hold_spectrum(&mut state, column);
+    let dialled = spectrum_share(&state.spectrum_config);
+    for orientation in EVERY_ORIENTATION {
+        state.spectrum_config.orientation = orientation;
+        hold_spectrum(&mut state, column);
+        let split = spectrum_split(&state, DOCKED);
+        // Near rather than equal: a pane held at the size it was dialled on
+        // still runs the dialled share through points and back, which is a
+        // last-bit round trip. It is the same value every frame — nothing
+        // accumulates — and a whole ulp here is a thousandth of a point of
+        // divider on the widest pane the analyzer draws on.
+        assert!(
+            (split - dialled).abs() < 1e-4,
+            "{orientation:?}: turning the pane over moved the split to {split}, not {dialled}",
+        );
+    }
+}
+
+/// The hold never writes the DIAL — which is the field a take carries into a
+/// render (`save_persist`) and the Video tab's preview composes from.
+///
+/// So the editor window's size cannot reach a video. Written through, dragging
+/// the plugin wider would restyle every render made afterwards, with the
+/// preview shifting under the composition it is there to settle; the analyzer's
+/// own pane holds its picture, and the export keeps the one that was dialled.
+#[test]
+fn resizing_the_editors_pane_leaves_the_exported_split_alone() {
+    for orientation in EVERY_ORIENTATION {
+        let mut state = dialled_at(orientation, 207.0);
+        let dialled = state.spectrum_config.roll_fraction;
+        // Enlarged, squeezed, and squeezed past what the hold can keep.
+        for depth in [373.0, 800.0, 150.0, 40.0] {
+            hold_spectrum(&mut state, pane_of(orientation, depth));
+            assert_eq!(
+                state.spectrum_config.roll_fraction, dialled,
+                "{orientation:?}: a {depth}-point editor pane moved the exported split",
+            );
+        }
+        // And the preview draws that dial, not the docked pane's hold: slot 1
+        // is the Video tab's copy, whose size is its own layout's business.
+        let preview = spectrum_split(&state, 1);
+        assert_eq!(
+            preview,
+            spectrum_share(&state.spectrum_config),
+            "{orientation:?}: the Video preview followed the editor's hold",
         );
     }
 }

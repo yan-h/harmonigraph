@@ -268,3 +268,68 @@ fn the_divider_still_wins_the_drag_over_the_pane_behind_it() {
     // them leaves the other as a way through.
     assert_eq!(after.ceiling_db, before.ceiling_db, "nor zoom the Level, on the other side");
 }
+
+/// The analyzer's PANE resizing resizes its spectrogram and leaves the
+/// spectrum the size it was — the same claim the pane's own suite makes about
+/// `hold_spectrum`, made here through the real dock, where the resize arrives
+/// as a window that changed rather than as a number handed to the hold.
+///
+/// Which is the layer that could go wrong on its own: the hold is applied at
+/// the dock's tab dispatch, from the size the tab body is about to hand the
+/// pane, and nothing in the pane would notice if that size were a frame stale
+/// or the body's rather than the picture's.
+///
+/// So the spectrum is measured off the DRAWN divider — egui's own rect for the
+/// handle, which the pane registers at whatever depth it composed the frame at
+/// — rather than off `roll_fraction`, which the hold deliberately leaves to
+/// the dial. That is the only reading here that could tell a pane drawing its
+/// hold from a pane drawing the dial.
+#[test]
+fn resizing_the_analyzer_resizes_the_spectrogram_and_not_the_spectrum() {
+    let mut state = fresh();
+    let mut h = DockHarness::new();
+    h.settle(&mut state);
+    // Left is the default orientation, so the analyzer's depth axis — the one
+    // the divider cuts — runs along the column's WIDTH, which is what a wider
+    // window gives it more of.
+    let pane = |state: &crate::SharedState| {
+        crate::pane_body(state, &crate::panes::Tab::Spectral)
+            .expect("the Spectral pane should be visible in the default dock")
+    };
+    let handle = egui::Id::new(("spectral-split", 0usize));
+    // The spectrum's drawn length: its outer edge is the pane's left in this
+    // orientation, and the divider's band is centred on the boundary.
+    let spectrum = |h: &DockHarness, state: &crate::SharedState| {
+        let band = h.ctx.read_response(handle).expect("the split handle never registered").rect;
+        band.center().x - pane(state).left()
+    };
+    let (was, dialled) = (pane(&state).width(), spectrum(&h, &state));
+
+    h.screen.max.x += 400.0;
+    h.settle(&mut state);
+    let (now, kept) = (pane(&state).width(), spectrum(&h, &state));
+    assert!(now > was + 20.0, "the analyzer's pane should have grown ({was} -> {now})");
+    assert!((kept - dialled).abs() < 1.0, "the spectrum went {dialled} -> {kept}");
+    // The spectrogram is where the growth went, all of it.
+    let far = now - kept;
+    assert!(
+        (far - (was - dialled) - (now - was)).abs() < 1.0,
+        "the spectrogram got {far} of a pane that gained {}", now - was,
+    );
+    // And the dial the render composes from never moved.
+    assert_eq!(
+        state.spectrum_config.roll_fraction,
+        crate::SpectrumConfig::default().roll_fraction,
+        "resizing the editor moved the split a take would export with",
+    );
+
+    // Back: a window returned to its size returns the picture to its own.
+    h.screen.max.x -= 400.0;
+    h.settle(&mut state);
+    assert!(
+        (pane(&state).width() - was).abs() < 0.5 && (spectrum(&h, &state) - dialled).abs() < 1.0,
+        "back at {} points the spectrum is {}, not the {dialled} it started at",
+        pane(&state).width(),
+        spectrum(&h, &state),
+    );
+}

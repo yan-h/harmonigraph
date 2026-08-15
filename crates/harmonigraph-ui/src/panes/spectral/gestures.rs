@@ -1,9 +1,18 @@
 //! Dragging the Spectral pane: the divider between the spectrum and the
-//! roll, and the pans and zooms that move the two axes.
+//! roll, the pans and zooms that move the two axes, and where the divider
+//! stands when the pane it is drawn on is resized.
 //!
-//! Apart from the drawing because a gesture reads the plane and writes the
-//! CONFIG — it is the only part of the pane that runs backwards, from a
-//! screen position to the setting that would put something there.
+//! Apart from the drawing because all of it runs BACKWARDS — from a screen
+//! position, or a screen SIZE, to where the pane's boundary goes.
+//!
+//! Which is why the resize sits beside the drag rather than in the pane: the
+//! two are the only things that decide that boundary, and they answer in
+//! different currencies. [`drag_split`] writes the DIAL
+//! ([`roll_fraction`](crate::SpectrumConfig::roll_fraction), which persists and
+//! is what a take exports with); [`hold_spectrum`] leaves that alone and works
+//! out what the docked pane draws instead, so that a resized pane keeps the
+//! spectrum's own size. [`spectrum_split`] is where the two meet, and it is the
+//! one answer every layer of the pane takes its boundary from.
 
 use crate::panes::zoom_gesture;
 use crate::SharedState;
@@ -32,13 +41,19 @@ pub(super) const SPLIT_GRAB_HALF: f32 = 6.0;
 /// Returns the handle's response so the caller can paint its highlight last,
 /// over the plots. `surface` keeps the docked pane and the Video preview from
 /// sharing one interaction id.
+///
+/// `split` is where the divider is DRAWN on this pane — the caller's one
+/// reading of [`spectrum_split`], so the band cannot end up straddling a line
+/// somewhere else. Writing the dial rather than that is what makes the drag a
+/// re-dial: it lands at the pointer, and the hold takes it from there.
 pub(super) fn drag_split(
     ui: &mut egui::Ui,
     axes: &Axes,
     state: &mut SharedState,
     surface: usize,
+    split: f32,
 ) -> egui::Response {
-    let band = axes.depth_band(spectrum_share(&state.spectrum_config), SPLIT_GRAB_HALF);
+    let band = axes.depth_band(split, SPLIT_GRAB_HALF);
     let response = ui
         .interact(band, egui::Id::new(("spectral-split", surface)), Sense::drag())
         .on_hover_cursor(axes.resize_cursor());
@@ -51,6 +66,172 @@ pub(super) fn drag_split(
         state.spectrum_config.roll_fraction = (1.0 - axes.depth_at(pointer)).clamp(0.0, 1.0);
     }
     response
+}
+
+/// What the divider is holding for the pane it was dialled on: the picture the
+/// dial made, in points, so that resizing that pane resizes the SPECTROGRAM and
+/// leaves the spectrum the size it was.
+///
+/// The two regions are not the same kind of picture, which is what makes one of
+/// them the one to stretch. The spectrum is a curve whose height IS its dB
+/// window: give it more depth and every peak grows, so the shape being read —
+/// how steeply a partial stands out of the noise — is drawn differently on
+/// every pane size. The far region is a WINDOW onto time: give it more depth
+/// and the same [`roll_seconds`](crate::SpectrumConfig::roll_seconds) is laid
+/// out over more of it, which spreads the picture without restating it. So a
+/// resize spent there costs a reading nothing, and one spent on the curve costs
+/// the reading the curve exists for.
+///
+/// **The dial is not touched.** `roll_fraction` stays exactly what was dragged,
+/// and this carries the answer the docked pane draws from
+/// ([`spectrum_split`]) instead. Which matters because that field is what a take
+/// EXPORTS with (`save_persist` rides the config into every take, and the
+/// offline renderer composes the frame from it): written through, the editor
+/// window's size would decide a video's composition, and dragging the plugin
+/// wider would restyle a render nobody touched. The Video tab is where a
+/// video's look is dialled in and its preview reads the same field, so it has
+/// to sit still while the editor around it moves — the same call
+/// [`spectrum_settings_pane`](super::spectrum_settings_pane) makes in refusing
+/// an automatic orientation.
+///
+/// Held for the docked pane alone, and by its tab dispatch (see
+/// [`crate::panes`]), which is the one surface a window can resize: the Video
+/// preview and the offline renderer draw from a size their own layout fixes,
+/// and a hold means nothing there.
+#[derive(Default)]
+pub(crate) struct SpectrumHold(Option<Held>);
+
+#[derive(Clone, Copy)]
+struct Held {
+    /// The `roll_fraction` this was dialled from.
+    ///
+    /// A fraction that no longer matches it says the divider has been dragged,
+    /// or a blob loaded, or a take's config arrived — so what is held describes
+    /// a picture nobody is asking for any more, and the dial answers until the
+    /// next pass re-takes it. An exact comparison, and it can be: nothing
+    /// derives this field from itself, so there is no rounding to forgive.
+    dial: f32,
+    /// The depth axis that dial was made against, in points. With the dialled
+    /// share it gives the spectrum's length, which is the thing being kept.
+    depth: f32,
+    /// Which screen axis that was, so a change of
+    /// [`orientation`](crate::SpectrumConfig::orientation) re-dials rather than
+    /// spending a length measured down the pane on the way across it. The two
+    /// differ by more than three to one on the analyzer's own column.
+    vertical: bool,
+    /// The spectrum's share of the depth axis on the pane this was measured
+    /// for — what [`spectrum_split`] hands the docked pane in place of the
+    /// dialled share.
+    held: f32,
+}
+
+/// The depth the far region keeps for itself once holding the spectrum starts
+/// crowding it, in points.
+///
+/// A spectrogram thinner than this is a band rather than a picture — the
+/// heatmap's structure is in how it CHANGES along time, and there is no room to
+/// see that in a strip a few notes wide; a roll alone is the same argument with
+/// ribbons for cells. So the hold is a promise about the spectrum's size that
+/// the far region's own legibility ends: past this the spectrum yields, which
+/// is the failure that costs the pane less.
+///
+/// A judgement rather than a derivation, sized against the thing it is
+/// protecting: about a third of the depth the analyzer column gets in the
+/// plugin's own default window, so it bites only on a pane squeezed well under
+/// what it was dialled at.
+pub(super) const FAR_REGION_FLOOR_PT: f32 = 64.0;
+
+/// How the depth axis is shared out on the pane being DRAWN: the dialled share
+/// ([`spectrum_share`]), or the docked pane's hold where one stands.
+///
+/// Every layer of the pane takes its split from here, so the divider's grab
+/// band, the curve, the heatmap and the ribbons cannot disagree about where the
+/// boundary is.
+pub(super) fn spectrum_split(state: &SharedState, surface: usize) -> f32 {
+    let cfg = &state.spectrum_config;
+    let dialled = spectrum_share(cfg);
+    match state.spectrum_hold.0 {
+        // A dial of the WHOLE axis is a state rather than a size: the far
+        // region turned off, or the divider dragged shut — which the pane
+        // keeps grabbable precisely so that shutting it is not one-way (see
+        // `spectral_pane`). Holding points against it would re-open a region
+        // that was closed on purpose, so the dial wins.
+        Some(held)
+            if surface == DOCKED_SURFACE
+                && dialled < 1.0
+                && held.dial == cfg.roll_fraction
+                && held.vertical == cfg.orientation.is_time_vertical() =>
+        {
+            held.held
+        }
+        _ => dialled,
+    }
+}
+
+/// Take the size the spectrum is drawn at on the docked pane, so that resizing
+/// that pane spends the difference on the spectrogram.
+///
+/// Called with the pane's own size, BEFORE it draws, so what this settles is
+/// what the frame is composed from and the picture never shows an intermediate.
+///
+/// Two things bound it, and both are the far region's:
+///
+/// - Growing, nothing does: the spectrum holds its points and every point the
+///   pane gains goes to the spectrogram, however tall the pane gets.
+/// - Shrinking, the far region floors at [`FAR_REGION_FLOOR_PT`] and the
+///   spectrum yields from there — and under a pane too small to hold even that
+///   beside the dialled share, the whole thing gives way to the plain
+///   proportional split, which is what a pane with no hold on it draws at every
+///   size. So it degrades toward sharing the squeeze rather than toward a
+///   spectrum filling the pane edge to edge.
+pub(crate) fn hold_spectrum(state: &mut SharedState, pane: egui::Vec2) {
+    let cfg = state.spectrum_config;
+    // No far region is no divider — there is nothing to take a resize. The hold
+    // is left standing rather than dropped, so turning the spectrogram back on
+    // returns the picture it was turned off at.
+    if !(cfg.show_roll || cfg.show_spectrogram) {
+        return;
+    }
+    let share = spectrum_share(&cfg);
+    // The divider dragged shut, which is a state to sit in rather than a size to
+    // keep (see [`spectrum_split`]). Dropped rather than left standing: what
+    // re-opens it is a drag, which re-dials anyway.
+    if share >= 1.0 {
+        state.spectrum_hold.0 = None;
+        return;
+    }
+    let vertical = cfg.orientation.is_time_vertical();
+    let depth = if vertical { pane.y } else { pane.x };
+    // A pane with no depth to share out: the first frame of a dock that has not
+    // laid out yet, or a leaf folded to its tab bar. Dividing by it would hand
+    // the picture an infinity, and holding a size against it would price the
+    // dial at zero points. Non-finite is the same case at its limit —
+    // egui_dock's viewport is `Rect::NOTHING` until it has laid out, whose sides
+    // subtract to an infinity rather than to a number worth dividing by.
+    if !depth.is_finite() || depth <= 0.0 {
+        return;
+    }
+    let held = match state.spectrum_hold.0 {
+        Some(held)
+            if held.dial == cfg.roll_fraction && held.vertical == vertical => held,
+        // Dialled since this last looked — so THIS is the picture to keep, at
+        // the size and along the axis it was set on. A dial is already the
+        // answer for the pane it was made on, so nothing is derived from it
+        // until that pane changes.
+        _ => {
+            state.spectrum_hold.0 =
+                Some(Held { dial: cfg.roll_fraction, depth, vertical, held: share });
+            return;
+        }
+    };
+    // The spectrum's dialled length, and the two floors under it. `max` before
+    // `min` so the order reads as what it is: what the far region will spare
+    // decides the ceiling, and the dialled share is the floor under THAT — at a
+    // depth where the two cross, a bare `min` would hand the spectrum less than
+    // its share of a pane it is supposed to be filling more of.
+    let kept = share * held.depth;
+    let keep = kept.min((depth - FAR_REGION_FLOOR_PT).max(share * depth)) / depth;
+    state.spectrum_hold.0 = Some(Held { held: keep.clamp(0.0, 1.0), ..held });
 }
 
 /// The `surface` that is the real, docked Analyzer pane. Slot 1 is the Video
@@ -136,17 +317,19 @@ pub(super) fn drag_zoom(
     response: &egui::Response,
     state: &mut SharedState,
     surface: usize,
+    // Where the far region begins on the pane being drawn, and so which drags
+    // have a time axis under them and which a dB one. The caller's reading, for
+    // the reason [`drag_split`] takes one: a gesture aimed at a region has to
+    // read the boundary the picture shows. At 1.0 there is no far region at all
+    // (both layers off, or the divider dragged shut) and the Span has nothing on
+    // screen to zoom; at 0.0 the spectrum is the one with nothing.
+    split: f32,
 ) {
     use harmonigraph_core::spectrum::{SPECTRUM_MAX_MIDI, SPECTRUM_MIN_MIDI};
 
     if surface != DOCKED_SURFACE {
         return;
     }
-    // Where the far region begins, and so which drags have a time axis under
-    // them and which a dB one. At 1.0 there is no far region at all (both
-    // layers off, or the divider dragged shut) and the Span has nothing on
-    // screen to zoom; at 0.0 the spectrum is the one with nothing.
-    let split = spectrum_share(&state.spectrum_config);
     let cfg = &mut state.spectrum_config;
     let mut low = cfg.low_midi;
     let mut span = (cfg.high_midi - cfg.low_midi).max(crate::PITCH_RANGE_MIN_SPAN);
