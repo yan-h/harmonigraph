@@ -27,7 +27,7 @@ use crate::{HarmonigraphParams, PluginParamBackend};
 /// and DX12. If the lattice pane ever panics with a pipeline/surface format
 /// mismatch on some exotic setup, this is the knob (the real fix is
 /// upstreaming RenderState access in egui-baseview).
-const ASSUMED_SURFACE_FORMAT: harmonigraph_render::wgpu::TextureFormat =
+pub(crate) const ASSUMED_SURFACE_FORMAT: harmonigraph_render::wgpu::TextureFormat =
     harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm;
 
 /// Editor size on first open, in logical pixels.

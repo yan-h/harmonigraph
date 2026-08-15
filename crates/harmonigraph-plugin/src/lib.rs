@@ -335,9 +335,15 @@ impl Default for Harmonigraph {
         // thread is to cover the stretches nothing else does, and both of those
         // are stretches. `initialize` runs on activation, so a suspended plugin
         // would go dark; the editor is the very thing being covered for.
+        //
+        // `ui_state` goes with it because the same argument covers the project's
+        // saved settings: the host restores them into that field at a moment of
+        // its own choosing, and nothing but this thread is there to read them
+        // before a window is built. See `background::Restore`.
         let _background = background::BackgroundAnalyzer::spawn(
             editor_shared.clone(),
             params.editor_state.clone(),
+            params.ui_state.clone(),
         );
         Harmonigraph {
             params,
@@ -599,6 +605,61 @@ mod tests {
             columns(&plugin) > 0,
             "the analyzer never noticed the window close: it is not watching the \
              EguiState the editor sets",
+        );
+    }
+
+    /// The project's saved settings have to reach the analyzer with no editor
+    /// ever constructed, which is the whole of issue #324: `params.ui_state` is
+    /// where the host puts them, `Editor::spawn`'s window-build closure was its
+    /// only reader, and the plugin analyzes audio from the moment it is
+    /// instantiated.
+    ///
+    /// Driven through the REAL spawned thread and the real `params` field —
+    /// nothing here calls [`Plugin::editor`] — because the wiring between those
+    /// two is precisely the thing that did not exist. The unit tests one file
+    /// over cover what the adopt DECIDES; this covers that it is reachable at
+    /// all from where a host writes.
+    #[test]
+    fn a_projects_saved_window_reaches_the_analyzer_with_no_editor_built() {
+        use harmonigraph_ui::SpectrumWindow;
+
+        // Half the analysis window: what `column_lag` reads back out of the
+        // analyzer, on the rate a plugin runs at until a host reports its own.
+        let lag_of = |window: SpectrumWindow| {
+            0.5 * window.samples() as f64 / f64::from(DEFAULT_SAMPLE_RATE as f32)
+        };
+        let blob = {
+            let mut saved =
+                harmonigraph_ui::SharedState::new(editor::ASSUMED_SURFACE_FORMAT);
+            saved.spectrum_config.window = SpectrumWindow::Precise;
+            harmonigraph_ui::shell::close(&saved)
+        };
+
+        let mut plugin = Harmonigraph::default();
+        // What the host does when it restores a project, and all it does: no
+        // editor, no activation, just the field.
+        *plugin.params.ui_state.write() = blob;
+        // A Precise window is 16384 samples; this is more than one windowful,
+        // so the analyzer cannot come out of the drain empty.
+        for i in 0..40_000 {
+            let t = i as f32 / 48_000.0;
+            plugin
+                .audio_producer
+                .push((std::f32::consts::TAU * 440.0 * t).sin() * 0.5)
+                .expect("the ring is sized for this");
+        }
+        // Five polls: long enough that a round cannot merely be late.
+        std::thread::sleep(background::POLL * 5);
+
+        let shared = plugin.editor_shared.lock();
+        assert!(!shared.ui.spectrum.history().is_empty(), "nothing was analyzed at all");
+        let lag = shared.ui.spectrum.column_lag();
+        assert!(
+            (lag - lag_of(SpectrumWindow::Precise)).abs() < 1e-9,
+            "the background analyzer ran at a {:.1} ms window where the project saved \
+             {:.1} ms: the restored blob reaches nothing until the editor opens",
+            lag * 2000.0,
+            lag_of(SpectrumWindow::Precise) * 2000.0,
         );
     }
 

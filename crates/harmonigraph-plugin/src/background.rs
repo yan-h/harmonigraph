@@ -37,14 +37,25 @@
 //! which is the frame's own drain plus the ageing a frame instead gets from
 //! `begin_frame`; see there for why sharing that one path is the point.
 //!
+//! **The project's own settings arrive here too**, for the same reason: this
+//! is the only thing running before the editor's window exists, and that
+//! window's build closure is otherwise the sole reader of `params.ui_state`.
+//! Left to it, every column analyzed before the first open is analyzed at
+//! [`SpectrumConfig::default`]'s window whatever the project saved — and since
+//! `INTERP_BIN_CEILING` is a fixed BIN index, the two stretches differ in the
+//! reconstruction rule a band of the spectrum is drawn under and not merely in
+//! resolution, so their join scrolls across the heatmap as a seam. See
+//! [`Restore`].
+//!
 //! [`SpectrumHistory`]: harmonigraph_core::SpectrumHistory
+//! [`SpectrumConfig::default`]: harmonigraph_ui::SpectrumConfig
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 
 use crate::editor::{EditorShared, EguiState};
 
@@ -83,13 +94,14 @@ impl BackgroundAnalyzer {
     pub(crate) fn spawn(
         shared: Arc<Mutex<EditorShared>>,
         editor_state: Arc<EguiState>,
+        ui_state: Arc<RwLock<String>>,
     ) -> BackgroundAnalyzer {
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
         let worker = shared.clone();
         let thread = std::thread::Builder::new()
             .name("harmonigraph-background-analyzer".to_string())
-            .spawn(move || run(&worker, &editor_state, &flag));
+            .spawn(move || run(&worker, &editor_state, Restore::of(ui_state), &flag));
         let thread = match thread {
             Ok(thread) => Some(thread),
             // Audible rather than silent, on the same argument as a refused
@@ -111,7 +123,8 @@ impl BackgroundAnalyzer {
 impl Drop for BackgroundAnalyzer {
     /// Stops the thread and waits for it, so the plugin never outlives its own
     /// worker. The wait is up to one [`POLL`] — the flag is read at the top of
-    /// each round, and a round is only a drain.
+    /// each round, and a round is a drain plus, on the rounds a host has just
+    /// written state, one RON parse.
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
         if let Some(thread) = self.thread.take() {
@@ -120,10 +133,77 @@ impl Drop for BackgroundAnalyzer {
     }
 }
 
-/// One round: drain the rings if no frame is already doing it.
+/// The host's saved UI state, and what of it the shared state already holds.
+///
+/// `params.ui_state` is where a project's settings arrive — the host writes it
+/// on state restore, and `LatticeEditorHandle`'s `Drop` writes it again on the
+/// way out of every editor session. Nothing reads it until a window is built,
+/// so a project's saved analyzer Window reaches nothing that runs before the
+/// first open; applying it here is what closes that gap.
+///
+/// A MIRROR of the blob rather than a done-once flag, because the field is
+/// written more than once: a preset change or an undo pushes fresh state at a
+/// plugin whose window is shut, and the round after it should take that too.
+/// The mirror is also what keeps the cost of a round at one string compare.
+///
+/// One consequence, and it is a harmless one: the first round after every
+/// editor session adopts the blob that session's `Drop` wrote, which is a
+/// reload of the state's own save. Nothing in the state moves — `save_persist`
+/// reads exactly the fields `load_persist` writes — and it costs one RON round
+/// trip per window close, where a window close is already spending one.
+struct Restore {
+    /// The host's field, shared with the plugin and with the editor.
+    blob: Arc<RwLock<String>>,
+    /// The last blob handed to `load_persist`. Empty until one has been, which
+    /// is also what the field itself holds until a project supplies one.
+    applied: String,
+}
+
+impl Restore {
+    fn of(blob: Arc<RwLock<String>>) -> Restore {
+        Restore { blob, applied: String::new() }
+    }
+
+    /// Apply the host's blob to the shared state, unless the state already
+    /// holds it.
+    ///
+    /// Called with the window SHUT and the state's lock held, and both halves
+    /// are load-bearing. `Opening` applies the same blob through the same call
+    /// whenever a window is built, so an open window is already served; and
+    /// applying it under one would revert everything the user has changed since
+    /// they opened it, since the blob is only written on the way out. The lock
+    /// is what makes reading `blob` here safe to order this way — the close
+    /// path takes the same two in the same order (`shared`, then `ui_state`).
+    ///
+    /// The mirror is updated whether or not the blob was ACCEPTED, so one this
+    /// build refuses — below the version floor, or naming a dropped variant —
+    /// says so on the console once rather than fifty times a second.
+    fn adopt(&mut self, shared: &mut EditorShared) {
+        {
+            let blob = self.blob.read();
+            // An empty blob is what a project whose editor has never been open
+            // carries; reading it as one would put a parse failure on the
+            // console of every instance that has never saved.
+            if blob.is_empty() || *blob == self.applied {
+                return;
+            }
+            self.applied.clear();
+            self.applied.push_str(&blob);
+        }
+        shared.ui.load_persist(&self.applied);
+    }
+}
+
+/// One round: adopt whatever the host has restored, then drain the rings —
+/// both of them only while no frame is doing either.
 ///
 /// Split out from the sleep loop so what it DECIDES can be tested without a
 /// clock, which is most of what there is to get wrong here.
+///
+/// The window check carries a second job with the adopt behind it, and one that
+/// is about the USER rather than about a lock: `params.ui_state` names what the
+/// project last saved, so re-applying it under an open window would revert
+/// whatever has been changed since. See [`Restore::adopt`].
 ///
 /// **Both checks exist to keep this thread off a lock a frame is holding.**
 /// `frame` takes the `EditorShared` mutex for its whole run, on an argument
@@ -151,24 +231,37 @@ impl Drop for BackgroundAnalyzer {
 ///
 /// A skipped round costs nothing: the ring carries seventeen of them even at
 /// the fastest rate a host offers.
-fn tick(shared: &Mutex<EditorShared>, editor_state: &EguiState) {
+fn tick(shared: &Mutex<EditorShared>, editor_state: &EguiState, restore: &mut Restore) {
     if editor_state.is_open() {
         return;
     }
     let Some(mut shared) = shared.try_lock() else {
         return;
     };
+    // BEFORE the drain: the settings decide how the samples about to be taken
+    // are analyzed, so a round that adopted them afterwards would still leave
+    // its own columns at the window the blob just replaced.
+    restore.adopt(&mut shared);
     let now = shared.now();
     shared.catch_up_unwatched(now);
 }
 
 /// Drain, sleep, repeat, until the plugin goes away.
 ///
-/// The flag is read once per round and a round is only a drain, which is what
+/// The flag is read once per round and a round is bounded work, which is what
 /// bounds the join in [`BackgroundAnalyzer::drop`] to a single [`POLL`].
-fn run(shared: &Mutex<EditorShared>, editor_state: &EguiState, stop: &AtomicBool) {
+///
+/// The [`Restore`] mirror lives here, for the length of the thread: it is what
+/// the host has already been answered about, and a fresh one every round would
+/// re-apply the same blob fifty times a second.
+fn run(
+    shared: &Mutex<EditorShared>,
+    editor_state: &EguiState,
+    mut restore: Restore,
+    stop: &AtomicBool,
+) {
     while !stop.load(Ordering::Relaxed) {
-        tick(shared, editor_state);
+        tick(shared, editor_state, &mut restore);
         std::thread::sleep(POLL);
     }
 }
@@ -183,12 +276,18 @@ mod tests {
     use super::*;
 
     /// What a shell owns between the audio thread and the GUI: the state, the
-    /// producer ends of both rings, and the window's open flag.
+    /// producer ends of both rings, the window's open flag, and the field the
+    /// host restores a project's settings into.
     struct Harness {
         shared: Arc<Mutex<EditorShared>>,
         notes: rtrb::Producer<CoreNoteEvent>,
         audio: rtrb::Producer<f32>,
         editor_state: Arc<EguiState>,
+        /// The host's end of `params.ui_state`.
+        ui_state: Arc<RwLock<String>>,
+        /// The thread's end of it, held across rounds exactly as [`run`] holds
+        /// one — so a test can tick twice and see what the second round skips.
+        restore: Restore,
     }
 
     fn harness() -> Harness {
@@ -203,15 +302,47 @@ mod tests {
             take_control,
             Arc::new(std::sync::atomic::AtomicU64::new(0)),
         );
+        let ui_state = Arc::new(RwLock::new(String::new()));
         Harness {
             shared: Arc::new(Mutex::new(shared)),
             notes,
             audio,
             editor_state: EguiState::from_size(800, 600),
+            restore: Restore::of(ui_state.clone()),
+            ui_state,
         }
     }
 
+    /// A project blob that differs from a fresh install in its analyzer Window
+    /// and nothing else, written by the same call the editor saves through.
+    fn blob_with_window(window: harmonigraph_ui::SpectrumWindow) -> String {
+        let mut state = harmonigraph_ui::SharedState::new(crate::editor::ASSUMED_SURFACE_FORMAT);
+        state.spectrum_config.window = window;
+        harmonigraph_ui::shell::close(&state)
+    }
+
+    /// Half the analysis window, in seconds, at the harness's rate: what
+    /// [`AudioSpectrum::column_lag`] reads back out of the analyzer, and so the
+    /// one window size observable from outside it.
+    ///
+    /// [`AudioSpectrum::column_lag`]: harmonigraph_ui::AudioSpectrum::column_lag
+    fn lag_of(window: harmonigraph_ui::SpectrumWindow) -> f64 {
+        0.5 * window.samples() as f64 / 48_000.0
+    }
+
     impl Harness {
+        /// One round of the loop the thread runs, against a mirror that
+        /// survives between rounds.
+        fn tick(&mut self) {
+            super::tick(&self.shared, &self.editor_state, &mut self.restore);
+        }
+
+        /// What the host does when it restores a project — or pushes a preset
+        /// at a plugin whose window is shut.
+        fn restore(&mut self, blob: &str) {
+            *self.ui_state.write() = blob.to_string();
+        }
+
         /// Mono audio at 48 kHz, enough for the analyzer to fill a window and
         /// cross hop boundaries, so a drain of it must produce columns.
         fn push_audio(&mut self, frames: usize) {
@@ -246,6 +377,19 @@ mod tests {
             self.shared.lock().ui.tracker.voices().count()
         }
 
+        /// The window the SETTING asks for.
+        fn configured_window(&self) -> harmonigraph_ui::SpectrumWindow {
+            self.shared.lock().ui.spectrum_config.window
+        }
+
+        /// The window the ANALYZER is actually running at, which is the claim
+        /// worth making: the setting reaching the config and stopping there is
+        /// precisely the bug (see `AudioSpectrum::push_samples`, the one thing
+        /// that carries one to the other).
+        fn analyzed_lag(&self) -> f64 {
+            self.shared.lock().ui.spectrum.column_lag()
+        }
+
         /// What a GUI frame does with the rings, which is the same call this
         /// module makes — see `EditorShared::catch_up`.
         fn frame(&self) {
@@ -263,7 +407,7 @@ mod tests {
         h.push_audio(20_000);
         assert_eq!(h.columns(), 0, "nothing is analyzed before a drain");
 
-        tick(&h.shared, &h.editor_state);
+        h.tick();
 
         assert!(h.columns() > 0, "a closed window dropped its audio on the floor");
     }
@@ -279,7 +423,7 @@ mod tests {
         h.push_note(1.5, 64);
         assert_eq!(h.voices(), 0, "nothing is tracked before a drain");
 
-        tick(&h.shared, &h.editor_state);
+        h.tick();
 
         assert_eq!(h.voices(), 2, "a closed window dropped its notes on the floor");
     }
@@ -309,7 +453,7 @@ mod tests {
         // the released tail rather than an empty tracker.
         h.push_note(100.0, 64);
 
-        tick(&h.shared, &h.editor_state);
+        h.tick();
 
         assert_eq!(
             h.voices(),
@@ -329,7 +473,7 @@ mod tests {
         h.push_note(1.0, 60);
         h.editor_state.set_open(true);
 
-        tick(&h.shared, &h.editor_state);
+        h.tick();
         assert_eq!(h.columns(), 0, "analyzed audio the frame was going to take");
         assert_eq!(h.voices(), 0, "tracked notes the frame was going to take");
 
@@ -337,7 +481,7 @@ mod tests {
         // drains next, which is the part a `return` after the pop would get
         // silently wrong.
         h.editor_state.set_open(false);
-        tick(&h.shared, &h.editor_state);
+        h.tick();
         assert!(h.columns() > 0, "the open round ate the audio ring");
         assert_eq!(h.voices(), 1, "the open round ate the note ring");
     }
@@ -382,7 +526,7 @@ mod tests {
         // And now split across a window that was shut for the first half.
         let mut h = harness();
         h.push_audio(20_000);
-        tick(&h.shared, &h.editor_state);
+        h.tick();
         let while_closed = h.columns();
         assert!(while_closed > 0, "the closed half analyzed nothing");
 
@@ -398,6 +542,114 @@ mod tests {
              {baseline}: the handover is not on the same grid",
             h.columns(),
         );
+    }
+
+    /// Issue #324: the project's saved Window has to reach the analyzer with no
+    /// editor anywhere in the picture, because the stretch before the first
+    /// open is exactly what this thread exists to cover.
+    ///
+    /// Asserted on [`AudioSpectrum::column_lag`] — half the analysis window —
+    /// rather than on the config, because the config is where the setting
+    /// already got to and the analyzer is where it did not. Nothing but
+    /// `push_samples` carries one to the other, so a fix that loaded the blob
+    /// after the drain would satisfy the config assertion alone.
+    ///
+    /// [`AudioSpectrum::column_lag`]: harmonigraph_ui::AudioSpectrum::column_lag
+    #[test]
+    fn a_restored_window_reaches_the_analyzer_with_no_editor_ever_built() {
+        use harmonigraph_ui::SpectrumWindow;
+
+        let mut h = harness();
+        h.restore(&blob_with_window(SpectrumWindow::Precise));
+        // A Precise window is 16384 samples, so this is comfortably more than
+        // one windowful and the analyzer cannot come out of it empty.
+        h.push_audio(40_000);
+
+        h.tick();
+
+        assert!(h.columns() > 0, "nothing was analyzed at all");
+        assert_eq!(h.configured_window(), SpectrumWindow::Precise, "the blob never landed");
+        assert!(
+            (h.analyzed_lag() - lag_of(SpectrumWindow::Precise)).abs() < 1e-9,
+            "columns analyzed at a {:.1} ms window where the project saved {:.1} ms: the \
+             restored setting reached the config and not the analyzer",
+            h.analyzed_lag() * 2000.0,
+            lag_of(SpectrumWindow::Precise) * 2000.0,
+        );
+    }
+
+    /// The trap in fixing it. `params.ui_state` is only written on the way OUT
+    /// of an editor session, so it names what the user had when they last
+    /// closed the window — and re-applying that under an open one would revert
+    /// everything they have changed since.
+    ///
+    /// The guard is [`tick`]'s existing open-window check, which is why this
+    /// test lives next to the drain it also guards: anything that moved the
+    /// adopt ahead of that check would pass every other test here.
+    #[test]
+    fn an_open_window_keeps_the_settings_it_is_being_used_to_change() {
+        use harmonigraph_ui::SpectrumWindow;
+
+        let mut h = harness();
+        // What the project saved, against what the user has since dialled in.
+        h.restore(&blob_with_window(SpectrumWindow::Precise));
+        h.shared.lock().ui.spectrum_config.window = SpectrumWindow::Fast;
+        h.editor_state.set_open(true);
+
+        h.tick();
+
+        assert_eq!(
+            h.configured_window(),
+            SpectrumWindow::Fast,
+            "the saved blob was re-applied under an open window, reverting the setting the \
+             user is holding the window open to change",
+        );
+    }
+
+    /// A host writes that field more than once — a preset change or an undo
+    /// pushes fresh state at a plugin whose window is shut — so what the thread
+    /// keeps has to be a mirror of the blob and not a done-once flag.
+    #[test]
+    fn a_project_switched_while_the_window_is_shut_is_taken_too() {
+        use harmonigraph_ui::SpectrumWindow;
+
+        let mut h = harness();
+        h.restore(&blob_with_window(SpectrumWindow::Precise));
+        h.tick();
+        assert_eq!(h.configured_window(), SpectrumWindow::Precise);
+
+        h.restore(&blob_with_window(SpectrumWindow::Fast));
+        h.tick();
+
+        assert_eq!(
+            h.configured_window(),
+            SpectrumWindow::Fast,
+            "the second blob was never read: the thread adopts once and then stops looking",
+        );
+    }
+
+    /// And the mirror's other half. A blob this build refuses — below the
+    /// version floor, or naming a variant that has been dropped — is refused
+    /// LOUDLY, on the console, which is a fine thing to say once and a useless
+    /// thing to say fifty times a second for as long as the project is loaded.
+    #[test]
+    fn a_blob_this_build_refuses_says_so_once() {
+        let mut h = harness();
+        h.restore("this is not a persist blob");
+
+        for _ in 0..5 {
+            h.tick();
+        }
+
+        let refusals = h
+            .shared
+            .lock()
+            .ui
+            .console
+            .lines()
+            .filter(|line| line.contains("persist ignored"))
+            .count();
+        assert_eq!(refusals, 1, "the console holds one line per round, not one per blob");
     }
 
     /// [`POLL`] against the ring it is pacing itself to. A poll slower than the
@@ -433,7 +685,11 @@ mod tests {
         let mut h = harness();
         h.push_audio(20_000);
 
-        let analyzer = BackgroundAnalyzer::spawn(h.shared.clone(), h.editor_state.clone());
+        let analyzer = BackgroundAnalyzer::spawn(
+            h.shared.clone(),
+            h.editor_state.clone(),
+            h.ui_state.clone(),
+        );
         // Generous against POLL, so a loaded machine cannot fail this for being
         // slow — it is asserting that rounds happen at all, not how fast.
         std::thread::sleep(POLL * 10);
