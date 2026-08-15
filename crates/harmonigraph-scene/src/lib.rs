@@ -59,6 +59,35 @@ fn lattice_to_world(pos: LatticePos, spacing: f32) -> Vec3 {
 /// Node radius as a fraction of the lattice spacing.
 const NODE_RADIUS_FACTOR: f32 = 0.25;
 
+/// The most nodes one drawn window may hold, and the backstop on a lattice
+/// with no size of its own: the window is derived from the viewport
+/// ([`ViewConfig::scrolled`]), so what decides how much work a frame is is the
+/// camera — and there are cameras with no bounded answer at all.
+///
+/// Which is worth being exact about, because it is the whole reason this
+/// exists. Tilt a camera toward the sheet's own plane and the sheet goes
+/// edge-on: the far half of an unbounded plane is genuinely on screen, in a
+/// band a few pixels tall. Orthographic at the pitch limit asks for half a
+/// million nodes that way, perspective for ten million. There is nothing to
+/// draw there and no window that would be right.
+///
+/// Cabinet has no such camera — it faces the sheet by construction, whatever
+/// the orbit says — so its window is bounded at every setting, and this sits
+/// above the largest one a pane of ordinary shape reaches: 19809 nodes, at
+/// 3:1, fully zoomed out, nine sheets deep, at cavalier scale. Bounded is not
+/// the same as under the cap, and the difference is measured rather than
+/// assumed — past about 3.5:1 with full depth cabinet does reach this, and
+/// there is a pane that gets there without hand-editing anything, since
+/// `Layout::split` will give the lattice a fifth of a 21:9 frame. What the
+/// trim costs there is 160 nodes at 4:1 and 4366 at 6:1, off all four edges.
+/// A cap that covered it would have to be three times this one, for a band of
+/// lattice eight steps tall.
+///
+/// The cost it is holding: `derive_scene` with ten voices held takes 0.02ms
+/// over 273 nodes, 0.06ms over 875 (a 16:9 pane fully zoomed out, flat), and
+/// 1.2ms over 14877.
+pub const MAX_DRAWN_NODES: usize = 20480;
+
 /// The longest wait the Delay bar offers before a melody/bass ring starts
 /// easing in ([`ViewConfig::mark_delay`]), and the clamp `derive_scene` holds
 /// a hand-edited view to. ONE constant for the two so the bar's end and the

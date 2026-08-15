@@ -242,7 +242,18 @@ impl egui_dock::TabViewer for Viewer<'_> {
             Tab::Tuning => tuning_pane(ui, self.state, self.params, self.now),
             Tab::Display => display_pane(ui, self.state, self.params),
             Tab::Console => console_pane(ui, self.state),
-            Tab::Spectral => spectral_pane(ui, self.state, self.now, 0),
+            Tab::Spectral => {
+                // The docked analyzer, and the reason the hold is applied HERE
+                // rather than inside the pane: this is the one copy of it whose
+                // size is a window's to change. The Video tab's preview draws
+                // the same config in a box of its own, and the offline renderer
+                // draws it at whatever the layout says — both reach
+                // `spectral_pane` too, and either holding its own size would be
+                // a second answer overwriting this one in the single fraction
+                // all three compose from.
+                spectral::hold_spectrum(self.state, ui.available_size());
+                spectral_pane(ui, self.state, self.now, 0)
+            }
             Tab::Spiral => spiral_pane(ui, self.state, self.now),
             Tab::Notes => notes_pane(ui, self.state),
             Tab::Video => render_pane(ui, self.state, self.now),

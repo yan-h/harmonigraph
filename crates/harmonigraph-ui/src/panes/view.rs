@@ -181,20 +181,23 @@ pub(super) fn view_pane(ui: &mut egui::Ui, state: &mut SharedState) {
         });
     }
 
-    // How much lattice there is: its own section, because it is a different
-    // question from where you are standing. The camera above moves the view
-    // without changing which nodes exist; these change which nodes exist at
-    // all, whatever the camera then does with them.
+    // How deep the lattice runs, which is the only one of the three axes asked
+    // here. The fifths and thirds sheet has no extent to set: it is unbounded,
+    // and what is drawn of it is whatever the pane is looking at
+    // (`ViewConfig::scrolled`) — pan and the window walks with you. The camera
+    // above is how you get to a part of the lattice, so a bar saying how much
+    // of it exists would be a bar saying nothing.
+    //
+    // The sevens axis is different in kind rather than merely spared: its
+    // extent is how many sheets there ARE, which the pane cannot answer,
+    // because a sheet is not drawn somewhere on screen for the camera to find
+    // — it is drawn over the home one at an offset.
     section(ui, "Extents");
     for (extent, range, label) in [
-        // Ranges must contain the ViewConfig defaults (10/6) or the bar
-        // could never drag back to them.
-        (&mut state.view.extent_threes, 1.0..=12.0, "Fifths extent"),
-        (&mut state.view.extent_fives, 1.0..=8.0, "Thirds extent"),
+        // Ranges must contain the ViewConfig defaults or the bar could never
+        // drag back to them.
         (&mut state.view.extent_sevens, 0.0..=4.0, "Sevenths extent"),
-        // Window center in lattice steps from C (v1's Grid X/Y/Z).
-        (&mut state.view.center_threes, -20.0..=20.0, "Fifths center"),
-        (&mut state.view.center_fives, -20.0..=20.0, "Thirds center"),
+        // Which sheet is home, in lattice steps from C (v1's Grid Z).
         (&mut state.view.center_sevens, -20.0..=20.0, "Sevenths center"),
     ] {
         let mut value = *extent as f32;

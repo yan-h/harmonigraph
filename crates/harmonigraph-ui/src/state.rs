@@ -111,6 +111,21 @@ pub struct SharedState {
     /// it wrote a node the pointer had only landed near. Nothing outside
     /// [`crate::panes::lattice`] should write this.
     pub hovered: Option<LatticePos>,
+    /// How many nodes the docked lattice built last frame — the perf
+    /// overlay's node count.
+    ///
+    /// Reported rather than computed from the view, because the view holds no
+    /// number to compute it from: the drawn window is derived per pane from
+    /// that pane's own aspect
+    /// ([`harmonigraph_scene::ViewConfig::scrolled`]), so the only place the
+    /// count exists is inside the draw that built it.
+    ///
+    /// The DOCKED copy alone. The Video tab's preview is a second lattice at
+    /// a second aspect, and reporting its count as the lattice's would make
+    /// the overlay's number jump with a tab that is not the one being
+    /// measured — the same argument that keeps the preview out of the GPU
+    /// timing slot.
+    pub drawn_nodes: usize,
     pub console: Console,
     /// Surface format of the shell's swapchain; the lattice render pipeline
     /// must match it.
@@ -163,6 +178,15 @@ pub struct SharedState {
     /// The Spectral pane's settings (the Display tab's Analyzer section;
     /// persisted).
     pub spectrum_config: SpectrumConfig,
+    /// Where the analyzer's divider stands on the DOCKED pane as that pane is
+    /// resized — the spectrum keeps its size and the spectrogram takes the
+    /// difference. See [`panes::spectral::SpectrumHold`].
+    ///
+    /// Runtime-only, and it is the answer rather than the setting: the dial
+    /// itself stays in [`spectrum_config`](Self::spectrum_config), because that
+    /// is what a project saves and a take renders from, and a length in POINTS
+    /// is a fact about the window this session happens to be open in.
+    pub(crate) spectrum_hold: panes::spectral::SpectrumHold,
     /// Offline playhead render: the whole take's spectrogram laid out
     /// statically with a playhead at `now`, instead of the live scrolling
     /// window. `Some` only in the offline renderer. Runtime-only, never
@@ -586,6 +610,7 @@ impl SharedState {
             frame_params: FrameParams::default(),
             camera: Camera::default(),
             hovered: None,
+            drawn_nodes: 0,
             console: Console::default(),
             target_format,
             background: harmonigraph_scene::skin::panel_color(),
@@ -597,6 +622,7 @@ impl SharedState {
             take: TakeState::default(),
             spectrum: AudioSpectrum::default(),
             spectrum_config: SpectrumConfig::default(),
+            spectrum_hold: panes::spectral::SpectrumHold::default(),
             whole_song: None,
             workspace: Workspace::default(),
             display_sections: panes::display::DisplaySections::default(),

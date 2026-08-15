@@ -9,6 +9,7 @@ mod grid;
 mod marks;
 mod sheet;
 mod camera;
+mod scroll;
 mod trail;
 mod hue_space;
 mod shimmer;

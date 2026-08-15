@@ -283,11 +283,13 @@ pub struct SpectrumConfig {
     /// axis is, and the axis is the one thing on the pane that does not change
     /// size when the range is zoomed.
     ///
-    /// A saved view loads at 1 and so draws its markings TWICE the size it was
-    /// saved at, the built-in size having been rebased by 2 (see
-    /// `panes::spectral::axes::MARKING_PT`). Deliberate, and the same call as the
-    /// lattice's: 10pt was the wrong number rather than one of several, and a
-    /// blob that kept it would be preserving a mistake.
+    /// The multiple is against `panes::spectral::axes::MARKING_PT`, which is
+    /// requoted whenever the bar settles somewhere other than 1 — so a saved
+    /// view draws its markings at the number it holds times whatever the
+    /// built-in currently is, and one that predates a requote is redrawn by it.
+    /// Deliberate: a built-in nobody opens on is the wrong number rather than
+    /// one of several, and a blob that pinned the old picture would be
+    /// preserving it.
     pub marking_scale: f32,
     /// Strength of the light edge drawn along the spectrum's profile, 0 = none.
     /// The profile's alone — a note's edge is the outline the roll's own pair of
@@ -316,6 +318,17 @@ pub struct SpectrumConfig {
     /// spectrum). 0 hides it; 1 gives the whole pane to the roll. Set by
     /// dragging the divider in the Spectral pane itself
     /// (`panes::spectral::gestures::drag_split`) — there is no bar for it.
+    ///
+    /// A share rather than a length in points, and that is what makes one
+    /// setting compose the same picture at every size it is drawn at — the
+    /// Video tab's preview and an export at any resolution alike.
+    ///
+    /// It is the DIAL, and nothing derives it: the docked pane holds the
+    /// spectrum's own size across a resize by drawing at a share of its own
+    /// (`panes::spectral::hold_spectrum`), and deliberately leaves this where
+    /// the drag left it. A render composes from what was dialled rather than
+    /// from whatever size the editor window happened to be at when the take was
+    /// recorded.
     pub roll_fraction: f32,
     /// Seconds of history the roll's depth spans.
     pub roll_seconds: f32,
@@ -675,17 +688,21 @@ pub(crate) const ROLL_OUTLINE_MAX: f32 = 4.0;
 /// much of that may be fade — one number for both ends of the Lead bar, a fade
 /// past the reach it softens having nothing left to soften.
 ///
-/// A quarter of the analyzer, which is a tongue you cannot miss and still leaves
-/// three quarters of the picture it lands on. Past it the ribbons stop reading
-/// as notes reaching across a boundary and start reading as a comb laid over the
-/// curve — and the curve is what they are reaching INTO, so covering it defeats
-/// the whole errand.
+/// Half the analyzer, which still leaves the far half of the curve clear of
+/// ribbons. Past it the ribbons stop reading as notes reaching across a boundary
+/// and start reading as a comb laid over the curve — and the curve is what they
+/// are reaching INTO, so covering it defeats the whole errand.
+///
+/// The default sits at half of this, so the bar opens with as much travel above
+/// the dialled lead as below it: how far a note should reach is a matter of
+/// taste and of how busy the music is, and a bound that barely cleared the
+/// default left only one direction to explore.
 ///
 /// A fraction, so this is a bound on the COMPOSITION rather than on a length:
-/// whatever the pane size, the pitch zoom or where the divider sits, a quarter
-/// is a quarter. See [`SpectrumConfig::roll_lead`] for why the lead is measured
-/// that way and the outline beside it is not.
-pub(crate) const ROLL_LEAD_MAX: f32 = 0.25;
+/// whatever the pane size, the pitch zoom or where the divider sits, half is
+/// half. See [`SpectrumConfig::roll_lead`] for why the lead is measured that way
+/// and the outline beside it is not.
+pub(crate) const ROLL_LEAD_MAX: f32 = 0.5;
 
 /// How long a lead may take to fade out after its note is released, in seconds.
 ///
@@ -755,7 +772,15 @@ impl Default for SpectrumConfig {
             high_midi: harmonigraph_core::spectrum::SPECTRUM_MAX_MIDI,
             show_roll: true,
             roll_fraction: 0.55,
-            roll_seconds: 12.0,
+            // Three minutes, which is a whole piece rather than a glimpse of
+            // the hands: the roll and the heatmap are read for the SHAPE of
+            // what has been played, and a dozen seconds only ever shows the
+            // last phrase of it. Well inside the history the store keeps
+            // (`AudioSpectrum::HISTORY_MAX_SECONDS`), so the heatmap fills the
+            // whole span rather than fading out partway back. The bar's scale
+            // is logarithmic and gives the short spans most of its travel, so
+            // a close-up is one drag away.
+            roll_seconds: 180.0,
             // Thin: a note is a line through the spectrogram at its own
             // pitch, not a slab over it. At 0.3 semitones a semitone of pitch
             // axis still separates two neighbouring keys, which is what makes
@@ -768,14 +793,14 @@ impl Default for SpectrumConfig {
             // off the picture rather than as a second shape drawn around it.
             roll_outline: 2.0,
             roll_outline_fade: 1.5,
-            // A short tongue that is solid across the divider and gone a
-            // thirtieth of the way into the spectrum: at 3% with 2.5 of it
-            // fading, a sounding note covers the line at full color and
-            // dissolves before it reaches anything the curve is drawing. Enough
-            // to see which notes are down at a glance, little enough that a held
-            // chord does not fence off the analyzer.
-            roll_lead: 0.03,
-            roll_lead_fade: 0.025,
+            // A long tongue that stays solid nearly the whole way: a quarter of
+            // the analyzer, with the last fifth of that spent fading. A
+            // sounding note reaches well into the curve it is making and ends
+            // by softening rather than by stopping, so which notes are down is
+            // legible from across the room and the ribbon still lets go of the
+            // spectrum instead of ruling a line across it.
+            roll_lead: 0.25,
+            roll_lead_fade: 0.05,
             // Long enough to read as the note letting go rather than as ink
             // disappearing, short enough that the tongue is gone before the eye
             // goes looking for the note that made it.

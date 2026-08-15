@@ -359,7 +359,7 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
         Workload {
             active_voices: state.tracker.voices().count(),
             held_voices: state.tracker.held_count(),
-            visible_nodes: state.view.visible_count(),
+            visible_nodes: state.drawn_nodes,
             render_scale: state.view.render_scale,
             animating,
         },
@@ -425,6 +425,13 @@ fn pane_body(state: &SharedState, tab: &panes::Tab) -> Option<egui::Rect> {
 /// last frame's tuning against never-pruned voices.
 pub fn begin_frame(state: &mut SharedState, params: &dyn ParamBackend, now: f64) {
     learn_step(state, params);
+
+    // Cleared here so the count belongs to THIS frame: the lattice reports it
+    // as it builds its window, and a frame where the lattice is not drawn at
+    // all — its leaf collapsed, or laid out too small to draw — reports none
+    // rather than going on showing the last frame that was. A diagnostic that
+    // holds its last good reading is the one that misleads.
+    state.drawn_nodes = 0;
 
     state.tuning = params::tuning_from_params(params);
     // Auto-detect, then lock, one comma at a time and up the primes — the

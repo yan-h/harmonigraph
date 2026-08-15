@@ -119,8 +119,8 @@ fn every_settings_pane_scrolls_when_its_content_overflows() {
     }
 }
 
-/// The Nodes section's Shape bar draws the curve the NOTES run on, not a second
-/// copy of the formula that happens to look like it.
+/// The Nodes section's Fade curve bar draws the curve the NOTES run on, not a
+/// second copy of the formula that happens to look like it.
 ///
 /// The whole value of a preview is that it cannot disagree with what it
 /// previews, and a disagreement here is invisible: a line that bends the wrong

@@ -11,7 +11,7 @@ use super::probe::fresh;
 fn persist_round_trips_camera_and_view() {
     let mut state = fresh();
     state.camera.yaw = 1.23;
-    state.camera.distance = 42.0;
+    state.camera.distance = 18.0;
     state.view.extent_sevens = 3;
     // Non-default values throughout, so the fields prove they
     // round-trip rather than matching the defaults by luck.
@@ -62,7 +62,7 @@ fn persist_round_trips_camera_and_view() {
     let mut restored = fresh();
     restored.load_persist(&saved);
     assert_eq!(restored.camera.yaw, 1.23);
-    assert_eq!(restored.camera.distance, 42.0);
+    assert_eq!(restored.camera.distance, 18.0);
     assert_eq!(restored.view.extent_sevens, 3);
     assert_eq!(restored.view.core_radius, 0.0, "off (radius 0) round-trips");
     assert_eq!(restored.view.core_solidity, 0.4);

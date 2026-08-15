@@ -105,11 +105,11 @@ pub(super) fn label_anchor(split: f32) -> (f32, f32) {
 /// Point size of an axis marking's label — a dozen standing marks that
 /// should stay quiet.
 ///
-/// Doubled from the 10 it was drawn at before the Marking size bar existed. The
-/// bar went to 2 the first time it was tried and stayed there — so the number
-/// was wrong rather than the bar wanted, and rebasing it leaves the bar
-/// reading 1 at the size the pane is actually read at.
-pub(super) const MARKING_PT: f32 = 20.0;
+/// Quoted at the size the pane is actually read at, so the Marking size bar
+/// reads 1 there: the bar is where the size gets dialled, and a built-in nobody
+/// opens on turns every view into a correction of it. When the bar settles
+/// somewhere other than 1, this number is what moves.
+pub(super) const MARKING_PT: f32 = 16.0;
 
 /// The whole pitch axis, in semitones — the widest the range opens, and the
 /// zoom the note names' built-in size is dialled for.
@@ -754,12 +754,43 @@ pub(super) fn level_grid(
     // `the_sparse_bound_wins_where_the_type_wants_more_room_than_the_axis_has`
     // holds the case, which is off the end of what any real Marking size
     // reaches.
+    // Multiples of a step across the window, taken as whole counts so the ladder
+    // is the same set of levels wherever the window has been dragged to, rather
+    // than a phase of it. The floor is IN when it lands on one and the ceiling
+    // is always out — see the ends above.
+    let ends = |step: f32| {
+        let rungs = floor / step;
+        let first = if (rungs - rungs.round()).abs() < 1e-4 {
+            rungs.round() as i32
+        } else {
+            rungs.floor() as i32 + 1
+        };
+        let last = ((ceiling / step).ceil() as i32 - 1).min(first + MAX_LEVEL_RULINGS - 1);
+        (first, last)
+    };
+
     let closest = MIN_LEVEL_GAP_PT.max(label_room * NUMBERED_LINE_SHARE);
     let mut rung = LEVEL_STEP;
     while rung + 1 < LEVEL_STEPS_DB.len() && gap(LEVEL_STEPS_DB[rung]) < closest {
         rung += 1;
     }
-    while rung > 0 && gap(LEVEL_STEPS_DB[rung]) > MAX_LEVEL_GAP_PT {
+    // The sparse bound is TWO bounds, and the second is the one the first
+    // cannot state. `gap` is a step's nominal spacing and says nothing about
+    // how many multiples of it land inside the window, so a step near or past
+    // the span itself passes `MAX_LEVEL_GAP_PT` comfortably while the window
+    // holds a single rung — the exact picture that bound exists to forbid, a
+    // line bracketing the analyzer rather than measuring it. The count is what
+    // the reading actually needs, so the walk-back tests both.
+    //
+    // It always terminates with a grid: `level_window` holds the span at
+    // `LEVEL_RANGE_MIN_SPAN` (12 dB) or wider, and the ladder's finest rung is
+    // 1 dB, so rung 0 has eleven rulings in the narrowest window there is.
+    // `a_ruled_level_axis_always_has_a_between` sweeps it.
+    let sparse = |step: f32| {
+        let (first, last) = ends(step);
+        gap(step) > MAX_LEVEL_GAP_PT || last - first < 1
+    };
+    while rung > 0 && sparse(LEVEL_STEPS_DB[rung]) {
         rung -= 1;
     }
     let step = LEVEL_STEPS_DB[rung];
@@ -783,17 +814,7 @@ pub(super) fn level_grid(
         }
     }
 
-    // Multiples of the step across the window, taken as whole counts so the
-    // ladder is the same set of levels wherever the window has been dragged to,
-    // rather than a phase of it. The floor is IN when it lands on one and the
-    // ceiling is always out — see the ends above.
-    let rungs = floor / step;
-    let first = if (rungs - rungs.round()).abs() < 1e-4 {
-        rungs.round() as i32
-    } else {
-        rungs.floor() as i32 + 1
-    };
-    let last = ((ceiling / step).ceil() as i32 - 1).min(first + MAX_LEVEL_RULINGS - 1);
+    let (first, last) = ends(step);
     // ...and the numbers every `stride` rulings COUNTED UP FROM THE LOWEST, so
     // the bottom of the scale is named whatever the window has been dragged to.
     // Numbering the round multiples of `labels` instead reads the same on a
