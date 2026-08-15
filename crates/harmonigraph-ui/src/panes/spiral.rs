@@ -33,6 +33,14 @@
 //! One consequence of sharing worth expecting: `tilt` pivots at 1 kHz, so on a
 //! spiral it lifts by RADIUS rather than along a straight axis — a brightness
 //! that grows outward from the middle turns.
+//!
+//! What this pane carries of its OWN is the framing — [`SpiralView`], a
+//! magnifier over the fit and a point of the disc to look at. That is not one
+//! more analyzer setting: the settings above say what the disc is showing, and
+//! the framing says how closely it is being looked at. It is the lattice's
+//! camera on a flat picture, and it answers the lattice's gestures — see
+//! [`navigate`], which is also where the reason the wheel here does not mean
+//! what the wheel next door means is written down.
 
 use egui::Color32;
 
@@ -52,8 +60,12 @@ use crate::SharedState;
 /// actually has; edge to edge it reads as a sixth, and saying which is what
 /// keeps the figure checkable. Coarse either way, but still twelve directions
 /// rather than a blot.
-/// Narrowing the Analyzer's pitch range is what buys the inner turns room, and
-/// is the intended way to read this pane closely.
+/// Two things buy the inner turns room, and they are worth telling apart:
+/// narrowing the Analyzer's pitch range gives them more of the disc, and
+/// magnifying the disc ([`SpiralView`]) gives them more POINTS of the same
+/// share of it. The first changes what the picture holds and the second how
+/// closely it is being read; either is the intended way to read this pane
+/// closely, and they compose.
 const INNER_HOLE: f32 = 0.16;
 
 /// Points of air between the outermost turn and the pane edge.
@@ -93,14 +105,14 @@ const SEAM: (f32, f32) = (0.28, 1.0);
 /// this disc; the strip is cut fine because its COLOUR changes along it, where
 /// the seam is one hairline all the way round.
 ///
-/// What that saves depends on the pane, because the strip's step count is
-/// CAPPED at one step per bucket and this one is not capped at all. At the
-/// fresh range: on a docked pane the seam is under a quarter of the strip's
-/// 3826 steps and cutting it at the strip's grain would roughly double what
-/// the pane hands the tessellator; at 1080p it is two thirds; and at 3840x2160
-/// the seam alone is longer than the capped strip. The sagitta holds at every
-/// one of those, so what grows is a curve already smoother than it needs to be
-/// rather than one going rough.
+/// What that saves depends on the pane, both curves being cut by arc length and
+/// only then capped at one step per bucket. At the fresh range: on a docked pane
+/// the seam is under a quarter of the strip's 3826 steps and cutting it at the
+/// strip's grain would roughly double what the pane hands the tessellator; at
+/// 1080p it is two thirds; and at 3840x2160 the seam runs into the cap, which is
+/// where the coarser grain stops saving anything and starts being the reason the
+/// cap is not felt. The sagitta holds at every one of those, so what grows is a
+/// curve already smoother than it needs to be rather than one going rough.
 const SEAM_SEGMENT_PT: f32 = 6.0;
 
 /// A sounding note's dot: its radius as a share of half the track, and the
@@ -200,11 +212,147 @@ const NAME_BAND_SHARE: f32 = 0.15;
 /// note into two names.
 const NAME_GRAIN_CENTS: f32 = 10.0;
 
+/// How far the disc may be magnified, as a multiple of its own fit.
+///
+/// The FLOOR is 1 and is not a matter of taste: the fit already draws the whole
+/// disc inside the pane, and radius is the octave from the innermost turn to the
+/// rim, so there is nothing outside the picture to pull back to. A zoom under 1
+/// would draw the same picture smaller with well around it — which is where this
+/// parts company with the lattice's own zoom out, that one revealing more nodes
+/// because the lattice is unbounded.
+///
+/// The CEILING is measured off the reason to magnify at all. At the analyzer's
+/// full range the innermost turn has about a fifth of the outermost one's
+/// circumference (see [`INNER_HOLE`]), so five times the radius is what gives
+/// the inner turn the room the outer one has at the fit; eight leaves headroom
+/// past that for a reader going in on one turn. Past it a pane holds a couple of
+/// turns and no spiral, which is a picture this one has stopped being.
+const ZOOM: (f32, f32) = (1.0, 8.0);
+
+/// How far off centre the pane may look, in units of the drawn disc's outer
+/// radius — 1 puts the RIM under the pane's centre.
+///
+/// A bound on where a reader may LOOK rather than on where the disc may go, and
+/// stated in the disc's own radius so that it means the same thing at every zoom
+/// and on every pane. What it buys is that the middle of the pane always has
+/// spiral under it: outside the rim there is only the names' band and the well,
+/// so a pan that could bring those to the middle is a pan onto nothing, with
+/// the whole picture off the pane and the double-click the only way to find it
+/// again.
+const LOOK_MAX: f32 = 1.0;
+
+/// How the disc is FRAMED in the pane: the magnifier over its fit, and which
+/// point of it the pane's centre is looking through that at.
+///
+/// A magnifier and not a second fit. Nothing here changes which pitch is where —
+/// an octave is still one turn, a partial still lands on its own ray — so every
+/// reading the picture offers survives being looked at closely, and what changes
+/// is only how much of the pane one turn gets. Narrowing the Analyzer's pitch
+/// range is the other way to spend the pane on fewer octaves and it is a
+/// different thing: it changes what the disc is SHOWING. The two compose, and
+/// [`INNER_HOLE`] says which is which.
+///
+/// Persisted, like the lattice's [`Camera`](harmonigraph_scene::Camera) and for
+/// the lattice's reason: a framing is dialled in by hand, a take renders from
+/// the blob, and a disc dialled in on its inner turns has to export the picture
+/// it was dialled to. What that costs is that a framing left somewhere odd is
+/// still there next session — the same trade the camera already makes, and the
+/// double-click is the way out of it.
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct SpiralView {
+    /// How much larger than its fit the disc is drawn. 1 is the whole disc in
+    /// the pane; see [`ZOOM`] for both ends.
+    pub zoom: f32,
+    /// Which point of the disc the pane's CENTRE looks at, in units of the
+    /// disc's own outer radius: the origin is the spiral's centre, and length 1
+    /// is somewhere on the rim (see [`LOOK_MAX`]).
+    ///
+    /// A point of the PICTURE rather than an offset in points, which is what
+    /// makes one saved framing the same framing at every size it is drawn at —
+    /// the docked pane, the Video preview and an export at any resolution alike.
+    /// The same argument the roll's own divider is a share for
+    /// (`SpectrumConfig::roll_fraction`), and the reason a magnified disc can be
+    /// composed into a video at all.
+    pub look: glam::Vec2,
+}
+
+impl Default for SpiralView {
+    fn default() -> Self {
+        SpiralView { zoom: ZOOM.0, look: glam::Vec2::ZERO }
+    }
+}
+
+impl SpiralView {
+    /// Magnify by `factor` about `anchor` — where the pointer is, as an offset
+    /// from the point the pane's centre is looking at, in disc radii — so
+    /// whatever is under it stays where it is on screen.
+    ///
+    /// Everywhere but the rim, and [`LOOK_MAX`] is why: the look is written
+    /// through [`looking_at`], so where the anchor asks for a look past the rim
+    /// the shortened one is what lands, and the anchored point slides under the
+    /// pointer by the difference. The clamp wins deliberately — the middle of
+    /// the pane always having spiral under it is what keeps the picture findable
+    /// at all, where an anchor held exactly is what makes one gesture feel
+    /// right — so with the rim already centred and the pointer on the outward
+    /// side, a zoom creeps instead of pivoting.
+    /// `a_zoom_at_the_rim_holds_the_look_and_lets_the_anchor_slide` is what pins
+    /// which of the two gives.
+    fn zoom_about(&mut self, factor: f32, anchor: egui::Vec2) {
+        let zoom = (self.zoom * factor).clamp(ZOOM.0, ZOOM.1);
+        // `anchor` is in radii at the CURRENT zoom, so what the look has to
+        // travel is the share of it the magnification changes that unit by —
+        // and nothing at all where the clamp refused the zoom, which is what
+        // keeps a wheel spun at either end from walking the picture sideways.
+        let travel = 1.0 - self.zoom / zoom;
+        self.look = looking_at(self.look + glam::vec2(anchor.x, anchor.y) * travel);
+        self.zoom = zoom;
+    }
+
+    /// Slide the picture with the hand: `by` is the drag in disc radii. The
+    /// content follows the pointer, so the point being looked AT travels the
+    /// other way.
+    fn slide(&mut self, by: egui::Vec2) {
+        self.look = looking_at(self.look - glam::vec2(by.x, by.y));
+    }
+
+    /// Fit a deserialized framing to what the gestures can produce.
+    ///
+    /// The same door and the same argument as
+    /// [`Camera::sanitize`](harmonigraph_scene::Camera::sanitize): a gesture
+    /// cannot write either field out of range, a hand-edited blob can, and both
+    /// of these MULTIPLY the geometry the pane paints — a NaN zoom is a disc of
+    /// NaN vertices, which is a panic inside egui's tessellator rather than a
+    /// wrong picture, and a panic in the editor takes the host with it.
+    ///
+    /// The look is repaired as a whole vector, as the camera's target is: the
+    /// two components are read together and one NaN takes the other through
+    /// [`looking_at`]'s length.
+    pub(crate) fn sanitize(&mut self) {
+        let fresh = SpiralView::default();
+        self.zoom =
+            if self.zoom.is_finite() { self.zoom } else { fresh.zoom }.clamp(ZOOM.0, ZOOM.1);
+        self.look = looking_at(if self.look.is_finite() { self.look } else { fresh.look });
+    }
+}
+
+/// A look held to the disc — see [`LOOK_MAX`]. Every write of the field goes
+/// through this, so "the pane's centre is on the picture" is a property of the
+/// type rather than something each gesture remembers.
+fn looking_at(look: glam::Vec2) -> glam::Vec2 {
+    look.clamp_length_max(LOOK_MAX)
+}
+
 /// Where a MIDI pitch lands in the pane.
 ///
 /// Two numbers do all of it: `angle = 2π · frac(midi / 12)` and
 /// `radius = r0 + (midi - min_midi) / 12 · dr`. Everything drawn here speaks
 /// MIDI pitch and a radial offset, and only this knows where that is on screen.
+///
+/// The framing is folded into those two numbers and the centre by
+/// [`framed`](Self::framed), so nothing that draws has to know whether a hand
+/// has been over the pane: there is one geometry, and it is the one the picture
+/// is at.
 #[derive(Clone, Copy)]
 struct Spiral {
     centre: egui::Pos2,
@@ -223,7 +371,9 @@ struct Spiral {
 }
 
 impl Spiral {
-    /// Fit the spiral to `rect` over the Analyzer's pitch range.
+    /// Fit the spiral to `rect` over the Analyzer's pitch range — the whole
+    /// disc, centred, which is what the pane opens at and what
+    /// [`framed`](Self::framed) is a transform on.
     fn new(rect: egui::Rect, cfg: &crate::SpectrumConfig) -> Spiral {
         let min_midi = cfg.low_midi;
         // Never trust the pair to be ordered, exactly as the Spectral pane does
@@ -257,6 +407,39 @@ impl Spiral {
         let dr = (r_out - hole) / (octaves + 1.0 + VOICE_OVERHANG);
         let r0 = hole + dr * 0.5 * (1.0 + VOICE_OVERHANG);
         Spiral { centre: rect.center(), r0, dr, band, min_midi, max_midi }
+    }
+
+    /// The same disc under a [`SpiralView`]: magnified about the pane's centre,
+    /// then slid until the point the view is looking at is at that centre.
+    ///
+    /// Two multiplies and an offset, on top of a fit left exactly as
+    /// [`new`](Self::new) solved it. That is the whole reason the framing is a
+    /// second step rather than a term in the fit: every argument there — the hole
+    /// as a share, the reach reserved at both ends, the band taken off the radius
+    /// first — is about the picture's proportions, and a magnifier keeps all of
+    /// them. What it does not keep is the promise that the disc is INSIDE the
+    /// pane, which is what magnifying means; the pane paints through a clipping
+    /// painter, so what hangs over the edge is cut off.
+    ///
+    /// The names' [`band`](Self::band) is the one thing not magnified. It is
+    /// measured in points because it holds TYPE, and the type it holds is set at
+    /// the size the Display tab dialled it to (see [`NAME_PT`]) — a name grown
+    /// eight times over would be a word across the pane. So a magnified disc
+    /// carries the same names at the same size, standing off the rim by the same
+    /// air. The band still comes off the FIT's radius, since reserving room is
+    /// only ever a question at the fit: magnified, the rim it stands outside is
+    /// off the pane anyway.
+    fn framed(self, view: &SpiralView) -> Spiral {
+        // The drawn outer radius — the unit `look` is measured in. Read off the
+        // fit's own bounds so the unit is the disc a reader can see rather than
+        // any of the radii it is built from.
+        let unit = self.bounds().1 * view.zoom;
+        Spiral {
+            centre: self.centre - egui::vec2(view.look.x, view.look.y) * unit,
+            r0: self.r0 * view.zoom,
+            dr: self.dr * view.zoom,
+            ..self
+        }
     }
 
     /// The unit vector pointing out of the centre at `midi`'s pitch class. C is
@@ -338,18 +521,30 @@ impl Spiral {
 /// The analyzer's current spectrum in polar coordinates, with the sounding
 /// voices marked on it.
 ///
-/// A pointer over this pane changes nothing on it, matching the Spectral pane:
-/// the zoom is the Analyzer section's pitch range, which both panes read.
+/// A pointer over this pane moves the FRAMING and nothing else — see
+/// [`navigate`], which runs before the picture is drawn so that a drag lands in
+/// the frame the hand moved in rather than the one after it.
+///
+/// Every copy of the pane answers whatever pointer is over IT, which today is
+/// the docked one and nothing else: the offline renderer has no pointer, and the
+/// Video tab's preview cannot reach a spiral at all (`panes::render`'s
+/// `Pane::Spiral` arm). Were that arm ever to become live, this would want the
+/// Analyzer's own `DOCKED_SURFACE` gate for the Analyzer's reason — a wheel
+/// spent zooming inside a scrolling settings tab is a wheel that tab cannot be
+/// scrolled with.
 pub(crate) fn spiral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
     let cfg = state.spectrum_config;
-    let (rect, _response) = ui.allocate_exact_size(ui.available_size(), egui::Sense::hover());
+    let (rect, response) =
+        ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
     if rect.width() < 10.0 || rect.height() < 10.0 {
         return;
     }
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 0.0, crate::theme::well());
 
-    let spiral = Spiral::new(rect, &cfg);
+    let fit = Spiral::new(rect, &cfg);
+    navigate(ui, &response, &fit, &mut state.spiral_view);
+    let spiral = fit.framed(&state.spiral_view);
     painter.add(egui::Shape::mesh(strip(&spiral, state, &cfg, now)));
     seam(&painter, &spiral);
     rays(&painter, &spiral);
@@ -364,11 +559,83 @@ pub(crate) fn spiral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) 
         rect,
         state,
         crate::text::SPIRAL_NAMES,
-        // Nothing here scrolls: a name sits on its note's ray and stays there
-        // for as long as the note sounds, so the filter has no travel to
-        // follow and takes the axis every still surface takes.
+        // Nothing here scrolls: a name sits on its note's ray for as long as
+        // the note sounds, so the filter has no travel to follow and takes the
+        // axis every still surface takes. A pan is travel, but it is a
+        // DIAGONAL one lasting only while the hand moves, which is a case this
+        // pair cannot name and would not pay for — see `SlideAxis`, where the
+        // lattice's orbiting camera is the same answer.
         harmonigraph_render::SlideAxis::Across,
     );
+}
+
+/// Drag to slide the disc under the pane, scroll or pinch to magnify it, and
+/// double-click back to the whole disc: the lattice's three gestures on a flat
+/// picture, which is where a reader will have learnt them.
+///
+/// What they move is the [`SpiralView`] and never the pitch range, and that seam
+/// is worth stating outright because the Analyzer beside it answers the same
+/// wheel with the RANGE (`panes::spectral::gestures::drag_zoom`). On a straight
+/// pitch axis the range is the only zoom there is: the axis runs off both ends of
+/// the pane, so what a hand reaches for is more of it. This disc holds its whole
+/// range at once by construction — radius is the octave, hole to rim — so there
+/// is nothing off the pane to fetch, and what a reader is short of is SIZE on the
+/// inner turns. A magnifier is what gives them that. The range is still the
+/// Analyzer section's bar, the two compose, and neither gesture can reach the
+/// other's value.
+///
+/// The whole cost of magnifying is the rim: the names live outside it, so far
+/// enough in they are off the pane and clipped away. The twelve rays are what
+/// still says which direction is which, C's being the heavy one — which is the
+/// job [`RAY_FADE`] weights them for.
+///
+/// `fit` is the UNFRAMED disc, so `fit.centre` is the pane's own centre and
+/// `fit.bounds().1` the radius a `look` of 1 means: the gestures are in points
+/// and the view is in disc radii, and this is the one place the two meet.
+fn navigate(ui: &egui::Ui, response: &egui::Response, fit: &Spiral, view: &mut SpiralView) {
+    // The whole disc again, centred. The lattice's own double-click, and the way
+    // back from a framing dragged somewhere unreadable — which is what lets the
+    // gestures be as free as they are.
+    if response.double_clicked() {
+        *view = SpiralView::default();
+        return;
+    }
+    let out = fit.bounds().1;
+    if response.dragged() {
+        // Spent BEFORE the zoom below, and a frame can carry both — a trackpad
+        // hands over two fingers sliding while they spread routinely. A drag is
+        // spent in the radius the picture the hand moved OVER was drawn at, which
+        // is the framing before this frame's zoom, so it goes first. The zoom then
+        // anchors on the pointer, and `slide` leaves `zoom` alone, so the anchor
+        // below is the same offset either way round and holds whatever the drag has
+        // just brought under the cursor. Spending the drag after the zoom instead
+        // spends it twice: the anchor is read from `pointer_hover_pos`, which is
+        // where the pointer is once this frame's motion has been applied, so the
+        // drag is already inside it.
+        view.slide(response.drag_delta() / (out * view.zoom));
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+    }
+    if let Some((scroll, pinch)) = super::zoom_gesture(ui, response) {
+        // The Analyzer's own rate, quoted rather than picked afresh: one wheel
+        // over one analyzer drawn two ways, so a notch closes each picture by
+        // about the same third. WHAT it closes differs; how far a hand has to
+        // spin does not.
+        let factor = (scroll * super::spectral::ZOOM_PER_SCROLL_POINT).exp() * pinch;
+        if (factor - 1.0).abs() > 1e-4 {
+            // About the POINTER rather than the pane's centre: what is being
+            // magnified is a turn already being looked at, and a zoom about the
+            // middle walks it off the pane and leaves the drag to fetch it back.
+            // The pitch wheel next door is anchored the same way and for the same
+            // reason. With the pointer somewhere this cannot ask about — a pinch
+            // arriving with no hover position — the centre is the honest
+            // fallback, being the one point of the pane that is certainly on it.
+            let anchor = ui
+                .ctx()
+                .pointer_hover_pos()
+                .map_or(egui::Vec2::ZERO, |p| (p - fit.centre) / (out * view.zoom));
+            view.zoom_about(factor, anchor);
+        }
+    }
 }
 
 /// The spectrum itself: one triangle strip winding out from the centre, two
@@ -464,7 +731,16 @@ fn seam(painter: &egui::Painter, spiral: &Spiral) {
         return;
     }
     let (r_a, r_b) = (spiral.radius(spiral.min_midi), spiral.radius(spiral.max_midi - 12.0));
-    let steps = (arc_len(r_a, r_b, span / 12.0) / SEAM_SEGMENT_PT).max(MIN_STEPS) as usize;
+    // Capped at the strip's own grain — one step per analyzer bucket — for the
+    // case the magnifier makes: arc length is linear in radius, so a disc drawn
+    // eight times over asks for eight times the seam, and the seam is the one
+    // curve here whose step count nothing else bounds. The sagitta survives the
+    // cap: at the extreme it binds hardest on — a 4K frame magnified to the hilt
+    // over ten octaves, where a step is 121 points of arc at a radius of 7400 —
+    // a straight segment departs its curve by a quarter of a point, and by
+    // hundredths on a docked pane at any zoom.
+    let cap = (span * harmonigraph_core::spectrum::BINS_PER_SEMITONE as f32).max(MIN_STEPS);
+    let steps = (arc_len(r_a, r_b, span / 12.0) / SEAM_SEGMENT_PT).clamp(MIN_STEPS, cap) as usize;
     let points = (0..=steps)
         .map(|i| {
             let midi = spiral.min_midi + span * i as f32 / steps as f32;
@@ -636,7 +912,7 @@ fn names(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tests::probe::{fresh, painted_into};
+    use crate::tests::probe::{events_into, fresh, painted_into, press, themed};
     use crate::SpectrumConfig;
     use harmonigraph_core::{NoteEvent, NoteEventKind};
 
@@ -668,6 +944,101 @@ mod tests {
     fn spiral(low: f32, high: f32) -> Spiral {
         let cfg = SpectrumConfig { low_midi: low, high_midi: high, ..Default::default() };
         Spiral::new(PANE, &cfg)
+    }
+
+    /// A framing, as a gesture would leave it: through the type's own clamp, so
+    /// no fixture can ask about a `look` the pane cannot be navigated to.
+    fn view(zoom: f32, look: egui::Vec2) -> SpiralView {
+        SpiralView { zoom, look: looking_at(glam::vec2(look.x, look.y)) }
+    }
+
+    /// Which point of the DISC a screen position is over, in the units
+    /// [`SpiralView::look`] is in — the framing read backwards, so a fixture can
+    /// ask what was under the pointer before a gesture and what is under it
+    /// after.
+    ///
+    /// Written out from the fit rather than by inverting [`Spiral::framed`]
+    /// through the drawn spiral: a transform compared with itself agrees at every
+    /// sign, which is exactly what these tests are about.
+    fn under(view: &SpiralView, at: egui::Pos2) -> egui::Vec2 {
+        let fit = Spiral::new(PANE, &SpectrumConfig::default());
+        egui::vec2(view.look.x, view.look.y) + (at - fit.centre) / (fit.bounds().1 * view.zoom)
+    }
+
+    /// One frame of the whole pane on a context of `frames`' own, with events
+    /// delivered — what every gesture fixture below is built from.
+    fn frame(ctx: &egui::Context, state: &mut SharedState, events: Vec<egui::Event>) {
+        let _ = events_into(ctx, SCREEN, PANE, events, |ui| spiral_pane(ui, state, 100.0));
+    }
+
+    /// The framing a drag from `from` by `delta` leaves behind, driven through
+    /// the real pane.
+    ///
+    /// Four frames, exactly as the Analyzer's own drag fixture takes: egui
+    /// resolves the widget under the pointer from the PREVIOUS pass, so the press
+    /// needs a frame before it, and a drag registers only once the pointer has
+    /// moved while held.
+    fn dragged(start: SpiralView, from: egui::Pos2, delta: egui::Vec2) -> SpiralView {
+        let mut state = fresh();
+        state.spiral_view = start;
+        let ctx = themed();
+        frame(&ctx, &mut state, vec![egui::Event::PointerMoved(from)]);
+        frame(&ctx, &mut state, vec![egui::Event::PointerMoved(from), press(from, true)]);
+        frame(&ctx, &mut state, vec![egui::Event::PointerMoved(from + delta)]);
+        frame(&ctx, &mut state, vec![press(from + delta, false)]);
+        state.spiral_view
+    }
+
+    /// The framing `points` of wheel with the pointer at `at` leaves behind.
+    ///
+    /// Several frames of it, because egui SMOOTHS a scroll: one notch arrives
+    /// spread over the frames after it, so a fixture asks where the picture has
+    /// got to rather than what one frame did.
+    fn scrolled(start: SpiralView, at: egui::Pos2, points: f32) -> SpiralView {
+        let mut state = fresh();
+        state.spiral_view = start;
+        let ctx = themed();
+        frame(&ctx, &mut state, vec![egui::Event::PointerMoved(at)]);
+        for _ in 0..6 {
+            frame(
+                &ctx,
+                &mut state,
+                vec![egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(0.0, points),
+                    phase: egui::TouchPhase::Move,
+                    modifiers: egui::Modifiers::default(),
+                }],
+            );
+        }
+        state.spiral_view
+    }
+
+    /// The framing ONE frame carrying both a drag and a pinch leaves behind: the
+    /// press and the frame before it exactly as [`dragged`] takes them, then a
+    /// single frame delivering the motion and the pinch factor together.
+    ///
+    /// `egui::Event::Zoom` rather than a ctrl-held wheel, because a wheel is
+    /// smoothed over the frames after it and this fixture is about one frame: the
+    /// event multiplies `zoom_delta` in the pass it arrives in, so the drag and
+    /// the magnification land in the same call to [`navigate`].
+    fn dragged_and_pinched(
+        start: SpiralView,
+        from: egui::Pos2,
+        delta: egui::Vec2,
+        pinch: f32,
+    ) -> SpiralView {
+        let mut state = fresh();
+        state.spiral_view = start;
+        let ctx = themed();
+        frame(&ctx, &mut state, vec![egui::Event::PointerMoved(from)]);
+        frame(&ctx, &mut state, vec![egui::Event::PointerMoved(from), press(from, true)]);
+        frame(
+            &ctx,
+            &mut state,
+            vec![egui::Event::PointerMoved(from + delta), egui::Event::Zoom(pinch)],
+        );
+        state.spiral_view
     }
 
     fn painted(state: &mut SharedState, now: f64) -> Vec<egui::Shape> {
@@ -1219,5 +1590,452 @@ mod tests {
         // frame sat at exactly the dialled size once, and the fixture said
         // otherwise in its own doc.
         assert!(scaled > 0, "no frame here is small enough for the share to bind");
+    }
+
+    /// The framing a fresh pane opens at is the plain fit, to the bit.
+    ///
+    /// Which is what every test above is about: they all ask [`Spiral::new`] and
+    /// describe the pane a reader opens, and they only go on doing so while the
+    /// framing at rest is inert. A default that magnified by a hair would leave
+    /// them all passing about a picture nobody sees.
+    #[test]
+    fn the_fresh_framing_draws_exactly_the_fit() {
+        let cfg = SpectrumConfig::default();
+        let fit = Spiral::new(PANE, &cfg);
+        let framed = fit.framed(&SpiralView::default());
+        assert_eq!(
+            (framed.centre, framed.r0, framed.dr, framed.band),
+            (fit.centre, fit.r0, fit.dr, fit.band),
+            "the fresh framing is not the fit",
+        );
+    }
+
+    /// Magnifying draws the same picture larger: every radius scales, the pitch
+    /// map does not move, and the type does not grow with it.
+    ///
+    /// Three claims because they are three different promises, and each fails on
+    /// its own. A magnifier that also rotated or re-wound would still look like a
+    /// spiral — which is the trap [`an_octave_is_one_turn_of_the_spiral`] exists
+    /// for, one transform along. A band that scaled with the disc would set the
+    /// rim names at eight times their dialled size, a word across the pane. And a
+    /// track that did NOT scale would leave the dots and the seam drawn against a
+    /// picture that had moved out from under them.
+    #[test]
+    fn magnifying_scales_the_picture_and_not_the_pitch_map_or_the_type() {
+        let cfg = SpectrumConfig { low_midi: 36.0, high_midi: 96.0, ..Default::default() };
+        let fit = Spiral::new(PANE, &cfg);
+        for zoom in [1.5f32, 3.0, ZOOM.1] {
+            let s = fit.framed(&view(zoom, egui::Vec2::ZERO));
+            assert_eq!(s.centre, fit.centre, "zoom {zoom} moved the centre of a centred look");
+            for midi in [36.0f32, 47.5, 60.0, 96.0] {
+                assert!(
+                    (s.radius(midi) - fit.radius(midi) * zoom).abs() < 1e-3,
+                    "zoom {zoom}: {midi} draws at {} rather than {}",
+                    s.radius(midi),
+                    fit.radius(midi) * zoom,
+                );
+                assert_eq!(s.ray(midi), fit.ray(midi), "zoom {zoom}: {midi} changed direction");
+            }
+            assert!(
+                (s.half() - fit.half() * zoom).abs() < 1e-3 && s.dot().0 > fit.dot().0,
+                "zoom {zoom}: the track and the dot on it must grow with the picture",
+            );
+            // The names: same band, same size, and the same air between the ink
+            // and whatever rim the disc now has.
+            assert_eq!(
+                (s.band, s.name_scale()),
+                (fit.band, fit.name_scale()),
+                "zoom {zoom} resized the rim names",
+            );
+            let standoff = |s: &Spiral| (s.rim(60.0) - s.centre).length() - s.bounds().1;
+            assert!(
+                (standoff(&s) - standoff(&fit)).abs() < 1e-3,
+                "zoom {zoom}: a name stands {} off the rim rather than {}",
+                standoff(&s),
+                standoff(&fit),
+            );
+        }
+    }
+
+    /// A `look` names the point of the disc the pane's CENTRE is at, which is
+    /// what makes one saved framing mean one picture at any size it is drawn.
+    ///
+    /// Asked at the rim (`look` of length 1, the furthest [`LOOK_MAX`] allows)
+    /// and half way out, on rays that are not the cardinals: the look is a
+    /// vector and a transform that dropped or swapped a component still centres
+    /// correctly on the axes.
+    #[test]
+    fn a_look_puts_its_own_point_of_the_disc_at_the_pane_centre() {
+        let cfg = SpectrumConfig::default();
+        let fit = Spiral::new(PANE, &cfg);
+        let out = fit.bounds().1;
+        for midi in [37.0f32, 60.5, 71.0, 94.25] {
+            for share in [1.0f32, 0.5] {
+                let ray = fit.ray(midi);
+                let s = fit.framed(&view(2.0, ray * share));
+                // The same point of the picture, named in the pane's own terms:
+                // `share` of the way out along that ray from the spiral's centre.
+                let drawn = s.centre + ray * (out * share * 2.0);
+                assert!(
+                    (drawn - fit.centre).length() < 1e-2,
+                    "looking {share} out along {midi}'s ray put it at {drawn:?}, \
+                     not the pane's centre {:?}",
+                    fit.centre,
+                );
+            }
+        }
+    }
+
+    /// The wheel magnifies about the POINTER: whatever is under it stays under
+    /// it, so a reader zooms in on the turn they are already looking at instead
+    /// of watching it slide off the pane.
+    #[test]
+    fn the_wheel_magnifies_about_the_pointer() {
+        // Off centre, and off both axes, so a zoom about the middle — or about
+        // one axis' worth of the pointer — moves what is under the pointer.
+        let at = PANE.center() + egui::vec2(70.0, -40.0);
+        let before = SpiralView::default();
+        let after = scrolled(before, at, 30.0);
+        assert!(
+            after.zoom > before.zoom + 0.1,
+            "scrolling up must magnify ({} -> {})",
+            before.zoom,
+            after.zoom,
+        );
+        let (was, now) = (under(&before, at), under(&after, at));
+        assert!(
+            (was - now).length() < 1e-3,
+            "the disc point under the pointer moved from {was:?} to {now:?}",
+        );
+        // And scrolling back down opens the picture out again, so the gesture is
+        // reversible rather than a one-way trip to the ceiling.
+        assert!(
+            scrolled(after, at, -30.0).zoom < after.zoom,
+            "scrolling down must pull the picture back out",
+        );
+    }
+
+    /// At the rim it is the ANCHOR that gives, not the look: a zoom there keeps
+    /// the pane's centre on the picture and lets what is under the pointer slide.
+    ///
+    /// Which is [`the_wheel_magnifies_about_the_pointer`]'s promise held against
+    /// [`LOOK_MAX`], and the case is reachable rather than theoretical — the rim
+    /// centred and the pointer on the outward side of the pane's centre is where
+    /// any pan that has run out of disc leaves a reader, one notch from a wheel.
+    /// The bound is the one worth keeping: a pane whose middle has no spiral under
+    /// it is a picture only the double-click can find. So this pins the cost rather
+    /// than reporting it.
+    #[test]
+    fn a_zoom_at_the_rim_holds_the_look_and_lets_the_anchor_slide() {
+        // The rim under the pane's centre, and the pointer further out still, so
+        // the zoom asks for a look past the rim and cannot be given one.
+        let before = view(2.0, egui::vec2(0.0, -1.0));
+        assert!((before.look.length() - LOOK_MAX).abs() < 1e-6, "the fixture is not at the rim");
+        let at = PANE.center() + egui::vec2(0.0, -60.0);
+        let after = scrolled(before, at, 30.0);
+        assert!(
+            after.zoom > before.zoom + 0.1,
+            "the wheel never magnified ({} -> {})",
+            before.zoom,
+            after.zoom,
+        );
+        assert!(
+            after.look.length() <= LOOK_MAX + 1e-4,
+            "a zoom at the rim looked {} radii off centre",
+            after.look.length(),
+        );
+        // Pinned exactly, there being nowhere further out for it to go — so it is
+        // the anchored point that moves. The pointer's offset from the centre is a
+        // fixed number of POINTS, and a larger picture makes that fewer disc radii,
+        // so it comes to sit nearer the rim point the pane's centre is held on.
+        assert_eq!(after.look, before.look, "the clamp let the look off the rim");
+        let (was, now) = (under(&before, at), under(&after, at));
+        assert!(
+            now.y > was.y + 1e-2,
+            "the point under the pointer went from {was:?} to {now:?} rather than sliding",
+        );
+    }
+
+    /// A drag slides the picture with the hand: the point of the disc under the
+    /// press is the point under the pointer where the drag ends.
+    ///
+    /// Grab-style, which is the lattice's own promise for its pan, and EXACT: the
+    /// drag is spent in the radius the picture is drawn at, so what the hand
+    /// travels the picture travels.
+    ///
+    /// Exact to a rounding error because the fixture moves in one step. A drag
+    /// slow enough to cross egui's click radius in stages loses those first few
+    /// points, and that is not this arithmetic: it is the disambiguation any
+    /// widget sensing clicks and drags alike has to do before it can know which
+    /// it has, and the lattice's own pan spends the same points on it.
+    #[test]
+    fn a_drag_slides_the_picture_with_the_hand() {
+        let from = PANE.center() + egui::vec2(-30.0, 20.0);
+        let delta = egui::vec2(60.0, -45.0);
+        let before = view(3.0, egui::Vec2::ZERO);
+        let after = dragged(before, from, delta);
+        // Both in disc radii, the units the framing itself is in.
+        let (grabbed, landed) = (under(&before, from), under(&after, from + delta));
+        assert!(
+            (grabbed - landed).length() < 1e-4,
+            "the point grabbed at {grabbed:?} was carried to {landed:?}",
+        );
+        // The right WAY, which the tolerance above would forgive on its own: a
+        // drag up and to the right brings the picture up and to the right, so
+        // the point being looked at travels down and to the left.
+        let travel = egui::vec2(after.look.x - before.look.x, after.look.y - before.look.y);
+        assert!(
+            travel.x < 0.0 && travel.y > 0.0,
+            "the look travelled {travel:?} for a drag of {delta:?}",
+        );
+    }
+
+    /// A frame carrying both a drag and a pinch spends the drag ONCE: the point
+    /// grabbed at the press is still under the pointer where the drag ends, and
+    /// the magnification is the pinch's own.
+    ///
+    /// Both at once is what a trackpad hands over routinely — two fingers sliding
+    /// while they spread — and it is the only case where the ORDER [`navigate`]
+    /// reads the two gestures in is visible. The pinch is anchored on
+    /// `pointer_hover_pos`, which is where the pointer is once this frame's motion
+    /// has been applied, so the drag is already inside the anchor; a drag spent on
+    /// top of a framing that anchor has already zoomed is spent twice, and the
+    /// picture lands the drag times whatever the zoom changed the unit by past
+    /// where the hand left it.
+    ///
+    /// Both directions of pinch, from a zoom with room to move either way: the
+    /// error is the drag times one minus the zoom factor, so it changes sign
+    /// across a pinch of 1 and a single direction would leave half of it unasked.
+    #[test]
+    fn a_frame_carrying_a_drag_and_a_pinch_spends_the_drag_once() {
+        let from = PANE.center() + egui::vec2(-30.0, 20.0);
+        let delta = egui::vec2(60.0, -45.0);
+        for pinch in [0.5f32, 2.0] {
+            let before = view(3.0, egui::Vec2::ZERO);
+            let after = dragged_and_pinched(before, from, delta, pinch);
+            // The pinch reached the pane at all, and neither end of [`ZOOM`]
+            // clamped it — a refused zoom has no unit change to double-count and
+            // would let the claim below pass on the bug.
+            assert!(
+                (after.zoom - before.zoom * pinch).abs() < 1e-3,
+                "a pinch of {pinch} left the zoom at {} rather than {}",
+                after.zoom,
+                before.zoom * pinch,
+            );
+            let (grabbed, landed) = (under(&before, from), under(&after, from + delta));
+            assert!(
+                (grabbed - landed).length() < 1e-4,
+                "pinch {pinch}: the point grabbed at {grabbed:?} was carried to {landed:?}, \
+                 {} radii off",
+                (grabbed - landed).length(),
+            );
+        }
+    }
+
+    /// A drag moves the framing and nothing else. In particular not the pitch
+    /// range, which is what the same drag does on the Analyzer next door
+    /// (`spectral::gestures::drag_zoom`) — and the range is shared, so a spiral
+    /// that panned it would re-zoom the pane beside it.
+    #[test]
+    fn a_drag_leaves_the_analyzers_own_settings_alone() {
+        let mut state = fresh();
+        let before = state.spectrum_config;
+        let ctx = themed();
+        let from = PANE.center() + egui::vec2(-30.0, 20.0);
+        let delta = egui::vec2(60.0, -45.0);
+        frame(&ctx, &mut state, vec![egui::Event::PointerMoved(from)]);
+        frame(&ctx, &mut state, vec![egui::Event::PointerMoved(from), press(from, true)]);
+        frame(&ctx, &mut state, vec![egui::Event::PointerMoved(from + delta)]);
+        frame(&ctx, &mut state, vec![press(from + delta, false)]);
+        assert_ne!(
+            state.spiral_view.look,
+            SpiralView::default().look,
+            "the drag never reached the pane",
+        );
+        assert_eq!(
+            (before.low_midi, before.high_midi, before.roll_seconds, before.ceiling_db),
+            (
+                state.spectrum_config.low_midi,
+                state.spectrum_config.high_midi,
+                state.spectrum_config.roll_seconds,
+                state.spectrum_config.ceiling_db,
+            ),
+            "a drag on the spiral moved an Analyzer setting",
+        );
+    }
+
+    /// A double-click is the way back to the whole disc — the lattice's own
+    /// reset, and what makes the freedom of the other two gestures safe.
+    #[test]
+    fn a_double_click_returns_to_the_whole_disc() {
+        let mut state = fresh();
+        state.spiral_view = view(5.0, egui::vec2(0.8, -0.4));
+        let ctx = themed();
+        let at = PANE.center() + egui::vec2(40.0, 40.0);
+        frame(&ctx, &mut state, vec![egui::Event::PointerMoved(at)]);
+        for _ in 0..2 {
+            frame(&ctx, &mut state, vec![press(at, true)]);
+            frame(&ctx, &mut state, vec![press(at, false)]);
+        }
+        let after = state.spiral_view;
+        assert_eq!(
+            (after.zoom, after.look),
+            (SpiralView::default().zoom, SpiralView::default().look),
+            "a double-click must land back on the fit",
+        );
+    }
+
+    /// Neither gesture can take the picture off the pane or the magnifier out of
+    /// its range, however far it is pushed.
+    ///
+    /// The drag is the one worth driving through the pane rather than through
+    /// [`SpiralView::slide`] alone: a drag of ten pane-widths is what a hand
+    /// actually does when it means "as far as this goes", and the clamp has to
+    /// answer that rather than a single tidy delta.
+    #[test]
+    fn a_gesture_cannot_take_the_framing_off_the_picture() {
+        let far = dragged(view(2.0, egui::Vec2::ZERO), PANE.center(), egui::vec2(4000.0, -3000.0));
+        assert!(
+            far.look.length() <= LOOK_MAX + 1e-4,
+            "a long drag looked {} radii off centre",
+            far.look.length(),
+        );
+        // And the look it lands on is the direction it was dragged, not a
+        // component of it: a clamp per axis would put the corner of a square
+        // where the rim is.
+        assert!(far.look.x < 0.0 && far.look.y > 0.0, "the clamp turned the drag: {:?}", far.look);
+        let at = PANE.center();
+        assert_eq!(scrolled(SpiralView::default(), at, 400.0).zoom, ZOOM.1, "the ceiling holds");
+        let out = scrolled(view(ZOOM.1, egui::Vec2::ZERO), at, -400.0);
+        assert_eq!(out.zoom, ZOOM.0, "and the floor, which is the whole disc");
+    }
+
+    /// A wheel spun at either end of [`ZOOM`] leaves the look exactly where it is:
+    /// where the clamp refuses the magnification, the picture does not travel at
+    /// all.
+    ///
+    /// [`SpiralView::zoom_about`] divides by the CLAMPED zoom for this, so the
+    /// share the magnification changes the unit by is nothing when it changes it by
+    /// nothing. Dividing by the factor the gesture ASKED for instead agrees at
+    /// every zoom the clamp lets through and moves the look on every notch the
+    /// clamp eats — a reader holding the wheel at the ceiling would watch the disc
+    /// walk sideways under a magnification that is not changing, and there is no
+    /// way back but the double-click.
+    ///
+    /// Off-centre pointers, and that is the whole of why this is its own fixture:
+    /// at the pane's own centre the anchor is exactly zero and the look cannot move
+    /// under any formula at all, so
+    /// [`a_gesture_cannot_take_the_framing_off_the_picture`]'s scrolls — which are
+    /// the other two at the clamps — cannot ask it.
+    #[test]
+    fn a_wheel_spun_at_either_end_leaves_the_look_where_it_is() {
+        // Off both axes, so a formula walking one component is caught too.
+        let at = PANE.center() + egui::vec2(70.0, -40.0);
+        // From the centred look and from one already off it: a travel term that
+        // ZEROED the look rather than leaving it alone passes the first.
+        for look in [egui::Vec2::ZERO, egui::vec2(0.3, -0.2)] {
+            // The ceiling spun further in, then the floor spun further out.
+            for (end, points) in [(ZOOM.1, 400.0f32), (ZOOM.0, -400.0)] {
+                let before = view(end, look);
+                let after = scrolled(before, at, points);
+                assert_eq!(after.zoom, end, "a wheel at {end} magnified past it");
+                assert_eq!(
+                    after.look, before.look,
+                    "{points} points of wheel refused at {end} walked the look",
+                );
+            }
+        }
+    }
+
+    /// A framing a hand-edited blob can carry — a NaN, an infinity, a zoom out
+    /// of range — loads as one the pane can draw.
+    ///
+    /// The same threat and the same door as [`SpectrumConfig::sanitize`]: both
+    /// fields multiply the geometry this pane paints, and NaN geometry is a panic
+    /// inside egui's tessellator rather than a wrong picture — which in the
+    /// editor takes the host down with it.
+    #[test]
+    fn a_hand_edited_framing_loads_at_a_drawable_one() {
+        let bad = [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.0, -3.0, 1e30];
+        for zoom in bad {
+            for look in bad {
+                let mut framing = SpiralView { zoom, look: glam::vec2(look, -look) };
+                framing.sanitize();
+                assert!(
+                    (ZOOM.0..=ZOOM.1).contains(&framing.zoom),
+                    "zoom {zoom} loaded as {}",
+                    framing.zoom,
+                );
+                assert!(
+                    framing.look.is_finite() && framing.look.length() <= LOOK_MAX + 1e-4,
+                    "a look of {look} loaded as {:?}",
+                    framing.look,
+                );
+                // And the repaired framing paints finite geometry, which is the
+                // claim the ranges above are only a proxy for.
+                let mut state = fresh();
+                state.spiral_view = framing;
+                for shape in painted(&mut state, 0.1) {
+                    assert!(
+                        !shape.visual_bounding_rect().any_nan(),
+                        "zoom {zoom}, look {look} painted NaN geometry",
+                    );
+                }
+            }
+        }
+    }
+
+    /// A magnified disc is still cut at the analyzer's own grain: arc length
+    /// decides how many segments each curve is drawn from, and magnifying
+    /// multiplies arc length, so both caps have to hold or the pane hands the
+    /// tessellator eight times the geometry for a picture no smoother.
+    ///
+    /// The seam is the half worth pinning — the cap is the only thing bounding its
+    /// step count, it being one hairline where the strip's colour changes along it
+    /// — and the 1080p frame is where it binds: at the fit that frame asks for
+    /// about two thirds of the cap, and magnified it asks for many times it.
+    #[test]
+    fn a_magnified_disc_is_cut_no_finer_than_the_analyzers_grain() {
+        use harmonigraph_core::spectrum::BINS_PER_SEMITONE;
+        let rect = FRAMES[1].1;
+        let mut state = fresh();
+        state.spiral_view = view(ZOOM.1, egui::Vec2::ZERO);
+        let cfg = state.spectrum_config;
+        let span = cfg.high_midi - cfg.low_midi;
+        let shapes: Vec<egui::Shape> = painted_into(rect.size(), rect, |ui| {
+            spiral_pane(ui, &mut state, 0.1)
+        })
+        .shapes
+        .into_iter()
+        .map(|s| s.shape)
+        .collect();
+
+        // One step per bucket, two vertices a step, and the step count is
+        // inclusive of both ends.
+        let strip_cap = 2 * (span * BINS_PER_SEMITONE as f32) as usize + 4;
+        let seam_cap = ((span - 12.0) * BINS_PER_SEMITONE as f32) as usize + 2;
+        let (mut meshes, mut paths) = (0, 0);
+        for shape in &shapes {
+            match shape {
+                egui::Shape::Mesh(mesh) => {
+                    meshes += 1;
+                    assert!(
+                        mesh.vertices.len() <= strip_cap,
+                        "the strip is {} vertices against a cap of {strip_cap}",
+                        mesh.vertices.len(),
+                    );
+                }
+                egui::Shape::Path(path) => {
+                    paths += 1;
+                    assert!(
+                        path.points.len() <= seam_cap,
+                        "the seam is {} points against a cap of {seam_cap}",
+                        path.points.len(),
+                    );
+                }
+                _ => {}
+            }
+        }
+        assert_eq!((meshes, paths), (1, 1), "the pane draws one strip and one seam");
     }
 }

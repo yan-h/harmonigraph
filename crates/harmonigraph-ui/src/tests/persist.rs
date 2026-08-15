@@ -834,6 +834,7 @@ fn the_persist_blob_carries_exactly_these_top_level_keys() {
         "view",
         "camera_presets",
         "spectrum",
+        "spiral",
         "render",
         "fps_cap",
         "ui_scale",
@@ -957,6 +958,105 @@ fn a_persist_blob_missing_any_one_section_keeps_the_rest() {
             "dropping {key:?} sank the whole document instead of costing itself",
         );
         assert_eq!(restored.camera.yaw, 1.23, "dropping {key:?} cost the camera too");
+    }
+}
+
+/// The Spiral pane's framing round-trips, and a hand-edited one comes back
+/// drawable.
+///
+/// Persisted for the reason the camera beside it is — a framing is dialled in by
+/// hand and a take renders from the blob — so what has to hold is that the pair
+/// SURVIVES rather than being re-derived from the fit, and that a nonsense one
+/// cannot reach the pane: both fields multiply the geometry it paints, and NaN
+/// geometry is a panic inside egui's tessellator.
+#[test]
+fn persist_round_trips_the_spiral_framing() {
+    let mut state = fresh();
+    // A zoom off both ends of the range and a look off both axes, so a field
+    // dropped or transposed on the way through shows up.
+    state.spiral_view =
+        crate::panes::spiral::SpiralView { zoom: 2.75, look: glam::vec2(0.4, -0.6) };
+
+    let mut restored = fresh();
+    assert!(restored.load_persist(&state.save_persist()));
+    assert_eq!(restored.spiral_view.zoom, 2.75);
+    assert_eq!(restored.spiral_view.look, glam::vec2(0.4, -0.6));
+
+    // And the repair on the way in, which is `load_persist`'s call rather than
+    // the pane's: a blob nothing but a text editor could have written.
+    let saved = state.save_persist();
+    let edited = replace_pair(&saved, "zoom", "2.75", "NaN");
+    assert_ne!(edited, saved, "`zoom` is not in the blob to edit");
+    let mut restored = fresh();
+    assert!(restored.load_persist(&edited));
+    assert!(
+        restored.spiral_view.zoom.is_finite(),
+        "a NaN zoom opened at {}",
+        restored.spiral_view.zoom,
+    );
+}
+
+/// Dropping any one key from INSIDE the `spiral` section costs that key alone:
+/// the rest of the blob loads, the section's other field keeps the value the blob
+/// names, and the dropped one comes back at the fresh-install value.
+///
+/// One layer in from [`a_persist_blob_missing_any_one_section_keeps_the_rest`],
+/// and that is the whole reason it exists: sweeping whole sections exercises
+/// `UiPersist::spiral`'s field-level attribute, where this is the only thing that
+/// asks after `SpiralView`'s container-level one — the attribute nothing at a
+/// declaration says is there.
+///
+/// The input is one a hand-authored `--ui-state` file arrives in every time:
+/// `spiral: (zoom: 3.0)` and no `look`, because a person writing a framing out by
+/// hand writes the field they came to change. Without the attribute that file does
+/// not cost `look` — it sinks the whole document, dock and camera with it, and
+/// nothing but this would fail.
+#[test]
+fn a_persist_blob_missing_any_one_spiral_key_keeps_the_rest() {
+    let mut state = fresh();
+    // A witness outside the section, so "the blob survived" is distinguishable
+    // from "it sank and every section reverted together".
+    state.camera.yaw = 1.23;
+    // Both fields off their fresh values, and the look off both axes: a field
+    // that came back from the wrong place is only visible against a value the
+    // default is not.
+    state.spiral_view =
+        crate::panes::spiral::SpiralView { zoom: 2.75, look: glam::vec2(0.4, -0.6) };
+    let saved = state.save_persist();
+
+    let whole = top_level_pairs(&saved)
+        .into_iter()
+        .find_map(|(key, text)| (key == "spiral").then_some(text))
+        .expect("the blob carries a spiral section");
+    // The section's own pairs, through the same depth-aware split: `look` is a
+    // nested struct, so a comma split would cut it in half.
+    let inner = whole.trim_start_matches("spiral:");
+    let pairs = top_level_pairs(inner);
+    assert_eq!(pairs.len(), 2, "the probe must see the whole framing, got {pairs:?}");
+
+    let opened = crate::panes::spiral::SpiralView::default();
+    for (key, _) in &pairs {
+        let kept: Vec<&str> =
+            pairs.iter().filter(|(k, _)| k != key).map(|(_, text)| text.as_str()).collect();
+        let without = replace_pair(&saved, "spiral", inner, &format!("({})", kept.join(",")));
+        assert_ne!(without, saved, "the spiral's {key:?} must be in the blob to drop");
+
+        let mut restored = fresh();
+        assert!(
+            restored.load_persist(&without),
+            "dropping the spiral's {key:?} sank the whole document instead of costing itself",
+        );
+        assert_eq!(restored.camera.yaw, 1.23, "dropping the spiral's {key:?} cost the camera too");
+        let want = match key.as_str() {
+            "zoom" => (opened.zoom, state.spiral_view.look),
+            "look" => (state.spiral_view.zoom, opened.look),
+            other => panic!("the framing grew a {other:?} field this sweep does not name"),
+        };
+        assert_eq!(
+            (restored.spiral_view.zoom, restored.spiral_view.look),
+            want,
+            "dropping the spiral's {key:?} did not cost that key alone",
+        );
     }
 }
 
@@ -1410,7 +1510,13 @@ fn a_display_section_left_open_survives_an_editor_reopen() {
 /// a whole persist section (`render:(...)`, `dock:(...)`) be dropped or
 /// counted as one.
 fn top_level_pairs(blob: &str) -> Vec<(String, String)> {
-    let inner = blob.trim().trim_start_matches('(').trim_end_matches(')');
+    let trimmed = blob.trim();
+    // Exactly ONE enclosing paren off each end. Trimming every one of them takes
+    // the last field's own closer along with the container's wherever that field
+    // is itself a struct — `(zoom:2.75,look:(0.4,-0.6))` comes back with `look`
+    // one paren short, which reads as a pair and rebuilds into a blob that will
+    // not parse.
+    let inner = trimmed.strip_prefix('(').and_then(|s| s.strip_suffix(')')).unwrap_or(trimmed);
     let (mut out, mut depth, mut start) = (Vec::new(), 0i32, 0usize);
     for (i, c) in inner.char_indices() {
         match c {
