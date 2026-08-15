@@ -1338,9 +1338,13 @@ impl ViewConfig {
             finite_or(self.spectral_ring_inner, fresh.spectral_ring_inner).clamp(0.0, 1.0);
         self.spectral_ring_outer =
             finite_or(self.spectral_ring_outer, fresh.spectral_ring_outer).clamp(0.0, 1.0);
-        // How wide a window each wedge shows. A DIVISOR again — the shader
-        // turns a fragment's angle into a cents offset by it — so a zero from a
-        // hand-edited blob is a ring of NaN colour rather than a wrong zoom.
+        // How wide a window each wedge shows. A MULTIPLIER in the shader — a
+        // fragment's across-the-wedge fraction scales by it into a cents
+        // offset — so a zero from a hand-edited blob is finite but degenerate:
+        // every fragment of a wedge reads the slot's own pitch and the ring
+        // collapses to one flat reading per wedge. The floor forbids that
+        // zoom; [`SPECTRAL_RANGE_MIN`](crate::SPECTRAL_RANGE_MIN) says where
+        // it sits and why.
         self.spectral_ring_range = finite_or(self.spectral_ring_range, fresh.spectral_ring_range)
             .clamp(crate::SPECTRAL_RANGE_MIN, crate::SPECTRAL_RANGE_MAX);
 
