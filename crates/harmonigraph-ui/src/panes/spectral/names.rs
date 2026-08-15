@@ -481,7 +481,15 @@ pub(super) fn plan(
         // anchor.
         .filter(|note| note.stop(now) >= sweep_from)
         .map(|note| (note, anchor_edge(note, now, anchor)))
-        .filter(|(_, edge)| edge.time >= sweep_from)
+        // An anchor inside the sweep, OR a note still on the pane whatever its
+        // anchor is doing. The second arm is the note longer than the window:
+        // its anchor can be any distance back — a drone's is unbounded — while
+        // its ribbon is still filling the picture, and a name is owed to the
+        // ribbon (see `on_pane` below). Bounded all the same, because what
+        // bounds it is the window rather than a constant: a note only qualifies
+        // while it has ink on the pane, and the roll holds one such note per
+        // key.
+        .filter(|(note, edge)| edge.time >= sweep_from || note.stop(now) >= oldest)
         .collect();
     // By ANCHOR, oldest first — where the name will sit, which is what
     // the thinning is handing out — and by channel and key after it, since the
@@ -610,27 +618,33 @@ pub(super) fn plan(
         // will be DRAWN at, not the note's pitch in general, since the two
         // differ for a bent note and it is the name that has to be visible.
         //
-        // A name lives as long as the END IT IS WRITTEN ON is on the pane, so
-        // live this is the anchor's own time: a leading edge inside the window
-        // is the note still having a head to name (`stop(now) >= oldest`,
-        // identically), and an onset that has scrolled off the far edge is a
-        // ribbon whose head has gone with it.
+        // A name lives as long as its NOTE has ink on the pane, and the anchor
+        // decides only WHERE it is written. One test for every anchor and every
+        // layout: the note's stop is the last of it to leave, so this is the
+        // ribbon still having something under the name.
         //
-        // Onsets have to be ASKED, because the depth they draw at CLAMPS. What
-        // catches a name written on one that has left is otherwise the sweep's
-        // own bound, and that is `lookback` — four of the widest name's rooms,
-        // some seconds at any ordinary Span — beyond the far edge: a held
-        // note's name would sit clamped against that edge for the whole of it
-        // before vanishing, which is the waiting this anchor exists to end,
-        // moved to the other end of the pane. Whole-song does want the clamp,
-        // and asks the note instead — a note that began before the render's
-        // start is named at the near edge, having nowhere to scroll off to.
+        // Asking the ANCHOR instead is the same question at the leading edge —
+        // that edge IS `stop(now)` — and a much sharper one at the onset, where
+        // it drops the name the moment the ribbon's TAIL crosses the far edge
+        // and leaves the rest of it scrolling unnamed. On a reversed
+        // orientation, where the onset is the end that reads first (see
+        // [`Anchor::of`]), that is every note losing its name its own length
+        // early, and a held drone never being named at all past one window.
         //
-        // Only DRAWING is culled here. A note off the far edge still takes its
-        // turn in the thinning, which is what lets the names on the pane stand
-        // still while it scrolls.
-        let on_pane =
-            if time.whole_song() { note.stop(now) >= oldest } else { edge.time >= oldest };
+        // What the anchor's own bound bought was that a name never sits still:
+        // an onset past the far edge draws at a CLAMPED depth, so its name
+        // parks on that edge instead of travelling. It still does, and this is
+        // the trade — a parked name for the length of ribbon still showing,
+        // against no name at all. Parked, it is at the end of the ribbon that
+        // reads first of what is left of it, which is where the name belongs;
+        // and it goes when the note goes rather than some seconds later at the
+        // sweep's own `lookback`, which is what asking the note rather than the
+        // anchor is worth here.
+        //
+        // Only DRAWING is culled. A note off the far edge still takes its turn
+        // in the thinning, which is what lets the names on the pane stand still
+        // while it scrolls.
+        let on_pane = note.stop(now) >= oldest;
         let visible = on_pane && scale.contains(edge.pitch);
         // A held note whose name is anchored on the LEADING EDGE stands outside
         // the sweep in BOTH directions: it is named whatever is already there,
@@ -776,9 +790,11 @@ enum Anchor {
     ///
     /// Fixed in take time, so the name scrolls with the picture from the first
     /// frame of the note and nothing about it changes at the release: not where
-    /// it sits, not whether the thinning kept it. The price is a note whose
-    /// onset has scrolled off the far edge, which loses its name while it is
-    /// still sounding.
+    /// it sits, not whether the thinning kept it. The price is a note longer
+    /// than the window, whose onset leaves the far edge with ribbon still to
+    /// come: the name parks on that edge for the rest of it, since there is no
+    /// onset left on the pane to travel with. It is still named — [`plan`] asks
+    /// the NOTE whether to draw one, not the anchor.
     ///
     /// The whole-song layout has no other option, for a reason that is about
     /// the TAKE rather than about reading order — see [`of`](Self::of).
@@ -880,8 +896,9 @@ impl Anchor {
 /// there.
 ///
 /// Both ends are CLAMPED into the region on the way, so a note reaching past
-/// either edge is named at the last of it still on the pane — except an onset
-/// gone off the far edge live, which [`plan`] culls rather than clamps.
+/// either edge is named at the last of it still on the pane. Which end has left
+/// makes no difference: [`plan`] draws a name while the NOTE is on the pane, so
+/// an onset off the far edge parks its name there rather than losing it.
 fn anchor_edge(note: &RollNote, now: f64, anchor: Anchor) -> Edge {
     match anchor {
         // The onset end, so the pitch the note SETTLED on rather than the key
@@ -2294,21 +2311,80 @@ mod tests {
         assert_eq!(said(&labels(&pressed(true), 1.5)), ["C"]);
     }
 
-    /// A travelling name leaves with the end it is written on: a note still
-    /// sounding whose ONSET has scrolled off the far edge is no longer named.
+    /// A note keeps its name for exactly as long as it keeps its RIBBON, in
+    /// every orientation — the claim the whole cull rests on.
     ///
-    /// The price of this anchor, and the one behaviour it gives up — the drone
-    /// of [`a_note_that_began_before_the_window_is_still_named`] keeps its name
-    /// at the leading edge and loses it here.
+    /// Swept over [`SpectralOrientation::ALL`] because this is the one thing
+    /// about a name that the orientation used to decide, and decided badly. The
+    /// anchor is the orientation's (see [`Anchor::of`]): the two that agree with
+    /// the screen name a ribbon's leading edge, the two that reverse it name the
+    /// onset. Culling on the ANCHOR made those two drop a name the moment the
+    /// ribbon's tail crossed the far edge — so with the analyzer on the right, a
+    /// note went unnamed for its own length before it had finished scrolling,
+    /// and a drone went unnamed with its ribbon filling the pane.
     ///
-    /// Asked at the moment the onset LEAVES, which is the only moment that
-    /// distinguishes culling it from letting it clamp. Further off the far edge
-    /// the sweep's own `lookback` bound drops the note anyway and the name goes
-    /// whatever this decides — so a test asking about a drone minutes old would
-    /// pass against a name parked on the edge for the seconds in between, which
-    /// is the artifact being ruled out.
+    /// Two lengths, because the gap the fault opens IS the note's length: a
+    /// short one loses its name a moment early and a long one loses it for the
+    /// whole of itself, and a test on one note cannot tell a fix from a shift.
     #[test]
-    fn a_travelling_name_leaves_with_the_onset_it_is_written_on() {
+    fn a_name_outlasts_its_ribbon_by_nothing_and_falls_short_of_it_by_nothing() {
+        for orientation in SpectralOrientation::ALL {
+            for length in [2.0f64, 12.0] {
+                let mut state = turned(24.0, 10.0, orientation);
+                state.tracker.handle_event(on(1.0, 60));
+                state.tracker.handle_event(off(1.0 + length, 60));
+
+                let cfg = &state.spectrum_config;
+                let axes = Axes::new(PANE, cfg);
+                let split = super::super::axes::spectrum_share(cfg);
+                let scale = scale_of(&state);
+                // The last moment each survives, walked at a step fine enough
+                // that the two cannot be a step apart by rounding alone.
+                let (mut named, mut drawn) = (f64::NAN, f64::NAN);
+                let mut now = 1.0;
+                while now < 40.0 {
+                    if !labels(&state, now).is_empty() {
+                        named = now;
+                    }
+                    let ribbons = super::super::roll::note_instances(
+                        &axes, &scale, &state, split, now, 2.0,
+                    );
+                    if !ribbons.is_empty() {
+                        drawn = now;
+                    }
+                    now += 0.02;
+                }
+                // The ribbon outlives the name by the ink it owes past its own
+                // box and no more — a few points of outline and rim, which at
+                // this Span is a fraction of a second. Never by the note's own
+                // length, which is what culling on the onset cost.
+                let over = drawn - named;
+                assert!(
+                    (0.0..0.5).contains(&over),
+                    "{orientation:?}, a {length} s note: the name went {over} s before the \
+                     ribbon did (name {named}, ribbon {drawn})",
+                );
+            }
+        }
+    }
+
+    /// A travelling name parks on the far edge once its onset has left, and
+    /// stays for as long as the ribbon does.
+    ///
+    /// The one behaviour this anchor gives up is the TRAVEL, not the name: an
+    /// onset past the far edge has nowhere left to scroll from, so the name
+    /// holds the last of the ribbon still showing. Drop it instead and a drone
+    /// goes unnamed from one window after its onset for as long as the key is
+    /// down, with its ribbon filling the pane the whole time — which is the
+    /// reversed orientations' DEFAULT anchor (see [`Anchor::of`]), so it is
+    /// every note on such a pane losing its name its own length early.
+    ///
+    /// Asked either side of the moment the onset leaves, and then far past it:
+    /// the near pair is what distinguishes parking from culling, and the last
+    /// is what says the name survives the sweep's own `lookback` bound rather
+    /// than lingering a few seconds and going anyway.
+    #[test]
+    fn a_travelling_name_parks_on_the_far_edge_once_its_onset_has_left() {
         let mut state = travelling(24.0, 10.0);
         state.tracker.handle_event(on(0.0, 67)); // still held, and never released
 
@@ -2321,10 +2397,24 @@ mod tests {
         // is sounding at the now-line throughout, and its ribbon still fills
         // the pane.
         assert_eq!(said(&labels(&state, 9.5)), ["G"], "still on, just inside the far edge");
+        let parked = labels(&state, 10.5);
+        assert_eq!(said(&parked), ["G"], "the onset has left; the ribbon has not");
+        // ...and it is ON the far edge rather than adrift past it: the box is
+        // placed at the clamped depth and grows back toward the now-line, so
+        // its far corner sits on the edge and the rest of it lies inside.
+        let far = axes.at(0.5, 1.0).x;
         assert!(
-            labels(&state, 10.5).is_empty(),
-            "the onset has left: the name goes with it rather than clamping to the edge",
+            parked[0].rect.max.x <= far && parked[0].rect.min.x < far,
+            "parked at {:?}, not against the far edge at {far}",
+            parked[0].rect,
         );
+        // ...and it holds there rather than drifting on: the onset's depth is
+        // clamped, so two frames a second apart put the name in one place.
+        let held_still = labels(&state, 11.5);
+        assert_eq!(held_still[0].rect.min.x, parked[0].rect.min.x, "the parked name moved");
+        // Minutes later — well past the sweep's `lookback` — it is still there,
+        // because what keeps it is the ribbon and the ribbon is still there.
+        assert_eq!(said(&labels(&state, 120.0)), ["G"], "a long drone lost its name after all");
     }
 
     /// Travelling names hold still against each other as the roll scrolls, the
