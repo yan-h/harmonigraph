@@ -2666,7 +2666,16 @@ mod tests {
         for (algo, lag) in windows {
             for (pane, cols) in panes {
                 // Where a slab is exactly the lag — the crossing this pair's
-                // ring behaviour turns on — plus the Span the pane opens on.
+                // ring behaviour turns on — plus a close-up to anchor it.
+                //
+                // The close-up is 12 s rather than the three-minute Span a
+                // fresh view opens on, and the two crossing-relative spans are
+                // why that costs no coverage: they land either side of the
+                // crossing for each window and pane, which is a longer Span
+                // than the default for some of those pairs and a shorter one
+                // for others. Driving the default outright would add 24,000
+                // columns per pair (the loop below runs `(span + 15) /
+                // interval` of them) to make a case these already bracket.
                 let crossing = lag * cols;
                 for span in [12.0f64, crossing * 0.6, crossing * 1.4] {
                     let planned = cols as usize + RING_HEADROOM;
