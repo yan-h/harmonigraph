@@ -415,19 +415,21 @@ pub(crate) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
         );
     ui.checkbox(&mut cfg.note_names, "Note names").on_hover_text(
         "Write each note's name on its own ribbon, at the end of it you read \
-         first — the left of the note where time runs across the pane, its top \
-         where time runs down — with the note running away under the rest of \
-         the name. For reading \
-         the heatmap: a band of energy sits at \
-         some height on an axis marked only in decades of hertz, and the \
-         ribbon over that band is the same note, so naming the ribbon names \
-         the band.\n\n\
+         first — the left of the note where time runs across the pane, its \
+         top where time runs down — with the note running away under the rest \
+         of the name. For reading the heatmap: a band of energy sits at some \
+         height on an axis marked only in decades of hertz, and the ribbon \
+         over that band is the same note, so naming the ribbon names the \
+         band.\n\n\
          Names are the lattice's own, in its own hand: the node's spelling \
          with its accidental and comma mark, so a just third reads E- rather \
          than as an E and a cents offset.\n\nWhere repeats of a note come too \
          fast to name each one, the first keeps its name and the next waits \
-         for clear room — except a note you are holding, which is always \
-         named. Needs Note history on: a name labels a ribbon.",
+         for clear room. A note you are HOLDING is named whatever the crowd, \
+         but only where its name is the one waiting at the now-line — with \
+         the spectrum on the right or along the bottom a held note takes its \
+         turn like any other, its name being pinned to the take instead. \
+         Needs Note history on: a name labels a ribbon.",
     );
     ui.add_enabled_ui(cfg.note_names && cfg.show_roll, |ui| {
         ui.checkbox(&mut cfg.note_names_travel, "Name the far end").on_hover_text(
@@ -448,7 +450,10 @@ pub(crate) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
              scrolled off the far edge loses its name, and that a note younger \
              than its own name wears it over the spectrum until its ribbon is \
              long enough to hold it.\n\nSo this is the switch between those \
-             two, whichever way round the pane has them.",
+             two, whichever way round the pane has them.\n\nThe offline \
+             render's whole-song layout is anchored at the onset either way: \
+             it lays the take out as a still, and the onset is the one end of \
+             a note that stands in one place there.",
         );
         ValueBar::new(&mut cfg.note_name_scale, crate::SCALE_BAR_RANGE, "Name size")
             .show(ui)

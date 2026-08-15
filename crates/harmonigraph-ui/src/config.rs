@@ -454,8 +454,12 @@ pub struct SpectrumConfig {
     /// Turning this on asks for the other end, and so for the other of those
     /// two in whichever orientation the pane is in.
     ///
-    /// The default is off, which is the look the naming was dialled in at:
-    /// with the spectrum on the left it is the leading edge, exactly as before.
+    /// The offline whole-song layout is outside all of this and takes the
+    /// onset in every orientation, at either setting: it lays the take out as
+    /// a still, and an onset is the one end of a note that stands in one place
+    /// there — see [`Anchor::of`](crate::panes::spectral::names).
+    ///
+    /// The default is off, which is the look the naming was dialled in at.
     pub note_names_travel: bool,
     /// Overall size of those names, as a multiple of their built-in size.
     ///

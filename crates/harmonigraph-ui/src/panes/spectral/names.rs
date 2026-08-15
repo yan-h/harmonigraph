@@ -1301,8 +1301,9 @@ mod tests {
         turned(range, span, SpectralOrientation::Left)
     }
 
-    /// The same pane with the names anchored on their onsets — the "Travel
-    /// from the onset" setting, and [`Anchor::Onset`] in the live layout.
+    /// The same pane with the names anchored on their onsets — the "Name the
+    /// far end" setting, which in this Left-facing fixture is the onset and in
+    /// a reversed orientation would be the leading edge.
     fn travelling(range: f32, span: f32) -> SharedState {
         let mut state = state(range, span);
         state.spectrum_config.note_names_travel = true;
@@ -2418,9 +2419,10 @@ mod tests {
         }
     }
 
-    /// The offline whole-song layout lays the take out in reading order, so a
-    /// ribbon's leading edge is its ONSET there rather than its release — the
-    /// one place the two layouts disagree about which end that is.
+    /// The offline whole-song layout names a ribbon at its ONSET rather than
+    /// at its release, in every orientation — the one place the anchor is not
+    /// the orientation's to decide. See [`Anchor::of`] for why a still picture
+    /// has only the one end it can anchor to.
     #[test]
     fn whole_song_names_a_ribbon_at_its_onset() {
         let mut state = state(24.0, 10.0);
