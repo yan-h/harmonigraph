@@ -853,7 +853,16 @@ impl LatticeCallback {
                 }),
                 misc9: [scene.spectral.range, f32::from(u8::from(scene.spectral.lit)), 0.0, 0.0],
                 spectral_lut: std::array::from_fn(|k| scene.spectral.lut[k].to_array()),
-                spectrum: pack_spectrum(&scene.spectral.levels),
+                // Zeroed rather than packed when the ring is off: `u.spectrum`
+                // is read only through `spectral_ring`, which draws nothing off
+                // an empty annulus, so the fresh feature-off frame skips the
+                // 3828-bucket pack — twice, docked pane and Render preview —
+                // and the struct uploads whole either way.
+                spectrum: if scene.spectral.ring_draws() {
+                    pack_spectrum(&scene.spectral.levels)
+                } else {
+                    [[0u32; 4]; SPECTRUM_WORDS]
+                },
             },
             target_format,
             pane_id,
