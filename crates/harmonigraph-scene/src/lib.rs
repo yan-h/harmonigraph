@@ -133,10 +133,11 @@ pub const MARK_DELAY_MAX: f32 = 1.0;
 /// ([`ViewConfig::spectral_width`]), in cents — the bar's two ends, and what
 /// `sanitize` holds a hand-edited view to.
 ///
-/// The floor is a tenth of an analyzer bucket (3.125¢), which is as narrow as
-/// asking is worth: below it the kernel sits inside one bucket and the fold is
-/// reading a single 3.125¢ column of the spectrum, which is precisely the
-/// exposure the whole design avoids. The ceiling is a comfortable quarter-tone,
+/// The floor is a third of an analyzer bucket (3.125¢), which is as narrow as
+/// asking is worth: at 1¢ the kernel already sits inside one bucket, reading a
+/// single 3.125¢ column of the spectrum — precisely the exposure the whole
+/// design avoids — and narrower buys nothing a column does not already give.
+/// The ceiling is a comfortable quarter-tone,
 /// wide enough to take in a tempered seventh's 31¢ miss with room over — past
 /// that the kernel starts admitting the NEXT lattice node's partials as well as
 /// this one's, and the constellation smears into a glow.

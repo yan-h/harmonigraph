@@ -44,9 +44,11 @@ use crate::{ViewConfig, PITCH_LUT_N, SPECTRAL_RING_MIN_SPAN};
 /// one node claiming the same frequency — which is a picture that cannot be
 /// read as a position.
 ///
-/// The floor is a fifth of an analyzer bucket (3.125¢). Below it a whole wedge
-/// spans less than the grid's own step, so the arc is one bucket stretched
-/// across it and the ring says nothing a single number could not.
+/// The floor is a sixth of an analyzer bucket (3.125¢). Any wedge narrower
+/// than a bucket is one bucket stretched across its arc, saying nothing a
+/// single number could not — so the floor is not where the picture sharpens,
+/// only what keeps a hand-edited zero from collapsing every wedge to its
+/// slot's own flat reading.
 pub const SPECTRAL_RANGE_MIN: f32 = 0.5;
 /// See [`SPECTRAL_RANGE_MIN`].
 pub const SPECTRAL_RANGE_MAX: f32 = 1200.0;
