@@ -322,9 +322,11 @@ pub(crate) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
         .show(ui)
         .on_hover_text(
             "Seconds of history the roll spans end to end, up to 10 minutes. \
-             The scale is logarithmic, so the short spans you live in get most \
-             of the travel. The spectrogram fills the most recent few minutes \
-             of a long span; the notes span the whole of it.\n\nOr set it on the \
+             The scale is logarithmic, so the short spans get most of the \
+             travel. The spectrogram fills the whole of it, as far back as it \
+             has been listening -- what a long span costs is grain, not reach: \
+             its detail is merged into wider time slabs, and zooming in is what \
+             asks for it back.\n\nOr set it on the \
              display itself: drag the roll along the time axis, away from the \
              now-line to zoom in.",
         );
