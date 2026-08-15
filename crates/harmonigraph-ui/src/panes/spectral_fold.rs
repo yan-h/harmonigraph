@@ -312,7 +312,10 @@ impl Fold {
         if !(SPECTRUM_MIN_MIDI..=SPECTRUM_MAX_MIDI).contains(&pitch) {
             return None;
         }
-        let x = (pitch - SPECTRUM_MIN_MIDI) * BINS_PER_SEMITONE as f32;
+        // Bucket `b` stands for `SPECTRUM_MIN_MIDI + (b + 0.5) / 32` — the
+        // grid's own convention, and the shader's `spectrum_at` subtracts the
+        // same half so the fold and the ring place a partial at one pitch.
+        let x = (pitch - SPECTRUM_MIN_MIDI) * BINS_PER_SEMITONE as f32 - 0.5;
         let i = (x.max(0.0) as usize).min(SPECTRUM_BINS - 2);
         let t = (x - i as f32).clamp(0.0, 1.0);
         Some(self.smoothed[i] + (self.smoothed[i + 1] - self.smoothed[i]) * t)
@@ -1104,6 +1107,41 @@ mod tests {
             return None;
         }
         Some(x.round() as usize)
+    }
+
+    /// A probe at a bucket's own centre reads that bucket, not a blend of it
+    /// and its neighbour: the reader subtracts the grid's half-bucket offset
+    /// exactly as `bucket_pitch`, `grid_bucket` and the shader's `spectrum_at`
+    /// do, so the band's fold and the ring place a partial at the same pitch.
+    #[test]
+    fn a_probe_at_a_buckets_centre_reads_that_bucket_alone() {
+        let mut levels = [0.0f32; SPECTRUM_BINS];
+        let bucket = 2000;
+        levels[bucket] = 1.0;
+        let fold = Fold::measure(&levels, SPECTRAL_WIDTH_MIN);
+
+        // Tolerances are f32 grid arithmetic, not slack: recovering the index
+        // from an absolute pitch wobbles by ~1e-4 of a bucket, and the levels
+        // reach the GPU as bytes (a step of ~4e-3) anyway. The bug this pins
+        // read the centre HALF a bucket off — three orders of magnitude out.
+        let centre = harmonigraph_scene::bucket_pitch(bucket);
+        let at_centre = fold.slot_power(centre).unwrap();
+        assert!(
+            (at_centre - fold.smoothed[bucket]).abs() < 1e-3,
+            "the centre of bucket {bucket} reads {at_centre}, not its own smoothed value {}",
+            fold.smoothed[bucket],
+        );
+
+        // And symmetrically off it: a quarter-bucket flat and a quarter-bucket
+        // sharp of an isolated partial are the same distance from it, so they
+        // read the same power.
+        let quarter = 0.25 / BINS_PER_SEMITONE as f32;
+        let flat = fold.slot_power(centre - quarter).unwrap();
+        let sharp = fold.slot_power(centre + quarter).unwrap();
+        assert!(
+            (flat - sharp).abs() < 1e-3,
+            "a quarter-bucket flat reads {flat} and a quarter-bucket sharp reads {sharp}",
+        );
     }
 
     /// Only the LIGHTING is replaced: the geometry, the wheel, the grid and the
