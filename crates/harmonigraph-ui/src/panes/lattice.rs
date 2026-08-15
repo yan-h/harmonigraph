@@ -584,6 +584,13 @@ mod tests {
     /// half-height is `distance * tan(fov/2)` — so it has to double the type
     /// too. Read off the largest piece each frame laid out, which is the note
     /// name: the marks and the cents line are sized off it.
+    ///
+    /// The size at the default framing is `NAME_SIZE` through the fresh view's
+    /// own Name size, rather than the constant bare: the bar is a multiple of
+    /// the built-in and a fresh view does not open at 1, so quoting the
+    /// constant alone would pin the picture to a bar position nobody starts
+    /// from. What the test is about is the RATIO the camera moves it by, and
+    /// that is untouched by where the bar sits.
     #[test]
     fn a_label_grows_with_the_camera() {
         // A pane the height the sizes are quoted against, so this is a test
@@ -596,9 +603,10 @@ mod tests {
                 .map(|piece| piece.font_size)
                 .fold(0.0f32, f32::max)
         };
+        let dialled = NAME_SIZE * harmonigraph_scene::ViewConfig::default().label_scale;
         assert_eq!(
             biggest(Camera::DEFAULT_DISTANCE),
-            NAME_SIZE,
+            dialled,
             "the default framing is where the sizes are dialled",
         );
         // Within a rung of the ladder either way. The size follows the camera
@@ -608,24 +616,39 @@ mod tests {
         let tracks = |distance: f32, want: f32| {
             let got = biggest(distance);
             // Off by at most a rung of the ladder, or half a pixel where that
-            // is coarser — the two grains `snap_scale` quantizes on. A quarter
-            // of a 30pt name is 7.5 pixels on this 1x context, where half a
-            // pixel is a fifteenth of the size and the rung is a thirtieth.
+            // is coarser — the two grains `snap_scale` quantizes on. The rung
+            // is the coarser of the two at every size here but the smallest,
+            // where a quarter of the dialled name is a few pixels on this 1x
+            // context and half a pixel is the wider tolerance of the pair.
             let slack = (0.04 * want).max(0.5);
             assert!(
                 (got - want).abs() <= slack,
                 "at distance {distance} a name drew at {got}, not within {slack} of {want}",
             );
         };
-        tracks(Camera::DEFAULT_DISTANCE * 0.5, NAME_SIZE * 2.0);
-        tracks(Camera::DEFAULT_DISTANCE * 2.0, NAME_SIZE * 0.5);
-        tracks(Camera::DEFAULT_DISTANCE * 4.0, NAME_SIZE * 0.25);
-        // And the ladder is really there: a nudge of the camera too small to
-        // see is not a new size to rasterize.
-        assert_eq!(
-            biggest(Camera::DEFAULT_DISTANCE),
-            biggest(Camera::DEFAULT_DISTANCE * 1.01),
-            "a 1% camera move asked for a size of its own",
+        tracks(Camera::DEFAULT_DISTANCE * 0.5, dialled * 2.0);
+        tracks(Camera::DEFAULT_DISTANCE * 2.0, dialled * 0.5);
+        tracks(Camera::DEFAULT_DISTANCE * 4.0, dialled * 0.25);
+        // And the ladder is really there: a walk of nudges each too small to
+        // see costs a handful of sizes to rasterize rather than one apiece.
+        //
+        // Counted over a walk rather than asserted on a single nudge, and the
+        // difference is the rung BOUNDARIES: two sizes 1% apart are usually
+        // one size and are two whenever the pair straddles a boundary, so a
+        // single nudge is a test of where the fresh view's Name size happens
+        // to sit on the ladder. What is actually promised is that the count of
+        // sizes follows the rungs crossed and not the frames drawn — and 24
+        // steps of 1% is a quarter more distance, which is 6 rungs of a 4%
+        // ladder however the bar is set.
+        let mut sizes: Vec<f32> = (0..25)
+            .map(|step| biggest(Camera::DEFAULT_DISTANCE * 1.01f32.powi(step)))
+            .collect();
+        sizes.sort_by(f32::total_cmp);
+        sizes.dedup();
+        assert!(
+            sizes.len() <= 8,
+            "25 camera nudges of 1% asked for {} sizes: {sizes:?}",
+            sizes.len(),
         );
     }
 
