@@ -1040,7 +1040,14 @@ fn name_extent(name: &NoteName, size: f32) -> egui::Vec2 {
 /// A note's name: the LATTICE's spelling of its pitch.
 ///
 /// No octave number, because a lattice node is a pitch class and wears none
-/// either — and the octave is already said by where the name sits on the axis.
+/// either — and on this pane the octave is already said by where the name
+/// sits, which is its height on the axis.
+///
+/// The [`spiral`](crate::panes::spiral) names notes through here too and drops
+/// the octave for a different reason: there a name stands on the rim at one
+/// fixed radius and serves every octave of its class at once, so where it sits
+/// says the pitch CLASS and nothing about which octave is sounding. What
+/// answers that is the dots on the turns, which are not the name.
 ///
 /// The REACH is asked first and the picture's own window
 /// ([`SharedState::shown`](crate::SharedState::shown)) only where the reach
@@ -1062,7 +1069,12 @@ fn name_extent(name: &NoteName, size: f32) -> egui::Vec2 {
 /// the band says what is on screen, the name says what the note is called —
 /// and a name that changed under a pan would be the worse of the two to make
 /// agree. A note with no name at all would just look like a bug.
-fn note_name(view: &ViewConfig, shown: &DrawnWindow, tuning: &Tuning, midi: f32) -> NoteName {
+pub(crate) fn note_name(
+    view: &ViewConfig,
+    shown: &DrawnWindow,
+    tuning: &Tuning,
+    midi: f32,
+) -> NoteName {
     // Cents from C, measured from MIDI 0 (which IS a C) — the same reduction
     // the pane's hover makes before asking the same question.
     let pc = PitchClass::from_cents(midi.rem_euclid(12.0) * 100.0);

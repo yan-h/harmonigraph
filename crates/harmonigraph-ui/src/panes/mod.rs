@@ -101,7 +101,8 @@ pub enum Tab {
     /// "Analyzer".
     Spectral,
     /// The same analyzer frame wound onto a chroma spiral, one turn per
-    /// octave, with the sounding notes marked on it. Titled "Spiral".
+    /// octave, with the sounding notes dotted on it and named around its rim.
+    /// Titled "Spiral".
     Spiral,
     Notes,
     /// A live preview of the offline video frame, composed and adjusted here.
