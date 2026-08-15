@@ -947,10 +947,14 @@ fn name_extent(name: &NoteName, size: f32) -> egui::Vec2 {
 /// A note's name: the LATTICE's spelling of its pitch.
 ///
 /// No octave number, because a lattice node is a pitch class and wears none
-/// either — and the octave is already said by where the name sits. On this
-/// pane that is its height on the axis; in the [`spiral`](crate::panes::spiral),
-/// the other pane that names notes through here, it is which turn the note's
-/// dot is on.
+/// either — and on this pane the octave is already said by where the name
+/// sits, which is its height on the axis.
+///
+/// The [`spiral`](crate::panes::spiral) names notes through here too and drops
+/// the octave for a different reason: there a name stands on the rim at one
+/// fixed radius and serves every octave of its class at once, so where it sits
+/// says the pitch CLASS and nothing about which octave is sounding. What
+/// answers that is the dots on the turns, which are not the name.
 ///
 /// The REACH is asked first and the picture's own window
 /// ([`SharedState::shown`](crate::SharedState::shown)) only where the reach
