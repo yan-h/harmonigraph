@@ -57,12 +57,11 @@ use crate::{theme, SharedState};
 /// [`plan`] and [`draw`] a scale that grows this as the range narrows. See
 /// `spectral::name_zoom`.
 ///
-/// Rebased by 1.3 from the 9.5 it was drawn at before the Name size bar
-/// existed, that being where the bar settled once there was one. [`LABEL_PAD`]
-/// and [`REPEAT_GAP`] moved with it and still ride the same scale, being the
-/// clear space this type demands around itself. [`LABEL_INSET`] does NOT: it
-/// was rebased along with them, and is no longer a spacing quoted against this
-/// size at all.
+/// Where the Name size bar settles, which is what quotes this number rather
+/// than any round figure. [`LABEL_PAD`] and [`REPEAT_GAP`] ride the same
+/// scale, being the clear space this type demands around itself, so the bar
+/// moves all three together. [`LABEL_INSET`] does NOT: it is a screen
+/// distance the pane scales, not a spacing quoted against this size at all.
 pub(super) const LABEL_PT: f32 = 12.35;
 
 /// Points the name is set in from the end of the ribbon it is anchored to,

@@ -128,6 +128,52 @@ fn a_cabinet_pane_never_draws_a_node_the_reach_cannot_name() {
     }
 }
 
+/// ...and a LOADED view holds it too, which is the half the fresh one cannot
+/// check.
+///
+/// The reach is sized on the drawn window, and the sizing is a default — so the
+/// test above asserts the property for the one view that cannot violate it. A
+/// saved blob carries whatever reach the build that wrote it shipped, and the
+/// reach is a persisted field with no bar: nothing on screen sets it, so
+/// nothing on screen can repair it either. Sanitize is the only place a loaded
+/// view is made to make sense, and a reach that no longer covers the window is
+/// exactly the case it exists for.
+///
+/// The fixture is the reach the previous build shipped, which is the input
+/// every project on disk actually carries.
+#[test]
+fn a_loaded_view_never_draws_a_node_its_reach_cannot_name() {
+    let mut view = ViewConfig { extent_threes: 10, extent_fives: 6, ..ViewConfig::default() };
+    view.sanitize();
+    let reach: std::collections::HashSet<_> = view.visible_positions().collect();
+    for aspect in [0.6, 1.0, 1.5, 16.0 / 9.0] {
+        for distance in [Camera::MIN_DISTANCE, Camera::DEFAULT_DISTANCE, Camera::MAX_DISTANCE] {
+            for cabinet_scale in [0.1, 0.6, 1.0] {
+                let camera = Camera {
+                    projection: Projection::Cabinet,
+                    distance,
+                    cabinet_scale,
+                    ..Camera::default()
+                };
+                let drawn = view.scrolled(&camera, aspect);
+                let outside = drawn
+                    .visible_positions()
+                    .filter(|&pos| {
+                        ndc(&camera, &drawn, aspect, pos)
+                            .is_some_and(|p| p.x.abs() <= 1.0 && p.y.abs() <= 1.0)
+                    })
+                    .filter(|pos| !reach.contains(pos))
+                    .count();
+                assert_eq!(
+                    outside, 0,
+                    "aspect {aspect}, distance {distance}, shear {cabinet_scale}: {outside} \
+                     nodes are drawn on the pane and cannot be named",
+                );
+            }
+        }
+    }
+}
+
 /// No cabinet camera reaches the node budget on a pane of ordinary shape, at
 /// any zoom, depth or shear — so under the projection this feature is FOR, the
 /// cap is a thing that exists rather than a thing that happens.

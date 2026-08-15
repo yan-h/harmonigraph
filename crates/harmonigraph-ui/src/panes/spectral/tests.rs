@@ -1224,9 +1224,15 @@ fn the_volume_grid_follows_the_level_zoom_in_both_directions() {
     };
 
     // Zoomed IN to the narrowest window the Level bar allows. A 10 dB step has
-    // one line to give here, which brackets the picture instead of measuring it.
+    // one line to give here, which brackets the picture instead of measuring
+    // it — so even the shortest axis subdivides rather than rule it, which is
+    // the whole of what the sparse bound is for.
     let tight = level_cfg(-32.0, -20.0);
-    assert_eq!(ruled_db(&tight, 40.0, 60.0).len(), 1, "a 40-point axis has room for nothing finer");
+    assert_eq!(
+        ruled_db(&tight, 40.0, 60.0),
+        vec![-30.0, -25.0],
+        "the shortest axis ruled a bracket rather than a measure",
+    );
     let zoomed = ruled_db(&tight, 400.0, 60.0);
     assert_eq!(
         zoomed,
@@ -1261,19 +1267,44 @@ fn the_volume_grid_follows_the_level_zoom_in_both_directions() {
             for level_len in [40.0, 100.0, 300.0, 900.0] {
                 for room in [20.0, 60.0, 140.0] {
                     let closest = MIN_LEVEL_GAP_PT.max(room * NUMBERED_LINE_SHARE);
-                    for gap in gaps(&cfg, level_len, room) {
-                        assert!(
-                            gap >= closest,
-                            "{floor}..{ceiling} on {level_len} points at room {room} \
-                             ruled {gap} points apart",
-                        );
+                    // The crowding bound binds only where honouring it still
+                    // leaves a grid. Where the two bounds disagree the SPARSE
+                    // one wins — coarsening to buy the type its room would
+                    // spend the last line the window has between its ends, and
+                    // a grid that rules nothing is not a grid.
+                    // Which is a question about the next rung UP, not about how
+                    // many lines this one drew: the ladder's rungs are a factor
+                    // of 2 or 2.5 apart, so a three-line grid can be the last
+                    // one that measures just as a two-line grid can.
+                    let grid = level_grid(&cfg, level_len, room);
+                    let step = grid.windows(2).map(|w| w[1].db - w[0].db).next();
+                    let (lo, hi) = level_window(&cfg);
+                    let rungs_at = |s: f32| {
+                        let r = lo / s;
+                        let first = if (r - r.round()).abs() < 1e-4 {
+                            r.round() as i32
+                        } else {
+                            r.floor() as i32 + 1
+                        };
+                        (hi / s).ceil() as i32 - first
+                    };
+                    let coarser_measures = step.is_some_and(|s| {
+                        let coarser = LEVEL_STEPS_DB.iter().find(|&&c| c > s + 1e-3);
+                        coarser.is_some_and(|&c| rungs_at(c) >= 2)
+                    });
+                    if coarser_measures {
+                        for gap in gaps(&cfg, level_len, room) {
+                            assert!(
+                                gap >= closest,
+                                "{floor}..{ceiling} on {level_len} points at room {room} \
+                                 ruled {gap} points apart",
+                            );
+                        }
                     }
                     // The sparse bound binds only where the ladder has a finer
                     // rung left to take: below 1 dB there is nothing to
                     // subdivide to, and the crowding bound wins where they
                     // disagree.
-                    let grid = level_grid(&cfg, level_len, room);
-                    let step = grid.windows(2).map(|w| w[1].db - w[0].db).next();
                     if step.is_some_and(|s| s > LEVEL_STEPS_DB[0]) && closest <= MAX_LEVEL_GAP_PT {
                         for gap in gaps(&cfg, level_len, room) {
                             assert!(
@@ -1320,6 +1351,42 @@ fn the_sparse_bound_wins_where_the_type_wants_more_room_than_the_axis_has() {
     // The bottom of the scale is still named, which is the one thing that holds
     // through every regime.
     assert!(grid[0].numbered);
+}
+
+/// A grid that is ruled at all is ruled with something BETWEEN its lines.
+///
+/// [`MAX_LEVEL_GAP_PT`] is the bound written against exactly one outcome — a
+/// single line across the whole analyzer, which brackets the picture rather
+/// than measuring it — and it states the reason: the reading a grid exists for
+/// is the one between its lines, and there is no between with one line.
+///
+/// But that bound is quoted on the step's NOMINAL spacing, `step/span *
+/// level_len`, which says nothing about how many multiples of the step land
+/// inside the window. Once the ladder climbs to a step near or past the span
+/// itself, the nominal gap is still comfortably inside the bound while the
+/// window holds one rung or none — so the bound passes and the outcome it
+/// forbids is drawn anyway. What the picture needs is a count, and this asserts
+/// the count.
+///
+/// Swept rather than pinned to the one exemplar, because the hole is a relation
+/// between three inputs (the window's span, the axis's length, and the type's
+/// room) and any pinned triple reads as a special case.
+#[test]
+fn a_ruled_level_axis_always_has_a_between() {
+    for (floor, ceiling) in [(-60.0, -20.0), (-100.0, 0.0), (-32.0, -20.0), (-63.0, -21.0)] {
+        let cfg = level_cfg(floor, ceiling);
+        for level_len in [40.0, 52.0, 100.0, 300.0, 900.0] {
+            for room in [20.0, 60.0, 140.0, 500.0] {
+                let grid = level_grid(&cfg, level_len, room);
+                assert!(
+                    grid.len() != 1,
+                    "{floor}..{ceiling} on {level_len} points at room {room} ruled ONE line \
+                     ({} dB) across the whole axis — a grid with no between",
+                    grid[0].db,
+                );
+            }
+        }
+    }
 }
 
 /// Ten is where the RULINGS live. The numbers start from whatever the rulings

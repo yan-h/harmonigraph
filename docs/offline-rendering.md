@@ -277,9 +277,12 @@ Offline rendering does **not** reproduce the plugin's dock. It composes
 its own picture — no tab bars, no settings columns, and whatever
 proportions suit the piece.
 
-Four presets: `side-by-side` (lattice left, Spectral pane right — the
+Five presets: `side-by-side` (lattice left, Spectral pane right — the
 arrangement the plugin's own default dock uses), `stacked`, `lattice`,
-`spectral`.
+`spectral`, `spiral` — the two arrangements the panes were designed around,
+plus each pane alone. The spiral is a disc, so it centres itself in the frame
+it is given, and a composition wanting it beside something else is a
+hand-written `.ron`.
 
 A preset places the panes and nothing else: the Spectral pane renders at
 whichever orientation the take's own UI state carries, so a `side-by-side`
