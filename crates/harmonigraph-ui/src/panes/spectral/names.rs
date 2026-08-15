@@ -851,10 +851,10 @@ fn anchor_edge(note: &RollNote, now: f64, anchor: Anchor) -> Edge {
 /// What that costs is worth stating at its real size, because it is not a
 /// rounding error: a name whose marks are wider than [`LABEL_INSET`] — which is
 /// every marked name — puts its mark column PAST the end it is anchored to,
-/// over whatever the picture holds beyond it. Measured as INK on a 300pt pane
-/// at `LABEL_PT`, a `B♭↓` crosses by 6.0 points, and by 37.7 at the two-octave
-/// floor: the marks grow with the type and [`LABEL_INSET`] does not, so what
-/// the inset buys back is the same 2.6 points at five times the size.
+/// over whatever the picture holds beyond it. Measured as INK on a 300pt pane,
+/// a `B♭↓` crosses by 6.21 points at the dialled size and 40.13 at the
+/// two-octave floor: the marks grow with the type and [`LABEL_INSET`] does not,
+/// so what the inset buys back is the same 2.6 points at five times the size.
 ///
 /// The two constraints cannot both hold while [`draw_stacked_name`] typesets the
 /// marks after the letter: leading by the letter holds it still and lets the
@@ -865,12 +865,17 @@ fn anchor_edge(note: &RollNote, now: f64, anchor: Anchor) -> Edge {
 /// candidate ways out; this comment exists so the spill reads as a known price
 /// rather than as a bug nobody noticed.
 ///
-/// It is not the Right orientation's alone, which is how #151 first read. Every
-/// orientation has a backward case in it (see [`Anchor`]), and the vertical
-/// ones spill too, once the zoom opens far enough that the accidental's rise
-/// clears the inset — they merely LOOKED contained while the box placed the
-/// name, because a line box stands tall enough above its letter to hide the
-/// mark riding there.
+/// It is not the Right orientation's alone, which is how #151 first read, and
+/// the spilling case is not the one the growth's sign picks out. What spills is
+/// whichever direction the MARKS run against, and they always run to the right
+/// of the letter and above it: growth leftward (Right's leading edge) sends the
+/// mark column back over the anchor, and growth DOWNWARD sends the accidental
+/// up over it. Measured at the same pane, `B♭↓`'s ink reaches 6.21 points past
+/// the end growing leftward and 3.45 growing down, against 2.60 clear in the
+/// two directions the marks trail into the note. The vertical case merely
+/// LOOKED contained while the box placed the name — a line box stands tall
+/// enough above its letter to hide the mark riding there — and it clears the
+/// end at the dialled size, crossing only once the zoom opens past about 1.4.
 ///
 /// [`draw_stacked_name`]: crate::marks::draw_stacked_name
 fn label_rect(

@@ -878,11 +878,12 @@ pub(crate) enum NameLead {
     /// their letters, so the letter is the piece that has to stand still
     /// against its ribbon end whatever the spelling costs; the mark column
     /// trails it, and is therefore free to reach PAST the end the name is
-    /// anchored to. Measured on a 300pt pane, a `B♭↓` at the leading edge puts
-    /// its marks 6.0 points past it at the dialled size and 37.7 at the
-    /// two-octave floor. Containing the name instead is one edit here -- the
-    /// union below rather than the letter alone -- and it buys that back by
-    /// letting every marked name's letter sit deeper than a bare one's.
+    /// anchored to. Measured on a 300pt pane, a `B♭↓` whose growth runs against
+    /// the way its marks are set puts them 6.21 points past that end at the
+    /// dialled size and 40.13 at the two-octave floor. Containing the name
+    /// instead is one edit here -- the union of this ink with the marks' own
+    /// quads, rather than this ink alone -- and it buys that back by letting
+    /// every marked name's letter sit deeper than a bare one's.
     Letter(egui::Vec2),
 }
 
