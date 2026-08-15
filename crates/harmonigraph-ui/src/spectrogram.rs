@@ -205,8 +205,8 @@ pub(crate) fn gesture_rows(rows: usize) -> usize {
 pub(crate) const STYLE_SETTLE: f64 = 0.2;
 
 /// The full-resolution [`ColumnStyle`] a surface last built toward, when it
-/// last CHANGED, and whether those changes are still ARRIVING — what decides
-/// whether a frame sits inside a style gesture and should build coarse.
+/// last CHANGED, and whether a gesture is open — what decides whether a frame
+/// sits inside a style gesture and should build coarse.
 ///
 /// Fed the style of the FULL plan, never the degraded one: the degraded
 /// plan's rows differ from the full plan's by construction, so watching what
@@ -214,7 +214,8 @@ pub(crate) const STYLE_SETTLE: f64 = 0.2;
 pub(crate) struct StyleMotion {
     style: ColumnStyle,
     changed_at: f64,
-    /// Whether the last change was one of a RUN of them — see [`observe`].
+    /// Whether a gesture is OPEN — see [`observe`]. Only a style CHANGE ever
+    /// sets it, so no pointer-down alone can degrade the picture.
     ///
     /// [`observe`]: StyleMotion::observe
     moving: bool,
@@ -222,25 +223,40 @@ pub(crate) struct StyleMotion {
 
 impl StyleMotion {
     /// Observe this frame's full-resolution style at time `t` (egui's input
-    /// clock): whether it sits inside a gesture, and so should trade
+    /// clock), with `pointer_down` saying whether any pointer button is held:
+    /// whether the frame sits inside a gesture, and so should trade
     /// resolution for rate.
     ///
-    /// A gesture is a style changing REPEATEDLY, not a style changing. One
-    /// change on its own — a Span drag crossing a slab rung, a palette
-    /// clicked, a pane resize stepping a quantum — costs exactly one
-    /// full-quality restart, and degrading the picture around it saves
-    /// nothing: the settled build it would defer is the same build, still
-    /// owed [`STYLE_SETTLE`] later, with a coarse restart now added in front
-    /// of it. What the trade is worth paying for is the case where the next
-    /// frame will change the style again, and the only evidence for that is
-    /// that the LAST one did. So a change opens a gesture only when it lands
-    /// within `STYLE_SETTLE` of the previous change, which costs a continuous
-    /// drag its first frame at full quality and leaves an isolated change
-    /// sharp throughout.
+    /// A gesture opens on a style CHANGE — never on the pointer alone — and
+    /// it opens on the first change the pointer is holding: a drag's first
+    /// frame is already mid-gesture, so it builds coarse rather than paying a
+    /// full-height restart it is about to throw away. A change with the
+    /// pointer UP is a wheel notch or a click, and there the only evidence
+    /// the next frame will change the style again is that the LAST one did —
+    /// so it opens a gesture only when it lands within [`STYLE_SETTLE`] of
+    /// the previous change, which keeps an isolated click sharp throughout
+    /// (degrading around a lone change saves nothing: the settled build it
+    /// would defer is the same build, still owed a settle later, with a
+    /// coarse restart now added in front of it).
+    ///
+    /// The gesture then stays open while the pointer stays down, however long
+    /// the style holds still — not just for `STYLE_SETTLE` past the last
+    /// change. The Span drag is why: the slab ladder holds the width across a
+    /// rung, so a drag changes the style only at crossings a couple of tenths
+    /// of a second apart, and a settle window alone would close the gesture
+    /// and pay a full-quality build between every pair. With the pointer up,
+    /// the settle window is what closes it, so letting go reads as the
+    /// picture snapping into focus.
     ///
     /// First sight of a surface is a fresh pane, not a gesture, so it builds
-    /// at full height straight away.
-    pub(crate) fn observe(slot: &mut Option<StyleMotion>, style: &ColumnStyle, t: f64) -> bool {
+    /// at full height straight away — and a pointer already down over it
+    /// changes nothing until a change arrives.
+    pub(crate) fn observe(
+        slot: &mut Option<StyleMotion>,
+        style: &ColumnStyle,
+        t: f64,
+        pointer_down: bool,
+    ) -> bool {
         match slot {
             // A clock reading EARLIER than the stamp is a new egui context —
             // the editor window creates one per open and its input clock
@@ -256,12 +272,20 @@ impl StyleMotion {
                 m.moving = false;
                 false
             }
-            // Holding still: the gesture runs on for the settle window, so a
-            // wheel's notches stay inside one. A style that was never moving
-            // stays sharp however recently it changed.
-            Some(m) if m.style == *style => m.moving && t - m.changed_at < STYLE_SETTLE,
+            // Holding still: the gesture runs on while the pointer is down —
+            // a Span drag between rungs — or for the settle window past the
+            // last change, so a wheel's notches stay inside one. Written
+            // BACK, not just read: a gesture that has closed stays closed,
+            // so a later pointer-down that changes nothing — a divider, a
+            // note dragged in the roll — cannot reopen it off the stale
+            // flag. A style that was never moving stays sharp however
+            // recently it changed.
+            Some(m) if m.style == *style => {
+                m.moving = m.moving && (pointer_down || t - m.changed_at < STYLE_SETTLE);
+                m.moving
+            }
             Some(m) => {
-                m.moving = t - m.changed_at < STYLE_SETTLE;
+                m.moving = pointer_down || t - m.changed_at < STYLE_SETTLE;
                 m.style = style.clone();
                 m.changed_at = t;
                 m.moving
@@ -3066,11 +3090,13 @@ mod tests {
         assert!(wide_rows > 0, "a zoomed-out scale must produce wide rows");
     }
 
-    /// The gesture detector: a RUN of style changes opens a gesture, the
-    /// gesture holds for [`STYLE_SETTLE`] past the last change, and first
-    /// sight of a surface is a fresh pane rather than a gesture — so an opened
-    /// editor draws sharp straight away, and only an actually-moving bar
-    /// trades quality for rate.
+    /// The gesture detector with the pointer UP — the wheel's case: a RUN of
+    /// style changes opens a gesture, the gesture holds for [`STYLE_SETTLE`]
+    /// past the last change, and first sight of a surface is a fresh pane
+    /// rather than a gesture — so an opened editor draws sharp straight away,
+    /// and only an actually-moving bar trades quality for rate. Only the
+    /// closing clock-restart check runs the pointer both ways: the guard
+    /// answers settled regardless.
     #[test]
     fn the_style_settles_after_holding_still() {
         let cfg = SpectrumConfig::default();
@@ -3078,19 +3104,25 @@ mod tests {
         let b = ColumnStyle::new(100, false, 0.1, 41.0, 48.0, &cfg);
         let c = ColumnStyle::new(100, false, 0.1, 42.0, 48.0, &cfg);
         let mut slot = None;
-        assert!(!StyleMotion::observe(&mut slot, &a, 10.0), "first sight is not a gesture");
-        assert!(!StyleMotion::observe(&mut slot, &b, 10.1), "one change is not a gesture");
-        assert!(StyleMotion::observe(&mut slot, &c, 10.15), "a second one right after opens it");
+        assert!(!StyleMotion::observe(&mut slot, &a, 10.0, false), "first sight is not a gesture");
+        assert!(!StyleMotion::observe(&mut slot, &b, 10.1, false), "one change is not a gesture");
         assert!(
-            StyleMotion::observe(&mut slot, &c, 10.15 + STYLE_SETTLE * 0.5),
+            StyleMotion::observe(&mut slot, &c, 10.15, false),
+            "a second one right after opens it",
+        );
+        assert!(
+            StyleMotion::observe(&mut slot, &c, 10.15 + STYLE_SETTLE * 0.5, false),
             "and it holds while the settle has not passed",
         );
         assert!(
-            !StyleMotion::observe(&mut slot, &c, 10.15 + STYLE_SETTLE * 1.01),
+            !StyleMotion::observe(&mut slot, &c, 10.15 + STYLE_SETTLE * 1.01, false),
             "held still past the settle, the image sharpens",
         );
-        assert!(!StyleMotion::observe(&mut slot, &c, 20.0), "quiet frames stay settled");
-        assert!(!StyleMotion::observe(&mut slot, &a, 21.0), "and the next lone change is sharp");
+        assert!(!StyleMotion::observe(&mut slot, &c, 20.0, false), "quiet frames stay settled");
+        assert!(
+            !StyleMotion::observe(&mut slot, &a, 21.0, false),
+            "and the next lone change is sharp",
+        );
 
         // A fresh egui context restarts the input clock at zero while the slot
         // lives on (the editor window recreates its context per open; `motion`
@@ -3102,20 +3134,30 @@ mod tests {
         let mut slot =
             Some(StyleMotion { style: a.clone(), changed_at: 600.0, moving: true });
         assert!(
-            !StyleMotion::observe(&mut slot, &a, 0.5),
+            !StyleMotion::observe(&mut slot, &a, 0.5, false),
             "a restarted clock reads as settled, not as ten minutes of gesture",
         );
         // And the slot is re-stamped onto the new clock: a drag a moment later
         // still opens a gesture, on its second frame as any other drag does.
-        assert!(!StyleMotion::observe(&mut slot, &b, 0.6), "the new clock's first change");
-        assert!(StyleMotion::observe(&mut slot, &c, 0.62), "and its second opens a gesture");
+        assert!(!StyleMotion::observe(&mut slot, &b, 0.6, false), "the new clock's first change");
+        assert!(StyleMotion::observe(&mut slot, &c, 0.62, false), "and its second opens a gesture");
+
+        // The pointer does not change the reopen: a button already held while
+        // the editor comes back is first sight on this clock, not a gesture.
+        let mut slot =
+            Some(StyleMotion { style: a.clone(), changed_at: 600.0, moving: true });
+        assert!(
+            !StyleMotion::observe(&mut slot, &a, 0.5, true),
+            "a restarted clock reads as settled with the pointer down too",
+        );
     }
 
-    /// A gesture is changes ARRIVING, so the frames of a drag are coarse while
-    /// an isolated change — a Span drag crossing one slab rung, a palette
-    /// clicked — is not. Degrading around a lone change buys nothing: the
-    /// full-quality build it defers is still owed a settle later, with a
-    /// coarse restart added in front of it.
+    /// A gesture is a style being DRIVEN — changes arriving, or the pointer
+    /// holding one — so the frames of a drag are coarse while an isolated
+    /// pointer-up change — a wheel notch on its own, a palette clicked — is
+    /// not. Degrading around a lone change buys nothing: the full-quality
+    /// build it defers is still owed a settle later, with a coarse restart
+    /// added in front of it.
     #[test]
     fn a_lone_style_change_is_not_a_gesture() {
         let cfg = SpectrumConfig::default();
@@ -3124,11 +3166,11 @@ mod tests {
             .collect();
         let mut slot = None;
 
-        // A rung crossed every second: each is alone, and none costs the
-        // picture its rows.
+        // A change every second, none with the pointer held: each is alone,
+        // and none costs the picture its rows.
         for (i, style) in styles.iter().enumerate() {
             assert!(
-                !StyleMotion::observe(&mut slot, style, 100.0 + i as f64),
+                !StyleMotion::observe(&mut slot, style, 100.0 + i as f64, false),
                 "a change a second after the last one is not a gesture",
             );
         }
@@ -3146,19 +3188,124 @@ mod tests {
             let t = 107.0 + f64::from(frame) / 60.0;
             assert!(t - 107.0 < STYLE_SETTLE, "the sweep stays inside the settle");
             assert!(
-                !StyleMotion::observe(&mut slot, last, t),
+                !StyleMotion::observe(&mut slot, last, t, false),
                 "frame {frame} after a lone change is still settled",
             );
         }
         // A second change this soon after the FIRST one would have opened a
         // gesture; this far past it, the next lone change is sharp too.
-        assert!(!StyleMotion::observe(&mut slot, next, 108.0), "and the next lone change is too");
+        assert!(
+            !StyleMotion::observe(&mut slot, next, 108.0, false),
+            "and the next lone change is too",
+        );
         // The same changes at a frame's spacing ARE a drag, from the second on.
         let mut slot = None;
         for (i, style) in styles.iter().enumerate() {
-            let gesture = StyleMotion::observe(&mut slot, style, 200.0 + i as f64 / 60.0);
+            let gesture = StyleMotion::observe(&mut slot, style, 200.0 + i as f64 / 60.0, false);
             assert_eq!(gesture, i > 1, "frame {i} of a continuous drag");
         }
+    }
+
+    /// A drag's first frame is already a gesture: the first change the
+    /// pointer is holding builds coarse straight away, instead of paying a
+    /// full-height restart it is about to throw away. (A change with the
+    /// pointer UP — the wheel, a click — still needs a second one, which the
+    /// settle tests hold.)
+    #[test]
+    fn a_drags_first_frame_is_already_a_gesture() {
+        let cfg = SpectrumConfig::default();
+        let a = ColumnStyle::new(100, false, 0.1, 40.0, 48.0, &cfg);
+        let b = ColumnStyle::new(100, false, 0.1, 41.0, 48.0, &cfg);
+        let mut slot = None;
+        assert!(!StyleMotion::observe(&mut slot, &a, 10.0, false), "first sight is not a gesture");
+        // A long quiet, then a press whose first frame moves the style.
+        assert!(
+            StyleMotion::observe(&mut slot, &b, 60.0, true),
+            "one change with the pointer down opens the gesture",
+        );
+    }
+
+    /// The gesture survives the gap between ladder rungs — the test that pins
+    /// the fix. The slab ladder holds the width across a rung
+    /// (`dragging_the_span_carries_the_ring_forward`), so a Span drag changes
+    /// the style only at crossings, and at trackpad speed those arrive about
+    /// 0.39 s apart — outside `STYLE_SETTLE`. The held frames between them
+    /// are what run on almost every frame of the drag, and the pointer is
+    /// what carries the gesture across; with the bare settle in the HELD arm
+    /// the picture would rebuild at full quality before every crossing, which
+    /// is the intermittent hitch this rule exists to end.
+    #[test]
+    fn the_gesture_survives_the_gap_between_rungs() {
+        let cfg = SpectrumConfig::default();
+        let a = ColumnStyle::new(100, false, 0.1, 40.0, 48.0, &cfg);
+        let b = ColumnStyle::new(100, false, 0.2, 40.0, 48.0, &cfg);
+        let c = ColumnStyle::new(100, false, 0.4, 40.0, 48.0, &cfg);
+        let mut slot = None;
+        assert!(!StyleMotion::observe(&mut slot, &a, 10.0, false), "first sight is not a gesture");
+        assert!(StyleMotion::observe(&mut slot, &b, 20.0, true), "the drag's first rung");
+        // 0.38 s of held style at 60 Hz, pointer down throughout — well past
+        // the settle window from frame 13 on.
+        for frame in 1..=23 {
+            let t = 20.0 + f64::from(frame) / 60.0;
+            assert!(
+                StyleMotion::observe(&mut slot, &b, t, true),
+                "frame {frame} between rungs is still the gesture",
+            );
+        }
+        assert!(StyleMotion::observe(&mut slot, &c, 20.39, true), "and the next rung still is");
+    }
+
+    /// Release settles: with the pointer up, the settle window past the last
+    /// change is what closes the gesture, so letting go reads as the picture
+    /// snapping into focus.
+    #[test]
+    fn releasing_the_pointer_settles_the_gesture() {
+        let cfg = SpectrumConfig::default();
+        let a = ColumnStyle::new(100, false, 0.1, 40.0, 48.0, &cfg);
+        let b = ColumnStyle::new(100, false, 0.2, 40.0, 48.0, &cfg);
+        let mut slot = None;
+        assert!(!StyleMotion::observe(&mut slot, &a, 10.0, false), "first sight is not a gesture");
+        assert!(StyleMotion::observe(&mut slot, &b, 20.0, true), "a drag opens a gesture");
+        assert!(
+            StyleMotion::observe(&mut slot, &b, 20.1, false),
+            "released inside the settle, it runs on to the window",
+        );
+        assert!(
+            !StyleMotion::observe(&mut slot, &b, 20.0 + STYLE_SETTLE * 1.01, false),
+            "held still past the settle with the pointer up, the image sharpens",
+        );
+    }
+
+    /// A pointer-down that changes nothing about the picture never opens a
+    /// gesture: only a style CHANGE ever sets the latch, so a divider drag or
+    /// a note dragged in the roll reaches the HELD arm latched shut. And a
+    /// gesture that has CLOSED writes the latch back down, so a later
+    /// unrelated press cannot reopen it off the stale flag.
+    #[test]
+    fn a_pointer_down_that_changes_nothing_is_not_a_gesture() {
+        let cfg = SpectrumConfig::default();
+        let a = ColumnStyle::new(100, false, 0.1, 40.0, 48.0, &cfg);
+        let b = ColumnStyle::new(100, false, 0.2, 40.0, 48.0, &cfg);
+        let mut slot = None;
+        // Fresh slot: press and hold over an unchanging picture.
+        for frame in 0..30 {
+            let t = 10.0 + f64::from(frame) / 60.0;
+            assert!(
+                !StyleMotion::observe(&mut slot, &a, t, true),
+                "frame {frame} of a drag that moves no style is settled",
+            );
+        }
+        // A real gesture, opened by a change and settled by release...
+        assert!(StyleMotion::observe(&mut slot, &b, 20.0, true), "a drag opens a gesture");
+        assert!(
+            !StyleMotion::observe(&mut slot, &b, 20.0 + STYLE_SETTLE * 1.01, false),
+            "and release settles it",
+        );
+        // ...stays settled under a later press that changes nothing.
+        assert!(
+            !StyleMotion::observe(&mut slot, &b, 30.0, true),
+            "a later unrelated press does not reopen the settled gesture",
+        );
     }
 
     /// The gesture image is a bounded MAGNIFICATION of the pane, not a fixed

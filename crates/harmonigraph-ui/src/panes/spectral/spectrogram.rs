@@ -241,12 +241,18 @@ pub(crate) fn draw_spectrogram(
     // else schedules when no audio is flowing and the pointer has let go, so
     // it is requested here. Whole-song is out: its one style change per
     // config edit is already cached after a frame, and an offline render must
-    // never trade resolution away.
+    // never trade resolution away. The whole-song guard alone does not carry
+    // that: only a playhead render takes it, so a default export reaches this
+    // observe every frame — and stays sharp because headless input holds no
+    // pointer down and a replay moves no style input, so no change ever
+    // opens a gesture.
+    let (t, pointer_down) = painter.ctx().input(|i| (i.time, i.pointer.any_down()));
     if !view.whole
         && crate::spectrogram::StyleMotion::observe(
             &mut spectrum.spectrogram[surface].motion,
             plan.key.style(),
-            painter.ctx().input(|i| i.time),
+            t,
+            pointer_down,
         )
     {
         painter.ctx().request_repaint_after(std::time::Duration::from_secs_f64(
