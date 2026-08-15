@@ -3090,12 +3090,13 @@ mod tests {
         assert!(wide_rows > 0, "a zoomed-out scale must produce wide rows");
     }
 
-    /// The gesture detector with the pointer UP throughout — the wheel's
-    /// case: a RUN of style changes opens a gesture, the gesture holds for
-    /// [`STYLE_SETTLE`] past the last change, and first sight of a surface is
-    /// a fresh pane rather than a gesture — so an opened editor draws sharp
-    /// straight away, and only an actually-moving bar trades quality for
-    /// rate.
+    /// The gesture detector with the pointer UP — the wheel's case: a RUN of
+    /// style changes opens a gesture, the gesture holds for [`STYLE_SETTLE`]
+    /// past the last change, and first sight of a surface is a fresh pane
+    /// rather than a gesture — so an opened editor draws sharp straight away,
+    /// and only an actually-moving bar trades quality for rate. Only the
+    /// closing clock-restart check runs the pointer both ways: the guard
+    /// answers settled regardless.
     #[test]
     fn the_style_settles_after_holding_still() {
         let cfg = SpectrumConfig::default();
