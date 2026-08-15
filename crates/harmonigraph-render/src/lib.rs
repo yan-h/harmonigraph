@@ -405,9 +405,10 @@ impl GpuInstance {
         array_stride: std::mem::size_of::<GpuInstance>() as u64,
         step_mode: wgpu::VertexStepMode::Instance,
         // Locations 5 and 9 are absent, not renumbered. Both are retired
-        // slots: 9 the trail level, read only by an idle marker the nodes do
-        // not draw, and 5 a per-node audio word, which the ring has no use for
-        // now that it reads one shared spectrum in the uniforms. The macro
+        // slots — 5 the home-sheet flag, 9 the trail level, each read only by
+        // an idle marker the nodes do not draw; the audio ring needs no slot
+        // here at all, since it reads one shared spectrum in the uniforms
+        // rather than a per-node word. The macro
         // names each location and takes each OFFSET from the sequence, so a
         // dropped entry shrinks the stride to match the struct without moving
         // the rest off their numbers — which is what keeps this list and
