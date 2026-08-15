@@ -447,12 +447,18 @@ pub struct SpectrumConfig {
     ///     the reading-first end is the ONSET. The name is pinned to a take
     ///     time, travelling with the picture from the first frame of the note
     ///     and unchanged by the release — at the price that a note held longer
-    ///     than the Span runs out of onset to travel with and parks its name on
-    ///     the far edge, and that a note younger than its own name has the name
-    ///     lying over the spectrum until its ribbon is long enough to hold it.
+    ///     than the Span carries its name off the far edge with its onset and
+    ///     scrolls the rest of its ribbon unnamed, and that a note younger than
+    ///     its own name has the name lying over the spectrum until its ribbon
+    ///     is long enough to hold it.
     ///
     /// Turning this on asks for the other end, and so for the other of those
     /// two in whichever orientation the pane is in.
+    ///
+    /// The GAP is the same at either setting and for the whole life of a note:
+    /// a name holds its small distance from the end it is written on, and goes
+    /// off the picture when that end does, rather than waiting on the edge
+    /// while its own note scrolls out from under it.
     ///
     /// The offline whole-song layout is outside all of this and takes the
     /// onset in every orientation, at either setting: it lays the take out as
