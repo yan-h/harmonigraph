@@ -1,6 +1,11 @@
-//! The performance overlay: a small corner HUD over the editor showing the
-//! frame rate, the process's memory, and the workload driving them — enough
-//! to see at a glance whether the plugin is working the machine hard.
+//! The performance overlay: a small HUD over the editor showing the frame
+//! rate, the process's memory, and the workload driving them — enough to see
+//! at a glance whether the plugin is working the machine hard.
+//!
+//! Where it sits is the user's, and nothing else's: it opens in the editor's
+//! top-right corner and is DRAGGED from there to wherever it is wanted, which
+//! is the only thing that ever moves it (see [`draw_overlay`]). The position
+//! outlives the session — `SharedState::perf_pos`.
 //!
 //! The picture is the whole of this module: which rows the HUD shows, and how
 //! they are painted. Everything the numbers are MADE of — the windows and
@@ -23,7 +28,7 @@
 
 use harmonigraph_perf::{memory_readout, PerfStats, Stage, BUILD_TAG, STAGES};
 
-/// Points between the overlay and the corner it sits in.
+/// Points between the overlay and the editor's corner, where it opens.
 const OVERLAY_INSET: f32 = 8.0;
 
 /// The overlay's rows: `(depth, label, value, peak)`.
@@ -140,14 +145,19 @@ fn overlay_rows(perf: &PerfStats, detail: bool) -> Vec<(u8, &'static str, String
     rows
 }
 
-/// Draw the overlay in the top-right corner of `area` — a picture pane's
-/// body, or the editor clear of the tab bar when neither is on screen (see
-/// `perf_overlay_area`, which is where the choice and its reasons live). A
-/// floating, non-interactive panel so it never steals clicks from the view
-/// under it.
+/// Draw the overlay over `editor`, at `pos` — dragging it writes the new
+/// position back through that handle, and nothing else in the tree moves it.
+///
+/// `None` is "never dragged", and only then does the HUD have a position of
+/// anyone else's choosing: the editor's top-right corner, one tab bar down so
+/// it opens clear of the chrome along the top rather than on the collapse
+/// arrow that folds a pane back. That is where it OPENS, not where it belongs
+/// — the first drag makes the position the user's and it is honoured from
+/// then on, whatever the dock does underneath it.
 pub(crate) fn draw_overlay(
     ctx: &egui::Context,
-    area: egui::Rect,
+    editor: egui::Rect,
+    pos: &mut Option<egui::Pos2>,
     perf: &PerfStats,
     detail: bool,
 ) {
@@ -175,20 +185,6 @@ pub(crate) fn draw_overlay(
 
     let rows = overlay_rows(perf, detail);
 
-    // Painted straight onto a foreground layer rather than assembled from
-    // widgets inside an Area.
-    //
-    // The Area was already `interactable(false)`, which is enough to keep it
-    // out of `layer_id_at` — but every `ui.label` inside it still registered a
-    // widget rect, and those win the pointer regardless. The result was a dead
-    // zone the size of the HUD in the corner of the lattice: no scroll-to-zoom
-    // and no drag-to-orbit under it, for as long as the overlay was up. A
-    // readout that changes the thing it is measuring is worse than no readout.
-    // Nothing below allocates a widget, so nothing can take the pointer.
-    let painter = ctx.layer_painter(egui::LayerId::new(
-        egui::Order::Foreground,
-        egui::Id::new("perf_overlay"),
-    ));
     let layout = |text: &str, font: &egui::FontId, color: egui::Color32| {
         ctx.fonts_mut(|f| f.layout_no_wrap(text.to_owned(), font.clone(), color))
     };
@@ -309,48 +305,62 @@ pub(crate) fn draw_overlay(
         + row_gap * lines.len().saturating_sub(1) as f32;
 
     let margin = egui::vec2(8.0, 6.0) * scale;
-    // Top-RIGHT of `area`, and clamped to it so a pane too narrow to hold the
-    // overlay shows its left edge rather than pushing the numbers off screen.
-    //
-    // Placed outright rather than anchored. Anchoring existed because a
-    // widget-built overlay only learns its own width after laying out, and the
-    // right edge has to stay put as the numbers change width underneath it.
-    // Measuring the galleys up front settles the size before anything is
-    // drawn, so the position is simply known.
-    // ...and never wider than the pane it hangs in. Clamping the left edge is
-    // not enough on its own: this is painted on a foreground layer whose clip
-    // is the whole screen, so nothing else stops a readout wider than its pane
-    // from crossing the separator and covering the settings column — including
-    // the collapse arrow at the left of every tab bar, which is the control
-    // that brings a folded pane back, and the thing the overlay's placement
-    // exists to stay off. The analyzer is the narrowest pane the default dock
-    // has, and a sideways fold can drive the window to its floor without anyone
-    // dragging it there.
-    //
-    // A readout too wide for its pane is cut off rather than moved or dropped.
-    // At a window that narrow no arrangement of it is readable, and the numbers
-    // are worth less than the controls underneath them.
+    // Sized from the galleys, which are measured before anything is drawn, so
+    // the HUD is placed outright rather than anchored: an Area told where its
+    // top-left goes, at a size it already knows.
     let size = egui::vec2(width, height) + margin * 2.0;
     let inset = OVERLAY_INSET * scale;
-    let size = egui::vec2(size.x.min((area.width() - inset * 2.0).max(0.0)), size.y);
-    let origin = egui::pos2(
-        (area.right() - inset - size.x).max(area.left()),
-        area.top() + inset,
+    // Where an undragged HUD opens — this function's docs say why it is this
+    // corner, and why it is a starting point rather than a rule.
+    let home = egui::pos2(
+        editor.right() - inset - size.x,
+        editor.top() + crate::theme::tab_bar_height(scale) + inset,
     );
-    let plate = egui::Rect::from_min_size(origin, size);
-    painter.rect_filled(plate, 4.0 * scale, egui::Color32::from_black_alpha(0xC0));
-    // The rows are laid out at their own width, which the clamp above does not
-    // change, so the plate is what holds them in.
-    let painter = painter.with_clip_rect(plate);
 
-    let mut y = origin.y + margin.y;
-    for parts in lines {
-        let row_height =
-            parts.iter().map(|(_, g)| g.rect.height()).fold(0.0f32, f32::max);
-        for (dx, galley) in parts {
-            painter.galley(egui::pos2(origin.x + margin.x + dx, y), galley, bright);
-        }
-        y += row_height + row_gap;
+    // An Area, so the plate can be dragged. It registers exactly ONE widget
+    // rect — its own — and the rows inside it allocate nothing, which is the
+    // difference that matters: assembled out of `ui.label`s, every row would
+    // register a rect of its own and win the pointer, and the HUD would be a
+    // dead zone for the lattice's scroll-to-zoom and drag-to-orbit whether or
+    // not anyone ever dragged it. It takes the pointer over the plate and
+    // nowhere else, and the way out from under it is the drag itself.
+    //
+    // `constrain_to` the editor is containment rather than placement, and the
+    // HUD needs it because the plate is the only handle it has: dragged past
+    // the window edge, or left where a smaller window no longer reaches, it
+    // would be unrecoverable.
+    let area = egui::Area::new(egui::Id::new("perf_overlay"))
+        .order(egui::Order::Foreground)
+        .movable(true)
+        .fade_in(false)
+        .constrain_to(editor)
+        .current_pos(pos.unwrap_or(home))
+        .show(ctx, |ui| {
+            // No sense of its own: the drag belongs to the Area, and a
+            // drag-sensing rect on top of it would win the pointer and move
+            // nothing.
+            let (plate, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+            let painter = ui.painter();
+            painter.rect_filled(plate, 4.0 * scale, egui::Color32::from_black_alpha(0xC0));
+
+            let mut y = plate.top() + margin.y;
+            for parts in lines {
+                let row_height =
+                    parts.iter().map(|(_, g)| g.rect.height()).fold(0.0f32, f32::max);
+                for (dx, galley) in parts {
+                    painter.galley(egui::pos2(plate.left() + margin.x + dx, y), galley, bright);
+                }
+                y += row_height + row_gap;
+            }
+        })
+        .response
+        .on_hover_and_drag_cursor(egui::CursorIcon::Grab);
+
+    // Written back only while it is dragged, so an untouched HUD goes on
+    // opening at `home` — and follows the corner as the window resizes —
+    // while a placed one is left exactly where it was put.
+    if area.dragged() {
+        *pos = Some(area.rect.min);
     }
 }
 
@@ -634,10 +644,19 @@ mod tests {
             Workload { animating: true, ..Default::default() },
         );
 
-        let output = ctx.run_ui(
-            egui::RawInput { screen_rect: Some(area), ..Default::default() },
-            |ui| draw_overlay(ui.ctx(), area, &perf, true), // detail on: the widest case
-        );
+        // TWO passes, and the second is the one read: an Area's opening pass
+        // is a sizing pass, which lays the contents out to measure them and
+        // paints nothing. The HUD is drawn from the pass after.
+        let mut pos = None;
+        let mut frame = || {
+            ctx.run_ui(
+                egui::RawInput { screen_rect: Some(area), ..Default::default() },
+                // Detail on: the widest case.
+                |ui| draw_overlay(ui.ctx(), area, &mut pos, &perf, true),
+            )
+        };
+        frame();
+        let output = frame();
         let mut texts: Vec<(egui::Rect, String)> = output
             .shapes
             .iter()

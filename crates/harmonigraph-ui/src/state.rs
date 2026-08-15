@@ -262,6 +262,16 @@ pub struct SharedState {
     /// only thing that reads it, and the offline renderer never reaches
     /// there.
     pub ui_scale: f32,
+    /// Where the performance overlay's top-left corner sits, in editor
+    /// points. Persisted; `None` until the HUD is dragged, which is the only
+    /// thing that ever writes it (see [`crate::perf::draw_overlay`]).
+    ///
+    /// Here rather than in `view` for the reason `ui_scale` above it is: the
+    /// overlay is a development instrument over the picture and never part of
+    /// one, so where it was pushed to on this screen must not travel with a
+    /// project into a render. Nothing but [`root_ui`](crate::root_ui) reads
+    /// it, and the offline renderer never draws the HUD at all.
+    pub perf_pos: Option<egui::Pos2>,
 }
 
 /// The pane layout: the arrangement itself, what each sideways fold is holding,
@@ -272,8 +282,7 @@ pub struct SharedState {
 /// read in one stretch of [`root_ui`](crate::root_ui) — the block that moves
 /// the dock out, hands the fields to [`fold`] as arguments, draws, paints the
 /// rails and writes the dock back — and everything else that touches it takes
-/// one or two members for a stated reason: `pane_body` reads the dock to find
-/// which pane the performance overlay may hang on, `save_persist` and
+/// one or two members for a stated reason: `save_persist` and
 /// `load_persist` carry [`dock`](Self::dock) and [`folds`](Self::folds) because
 /// those two are the members that survive a session, and [`crate::shell`] sets
 /// [`min_window_width`](Self::min_window_width) on the way in and spends
@@ -658,6 +667,7 @@ impl SharedState {
             instruments: Instruments::default(),
             fps_cap: None,
             ui_scale: default_ui_scale(),
+            perf_pos: None,
         }
     }
 
@@ -694,6 +704,7 @@ impl SharedState {
             render: self.take.render_config.clone(),
             fps_cap: self.fps_cap,
             ui_scale: self.ui_scale,
+            perf_pos: self.perf_pos,
         })
         .unwrap_or_default()
     }
@@ -848,6 +859,12 @@ impl SharedState {
         // would take a hand-edited 5.0 down to the top of the range while
         // the bar went on saying 500%.
         self.ui_scale = crate::theme::sane_ui_scale(persist.ui_scale);
+        // A hand-edited NaN is dropped rather than honoured, on the grounds
+        // the spiral framing above is repaired on: it positions drawn
+        // geometry, and NaN geometry is a panic inside egui's tessellator. A
+        // dropped position opens the HUD where an undragged one opens, which
+        // is a place the user can see it and drag it from.
+        self.perf_pos = persist.perf_pos.filter(|pos| pos.is_finite());
         true
     }
 }
@@ -962,6 +979,10 @@ pub(crate) struct UiPersist {
     /// state, so it defaults its fields one at a time and requires `panes`.
     #[serde(default = "default_ui_scale")]
     pub(crate) ui_scale: f32,
+    /// Where the performance overlay was dragged to; a blob without one opens
+    /// it where an undragged HUD opens. See [`SharedState::perf_pos`].
+    #[serde(default)]
+    pub(crate) perf_pos: Option<egui::Pos2>,
 }
 
 /// Parse just the render settings out of a persisted UI-state blob — so the

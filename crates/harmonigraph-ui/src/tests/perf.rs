@@ -1,35 +1,78 @@
-//! The performance overlay: where it hangs, and that it ships off.
+//! The performance overlay: where it opens, that it is dragged from there,
+//! that nothing else moves it, and that it ships off.
 
 use crate::*;
 use super::harness::*;
 
-/// The performance overlay hangs off the analyzer pane; off the lattice when
-/// that pane isn't on screen; off the editor, clear of the tab bar, when
-/// neither is. All three land somewhere no tab bar's collapse arrow is.
+/// The HUD's backing plate, which is its actual extent — the rows inside it
+/// are left-aligned, so no single string reveals where the box sits.
+///
+/// Found by its painted plate rather than by `Memory::area_rect` for a second
+/// reason: what is worth asserting is where the numbers LAND, and an Area's
+/// rect is a frame behind its contents on the pass that sizes it.
+fn hud_of(output: &egui::FullOutput) -> egui::Rect {
+    let plate = egui::Color32::from_black_alpha(0xC0);
+    output
+        .shapes
+        .iter()
+        .find_map(|clipped| match &clipped.shape {
+            egui::Shape::Rect(rect) if rect.fill == plate => Some(rect.rect),
+            _ => None,
+        })
+        .expect("the overlay should paint its backing plate")
+}
+
+/// A press-move-release on the HUD, from its middle by `by`, and the plate as
+/// it stands after the release.
+fn drag_hud(h: &mut DockHarness, state: &mut SharedState, by: egui::Vec2) -> egui::Rect {
+    let grab = hud_of(&h.frame(state, vec![])).center();
+    let to = grab + by;
+    h.frame(state, vec![egui::Event::PointerMoved(grab)]);
+    h.frame(state, vec![egui::Event::PointerMoved(grab), press(grab, true)]);
+    h.frame(state, vec![egui::Event::PointerMoved(to)]);
+    h.frame(state, vec![egui::Event::PointerMoved(to), press(to, false)]);
+    hud_of(&h.frame(state, vec![]))
+}
+
+/// Nothing in the dock may sit under the HUD's opening spot: a tab bar's
+/// collapse arrow is the control that brings a folded pane back, and the HUD
+/// is painted on a foreground layer over the whole editor.
+fn clear_of_every_tab_bar(state: &SharedState, hud: egui::Rect, what: &str) {
+    for node in state.workspace.dock.main_surface().iter() {
+        let egui_dock::Node::Leaf(leaf) = node else {
+            continue;
+        };
+        let mut bar = leaf.rect;
+        bar.max.y = bar.min.y + crate::theme::TAB_BAR_HEIGHT;
+        assert!(
+            !hud.intersects(bar),
+            "{what}: the HUD covers a tab bar and its collapse arrow: {hud:?} over {bar:?}",
+        );
+    }
+}
+
+/// An overlay nobody has dragged opens in the editor's top-right corner, one
+/// tab bar down — the one placement anything but a drag decides.
+///
+/// The corner is a starting point rather than a policy, and the tab bar it
+/// clears is why it is not simply the corner: dock chrome runs along the top
+/// of the editor, so a HUD hung on the corner outright lands on the settings
+/// column's bar and, with the column folded, on the collapse arrow that brings
+/// it back. Opening on the control that undoes a fold is the worst place on
+/// screen for it.
 #[test]
-fn the_perf_overlay_follows_the_analyzer_pane() {
+fn the_perf_overlay_opens_in_the_editors_corner() {
     let mut state = fresh();
-    // Turned on by hand: the overlay ships off, and what is under test is where
-    // it lands once asked for, not whether anything asks.
+    // Turned on by hand: the overlay ships off, and what is under test is
+    // where it lands once asked for, not whether anything asks.
     state.view.show_perf = true;
     let mut h = DockHarness::new();
     let screen = h.screen;
-    // A frame first: the dock only knows where its panes are once it has laid
-    // them out, and before that the overlay has nothing to hang off.
+    // An Area's opening pass sizes it and paints nothing, so the HUD is read
+    // from the pass after.
     h.frame(&mut state, vec![]);
     let output = h.frame(&mut state, vec![]);
 
-    let area = perf_overlay_area(&state, screen, 1.0);
-    assert_ne!(area, screen, "the overlay should have found the analyzer pane");
-
-    // ...and the HUD really lands in that pane's top-right corner.
-    //
-    // Found by its painted text rather than by `Memory::area_rect`: the HUD is
-    // not an Area. As one, every label inside it registers a widget rect that
-    // takes the pointer from whatever is underneath — a dead zone the size of
-    // the readout. It is painted straight onto a foreground layer, so there is
-    // no area to look up, and the thing worth asserting was never the Area
-    // anyway: it is where the numbers land.
     assert!(
         output.shapes.iter().any(|clipped| matches!(
             &clipped.shape,
@@ -37,18 +80,21 @@ fn the_perf_overlay_follows_the_analyzer_pane() {
         )),
         "the overlay should be drawn once show_perf is set",
     );
-    // The backing plate, which is the HUD's actual extent — the rows inside it
-    // are left-aligned, so no single string reveals where the box sits.
     let hud = hud_of(&output);
-    assert!(area.contains_rect(hud), "the HUD should sit inside the analyzer pane: {hud:?}");
+    assert!(screen.contains_rect(hud), "the HUD should sit inside the editor: {hud:?}");
     assert!(
-        (hud.right() - (area.right() - 8.0)).abs() < 1.0,
-        "the HUD should hug the pane's RIGHT edge: {hud:?} in {area:?}",
+        (hud.right() - (screen.right() - 8.0)).abs() < 1.0,
+        "the HUD should hug the editor's RIGHT edge: {hud:?} in {screen:?}",
     );
     assert!(
-        (hud.right() - area.right()).abs() < 12.0 && (hud.top() - area.top()).abs() < 12.0,
-        "the HUD should hug the pane's top-RIGHT corner: {hud:?} in {area:?}",
+        (hud.top() - (screen.top() + crate::theme::TAB_BAR_HEIGHT + 8.0)).abs() < 1.0,
+        "the HUD should open one tab bar below the editor's top: {hud:?} in {screen:?}",
     );
+    clear_of_every_tab_bar(&state, hud, "as it opens");
+    // Nothing has placed it, which is what makes the corner a default: the
+    // position is written by the drag and by nothing else.
+    assert!(state.perf_pos.is_none(), "opening the HUD must not place it");
+
     // The build tag, which is why the HUD is worth looking at before any of
     // its numbers: Bitwig loads ONE bundle and every session builds into its
     // own worktree, so "am I even looking at the build I just loaded?" has a
@@ -67,135 +113,132 @@ fn the_perf_overlay_follows_the_analyzer_pane() {
         "the overlay should name the build it is ({}), so a reload can be checked",
         harmonigraph_perf::BUILD_TAG,
     );
-    // ...and naming it must not have pushed the HUD out of its pane. The tag
-    // is a branch name, so it is arbitrarily long; `draw_overlay` wraps it to
-    // the width the numbers already need. Without that, a long enough branch
-    // silently widens the HUD past the pane — which the assertion above on
-    // `contains_rect` catches, but only on a branch that happens to be long.
-    assert!(
-        hud.width() < area.width(),
-        "the build tag must wrap, not widen the HUD: {hud:?} in {area:?}",
-    );
-
-    assert!(screen.contains_rect(area), "the analyzer pane is inside the editor");
-    // Right of the lattice and left of the settings column: the Spectral pane
-    // as `default_dock` places it.
-    assert!(area.left() > screen.left(), "the analyzer pane is not the left edge");
-    assert!(area.right() < screen.right(), "the settings column is right of it");
-
-    // Its leaf holds Spectral alone, so collapsing it is what takes it off
-    // screen; the overlay then falls back to the OTHER picture pane.
-    let path = state.workspace.dock.find_tab(&panes::Tab::Spectral).expect("Spectral is docked");
-    let egui_dock::Node::Leaf(leaf) = &mut state.workspace.dock[path.surface][path.node] else {
-        panic!("Spectral should live in a leaf");
-    };
-    leaf.collapsed = true;
-    h.frame(&mut state, vec![]);
-    let output = h.frame(&mut state, vec![]);
-    let lattice = state.workspace.dock.find_tab(&panes::Tab::Lattice).expect("Lattice is docked");
-    let egui_dock::Node::Leaf(lattice) = &state.workspace.dock[lattice.surface][lattice.node] else {
-        panic!("Lattice should live in a leaf");
-    };
-    assert_eq!(
-        perf_overlay_area(&state, screen, 1.0),
-        lattice.viewport,
-        "a collapsed analyzer should hand the overlay to the lattice, not to the window",
-    );
-
-    // ...and the point of that, which is what the fallback is FOR: the HUD is
-    // painted on a foreground layer over the whole dock, so hanging it off the
-    // window puts it on the chrome along the top — the settings column's tab
-    // bar, and the collapse arrow at the left of every bar, which is the
-    // control that brings a folded pane back. A tab body starts below its own
-    // bar, so landing in one is what keeps it clear of all of them.
-    fn hud_of(output: &egui::FullOutput) -> egui::Rect {
-        let plate = egui::Color32::from_black_alpha(0xC0);
-        output
-            .shapes
-            .iter()
-            .find_map(|clipped| match &clipped.shape {
-                egui::Shape::Rect(rect) if rect.fill == plate => Some(rect.rect),
-                _ => None,
-            })
-            .expect("the overlay should paint its backing plate")
-    }
-    fn clear_of_every_tab_bar(state: &SharedState, hud: egui::Rect, what: &str) {
-        for node in state.workspace.dock.main_surface().iter() {
-            let egui_dock::Node::Leaf(leaf) = node else {
-                continue;
-            };
-            let mut bar = leaf.rect;
-            bar.max.y = bar.min.y + crate::theme::TAB_BAR_HEIGHT;
-            assert!(
-                !hud.intersects(bar),
-                "{what}: the HUD covers a tab bar and its collapse arrow: {hud:?} over {bar:?}",
-            );
-        }
-    }
-    clear_of_every_tab_bar(&state, hud_of(&output), "on the lattice");
-
-    // Fold the lattice too and there is no picture left to hang off, which is
-    // the last resort. It is the only branch that does arithmetic — the editor
-    // rect pushed down past the tab bar — and the arithmetic is the whole of
-    // what keeps the HUD off the collapse arrows in the one state where those
-    // arrows are the only way back.
-    let path = state.workspace.dock.find_tab(&panes::Tab::Lattice).expect("Lattice is docked");
-    let egui_dock::Node::Leaf(leaf) = &mut state.workspace.dock[path.surface][path.node] else {
-        panic!("Lattice should live in a leaf");
-    };
-    leaf.collapsed = true;
-    h.frame(&mut state, vec![]);
-    let output = h.frame(&mut state, vec![]);
-    let area = perf_overlay_area(&state, screen, 1.0);
-    assert_eq!(
-        area.min.y,
-        screen.min.y + crate::theme::TAB_BAR_HEIGHT,
-        "with neither picture on screen the overlay should clear the tab bar: {area:?}",
-    );
-    clear_of_every_tab_bar(&state, hud_of(&output), "with both pictures folded");
 }
 
-/// Landing in the analyzer's body is only half of staying out of the way: the
-/// HUD is painted on a foreground layer whose clip is the whole screen, so a
-/// pane too narrow to hold it does not crop it — it spills across the separator
-/// and over the settings column, and over whatever collapse arrow is there.
+/// The HUD is dragged, and it is dropped where the pointer left it.
 ///
-/// The analyzer is the NARROWEST pane in `default_dock` (0.2016 of the window),
-/// so it is the first to run out of room, and a sideways fold can drive the
-/// window to its floor without the user ever dragging it there.
+/// Through the REAL dock, so the drag crosses every layer between the mouse
+/// and the overlay: the picture pane under it senses drags of its own (a drag
+/// on the lattice orbits the camera), and the HUD sitting on a foreground
+/// layer is what decides which of the two the pointer is talking to.
 #[test]
-fn the_perf_overlay_stays_inside_its_pane_at_the_narrowest_window() {
-    // The narrowest window a shell will actually hand the UI, read from the
-    // constant that decides it rather than restated. The plugin's `MIN_SIZE`
-    // derives its width from this one, so it is the source and the editor's
-    // copy is not; and taking it by hand would leave this measuring 400pt
-    // after a retune, which is the one window where the HUD has no room to
-    // spare and so the one that has to follow the floor down.
+fn the_perf_overlay_goes_where_it_is_dragged() {
     let mut state = fresh();
-    // Turned on by hand: the overlay ships off, and what is under test is
-    // whether it stays inside its pane once asked for.
     state.view.show_perf = true;
-    let mut h = DockHarness::at(egui::vec2(shell::MIN_WINDOW_WIDTH, 800.0));
-    let screen = h.screen;
-    h.frame(&mut state, vec![]);
-    let output = h.frame(&mut state, vec![]);
+    let mut h = DockHarness::new();
+    h.settle(&mut state);
 
-    let plate = egui::Color32::from_black_alpha(0xC0);
-    let hud = output
-        .shapes
-        .iter()
-        .find_map(|clipped| match &clipped.shape {
-            egui::Shape::Rect(rect) if rect.fill == plate => Some(rect.rect),
-            _ => None,
-        })
-        .expect("the overlay should paint its backing plate");
-    let area = perf_overlay_area(&state, screen, 1.0);
+    let before = hud_of(&h.frame(&mut state, vec![]));
+    let by = egui::vec2(-260.0, 190.0);
+    let after = drag_hud(&mut h, &mut state, by);
+
     assert!(
-        area.contains_rect(hud),
-        "the HUD ran {:.0}pt past its {:.0}pt pane: {hud:?} in {area:?}",
-        hud.right() - area.right(),
-        area.width(),
+        (after.min - (before.min + by)).length() < 1.0,
+        "the HUD should have moved by the drag: {before:?} by {by:?} left it at {after:?}",
     );
+    assert_eq!(
+        state.perf_pos,
+        Some(after.min),
+        "the drop should be recorded as the overlay's position",
+    );
+    // Drawn where it was dropped on the frames after, rather than springing
+    // back to the corner once the pointer lets go.
+    let settled = hud_of(&h.frame(&mut state, vec![]));
+    assert_eq!(settled, after, "the HUD should stay where it was dropped");
+}
+
+/// Once placed, the HUD is where the user put it, whatever the dock does.
+///
+/// This is the inverse of a rule the overlay used to carry: it hung off the
+/// analyzer pane, fell back to the lattice when that pane went off screen, and
+/// off the editor when neither was up — so folding a leaf moved it. A dragged
+/// HUD is furniture the user positioned, and a fold is not a request to move
+/// it.
+#[test]
+fn folding_a_pane_does_not_move_the_perf_overlay() {
+    let mut state = fresh();
+    state.view.show_perf = true;
+    let mut h = DockHarness::new();
+    h.settle(&mut state);
+    let placed = drag_hud(&mut h, &mut state, egui::vec2(-200.0, 120.0));
+
+    // Both picture panes off screen in turn — the two folds that used to hand
+    // the overlay from one pane to the next, and then to the window.
+    for tab in [panes::Tab::Spectral, panes::Tab::Lattice] {
+        let path = state.workspace.dock.find_tab(&tab).expect("the tab is docked");
+        let egui_dock::Node::Leaf(leaf) = &mut state.workspace.dock[path.surface][path.node] else {
+            panic!("{tab:?} should live in a leaf");
+        };
+        leaf.collapsed = true;
+        h.settle_folds(&mut state);
+        // Its POSITION, which is what a fold used to change. The plate's width
+        // still follows the numbers inside it — a folded lattice draws no
+        // nodes, and that row gets shorter — and it grows from the corner the
+        // HUD was dropped by.
+        assert_eq!(
+            hud_of(&h.frame(&mut state, vec![])).min,
+            placed.min,
+            "collapsing {tab:?} moved the overlay",
+        );
+    }
+}
+
+/// A drag cannot push the HUD out of the editor, because the plate is the only
+/// handle it has: dragged off the edge, or left where a smaller window no
+/// longer reaches, there would be nothing left to grab it by.
+#[test]
+fn the_perf_overlay_cannot_be_dragged_out_of_the_editor() {
+    let mut state = fresh();
+    state.view.show_perf = true;
+    let mut h = DockHarness::new();
+    h.settle(&mut state);
+    let screen = h.screen;
+
+    // Far past the bottom-left corner, which is as far as a pointer inside the
+    // window can throw it.
+    let hud = drag_hud(&mut h, &mut state, egui::vec2(-2000.0, 2000.0));
+    assert!(
+        screen.contains_rect(hud),
+        "the HUD was dragged out of reach: {hud:?} outside {screen:?}",
+    );
+
+    // ...and a window that shrinks under a HUD already at its edge brings it
+    // back in rather than leaving it beyond the corner.
+    h.screen.max -= egui::vec2(300.0, 200.0);
+    h.frame(&mut state, vec![]);
+    let hud = hud_of(&h.frame(&mut state, vec![]));
+    assert!(
+        h.screen.contains_rect(hud),
+        "a smaller window stranded the HUD: {hud:?} outside {:?}",
+        h.screen,
+    );
+}
+
+/// Where the HUD was dragged to outlives the session, and a hand-edited
+/// position that cannot be drawn is dropped rather than honoured.
+#[test]
+fn a_dragged_perf_overlay_is_persisted() {
+    let mut state = fresh();
+    state.view.show_perf = true;
+    state.perf_pos = Some(egui::pos2(123.0, 456.0));
+
+    let mut restored = fresh();
+    assert!(restored.load_persist(&state.save_persist()));
+    assert_eq!(
+        restored.perf_pos,
+        Some(egui::pos2(123.0, 456.0)),
+        "a dragged overlay should open where it was left",
+    );
+
+    // NaN reaches the tessellator as geometry, and a blob is a file someone
+    // can edit — see `load_persist`, which repairs the spiral framing beside
+    // this for the same reason.
+    let mut restored = fresh();
+    let saved = state.save_persist();
+    let edited = saved.replacen("x:123.0", "x:NaN", 1);
+    assert_ne!(edited, saved, "the position must be in the blob to edit");
+    assert!(restored.load_persist(&edited));
+    assert_eq!(restored.perf_pos, None, "an undrawable position should be dropped");
 }
 
 /// The overlay ships OFF, on a fresh install and in a project saved before the

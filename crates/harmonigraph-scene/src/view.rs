@@ -706,7 +706,7 @@ pub struct ViewConfig {
     /// is the same in both modes and a take framed in one is framed in the
     /// other.
     pub frameless: bool,
-    /// Show the performance overlay (a small corner HUD with frame rate,
+    /// Show the performance overlay (a small draggable HUD with frame rate,
     /// memory and workload counts; per-stage CPU time waits for
     /// [`Self::show_perf_detail`]). Interactive shells only — the offline
     /// renderer never draws it, keeping its frames deterministic.
