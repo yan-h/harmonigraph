@@ -495,7 +495,7 @@ fn rays(painter: &egui::Painter, spiral: &Spiral) {
 ///
 /// Read once and handed to both the dot and the name, so the two cannot
 /// disagree about which notes are sounding or how far each has faded.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct Sounding {
     pitch: f32,
     strength: f32,
@@ -631,7 +631,7 @@ mod tests {
     use super::*;
     use crate::tests::probe::{fresh, painted_into};
     use crate::SpectrumConfig;
-    use harmonigraph_core::NoteEvent;
+    use harmonigraph_core::{NoteEvent, NoteEventKind};
 
     /// A square pane at an offset origin, so a mistake that assumes the rect
     /// starts at zero shows up.
@@ -1129,6 +1129,42 @@ mod tests {
         }
         let (batch, _) = rim_names(&state, PANE, 0.1);
         assert_eq!(batch.pieces().len(), 1, "three Cs are one name");
+    }
+
+    /// A note bent to just UNDER a pitch class is named with it, not beside it.
+    ///
+    /// This is the wrap at the end of `names`' `class`, and it is the one
+    /// thing there that only a bent note reaches: every whole MIDI number
+    /// lands on a multiple of the grain, so the rounding has nowhere to go and
+    /// the modulo is dead against integers. Four cents flat of C rounds to
+    /// 1200 cents rather than to 0 — the top of the circle, which IS C's own
+    /// ray — so without the wrap it is a class of its own and prints C's name
+    /// a second time about a degree away, the smear `NAME_GRAIN_CENTS` is
+    /// there to prevent.
+    ///
+    /// Four cents is well inside the vibrato this pane is read under, so a
+    /// held note crosses this boundary rather than sitting on one side of it.
+    #[test]
+    fn a_note_bent_just_under_a_pitch_class_is_named_with_it() {
+        let mut state = fresh();
+        state.spectrum_config.low_midi = 48.0;
+        state.spectrum_config.high_midi = 84.0;
+        state.tracker.handle_event(NoteEvent::on(0.0, 0, 60, 1.0));
+        state.tracker.handle_event(NoteEvent::on(0.0, 0, 72, 1.0));
+        state.tracker.handle_event(NoteEvent {
+            time: 0.0,
+            channel: 0,
+            note: 72,
+            kind: NoteEventKind::Tuning { semitones: -0.04 },
+        });
+        let spiral = Spiral::new(PANE, &state.spectrum_config);
+        let lit = sounding(&spiral, &state, 0.1);
+        // Both are on the disc, so one name is a name they SHARE rather than
+        // one of them having been dropped on the way in.
+        assert_eq!(lit.len(), 2, "both notes sound: {lit:?}");
+        assert!((lit[1].pitch - 71.96).abs() < 1e-3, "the bend landed at {}", lit[1].pitch);
+        let (batch, _) = rim_names(&state, PANE, 0.1);
+        assert_eq!(batch.pieces().len(), 1, "a C and a C four cents flat are one name");
     }
 
     /// A voice the disc cannot show is not named either. The dots and the names
