@@ -40,6 +40,7 @@ fn stacked_name(
             egui::Color32::BLACK,
             scale,
             magnify,
+            marks::NameLead::Centred,
         );
     });
     (batch, reach, out)
