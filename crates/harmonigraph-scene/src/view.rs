@@ -603,7 +603,7 @@ impl ViewConfig {
     /// hand-edited blob can hold anything, and `sanitize` only repairs the
     /// non-finite (a finite 40 would be a curve no bar can undo).
     ///
-    /// The Nodes section's Shape bar builds one of its own, and it is the single
+    /// The Nodes section's Fade curve bar builds one of its own, and it is the single
     /// exception rather than a second assembly point: it is drawing a PICTURE
     /// of the curve, over a unit duration that is nothing a note ever fades
     /// on, so it has no note's seconds to pair with and could not reach for
@@ -1101,15 +1101,22 @@ impl Default for ViewConfig {
             // septimal mark spells apart from the node two fifths down (see
             // SevensLabel) rather than repeating it.
             sevens_size: 1.0,
-            // Reach and fade all but equal, which puts the clearing at full
-            // strength to about the node's rim and gone a bit over a quarter
-            // of a node-width past it.
-            sevens_gutter: 0.278_196_75,
-            sevens_gutter_soft: 0.271_047_7,
+            // Off, so the grid runs unbroken under a sounding node. A fresh
+            // view is flat (extent_sevens 0), and there the clearing has no
+            // sheet behind it to hide — it only cuts the grid, which is a look
+            // to reach for rather than one to open on. Opening depth is the
+            // cue to turn it on, the same move that brings sevens_size down.
+            sevens_gutter: 0.0,
+            sevens_gutter_soft: 0.0,
             sevens_label: SevensLabel::Name,
             show_labels: true,
-            // Labels at their built-in size.
-            label_scale: 1.0,
+            // A third over the built-in size, which is what the lattice is
+            // actually read at: a name has to carry its accidental and its
+            // comma mark, and at 1 those are strokes rather than marks. The
+            // built-in size stays where it is — it is what the marks and the
+            // cents line are proportioned against, and this bar sizes the
+            // whole label together.
+            label_scale: 1.3,
             show_cents: true,
             // Written out rather than taken from `Gradient::default()`,
             // which is the gradient TYPE's own default — the CIELAB arc

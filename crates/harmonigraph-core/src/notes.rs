@@ -876,8 +876,8 @@ mod tests {
         }
     }
 
-    /// What the Shape bar buys: 0 is the straight line the lattice has always
-    /// faded on, and turning it up moves the fade EARLIER without moving
+    /// What the Fade curve bar buys: 0 is the straight line the lattice fades
+    /// on, and turning it up moves the fade EARLIER without moving
     /// either end. Written as an ordering rather than as numbers so it states
     /// the property the bar promises instead of restating the formula.
     #[test]

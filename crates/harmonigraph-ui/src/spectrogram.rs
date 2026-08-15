@@ -27,10 +27,13 @@ use harmonigraph_scene::Gradient;
 ///
 /// Raising this is not free: the store's tiers have to keep up with it (see
 /// [`SpectrumHistory::COARSE_COLUMNS`](harmonigraph_core::SpectrumHistory::COARSE_COLUMNS),
-/// which must be at least as large), so 512 -> 1024 took the store from 17 to
-/// 30 MB. What it buys is the DEFAULT span: at 512 the pane would open on a
-/// 32 ms slab where 1024 gives it 16 ms, so the cap and not the data was setting
-/// the resolution of the span the pane actually opens on.
+/// which must be at least as large), so this is what puts the store at 30 MB
+/// where half the cap would cost 17. What the larger one buys is the SHORT
+/// spans, which is where a halving still lands somewhere the data can tell
+/// apart: a 12 s close-up is cut into 16 ms slabs here and 32 ms ones at half
+/// this, against an 8 ms column rate. At the three-minute Span a fresh view
+/// opens on it is 256 ms against 512, and both are far coarser than the data —
+/// the cap still doubles the resolution there, but neither is drawing grain.
 ///
 /// It is a CEILING on the count, not the count itself: [`live_slab`] picks the
 /// finest rung of its ladder that fits a window inside this many slabs, so the
@@ -244,9 +247,14 @@ const LADDER_FLOOR_COLUMNS: f64 = 2.0;
 ///
 /// The cost is resolution that steps rather than tracks: within a rung a wider
 /// pane buys nothing, so the image can hold half the slabs the depth axis has
-/// pixels. That is well under what the analysis resolves — at the default Span a
-/// slab is 16 ms against a 171 ms analysis window — so what it gives up is
-/// detail the FFT never had.
+/// pixels. What that gives up depends on the Span, and the two ends differ in
+/// kind. At a close-up — a 12 s window cuts into 16 ms slabs — the slab is well
+/// under the 171 ms analysis window, so the stepping loses detail the FFT never
+/// had. At the three-minute Span a fresh view opens on, the slab is 256 ms and
+/// the CAP is what sets the resolution: those slabs merge detail the FFT did
+/// resolve. That is what a long Span is for rather than a flaw in it — the
+/// shape of a piece instead of the grain of a phrase — and zooming in is what
+/// asks for the grain back.
 pub(crate) fn live_slab(window: f64, target_cols: usize) -> f64 {
     let mut bucket = crate::AudioSpectrum::FFT_INTERVAL * LADDER_FLOOR_COLUMNS;
     // The Span reaches ten minutes and the pane can be a sliver, so walk the
@@ -1128,8 +1136,8 @@ impl SlabGrid {
 /// compose time, so a pitch zoom or pan re-reads a grid that is already folded
 /// and never comes here. That is not incidental: a pitch drag moves its scale
 /// on every frame of itself, and a fold that applied the rows would re-walk
-/// the whole retention on each of those frames — 46 ms at the default Span on
-/// a full-height 2x pane, and past 100 ms at long ones, measured.
+/// the whole retention on each of those frames — 46 ms at a 12 s Span on a
+/// full-height 2x pane, and past 100 ms at long ones, measured.
 ///
 /// It reproduces `aggregate_slabs` over the columns AS THEY ARRIVED: the shared
 /// [`SlabGrid::fold`] gives identical slab values, and the window is served from
@@ -2658,7 +2666,16 @@ mod tests {
         for (algo, lag) in windows {
             for (pane, cols) in panes {
                 // Where a slab is exactly the lag — the crossing this pair's
-                // ring behaviour turns on — plus the Span the pane opens on.
+                // ring behaviour turns on — plus a close-up to anchor it.
+                //
+                // The close-up is 12 s rather than the three-minute Span a
+                // fresh view opens on, and the two crossing-relative spans are
+                // why that costs no coverage: they land either side of the
+                // crossing for each window and pane, which is a longer Span
+                // than the default for some of those pairs and a shorter one
+                // for others. Driving the default outright would add 24,000
+                // columns per pair (the loop below runs `(span + 15) /
+                // interval` of them) to make a case these already bracket.
                 let crossing = lag * cols;
                 for span in [12.0f64, crossing * 0.6, crossing * 1.4] {
                     let planned = cols as usize + RING_HEADROOM;
@@ -2957,9 +2974,16 @@ mod tests {
     /// the pixels really are all different, while the aggregator's grid, which
     /// is in bucket space, is carried untouched. That split is what holds the
     /// gesture's cost to a compose. With the rows folded in, every frame of it
-    /// would re-fold the whole retention — 46 ms at the default Span on a
+    /// would re-fold the whole retention — 46 ms at a 12 s Span on a
     /// full-height 2x pane, measured — and only the rebuild counter can see the
     /// difference, since the refold draws the same picture.
+    ///
+    /// Driven at a 12 s Span rather than at the three-minute one a fresh view
+    /// opens on, and that is the fixture being cheap rather than being stale:
+    /// what it counts is aggregator rebuilds across a gesture, which the span
+    /// does not change. The loop runs `(span + 5) / FFT_INTERVAL` frames, so
+    /// three minutes would drive it 23,000 times rather than 2,100 — a slower
+    /// test making the same count.
     #[test]
     fn a_pitch_gesture_never_reaches_the_aggregator() {
         let interval = crate::AudioSpectrum::FFT_INTERVAL;

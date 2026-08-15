@@ -105,11 +105,11 @@ pub(super) fn label_anchor(split: f32) -> (f32, f32) {
 /// Point size of an axis marking's label — a dozen standing marks that
 /// should stay quiet.
 ///
-/// Doubled from the 10 it was drawn at before the Marking size bar existed. The
-/// bar went to 2 the first time it was tried and stayed there — so the number
-/// was wrong rather than the bar wanted, and rebasing it leaves the bar
-/// reading 1 at the size the pane is actually read at.
-pub(super) const MARKING_PT: f32 = 20.0;
+/// Quoted at the size the pane is actually read at, so the Marking size bar
+/// reads 1 there: the bar is where the size gets dialled, and a built-in nobody
+/// opens on turns every view into a correction of it. When the bar settles
+/// somewhere other than 1, this number is what moves.
+pub(super) const MARKING_PT: f32 = 16.0;
 
 /// The whole pitch axis, in semitones — the widest the range opens, and the
 /// zoom the note names' built-in size is dialled for.
