@@ -455,10 +455,13 @@ pub struct SpectrumConfig {
     /// Turning this on asks for the other end, and so for the other of those
     /// two in whichever orientation the pane is in.
     ///
-    /// The GAP is the same at either setting and for the whole life of a note:
-    /// a name holds its small distance from the end it is written on, and goes
-    /// off the picture when that end does, rather than waiting on the edge
-    /// while its own note scrolls out from under it.
+    /// The GAP is the same at either setting: a name holds its small distance
+    /// from the end it is written on, and goes off the picture when that end
+    /// does, rather than waiting on the edge while its own note scrolls out
+    /// from under it. The one thing that holds a name off that distance is the
+    /// pane's own outer edge, which a name younger than its own ribbon can
+    /// reach past — and only where [`roll_fraction`](Self::roll_fraction)
+    /// leaves the analyzer too narrow to lie over.
     ///
     /// The offline whole-song layout is outside all of this and takes the
     /// onset in every orientation, at either setting: it lays the take out as

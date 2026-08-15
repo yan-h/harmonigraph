@@ -471,7 +471,11 @@ pub(super) fn plan(
     // Which end of the region the sweep starts behind is a fact about the
     // LAYOUT — which way take time runs across it — and not about the anchor:
     // whichever end of a ribbon a name is written on, the earliest one that can
-    // land on the pane is at the oldest time the region shows.
+    // put ink on the pane is at the oldest time the region shows, less the
+    // reach of the name written on it (see [`shows`](plan), which is what lets
+    // an anchor off the far edge still be drawing). That slack is bounded by
+    // one room, and the lookback is four, so the cells this cannot vouch for
+    // stay clear of the picture with a whole cell to spare.
     let lookback = 4.0 * room(&WIDEST_NAME);
     let oldest = time.oldest();
     let sweep_from =
@@ -681,9 +685,11 @@ pub(super) fn plan(
     // its edge, where it always has ink, so this is a live question and answers
     // trivially there.
     let shows = |edge: &Edge, room: f64| {
-        // The lane's room less the gap it demands of the next name is this
-        // name's own box (the same subtraction the thinning's reach makes), and
-        // the air it stands off its end is ink no box carries.
+        // THIS pitch's room, not its lane's — the two are not the same number,
+        // and [`Lane`]'s second defect is the whole of why. Less the gap it
+        // demands of the next name it is this name's own box (the same
+        // subtraction the thinning's reach makes), and the air it stands off
+        // its end is ink no box carries.
         let (_, latest) = name_span(edge.time, room - gap + inset, backward);
         latest >= oldest
     };
@@ -702,6 +708,8 @@ pub(super) fn plan(
         // On the pane, and so worth drawing — decided on the pitch the name
         // will be DRAWN at, not the note's pitch in general, since the two
         // differ for a bent note and it is the name that has to be visible.
+        // Its POSITION only: the spelling is still asked of the true anchor,
+        // for the reason [`drawn_edge`] gives.
         //
         // Three questions, and the last one is the anchor's: the note has
         // ribbon on the pane, that ribbon is inside the pitch zoom, and the
@@ -728,12 +736,9 @@ pub(super) fn plan(
         // in the thinning, which is what lets the names on the pane stand still
         // while it scrolls.
         //
-        // The pitch is the one the name will be DRAWN at, not the note's pitch
-        // in general, since the two differ for a bent note and it is the name
-        // that has to be visible.
         let drawn = drawn_edge(note, &edge, now, &time);
         let visible = note.stop(now) >= oldest
-            && scale.contains(edge.pitch)
+            && scale.contains(drawn.pitch)
             && shows(&drawn, naming(edge.pitch, &mut names).1);
         // A held note whose name is anchored on the LEADING EDGE stands outside
         // the sweep in BOTH directions: it is named whatever is already there,
@@ -900,9 +905,10 @@ pub(super) fn plan(
 /// A TIME, not a depth. The thinning is measured in it — a time is a fact
 /// about the music, where a depth is a fact about where the window happens to
 /// be — and it is the only one of the two that still says anything about a
-/// note off the pane, since past either edge every depth clamps to the edge.
-/// The depth follows from it (`TimeAxis::depth_of`) for the few notes that are
-/// actually drawn.
+/// note off the pane, where what a depth says depends on which picture is
+/// asking — it runs on past a scrolling edge and stops dead at a crop. The
+/// depth follows from it for the few notes that are actually drawn, by
+/// whichever of the two [`place`](plan) is owed.
 #[derive(Clone, Copy)]
 struct Edge {
     time: f64,
@@ -2546,9 +2552,16 @@ mod tests {
     /// back at the edge instead, the name would stand still in a moving picture
     /// with the gap opening behind it.
     ///
-    /// Two lengths, because that shortfall IS the note's length: a test on one
-    /// note cannot tell an anchor that leaves with its end from one that has
-    /// simply been shifted.
+    /// Three lengths, because that shortfall IS the note's length: a test on
+    /// one note cannot tell an anchor that leaves with its end from one that
+    /// has simply been shifted.
+    ///
+    /// The shortest is under a name's own REACH, and it is the only case that
+    /// asks anything of the note's own term in [`plan`]'s `visible`. Above that
+    /// reach the name's ink leaves before the ribbon does and the term decides
+    /// nothing; below it the name would outlive the thing it names, and the
+    /// `over >= 0` assertion is what catches it. Drop that term and this length
+    /// alone goes red.
     ///
     /// The slack is a second either way, against note lengths of 4 and 12: what
     /// it covers is the ink each end carries past its own box — the name's inset
@@ -2566,7 +2579,7 @@ mod tests {
     fn a_name_leaves_with_the_end_it_is_written_on_and_never_outlasts_its_ribbon() {
         let square = egui::Rect { min: egui::pos2(10.0, 20.0), max: egui::pos2(310.0, 320.0) };
         for orientation in SpectralOrientation::ALL {
-            for length in [4.0f64, 12.0] {
+            for length in [0.3f64, 4.0, 12.0] {
                 let mut state = turned(24.0, 10.0, orientation);
                 state.tracker.handle_event(on(1.0, 60));
                 state.tracker.handle_event(off(1.0 + length, 60));
@@ -2618,7 +2631,7 @@ mod tests {
     ///
     /// The moment the onset crosses is the one to watch, and there are three
     /// wrong things a name can do at it. It can POP — drawn whole one frame and
-    /// gone the next, which is what culling on the anchor did. It can PARK —
+    /// gone the next, which is what culling on the anchor would do. It can PARK —
     /// held on the edge while its own note goes on scrolling out from under it,
     /// the gap opening by the whole length of ribbon still showing. Or it can
     /// stay for ever, which for a drone is a name minutes from the note it was
@@ -3747,7 +3760,7 @@ mod tests {
     /// read at the clamped time or the pair comes apart exactly where the clamp
     /// bites.
     ///
-    /// A whole-song render, which is where the clamp now lives, of a note that
+    /// A whole-song render, which is where the clamp lives, of a note that
     /// glides a fifth before the render's start and is held past it: measured,
     /// the name sat 29.2 points from its ribbon on a 100-point pitch axis — a
     /// name saying C in clear air, with the ribbon it belongs to a quarter of
@@ -3786,13 +3799,59 @@ mod tests {
             placed[0].rect.center(),
             crossing.center,
         );
-        // The onset's own row is where it used to land, and is a long way from
-        // the ribbon — so the assertion above is about the fix and not about a
-        // pitch axis too small to tell the two apart.
+        // The onset's own row is a long way from the ribbon — so the assertion
+        // above is about the pitch moving with the clamp and not about a pitch
+        // axis too small to tell the two apart.
         let onset_row = axes.at(scale.t_of(60.0), 1.0).y;
         assert!(
             (onset_row - crossing.center[1]).abs() > 20.0,
             "the fixture is vacuous: the onset's pitch and the ribbon's agree",
+        );
+    }
+
+    /// A cropped name is KEPT OR DROPPED on the pitch it is drawn at, not on
+    /// the pitch its note began at.
+    ///
+    /// The same pair [`drawn_edge`] exists to hold together, asked of the cull
+    /// rather than of the placement: it moves the pitch with the clamped time
+    /// so the name lands on its ribbon, and a cull reading the other pitch
+    /// answers for a point the picture does not contain. Both directions are
+    /// wrong and neither is quiet — a note that glides INTO the zoom before the
+    /// render's start draws its ribbon across the whole picture and is refused
+    /// a name, and one that glides OUT of it keeps a name drawn off the pitch
+    /// axis altogether.
+    ///
+    /// The zoom is the two octaves above middle C, so the note's onset pitch
+    /// sits three semitones below the floor and the pitch it is sounding at the
+    /// crop four semitones inside it. Live the two pitches are one and this
+    /// cannot bite, the anchor never being clamped there.
+    #[test]
+    fn a_cropped_name_is_culled_on_the_pitch_it_is_drawn_at() {
+        let mut state = state(24.0, 10.0);
+        state.spectrum_config.low_midi = 63.0;
+        state.spectrum_config.high_midi = 87.0;
+        state.tracker.handle_event(on(1.0, 60));
+        state.tracker.handle_event(tuning(1.5, 60, 7.0)); // C4 -> G4, then held
+        let roll = state.tracker.roll().clone();
+        state.whole_song =
+            Some(crate::WholeSong { columns: Vec::new(), roll, start: 4.0, span: 10.0 });
+
+        let placed = labels(&state, 8.0);
+        assert_eq!(
+            said(&placed),
+            ["C"],
+            "the ribbon crosses the whole picture at G, inside the zoom, and went unnamed",
+        );
+        // ...on the ribbon's own row, which is the placement half of the same
+        // pair — and the row its onset would have had is off the axis here, so
+        // a name placed by that pitch could not be found by this assertion at
+        // all.
+        let axes = Axes::new(PANE, &state.spectrum_config);
+        let row = axes.at(scale_of(&state).t_of(67.0), 0.0).y;
+        assert!(
+            (placed[0].rect.center().y - row).abs() < 2.0,
+            "the name sits at {} rather than on the ribbon's row at {row}",
+            placed[0].rect.center().y,
         );
     }
 }
