@@ -409,6 +409,13 @@ pub struct ViewConfig {
     /// cents: the standard deviation of the Gaussian the fold weights power by,
     /// 1..=50.
     ///
+    /// The FOLD's kernel, so it is
+    /// [`spectral_light`](Self::spectral_light)'s alone. The audio ring reads
+    /// the spectrum raw and shows a whole window of it per wedge
+    /// ([`spectral_ring_range`](Self::spectral_ring_range)), where a kernel
+    /// would be a blur over a picture whose whole subject is where a partial
+    /// sits.
+    ///
     /// A WEIGHT and not a gate, which is the whole of why it is a width in
     /// cents rather than a tolerance: distance maps to dimness, so a detuned
     /// partial fades rather than switching off, and ±15¢ of vibrato reads as
@@ -426,18 +433,23 @@ pub struct ViewConfig {
     /// third's 5th harmonic sits 13.7¢ off the node it belongs to and a
     /// harmonic seventh 31¢ off.
     pub spectral_width: f32,
-    /// Draw a second ring on every node, inside the octave band, lit from the
-    /// analyzer's spectrum: which sine waves are sounding at each of this
-    /// node's octaves ([`NodeInstance::spectral_octaves`](crate::NodeInstance)).
+    /// Draw a second ring on every node, inside the octave band: the raw pitch
+    /// spectrum, bent round the node's own wheel.
+    ///
+    /// Each wedge of it is a SEGMENT of the spiral spectrogram — angle within
+    /// the wedge is a cents offset around that octave's own pitch, over
+    /// [`spectral_ring_range`](Self::spectral_ring_range) — so the ring says
+    /// not merely whether something is sounding at this node's pitch class but
+    /// exactly how far off it sits. A partial dead on the node paints down the
+    /// middle of its wedge; one a comma sharp paints to the clockwise side of
+    /// it, in the direction pitch rises everywhere else on the wheel.
     ///
     /// An ADDITION rather than a source switch, which is what makes it a
     /// different picture from [`spectral_light`](Self::spectral_light) rather
     /// than a second way of asking for it: MIDI keeps everything it draws —
     /// the node body, the octave band, the melody and bass rings — and the
-    /// measurement is a ring of its own. The two rings share the wheel, so a
-    /// held note's wedge and the partial that should be sounding it sit at the
-    /// SAME angle and agreement between intent and sound is one glance down a
-    /// radius.
+    /// measurement is a ring of its own, in the analyzer's colours rather than
+    /// the pitch ramp's, so neither reading can be mistaken for the other.
     ///
     /// Inside the band rather than outside because of which disagreement is
     /// common: energy at a pitch class with no note held — every partial above
@@ -446,9 +458,15 @@ pub struct ViewConfig {
     /// the inner ring, where a busy ring of small wedges is contained by the
     /// band around it rather than fringing the node.
     ///
-    /// Off fresh, and with it off the picture is exactly the MIDI one. Both
-    /// this and `spectral_light` on is redundant rather than wrong: the band
-    /// and the ring then draw the same measurement at two radii.
+    /// RAW, with no fold and no noise floor behind it: what a wedge paints is
+    /// the analyzer's own buckets through the analyzer's own Level window, so
+    /// every node wears a ring at the ramp's floor colour wherever nothing is
+    /// sounding. That is the reading rather than a defect — the ring measures
+    /// a stretch of spectrum, and a stretch with nothing in it is an answer.
+    /// [`spectral_width`](Self::spectral_width) is the FOLD's kernel and has
+    /// nothing to do with this ring.
+    ///
+    /// Off fresh, and with it off the picture is exactly the MIDI one.
     pub spectral_ring: bool,
     /// The audio ring's inner and outer radius, in the same quad UV units as
     /// the octave band's own ([`outer_inner`](Self::outer_inner)) and clamped
@@ -464,6 +482,26 @@ pub struct ViewConfig {
     pub spectral_ring_inner: f32,
     /// See [`spectral_ring_inner`](Self::spectral_ring_inner).
     pub spectral_ring_outer: f32,
+    /// How much of the spectrum one wedge of the audio ring shows, in cents,
+    /// centred on that wedge's own octave — the ZOOM of the segment, and the
+    /// one setting that says what the ring is for.
+    ///
+    /// At the ceiling ([`SPECTRAL_RANGE_MAX`](crate::SPECTRAL_RANGE_MAX), an
+    /// octave) a wedge stands for exactly the octave it names, so neighbouring
+    /// wedges meet at the pitch they share and the ring is one continuous
+    /// reading — the wheel's own pitch map, painted. It is also the setting at
+    /// which the ring says nothing about the NODE: with no extras the wheel's
+    /// map is shared by every node, so every ring on screen is then the same
+    /// picture turned, and what is worth looking at is the disagreement
+    /// between a node's own pitch and where the energy near it actually sits.
+    ///
+    /// Fresh at 200¢, a whole tone across a wedge. Wide enough to hold every
+    /// miss the material makes — a tempered major third's 5th harmonic sits
+    /// 13.7¢ off its node, a harmonic seventh 31¢, and the syntonic comma
+    /// between two just spellings is 21.5¢ — and narrow enough that those are
+    /// a seventh of the wedge apart rather than a fiftieth, which is the
+    /// difference between reading a detuning and taking it on trust.
+    pub spectral_ring_range: f32,
     // ---- Note envelope ---------------------------------------------------
     // How a note ARRIVES and how it LEAVES, for every layer of the node at
     // once. The DURATION of both is the host-automatable Fade param and lives
@@ -1293,13 +1331,18 @@ impl ViewConfig {
         // radial coverage comes out NaN, every wedge multiplies away, and the
         // ring simply is not there while the bar reads out a number. Only the
         // range is repaired here; which of the two is the larger is
-        // `derive_scene`'s, exactly as it is for the octave band, since that
-        // is a question about the PICTURE and the bar is free to be dragged
-        // through it.
+        // [`SpectralPaint::new`](crate::SpectralPaint)'s, exactly as the octave
+        // band's is `derive_scene`'s, since that is a question about the
+        // PICTURE and the bar is free to be dragged through it.
         self.spectral_ring_inner =
             finite_or(self.spectral_ring_inner, fresh.spectral_ring_inner).clamp(0.0, 1.0);
         self.spectral_ring_outer =
             finite_or(self.spectral_ring_outer, fresh.spectral_ring_outer).clamp(0.0, 1.0);
+        // How wide a window each wedge shows. A DIVISOR again — the shader
+        // turns a fragment's angle into a cents offset by it — so a zero from a
+        // hand-edited blob is a ring of NaN colour rather than a wrong zoom.
+        self.spectral_ring_range = finite_or(self.spectral_ring_range, fresh.spectral_ring_range)
+            .clamp(crate::SPECTRAL_RANGE_MIN, crate::SPECTRAL_RANGE_MAX);
 
         self.shimmer_speed = finite_or(self.shimmer_speed, fresh.shimmer_speed);
         self.shimmer_width = finite_or(self.shimmer_width, fresh.shimmer_width);
@@ -1455,6 +1498,9 @@ impl Default for ViewConfig {
             // of them touches.
             spectral_ring_inner: 0.32,
             spectral_ring_outer: 0.47,
+            // A whole tone across a wedge — see the field for why that width
+            // and not the octave that makes the ring continuous.
+            spectral_ring_range: 200.0,
             // Near enough a square law (the exponent lands at 2.05): enough
             // that a release leaves promptly and settles instead of sliding
             // out at one rate, and not so much that the tail is over before

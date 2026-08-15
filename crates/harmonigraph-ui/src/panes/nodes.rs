@@ -16,7 +16,8 @@ use crate::widgets::{button_row, choice_row, OctaveStrip, RangeBar, ValueBar};
 use crate::SharedState;
 use harmonigraph_scene::{
     Pulse, ViewConfig, MARK_DELAY_MAX, MIN_EXTRA_SIZE, PITCH_CEIL, PITCH_FLOOR,
-    SPECTRAL_RING_MIN_SPAN, SPECTRAL_WIDTH_MAX, SPECTRAL_WIDTH_MIN,
+    SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN, SPECTRAL_RING_MIN_SPAN, SPECTRAL_WIDTH_MAX,
+    SPECTRAL_WIDTH_MIN,
 };
 
 /// The sounding-note controls: what lights a node at all, then the whole note
@@ -390,19 +391,22 @@ fn source_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
         );
     ui.checkbox(&mut view.spectral_ring, "Audio ring")
         .on_hover_text(
-            "Draw what the analyzer hears as a second ring inside the octave \
-             band, leaving the MIDI picture alone: the band says which octaves \
-             are HELD, the ring which are SOUNDING. Both rings use the same \
-             wheel, so a note and the partial that should be sounding it stand \
-             at the same angle — a held octave with nothing lit inside it is a \
-             note the sound is not making, and a lit wedge with nothing held \
-             outside it is an overtone of something else",
+            "Draw the raw pitch spectrum as a second ring inside the octave \
+             band, leaving the MIDI picture alone. Each wedge is a segment of \
+             the spiral spectrogram bent into its arc: angle across the wedge \
+             is a pitch window around that octave, so a partial dead on the \
+             node paints down the middle and one a comma sharp paints to the \
+             clockwise side. In the analyzer's own colours, not the pitch \
+             ramp's, so the two readings on a node are never mistaken for each \
+             other — and with nothing sounding a wedge is the ramp's floor \
+             colour rather than empty, because the ring always measured",
         );
-    // Inert with both sources off, like every other gated bar in the pane: the
-    // kernel is the fold's own, so with nothing folding there is nothing for it
-    // to be the width of. Live for EITHER, since the ring and the replaced
-    // lighting are two readings of the one fold and this is its one width.
-    ui.add_enabled_ui(view.spectral_light || view.spectral_ring, |ui| {
+    // Inert without the LIGHTING, and not merely without audio: the kernel is
+    // the fold's own, and the fold is what `Light from audio` runs. The ring
+    // reads the spectrum raw and shows a whole window per wedge, so a kernel
+    // there would blur the one axis the window exists to resolve — its zoom is
+    // the Range bar below.
+    ui.add_enabled_ui(view.spectral_light, |ui| {
         ValueBar::new(
             &mut view.spectral_width,
             SPECTRAL_WIDTH_MIN..=SPECTRAL_WIDTH_MAX,
@@ -417,7 +421,8 @@ fn source_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
              vibrato breathes instead of flickering. Narrow is right for just \
              intonation, where partials land dead on the nodes; equal-tempered \
              material wants it wider, a tempered third's 5th harmonic sitting \
-             13.7 ¢ off its node and a 7th harmonic 31 ¢",
+             13.7 ¢ off its node and a 7th harmonic 31 ¢. Lights the nodes \
+             only — the audio ring does not fold",
         );
     });
     // Where the ring sits, as one control over its two radii — the same shape
@@ -440,6 +445,24 @@ fn source_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
              or out; fresh it sits in the clear space between the core and the \
              melody ring, with a gap either side so the three read as separate \
              layers",
+        );
+        // The ring's ZOOM, beside its radius, because the two are the whole of
+        // what the ring is: where it sits and how much spectrum it shows there.
+        ValueBar::new(
+            &mut view.spectral_ring_range,
+            SPECTRAL_RANGE_MIN..=SPECTRAL_RANGE_MAX,
+            "Range",
+        )
+        .display(|cents| format!("{cents:.0}¢"))
+        .show(ui)
+        .on_hover_text(
+            "How much of the spectrum one wedge of the audio ring shows, in \
+             cents, centred on that octave's own pitch. Narrow zooms in on the \
+             node's own neighbourhood, where a partial's detuning is a \
+             readable fraction of the wedge; at the top of the bar a wedge \
+             spans exactly its octave, so neighbouring wedges meet at the \
+             pitch they share and the ring becomes one continuous reading — \
+             the same picture on every node, turned",
         );
     });
 }

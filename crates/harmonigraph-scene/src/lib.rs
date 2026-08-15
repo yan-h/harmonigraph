@@ -17,6 +17,8 @@
 //! - [`camera`] — [`Camera`], [`Projection`], and the [`Projector`] used
 //!   for label placement and picking.
 //! - [`color`] — the pitch ramp every note is colored off, and the idle color.
+//! - [`spectral`] — the lattice's audio channel, and the second of the two
+//!   colour schemes the plugin has (the analyzer's, by loudness).
 //! - [`skin`] — the static palette the UI and renderer share.
 //! - [`trail`] — a quiet mark on the nodes the music has already been to.
 //!
@@ -28,6 +30,7 @@ pub mod color;
 pub mod derive;
 pub mod octaves;
 pub mod skin;
+pub mod spectral;
 pub mod style;
 pub mod trail;
 pub mod view;
@@ -39,6 +42,10 @@ pub use octaves::{
     clamp_center, clamp_wheel, octave_layout, OctaveLayout, Ring, DEFAULT_CENTER, DEFAULT_COUNT,
     DEFAULT_EXTRA_BLEND, DEFAULT_EXTRA_SIZE, MAX_EXTRAS, MAX_SPAN, MIDDLE_C_SLOT, MIN_COUNT,
     MIN_EXTRA_SIZE, MIN_SPAN, OCTAVE_SLOTS, PITCH_CEIL, PITCH_FLOOR,
+};
+pub use spectral::{
+    bucket_pitch, SpectralLevels, SpectralPaint, SPECTRAL_AXIS, SPECTRAL_BUCKETS,
+    SPECTRAL_BUCKETS_PER_SEMITONE, SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN,
 };
 pub use style::{Gradient, Pulse, SevensLabel};
 pub use view::{DrawnWindow, FrameParams, ViewConfig};
@@ -139,8 +146,8 @@ pub const SPECTRAL_WIDTH_MAX: f32 = 50.0;
 
 /// The thinnest the audio ring may be dialled, in quad UV units
 /// ([`ViewConfig::spectral_ring_inner`]/[`ViewConfig::spectral_ring_outer`]):
-/// the Ring bar's own floor, and the span `derive_scene` opens a hand-edited
-/// or inverted pair back out to.
+/// the Ring bar's own floor, and the span [`SpectralPaint::new`] opens a
+/// hand-edited or inverted pair back out to.
 ///
 /// The same floor the octave band's bar keeps, because the two are read the
 /// same way — a wedge whose radial extent is a hairline says nothing about how
@@ -222,23 +229,6 @@ pub struct NodeInstance {
     /// range lights the outermost indicator on its side rather than
     /// disappearing.
     pub octaves: [f32; OCTAVE_SLOTS],
-    /// The same eleven slots, measured from the AUDIO rather than held: how
-    /// much power the analyzer reads at each of this node's octaves, through
-    /// the shared loudness curve. Drawn as a second ring inside the octave
-    /// band ([`ViewConfig::spectral_ring`]), on the same wheel, so a partial
-    /// and the note that should be sounding it sit at one angle and agreement
-    /// is a radial glance.
-    ///
-    /// A channel of its own rather than a source switch on the one above,
-    /// which is the whole of the difference from
-    /// [`ViewConfig::spectral_light`]: the two questions — which keys are
-    /// down, which sine waves are sounding — are drawn AT ONCE, so neither
-    /// answer can be mistaken for the other's.
-    ///
-    /// All zeros unless the Lattice pane has filled it, and it is the pane
-    /// that does: nothing in this crate reads audio (see
-    /// `harmonigraph-ui`'s `panes::spectral_fold`).
-    pub spectral_octaves: [f32; OCTAVE_SLOTS],
     pub hovered: bool,
     /// On the home (center sevens) sheet. An idle node draws nothing
     /// wherever it sits; what marks a home position is the GRID, whose
@@ -411,13 +401,20 @@ pub struct Scene {
     /// Padding inside the octave layer (see [`ViewConfig::outer_gap`]):
     /// sector-to-sector and band-to-mark-ring alike. Already clamped.
     pub outer_gap: f32,
-    /// The audio ring's radial band (same UV units), already sanitized: outer
-    /// is ahead of inner by a visible margin. **Both 0 when the ring is off**
-    /// — [`ViewConfig::spectral_ring`] is answered here rather than carried
-    /// on, so the empty annulus is the one thing that says the ring is not
-    /// drawn and nothing downstream needs the flag as well.
-    pub spectral_inner: f32,
-    pub spectral_outer: f32,
+    /// The lattice's AUDIO channel: what the analyzer measured, where the
+    /// ring that draws it sits, and the ramp every audio-lit element on the
+    /// node is painted from (see [`spectral`]).
+    ///
+    /// [`SpectralPaint::silent`] from [`derive_scene`], because nothing in
+    /// this crate reads audio; `harmonigraph-ui`'s `panes::spectral_fold` is
+    /// the one pass that fills it, and a scene drawn without that pass is the
+    /// MIDI picture alone.
+    ///
+    /// By value, with the analyzer's GRID boxed inside it: the grid is the
+    /// only part big enough to be worth an allocation, and holding the whole
+    /// struct behind a pointer would make replacing it an allocation a frame
+    /// per pane for the sake of the kilobyte of ramp beside it.
+    pub spectral: SpectralPaint,
     /// The pitch axis the octave indicators are drawn on (see [`octaves`]):
     /// how many octaves one turn of a node covers, which pitch sits at the top
     /// of it, and how the circle is shared out between them. ONE set of widths

@@ -279,11 +279,11 @@ struct Uniforms {
     /// derives them per node from these two.
     ///
     /// z/w: the audio ring's inner and outer radius in quad UV units
-    /// (`Scene::spectral_inner` / `::spectral_outer`), both 0 when the ring is
-    /// off — the shader draws nothing for an empty annulus, so the toggle
-    /// reaches it as geometry. They ride here rather than in a slot of their
-    /// own because the ring is the same wheel at smaller radii: the shader
-    /// reads the span and the center beside them for every wedge it draws.
+    /// (`SpectralPaint::inner` / `::outer`), both 0 when the ring is off — the
+    /// shader draws nothing for an empty annulus, so the toggle reaches it as
+    /// geometry. They ride here rather than in a slot of their own because the
+    /// ring is the same wheel at smaller radii: the shader reads the span and
+    /// the center beside them for every wedge it draws.
     misc7: [f32; 4],
     /// The shimmer's knobs (see
     /// `Scene::shimmer_speed`). x: how far the sheet has travelled, in world
@@ -302,7 +302,40 @@ struct Uniforms {
     /// slice boundaries, the same table for every node — four to a row, which
     /// is how a uniform array is laid out anyway.
     oct_bounds: [[f32; 4]; 3],
+    /// The audio channel's knobs (see `harmonigraph_scene::SpectralPaint`).
+    /// x: how many cents of spectrum one wedge of the audio ring spans; y: 1
+    /// where the node bodies and the octave band are lit from audio and so
+    /// take their colour off `spectral_lut` at their own level rather than off
+    /// `pitch_lut` at their own pitch; z/w unused.
+    misc9: [f32; 4],
+    /// The FREQUENCY colour scheme's ramp — the analyzer's own gradient
+    /// (`SpectrumConfig::spectrogram_gradient`) through `pitch_ramp_lut`, the
+    /// same table the spectrogram's cells and the Spiral pane's segments are
+    /// read off. Indexed by a LEVEL where `pitch_lut` beside it is indexed by
+    /// a pitch, which is the whole difference between the two schemes.
+    spectral_lut: [[f32; 4]; harmonigraph_scene::PITCH_LUT_N],
+    /// The analyzer's loudness at every bucket of its pitch grid, a byte
+    /// apiece, sixteen to a row (see `SPECTRUM_WORDS`).
+    ///
+    /// In the uniform buffer rather than a texture, and it is 3.8 KB of it.
+    /// What a texture would buy is a sampler's own bilinear read; what it
+    /// costs is a bind-group entry on every lattice pipeline, a texture per
+    /// SURFACE — the docked pane and the Render preview both draw a lattice in
+    /// one frame, and a `write_texture` is ordered ahead of the shared encoder
+    /// egui-wgpu submits, so one shared texture would hand both panes whichever
+    /// spectrum was written last (the trap `mirror_sheets` documents) — and a
+    /// second upload path beside the uniforms, which are already per pane and
+    /// already carry a lookup table of their own. The interpolation is two
+    /// unpacks and a mix.
+    spectrum: [[u32; 4]; SPECTRUM_WORDS],
 }
+
+/// Rows of four `u32` the analyzer's grid packs into: sixteen levels to a row.
+///
+/// A byte per bucket, little-endian within each word, exactly as the octave
+/// levels are packed into a vertex attribute — one packing convention in the
+/// renderer rather than two.
+const SPECTRUM_WORDS: usize = harmonigraph_scene::SPECTRAL_BUCKETS.div_ceil(16);
 
 // Two fixed-size GPU homes, one per table, and both are exact rather than
 // one-sided ceilings — the uploads below fill every entry unconditionally, so
@@ -318,8 +351,19 @@ const _: () = assert!(harmonigraph_scene::OCTAVE_SLOTS == 11);
 const _: () = assert!(harmonigraph_scene::MAX_SPAN as usize + 1 == 12);
 
 // The shader declares `pitch_lut` with a literal length; keep the two in
-// lockstep so the uniform buffer and the WGSL agree.
+// lockstep so the uniform buffer and the WGSL agree. `spectral_lut` beside it
+// is the same length by construction — one gradient table shape, two tables.
 const _: () = assert!(harmonigraph_scene::PITCH_LUT_N == 64);
+
+// The analyzer's grid, which lattice.wgsl also declares as literals
+// (SPECTRUM_BUCKETS, BUCKETS_PER_SEMITONE, SPECTRUM_MIN_MIDI, and the length
+// of the `spectrum` array). A mismatch here is a ring reading the wrong
+// buckets at the wrong pitches, which draws a plausible picture of nothing —
+// so the numbers are asserted rather than trusted to stay in step.
+const _: () = assert!(harmonigraph_scene::SPECTRAL_BUCKETS == 3828);
+const _: () = assert!(harmonigraph_scene::SPECTRAL_BUCKETS_PER_SEMITONE == 32);
+const _: () = assert!(harmonigraph_scene::SPECTRAL_AXIS.0 == 15.486_82);
+const _: () = assert!(SPECTRUM_WORDS == 240);
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -334,12 +378,6 @@ struct GpuInstance {
     /// Per-octave activation, 8 bits per slot, little-endian packed
     /// (slot 0 = lowest byte of the first word).
     octaves: [u32; 3],
-    /// The same packing for the AUDIO ring's levels (see
-    /// `NodeInstance::spectral_octaves`) — a second channel rather than a
-    /// second meaning for the one above, which is what lets both be drawn at
-    /// once. All zeros with the ring off, and then the shader's idle branch
-    /// reads it as it reads the MIDI word.
-    spectral_octaves: [u32; 3],
     /// The node's pitch class in cents (0..1200). It both PLACES the octave
     /// indicators and COLORS them, off the one quantity: an indicator's
     /// octave has a pitch, that octave's C plus this, and the indicator sits
@@ -366,22 +404,35 @@ impl GpuInstance {
     const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
         array_stride: std::mem::size_of::<GpuInstance>() as u64,
         step_mode: wgpu::VertexStepMode::Instance,
-        // Location 9 is absent, not renumbered: it carried the trail level,
-        // read only by the idle marker the nodes no longer draw. The macro
+        // Locations 5 and 9 are absent, not renumbered. Both are retired
+        // slots: 9 the trail level, read only by an idle marker the nodes do
+        // not draw, and 5 a per-node audio word, which the ring has no use for
+        // now that it reads one shared spectrum in the uniforms. The macro
         // names each location and takes each OFFSET from the sequence, so a
         // dropped entry shrinks the stride to match the struct without moving
         // the rest off their numbers — which is what keeps this list and
-        // lattice.wgsl's `Instance` readable side by side. That is also why 5
-        // — freed by the same retirement, the home-sheet flag — is listed
-        // BETWEEN 3 and 4 rather than in numeric order: the sequence is the
-        // struct's field order, and the audio ring's word sits beside the MIDI
-        // one it parallels.
+        // lattice.wgsl's `Instance` readable side by side.
         attributes: &wgpu::vertex_attr_array![
             0 => Float32x3, 1 => Float32x4, 2 => Float32x3, 3 => Uint32x3,
-            5 => Uint32x3, 4 => Float32, 6 => Uint32x2,
+            4 => Float32, 6 => Uint32x2,
             7 => Float32x4, 8 => Float32x4, 10 => Float32x2
         ],
     };
+}
+
+/// Pack the analyzer's per-bucket levels into the rows `spectrum_level()` in
+/// lattice.wgsl unpacks: a byte per bucket, little-endian within each `u32`,
+/// sixteen buckets to a row.
+///
+/// Already quantized on the way in — [`harmonigraph_scene::SpectralLevels`] is
+/// bytes — so this is a repack and not a second rounding: the level a wedge
+/// paints is exactly the level the fold measured, to the byte.
+fn pack_spectrum(levels: &harmonigraph_scene::SpectralLevels) -> [[u32; 4]; SPECTRUM_WORDS] {
+    let mut rows = [[0u32; 4]; SPECTRUM_WORDS];
+    for (bucket, &level) in levels.iter().enumerate() {
+        rows[bucket / 16][(bucket / 4) % 4] |= u32::from(level) << ((bucket % 4) * 8);
+    }
+    rows
 }
 
 /// Pack the per-octave activation levels into the bit layout
@@ -671,7 +722,6 @@ impl LatticeCallback {
                 color: n.color.to_array(),
                 params: [n.activation, n.melody_level, n.bass_level],
                 octaves: pack_octaves(&n.octaves),
-                spectral_octaves: pack_octaves(&n.spectral_octaves),
                 cents: n.cents,
                 marks: [n.melody_slots, n.bass_slots],
                 melody_color: n.melody_color.to_array(),
@@ -698,12 +748,20 @@ impl LatticeCallback {
         // rather than close: an octave level under half a byte quantizes to
         // zero on the way to the GPU, and a node dropped for that is a node
         // the shader would have discarded anyway.
+        //
+        // The audio RING is why this is not a property of the node alone: the
+        // ring is a window onto the spectrum rather than a level a node
+        // carries, so with it on every node in the window paints one, silence
+        // included — that is what "the ring reads raw" means as a cost. The
+        // shader's idle branch pays it back per fragment, keeping an otherwise
+        // idle node to the ring's own annulus.
+        let ringing = scene.spectral.ring_draws();
         let paints = |g: &GpuInstance| {
-            g.params[0] > 0.0
+            ringing
+                || g.params[0] > 0.0
                 || g.params[1] > 0.0
                 || g.params[2] > 0.0
                 || (g.octaves[0] | g.octaves[1] | g.octaves[2]) != 0
-                || (g.spectral_octaves[0] | g.spectral_octaves[1] | g.spectral_octaves[2]) != 0
         };
         // Where a node's own label goes, per node: after everything drawn up
         // to and including that node, counted over the KEPT instances. Not its
@@ -776,8 +834,8 @@ impl LatticeCallback {
                 misc7: [
                     scene.octave_layout.span as f32,
                     scene.octave_layout.center,
-                    scene.spectral_inner,
-                    scene.spectral_outer,
+                    scene.spectral.inner,
+                    scene.spectral.outer,
                 ],
                 misc8: [
                     scene.shimmer_slide(),
@@ -792,6 +850,9 @@ impl LatticeCallback {
                 oct_bounds: std::array::from_fn(|row| {
                     std::array::from_fn(|col| scene.octave_layout.bounds[row * 4 + col])
                 }),
+                misc9: [scene.spectral.range, f32::from(u8::from(scene.spectral.lit)), 0.0, 0.0],
+                spectral_lut: std::array::from_fn(|k| scene.spectral.lut[k].to_array()),
+                spectrum: pack_spectrum(&scene.spectral.levels),
             },
             target_format,
             pane_id,

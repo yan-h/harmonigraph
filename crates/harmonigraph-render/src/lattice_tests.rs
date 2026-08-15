@@ -292,14 +292,6 @@ fn parity_scene() -> Scene {
             // and labels are the UI crate's text pass, not the lattice pass.
             departing: false,
             octaves,
-            // The audio ring is OFF in the fixture every other test builds on,
-            // and the radii below say so too. It is a whole layer more light
-            // in the middle of the node, and the sweep and mark measurements
-            // here are sized against the picture without it;
-            // `the_audio_ring_draws_inside_the_band_on_the_bands_own_angles`
-            // and the early-out parity's own `ringing` fixture are where it
-            // is turned on.
-            spectral_octaves: [0.0; harmonigraph_scene::OCTAVE_SLOTS],
             hovered: i == 1,
             on_home: i % 2 == 0,
             // The off-sheet half draws small and knocks out, so the
@@ -364,10 +356,12 @@ fn parity_scene() -> Scene {
         outer_inner: 0.545,
         outer_outer: 0.795,
         outer_gap: 0.12,
-        // An empty annulus: the ring off, matching the dark second word on
-        // every node above.
-        spectral_inner: 0.0,
-        spectral_outer: 0.0,
+        // No analyzer: the ring off and nothing audio-lit. It is a whole layer
+        // more light in the middle of every node, and the sweep and mark
+        // measurements here are sized against the picture without it —
+        // `the_audio_ring_reads_the_spectrum_around_each_octave` and the
+        // early-out parity's own `ringing` fixture are where it is turned on.
+        spectral: harmonigraph_scene::SpectralPaint::silent(),
         // The plain circular division: this scene is about how the draw
         // paths composite, so the indicators are the ones every other
         // setting is a departure from.
@@ -1260,9 +1254,6 @@ fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
         // Held at full, so neither end of the envelope is running.
         departing: false,
         octaves,
-        // No audio: this fixture is the mark rings' and the sweep's, and the
-        // ring is a layer they are not about.
-        spectral_octaves: [0.0; harmonigraph_scene::OCTAVE_SLOTS],
         hovered: false,
         on_home: true,
         scale: 1.0,
@@ -1349,15 +1340,31 @@ fn melody_bass_marks_are_visible_as_rings_around_the_band() {
     );
 }
 
-/// One node with both rings at the radii a FRESH view puts them at, lighting
-/// `held` on the octave band and `sounding` on the audio ring.
+/// How far either side of a pitch the fixture's synthetic partial reaches, in
+/// cents.
+///
+/// A BAND rather than a single bucket, and 40¢ rather than the 3.125¢ one
+/// bucket spans, because the measurement below is made in pixels: the ring is
+/// an annulus about 20 px from the node's centre in a 256 px shot, so a wedge
+/// of the fresh five-octave wheel is some 25 px of arc, and one bucket at the
+/// fresh 200¢ Range would be an eighth of a pixel of it. Symmetric, so the
+/// lit arc's centroid is the band's own centre pitch whatever the Range.
+const PARTIAL_HALF_CENTS: f32 = 40.0;
+
+/// One node with both rings at the radii a FRESH view puts them at: `held`
+/// lighting an octave of the band, and a synthetic partial at absolute MIDI
+/// `sounding` in the analyzer's grid for the audio ring to find.
 ///
 /// The fresh radii rather than the fixture's, because the claim below is about
 /// the shipped picture: that the ring lands in the space the core and the
 /// melody ring leave, on a node nobody has dialled. The core is the one thing
 /// turned off — its glow is light at every radius the measurements read, and
 /// what is being measured is where two annuli are.
-fn ringing_node(held: Option<usize>, sounding: Option<usize>) -> Scene {
+///
+/// The ramp is a plain black-to-white one rather than a gradient, so a pixel's
+/// brightness IS the level the shader read out of the grid and the differences
+/// below measure the reading rather than a hue.
+fn ringing_node(held: Option<usize>, sounding: Option<f32>, range: f32) -> Scene {
     let fresh = harmonigraph_scene::ViewConfig::default();
     let mut scene = single_marked_node(0, 0);
     let node = &mut scene.nodes[0];
@@ -1368,15 +1375,28 @@ fn ringing_node(held: Option<usize>, sounding: Option<usize>) -> Scene {
     if let Some(slot) = held {
         node.octaves[slot] = 1.0;
     }
-    if let Some(slot) = sounding {
-        node.spectral_octaves[slot] = 1.0;
-    }
     scene.core_radius = 0.0;
     scene.outer_inner = fresh.outer_inner;
     scene.outer_outer = fresh.outer_outer;
     scene.outer_gap = fresh.outer_gap;
-    scene.spectral_inner = fresh.spectral_ring_inner;
-    scene.spectral_outer = fresh.spectral_ring_outer;
+
+    let mut paint = harmonigraph_scene::SpectralPaint::silent();
+    paint.lut = std::array::from_fn(|k| {
+        let t = k as f32 / (harmonigraph_scene::PITCH_LUT_N - 1) as f32;
+        glam::Vec4::new(t, t, t, 1.0)
+    });
+    paint.inner = fresh.spectral_ring_inner;
+    paint.outer = fresh.spectral_ring_outer;
+    paint.range = range;
+    if let Some(pitch) = sounding {
+        for (bucket, level) in paint.levels.iter_mut().enumerate() {
+            let cents = (harmonigraph_scene::bucket_pitch(bucket) - pitch) * 100.0;
+            if cents.abs() <= PARTIAL_HALF_CENTS {
+                *level = 255;
+            }
+        }
+    }
+    scene.spectral = paint;
     scene
 }
 
@@ -1436,41 +1456,62 @@ fn light_about_center(weights: &[f64], size: [u32; 2]) -> Light {
     Light { weight, near, far, angle: sy.atan2(sx) }
 }
 
-/// The short way round between two angles, in degrees.
-fn angle_apart(a: f64, b: f64) -> f64 {
+/// The short way round from `b` to `a`, in degrees, SIGNED on the image's own
+/// axes.
+///
+/// Which sign means "clockwise on screen" is deliberately never settled here.
+/// Every claim that needs a direction calibrates it from the picture itself —
+/// the octave band's own wedges, an octave apart, are a known rise in pitch —
+/// so nothing below depends on which way the shot's y runs.
+fn signed_apart(a: f64, b: f64) -> f64 {
     let d = (a - b).rem_euclid(std::f64::consts::TAU);
-    d.min(std::f64::consts::TAU - d).to_degrees()
+    if d > std::f64::consts::PI { d - std::f64::consts::TAU } else { d }.to_degrees()
 }
 
-/// The audio ring draws INSIDE the octave band, on the band's own angles: one
-/// slot's wedge stands at one angle in both rings, which is the whole reading
-/// — "is anything sounding at the octave I am holding" as a glance down a
-/// radius, and a lit wedge with nothing outside it as an overtone of something
-/// else.
+/// The short way round between two angles, in degrees.
+fn angle_apart(a: f64, b: f64) -> f64 {
+    signed_apart(a, b).abs()
+}
+
+/// The audio ring reads the spectrum AROUND each octave: it draws inside the
+/// octave band on the band's own angles, a partial dead on the node paints
+/// down the middle of the wedge, and a detuned one paints off-centre in the
+/// direction pitch rises — further off the narrower the Range is dialled.
 ///
-/// Pixels rather than a reading of the two calls, because the agreement is
-/// geometric: both rings walk `oct_sector` off one `OctRing`, and the failure
-/// this catches is a second ring drawn on ITS own idea of where a slot is —
-/// which compiles, validates, and reads as a picture that is subtly lying.
+/// Pixels rather than a reading of the shader's arithmetic, because every
+/// claim here is geometric. Both rings walk `oct_sector` off one `OctRing`,
+/// and the failures this catches all compile, validate, and read as a picture
+/// that is subtly lying: a second ring drawn on its own idea of where a slot
+/// is, a pitch window mapped backwards across the wedge, a Range that scales
+/// the wrong way.
 #[test]
-fn the_audio_ring_draws_inside_the_band_on_the_bands_own_angles() {
+fn the_audio_ring_reads_the_spectrum_around_each_octave() {
     const SIZE: [u32; 2] = [256, 256];
     let Some(mut gpu) = Shooter::new(SIZE) else {
         return;
     };
-    // Two octaves the fresh wheel draws on a C node — five slices centered on
-    // middle C, so slots 3..=7 — two octaves apart, which at 72 degrees an
-    // octave is well clear of any fringe.
+    // Octaves the fresh wheel draws on a C node — five slices centered on
+    // middle C, so slots 3..=7. Middle C's own, the one above it (a known
+    // rise in pitch, which is what calibrates the shot's handedness), and one
+    // two below, far enough that a wedge at 72 degrees an octave is well clear
+    // of any fringe.
     const UP: usize = harmonigraph_scene::MIDDLE_C_SLOT;
+    const OVER: usize = harmonigraph_scene::MIDDLE_C_SLOT + 1;
     const DOWN: usize = harmonigraph_scene::MIDDLE_C_SLOT - 2;
+    // The fixture's node is a C (`cents` 0), so slot s names MIDI 12 * s.
+    let slot_pitch = |slot: usize| slot as f32 * 12.0;
+    // The fresh Range, which every angle below is measured at unless it says
+    // otherwise.
+    let fresh_range = harmonigraph_scene::ViewConfig::default().spectral_ring_range;
 
-    let base = gpu.shot(&ringing_node(None, None));
-    let wedge = |gpu: &mut Shooter, held, sounding| {
-        light_about_center(&light_over(&gpu.shot(&ringing_node(held, sounding)), &base), SIZE)
+    let base = gpu.shot(&ringing_node(None, None, fresh_range));
+    let mut wedge = |held, sounding, range| {
+        let shot = gpu.shot(&ringing_node(held, sounding, range));
+        light_about_center(&light_over(&shot, &base), SIZE)
     };
 
-    let band = wedge(&mut gpu, Some(UP), None);
-    let ring = wedge(&mut gpu, None, Some(UP));
+    let band = wedge(Some(UP), None, fresh_range);
+    let ring = wedge(None, Some(slot_pitch(UP)), fresh_range);
     assert!(ring.weight > 0.0, "the audio ring drew nothing at all");
     assert!(band.weight > 0.0, "the octave band drew nothing, so there is nothing to compare");
     eprintln!(
@@ -1492,29 +1533,82 @@ fn the_audio_ring_draws_inside_the_band_on_the_bands_own_angles() {
         ring.far,
         band.near,
     );
-    // ...and the two stand at ONE angle.
+    // A partial exactly on the octave stands where that octave's own wedge
+    // stands: the middle of it, which is the wheel's rule that an angle means
+    // an absolute pitch, holding across both rings.
     let apart = angle_apart(ring.angle, band.angle);
-    assert!(apart < 6.0, "the same octave sits {apart:.1}° apart in the two rings");
+    assert!(apart < 6.0, "a partial on the octave sits {apart:.1}° off the wedge that names it");
 
     // A different octave is a different angle in both — or the check above
     // would pass just as well for a ring pinned to one place on the node.
-    let band_down = wedge(&mut gpu, Some(DOWN), None);
-    let ring_down = wedge(&mut gpu, None, Some(DOWN));
+    let band_down = wedge(Some(DOWN), None, fresh_range);
+    let ring_down = wedge(None, Some(slot_pitch(DOWN)), fresh_range);
     let moved = angle_apart(ring_down.angle, ring.angle);
     assert!(moved > 60.0, "two octaves apart moved the ring's wedge only {moved:.1}°");
     let apart = angle_apart(ring_down.angle, band_down.angle);
-    assert!(apart < 6.0, "the lower octave sits {apart:.1}° apart in the two rings");
+    assert!(apart < 6.0, "the lower octave sits {apart:.1}° off the wedge that names it");
 
-    // The ring OFF draws nothing, whatever the node's audio word holds: the
-    // empty annulus is how the toggle reaches the shader, so this is the
-    // "exactly today's picture" claim in its smallest form.
-    let mut off = ringing_node(None, Some(UP));
-    off.spectral_inner = 0.0;
-    off.spectral_outer = 0.0;
+    // Which way is UP on this shot, taken from the band itself: an octave
+    // higher is a known rise in pitch, and the wheel turns clockwise with it.
+    let rising = signed_apart(wedge(Some(OVER), None, fresh_range).angle, band.angle);
+    assert!(
+        rising.abs() > 30.0,
+        "an octave moved the band only {rising:.1}°, so it cannot calibrate a direction",
+    );
+
+    // A partial a QUARTER of the window sharp lands a quarter of the wedge
+    // clockwise of centre — the whole of what the segment is for, and the
+    // reading a folded number per octave cannot give.
+    let sharp = fresh_range / 4.0;
+    let detuned = wedge(None, Some(slot_pitch(UP) + sharp / 100.0), fresh_range);
+    let shift = signed_apart(detuned.angle, ring.angle);
+    eprintln!(
+        "{sharp:.0}¢ sharp moved the wedge {shift:.1}°, an octave of band {rising:.1}°",
+    );
+    assert!(
+        shift * rising > 0.0,
+        "{sharp:.0}¢ SHARP moved the wedge {shift:.1}° where rising pitch moves it \
+         {rising:.1}°: the pitch window is mapped backwards across the wedge",
+    );
+    // A quarter of the window across a 72° wedge is 18°, and the lit arc is
+    // 80¢ of a 200¢ window wide, so its centroid moves with its centre. Well
+    // inside the wedge either way — a shift that ran off the end would clamp
+    // and read as a smaller one, which is the other way this can fail.
+    assert!(
+        (shift.abs() - 18.0).abs() < 5.0,
+        "a quarter-window detune moved the wedge {:.1}°, not the 18° a quarter of it is",
+        shift.abs(),
+    );
+
+    // ...and the Range is a ZOOM: the same detuning, read over twice the
+    // window, moves the wedge half as far.
+    let wide = wedge(None, Some(slot_pitch(UP) + sharp / 100.0), fresh_range * 2.0);
+    let wide_shift = signed_apart(wide.angle, ring.angle);
+    eprintln!("the same {sharp:.0}¢ over twice the Range moved it {wide_shift:.1}°");
+    assert!(
+        (wide_shift.abs() * 2.0 - shift.abs()).abs() < 5.0,
+        "twice the Range moved the same detune {:.1}° against {:.1}° at the fresh one, \
+         which is not half",
+        wide_shift.abs(),
+        shift.abs(),
+    );
+
+    // The ring OFF draws nothing, whatever the grid holds: the empty annulus
+    // is how the toggle reaches the shader, so this is the "exactly today's
+    // picture" claim in its smallest form.
+    let mut off = ringing_node(None, Some(slot_pitch(UP)), fresh_range);
+    off.spectral.inner = 0.0;
+    off.spectral.outer = 0.0;
+    let quiet = {
+        let mut quiet = ringing_node(None, None, fresh_range);
+        quiet.spectral.inner = 0.0;
+        quiet.spectral.outer = 0.0;
+        gpu.shot(&quiet)
+    };
     assert_eq!(
-        differing_pixels(&gpu.shot(&off), &base),
+        differing_pixels(&gpu.shot(&off), &quiet),
         0,
-        "a node with audio on it drew something with the ring switched off",
+        "a sounding partial drew something with the ring switched off",
     );
 }
 
@@ -3130,6 +3224,12 @@ fn sheets_draw_back_to_front_along_the_sevens_axis() {
 /// the edge pass. So every test below expects these nodes to be culled, and
 /// the fixture exists to make "nothing to draw" easy to ask for.
 ///
+/// The AUDIO RING has to be off for that to hold, and it is:
+/// [`parity_scene`] carries a silent [`harmonigraph_scene::SpectralPaint`].
+/// The ring is a window onto one shared spectrum rather than a level a node
+/// carries, so with it on every node in the window paints one and there is no
+/// such thing as an idle node to cull.
+///
 /// `on_home` and `trail` are still set, on different cycles, and neither is
 /// read by anything in THIS crate: no `GpuInstance` carries them, and the
 /// grid and the labels both arrive already built. They stay because a
@@ -3142,10 +3242,6 @@ fn idle_scene() -> Scene {
     for (i, node) in scene.nodes.iter_mut().enumerate() {
         node.activation = 0.0;
         node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
-        // Silent in BOTH channels: the audio ring is a second way for a node
-        // to have something to paint, so an idle fixture that left it lit
-        // would be asking the cull to drop a node that draws.
-        node.spectral_octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
         node.melody_slots = 0;
         node.bass_slots = 0;
         node.melody_level = 0.0;
@@ -3208,23 +3304,30 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         scene
     };
     // The audio ring on, which has two early-outs of its own: the annulus
-    // skip inside `spectral_ring`, and the idle branch's second octave word.
-    // Both are answers about a layer NO other fixture here draws — the ring
-    // is off in `parity_scene` — so without this the two switches would be
+    // skip inside `spectral_ring`, and the idle branch's radial exception,
+    // which keeps an otherwise idle node's fragments only where the ring is.
+    // Both are answers about a layer NO other fixture here draws — the ring is
+    // off in `parity_scene` — so without this the two switches would be
     // compiled and never compared.
     let ringing = || {
         let mut scene = parity_scene();
-        scene.spectral_inner = 0.20;
-        scene.spectral_outer = 0.38;
-        for (i, node) in scene.nodes.iter_mut().enumerate() {
-            // Lit where the node's own wheel reaches, so the wedges are drawn
-            // rather than clamped to a slot the ring has no slice for.
-            node.spectral_octaves = std::array::from_fn(|slot| {
-                if slot % 3 == i % 3 { 0.3 + 0.2 * (i % 4) as f32 } else { 0.0 }
-            });
+        let paint = &mut scene.spectral;
+        paint.inner = 0.20;
+        paint.outer = 0.38;
+        paint.range = 300.0;
+        paint.lut = std::array::from_fn(|k| {
+            let t = k as f32 / (harmonigraph_scene::PITCH_LUT_N - 1) as f32;
+            glam::Vec4::new(t, 0.6 * t, 1.0 - t, 1.0)
+        });
+        // A comb across the grid rather than a flat level, so a wedge carries
+        // an EDGE: a fragment either side of one reads a different bucket, and
+        // an early-out that shifted the sampled pitch by so much as a bucket
+        // shows up as a moved edge rather than being averaged away.
+        for (bucket, level) in paint.levels.iter_mut().enumerate() {
+            *level = if (bucket / 7) % 3 == 0 { 220 } else { 20 };
         }
-        // ...and a node with audio and nothing else, which is the idle
-        // branch's new case: no activation, no marks, and a ring to draw.
+        // ...and a node with a ring and nothing else, which is the idle
+        // branch's new case: no activation, no marks, and an annulus to draw.
         let mut silent = scene.nodes[0];
         silent.activation = 0.0;
         silent.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
@@ -3234,6 +3337,15 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         silent.bass_level = 0.0;
         silent.world_pos.x += 0.9;
         scene.nodes.push(silent);
+        scene
+    };
+    // The band and the bodies lit from AUDIO, which is the other half of the
+    // frequency scheme reaching the shader: `octave_slot_color` takes the
+    // other branch, off the level rather than the pitch, and the glow's lobes
+    // with it.
+    let audio_lit = || {
+        let mut scene = ringing();
+        scene.spectral.lit = true;
         scene
     };
     // No all-idle fixture: an idle node paints nothing, so the cull ships
@@ -3246,6 +3358,7 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         ("fat core", fat_core()),
         ("shimmering", shimmering()),
         ("ringing", ringing()),
+        ("audio lit", audio_lit()),
     ] {
         let cb = LatticeCallback::from_scene(
             &scene,

@@ -230,6 +230,16 @@ mod tests {
         assert_eq!(value.a, 1.0);
     }
 
+    /// Which of the lattice's three readings a shot is of: the MIDI picture
+    /// alone, the audio ring over it at a given Range, or the nodes themselves
+    /// lit from the analyzer.
+    #[derive(Clone, Copy)]
+    enum Shot {
+        Midi,
+        Ring(f32),
+        Lit,
+    }
+
     /// A sawtooth at MIDI `midi`, one second of it: every harmonic to Nyquist
     /// at amplitude 1/k, which is the signal the whole spectral-lattice family
     /// is judged on — its constellation is PREDICTED by the harmonic series
@@ -250,8 +260,8 @@ mod tests {
             .collect()
     }
 
-    /// The audio ring's picture, both ways, written to `target/scratch/` —
-    /// the only way to LOOK at this change without the DAW.
+    /// The audio ring's picture, written to `target/scratch/` — the only way
+    /// to LOOK at this change without the DAW.
     ///
     /// A probe: it asserts nothing, because what it produces is a judgement
     /// (#381's verdict is Yan's, at the plugin). It is kept, and kept
@@ -268,8 +278,13 @@ mod tests {
     /// ```
     ///
     /// Same note held as sounding, so both readings are on screen at once: the
-    /// held C3 lights its own node's band, and the saw's partials light the
-    /// rings of the six nodes the harmonic series reaches.
+    /// held C3 lights its own node's band, and the ring inside it reads the
+    /// saw's own spectrum around each of that node's octaves.
+    ///
+    /// The RANGE sweep is what the fresh value was chosen against, and it is
+    /// the reason this writes more than two shots: the setting decides whether
+    /// a wedge is a zoom on the node's own pitch or a copy of the whole wheel,
+    /// and the two ends look nothing alike.
     #[test]
     #[ignore = "a probe: writes PNGs and asserts nothing"]
     fn the_audio_ring_draws_a_picture() {
@@ -334,15 +349,40 @@ mod tests {
         // Two distances, because the two questions are asked at different
         // ones. Whether the constellation READS is a question about a screen
         // full of nodes; whether the ring sits clear of the core and the
-        // melody ring, and lines up with the band, is one about a single node
-        // — and at reading distance a wedge is a dozen pixels.
+        // melody ring, and what one wedge is actually showing, is one about a
+        // single node — and at reading distance a wedge is a dozen pixels.
+        //
+        // The Range sweep runs at both, because the setting trades exactly
+        // between them: narrow is legible close up and a smear at distance,
+        // and the octave end is one picture repeated on every node, which only
+        // shows on a screen full of them.
+        //
+        // `Light from audio` rides along at both distances, because it is the
+        // OTHER half of the frequency colour scheme: the band and the bodies
+        // painted by level off the analyzer's ramp rather than by pitch off
+        // the lattice's, which is a thing to look at rather than to assert.
+        let fresh_range = state.view.spectral_ring_range;
+        let mut shots: Vec<(f32, &str, Shot)> = Vec::new();
+        for (zoom, at) in [(2.5f32, ""), (9.0, "-close")] {
+            shots.push((zoom, at, Shot::Midi));
+            for range in [50.0f32, fresh_range, 600.0, 1200.0] {
+                shots.push((zoom, at, Shot::Ring(range)));
+            }
+            shots.push((zoom, at, Shot::Lit));
+        }
+
         let home = state.camera;
-        let shots = [(2.5f32, ""), (9.0, "-close")]
-            .into_iter()
-            .flat_map(|(zoom, at)| [(zoom, at, true), (zoom, at, false)]);
-        for (zoom, at, ring) in shots {
-            let source = if ring { "audio-ring-on" } else { "audio-ring-off" };
-            state.view.spectral_ring = ring;
+        for (zoom, at, shot) in shots {
+            let source = match shot {
+                Shot::Midi => "audio-ring-off".to_string(),
+                Shot::Lit => "light-from-audio".to_string(),
+                Shot::Ring(range) => {
+                    state.view.spectral_ring_range = range;
+                    format!("audio-ring-{range:.0}c")
+                }
+            };
+            state.view.spectral_ring = matches!(shot, Shot::Ring(_));
+            state.view.spectral_light = matches!(shot, Shot::Lit);
             // From the fresh camera each time: the pane pans the view's center
             // with the camera, so a zoom applied on top of the last one would
             // compound.

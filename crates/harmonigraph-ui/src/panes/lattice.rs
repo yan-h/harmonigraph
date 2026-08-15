@@ -723,7 +723,6 @@ mod tests {
             activation,
             departing: true,
             octaves: [0.0; harmonigraph_scene::OCTAVE_SLOTS],
-            spectral_octaves: [0.0; harmonigraph_scene::OCTAVE_SLOTS],
             hovered: false,
             on_home,
             scale: 1.0,

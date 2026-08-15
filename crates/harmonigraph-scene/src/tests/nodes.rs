@@ -1008,55 +1008,32 @@ fn the_fresh_audio_ring_sits_clear_of_the_core_and_the_melody_ring() {
     );
 }
 
-/// The ring's radii reach the picture as an annulus that can be drawn — or, if
-/// the ring is off, as an empty one, which is how the toggle reaches the
-/// shader at all.
+/// A scene derived here draws NO audio, whatever the view asks for.
 ///
-/// The pairs below are the ones no bar can produce: a blob's NaN (which walks
-/// through a `clamp` untouched, every comparison against it being false), an
-/// infinity, a pair dialled inside out, and a pair off both ends of the range.
-/// What each must come back as is an annulus with a visible span, because the
-/// alternative is a ring that silently is not there while the bar reads out a
-/// number.
+/// Nothing in this crate reads an analyzer, so the ring's radii, the frequency
+/// ramp and the grid it reads are the Lattice pane's to fill
+/// (`panes::spectral_fold`), and `derive_scene` answers the one state in which
+/// none of them is consulted. The alternative is what makes this worth a test:
+/// a `derive_scene` that honoured the toggle would hand every shell that draws
+/// a lattice without an analyzer — a test here, an offline layout with no
+/// audio, a standalone harness — a ring of unmeasured silence painted off a
+/// ramp nobody supplied.
+///
+/// (Where the clamps live now, and what a hand-edited pair comes back as, is
+/// `spectral::tests::a_hand_edited_audio_ring_still_draws_an_annulus`, beside
+/// the constructor that does the clamping.)
 #[test]
-fn a_hand_edited_audio_ring_still_draws_an_annulus() {
-    for (inner, outer) in [
-        (f32::NAN, 0.4),
-        (0.3, f32::NAN),
-        (f32::INFINITY, f32::NEG_INFINITY),
-        (0.6, 0.2),
-        (-3.0, 9.0),
-        (0.98, 0.99),
-    ] {
-        let mut view = ViewConfig {
-            spectral_ring: true,
-            spectral_ring_inner: inner,
-            spectral_ring_outer: outer,
-            ..plain_view()
-        };
-        view.sanitize();
-        let scene = scene_of(&sounding(), &Tuning::just(), &view, &plain_frame(), 0.5);
-        assert!(
-            scene.spectral_inner.is_finite() && scene.spectral_outer.is_finite(),
-            "({inner}, {outer}) reached the shader as ({}, {})",
-            scene.spectral_inner,
-            scene.spectral_outer,
-        );
-        assert!(
-            scene.spectral_outer - scene.spectral_inner >= SPECTRAL_RING_MIN_SPAN - 1e-6,
-            "({inner}, {outer}) drew a ring {} wide",
-            scene.spectral_outer - scene.spectral_inner,
-        );
-        assert!(
-            scene.spectral_outer <= 1.0,
-            "({inner}, {outer}) put the ring's outer edge at {}, off the node",
-            scene.spectral_outer,
-        );
-    }
-
-    // Off is an empty annulus, and it is the ONLY thing that says so
-    // downstream: the flag itself does not reach the shader.
-    let view = ViewConfig { spectral_ring: false, ..plain_view() };
+fn a_scene_derived_without_an_analyzer_carries_no_audio() {
+    let view = ViewConfig {
+        spectral_ring: true,
+        spectral_light: true,
+        ..plain_view()
+    };
     let scene = scene_of(&sounding(), &Tuning::just(), &view, &plain_frame(), 0.5);
-    assert_eq!((scene.spectral_inner, scene.spectral_outer), (0.0, 0.0));
+    assert!(!scene.spectral.ring_draws(), "a derived scene drew a ring with no analyzer behind it");
+    assert!(!scene.spectral.lit, "a derived scene claimed its nodes were lit from audio");
+    assert!(
+        scene.spectral.levels.iter().all(|&level| level == 0),
+        "a derived scene carried a spectrum reading",
+    );
 }
