@@ -111,6 +111,21 @@ pub struct SharedState {
     /// it wrote a node the pointer had only landed near. Nothing outside
     /// [`crate::panes::lattice`] should write this.
     pub hovered: Option<LatticePos>,
+    /// How many nodes the docked lattice built last frame — the perf
+    /// overlay's node count.
+    ///
+    /// It has to be reported rather than computed from the view, because
+    /// there is no longer a number in the view to compute it from: the drawn
+    /// window is derived per pane from that pane's own aspect
+    /// ([`harmonigraph_scene::ViewConfig::scrolled`]), so the only place the
+    /// count exists is inside the draw that built it.
+    ///
+    /// The DOCKED copy alone. The Video tab's preview is a second lattice at
+    /// a second aspect, and reporting its count as the lattice's would make
+    /// the overlay's number jump with a tab that is not the one being
+    /// measured — the same argument that keeps the preview out of the GPU
+    /// timing slot.
+    pub drawn_nodes: usize,
     pub console: Console,
     /// Surface format of the shell's swapchain; the lattice render pipeline
     /// must match it.
@@ -586,6 +601,7 @@ impl SharedState {
             frame_params: FrameParams::default(),
             camera: Camera::default(),
             hovered: None,
+            drawn_nodes: 0,
             console: Console::default(),
             target_format,
             background: harmonigraph_scene::skin::panel_color(),

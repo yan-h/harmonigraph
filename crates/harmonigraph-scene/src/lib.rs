@@ -59,6 +59,32 @@ fn lattice_to_world(pos: LatticePos, spacing: f32) -> Vec3 {
 /// Node radius as a fraction of the lattice spacing.
 const NODE_RADIUS_FACTOR: f32 = 0.25;
 
+/// The most nodes one drawn window may hold, and the backstop on a lattice
+/// that no longer has a size of its own: with the window derived from the
+/// viewport ([`ViewConfig::scrolled`]), what decides how much work a frame is
+/// became the camera — and for two of the three projections there are cameras
+/// with no bounded answer at all.
+///
+/// Which is worth being exact about, because it is the whole reason this
+/// exists. Tilt a camera toward the sheet's own plane and the sheet goes
+/// edge-on: the far half of an unbounded plane is genuinely on screen, in a
+/// band a few pixels tall. Orthographic at the pitch limit asks for half a
+/// million nodes that way, perspective for ten million. There is nothing to
+/// draw there and no window that would be right.
+///
+/// Cabinet has no such camera — it faces the sheet by construction, whatever
+/// the orbit says — so its window is bounded at every setting, and this is
+/// sized above the largest one: 19809 nodes, at a 3:1 pane, fully zoomed out,
+/// nine sheets deep, at cavalier scale. Cabinet therefore never reaches this
+/// cap, which matters because cabinet is where scrolling is the way you get
+/// around; under the other two the cap can bite, and what it costs is the
+/// lattice's outer ring in a picture that is already a smear.
+///
+/// The cost it is holding: `derive_scene` with ten voices held takes 0.02ms
+/// over 273 nodes (the window's size before it was derived at all), 0.06ms
+/// over 875 (a 16:9 pane fully zoomed out, flat), and 1.2ms over 14877.
+pub const MAX_DRAWN_NODES: usize = 20480;
+
 /// The longest wait the Delay bar offers before a melody/bass ring starts
 /// easing in ([`ViewConfig::mark_delay`]), and the clamp `derive_scene` holds
 /// a hand-edited view to. ONE constant for the two so the bar's end and the

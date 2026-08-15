@@ -85,7 +85,19 @@ impl Camera {
     pub const PITCH_LIMIT: f32 = 1.5;
     /// Zoom clamp; CLIP_NEAR/CLIP_FAR must bracket it with margin.
     pub const MIN_DISTANCE: f32 = 2.0;
-    pub const MAX_DISTANCE: f32 = 80.0;
+    /// The far end is what bounds the lattice, the lattice itself being
+    /// unbounded: the drawn window is whatever the viewport shows (see
+    /// [`ViewConfig::scrolled`](crate::ViewConfig::scrolled)), so pulling back
+    /// does not run out of nodes to draw, it asks for more of them. Here the
+    /// window is about twenty steps of fifths tall — `distance *
+    /// tan(fov/2) * 2` is 19.9 at the default field of view — which is the
+    /// point past which a node is too small to read a name on anyway.
+    ///
+    /// The width that comes with it is the pane's aspect times that, so a wide
+    /// pane fully zoomed out is nearer 20x30 than 20x20, and a 16:9 render
+    /// 20x35. [`MAX_DRAWN_NODES`](crate::MAX_DRAWN_NODES) is what actually
+    /// bounds the work; this is what bounds the PICTURE.
+    pub const MAX_DISTANCE: f32 = 24.0;
     /// The framing a fresh view opens at, and the zoom
     /// [`screen_scale`](Self::screen_scale) measures against.
     pub const DEFAULT_DISTANCE: f32 = 12.0;
@@ -227,6 +239,64 @@ impl Camera {
             }
         };
         proj * self.view()
+    }
+
+    /// The world-space x/y rectangle this camera shows, across the slab of
+    /// depths `z_lo..=z_hi` — `(min, max)`, or `None` where the answer is not
+    /// a finite rectangle.
+    ///
+    /// This is what makes the drawn lattice window derivable rather than a
+    /// setting: the lattice's x/y plane is the fifths/thirds sheet, so the
+    /// rectangle divided by the spacing IS the range of lattice steps worth
+    /// building instances for.
+    ///
+    /// It reads the answer out of [`view_proj`](Self::view_proj) rather than
+    /// re-deriving one per projection, which is the whole of why it is exact
+    /// under all three. The set of world points landing on one viewport corner
+    /// is a LINE — that is true of any projective map, and it is the only
+    /// property used here — so unprojecting the corner at both clip planes
+    /// gives two points on it, and where that line crosses each sheet's depth
+    /// is a point the corner shows. The bounding box over four corners and the
+    /// slab's two ends is the rectangle.
+    ///
+    /// Only the two ENDS of the slab, not every sheet in it: a corner's line
+    /// is straight, so its crossings move monotonically with depth and the
+    /// extremes are at the ends. Cabinet's shear and perspective's spread are
+    /// both covered by that, differing only in which end is the wide one.
+    ///
+    /// `None` where the geometry has no rectangle to give: under a steep
+    /// perspective pitch the corner lines run nearly ALONG the sheets, and the
+    /// visible span of a sheet genuinely is unbounded there. The caller wants
+    /// its own fallback for that rather than an enormous number.
+    pub fn visible_world_bounds(&self, aspect: f32, z_lo: f32, z_hi: f32) -> Option<(Vec2, Vec2)> {
+        let inverse = self.view_proj(aspect).inverse();
+        // A world point from a clip-space one, perspective divide included —
+        // orthographic and cabinet both leave w at 1, so this is a no-op for
+        // them and the one path still serves all three.
+        let unproject = |ndc: Vec3| {
+            let world = inverse * ndc.extend(1.0);
+            (world.w.abs() > 1e-6).then(|| world.truncate() / world.w)
+        };
+        let (mut min, mut max) = (Vec2::splat(f32::INFINITY), Vec2::splat(f32::NEG_INFINITY));
+        for (nx, ny) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
+            // wgpu clip depth runs 0 (near) to 1 (far); both constructors in
+            // `view_proj` produce it, which is what lets these be literals.
+            let near = unproject(Vec3::new(nx, ny, 0.0))?;
+            let far = unproject(Vec3::new(nx, ny, 1.0))?;
+            let span = far.z - near.z;
+            // The corner's line lying in a sheet rather than crossing one:
+            // no crossing to find, and the span it shows is every x and y
+            // there is.
+            if span.abs() < 1e-4 {
+                return None;
+            }
+            for z in [z_lo, z_hi] {
+                let crossing = (near + (far - near) * ((z - near.z) / span)).truncate();
+                min = min.min(crossing);
+                max = max.max(crossing);
+            }
+        }
+        (min.is_finite() && max.is_finite()).then_some((min, max))
     }
 
     /// Camera-space right/up axes in world space, for billboarding.

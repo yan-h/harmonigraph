@@ -359,7 +359,7 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
         Workload {
             active_voices: state.tracker.voices().count(),
             held_voices: state.tracker.held_count(),
-            visible_nodes: state.view.visible_count(),
+            visible_nodes: state.drawn_nodes,
             render_scale: state.view.render_scale,
             animating,
         },
