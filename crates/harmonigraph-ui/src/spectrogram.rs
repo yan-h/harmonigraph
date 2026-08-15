@@ -37,7 +37,9 @@ use harmonigraph_scene::Gradient;
 ///
 /// It is a CEILING on the count, not the count itself: [`live_slab`] picks the
 /// finest rung of its ladder that fits a window inside this many slabs, so the
-/// image holds between half of them and all of them.
+/// image holds between half of them and all of them. Nor is it the only
+/// ceiling — [`slab_ceiling`] cuts under it on a device whose textures are too
+/// small to hold this many slabs written twice.
 pub(crate) const LIVE_SLAB_CAP: f32 = 1024.0;
 /// The same for the offline whole-song build, which spans an entire take rather
 /// than a scrolling window and so wants more of them.
@@ -59,6 +61,55 @@ pub(crate) const COLUMNS_PER_SLAB: f64 = 1.6;
 /// no longer floors it.
 pub(crate) const MIN_BUCKET: f64 = crate::AudioSpectrum::FFT_INTERVAL * COLUMNS_PER_SLAB;
 
+/// Slabs a build can plan for before the image they go into passes `max_side`,
+/// the widest texture the GPU will take — the bound the rows get from
+/// [`PaneView::max_rows`], on the axis that reaches it FIRST.
+///
+/// It reaches it first because the two axes spend texels at different rates,
+/// and the LIVE path spends two: its ring writes every slab twice so that any
+/// run is contiguous whatever the scroll (see [`SpectrogramRing`]), and carries
+/// [`RING_HEADROOM`] slabs past the pane's own count, so its texture is
+/// `2 * (slabs + RING_HEADROOM)` across — over the limit at half the pane
+/// width a row count needs to reach it. The whole-song build owns its texture
+/// outright and spends one texel a slab, plus one slab in hand: the fold keys
+/// columns by absolute `floor(t / bucket)`, so a stretch of time worth `n`
+/// slabs touches `n + 1` of them whenever the boundaries fall mid-slab.
+///
+/// It is the DEVICE's limit that binds here, never the pane's, and which
+/// devices it fires on is the whole of what it costs. At the 8192 an editor
+/// reports (wgpu's own default limit, which egui-baseview passes through) it
+/// sits far above both [slab](LIVE_SLAB_CAP) [caps](WHOLE_SONG_SLAB_CAP) and
+/// can never bite. At the 2048 an egui context defaults to when nothing tells
+/// it otherwise — every test, and the offline renderer, which drives a bare
+/// `egui::Context` — [`LIVE_SLAB_CAP`] alone puts the texture at
+/// `2 * (1024 + 8)` = 2064 and the upload panics. So this trades time
+/// resolution for a texture that fits, on exactly the builds whose alternative
+/// is the crash.
+fn slab_ceiling(max_side: usize, whole: bool) -> usize {
+    let ceiling = if whole {
+        // The one slab in hand described above — and this arm bounds the PLAN
+        // rather than the image, which on this path are not the same number.
+        // The whole-song build folds every column it is given
+        // ([`aggregate_slabs`] over `WholeSong::columns`) rather than the ones
+        // inside `window`, and gives every elapsed slab a row, so a column set
+        // reaching past the window makes the image wider than any count taken
+        // from the span. Bounding that belongs where the fold is, not here —
+        // issue #367.
+        max_side.saturating_sub(1)
+    } else {
+        // [`RING_HEADROOM`] for the ring's own slabs, and two more for
+        // [`ring_capacity`]'s floor — it takes `visible + 2` when the run
+        // reaches the capacity, so a ceiling that spends the whole limit here
+        // hands the GPU four texels more than it will take. Cheaper to leave
+        // the two unspent than to rest the bound on the run never getting
+        // there.
+        (max_side / 2).saturating_sub(RING_HEADROOM + 2)
+    };
+    // Two, which is [`Plan::new`]'s own floor and the width [`build`] refuses
+    // under — a limit small enough to reach it leaves no picture either way.
+    ceiling.max(2)
+}
+
 /// Device pixels the pane's size is rounded UP to before anything is derived
 /// from it.
 ///
@@ -75,7 +126,7 @@ pub(crate) const MIN_BUCKET: f64 = crate::AudioSpectrum::FFT_INTERVAL * COLUMNS_
 /// same trade [`PaneView`] makes by sizing in pixels rather than points. Sixty
 /// four turns a 600-pixel drag into ten re-layouts instead of six hundred, and
 /// leaves the image at most 9% taller than a 700-pixel pane needs.
-const PANE_QUANTUM: f32 = 64.0;
+pub(crate) const PANE_QUANTUM: f32 = 64.0;
 
 /// A pane measurement in device pixels, rounded up to [`PANE_QUANTUM`].
 fn quantized(pixels: f32) -> f32 {
@@ -107,13 +158,28 @@ pub(crate) const GESTURE_ROWS: usize = 4 * PANE_QUANTUM as usize;
 /// line, which is a picture the pitch axis cannot be judged from during the
 /// very gesture that is judging it.
 ///
-/// Two costs little because the ROWS are the cheap half of the trade, which
-/// is worth being exact about: measured over a 1024-slab window on a
-/// 1408-row pane, a restart zoomed out COMPOSES in 16.0 ms at full rows and
-/// the settled read, 6.9 ms once the read alone goes coarse, 3.8 ms at half
-/// rows with it, and 1.7 ms at [`GESTURE_ROWS`]. The read swap is the 2.3x;
-/// the row cap past half buys the last 2 ms and spends the picture to do it.
-/// `timing_parts` is that table.
+/// Two costs little ZOOMED OUT, where the rows are the cheap half of the
+/// trade: measured over a 1024-slab window on a 1408-row pane, a restart
+/// zoomed out COMPOSES in 16.0 ms at full rows and the settled read, 6.9 ms
+/// once the read alone goes coarse, 3.8 ms at half rows with it, and 1.7 ms
+/// at [`GESTURE_ROWS`]. The read swap is the 2.3x there, and the row cap past
+/// half buys the last 2 ms. `timing_parts` is that table.
+///
+/// Zoomed IN the split reverses, and that is the half this constant is set
+/// on. Each row is narrower than a bucket there, so the read is a
+/// [`RowRead::Lerp`] whichever way the flag reads and the compose is rows x
+/// slabs: on the same pane at a twelve-semitone zoom the read swap buys 1.09x
+/// (11.77 -> 10.83 ms) while the row cap buys 2.3x (10.83 -> 4.63 ms). A
+/// pitch zoom ENDS zoomed in, so the rows are what holds a drag's later
+/// frames inside a frame.
+///
+/// HISTORICAL NOTE: this was set to 1 — full rows, the read as the whole
+/// trade — and reverted, on the one measurement here that came off a real
+/// surface rather than the harness. At 1 a pitch drag on a full-height pane
+/// ran the UI frame at 5-10 ms, which matches the zoomed-in compose figures
+/// above and so also answers what the upload below is worth: the rows
+/// dominate it, not the megabytes. Do not raise this on the zoomed-out table
+/// alone; that is the reasoning the revert came out of.
 ///
 /// It is a table of COMPOSE, and the upload is the term it does not carry:
 /// `timing_parts` ends at [`restart_pixels`], which returns the pixels rather
@@ -121,8 +187,7 @@ pub(crate) const GESTURE_ROWS: usize = 4 * PANE_QUANTUM as usize;
 /// rows are on that side too — a full-width gesture frame's image goes from
 /// 2.1 MB at [`GESTURE_ROWS`] to 5.8 MB here, re-uploaded on every frame of a
 /// drag — and no harness in the tree can time it, since it takes a real
-/// surface. So the number to raise this constant on is a frame rate watched
-/// during a pitch drag on a full-height pane, not another run of the table.
+/// surface.
 const GESTURE_MAGNIFY: usize = 2;
 
 /// The rows a gesture frame builds for a pane that would settle at `rows`.
@@ -754,7 +819,21 @@ impl SpectrogramRing {
 pub(crate) struct PaneView {
     /// Physical pixels per egui point.
     pub(crate) ppp: f32,
-    /// The tallest image the GPU will take.
+    /// The largest image the GPU will take, on EITHER side — what holds the
+    /// rows down directly and the slabs through [`slab_ceiling`].
+    ///
+    /// Read off the context rather than assumed, because the two contexts this
+    /// pane draws through do not agree: an editor reports its device's limit
+    /// (8192), while a bare `egui::Context` — the offline renderer's, and every
+    /// test's — reports egui's own 2048 default whatever its GPU could take.
+    pub(crate) max_side: usize,
+    /// The tallest image THIS build makes: [`max_side`](Self::max_side), or the
+    /// cut a gesture takes ([`gesture_rows`]).
+    ///
+    /// Separate from the device's limit because the gesture's cut is a bound on
+    /// the PICTURE and not on the hardware — folded into one field it would
+    /// shrink the slab count too, resizing the ring on every frame of a gesture,
+    /// which is the cost the gesture path exists to avoid.
     pub(crate) max_rows: usize,
     /// Points across the pitch axis, and across the FAR region of the depth
     /// axis — which the heatmap does not own: the roll's ribbons draw over the
@@ -825,8 +904,13 @@ impl Plan {
         };
         let rows = (pitch_px as usize).clamp(2, view.max_rows);
         // One image column per output depth pixel; whole-song spans an entire
-        // take, so it needs a higher cap than the live window.
+        // take, so it needs a higher cap than the live window. Under the
+        // DEVICE's ceiling either way — the only one of the two that can cost
+        // the picture anything a wider pane would have bought, and the only one
+        // whose absence is a panic rather than a soft slab (see
+        // [`slab_ceiling`]).
         let col_cap = if view.whole { WHOLE_SONG_SLAB_CAP } else { LIVE_SLAB_CAP };
+        let col_cap = col_cap.min(slab_ceiling(view.max_side, view.whole) as f32);
         let target_cols = depth_px.clamp(2.0, col_cap) as usize;
         let bucket = if view.whole {
             // The offline build draws its own fixed column set rather than the
@@ -1465,7 +1549,10 @@ fn ring_capacity(planned: usize, visible: usize) -> usize {
 /// end); the rest is margin, and `ring_capacity`'s body leans on the whole
 /// eight. Each costs TWO texel columns, since every column is written twice
 /// (see [`SpectrogramRing`]) — so a full-width pane's texture is
-/// `2 * (1024 + 8)` = 2064 texels across.
+/// `2 * (1024 + 8)` = 2064 texels across wherever the GPU is large enough to
+/// hold it — and that doubling is why [`slab_ceiling`] holds the live slab
+/// count under HALF of what the GPU takes rather than under all of it. Under a
+/// ceiling that bites, the cap is the ceiling's and this width follows it down.
 const RING_HEADROOM: usize = 8;
 
 /// Compose a whole ring texture: every column of the run at its own texel and
@@ -1835,6 +1922,22 @@ mod tests {
     /// windows holds, so the trim never enters into it. The sweep and the drag
     /// test below pass the real, pane-sized retention instead.
     const KEEP: usize = 1 << 20;
+
+    /// The texture side an EDITOR reports — wgpu's own default limit, which
+    /// egui-baseview passes through from the device. Above every slab cap this
+    /// pane has, so a fixture carrying it is asking about the pane's own
+    /// arithmetic with the device's ceiling deliberately out of the way.
+    ///
+    /// Not what a bare `egui::Context` reports, which is why it is named:
+    /// egui's own default is [`BARE_MAX_SIDE`], and the gap between the two is
+    /// where a texture this pane plans can fit one context and not the other.
+    const EDITOR_MAX_SIDE: usize = 8192;
+
+    /// The texture side a context reports when NOTHING tells it otherwise —
+    /// egui's `InputState` default. What the offline renderer runs at (it
+    /// builds a bare context and never fills in `RawInput::max_texture_side`),
+    /// and what every test in this tree runs at.
+    const BARE_MAX_SIDE: usize = 2048;
 
     /// The pitch range the ring sweeps hold fixed while they move time.
     const SWEEP_SCALE: PitchScale = PitchScale { min_midi: 40.0, max_midi: 88.0, span: 48.0 };
@@ -2544,7 +2647,8 @@ mod tests {
         let scale = PitchScale { min_midi: 40.0, max_midi: 88.0, span: 48.0 };
         let view = |ppp: f32, pitch_len: f32, depth_len: f32, window: f64, whole: bool| PaneView {
             ppp,
-            max_rows: 8192,
+            max_side: EDITOR_MAX_SIDE,
+            max_rows: EDITOR_MAX_SIDE,
             pitch_len,
             depth_len,
             window,
@@ -2571,8 +2675,8 @@ mod tests {
         assert!((rows_at(2.0, 517.0) / rows_at(1.0, 517.0) - 2.0).abs() < 0.2);
         // And never a taller image than the GPU will take.
         let mut small = view(2.0, 4000.0, 800.0, 12.0, false);
-        small.max_rows = 2048;
-        assert_eq!(plan(&small).rows, 2048, "an image taller than the GPU allocates");
+        small.max_rows = BARE_MAX_SIDE;
+        assert_eq!(plan(&small).rows, BARE_MAX_SIDE, "an image taller than the GPU allocates");
 
         // A slab is never finer than the columns arrive, whatever the pane's
         // width asks for: a shorter one leaves empty slabs between columns, and
@@ -2618,6 +2722,124 @@ mod tests {
         let at_2x = plan(&view(2.0, 300.0, 800.0, 12.0, false)).key;
         assert_eq!(at_1x, plan(&view(1.0, 300.0, 800.0, 12.0, false)).key);
         assert_ne!(at_1x, at_2x, "a density change must not hit the cache");
+    }
+
+    /// **Neither side of the planned image may pass what the GPU will take**,
+    /// on any pane, at any density, through either build.
+    ///
+    /// The rows carry the bound directly; the SLABS need their own, and reach
+    /// the limit FIRST — the live ring writes every column twice, so a slab
+    /// costs two texel columns and the width crosses at half the pane pixels a
+    /// row count needs. At the 2048 a bare `egui::Context` reports,
+    /// [`LIVE_SLAB_CAP`] alone put a full-width pane's texture at
+    /// `2 * (1024 + 8)` = 2064 and `Context::load_texture` asserted on the
+    /// upload: issues #333 and #335, one arithmetic bug seen from two
+    /// directions.
+    ///
+    /// Swept rather than pinned at the one geometry that panicked, because the
+    /// bound has to hold for whatever pane, density and Span a layout hands the
+    /// pane, and a single case cannot tell a fix from a coincidence. The widths
+    /// deliberately run far past any real pane: the ceiling is only reachable
+    /// with the caps saturated, so a sweep that stays inside them is a sweep
+    /// that never tests it.
+    #[test]
+    fn no_pane_plans_an_image_past_what_the_gpu_takes() {
+        let scale = PitchScale { min_midi: 40.0, max_midi: 88.0, span: 48.0 };
+        let columns = Columns { first: 3, len: 4000, newest: 12.0 };
+        let plan_for = |max_side: usize, whole: bool, ppp: f32, pitch: f32, depth: f32, win: f64| {
+            Plan::new(
+                &PaneView {
+                    ppp,
+                    max_side,
+                    max_rows: max_side,
+                    pitch_len: pitch,
+                    depth_len: depth,
+                    window: win,
+                    scale,
+                    cfg: SpectrumConfig { roll_seconds: win as f32, ..SpectrumConfig::default() },
+                    whole,
+                    coarse: false,
+                },
+                &columns,
+            )
+        };
+        // The texture each build actually uploads, derived the way `build`
+        // derives it rather than restated. The slabs the fold emits are
+        // `floor(span / bucket) + 1`, since the slab keys are absolute and both
+        // ends fall mid-slab; the whole-song build spends one texel on each,
+        // and the live one hands that count to [`ring_capacity`] and writes the
+        // answer TWICE across (`build`'s `tex_w`).
+        //
+        // Through the real [`ring_capacity`] on purpose: it GROWS to fit a run
+        // longer than the plan expected, so a window that put more slabs on
+        // screen than `target_cols` would widen the texture past the ceiling
+        // with the plan's own arithmetic still looking correct.
+        //
+        // The whole-song arm is WEAKER than the live one, and knowing which is
+        // which matters: `bucket` is `window / target_cols` floored at
+        // [`MIN_BUCKET`], so this expression is `target_cols + 1` by
+        // construction and the arm pins the ceiling's off-by-one and nothing
+        // else. It cannot see the real whole-song width, which comes from
+        // folding [`WholeSong`](crate::WholeSong)'s own columns rather than
+        // from `window` — see [`slab_ceiling`].
+        let tex_width = |p: &Plan, whole: bool, win: f64| {
+            let visible = (win / p.bucket).floor() as usize + 1;
+            if whole { visible } else { 2 * ring_capacity(p.capacity, visible) }
+        };
+
+        for max_side in [BARE_MAX_SIDE, EDITOR_MAX_SIDE, 4096] {
+            for whole in [false, true] {
+                for ppp in [1.0f32, 2.0, 3.0] {
+                    for depth in [200.0f32, 800.0, 2000.0, 8000.0] {
+                        for win in [1.0f64, 12.0, 600.0] {
+                            let p = plan_for(max_side, whole, ppp, 4000.0, depth, win);
+                            let w = tex_width(&p, whole, win);
+                            assert!(
+                                w <= max_side,
+                                "{}: a {depth} pt pane at {ppp}x over {win} s plans a {w} texel \
+                                 image, past the {max_side} the GPU takes",
+                                if whole { "whole-song" } else { "live" },
+                            );
+                            assert!(
+                                p.rows <= max_side,
+                                "{} rows is taller than the {max_side} the GPU takes",
+                                p.rows,
+                            );
+                            // And with the ring SATURATED, which is where
+                            // [`ring_capacity`] stops returning the plan's own
+                            // number and starts returning `visible + 2`. The
+                            // run is not supposed to reach the capacity, but a
+                            // bound that holds only while it does not is a
+                            // bound resting on a separate test's invariant.
+                            if !whole {
+                                let full = 2 * ring_capacity(p.capacity, p.capacity);
+                                assert!(
+                                    full <= max_side,
+                                    "a saturated ring is {full} texels across, past {max_side}",
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // And it costs the EDITOR nothing: the device's ceiling only binds
+        // where it sits under the pane's own caps, so at a real limit the plan
+        // is the one the caps alone would have made. Without this the bug could
+        // be "fixed" by clamping everything to 2048 and softening every
+        // spectrogram in the plugin to pay for a bare context's default.
+        let wide = plan_for(EDITOR_MAX_SIDE, false, 2.0, 4000.0, 8000.0, 12.0);
+        assert_eq!(
+            wide.capacity,
+            LIVE_SLAB_CAP as usize + RING_HEADROOM,
+            "the device ceiling cut a pane the device could hold",
+        );
+        let take = plan_for(EDITOR_MAX_SIDE, true, 2.0, 4000.0, 8000.0, 600.0);
+        assert!(
+            600.0 / take.bucket > LIVE_SLAB_CAP as f64,
+            "the whole-song build lost its higher cap to a ceiling above it",
+        );
     }
 
     /// **Every cache layer must stay on its fast path across the whole REGIME
@@ -3043,7 +3265,8 @@ mod tests {
         let scale = PitchScale { min_midi: 40.0, max_midi: 88.0, span: 48.0 };
         let view = |pitch_len: f32, depth_len: f32| PaneView {
             ppp: 2.0,
-            max_rows: 8192,
+            max_side: EDITOR_MAX_SIDE,
+            max_rows: EDITOR_MAX_SIDE,
             pitch_len,
             depth_len,
             window: 30.0,
@@ -3109,6 +3332,7 @@ mod tests {
                 let (min_midi, span) = (40.0 + frame as f32 * 0.5, 48.0 - frame as f32 * 0.9);
                 let view = |coarse: bool, max_rows: usize| PaneView {
                     ppp: 2.0,
+                    max_side: EDITOR_MAX_SIDE,
                     max_rows,
                     pitch_len,
                     depth_len: 800.0,
@@ -3119,7 +3343,7 @@ mod tests {
                     coarse,
                 };
                 // Exactly the pair of calls `draw_spectrogram` makes.
-                let full = Plan::new(&view(false, 8192), &columns);
+                let full = Plan::new(&view(false, EDITOR_MAX_SIDE), &columns);
                 let short = Plan::new(&view(true, gesture_rows(full.rows)), &columns);
 
                 assert_eq!(short.rows, gesture_rows(full.rows), "the cut reached the plan");
@@ -3130,6 +3354,15 @@ mod tests {
                     full.rows,
                 );
                 assert!(short.rows >= full.rows.min(GESTURE_ROWS), "under the floor");
+                // The READ half of the degradation reached the second plan
+                // too. The row assertions above cannot see it, and on a pane
+                // the cut does not bite they all hold with the flag lost —
+                // which would carry a settled texture through a gesture frame.
+                assert_eq!(
+                    full.key.style().differs(short.key.style()),
+                    Some(Restart::Rows),
+                    "{pitch_len} pt: the coarse read did not reach the plan",
+                );
                 planned.insert((full.rows, short.rows));
             }
             assert_eq!(
@@ -3143,7 +3376,8 @@ mod tests {
         let short = Plan::new(
             &PaneView {
                 ppp: 2.0,
-                max_rows: 8192,
+                max_side: EDITOR_MAX_SIDE,
+                max_rows: EDITOR_MAX_SIDE,
                 pitch_len: 120.0,
                 depth_len: 800.0,
                 window: 30.0,
@@ -3268,7 +3502,8 @@ mod tests {
             Plan::new(
                 &PaneView {
                     ppp: 2.0,
-                    max_rows: 8192,
+                    max_side: EDITOR_MAX_SIDE,
+                    max_rows: EDITOR_MAX_SIDE,
                     pitch_len: 300.0,
                     depth_len: 800.0,
                     window: span as f64,
