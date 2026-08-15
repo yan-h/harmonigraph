@@ -443,6 +443,9 @@ pub(crate) fn draw_node_labels(
                         outline,
                         scale,
                         magnify,
+                        // A node's label sits ON its node, so the node is the
+                        // middle of it.
+                        crate::marks::NameLead::Centred,
                     )
                 }
             };

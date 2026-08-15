@@ -79,23 +79,28 @@ pub(super) const LABEL_PT: f32 = 12.35;
 /// two-octave floor, so from a reader's side the names slide down the roll for
 /// as long as the zoom is being dragged — a movement the music did not make.
 ///
-/// It pins the BOX, and the box is not all the way to the ink. What a reader
-/// sees still opens with the zoom, by the amount [`name_extent`] overestimates
-/// the name plus the letter's own left bearing, both of which scale with the
-/// type. Measured through a real context at `ppp` 2, from the anchor to the
-/// drawn `C` of a bare name — box, galley, ink:
+/// It pins the letter's INK, which is the only thing a reader can measure a gap
+/// against. A box does not reach all the way to the glyph: the layout carries
+/// the font's side bearing, and [`name_extent`]'s estimate carries its own
+/// error on top. Pinning the box instead therefore sets a name at this distance
+/// PLUS two terms that both ride the type — so the gap opens as the pitch zoom
+/// does, and the name drifts off its note for as long as the range is dragged.
 ///
-/// | zoom | box | galley | ink |
-/// |------|------|--------|------|
-/// | 1    | 2.60 | 3.34   | 3.84 |
-/// | 2.23 | 2.60 | 4.25   | 5.78 |
-/// | 5    | 2.60 | 6.31   | 9.32 |
+/// Measured through a real context at `ppp` 2, anchor to the drawn `C` of a
+/// bare name, pinning each of the two:
 ///
-/// So this takes out the larger term and leaves 5.5 points of creep across the
-/// zoom where there were 15.9. Closing the rest means anchoring on measured ink
-/// the way the axis labels do ([`ink_inset`](crate::text::ink_inset)), which
-/// wants the drawn width rather than the estimate — issue #349 holds the
-/// measurements and the two candidates.
+/// | zoom | pinned by the box | pinned by the ink |
+/// |------|-------------------|-------------------|
+/// | 1    | 3.09              | 2.60              |
+/// | 2.23 | 4.13              | 2.60              |
+/// | 5    | 5.61              | 2.60              |
+///
+/// Time running DOWN the pane is the worse of the two, and by a long way: a
+/// line box stands well above its letter, so the same reading there goes 5.93 →
+/// 9.79 → 18.14, better than 12 points of drift where across the pane it is
+/// 2.5. The vertical term is [`LINE_HEIGHT`]'s and not [`GLYPH_ADVANCE`]'s,
+/// which is why tightening the advance does nothing for it and pinning the ink
+/// does. See [`marks::NameLead`], where the ink is found, and issue #349.
 ///
 /// What it still scales by is the PANE, which is not the same concession. The
 /// Render preview draws this pane a fraction of the size the offline render
@@ -134,7 +139,36 @@ pub(super) struct NameScale {
 /// that, measuring would put a text layout per candidate per frame in front of
 /// a decision that is thrown away for most of them, and would make the offline
 /// render's output depend on font metrics rather than on arithmetic.
-const GLYPH_ADVANCE: f32 = 0.62;
+///
+/// It decides only that BECAUSE it no longer places anything: a name is drawn
+/// against its letter's ink ([`marks::NameLead`]), so what this is wrong by
+/// costs a little spacing and never moves a glyph. The estimate is free to be
+/// generous; it is not free to be wrong about the face.
+///
+/// Half an em is what the tree's face advances — Iosevka Fixed sets every
+/// `hmtx` advance to 500/1000, which is the same fact [`marks::MARK_ADVANCE`]
+/// states for the mark column. It is quoted against THIS face and not against
+/// monospace in general: egui's stock monospace advances nearer 0.62, and a
+/// figure carried over from it makes the letter term a quarter too wide, which
+/// is a margin nobody chose and cannot say the size of.
+/// `a_bare_names_estimate_is_the_advance_the_face_actually_has` is what holds
+/// the two together, since nothing in the picture can — see below.
+///
+/// The margin that IS chosen stays: a counted mark is measured here at two full
+/// cells where the draw path tracks it into its sign's
+/// ([`marks::MARK_TRACK`]), so the estimate keeps its slack where too narrow
+/// would let names overlap.
+///
+/// What it moves is the THINNING, and that is the whole of what it can move.
+/// The direction is not the obvious one, so it is worth stating which way a
+/// wider figure here goes: a wider name makes a wider cell, the grid offers
+/// less often, and — because a refused offer still advances the lane's reach —
+/// offering less often into a wall of notes gets more of them KEPT. Measured on
+/// the dense `phrase` fixture, a fifth wider (0.62) draws 15 names at the
+/// two-octave floor against 13, and 30 at 2.23× against 31; at the dialled size
+/// the two agree at 48. Which is the grid's first defect (see [`Lane`]) showing
+/// through a number that touches it, rather than anything this number decides.
+const GLYPH_ADVANCE: f32 = 0.5;
 const LINE_HEIGHT: f32 = 1.3;
 const LABEL_PAD: f32 = 1.95;
 
@@ -333,14 +367,27 @@ fn name_span(at: f64, reach: f64, backward: bool) -> (f64, f64) {
 const WIDEST_NAME: NoteName =
     NoteName { letter: 'C', sharps: 2, syntonic_commas: -12, septimal_commas: -12 };
 
-/// One name, placed: what it says and the box it was measured into.
+/// One name, placed: what it says, the box it was measured into, and the point
+/// its letter is drawn against.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct NoteLabel {
     pub name: NoteName,
-    /// Screen box the name covers, padded. Its centre is where the name is
-    /// drawn — [`marks::draw_stacked_name`] centres on its anchor, while the
-    /// placement here works in boxes that grow away from theirs.
+    /// Screen box the name covers, padded — what the THINNING reasons about,
+    /// and an estimate throughout ([`name_extent`]).
+    ///
+    /// Not where the name is drawn, and the two are kept apart deliberately: a
+    /// box is measured from arithmetic so the offline render does not hang on
+    /// font metrics, and everything the box decides — which names fit, how far
+    /// apart they sit — is happy with an estimate a few percent wide. Where a
+    /// reader SEES the name is not happy with it, the error riding the type and
+    /// so opening with the pitch zoom. See [`lead`](Self::lead) and issue #349.
     pub rect: egui::Rect,
+    /// Where the letter's ink goes: [`LABEL_INSET`] off the end of the ribbon
+    /// this name belongs to, along [`grow`](Self::grow), and carrying whatever
+    /// `place`'s clamp did to the box.
+    pub lead: egui::Pos2,
+    /// The direction from that point INTO the note — see [`label_rect`].
+    pub grow: egui::Vec2,
     /// Test-only: the take time this name was placed at. Which NOTE a name
     /// belongs to is the whole question when asking whether the set of them
     /// holds still as the picture scrolls, and a rect that scrolls cannot
@@ -496,17 +543,42 @@ pub(super) fn plan(
     let place = |edge: &Edge, name: &NoteName| {
         let (t, d) = (scale.t_of(edge.pitch), time.depth_of(edge.time));
         let rect = label_rect(axes, grow, t, d, name, size, scales);
+        // Where the LETTER's ink is to land, which is what a reader measures
+        // the gap by and what [`draw`] finally places the name against. The
+        // same inset the box is built from, off the same end, so the two agree
+        // about where the name belongs and differ only in what they measure —
+        // arithmetic for the thinning, ink for the picture.
+        let lead = axes.at(t, d) + grow * (LABEL_INSET * scales.air);
         if !toward_near {
-            return rect;
+            return (rect, lead);
         }
         // The leading corner's reach past the edge: the box's centre projected
         // onto `grow`, plus half of what it spans that way.
         let span = (rect.width() * grow.x).abs() + (rect.height() * grow.y).abs();
         let over = (rect.center() - axes.at(t, split)).dot(grow) + span * 0.5;
         if over > 0.0 {
-            rect.translate(-grow * over)
+            // Both, by the same vector: what the clamp does is hold the name
+            // off an edge, and a name is its ink as much as its box.
+            //
+            // What it measures is still the BOX, which is looser than the ink
+            // by however much line box a letter does not fill — so a clamped
+            // name stands further off the edge than it strictly needs to, and
+            // the slack is the depth axis's. Time running across the pane, the
+            // box's depth is the name's width and the two agree: measured, the
+            // ink stands 8.12 points inside the divider either way. Time
+            // running down it, the box's depth is a whole line box against a
+            // letter's cap height, and the ink stands 18.01 points in where
+            // placing it by that box put it at 14.18.
+            //
+            // Left standing, because closing it means clamping on the ink and
+            // `plan` has no painter to measure ink with — the same constraint
+            // that makes `name_extent` an estimate in the first place. It errs
+            // toward the roll, so it can only ever withhold a few points of
+            // travel from a name too young to have a ribbon yet; it cannot put
+            // one over the spectrum.
+            (rect.translate(-grow * over), lead - grow * over)
         } else {
-            rect
+            (rect, lead)
         }
     };
 
@@ -574,12 +646,12 @@ pub(super) fn plan(
                 continue;
             }
             let (name, _) = naming(edge.pitch, &mut names);
-            let rect = place(&edge, &name);
+            let (rect, lead) = place(&edge, &name);
             // Two keys sounding one pitch — a doubled MIDI source, a layered
             // MPE part — would otherwise stamp the same name on the same
             // points once per voice. The name still appears; it is drawn once.
             if !held.iter().any(|l| l.name == name && l.rect == rect) {
-                held.push(NoteLabel { name, rect, #[cfg(test)] at: edge.time });
+                held.push(NoteLabel { name, rect, lead, grow, #[cfg(test)] at: edge.time });
             }
             continue;
         }
@@ -616,8 +688,8 @@ pub(super) fn plan(
         lane.reached = to;
         if clear && visible {
             let (name, _) = naming(edge.pitch, &mut names);
-            let rect = place(&edge, &name);
-            placed.push(NoteLabel { name, rect, #[cfg(test)] at: edge.time });
+            let (rect, lead) = place(&edge, &name);
+            placed.push(NoteLabel { name, rect, lead, grow, #[cfg(test)] at: edge.time });
         }
     }
     // Sounding notes reach the sweep in the tracker's key order — stable, but
@@ -753,18 +825,23 @@ fn anchor_edge(note: &RollNote, now: f64, anchor: Anchor) -> Edge {
 /// except where the growth runs backward and the name carries marks, which is
 /// the trade named at the bottom of this comment and measured in issue #151.
 ///
-/// The LETTER's own position inside that box has to be independent of the
-/// growth direction, or `C` and `C♯` disagree about where the letter goes and
-/// a column of names stops reading as one. [`draw_stacked_name`] always sets
-/// the letter first and lets the accidental/comma columns trail after it, so
-/// growth that runs the screen's own way (left-to-right or top-to-bottom)
-/// already puts the letter flush against the anchor, same as it would with no
-/// marks at all -- nothing to do there. Growth that runs backward is the
-/// mismatch: "first" is still the box's FAR edge from the anchor, not its near
-/// one, so centring on the FULL name drags the letter along with however wide
-/// its marks happen to be. Measuring the pure letter's reach instead of the
-/// whole name's is what keeps it still; the marks are what absorb the
-/// difference.
+/// This is a box and not a position: what a reader sees is placed against the
+/// letter's ink by [`draw`], off the same anchor and the same [`LABEL_INSET`].
+/// The job here is to say where that ink will LAND, closely enough that the
+/// thinning is honest about which names touch — so the box tracks the drawn
+/// name's own shape, and the shape has a handedness.
+///
+/// [`draw_stacked_name`] always sets the letter first and lets the
+/// accidental/comma columns trail after it, and the ink is led by that letter.
+/// Growth running the screen's own way (left-to-right or top-to-bottom) puts
+/// the letter at the anchor end and the marks deeper into the note, so the box
+/// runs `[inset, inset + name]` and covers it. Growth running backward puts the
+/// letter at the anchor end still — that is what leading by it means — and the
+/// marks then trail the OTHER way, back over the anchor. Measuring the pure
+/// letter's reach in that branch is what puts the box where they go: it lands
+/// at `[inset + letter - name, inset + letter]`, which is the same box slid
+/// back by the width of the mark column, and that is exactly the ground the
+/// ink covers.
 ///
 /// WHICH growth a name has is the anchor's and not the orientation's (see
 /// [`Anchor`]), so every orientation has a backward case in it: Right's
@@ -772,21 +849,33 @@ fn anchor_edge(note: &RollNote, now: f64, anchor: Anchor) -> Edge {
 /// box grows back toward the now-line.
 ///
 /// What that costs is worth stating at its real size, because it is not a
-/// rounding error: the box's near edge lands at `inset + letter - along`, so a
-/// name whose marks are wider than [`LABEL_INSET`] — which is every marked name
-/// — puts its mark column PAST the end it is anchored to, over whatever the
-/// picture holds beyond it. Measured on a 300pt pane at `LABEL_PT`: a bare `C`
-/// clears it by 0.65pt, `C♯` crosses by 3.4pt, `B♭↓` by 9.0pt, the widest
-/// spelling by 17.2pt. The pitch zoom makes it worse than proportionally,
-/// since the marks grow with the type and [`LABEL_INSET`] does not: what the
-/// inset buys back is the same 2.6 points at five times the size.
+/// rounding error: a name whose marks are wider than [`LABEL_INSET`] — which is
+/// every marked name — puts its mark column PAST the end it is anchored to,
+/// over whatever the picture holds beyond it. Measured as INK on a 300pt pane,
+/// a `B♭↓` crosses by 6.21 points at the dialled size and 40.13 at the
+/// two-octave floor: the marks grow with the type and [`LABEL_INSET`] does not,
+/// so what the inset buys back is the same 2.6 points at five times the size.
 ///
 /// The two constraints cannot both hold while [`draw_stacked_name`] typesets the
-/// marks after the letter: pinning the letter fixes the box's near edge and lets
-/// its far edge travel, and containing the box puts the letter back on however
-/// wide the marks are. Issue #151 holds the measurements and the candidate ways
-/// out; this comment exists so the spill reads as a known price rather than as a
-/// bug nobody noticed.
+/// marks after the letter: leading by the letter holds it still and lets the
+/// marks travel, and containing the name puts the letter back on however wide
+/// those marks are. Leading by the letter is the choice — a reader lines a
+/// column of names up by their letters — and it is one edit in
+/// [`marks::NameLead`] to reverse. Issue #151 holds the measurements and the
+/// candidate ways out; this comment exists so the spill reads as a known price
+/// rather than as a bug nobody noticed.
+///
+/// It is not the Right orientation's alone, which is how #151 first read, and
+/// the spilling case is not the one the growth's sign picks out. What spills is
+/// whichever direction the MARKS run against, and they always run to the right
+/// of the letter and above it: growth leftward (Right's leading edge) sends the
+/// mark column back over the anchor, and growth DOWNWARD sends the accidental
+/// up over it. Measured at the same pane, `B♭↓`'s ink reaches 6.21 points past
+/// the end growing leftward and 3.45 growing down, against 2.60 clear in the
+/// two directions the marks trail into the note. The vertical case merely
+/// LOOKED contained while the box placed the name — a line box stands tall
+/// enough above its letter to hide the mark riding there — and it clears the
+/// end at the dialled size, crossing only once the zoom opens past about 1.4.
 ///
 /// [`draw_stacked_name`]: crate::marks::draw_stacked_name
 fn label_rect(
@@ -1035,12 +1124,21 @@ pub(super) fn draw(
         marks::draw_stacked_name(
             batch,
             painter,
-            label.rect.center(),
+            label.lead,
             label.name,
             theme::text(),
             theme::well(),
             scale,
             magnify,
+            // Against the LETTER's ink, not the box's centre — which is the
+            // whole of issue #349's fix and the reason `NoteLabel` carries a
+            // point of its own. The box is an estimate and has to stay one
+            // (`plan` has no painter, and the offline render must not depend on
+            // font metrics); what a reader measures the gap by is the ink, and
+            // the two disagree by the estimate's error plus the letter's side
+            // bearing — both of which ride the type, so both open with the
+            // pitch zoom.
+            marks::NameLead::Letter(label.grow),
         );
     }
 }
@@ -1356,10 +1454,11 @@ mod tests {
     /// just-struck note's name at the onset anchor stands the pad clear of the
     /// now-line. It is invisible here, where nothing is clamped.)
     ///
-    /// The estimate, note, and not the glyph egui draws — those part company by
-    /// a margin that still follows the zoom, which
-    /// [`a_names_drawn_ink_creeps_only_by_the_estimates_own_error`] measures and
-    /// [`LABEL_INSET`] explains.
+    /// The estimate, note, and not the glyph egui draws. The two are placed off
+    /// the same anchor by the same inset but measure different things, so this
+    /// cannot see where the ink lands —
+    /// [`a_names_letter_stands_the_same_distance_off_its_note_at_every_zoom`]
+    /// is that reading, and [`LABEL_INSET`] explains the split.
     ///
     /// Both growth directions, since which one a name has is the anchor's and
     /// not the orientation's — every orientation draws both (see [`Anchor`]).
@@ -1447,10 +1546,16 @@ mod tests {
 
     /// The same claim as
     /// [`the_letter_lines_up_with_or_without_an_accidental`], but read off
-    /// the glyphs [`draw`] actually queues through a real `egui::Context` —
-    /// real font metrics, not [`name_extent`]'s estimate — so it would catch
-    /// the estimate and the real measurement disagreeing by enough to move
-    /// the letter visibly, which the arithmetic-only test cannot see.
+    /// the glyphs [`draw`] actually queues through a real `egui::Context`, so
+    /// it is about the letters a reader sees rather than about the boxes they
+    /// were chosen in.
+    ///
+    /// What it holds is that the mark column cannot reach the letter's
+    /// placement: the two names differ by a comma sign, and the drawn letter
+    /// does not move. The arithmetic-only test asks that of `label_rect`, where
+    /// the extent is what decides it; here nothing consults the extent at all
+    /// — the lead is a point and [`marks::NameLead::Letter`] measures the glyph
+    /// — so the two are the same sentence proved of two different mechanisms.
     #[test]
     fn the_drawn_letter_lines_up_across_notes_in_right_orientation() {
         let cfg =
@@ -1465,6 +1570,8 @@ mod tests {
             .map(|&name| NoteLabel {
                 name,
                 rect: label_rect(&axes, axes.dir_depth(), 0.5, 0.5, &name, LABEL_PT, FLAT),
+                lead: axes.at(0.5, 0.5) + axes.dir_depth() * (LABEL_INSET * FLAT.air),
+                grow: axes.dir_depth(),
                 #[cfg(test)]
                 at: 0.0,
             })
@@ -1746,6 +1853,86 @@ mod tests {
                     placed[0].rect.min.x,
                 );
             }
+        }
+    }
+
+    /// The ink [`plan`] finally puts on the pane stands [`LABEL_INSET`] off the
+    /// ribbon end — and, where the clamp fires, stays on the roll's side of the
+    /// divider.
+    ///
+    /// Everything else that reads the drawn glyphs builds its [`NoteLabel`] by
+    /// hand, which means it restates `plan`'s own arithmetic rather than
+    /// checking it: the lead can be taken straight off the anchor with the inset
+    /// dropped, or the clamp can be left off it while still moving the box, and
+    /// every one of those tests goes on passing. Both were tried. This is the
+    /// one that goes end to end, so it is the one that fails.
+    ///
+    /// The second half is the clamp's, and it is the half a box cannot answer.
+    /// A name at the onset anchor is held off the roll's near edge while its
+    /// note is younger than its own name, and it is the BOX that is measured
+    /// against that edge; the ink inside it is what a reader sees crossing onto
+    /// the spectrum. `a_name_never_reaches_back_over_the_spectrum` asserts on
+    /// the box, so a lead left uncorrected there draws the letter over the
+    /// analyzer with that test still green.
+    #[test]
+    fn the_ink_plan_places_stands_off_its_ribbon_and_inside_the_roll() {
+        const PPP: f32 = 2.0;
+        let ctx = themed_at(PPP);
+        // The letter's ink, drawn exactly as the pane draws it, projected onto
+        // the way the name runs from `from`.
+        let ink_from = |label: &NoteLabel, from: egui::Pos2| {
+            let mut batch = crate::text::TextBatch::default();
+            let _ = frame_full(&ctx, SCREEN, |ui| {
+                draw(ui.painter(), std::slice::from_ref(label), FLAT.label, &mut batch)
+            });
+            let letter = label.name.letter.to_string();
+            let ink = batch
+                .pieces()
+                .iter()
+                .find(|p| p.text == letter)
+                .unwrap_or_else(|| panic!("no {letter} drawn"))
+                .ink;
+            let corners =
+                [ink.left_top(), ink.right_top(), ink.left_bottom(), ink.right_bottom()];
+            corners.iter().map(|&c| (c - from).dot(label.grow)).fold(f32::INFINITY, f32::min)
+        };
+
+        // Nothing clamped: a released note, named on its leading edge.
+        let mut state = state(24.0, 10.0);
+        state.tracker.handle_event(on(2.0, 60));
+        state.tracker.handle_event(off(6.0, 60));
+        let placed = labels(&state, 10.0);
+        assert_eq!(placed.len(), 1);
+        let axes = Axes::new(PANE, &state.spectrum_config);
+        // The release, 4 seconds back of a 10-second window, at middle C.
+        let gap = ink_from(&placed[0], axes.at(0.5, 0.4));
+        assert!(
+            (gap - LABEL_INSET).abs() < 0.1,
+            "the drawn letter stands {gap} off the end it is written on, not {LABEL_INSET}",
+        );
+
+        // Clamped: struck this instant at the onset anchor, so the name is
+        // longer than the ribbon under it and is held off the near edge.
+        let mut state = travelling(24.0, 10.0);
+        state.spectrum_config.roll_fraction = 0.55; // the fresh value
+        state.tracker.handle_event(on(5.0, 60));
+        let axes = Axes::new(PANE, &state.spectrum_config);
+        let split = super::super::axes::spectrum_share(&state.spectrum_config);
+        let edge = axes.at(0.5, split).x;
+        for now in [5.0, 5.05, 5.1] {
+            let placed = labels(&state, now);
+            assert_eq!(placed.len(), 1, "at {now}s");
+            let mut batch = crate::text::TextBatch::default();
+            let _ = frame_full(&ctx, SCREEN, |ui| {
+                draw(ui.painter(), &placed, FLAT.label, &mut batch)
+            });
+            let ink = batch.pieces().iter().find(|p| p.text == "C").expect("a C drawn").ink;
+            assert!(
+                ink.left() >= edge,
+                "at {now}s the drawn letter reaches to {} where the roll only begins at \
+                 {edge}, so it is written over the spectrum",
+                ink.left(),
+            );
         }
     }
 
@@ -2388,6 +2575,53 @@ mod tests {
         );
     }
 
+    /// [`GLYPH_ADVANCE`] is the advance of the face the tree actually ships.
+    ///
+    /// The estimate no longer places anything — a name is drawn against its
+    /// letter's ink ([`marks::NameLead`]) — so nothing about the PICTURE moves
+    /// if this number drifts, and every other test here is blind to it: the two
+    /// that read a name's position substitute [`label_rect`]'s own centre back
+    /// in, where the extent cancels algebraically, and
+    /// [`a_septimal_mark_widens_what_a_name_is_measured_at`] reads only
+    /// differences, where a common factor cancels too. What would move is the
+    /// thinning, silently and everywhere.
+    ///
+    /// So it is asserted where it can be: against a galley egui lays out through
+    /// the shipped face. Iosevka Fixed advances every glyph at 500/1000 em, so
+    /// the estimate of a bare name is the drawn advance up to the rasterizer's
+    /// own rounding — which is real and is why the bound is not zero: at
+    /// [`LABEL_PT`] the galley comes back 6.1875 against an arithmetic 6.175,
+    /// egui having rounded the advance into its atlas cell.
+    ///
+    /// A percent of the size is the bound, and the margin either side of it is
+    /// what makes the test worth having: the rounding is a tenth of a percent,
+    /// while the constant this catches was out by 24.
+    #[test]
+    fn a_bare_names_estimate_is_the_advance_the_face_actually_has() {
+        let ctx = themed_at(2.0);
+        for size in [LABEL_PT, LABEL_PT * 5.0, marks::NAME_SIZE] {
+            let name = NoteName { letter: 'C', sharps: 0, syntonic_commas: 0, septimal_commas: 0 };
+            let mut drawn = 0.0;
+            let _ = frame_full(&ctx, SCREEN, |ui| {
+                drawn = ui
+                    .painter()
+                    .layout_no_wrap(
+                        "C".to_owned(),
+                        egui::FontId::monospace(size),
+                        egui::Color32::PLACEHOLDER,
+                    )
+                    .size()
+                    .x;
+            });
+            let estimated = name_extent(&name, size).x;
+            assert!(
+                (estimated - drawn).abs() < size * 0.01,
+                "at {size}pt the thinning believes a bare name is {estimated} wide where the \
+                 face lays it out at {drawn}: GLYPH_ADVANCE has drifted from the shipped font",
+            );
+        }
+    }
+
     /// A septimal mark costs a reader what a syntonic one does, so the
     /// spelling chooser weighs them together.
     ///
@@ -2610,60 +2844,91 @@ mod tests {
     }
 
     /// What a reader actually sees, read off the glyphs [`draw`] queues through
-    /// a real context rather than off the box that placed them: the drawn ink
-    /// still opens with the zoom, and by no more than [`name_extent`]'s own
-    /// error plus the letter's bearing.
+    /// a real context rather than off the box that placed them: the letter's
+    /// INK stands [`LABEL_INSET`] off the end of its ribbon, and stays there
+    /// through the zoom, in every orientation and either growth.
     ///
     /// [`a_name_keeps_its_distance_from_its_note_through_the_zoom`] is the same
     /// question asked of the arithmetic, and it CANNOT see this: substitute
     /// `label_rect`'s own centre into it and the extent cancels, so it holds for
-    /// any extent function whatsoever. This is the one that would notice
-    /// [`GLYPH_ADVANCE`] drifting from the face the tree ships.
+    /// any extent function whatsoever, at any bearing. This is the one that
+    /// notices the lead being taken off the box again.
     ///
-    /// The bound is what the split is worth, not what the picture wants. It is
-    /// well under the 15.9 points of creep the same measurement gives with the
-    /// inset scaled by the type, and well over the zero it would give with the
-    /// ink anchored the way the axis labels anchor theirs — issue #349.
+    /// It does NOT notice [`GLYPH_ADVANCE`], and nothing about a drawn name can:
+    /// [`draw`] reads the lead, the name and the growth, and never the box the
+    /// estimate built. That is the point of the split rather than a gap in it,
+    /// and it is why the constant is pinned against the face directly, by
+    /// [`a_bare_names_estimate_is_the_advance_the_face_actually_has`].
+    ///
+    /// A MARKED name as well as a bare one, and that is the half a single
+    /// spelling cannot ask: the letter has to land in the same place whatever
+    /// trails it, or a column of names stops reading as one. It was 1.31 points
+    /// out between `C` and `B♭↓` while the box did the placing, at the dialled
+    /// size alone.
+    ///
+    /// The bound is a tenth of a point — the ink is placed by the same
+    /// measurement the assertion reads, so what is left is the arithmetic's own
+    /// noise and not a design margin. Against it: 5.5 points of creep across
+    /// the zoom with time running across the pane before this, and 12.2 with it
+    /// running down. Issue #349.
     #[test]
-    fn a_names_drawn_ink_creeps_only_by_the_estimates_own_error() {
+    fn a_names_letter_stands_the_same_distance_off_its_note_at_every_zoom() {
         const PPP: f32 = 2.0;
-        let cfg = SpectrumConfig::default();
-        let axes = Axes::new(PANE, &cfg);
-        let name = NoteName { letter: 'C', sharps: 0, syntonic_commas: 0, septimal_commas: 0 };
-        let anchor = axes.at(0.5, 0.5);
         let ctx = themed_at(PPP);
-        let ink_at = |zoom: f32| {
-            let size = LABEL_PT * zoom;
-            let scales = NameScale { label: zoom, air: 1.0 };
-            let rect = label_rect(&axes, axes.dir_depth(), 0.5, 0.5, &name, size, scales);
-            let label = NoteLabel { name, rect, at: 0.0 };
-            let mut batch = crate::text::TextBatch::default();
-            let _ = frame_full(&ctx, SCREEN, |ui| {
-                draw(ui.painter(), std::slice::from_ref(&label), zoom, &mut batch)
-            });
-            let piece = batch
-                .pieces()
-                .iter()
-                .find(|p| p.text == "C")
-                .unwrap_or_else(|| panic!("no C drawn at zoom {zoom}"));
-            // The box's near edge and the ink's, from the ribbon end. The first
-            // is what LABEL_INSET pins; the second is what is read.
-            let box_edge = rect.center().x - name_extent(&name, size).x * 0.5;
-            (box_edge - anchor.x, piece.ink.left() - anchor.x)
-        };
-
-        let (dialled_box, dialled_ink) = ink_at(1.0);
-        let (floor_box, floor_ink) = ink_at(5.0);
-        // The box holds exactly, which is the invariant this file states.
-        assert!((dialled_box - LABEL_INSET).abs() < 0.01, "box at the dialled zoom: {dialled_box}");
-        assert!((floor_box - LABEL_INSET).abs() < 0.01, "box at the two-octave floor: {floor_box}");
-        // The ink does not, and the gap between the two claims is the estimate's
-        // error. A tightened GLYPH_ADVANCE, or ink-level anchoring, shrinks
-        // this; nothing should ever grow it.
-        let creep = floor_ink - dialled_ink;
-        assert!(
-            (0.0..=6.0).contains(&creep),
-            "the drawn ink moves {creep} points across the zoom ({dialled_ink} -> {floor_ink})",
-        );
+        let plain = NoteName { letter: 'C', sharps: 0, syntonic_commas: 0, septimal_commas: 0 };
+        let marked = NoteName { letter: 'B', sharps: -1, syntonic_commas: 0, septimal_commas: -1 };
+        for orientation in [
+            SpectralOrientation::Left,
+            SpectralOrientation::Right,
+            SpectralOrientation::Top,
+            SpectralOrientation::Bottom,
+        ] {
+            let cfg = SpectrumConfig { orientation, ..SpectrumConfig::default() };
+            let axes = Axes::new(PANE, &cfg);
+            let anchor = axes.at(0.5, 0.5);
+            // Both growths, which is both anchors: a name at the ribbon's head
+            // runs one way through time and one at its onset the other. See
+            // [`Anchor`].
+            for grow in [axes.dir_depth(), -axes.dir_depth()] {
+                for name in [plain, marked] {
+                    for zoom in [1.0f32, 2.23, 5.0] {
+                        let size = LABEL_PT * zoom;
+                        let scales = NameScale { label: zoom, air: 1.0 };
+                        let label = NoteLabel {
+                            name,
+                            rect: label_rect(&axes, grow, 0.5, 0.5, &name, size, scales),
+                            lead: anchor + grow * (LABEL_INSET * scales.air),
+                            grow,
+                            at: 0.0,
+                        };
+                        let mut batch = crate::text::TextBatch::default();
+                        let _ = frame_full(&ctx, SCREEN, |ui| {
+                            draw(ui.painter(), std::slice::from_ref(&label), zoom, &mut batch)
+                        });
+                        let letter = name.letter.to_string();
+                        let ink = batch
+                            .pieces()
+                            .iter()
+                            .find(|p| p.text == letter)
+                            .unwrap_or_else(|| panic!("no {letter} drawn at zoom {zoom}"))
+                            .ink;
+                        // The ink's own trailing edge, against the way the name
+                        // runs — projecting the corners answers all four
+                        // orientations without naming a screen side.
+                        let corners =
+                            [ink.left_top(), ink.right_top(), ink.left_bottom(), ink.right_bottom()];
+                        let gap = corners
+                            .iter()
+                            .map(|&corner| (corner - anchor).dot(grow))
+                            .fold(f32::INFINITY, f32::min);
+                        assert!(
+                            (gap - LABEL_INSET).abs() < 0.1,
+                            "{orientation:?} growing {grow:?}: {letter}'s ink stands {gap} off \
+                             its note at zoom {zoom}, not the {LABEL_INSET} it is placed at",
+                        );
+                    }
+                }
+            }
+        }
     }
 }

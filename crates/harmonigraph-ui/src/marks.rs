@@ -809,8 +809,17 @@ pub(crate) fn mark_key(kind: MarkKind, size: f32, weight: f32, ppp: f32) -> Mark
 /// free (the column already offsets its marks) and it is the one that
 /// survives when the node is small enough that the shape is four pixels.
 ///
-/// Returns how far the lowest thing drawn reaches below `anchor.y` -- ink,
-/// not boxes -- which is what the cents readout hangs off.
+/// Returns how far the lowest thing drawn reaches below the line the stack was
+/// finally laid out on -- ink, not boxes -- which is what the cents readout
+/// hangs off.
+///
+/// That line is `anchor.y` under [`NameLead::Centred`] and only there. A name
+/// LED by its letter is slid before anything is emitted, and for the two
+/// vertical cardinals that slide has a y in it, so the reach a caller gets back
+/// is measured from a line the caller was not told about. Every consumer today
+/// is `Centred` -- the cents readout is the only one, and the roll discards the
+/// value -- so this is a contract to read before adding the next one, not a
+/// defect to go looking for.
 ///
 /// Monospace for in-lattice text: labels align across nodes and match the
 /// technical feel of the readouts.
@@ -821,6 +830,12 @@ pub(crate) fn mark_key(kind: MarkKind, size: f32, weight: f32, ppp: f32) -> Mark
 /// [`crate::text::ladder`], which hands the pair out together, and
 /// [`crate::text::TextBatch::magnified`]; 1.0 is a label drawn at exactly the
 /// size it was rasterized at.
+///
+/// `lead` decides what `anchor` MEANS -- see [`NameLead`]. The magnification
+/// turns about that same point either way, so a name led by its letter keeps
+/// the gap it was placed with at every rung of the ladder: the letter's ink is
+/// at distance zero from the point everything is scaled about, and zero times
+/// anything is zero.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn draw_stacked_name(
     batch: &mut crate::text::TextBatch,
@@ -831,10 +846,45 @@ pub(crate) fn draw_stacked_name(
     outline: egui::Color32,
     scale: f32,
     magnify: f32,
+    lead: NameLead,
 ) -> f32 {
     batch.magnified(anchor, magnify, |batch| {
-        stacked_name(batch, painter, anchor, name, color, outline, scale)
+        stacked_name(batch, painter, anchor, name, color, outline, scale, lead)
     })
+}
+
+/// What the point handed to [`draw_stacked_name`] is a point OF.
+///
+/// The two pictures want different answers, and the difference is what the name
+/// is about. A lattice node's label sits ON its node, so the node is the middle
+/// of it. A roll name stands OFF the end of the ribbon it belongs to, by a gap
+/// a reader is supposed to see -- and a gap is only a gap to the INK. Placed by
+/// its box a name carries two errors into that gap: the font's own side bearing,
+/// and whatever the caller's estimate of the name's width was wrong by. Both
+/// scale with the type, so both open as the pitch zoom does, and the name
+/// drifts off the note it names exactly where the drift is easiest to see.
+/// Issue #349 measured 5.5 points of it across the zoom with time running
+/// across the pane and 12.2 with it running down.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) enum NameLead {
+    /// The whole name centred on the point, box and all.
+    Centred,
+    /// The LETTER's ink flush against the point, the name running the way this
+    /// direction points -- one of the four screen cardinals, which is what the
+    /// callers have ([`Axes::dir_depth`](crate::panes::spectral::axes::Axes)).
+    ///
+    /// The letter and not the whole name, and that is the trade issue #151
+    /// holds rather than an oversight. A reader lines a column of names up by
+    /// their letters, so the letter is the piece that has to stand still
+    /// against its ribbon end whatever the spelling costs; the mark column
+    /// trails it, and is therefore free to reach PAST the end the name is
+    /// anchored to. Measured on a 300pt pane, a `B♭↓` whose growth runs against
+    /// the way its marks are set puts them 6.21 points past that end at the
+    /// dialled size and 40.13 at the two-octave floor. Containing the name
+    /// instead is one edit here -- the union of this ink with the marks' own
+    /// quads, rather than this ink alone -- and it buys that back by letting
+    /// every marked name's letter sit deeper than a bare one's.
+    Letter(egui::Vec2),
 }
 
 /// [`draw_stacked_name`]'s layout, all of it at the rasterized size — and
@@ -850,6 +900,7 @@ fn stacked_name(
     color: egui::Color32,
     outline: egui::Color32,
     scale: f32,
+    lead: NameLead,
 ) -> f32 {
     let name_font = egui::FontId::monospace(NAME_SIZE * scale);
     let mark_font = egui::FontId::monospace(MARK_SIZE * scale);
@@ -918,6 +969,33 @@ fn stacked_name(
     // reads as its own thing rather than as a third row of the stack.
     let gap = if name.septimal_commas != 0 { SEPTIMAL_GAP * mark_size } else { 0.0 };
     let left = anchor.x - (letter.x + column + gap + septimal_column) / 2.0;
+
+    // Everything below places off `left` and `anchor.y`, so leading the name by
+    // its letter is a correction to those two and nothing else -- the stack is
+    // laid out identically either way, then slid. Taken BEFORE the first glyph
+    // is emitted, since a batch has no way to move what it has already been
+    // handed.
+    let (left, anchor) = match lead {
+        NameLead::Centred => (left, anchor),
+        NameLead::Letter(toward) => {
+            // The letter's ink where the centred layout would have put it. Its
+            // galley goes out LEFT_CENTER at (left, anchor.y), so the box
+            // `painter_ink` measures hangs off that corner.
+            let ink = painter_ink(painter, &letter_text, &name_font)
+                .translate(egui::vec2(left, anchor.y - letter.y / 2.0));
+            // How far the ink's own trailing edge sits from the point, against
+            // the way the name runs. Projecting the corners answers all four
+            // cardinals without naming a screen side, and for the two that run
+            // along x it reads the letter's side bearing -- the term no
+            // constant can remove, being per-glyph.
+            let behind = [ink.left_top(), ink.right_top(), ink.left_bottom(), ink.right_bottom()]
+                .iter()
+                .map(|&corner| (corner - anchor).dot(toward))
+                .fold(f32::INFINITY, f32::min);
+            let shift = -toward * behind;
+            (left + shift.x, anchor + shift)
+        }
+    };
 
     batch.text(
         painter,
@@ -1568,6 +1646,7 @@ mod tests {
             }
             (hi - lo) / hi.max(1e-6)
         }
+
     }
 
     fn drawn_coverage(kind: MarkKind, size: f32, ppp: f32) -> Grid {
@@ -1929,6 +2008,60 @@ mod tests {
             }
         }
 
+        /// The count digits are NOT what is left breathing -- issue #304's
+        /// last suspect, measured rather than reasoned about.
+        ///
+        /// The suspicion was specific and worth taking seriously: a count digit
+        /// is set at [`MARK_SIZE`], where Iosevka's 70/1000 em stroke is under
+        /// a physical pixel at ppp 2 -- the same regime the drawn signs were
+        /// pulled out of by [`mark_key`]'s whole-pixel floor. What answers it
+        /// is that a digit is not a stroke: it carries a bowl or a stem several
+        /// times that width, so its darkest pixel is opaque where a bar's is
+        /// not, and it has an interior that no sub-pixel phase can empty.
+        ///
+        /// Read as the composite through the filter the tree ships, which is
+        /// the only reading that says what a viewer sees today, and against the
+        /// marks beside it in the same column -- a digit and the sign it counts
+        /// are drawn together, so the sign is the fair bar. Every digit comes
+        /// in under it.
+        ///
+        /// A typeset cell is read here exactly as a mark bitmap is, with no
+        /// padding between them, and that IS the equal footing rather than a
+        /// gap in it. A mark carries a clear border ([`MARK_BITMAP_PAD`]) and an
+        /// atlas cell is the glyph box exactly, so the two look asymmetric --
+        /// but [`Sheet::tap`] reads outside either grid as nothing, which is the
+        /// clear space a glyph on a pane has around it, and [`walk`]'s window
+        /// already runs six pixels past both. Padding a grid here adds only
+        /// samples that contribute zero to `weight`, `smear` and `ink` alike:
+        /// measured, every digit below reads bit-identically with six pixels of
+        /// margin added. Worth stating because the asymmetry looks like it must
+        /// matter, and a pad put in to answer it would be twenty lines that
+        /// change no number.
+        #[test]
+        fn a_count_digit_breathes_less_than_the_sign_it_counts() {
+            const PPP: f32 = 2.0;
+            let size = roll_mark_size(PPP);
+            let composite =
+                |grid: Grid| per_ink(&walk(&Sheet(grid), &TWO_TAP, &TWO_TAP), |r| r.smear);
+            let sign = |kind| {
+                composite(sheet_of(&rasterize_mark(mark_key(kind, size, MARK_WEIGHT, PPP))).0)
+            };
+            // The louder of the two signs a count ever sits beside.
+            let bar = sign(MarkKind::Flat).max(sign(MarkKind::Sharp));
+            for digit in '0'..='9' {
+                let swing = composite(typeset_coverage(digit, size, PPP));
+                assert!(
+                    swing <= bar,
+                    "the count digit `{digit}` swings {:.1}% of its ink at {size:.2}pt against \
+                     {:.1}% for the sign it is counted beside -- the digits would then be the \
+                     shimmer that is left, which is issue #304's suspicion and not its finding",
+                    100.0 * swing,
+                    100.0 * bar,
+                );
+                println!("digit {digit}: {:.2}% (sign bar {:.2}%)", 100.0 * swing, 100.0 * bar);
+            }
+        }
+
         /// The swing is the RIM's, not the fill's -- which is why the filter
         /// lives in `coverage`, where both passes read it, and not in
         /// `fs_fill` where it looks like it belongs.
@@ -2092,6 +2225,9 @@ mod tests {
                                 egui::Color32::TRANSPARENT,
                                 scale,
                                 magnify,
+                                // The reading is about how the ink MOVES, so
+                                // the anchor is a place to move it from.
+                                NameLead::Centred,
                             );
                         },
                     );
