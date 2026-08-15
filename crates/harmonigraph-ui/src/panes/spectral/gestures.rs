@@ -242,7 +242,13 @@ const DOCKED_SURFACE: usize = 0;
 /// How much one point of scroll zooms, as an exponent — a full notch of a
 /// mouse wheel (~50 points) closes the range by about a third, and a trackpad's
 /// finer stream lands proportionally.
-const ZOOM_PER_SCROLL_POINT: f32 = 0.008;
+///
+/// The [`spiral`](crate::panes::spiral) pane's wheel reads this too. The two
+/// panes zoom different things — the range here, the disc's own magnification
+/// there — and share the rate anyway, because what a rate says is how far a hand
+/// has to spin for a third of a picture, and that answer should not depend on
+/// which drawing of the analyzer is under it.
+pub(crate) const ZOOM_PER_SCROLL_POINT: f32 = 0.008;
 
 /// How much one point of drag along the depth axis zooms, as an exponent.
 ///

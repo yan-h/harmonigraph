@@ -834,6 +834,7 @@ fn the_persist_blob_carries_exactly_these_top_level_keys() {
         "view",
         "camera_presets",
         "spectrum",
+        "spiral",
         "render",
         "fps_cap",
         "ui_scale",
@@ -958,6 +959,41 @@ fn a_persist_blob_missing_any_one_section_keeps_the_rest() {
         );
         assert_eq!(restored.camera.yaw, 1.23, "dropping {key:?} cost the camera too");
     }
+}
+
+/// The Spiral pane's framing round-trips, and a hand-edited one comes back
+/// drawable.
+///
+/// Persisted for the reason the camera beside it is — a framing is dialled in by
+/// hand and a take renders from the blob — so what has to hold is that the pair
+/// SURVIVES rather than being re-derived from the fit, and that a nonsense one
+/// cannot reach the pane: both fields multiply the geometry it paints, and NaN
+/// geometry is a panic inside egui's tessellator.
+#[test]
+fn persist_round_trips_the_spiral_framing() {
+    let mut state = fresh();
+    // A zoom off both ends of the range and a look off both axes, so a field
+    // dropped or transposed on the way through shows up.
+    state.spiral_view =
+        crate::panes::spiral::SpiralView { zoom: 2.75, look: glam::vec2(0.4, -0.6) };
+
+    let mut restored = fresh();
+    assert!(restored.load_persist(&state.save_persist()));
+    assert_eq!(restored.spiral_view.zoom, 2.75);
+    assert_eq!(restored.spiral_view.look, glam::vec2(0.4, -0.6));
+
+    // And the repair on the way in, which is `load_persist`'s call rather than
+    // the pane's: a blob nothing but a text editor could have written.
+    let saved = state.save_persist();
+    let edited = replace_pair(&saved, "zoom", "2.75", "NaN");
+    assert_ne!(edited, saved, "`zoom` is not in the blob to edit");
+    let mut restored = fresh();
+    assert!(restored.load_persist(&edited));
+    assert!(
+        restored.spiral_view.zoom.is_finite(),
+        "a NaN zoom opened at {}",
+        restored.spiral_view.zoom,
+    );
 }
 
 #[test]

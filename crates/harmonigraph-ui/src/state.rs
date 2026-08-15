@@ -202,6 +202,18 @@ pub struct SharedState {
     /// is what a project saves and a take renders from, and a length in POINTS
     /// is a fact about the window this session happens to be open in.
     pub(crate) spectrum_hold: panes::spectral::SpectrumHold,
+    /// How the Spiral pane is FRAMED — how far its disc is magnified past the
+    /// fit, and which point of it the pane is looking at (persisted; see
+    /// [`panes::spiral::SpiralView`]).
+    ///
+    /// Beside `spectrum_config` rather than inside it, because the two answer
+    /// different questions about one analyzer: that says what is being shown —
+    /// pitch range, level window, tilt, gradient — and both panes read it whole,
+    /// which is what makes "loud" and "high" mean the same thing in each. This
+    /// says how closely one of the two pictures is being looked at, and is the
+    /// lattice's [`camera`](Self::camera) with a disc in front of it rather than
+    /// a lattice.
+    pub spiral_view: panes::spiral::SpiralView,
     /// Offline playhead render: the whole take's spectrogram laid out
     /// statically with a playhead at `now`, instead of the live scrolling
     /// window. `Some` only in the offline renderer. Runtime-only, never
@@ -639,6 +651,7 @@ impl SharedState {
             spectrum: AudioSpectrum::default(),
             spectrum_config: SpectrumConfig::default(),
             spectrum_hold: panes::spectral::SpectrumHold::default(),
+            spiral_view: panes::spiral::SpiralView::default(),
             whole_song: None,
             workspace: Workspace::default(),
             display_sections: panes::display::DisplaySections::default(),
@@ -677,6 +690,7 @@ impl SharedState {
             view: self.view.clone(),
             camera_presets: self.camera_presets.clone(),
             spectrum: self.spectrum_config,
+            spiral: self.spiral_view,
             render: self.take.render_config.clone(),
             fps_cap: self.fps_cap,
             ui_scale: self.ui_scale,
@@ -820,6 +834,12 @@ impl SharedState {
         }
         self.spectrum_config = persist.spectrum;
         self.spectrum_config.sanitize();
+        // The Spiral pane's framing, repaired for the reason the camera beside it
+        // is: it multiplies the geometry that pane paints, and a NaN out of a
+        // hand-edited blob is a panic in egui's tessellator rather than a wrong
+        // picture.
+        self.spiral_view = persist.spiral;
+        self.spiral_view.sanitize();
         self.take.render_config = persist.render;
         self.take.render_config.sanitize();
         self.fps_cap = persist.fps_cap;
@@ -925,6 +945,10 @@ pub(crate) struct UiPersist {
     pub(crate) camera_presets: Vec<CameraPreset>,
     #[serde(default)]
     pub(crate) spectrum: SpectrumConfig,
+    /// The Spiral pane's framing, beside the analyzer settings both panes share
+    /// — see [`SharedState::spiral_view`] for why it is not one of them.
+    #[serde(default)]
+    pub(crate) spiral: panes::spiral::SpiralView,
     #[serde(default)]
     pub(crate) render: RenderConfig,
     /// A missing cap reads as uncapped.
