@@ -446,10 +446,11 @@ pub(crate) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
              With the spectrum on the RIGHT or along the BOTTOM it is on the \
              onset, pinned to a moment of the take: it travels with the picture \
              from the first frame of the note and the release changes nothing \
-             about it, at the price that a note still sounding whose onset has \
-             scrolled off the far edge loses its name, and that a note younger \
-             than its own name wears it over the spectrum until its ribbon is \
-             long enough to hold it.\n\nSo this is the switch between those \
+             about it, at the price that a note held longer than the Span runs \
+             out of onset to travel with and parks its name on the far edge, \
+             and that a note younger than its own name wears it over the \
+             spectrum until its ribbon is long enough to hold it.\n\nSo this is \
+             the switch between those \
              two, whichever way round the pane has them.\n\nThe offline \
              render's whole-song layout is anchored at the onset either way: \
              it lays the take out as a still, and the onset is the one end of \
