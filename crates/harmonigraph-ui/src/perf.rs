@@ -145,6 +145,23 @@ fn overlay_rows(perf: &PerfStats, detail: bool) -> Vec<(u8, &'static str, String
     rows
 }
 
+/// The build row, laid out to `width` — the HUD's own grid width, so naming
+/// the build cannot widen the HUD.
+///
+/// Split out to take the tag as an ARGUMENT: `BUILD_TAG` is stamped from the
+/// branch this compiles on, so the wrap is only exercised at all on a branch
+/// whose name happens to be long. Nothing about the layout is decided here,
+/// which is why it can be handed a tag nobody would ever build under.
+fn tag_line(
+    ctx: &egui::Context,
+    tag: &str,
+    font: &egui::FontId,
+    color: egui::Color32,
+    width: f32,
+) -> std::sync::Arc<egui::Galley> {
+    ctx.fonts_mut(|f| f.layout(format!("build  {tag}"), font.clone(), color, width))
+}
+
 /// Draw the overlay over `editor`, at `pos` — dragging it writes the new
 /// position back through that handle, and nothing else in the tree moves it.
 ///
@@ -279,18 +296,15 @@ pub(crate) fn draw_overlay(
     // Its OWN line rather than a row in the grid above: the tag is identity,
     // not a measurement, and a long branch name in the value column would
     // widen BOTH columns for every row. And WRAPPED to the width the grid
-    // already needs, so it cannot widen the HUD either — the overlay has to
-    // fit inside the analyzer pane, which is not always wide, and a branch
-    // name is arbitrarily long. A long one costs a second line, where there is
+    // already needs, so it cannot widen the HUD either: a branch name is
+    // arbitrarily long, and a HUD as wide as one is a slab across the picture
+    // it is measuring. A long one costs a second line instead, where there is
     // room to spare.
     let grid_width = lines
         .iter()
         .map(|parts| parts.iter().map(|(x, g)| x + g.rect.width()).fold(0.0f32, f32::max))
         .fold(0.0f32, f32::max);
-    let tag = ctx.fonts_mut(|f| {
-        f.layout(format!("build  {BUILD_TAG}"), mono.clone(), dim, grid_width)
-    });
-    lines.push(vec![(0.0, tag)]);
+    lines.push(vec![(0.0, tag_line(ctx, BUILD_TAG, &mono, dim, grid_width))]);
 
     let row_gap = 1.0 * scale;
     let width = lines
@@ -316,29 +330,50 @@ pub(crate) fn draw_overlay(
         editor.bottom() - inset - size.y,
     );
 
-    // An Area, so the plate can be dragged. It registers exactly ONE widget
-    // rect — its own — and the rows inside it allocate nothing, which is the
-    // difference that matters: assembled out of `ui.label`s, every row would
-    // register a rect of its own and win the pointer, and the HUD would be a
-    // dead zone for the lattice's scroll-to-zoom and drag-to-orbit whether or
-    // not anyone ever dragged it. It takes the pointer over the plate and
-    // nowhere else, and the way out from under it is the drag itself.
+    // Held inside the editor here, against the size measured THIS frame,
+    // rather than by the Area's own `constrain_to`. An Area measures its
+    // containment against the size it held last frame, so the frame a HUD
+    // loses twenty rows — the breakdown switched off — it is shoved that block
+    // of rows clear of the corner and snaps back on the next. The size is in
+    // hand right here, so the clamp is exact on the frame it happens.
     //
-    // `constrain_to` the editor is containment rather than placement, and the
-    // HUD needs it because the plate is the only handle it has: dragged past
-    // the window edge, or left where a smaller window no longer reaches, it
-    // would be unrecoverable.
+    // The clamp is on what is DRAWN and never on what is stored: a HUD pushed
+    // in by a window too small to hold it where it was dropped goes back there
+    // once the window has the room again.
+    let inside = |p: egui::Pos2| {
+        egui::pos2(
+            p.x.clamp(editor.left(), (editor.right() - size.x).max(editor.left())),
+            p.y.clamp(editor.top(), (editor.bottom() - size.y).max(editor.top())),
+        )
+    };
+    let at = inside(pos.unwrap_or(home));
+
+    // An Area, so the plate can be dragged. It registers exactly ONE widget
+    // rect — its own — because `allocate_space` takes layout room without
+    // interacting, and that is the difference that matters: assembled out of
+    // `ui.label`s, every row would register a rect of its own and win the
+    // pointer, and the HUD would be a dead zone for the lattice's
+    // scroll-to-zoom and drag-to-orbit whether or not anyone ever dragged it.
+    // It takes the pointer over the plate and nowhere else, and the way out
+    // from under it is the drag itself.
+    //
+    // The move is this function's rather than the Area's `movable`, which
+    // would place the plate from a position the clamp above never sees.
     let area = egui::Area::new(egui::Id::new("perf_overlay"))
         .order(egui::Order::Foreground)
-        .movable(true)
+        .sense(egui::Sense::drag())
         .fade_in(false)
-        .constrain_to(editor)
-        .current_pos(pos.unwrap_or(home))
+        // An Area constrains itself by DEFAULT, so this is the line that hands
+        // the clamp above its job rather than an omission — left on, the stale
+        // size wins and `inside` never decides anything.
+        .constrain(false)
+        .current_pos(at)
         .show(ctx, |ui| {
-            // No sense of its own: the drag belongs to the Area, and a
-            // drag-sensing rect on top of it would win the pointer and move
-            // nothing.
-            let (plate, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+            // What `constrain_to` used to cover: a HUD too big for the window
+            // is cut off at the editor's edge rather than drawn over whatever
+            // is outside it.
+            ui.set_clip_rect(ui.clip_rect().intersect(editor));
+            let (_, plate) = ui.allocate_space(size);
             let painter = ui.painter();
             painter.rect_filled(plate, 4.0 * scale, egui::Color32::from_black_alpha(0xC0));
 
@@ -358,8 +393,17 @@ pub(crate) fn draw_overlay(
     // Written back only while it is dragged, so an untouched HUD goes on
     // opening at `home` — and follows the corner as the window resizes —
     // while a placed one is left exactly where it was put.
+    let grabbed_at = egui::Id::new("perf_overlay_grab");
     if area.dragged() {
-        *pos = Some(area.rect.min);
+        // Where the gesture started plus its whole travel, rather than a sum
+        // of per-frame deltas: egui calls a press a drag only once it has
+        // moved past a click's slop, and those first points are in the total
+        // but in no frame's delta. Stored UNCLAMPED, so a pointer that leaves
+        // the editor mid-gesture keeps the plate under it on the way back.
+        let from = ctx.data_mut(|data| *data.get_temp_mut_or::<egui::Pos2>(grabbed_at, at));
+        *pos = Some(from + area.total_drag_delta().unwrap_or_default());
+    } else {
+        ctx.data_mut(|data| data.remove::<egui::Pos2>(grabbed_at));
     }
 }
 
@@ -600,6 +644,41 @@ mod tests {
             );
         }
     }
+    /// The build tag wraps rather than widening the HUD, at any branch name.
+    ///
+    /// A branch name is arbitrarily long and the tag is the one row not sized
+    /// by the grid, so it is the one line that can push the HUD out to a slab
+    /// across the picture. Held with a tag far longer than anything that would
+    /// really be built, because the real [`BUILD_TAG`] is whatever branch this
+    /// compiles on: pinned against that, the assertion passes on a short name
+    /// whether or not the wrap is there at all, which is how this stopped
+    /// being checked.
+    #[test]
+    fn the_build_tag_wraps_instead_of_widening_the_hud() {
+        let ctx = crate::tests::probe::themed();
+        let font = egui::FontId::monospace(11.0);
+        let grid = 160.0;
+        let long = "worktree-a-branch-name-nobody-would-type-but-git-will-take @0123456";
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let tag = tag_line(ui.ctx(), long, &font, egui::Color32::WHITE, grid);
+            assert!(
+                tag.rect.width() <= grid,
+                "a {} pt tag ran past the {grid} pt grid: {:?}",
+                long.len(),
+                tag.rect,
+            );
+            assert!(tag.rect.height() > font.size, "a wrapped tag takes more than one line");
+            // ...and a tag that FITS is left on one line rather than broken up
+            // for the sake of it.
+            let short = tag_line(ui.ctx(), "main @0123456", &font, egui::Color32::WHITE, grid);
+            assert!(
+                short.rect.height() < tag.rect.height(),
+                "a tag that fits should stay on one line: {:?}",
+                short.rect,
+            );
+        });
+    }
+
     /// Labels and values must not collide, whatever the rows are called.
     ///
     /// The label column was a hardcoded seven characters until a row named

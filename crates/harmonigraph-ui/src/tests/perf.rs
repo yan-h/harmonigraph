@@ -95,6 +95,49 @@ fn the_perf_overlay_opens_in_the_editors_corner() {
     );
 }
 
+/// The corner holds on the frame the HUD's own rows change size.
+///
+/// An undragged HUD is placed from two readings — the editor rect and the
+/// measured rows — and the frame the second one changes is the frame they can
+/// disagree. `egui::Area` measures its containment against the size it held
+/// LAST frame, so a HUD that just lost twenty rows was shoved a block of rows
+/// clear of the corner for one frame and snapped back on the next. Unticking
+/// Frame breakdown is exactly that input, and it is the control someone
+/// unticks while watching the HUD.
+#[test]
+fn the_perf_overlay_holds_its_corner_as_its_rows_shrink() {
+    let mut state = fresh();
+    state.view.show_perf = true;
+    // The breakdown open, which is the tall HUD: two dozen rows against four.
+    state.view.show_perf_detail = true;
+    let mut h = DockHarness::new();
+    h.settle(&mut state);
+    let screen = h.screen;
+
+    let deep = hud_of(&h.frame(&mut state, vec![]));
+    assert!(
+        (deep.bottom() - (screen.bottom() - 8.0)).abs() < 1.0,
+        "the breakdown should open in the corner too: {deep:?}",
+    );
+
+    // The VERY next frame after the rows go: no settling, because one frame
+    // in the wrong place is the whole of what this is about.
+    state.view.show_perf_detail = false;
+    let shallow = hud_of(&h.frame(&mut state, vec![]));
+    assert!(
+        shallow.height() < deep.height() - 100.0,
+        "the breakdown should have closed: {deep:?} then {shallow:?}",
+    );
+    assert!(
+        (shallow.bottom() - (screen.bottom() - 8.0)).abs() < 1.0,
+        "the HUD left the corner as its rows shrank: {shallow:?} in {screen:?}",
+    );
+    assert!(
+        (shallow.right() - (screen.right() - 8.0)).abs() < 1.0,
+        "the HUD left the corner as its rows shrank: {shallow:?} in {screen:?}",
+    );
+}
+
 /// The HUD is dragged, and it is dropped where the pointer left it.
 ///
 /// Through the REAL dock, so the drag crosses every layer between the mouse
@@ -118,10 +161,13 @@ fn the_perf_overlay_goes_where_it_is_dragged() {
         (after.min - (before.min + by)).length() < 1.0,
         "the HUD should have moved by the drag: {before:?} by {by:?} left it at {after:?}",
     );
-    assert_eq!(
-        state.perf_pos,
-        Some(after.min),
-        "the drop should be recorded as the overlay's position",
+    // Within a point of where it is drawn rather than equal to it: what is
+    // stored is where the pointer left the HUD, and what is painted is that
+    // rounded to a whole pixel, which is egui's job and not this one's.
+    let recorded = state.perf_pos.expect("the drop should be recorded");
+    assert!(
+        (recorded - after.min).length() < 1.0,
+        "the drop should be recorded as the overlay's position: {recorded:?} drawn at {after:?}",
     );
     // Drawn where it was dropped on the frames after, rather than springing
     // back to the corner once the pointer lets go.
@@ -194,6 +240,57 @@ fn the_perf_overlay_cannot_be_dragged_out_of_the_editor() {
         "a smaller window stranded the HUD: {hud:?} outside {:?}",
         h.screen,
     );
+}
+
+/// A position that came out of a blob draws where it says, on a context that
+/// has never seen the HUD.
+///
+/// The gap this closes is the one a person actually opens: reopening the
+/// editor builds a BRAND NEW `egui::Context` (see `release_context_resources`)
+/// while the state lives across it, so the Area has no memory of its size and
+/// egui spends the first pass measuring. Every other test here reaches a
+/// placed HUD through a drag, on a context that already knows it. Without
+/// this, a `draw_overlay` that wrote back on a non-drag frame would corrupt
+/// the saved position on every window open and the suite would stay green.
+#[test]
+fn a_saved_position_opens_the_hud_where_it_was_left() {
+    let mut state = fresh();
+    state.view.show_perf = true;
+    // Nowhere near the corner it would open at by itself, so "honoured" and
+    // "defaulted" cannot look alike.
+    let left = egui::pos2(120.0, 210.0);
+    state.perf_pos = Some(left);
+
+    let mut h = DockHarness::new();
+    h.frame(&mut state, vec![]);
+    let hud = hud_of(&h.frame(&mut state, vec![]));
+    assert!(
+        (hud.min - left).length() < 1.0,
+        "a saved position should be where the HUD opens: {hud:?} for {left:?}",
+    );
+    assert_eq!(state.perf_pos, Some(left), "drawing the HUD must not rewrite its position");
+}
+
+/// Switching the HUD off and on again leaves it where it was, and draws it on
+/// the frame it comes back rather than costing another blank one.
+///
+/// Both hold because egui keeps a hidden Area's state, which is a fact about
+/// egui rather than about this code — which is exactly why it is worth an
+/// assertion here.
+#[test]
+fn the_perf_overlay_comes_back_where_it_was_switched_off() {
+    let mut state = fresh();
+    state.view.show_perf = true;
+    let mut h = DockHarness::new();
+    h.settle(&mut state);
+    let placed = drag_hud(&mut h, &mut state, egui::vec2(-180.0, -140.0));
+
+    state.view.show_perf = false;
+    h.frame(&mut state, vec![]);
+    state.view.show_perf = true;
+    // ONE frame: a second would hide a fresh sizing pass behind it.
+    let back = hud_of(&h.frame(&mut state, vec![]));
+    assert_eq!(back, placed, "the HUD should come back where it was switched off");
 }
 
 /// Where the HUD was dragged to outlives the session, and a hand-edited
