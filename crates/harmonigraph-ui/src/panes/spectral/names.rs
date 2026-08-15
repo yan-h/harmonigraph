@@ -208,7 +208,7 @@ struct Occupancy {
 ///
 /// Every measurement below is taken with the sevens axis OPEN
 /// (`extent_sevens: 1`), which is not where a fresh view starts — the captured
-/// default opens flat, and `visible_positions` then yields the home sheet
+/// default opens flat, and the naming reach then holds the home sheet
 /// alone, so no roll name carries a septimal mark and `E♯-5↓` above is not one
 /// of the spellings on offer. The defects are about lattices with depth, which
 /// is the case worth stating them for; opening the sevens axis is what

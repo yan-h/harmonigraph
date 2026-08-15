@@ -607,7 +607,7 @@ fn no_camera_asks_for_more_than_the_budget() {
 /// blob — and `follow_camera` is the function on the far side of that door
 /// that WRITES persisted state from it. Carrying the step into the center
 /// without bounding it pinned the center at `i32::MAX` while the target went
-/// on stepping, and `center + extent` in `visible_positions` then wrapped:
+/// on stepping, and `center + extent` in `reach` then wrapped:
 /// the reach came out EMPTY, so every note read as off the lattice, with no
 /// analyzer names and an empty Notes column, and it never recovered.
 #[test]

@@ -113,7 +113,7 @@ impl Camera {
     /// unbounded: the drawn window is whatever the viewport shows (see
     /// [`ViewConfig::scrolled`](crate::ViewConfig::scrolled)), so pulling back
     /// does not run out of nodes to draw, it asks for more of them. Here the
-    /// window is about twenty steps of fifths tall — `distance *
+    /// window is about twenty steps of thirds tall — `distance *
     /// tan(fov/2) * 2` is 19.9 at the default field of view — which is the
     /// point past which a node is too small to read a name on anyway.
     ///
