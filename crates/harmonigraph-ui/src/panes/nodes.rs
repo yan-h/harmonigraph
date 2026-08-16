@@ -85,9 +85,8 @@ fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // one's reading comes FROM, which is what tells the two middle rings apart:
     // the analyzer's spectrum on the inner one, the played notes on this one.
     // This heading names the pitch axis drawn on it instead, that being what
-    // the rows below set — the Octave gap at the foot of them included, which
-    // is how wide the cut between two indicators is and is the one padding on
-    // the node this heading does own.
+    // the rows below set. How wide the cut between two indicators is belongs to
+    // neither: it is the Octave gap, up in Note with the other padding.
     //
     // COUNTS and a CENTER rather than a pitch range: a slice is always exactly
     // one octave, so an indicator can never stand for less pitch than it
@@ -154,26 +153,13 @@ fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                  outermost extra inward. The outermost never moves.",
             );
     });
-    // After the axis rather than in it: the rows above say how the turn is
-    // SHARED OUT, and this says how wide the cut between two shares is. It is
-    // the node's angular padding whole — the same width down the audio ring's
-    // wedges and a mark's sides, every one of those a boundary between two
-    // octaves — so the octave heading names it rather than merely housing it.
+    // The padding between one indicator and the next is NOT here: it is the
+    // Octave gap, up in Note beside the Ring gap. The two paddings are one
+    // question asked on a node's two axes — how far apart do its pieces read —
+    // and a person dialling one is looking at the other, which a heading
+    // between them costs. What this section keeps is the axis alone: how the
+    // turn is shared out, rather than how wide the cut between two shares is.
     //
-    // In the same units as the Ring gap up in Note, and to the same three
-    // decimals, so the two spacings can be read against each other by their
-    // numbers. They are free to differ, and dialling them apart is the whole
-    // reason there are two: what the node cannot say with one number is a ring
-    // standing well off its neighbour while the slices stay tight, or the
-    // reverse.
-    ValueBar::new(&mut view.octave_gap, 0.0..=GAP_MAX, "Octave gap")
-        .decimals(3)
-        .show(ui)
-        .on_hover_text(
-            "The padding between one octave sector and the next — on the band, \
-             on the audio ring's wedges and down a mark's sides. 0 closes the \
-             ring into a solid annulus.",
-        );
     // No size bar under these, and no on/off either: both are the Layers bar's,
     // where 0 is this layer's off position as it is on every other. The band is
     // one WIDTH there rather than a pair of radii, because where it sits is the
@@ -550,8 +536,8 @@ fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBack
     // Directly above the Ring gap, because the two are one idea: the sizes are
     // the layers and that gap is the padding standing between them, the bar
     // draws both, and dragging it is visibly the stack opening up. The Octave
-    // gap is not on this bar's axis at all and is filed with the slices it
-    // cuts.
+    // gap under it is not on this bar's axis at all, and is here anyway — see
+    // there.
     StackBar::new(view)
         .show(ui)
         .on_hover_text(
@@ -562,33 +548,60 @@ fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBack
              line is the node's edge, which only the marks may cross. \
              Double-click to restore.",
         );
-    // The stack's own padding, and so a whole-note setting rather than any one
-    // layer's: it spaces the rings apart and it is what a melody/bass mark
-    // stands off the band by. Directly under the bar that draws it, because it
-    // is measured on that bar's axis — every unit it takes is a unit the four
-    // widths cannot have.
+    // A node's two paddings, together and directly under the bar that draws one
+    // of them. They are the same question asked on the node's two axes — how
+    // far apart do its pieces read — so a person dialling one is looking at the
+    // other, and they are compared by their numbers, which a heading between
+    // them costs. Both are whole-note settings rather than any one layer's,
+    // which is what puts them in Note at all.
     //
-    // The node's ANGULAR padding is a second bar, under Octaves, where the
-    // slices it cuts are set. Two bars because they are answers to different
-    // questions: this one trades against the sizes above it, and the sectors'
-    // costs the node nothing.
+    // Two bars rather than one because the two axes answer differently: the
+    // RADIAL one is measured on the Layers bar's own axis, every unit it takes
+    // being a unit the four widths cannot have, and the ANGULAR one costs the
+    // stack nothing — it cuts slices out of a ring already placed. What a node
+    // could not say with one number is a ring standing well off its neighbour
+    // while the slices stay tight, or the reverse.
     //
-    // Three decimals on both, because a gap is the smallest thing on the node
-    // and two of them cannot say it: the fresh 0.052 and the 0.048 beside it
-    // read out as one number, so the bar goes quiet exactly where it is being
-    // dialled in.
+    // Read out as a PERCENTAGE of the node's radius, which is what quad uv 1.0
+    // is (`scene.node_radius`, a quarter of the lattice spacing — the classic
+    // core disc reaches 0.46 of it). That makes the whole stack a budget of
+    // 100%, which is the picture the Layers bar draws, and it is the same unit
+    // the Clearance below reads in. A tenth of a percent is exactly the
+    // resolution three decimals of the stored number gives, so the readout
+    // trades no precision for the point: the fresh 5.2% and the 4.8% beside it
+    // are one number at a coarser one, which is where the bar would go quiet
+    // exactly as it is being dialled in. Typing still takes the bare stored
+    // number, as it does under every other display formatter here.
     ValueBar::new(&mut view.ring_gap, 0.0..=GAP_MAX, "Ring gap")
         .decimals(3)
+        .display(|v| format!("{:.1}%", v * 100.0))
         .show(ui)
         .on_hover_text(
             "The padding between one ring of a node and the next, and before \
-             the melody/bass marks. 0 closes the stack up solid.",
+             the melody/bass marks, as a share of the node's radius. 0 closes \
+             the stack up solid.",
+        );
+    ValueBar::new(&mut view.octave_gap, 0.0..=GAP_MAX, "Octave gap")
+        .decimals(3)
+        .display(|v| format!("{:.1}%", v * 100.0))
+        .show(ui)
+        .on_hover_text(
+            "The padding between one octave sector and the next — on the band, \
+             on the audio ring's wedges and down a mark's sides — as a share of \
+             the node's radius. 0 closes the ring into a solid annulus.",
         );
     // Here rather than with the sevens-layer controls, where a "Sevenths" name
     // misreads what it does: the clearance is cut by every DRAWING node on
     // every sheet, the home one included and at any sheet count, so it belongs
     // to the node and not to the depth axis. Named Clearance for that; the
     // `sevens_` field names stay — they are what saved projects spell.
+    //
+    // A percentage of the node's radius, as the two gaps above it are, this
+    // being the same unit measured from the same place — a reach of 0.30 and a
+    // gap of 0.052 are two shares of one length, and a page that read one of
+    // them as a bare number would be saying they are different kinds of
+    // quantity. Whole percents, which is the resolution the readout has always
+    // had here.
     edge_bar(
         ui,
         (&mut view.sevens_gutter, &mut view.sevens_gutter_soft),
@@ -598,12 +611,12 @@ fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBack
             let fresh = ViewConfig::default();
             (fresh.sevens_gutter, fresh.sevens_gutter_soft)
         },
-        |v| format!("{v:.2}"),
+        |v| format!("{:.0}%", v * 100.0),
     )
     .on_hover_text(
         "The dark gap a node clears around its own shape, over grid lines and \
          back sheets — around each layer it is drawing, including an audio ring \
-         with no note under it. Solid to the inner handle, faded out by the \
-         outer. 0 draws none.",
+         with no note under it, as a share of the node's radius. Solid to the \
+         inner handle, faded out by the outer. 0 draws none.",
     );
 }
