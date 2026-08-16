@@ -130,11 +130,15 @@ impl Layer {
 }
 
 /// Where a drag on layer `k` leaves that layer's width, to put its boundary at
-/// `to` on the axis with the stack's own boundaries at `edges`.
+/// `to` on the axis of a node standing at `rings`, the layer being `current`
+/// wide now.
 ///
-/// Pure, so what actually matters — the boundary landing where the gesture asks
-/// for it, the off position at the bottom of every layer's travel, and a ring
-/// stopping at the quad edge — is testable without a pointer.
+/// **The whole of what a gesture on this bar writes**, so the pure tests below
+/// and the pointer path in [`StackBar::show`] cannot come to disagree about
+/// what a drag does. What actually matters — the boundary landing where the
+/// gesture asks for it, the off position at the bottom of a layer's travel, a
+/// ring stopping at the quad edge, and a refused layer keeping its width — is
+/// then testable without a pointer.
 ///
 /// **Every one of the four reads only the stack INSIDE it**: the core reads
 /// nothing, a ring its own slot's start, the marks theirs. So a gesture can
@@ -149,14 +153,31 @@ impl Layer {
 /// stack and stand off nobody, so their boundary is flush with the strip's own
 /// end.
 ///
-/// **Under a gap of travel every layer reads 0 and switches off**, which is the
-/// price of the stack closing up around a layer that is not there: a width of
-/// nothing gives back its slot AND its padding, so the boundary jumps a gap
-/// inward the moment the layer goes. The bar has that gap of dead travel at the
-/// bottom of every handle rather than a step it could be dragged across, and
-/// the alternative — sliding the boundary over ground the picture will not draw
-/// it on — is the bar lying about where the layer inside it ends.
-fn resized(k: usize, to: f32, edges: [f32; 4], gap: f32) -> f32 {
+/// **Under a gap of travel a layer that stands one off reads 0 and switches
+/// off**, which is the price of the stack closing up around a layer that is not
+/// there: a width of nothing gives back its slot AND its padding, so the
+/// boundary jumps a gap inward the moment the layer goes. Those three handles
+/// have that gap of dead travel at the bottom rather than a step they could be
+/// dragged across, and the alternative — sliding the boundary over ground the
+/// picture will not draw it on — is the bar lying about where the layer inside
+/// it ends. The marks stand nobody off and so have no such band: their strip
+/// thins to nothing continuously.
+fn resized(k: usize, to: f32, rings: &RingStack, current: f32) -> f32 {
+    // A layer the stack REFUSED keeps what it is holding. Refusal is the room
+    // running out from further in, so there is no cell on screen to move and
+    // every thumb is piled on the last layer that fit: a write here would set a
+    // size the picture cannot show, and the natural way to find out whether a
+    // handle is live — pulling it inward — would land on 0 and destroy the
+    // width the layer is keeping for when the room comes back. The one way back
+    // is from the inside, by narrowing whatever took the room.
+    //
+    // Told from an OFF layer by the width it holds, not by the empty span the
+    // two share: 0 is off and is the state a handle exists to leave.
+    let (lo, hi) = layer_spans(rings)[k];
+    if current > 0.0 && hi <= lo {
+        return current;
+    }
+    let (edges, gap) = (rings.edges(), rings.gap);
     let (start, pad) = match k {
         0 => (0.0, gap),
         1 => (edges[0], gap),
@@ -421,8 +442,9 @@ impl<'a> StackBar<'a> {
                     Grab { layer, offset: value_at(aim) - rings.edges()[layer.index()] }
                 });
                 let to = value_at(p.x) - grab.offset;
-                let want = resized(grab.layer.index(), to, rings.edges(), rings.gap);
-                if want != grab.layer.width(self.view) {
+                let current = grab.layer.width(self.view);
+                let want = resized(grab.layer.index(), to, &rings, current);
+                if want != current {
                     grab.layer.set(self.view, want);
                     response.mark_changed();
                 }
@@ -563,9 +585,43 @@ mod tests {
     fn dragged(view: &ViewConfig, k: usize, v: f32) -> ViewConfig {
         let mut out = view.clone();
         let rings = out.rings();
-        let width = resized(k, v, rings.edges(), rings.gap);
+        let width = resized(k, v, &rings, LAYERS[k].width(&out));
         LAYERS[k].set(&mut out, width);
         out
+    }
+
+    /// A layer the stack REFUSED keeps the width it is holding when its handle
+    /// is dragged, rather than losing it to a gesture nothing answers.
+    ///
+    /// Refusal is the room running out from further in, so there is no cell to
+    /// move and no boundary to move it to: every one of the four thumbs is
+    /// piled on the last layer that fit. A write there would set a size against
+    /// a picture that cannot show it — and dragging inward, the natural way to
+    /// find out whether a handle is live, sets it to 0 and destroys the width
+    /// the layer was keeping for when the room came back.
+    #[test]
+    fn a_refused_layer_keeps_its_width_when_its_handle_is_dragged() {
+        let mut view = fresh();
+        // Far enough out that the audio ring no longer fits, which takes the
+        // band with it: the stack drops from the outside in and stays dropped.
+        view.core_radius = 0.7;
+        let rings = view.rings();
+        assert!(rings.audio.1 <= rings.audio.0, "the audio ring was meant to be refused here");
+        assert!(rings.band.1 <= rings.band.0, "the band was meant to go with it");
+        for k in [1, 2] {
+            let home = dragged(&view, k, rings.edges()[k] - 0.2);
+            assert_eq!(
+                LAYERS[k].width(&home),
+                LAYERS[k].width(&view),
+                "layer {k} lost the width it was keeping while the stack had no room for it",
+            );
+            let out = dragged(&view, k, rings.edges()[k] + 0.2);
+            assert_eq!(
+                LAYERS[k].width(&out),
+                LAYERS[k].width(&view),
+                "layer {k} was resized by a handle with nothing on screen to move",
+            );
+        }
     }
 
     /// A handle dragged to a point on the axis puts its layer's boundary
