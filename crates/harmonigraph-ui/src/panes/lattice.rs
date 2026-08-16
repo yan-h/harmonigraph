@@ -119,8 +119,9 @@ pub(crate) fn draw_lattice(
     );
     // What the AUDIO says, over a scene derived exactly as above: a ring of
     // measured octaves inside the octave band, carrying whichever of two
-    // readings the selector asks for, or none — which is the pass's own to
-    // read, and with it Off it does not so much as look at the spectrum. A
+    // readings the selector asks for. Whether there IS a ring is the WIDTH's
+    // to say, not the selector's, and with no ring the pass does not so much
+    // as look at the spectrum (`spectral_ring_draws`). A
     // post-pass and not a branch inside the derivation, because the picture
     // around the ring — the geometry, the wheel, the grid, the camera, and the
     // whole of what the keys light — is the same answer either way, and a

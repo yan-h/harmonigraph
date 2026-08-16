@@ -42,7 +42,7 @@ pub(crate) fn curve_color() -> Color32 {
 /// The preview line in `shapes`, as the points it was drawn through.
 ///
 /// Shared by the two places that ask: the bar's own tests, which check WHERE
-/// the line is drawn, and the Nodes section's, which checks WHICH curve it is.
+/// the line is drawn, and the Note section's, which checks WHICH curve it is.
 /// The color is what identifies it — nothing else in a settings pane draws an
 /// open path in it.
 #[cfg(test)]
@@ -167,7 +167,7 @@ impl<'a> ValueBar<'a> {
 
     /// Draw what the value DOES across the track: `curve(value, p)` for `p`
     /// walking 0 to 1 gives the level reached that far through, and the line
-    /// is those points. For the Nodes section's Fade curve bar, whose number names a
+    /// is those points. For the Note section's Fade curve bar, whose number names a
     /// curve and says nothing about its character — the difference between a
     /// straight line and a knee is the whole setting, and 0.35 does not carry
     /// it.

@@ -179,7 +179,7 @@ pub(super) fn track_fill(response: &Response) -> Color32 {
 /// `A ∩ B ∩ run`; that region lies in `run`, so `B` intersects `run` too and
 /// emits its own knockout over the same ground. Painting every fill and then
 /// every knockout is equally correct. A flat ramp puts a [`SpreadBar`]'s two
-/// grips at exactly the same x — the state the Nodes section's chroma bar opens
+/// grips at exactly the same x — the state the Note colors group's chroma bar opens
 /// in, since `chroma_ramp` defaults to 0 — so this is a case that ships, not a
 /// corner.
 ///

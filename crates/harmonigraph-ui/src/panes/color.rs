@@ -4,8 +4,14 @@
 //! lattice's discs and octave glyphs, the trail, and the Analyzer's note
 //! ribbons — written by the gradient and the Color range, with Bloom the light
 //! riding on the result, post-process on both pictures at once. Heatmap colors
-//! are the other table: level->color, read by the spectrogram and by the Spiral
-//! that draws the same frame.
+//! are the other table: level->color, read by the spectrogram, by the Spiral
+//! that draws the same frame, and by the lattice's audio ring, which takes it
+//! re-anchored on the node's own ground rather than on the heatmap's black bed.
+//!
+//! Which table paints WHAT is the split a reader has to get right here, and it
+//! is not the split the panes suggest: the audio ring is drawn on the lattice
+//! and coloured by the analyzer's table, because what it encodes is a LEVEL.
+//! Pitch reads one table, level the other, wherever either is drawn.
 //!
 //! One page for the two, because color is what a reader comes here holding
 //! rather than a property of either picture: the question is "what color is
@@ -29,8 +35,8 @@ use harmonigraph_scene::ViewConfig;
 pub(super) fn color_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBackend) {
     ui.heading("Note colors");
     ui.weak(
-        "Colors every note in every pane — the lattice, the trail, the ribbons, \
-         the audio ring.",
+        "Colors every note in every pane — the lattice, the trail, the ribbons. \
+         By PITCH: what the lattice lights from audio reads the heatmap below.",
     );
     // The gradient above the range because it is the coarser of the two: it
     // says what the colors ARE, the range says which pitches they are spread
@@ -54,7 +60,10 @@ pub(super) fn color_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dy
     );
     bloom_bar(ui, &mut state.view);
     section(ui, "Heatmap colors");
-    ui.weak("The spectrogram's and the Spiral's level→color table.");
+    ui.weak(
+        "The level→color table: the spectrogram, the Spiral, and the lattice's \
+         audio ring, which takes it re-anchored on the node's own ground.",
+    );
     spectrogram_gradient_group(ui, &mut state.spectrum_config);
 }
 

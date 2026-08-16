@@ -1295,11 +1295,14 @@ fn octave_glow_color(
     return csum / wsum;
 }
 
-// An unlit node draws NOTHING -- no marker, no trail mark, no placeholder.
+// An unlit node draws no marker, no trail mark and no placeholder of its own.
 // What says a node position is there is the grid: the lines around it stop
 // short of it on every side, leaving a gap exactly where its disc would
-// light. So the resting lattice is drawn once, in one layer, and every disc
-// on screen is a note.
+// light. So every DISC on screen is a note.
+//
+// The audio ring is the one thing an idle node does paint, and it is not the
+// node speaking — it is the analyzer, drawn on the node's own ground (see
+// `node_paint`, which states the idle case in full).
 //
 // The trail rides no layer here at all. A node the music has been to is
 // captioned by the LABEL layer, on the CPU (see harmonigraph_scene::trail) --

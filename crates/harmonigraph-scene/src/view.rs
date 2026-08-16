@@ -756,9 +756,11 @@ pub struct ViewConfig {
     /// wider than the disc's visual radius, so the gap fully contains a
     /// sounding note's circle.
     ///
-    /// The gap is what a node position looks like at rest, nothing being
-    /// drawn inside it: the lines say a node is there by stopping short of
-    /// it.
+    /// The gap is what the LINES leave around a node position: they say a node
+    /// is there by stopping short of it. What stands in the gap is whatever
+    /// the node draws at rest — nothing at all with the audio ring off, and
+    /// the ring's own annulus with it on, which is where a fresh view starts
+    /// (the inset sits well inside the ring, so the two do not fight).
     pub grid_inset: f32,
     // ---- Trail (where the music has already been) ------------------------
     // The one part of the view about the past rather than the present, and it
@@ -844,8 +846,8 @@ pub struct ViewConfig {
     /// renderer never draws it, keeping its frames deterministic.
     ///
     /// Off by default: the HUD is a development instrument, and it sits over
-    /// the picture the plugin exists to draw. The System pane's Performance
-    /// section is where it gets switched on.
+    /// the picture the plugin exists to draw. The Display tab's System page,
+    /// under Performance, is where it gets switched on.
     ///
     pub show_perf: bool,
     /// Expand the overlay from the headline numbers into the full per-stage
@@ -1007,7 +1009,7 @@ impl ViewConfig {
     /// hand-edited blob can hold anything, and `sanitize` only repairs the
     /// non-finite (a finite 40 would be a curve no bar can undo).
     ///
-    /// The Nodes section's Fade curve bar builds one of its own, and it is the single
+    /// The Note section's Fade curve bar builds one of its own, and it is the single
     /// exception rather than a second assembly point: it is drawing a PICTURE
     /// of the curve, over a unit duration that is nothing a note ever fades
     /// on, so it has no note's seconds to pair with and could not reach for
@@ -1495,7 +1497,7 @@ impl ViewConfig {
         // has no door here to need.
         self.fade_shape = finite_or(self.fade_shape, 0.0);
 
-        // The gutter and its fade, which are ONE control (the Nodes section's
+        // The gutter and its fade, which are ONE control (the Note section's
         // Clearance bar) over two numbers: the fade is a distance measured back
         // from the reach, so a fade wider than the reach is a low end off the
         // bottom of the axis. It draws as a fade over the whole reach either
