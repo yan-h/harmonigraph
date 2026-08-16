@@ -700,6 +700,34 @@ mod tests {
         }
     }
 
+    /// A slot that starts PAST the quad edge leaves the layer no room, rather
+    /// than a negative ceiling — which is the state `resized` takes its `min`
+    /// and `max` in place of a clamp for, `f32::clamp` asserting `min <= max`
+    /// and taking the editor down with it from the paint path.
+    ///
+    /// Reachable from the bars alone, which is what makes it worth a fixture:
+    /// the core at its own maximum and the Gap at its puts the audio ring's
+    /// slot at 1.3. The ring is OFF there rather than refused, so the guard
+    /// above does not stand in front of this one.
+    #[test]
+    fn a_slot_starting_past_the_quad_edge_leaves_no_room() {
+        let mut view = fresh();
+        view.core_radius = CORE_RADIUS_MAX;
+        view.ring_gap = harmonigraph_scene::GAP_MAX;
+        view.spectral_ring_width = 0.0;
+        let rings = view.rings();
+        assert!(
+            rings.edges()[0] > 1.0,
+            "the audio ring's slot was meant to start past the quad edge, not at {}",
+            rings.edges()[0],
+        );
+        assert_eq!(
+            resized(1, AXIS_TOP, &rings, 0.0),
+            0.0,
+            "a slot with no room left was given a width anyway",
+        );
+    }
+
     /// Widening a layer past what the stack has room for drops the ones outside
     /// it instead of thinning them — the wall a handle stops at is its own, and
     /// the room running out from the inside is a different thing.
