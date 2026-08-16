@@ -312,8 +312,26 @@ pub struct SpectrumConfig {
     /// there being one depth axis to drag along and the floor being the end
     /// pinned to the baseline.
     pub ceiling_db: f32,
-    /// Display inertia: 0 = every refresh lands instantly, 0.9 = slow.
-    pub smoothing: f32,
+    /// How long the drawn curve takes to RISE toward a louder reading, in
+    /// seconds. 0 lands every refresh instantly.
+    ///
+    /// A TIME and not a per-column coefficient, because a coefficient names
+    /// nothing a reader can act on: the same number is a different filter at a
+    /// different hop, and there is no way to tell from the bar whether it is
+    /// smoothing over a fiftieth of a second or a fifth of one. A time is
+    /// converted to its coefficient against the hop actually in use
+    /// (`AudioSpectrum::push_samples`), so what the bar says is what the
+    /// analyzer does.
+    pub attack: f32,
+    /// How long it takes to FALL toward a quieter one, in seconds.
+    ///
+    /// Split from [`attack`](Self::attack) because a spectrum's two directions
+    /// are not one gesture: a partial arriving is an event worth seeing at the
+    /// moment it happens, and the same partial's noise wobbling downward is
+    /// nothing worth drawing at all. One symmetric time has to be short enough
+    /// for the first, which leaves it far too short for the second — every
+    /// analyzer with meter ballistics splits them for this reason.
+    pub release: f32,
     /// Spectral tilt, in the convention analyzers use: the reference
     /// slope in dB/octave that displays as FLAT, one of [`TILT_STEPS`]
     /// (0, -1.5 .. -6). 0 draws raw power; -3 makes pink noise read
@@ -827,7 +845,13 @@ impl Default for SpectrumConfig {
             tapers: SpectrumTapers::One,
             floor_db: -60.0,
             ceiling_db: DEFAULT_CEILING_DB,
-            smoothing: 0.55,
+            // Meter ballistics: quick enough up that a note's arrival is not
+            // behind the ear, slow enough down that the estimator's own noise
+            // wobbling between columns does not draw. 10 ms is inside one hop,
+            // so an arrival is essentially instant; 150 ms is most of a second
+            // of visible decay without holding a chord that has left.
+            attack: 0.010,
+            release: 0.150,
             // The slope that flattens typical musical material — what the
             // analyzer is looked at through nearly all the time, so it is
             // where it starts. Raw power (0) buries everything above a

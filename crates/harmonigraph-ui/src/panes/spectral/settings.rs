@@ -28,6 +28,22 @@ fn db_readout(db: f32) -> String {
     format!("{db:.0} dB")
 }
 
+/// The longest attack or release the analyzer's own curve offers, in seconds.
+///
+/// Half a second is already well past a meter's ballistics and is a guard rail
+/// rather than a setting; the ring, which wants a genuinely slow release, has
+/// its own pair with its own ceiling
+/// (`harmonigraph_scene::SPECTRAL_BALLISTICS_MAX`).
+const BALLISTICS_MAX: f32 = 0.5;
+
+/// A short duration in milliseconds, which is the unit these times are read and
+/// argued about in — a hop is 8 ms and a release worth having is a couple of
+/// hundred, so seconds under a bar would be three leading zeros and a decision
+/// nobody can eyeball.
+pub(in crate::panes) fn ms_readout(seconds: f32) -> String {
+    format!("{:.0} ms", seconds.max(0.0) * 1000.0)
+}
+
 /// A duration as the roll's Span bar reads it out, carrying its own unit
 /// rather than naming one in the label: the bar runs from a second to ten
 /// minutes, and "300" under a fixed "(s)" is a number you have to divide
@@ -190,9 +206,20 @@ pub(crate) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
          top down to lift quiet material into the picture. Double-click for the \
          full scale.",
     );
-    ValueBar::new(&mut cfg.smoothing, 0.0..=0.9, "Smoothing")
+    // Two bars and not one, because a spectrum's two directions are different
+    // events: a partial arriving is worth seeing when it happens, and the same
+    // partial's noise wobbling down is not worth drawing at all.
+    ValueBar::new(&mut cfg.attack, 0.0..=BALLISTICS_MAX, "Attack")
+        .display(ms_readout)
         .show(ui)
-        .on_hover_text("Display inertia: 0 reacts instantly, 0.9 glides");
+        .on_hover_text("How long the curve takes to rise to a louder reading. 0 lands instantly.");
+    ValueBar::new(&mut cfg.release, 0.0..=BALLISTICS_MAX, "Release")
+        .display(ms_readout)
+        .show(ui)
+        .on_hover_text(
+            "How long it takes to fall to a quieter one. The long one: most of \
+             what reads as speckle is the estimate wobbling downward.",
+        );
     // Tilt: conventional stepped reference slopes. Snap stray persisted
     // values (e.g. from the short-lived continuous bar) onto a step.
     if !crate::TILT_STEPS.contains(&cfg.tilt) {

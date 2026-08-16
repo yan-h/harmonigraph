@@ -18,7 +18,7 @@ mod gestures;
 pub(crate) mod names;
 pub(crate) mod roll;
 pub(crate) mod spectrogram;
-mod settings;
+pub(super) mod settings;
 
 pub(super) use settings::spectrum_settings_pane;
 pub(crate) use gestures::{hold_spectrum, SpectrumHold};

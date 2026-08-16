@@ -330,7 +330,8 @@ mod tests {
         // The display's EMA is the Analyzer's Smoothing control. Off here so
         // the picture is the spectrum of the second that was pushed rather
         // than a function of how many hops this fixture happened to feed.
-        state.spectrum_config.smoothing = 0.0;
+        state.spectrum_config.attack = 0.0;
+        state.spectrum_config.release = 0.0;
         // Fully lit at once: an envelope would put the MIDI half of the
         // picture part way through its arrival.
         state.frame_params.fade_time = 0.0;

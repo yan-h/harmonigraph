@@ -48,7 +48,8 @@ pub use octaves::{
 pub use spectral::{
     bucket_pitch, ring_gradient, RingFade, RingGate, SpectralLevels, SpectralPaint,
     SpectralReading, SPECTRAL_AXIS, SPECTRAL_BUCKETS, SPECTRAL_BUCKETS_PER_SEMITONE,
-    SPECTRAL_GATE_MAX, SPECTRAL_GATE_MIN, SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN,
+    SPECTRAL_BALLISTICS_MAX, SPECTRAL_GATE_MAX, SPECTRAL_GATE_MIN, SPECTRAL_HYSTERESIS_MAX,
+    SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN,
 };
 pub use style::{Gradient, Pulse, SevensLabel};
 pub use view::{DrawnWindow, FrameParams, RingStack, ViewConfig};

@@ -314,6 +314,37 @@ impl Default for AudioSpectrum {
     }
 }
 
+/// The one-step coefficient of an exponential approach with time constant
+/// `seconds`, taken `dt` seconds at a time.
+///
+/// `1 - exp(-dt/tau)`, which is what makes a TIME the thing set and the
+/// coefficient the thing derived: the same `seconds` is the same filter at any
+/// step size, where a raw coefficient silently means a different filter as soon
+/// as the step changes.
+///
+/// The two degenerate cases mean opposite things and are worth keeping apart:
+///
+/// - **No time PASSED** holds, returning 0. This is what a pane drawn twice in
+///   one frame hits — the docked lattice and the Video tab's preview, off one
+///   clock — and landing on the target there would run the filter at twice its
+///   speed whenever both are on screen.
+/// - **No time ASKED FOR** lands, returning 1. That is the bar's own off
+///   position, and a non-finite time takes it too, so a hand-edited blob
+///   cannot freeze the display at whatever it last held.
+pub(crate) fn hop_alpha(seconds: f32, dt: f64) -> f32 {
+    // A NaN clock holds rather than lands, on the same argument the zero step
+    // does: a step nobody can measure is not evidence that time passed. An
+    // INFINITE one falls through and lands, which the arithmetic below reaches
+    // on its own.
+    if dt.is_nan() || dt <= 0.0 {
+        return 0.0;
+    }
+    if !seconds.is_finite() || seconds <= 0.0 {
+        return 1.0;
+    }
+    1.0 - (-dt / f64::from(seconds)).exp() as f32
+}
+
 impl AudioSpectrum {
     /// Forget the spectrogram textures, so the next draw uploads fresh ones
     /// into whatever context is current. See
@@ -452,8 +483,16 @@ impl AudioSpectrum {
             self.next_hop = self.frames_seen + hop;
             let Some(fresh) = self.analyzer.power_sum() else { continue };
 
-            let alpha = 1.0 - config.smoothing.clamp(0.0, 0.95);
+            // Two coefficients, chosen per bucket by which way it is moving.
+            // Derived from the hop actually in use rather than set on the bar,
+            // so the times mean seconds at any hop this loop runs at.
+            let step = hop as f64 / sr;
+            let attack = hop_alpha(config.attack, step);
+            let release = hop_alpha(config.release, step);
             for (shown, new) in self.display.iter_mut().zip(&fresh) {
+                // POWER, so "louder" is the same comparison in dB — the levels
+                // are mapped through `loudness` well downstream of here.
+                let alpha = if *new > *shown { attack } else { release };
                 *shown += (new - *shown) * alpha;
             }
             // Keep the RAW spectrum for the spectrogram (the smoothed

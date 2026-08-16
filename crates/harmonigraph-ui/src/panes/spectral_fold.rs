@@ -128,16 +128,25 @@
 //! is what admits a DETUNED partial, and a detuned partial is meant to read
 //! dim, that failure points the right way.
 //!
-//! ## No envelope on the READING
+//! ## The reading has its own envelope
 //!
-//! [`AudioSpectrum::display`](crate::AudioSpectrum::display) is already
-//! EMA-smoothed on the hop grid by the Analyzer's own Smoothing control, so the
-//! fold inherits an attack/decay that is on the sample grid — deterministic,
-//! and shared with every other pane, so a hop that shimmers here shimmers on
-//! the Spectral pane too and one control settles both. A second envelope over
-//! the levels would be a second answer to a question one bar already settles,
-//! and it would be the analyzer's picture drawn at two speeds depending on
-//! which pane you looked at.
+//! [`AudioSpectrum::display`](crate::AudioSpectrum::display) arrives already
+//! smoothed on the hop grid by the Analyzer's own Attack and Release, and the
+//! ring then carries a SECOND envelope of its own ([`RingLevels`], on
+//! `ViewConfig::spectral_ring_attack` / `_release`).
+//!
+//! Two speeds for one analyzer, deliberately, because the two pictures are
+//! asked different questions. The Spectral pane is a measurement instrument and
+//! wants what is there; the ring is a legibility device spread over hundreds of
+//! nodes and wants whether a harmonic is PRESENT. A filter long enough to
+//! settle the second is longer than the first should ever be, so one bar
+//! settling both settles it wrong for one of them.
+//!
+//! It is stepped against the CLOCK rather than per call, exactly as the gate's
+//! fade below is, so the two lattices an editor frame draws step it once and a
+//! 60 fps render and a 144 Hz pane walk one curve. The state lives in
+//! [`SharedState`], which is the whole of what the offline renderer carries
+//! between frames.
 //!
 //! The GATE's answer does carry across frames
 //! ([`RingFade`](harmonigraph_scene::RingFade)), and it is a different thing
@@ -155,7 +164,8 @@ use harmonigraph_core::spectrum::{BINS_PER_SEMITONE, SPECTRUM_BINS};
 #[cfg(test)]
 use harmonigraph_core::spectrum::{SPECTRUM_MAX_MIDI, SPECTRUM_MIN_MIDI};
 use harmonigraph_scene::{
-    bucket_pitch, Scene, SpectralPaint, SpectralReading, SPECTRAL_WIDTH_MAX, SPECTRAL_WIDTH_MIN,
+    bucket_pitch, Scene, SpectralPaint, SpectralReading, ViewConfig, SPECTRAL_WIDTH_MAX,
+    SPECTRAL_WIDTH_MIN,
 };
 
 use super::spectral::axes::loudness;
@@ -306,7 +316,7 @@ impl Fold {
     /// The same SHAPE as the analyzer's own grid rather than a table of its
     /// own, which is what lets one path carry both readings from here on: the
     /// ring is a window onto a grid of power at pitch, and whether that power
-    /// was folded first is a question nothing past [`fill_grid`] asks.
+    /// was folded first is a question nothing past [`RingLevels::fill`] asks.
     pub(crate) fn grid(&self) -> &[f32; SPECTRUM_BINS] {
         &self.smoothed
     }
@@ -380,15 +390,19 @@ pub(crate) fn apply(scene: &mut Scene, state: &mut SharedState, now: f64) {
     let reading = state.view.spectral_reading;
     let cfg = state.spectrum_config;
     let mut paint = SpectralPaint::new(&state.view, cfg.spectrogram_gradient);
-    if let Some(levels) = state.spectrum.display(now) {
-        // The kernel is the FOLD's; `Spectrum` hands the analyzer's own grid
-        // through untouched. A `bool` and not a `match` over two arms that
-        // would read as a table of readings, where what this settles is one
-        // question about one of them.
-        let folded = (reading == SpectralReading::Fold)
-            .then(|| Fold::measure(levels, state.view.spectral_width));
-        fill_grid(&mut paint, &cfg, folded.as_ref().map_or(levels, Fold::grid));
-    }
+    // The kernel is the FOLD's; `Spectrum` hands the analyzer's own grid
+    // through untouched. A `bool` and not a `match` over two arms that
+    // would read as a table of readings, where what this settles is one
+    // question about one of them.
+    let levels = state.spectrum.display(now);
+    let folded = levels
+        .filter(|_| reading == SpectralReading::Fold)
+        .map(|levels| Fold::measure(levels, state.view.spectral_width));
+    // With no audio flowing the target is silence rather than nothing at all,
+    // so the reading LEAVES on its own release instead of dropping to the
+    // ramp's floor in one frame the moment the analyzer stops answering.
+    let grid = folded.as_ref().map(Fold::grid).or(levels);
+    state.ring_levels.fill(&mut paint, &cfg, grid, &state.view, now);
     scene.spectral = paint;
     // Which nodes the ring is worth drawing on, now that there is something to
     // ask it of. Last, and off the scene rather than off the paint above,
@@ -422,13 +436,93 @@ pub(crate) fn apply(scene: &mut Scene, state: &mut SharedState, now: f64) {
 /// That holds for the fold as much as for the raw spectrum — the kernel is the
 /// same shape wherever it is centred, so folding it over the grid once answers
 /// every node and every octave at a stroke.
-fn fill_grid(paint: &mut SpectralPaint, cfg: &crate::SpectrumConfig, grid: &SpectrumBuckets) {
-    for (bucket, power) in grid.iter().enumerate() {
-        // The bucket's own centre pitch, because the tilt in `loudness` is a
-        // function of pitch and because the shader reads this table back on
-        // the same convention.
-        let level = loudness(cfg, *power, bucket_pitch(bucket));
-        paint.levels[bucket] = (level.clamp(0.0, 1.0) * 255.0).round() as u8;
+/// What the ring's wedges READ, carried across frames on the ring's own attack
+/// and release — where [`RingFade`](harmonigraph_scene::RingFade) is whether the
+/// annulus is drawn at all.
+///
+/// Two envelopes and not one, because they answer different questions and a
+/// single one would have to answer both wrong: the fade is a NODE's layer
+/// arriving and leaving, which every other layer does on the note Fade, and
+/// this is how fast a measurement inside that layer moves, which has nothing to
+/// do with a note.
+#[derive(Clone)]
+pub struct RingLevels {
+    /// What each bucket of the ring currently reads, 0..=1 on the analyzer's
+    /// Level window — the envelope's state, kept in `f32` because the byte the
+    /// shader gets is a quantization of it and stepping the byte instead would
+    /// stall: a release slow enough to be worth having moves a bucket less than
+    /// 1/255 in a frame, and rounding that back is a filter that never arrives.
+    level: Box<[f32; SPECTRUM_BINS]>,
+    /// The clock the levels stand at, or `None` before the first fill.
+    ///
+    /// A moment and not a duration, so a pane drawn TWICE in one frame — the
+    /// docked lattice and the Video tab's preview, off one clock — steps once:
+    /// the second call's `dt` is zero and every bucket holds.
+    at: Option<f64>,
+}
+
+impl Default for RingLevels {
+    fn default() -> RingLevels {
+        RingLevels { level: Box::new([0.0; SPECTRUM_BINS]), at: None }
+    }
+}
+
+impl RingLevels {
+    /// Read a grid of power into the ring's channel, carried on the ring's own
+    /// attack and release: every bucket through the shared [`loudness`] curve,
+    /// stepped toward that, and quantized to the byte the shader unpacks.
+    ///
+    /// The one place either reading becomes a LEVEL, which is what keeps them in
+    /// the same colour scheme: the byte in the table is what `loudness` answers,
+    /// so a wedge and the Spectral pane's own curve at the same power are the
+    /// same level and therefore the same colour off the same ramp. What differs
+    /// between the two readings is the grid handed in — the fold's smoothed
+    /// excess, or the analyzer's raw buckets — and nothing after this point
+    /// knows which it was.
+    ///
+    /// Per BUCKET rather than per node, which is what makes the ring cost the
+    /// same whatever the extents are: the grid is one reading the whole lattice
+    /// shares, and each node's wedges are a window onto it (the shader's
+    /// `spectrum_at`). That holds for the fold as much as for the raw spectrum —
+    /// the kernel is the same shape wherever it is centred, so folding it over
+    /// the grid once answers every node and every octave at a stroke.
+    ///
+    /// `None` for the grid is the analyzer having nothing to say, which is a
+    /// target of silence rather than an early return: the ring's own release
+    /// carries it down, so the reading leaves the way it arrived.
+    ///
+    /// The FIRST fill of all settles rather than fading in — there is no
+    /// transition to draw when nothing was on screen to transition from.
+    fn fill(
+        &mut self,
+        paint: &mut SpectralPaint,
+        cfg: &crate::SpectrumConfig,
+        grid: Option<&SpectrumBuckets>,
+        view: &ViewConfig,
+        now: f64,
+    ) {
+        let dt = self.at.map(|at| now - at);
+        self.at = Some(now);
+        // No clock behind it: take the reading outright, which is what makes
+        // the first frame the analyzer's picture and not a fade of one.
+        let (attack, release) = match dt {
+            Some(dt) => (
+                crate::spectrum::hop_alpha(view.spectral_ring_attack, dt),
+                crate::spectrum::hop_alpha(view.spectral_ring_release, dt),
+            ),
+            None => (1.0, 1.0),
+        };
+        for (bucket, level) in self.level.iter_mut().enumerate() {
+            // The bucket's own centre pitch, because the tilt in `loudness` is
+            // a function of pitch and because the shader reads this table back
+            // on the same convention.
+            let target = grid
+                .map_or(0.0, |grid| loudness(cfg, grid[bucket], bucket_pitch(bucket)))
+                .clamp(0.0, 1.0);
+            let alpha = if target > *level { attack } else { release };
+            *level += (target - *level) * alpha;
+            paint.levels[bucket] = (*level * 255.0).round() as u8;
+        }
     }
 }
 
@@ -539,7 +633,8 @@ mod tests {
             // an inheritance the fold is glad of in the plugin and cannot use
             // here: it would make every number below a function of how many
             // hops the fixture happened to push.
-            state.spectrum_config.smoothing = 0.0;
+            state.spectrum_config.attack = 0.0;
+            state.spectrum_config.release = 0.0;
             let cfg = state.spectrum_config;
             state.spectrum.push_samples(samples, 1, SR, 1.0, &cfg);
             let levels = *state.spectrum.display(1.0).expect("a second of audio is enough");
@@ -892,7 +987,8 @@ mod tests {
     fn either_reading_draws_beside_the_keys_rather_than_instead_of_them() {
         let mut state = fresh();
         state.frame_params.fade_time = 0.0;
-        state.spectrum_config.smoothing = 0.0;
+        state.spectrum_config.attack = 0.0;
+        state.spectrum_config.release = 0.0;
         state.tracker.handle_event(NoteEvent::on(0.0, 0, 60, 1.0));
         let cfg = state.spectrum_config;
         state.spectrum.push_samples(&sawtooth(48.0), 1, SR, 1.0, &cfg);
@@ -946,7 +1042,8 @@ mod tests {
     #[test]
     fn the_rings_levels_are_the_analyzers_own() {
         let mut state = fresh();
-        state.spectrum_config.smoothing = 0.0;
+        state.spectrum_config.attack = 0.0;
+        state.spectrum_config.release = 0.0;
         state.view.spectral_reading = SpectralReading::Spectrum;
         let cfg = state.spectrum_config;
         state.spectrum.push_samples(&sawtooth(48.0), 1, SR, 1.0, &cfg);
@@ -985,13 +1082,20 @@ mod tests {
     #[test]
     fn the_two_readings_are_measured_apart() {
         let mut state = fresh();
-        state.spectrum_config.smoothing = 0.0;
+        state.spectrum_config.attack = 0.0;
+        state.spectrum_config.release = 0.0;
         let cfg = state.spectrum_config;
         state.spectrum.push_samples(&sawtooth(48.0), 1, SR, 1.0, &cfg);
 
+        // Each reading measured from a standing start. Both scenes are derived
+        // at one clock, where the ring's envelope holds rather than steps (a
+        // pane drawn twice in a frame must not run it twice), so without the
+        // reset the second reading would be handed back the first one's levels.
         state.view.spectral_reading = SpectralReading::Fold;
+        state.ring_levels = RingLevels::default();
         let folded = scene_of(&mut state);
         state.view.spectral_reading = SpectralReading::Spectrum;
+        state.ring_levels = RingLevels::default();
         let raw = scene_of(&mut state);
         assert!(folded.spectral.folded, "the fold is not read at its wedges' own pitches");
         assert!(!raw.spectral.folded, "the raw reading lost its window across the wedge");
@@ -1051,7 +1155,8 @@ mod tests {
 
         let mut state = fresh();
         state.view.spectral_reading = SpectralReading::Spectrum;
-        state.spectrum_config.smoothing = 0.0;
+        state.spectrum_config.attack = 0.0;
+        state.spectrum_config.release = 0.0;
         let cfg = state.spectrum_config;
         state.spectrum.push_samples(&sawtooth(48.0), 1, SR, 1.0, &cfg);
         let scene = scene_of(&mut state);
@@ -1175,7 +1280,8 @@ mod tests {
         );
 
         let mut state = fresh();
-        state.spectrum_config.smoothing = 0.0;
+        state.spectrum_config.attack = 0.0;
+        state.spectrum_config.release = 0.0;
         let cfg = state.spectrum_config;
         // A full-scale sine at middle C: one partial, so what should ring is
         // the C nodes and nothing else. A saw would light its whole
@@ -1219,7 +1325,8 @@ mod tests {
         // along; the fresh curve is not, and this is not the test for it.
         state.frame_params.fade_time = 1.0;
         state.view.fade_shape = 0.0;
-        state.spectrum_config.smoothing = 0.0;
+        state.spectrum_config.attack = 0.0;
+        state.spectrum_config.release = 0.0;
         let cfg = state.spectrum_config;
 
         // A quiet frame first, so there is a picture to arrive FROM: the very
@@ -1296,6 +1403,141 @@ mod tests {
         assert!(
             (flat - sharp).abs() < 1e-3,
             "a quarter-bucket flat reads {flat} and a quarter-bucket sharp reads {sharp}",
+        );
+    }
+
+    // ---- The ring's own ballistics ----------------------------------------
+
+    /// A view with the ring drawn and stated times on it.
+    fn timed(attack: f32, release: f32) -> ViewConfig {
+        ViewConfig {
+            spectral_ring_attack: attack,
+            spectral_ring_release: release,
+            ..ViewConfig::default()
+        }
+    }
+
+    /// One bucket's byte after filling from a flat grid of `power`, stepping
+    /// `steps` frames of `dt` each.
+    fn carried(view: &ViewConfig, first: f32, then: f32, dt: f64, steps: usize) -> Vec<u8> {
+        let cfg = crate::SpectrumConfig::default();
+        let mut ring = RingLevels::default();
+        let mut paint = SpectralPaint::new(view, Default::default());
+        let flat = |p: f32| -> SpectrumBuckets { [p; SPECTRUM_BINS] };
+        // The first fill settles, which is what makes the steps below a
+        // transition from a known place rather than from a fade-in.
+        ring.fill(&mut paint, &cfg, Some(&flat(first)), view, 0.0);
+        let mut out = vec![paint.levels[1000]];
+        for step in 1..=steps {
+            ring.fill(&mut paint, &cfg, Some(&flat(then)), view, dt * step as f64);
+            out.push(paint.levels[1000]);
+        }
+        out
+    }
+
+    /// The first fill of all settles: there is no transition to draw when
+    /// nothing was on screen to transition from, so a lattice whose ring has
+    /// just been switched on shows the analyzer rather than a fade-in.
+    #[test]
+    fn the_first_reading_settles_rather_than_fading_in() {
+        let view = timed(1.0, 1.0);
+        let quiet = carried(&view, 0.0, 0.0, 0.1, 0);
+        let loud = carried(&view, 1.0, 1.0, 0.1, 0);
+        assert_eq!(quiet[0], 0, "silence settles at the floor");
+        assert!(loud[0] > 200, "a full-scale grid settles near the top, not part way up");
+    }
+
+    /// Up on the attack and down on the release, and the two are independent:
+    /// the same step of the same size takes a different time each way.
+    #[test]
+    fn a_reading_rises_on_the_attack_and_falls_on_the_release() {
+        // Fast up, slow down — the shape the ring ships with.
+        let view = timed(0.01, 1.0);
+        let up = carried(&view, 0.0, 1.0, 0.05, 1);
+        let down = carried(&view, 1.0, 0.0, 0.05, 1);
+        assert!(
+            up[1] > 200,
+            "a 50 ms step on a 10 ms attack should be nearly all the way up, not {}",
+            up[1],
+        );
+        assert!(
+            down[1] > 200,
+            "the same step on a 1 s release should barely have moved, but it reads {}",
+            down[1],
+        );
+
+        // And swapped, the picture swaps with it — so what is being measured is
+        // the two times rather than a direction baked into the filter.
+        let view = timed(1.0, 0.01);
+        let up = carried(&view, 0.0, 1.0, 0.05, 1);
+        let down = carried(&view, 1.0, 0.0, 0.05, 1);
+        assert!(up[1] < 55, "a slow attack should barely have risen, but it reads {}", up[1]);
+        assert!(down[1] < 55, "a fast release should be nearly down, but it reads {}", down[1]);
+    }
+
+    /// One frame drawn TWICE steps the envelope once — the docked lattice and
+    /// the Video tab's preview come off one clock, and a reading that stepped
+    /// per call would run at twice the speed whenever both are on screen.
+    #[test]
+    fn one_frame_drawn_twice_carries_the_reading_once() {
+        let view = timed(0.1, 0.1);
+        let cfg = crate::SpectrumConfig::default();
+        let loud = [1.0f32; SPECTRUM_BINS];
+        let mut once = RingLevels::default();
+        let mut paint = SpectralPaint::new(&view, Default::default());
+        once.fill(&mut paint, &cfg, Some(&[0.0; SPECTRUM_BINS]), &view, 0.0);
+        once.fill(&mut paint, &cfg, Some(&loud), &view, 0.05);
+        let stepped = paint.levels[1000];
+
+        let mut twice = RingLevels::default();
+        twice.fill(&mut paint, &cfg, Some(&[0.0; SPECTRUM_BINS]), &view, 0.0);
+        twice.fill(&mut paint, &cfg, Some(&loud), &view, 0.05);
+        twice.fill(&mut paint, &cfg, Some(&loud), &view, 0.05);
+        assert_eq!(paint.levels[1000], stepped, "the second draw of one frame stepped it again");
+    }
+
+    /// The analyzer falling silent is a target of SILENCE rather than an early
+    /// return, so the reading leaves the way it arrived instead of dropping to
+    /// the ramp's floor in the one frame `display` stops answering.
+    #[test]
+    fn no_audio_leaves_on_the_release_rather_than_at_once() {
+        let view = timed(0.01, 1.0);
+        let cfg = crate::SpectrumConfig::default();
+        let mut ring = RingLevels::default();
+        let mut paint = SpectralPaint::new(&view, Default::default());
+        ring.fill(&mut paint, &cfg, Some(&[1.0; SPECTRUM_BINS]), &view, 0.0);
+        let lit = paint.levels[1000];
+        assert!(lit > 200, "the fixture did not light the ring to begin with");
+        ring.fill(&mut paint, &cfg, None, &view, 0.05);
+        let after = paint.levels[1000];
+        assert!(after < lit, "a silent analyzer has to start the reading down");
+        assert!(after > 200, "and on a 1 s release it must not have arrived, but it reads {after}");
+    }
+
+    /// Zero is the off position and lands every reading outright, which is what
+    /// makes the bars' floors the picture with no envelope in them.
+    #[test]
+    fn a_time_of_zero_lands_the_reading_at_once() {
+        let view = timed(0.0, 0.0);
+        let up = carried(&view, 0.0, 1.0, 0.008, 1);
+        let down = carried(&view, 1.0, 0.0, 0.008, 1);
+        assert!(up[1] > 200, "a zero attack did not land in one frame");
+        assert_eq!(down[1], 0, "a zero release did not land in one frame");
+    }
+
+    /// A TIME is the same filter however it is stepped: a tenth of a second
+    /// reached in one step of 100 ms and in ten of 10 ms lands in the same
+    /// place. This is the whole reason the bars hold times and the coefficient
+    /// is derived, and it is what keeps a 60 fps render and a 144 Hz pane
+    /// drawing one picture.
+    #[test]
+    fn a_time_is_the_same_filter_at_any_step_size() {
+        let view = timed(0.1, 0.1);
+        let coarse = *carried(&view, 0.0, 1.0, 0.1, 1).last().unwrap();
+        let fine = *carried(&view, 0.0, 1.0, 0.01, 10).last().unwrap();
+        assert!(
+            coarse.abs_diff(fine) <= 1,
+            "one 100 ms step reads {coarse} where ten 10 ms steps read {fine}",
         );
     }
 }

@@ -115,6 +115,22 @@ pub const SPECTRAL_GATE_MIN: f32 = 0.0;
 /// report opens a ring.
 pub const SPECTRAL_GATE_MAX: f32 = 1.0;
 
+/// The widest hysteresis band the gate offers: a quarter of the Level window.
+///
+/// The ceiling is what the band MEANS rather than arithmetic. It is the drop
+/// from the gate to the threshold a bucket already open is held by, so at a
+/// quarter of the window a ring that opened at the fresh 0.4 stays lit down to
+/// 0.15 — most of the way to the floor, and about as far as "this node is still
+/// sounding" can be stretched before it reads as "this node once sounded".
+pub const SPECTRAL_HYSTERESIS_MAX: f32 = 0.25;
+
+/// The longest attack or release the ring's reading offers, in seconds.
+///
+/// Two seconds is well past useful and is a guard rail rather than a setting:
+/// what the bar is for lives under a third of a second, and the room above that
+/// is there so a slow smear is reachable deliberately rather than fenced off.
+pub const SPECTRAL_BALLISTICS_MAX: f32 = 2.0;
+
 /// Buckets the analyzer's pitch grid holds, and how many of them a semitone
 /// spans — `harmonigraph_core::spectrum`'s own numbers, named again here
 /// because `harmonigraph-render` sizes its uniform row and walks the grid by
@@ -271,6 +287,11 @@ pub struct SpectralPaint {
     /// made against are read from one place; [`RingGate`] is where it is
     /// answered per node.
     pub gate: f32,
+    /// How far [`gate`](Self::gate) drops for a bucket already open
+    /// ([`ViewConfig::spectral_ring_hysteresis`]), already clamped. Carried
+    /// beside the gate because the two are one decision and a threshold read
+    /// from a different frame than its partner is a decision nobody made.
+    pub hysteresis: f32,
     /// The reading the ring paints, bucket by bucket of the analyzer's own
     /// pitch grid — the raw spectrum or the fold over it, whichever
     /// [`folded`](Self::folded) says, both already through the analyzer's Level
@@ -313,6 +334,7 @@ impl SpectralPaint {
             // must never be invented in is the one where nobody asked for a
             // reading at all.
             gate: SPECTRAL_GATE_MIN,
+            hysteresis: 0.0,
             levels: Box::new([0; SPECTRUM_BINS]),
         }
     }
@@ -360,6 +382,14 @@ impl SpectralPaint {
                 SPECTRAL_GATE_MIN,
                 SPECTRAL_GATE_MAX,
             ),
+            // Repaired to 0 — one threshold — for the reason above it: a band
+            // nobody can read falls back to the simpler rule.
+            hysteresis: clamp_or(
+                view.spectral_ring_hysteresis,
+                0.0,
+                0.0,
+                SPECTRAL_HYSTERESIS_MAX,
+            ),
             levels: Box::new([0; SPECTRUM_BINS]),
         }
     }
@@ -394,6 +424,9 @@ pub struct RingGate {
     /// [`SpectralPaint::gate`], carried so the pair cannot be read from two
     /// frames.
     gate: f32,
+    /// How far the gate drops for a bucket already open — the second threshold
+    /// of a Schmitt trigger, carried with its pair for the same reason.
+    hysteresis: f32,
 }
 
 impl RingGate {
@@ -404,7 +437,11 @@ impl RingGate {
         // and so has no window at all, and the raw spectrum spreads `range`
         // cents across the arc, centred on the wedge's own pitch.
         let half = if paint.folded { 0 } else { window_half(paint.range) };
-        RingGate { peaks: window_max(&paint.levels, half), gate: paint.gate }
+        RingGate {
+            peaks: window_max(&paint.levels, half),
+            gate: paint.gate,
+            hysteresis: paint.hysteresis,
+        }
     }
 
     /// The loudest level any wedge of the ring reaches on a node whose pitch
@@ -448,8 +485,19 @@ impl RingGate {
     /// Read at the bucket's own centre, which is where a wedge sitting on it
     /// reads: [`level_at`] interpolates between the two buckets a pitch falls
     /// between, and at a centre that blend is the bucket itself.
-    fn opens(&self, bucket: usize) -> bool {
-        f32::from(self.peaks[bucket]) / 255.0 >= self.gate
+    ///
+    /// `held` is whether this bucket is ALREADY open, which is what makes the
+    /// pair of thresholds a Schmitt trigger rather than two unrelated gates: an
+    /// open bucket is asked the lower one, so a level wobbling inside the band
+    /// keeps whatever answer it already had, and only a move clear of the band
+    /// changes it. [`RingFade`] holds that state per bucket already, so nothing
+    /// new is stored to get it.
+    fn opens(&self, bucket: usize, held: bool) -> bool {
+        // Never below zero, so the floor stays the bar's off position: at a gate
+        // of `SPECTRAL_GATE_MIN` every bucket opens whatever the band says, and
+        // a hysteresis that reached under it could not make that MORE true.
+        let gate = if held { (self.gate - self.hysteresis).max(0.0) } else { self.gate };
+        f32::from(self.peaks[bucket]) / 255.0 >= gate
     }
 }
 
@@ -535,11 +583,17 @@ impl RingFade {
     /// Buckets already at their target are skipped, which is nearly all of
     /// them nearly always: the grid is 3828 buckets and what is moving through
     /// a transition at any moment is the edge of whatever is sounding.
+    ///
+    /// The fade's own level stands in for the gate's previous ANSWER when the
+    /// hysteresis asks whether a bucket is already open. The two agree except
+    /// part way through a transition, where a bucket under halfway is asked the
+    /// strict threshold — the conservative side, and the one that cannot latch
+    /// a ring on out of a level that never really reached the gate.
     pub fn advance(&mut self, gate: &RingGate, env: &Envelope, now: f64) {
         let dt = self.at.map(|at| now - at);
         self.at = Some(now);
         for (bucket, level) in self.open.iter_mut().enumerate() {
-            let open = gate.opens(bucket);
+            let open = gate.opens(bucket, *level > 0.5);
             let target = if open { 1.0 } else { 0.0 };
             if *level == target {
                 continue;
@@ -1044,6 +1098,68 @@ mod tests {
         }
     }
 
+    /// The band's whole purpose: a level between the two thresholds keeps
+    /// whatever answer it already had, so a reading wobbling on the gate stops
+    /// switching. A gate of 0.4 with a 0.1 band opens at 0.4 and closes under
+    /// 0.3, and 0.35 is the level that reads both ways depending on where it
+    /// came from.
+    #[test]
+    fn a_held_bucket_keeps_its_ring_until_the_level_clears_the_band() {
+        let bucket = 1000usize;
+        let mut levels = empty();
+        // 0.35 of the window: over the closing threshold, under the opening one.
+        levels[bucket] = 89;
+        let view = ViewConfig {
+            spectral_ring_hysteresis: 0.1,
+            ..gated(0.4, SpectralReading::Fold)
+        };
+        let gate = gate_of(&view, levels);
+        assert!(!gate.opens(bucket, false), "0.35 is under the gate and must not OPEN a ring");
+        assert!(gate.opens(bucket, true), "0.35 is inside the band and must HOLD one");
+
+        // Clear of the band below: shut either way.
+        let mut levels = empty();
+        levels[bucket] = 70; // 0.275
+        let gate = gate_of(&view, levels);
+        assert!(!gate.opens(bucket, true), "a level under the band closes a held ring");
+    }
+
+    /// 0 is one threshold, which is the bar's off position and has to give back
+    /// the picture with no hysteresis in it — the same answer whether or not the
+    /// bucket is already lit.
+    #[test]
+    fn a_band_of_nothing_is_one_threshold() {
+        let view = ViewConfig {
+            spectral_ring_hysteresis: 0.0,
+            ..gated(0.4, SpectralReading::Fold)
+        };
+        for byte in [0u8, 70, 89, 102, 128, 255] {
+            let mut levels = empty();
+            levels[1000] = byte;
+            let gate = gate_of(&view, levels);
+            assert_eq!(
+                gate.opens(1000, true),
+                gate.opens(1000, false),
+                "level {byte} answers differently held and not, at a band of 0",
+            );
+        }
+    }
+
+    /// The floor stays the off position however wide the band is: at a gate of
+    /// [`SPECTRAL_GATE_MIN`] every bucket opens, and a band reaching under zero
+    /// cannot make that more true — nor may it turn into a negative threshold
+    /// that some arithmetic elsewhere reads as a level.
+    #[test]
+    fn the_band_never_reaches_under_the_gates_floor() {
+        let view = ViewConfig {
+            spectral_ring_hysteresis: SPECTRAL_HYSTERESIS_MAX,
+            ..gated(SPECTRAL_GATE_MIN, SpectralReading::Fold)
+        };
+        let gate = gate_of(&view, empty());
+        assert!(gate.opens(1000, true), "silence at the gate's floor still rings");
+        assert!(gate.opens(1000, false), "and rings whether or not it is held");
+    }
+
     /// A node rings where one of its wedges reaches the gate, and not where
     /// none of them does — the whole of what the setting says, read on a pitch
     /// class rather than on a node.
@@ -1197,7 +1313,13 @@ mod tests {
         levels[hi] = 100;
         let view = gated(0.4, SpectralReading::Fold);
         let gate = gate_of(&view, levels);
-        assert!(gate.opens(lo) && !gate.opens(hi), "the fixture's buckets do not straddle 0.4");
+        // Neither bucket held, so both are asked the strict threshold: what is
+        // being measured here is the ramp BETWEEN two buckets, not the band a
+        // held one keeps.
+        assert!(
+            gate.opens(lo, false) && !gate.opens(hi, false),
+            "the fixture's buckets do not straddle 0.4"
+        );
 
         // Ten seconds on a half-second Fade: twenty durations, nothing moving.
         let env = fade_of(0.5);

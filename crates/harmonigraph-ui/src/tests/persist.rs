@@ -788,7 +788,7 @@ fn a_persist_blob_naming_a_retired_node_style_still_loads() {
 fn a_persist_blob_missing_a_spectrum_field_keeps_the_rest_of_the_blob() {
     let defaults = crate::SpectrumConfig::default();
     for key in [
-        format!("smoothing:{:?},", defaults.smoothing),
+        format!("release:{:?},", defaults.release),
         format!("floor_db:{:?},", defaults.floor_db),
         format!("window:{:?},", defaults.window),
     ] {
