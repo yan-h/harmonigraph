@@ -204,6 +204,23 @@ fn a_wild_radial_gap_is_clamped_and_the_stack_stops_at_the_ring_that_fits() {
         "the outermost ring is at {}, which is off the node",
         scene.rings_outer,
     );
+    // The CEILING itself, read where the scene still carries it. Every ring
+    // this padding stands off was refused, so the radii above say nothing about
+    // how wide it is; the mark strip is the one slot a full stack still spends
+    // it on, and the difference IS the gap the picture used.
+    //
+    // Worth its own assertion because the escape is silent and lands outside
+    // the node: `mark_inner` is what the shader sizes every node's BILLBOARD on
+    // (`node_rim`, then `quad_margin`), so an unclamped 5.0 here asks for a quad
+    // some five node radii across, on every node in the window, with the marks
+    // drawn nowhere a person can see them. Nothing in the two assertions above
+    // moves when the clamp goes — the refused pair is still empty and the stack
+    // still stops at the core.
+    assert!(
+        scene.mark_inner - scene.rings_outer <= GAP_MAX,
+        "the padding reached the picture as {}, past the {GAP_MAX} its bar can produce",
+        scene.mark_inner - scene.rings_outer,
+    );
 }
 
 #[test]
