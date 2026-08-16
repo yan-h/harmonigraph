@@ -1601,15 +1601,22 @@ fn create_pipelines(
 /// color, and alpha accumulated so the pass composites the same way over a
 /// transparent framebuffer.
 ///
-/// Everything a callback lays into the egui pass takes it, the pictures and
-/// their halos alike. On a halo that is what makes it pure LIGHT: it carries
-/// zero alpha, so the color term adds and the alpha term leaves the
-/// destination's own alone.
+/// The three callbacks that draw their own geometry take it — the roll's
+/// notes, the glyphs of [`crate::text`], and the halo of [`crate::glow`]. On a
+/// halo that is what makes it pure LIGHT: it carries zero alpha, so the color
+/// term adds and the alpha term leaves the destination's own alone.
 ///
-/// One definition rather than one per callback, and the reason is that the two
-/// agreeing is what makes them composite identically — the roll's notes over
-/// the spectrogram, the spiral's halo over its disc — where two copies agree
-/// only until one is edited.
+/// One definition rather than one per callback, because them agreeing is what
+/// makes them composite identically — the roll's notes over the spectrogram,
+/// the spiral's halo over its disc — where copies agree only until one is
+/// edited.
+///
+/// The lattice's `fs_composite` is the one thing here that does NOT name it,
+/// and deliberately: it spells the same operator as
+/// `PREMULTIPLIED_ALPHA_BLENDING`, which is `a(1-b)+b` where this is
+/// `a+b(1-a)` — the same arithmetic written from the other side, as
+/// [`create_text_pipeline`]'s own doc sets out. Pointing it here would rename
+/// a difference that is real in the source and absent in every pixel.
 const EGUI_BLEND: wgpu::BlendState = wgpu::BlendState {
     color: wgpu::BlendComponent {
         src_factor: wgpu::BlendFactor::One,

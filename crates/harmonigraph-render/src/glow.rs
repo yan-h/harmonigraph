@@ -797,4 +797,5 @@ mod tests {
             "the halo of a mark that stopped sounding was painted again",
         );
     }
+
 }
