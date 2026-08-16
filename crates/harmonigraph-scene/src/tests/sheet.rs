@@ -192,6 +192,65 @@ fn the_rings_stack_outward_from_the_core() {
     assert_eq!(scene.rings_outer, 0.35, "the marks kept the band's slot");
 }
 
+/// A ring draws at exactly the width its bar reads, or it is not drawn at all:
+/// a slot that would cross the quad edge is REFUSED rather than squeezed into
+/// whatever room is left, and the layers outside it go with it.
+///
+/// The squeeze is what makes this worth a test, because it is invisible from
+/// everywhere but the picture: the bar goes on reading the width somebody
+/// dialled, the geometry holds a fraction of it, and at the far end that
+/// fraction is a hairline at the node's rim — a band 0.0008 wide is a
+/// twenty-fifth of a pixel on the 52-px node the DAW draws, where `glyph_band`'s
+/// two soft edges overlap instead of cancelling and paint a faint ring around
+/// nothing. Dropping the layer says what the room ran out at; clipping it says
+/// the bar was a suggestion.
+#[test]
+fn a_layer_with_no_room_left_in_the_node_is_not_drawn() {
+    // A core wide enough to leave the band a sliver of its 0.19: the audio
+    // ring still fits whole, and the band's slot ends past the quad edge.
+    let view = ViewConfig { core_radius: 0.594, ..ViewConfig::default() };
+    let rings = view.rings();
+    assert!(rings.audio.1 > rings.audio.0, "the audio ring lost a slot that fits");
+    assert_eq!(rings.band, (0.0, 0.0), "the band was squeezed into {:?}", rings.band);
+    assert_eq!(rings.outer, rings.audio.1, "the marks stand off the ring that IS outermost");
+    let scene = scene_of(
+        &NoteTracker::new(),
+        &Tuning::default(),
+        &view,
+        &plain_frame(),
+        0.0,
+    );
+    assert_eq!((scene.outer_inner, scene.outer_outer), (0.0, 0.0));
+
+    // Wider still, and the audio ring goes the same way: the layers drop off
+    // the OUTSIDE of the stack one at a time, leaving the core alone rather
+    // than a core wearing two hairlines.
+    let view = ViewConfig { core_radius: 0.9, ..ViewConfig::default() };
+    let rings = view.rings();
+    assert_eq!(rings.audio, (0.0, 0.0), "the audio ring was squeezed into {:?}", rings.audio);
+    assert_eq!(rings.band, (0.0, 0.0), "the band was squeezed into {:?}", rings.band);
+    assert_eq!(rings.outer, rings.core_radius, "the node is the core alone");
+
+    // Every pair the stack hands out, at every core the bar reaches: the ring
+    // is the width its own bar reads and sits inside the quad, or it is off.
+    // There is no third answer, which is the whole of the rule.
+    let fresh = ViewConfig::default();
+    for step in 0..=90 {
+        let core = step as f32 / 100.0;
+        let rings = ViewConfig { core_radius: core, ..fresh.clone() }.rings();
+        for (name, width, (inner, outer)) in [
+            ("audio", fresh.spectral_ring_width, rings.audio),
+            ("band", fresh.band_width, rings.band),
+        ] {
+            assert!(
+                (inner, outer) == (0.0, 0.0)
+                    || (outer <= 1.0 && (outer - inner - width).abs() < 1e-5),
+                "a core of {core} drew the {name} ring at {inner}..{outer}, not {width} wide",
+            );
+        }
+    }
+}
+
 /// A size a hand-edited blob holds but no bar can produce reaches the scene as
 /// the layer's own OFF position, and takes nothing else down with it.
 ///
@@ -230,8 +289,9 @@ fn a_hand_edited_size_reaches_the_scene_as_that_layers_off_position() {
 
 #[test]
 fn core_and_outer_geometry_are_sanitized_into_the_scene() {
-    // A stack dialled past the quad's own edge: every ring is held inside it
-    // rather than handed to the shader as a radius it would draw off the node.
+    // A stack dialled past the quad's own edge: each width is held to the bar's
+    // own top, and the layer the quad has no room left for is dropped rather
+    // than handed to the shader as a radius it would draw off the node.
     let view = ViewConfig {
         core_radius: 0.0,
         spectral_ring_width: 0.8,
@@ -246,10 +306,11 @@ fn core_and_outer_geometry_are_sanitized_into_the_scene() {
         0.0,
     );
     assert_eq!(scene.core_radius, 0.0, "radius 0 = core off");
-    // The core off, so the audio ring reaches the center; the band takes what
-    // is left of the quad.
-    assert!(scene.outer_outer > scene.outer_inner);
-    assert!(scene.outer_outer <= 1.0, "the band reaches past the node at {}", scene.outer_outer);
+    // The core off, so the audio ring reaches the center and takes its whole
+    // clamped width; the band's slot starts a gap past that and ends outside
+    // the quad, so the layer is off.
+    assert_eq!(scene.rings_outer, RING_WIDTH_MAX, "the audio ring is not its bar's full width");
+    assert_eq!((scene.outer_inner, scene.outer_outer), (0.0, 0.0));
 
     // Core on: the radius passes through and solidity rides alongside,
     // both clamped to range.

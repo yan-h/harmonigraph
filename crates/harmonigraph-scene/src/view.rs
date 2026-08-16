@@ -909,8 +909,17 @@ pub struct RingStack {
 
 /// One ring's slot in the stack: `width` thick, a `gap` out from `cursor`,
 /// which it then advances to its own outer edge. `(0.0, 0.0)` — and a cursor
-/// left where it was — when it is off or when the stack has already reached the
-/// quad edge.
+/// left where it was — when it is off, or when the slot it asks for would reach
+/// past the quad edge.
+///
+/// A ring draws at exactly the width its bar reads or it is not drawn at all,
+/// which is why a slot that does not fit is REFUSED rather than clipped to the
+/// room left. Clipping keeps the layer alive at whatever width the stack
+/// happened to leave it — a bar reading 0.19 drawing 0.0008, a hairline at the
+/// node's rim that no setting asked for and nothing on screen explains. Refusing
+/// it drops the layers off the outside of the stack one at a time as the room
+/// runs out, so what the picture loses is a whole ring and what is left is the
+/// widths the bars read.
 ///
 /// The gap is skipped at a cursor of 0, where there is nothing to stand off:
 /// with the core off the innermost ring reaches the node's center and its
@@ -920,9 +929,9 @@ fn stacked(cursor: &mut f32, gap: f32, width: f32) -> (f32, f32) {
     if width <= 0.0 {
         return (0.0, 0.0);
     }
-    let inner = if *cursor > 0.0 { (*cursor + gap).min(1.0) } else { 0.0 };
-    let outer = (inner + width).min(1.0);
-    if outer <= inner {
+    let inner = if *cursor > 0.0 { *cursor + gap } else { 0.0 };
+    let outer = inner + width;
+    if outer > 1.0 {
         return (0.0, 0.0);
     }
     *cursor = outer;
