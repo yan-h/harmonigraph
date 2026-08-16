@@ -657,9 +657,10 @@ pub(crate) fn blank_atlas(device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu::T
 ///     bright pass reads, so leaving it unwritten here is the whole of how a
 ///     name stays out of the bloom.
 ///
-/// The alpha blend is egui's own — `src * (1 - dst.a) + dst`, which is the
-/// same arithmetic as premultiplied `over` written from the other side, so a
-/// glyph composites into the lattice's offscreen exactly as a node does.
+/// The blend is [`crate::EGUI_BLEND`]. Its alpha term is egui's own —
+/// `src * (1 - dst.a) + dst`, which is the same arithmetic as premultiplied
+/// `over` written from the other side, so a glyph composites into the
+/// lattice's offscreen exactly as a node does.
 pub(crate) fn create_text_pipeline(
     device: &wgpu::Device,
     target_format: wgpu::TextureFormat,
@@ -678,18 +679,7 @@ pub(crate) fn create_text_pipeline(
     });
     let mut targets = vec![Some(wgpu::ColorTargetState {
         format: target_format,
-        blend: Some(wgpu::BlendState {
-            color: wgpu::BlendComponent {
-                src_factor: wgpu::BlendFactor::One,
-                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                operation: wgpu::BlendOperation::Add,
-            },
-            alpha: wgpu::BlendComponent {
-                src_factor: wgpu::BlendFactor::OneMinusDstAlpha,
-                dst_factor: wgpu::BlendFactor::One,
-                operation: wgpu::BlendOperation::Add,
-            },
-        }),
+        blend: Some(crate::EGUI_BLEND),
         write_mask: wgpu::ColorWrites::ALL,
     })];
     // The pass's nodes-only attachment, declared and never written — an empty

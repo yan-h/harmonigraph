@@ -231,12 +231,15 @@ mod tests {
     }
 
     /// Which of the ring's readings a shot is of: none of them (the MIDI
-    /// picture alone), the raw spectrum at a given Range, or the fold.
+    /// picture alone), the raw spectrum at a given Range, the fold, or the fold
+    /// at a stated Gate — how loud a node's loudest wedge must read for that
+    /// node to wear a ring at all.
     #[derive(Clone, Copy)]
     enum Shot {
         Midi,
         Spectrum(f32),
         Fold,
+        Gate(f32),
     }
 
     /// A sawtooth at MIDI `midi`, one second of it: every harmonic to Nyquist
@@ -362,6 +365,12 @@ mod tests {
         // same wedges in the same annulus, one flat per octave and one a
         // window across it. Which of the two reads better is the judgement
         // this probe exists to put in front of a person.
+        //
+        // The GATE sweep runs at the far distance alone, and that is its
+        // subject rather than a saving: what it decides is which of a screenful
+        // of nodes is worth a ring, and one node up close has nothing to say
+        // about that. Its low end is the gate off — a ring on every node in
+        // view, silence included — which is what the sweep is read against.
         let fresh_range = state.view.spectral_ring_range;
         let mut shots: Vec<(f32, &str, Shot)> = Vec::new();
         for (zoom, at) in [(2.5f32, ""), (9.0, "-close")] {
@@ -370,6 +379,9 @@ mod tests {
                 shots.push((zoom, at, Shot::Spectrum(range)));
             }
             shots.push((zoom, at, Shot::Fold));
+        }
+        for gate in [0.0f32, 0.25, 0.4, 0.6] {
+            shots.push((2.5, "", Shot::Gate(gate)));
         }
 
         let home = state.camera;
@@ -381,6 +393,14 @@ mod tests {
                     state.view.spectral_ring_range = range;
                     format!("audio-ring-{range:.0}c")
                 }
+                Shot::Gate(gate) => format!("audio-ring-gate-{:.0}", gate * 100.0),
+            };
+            // Every other shot is of the ring's own reading, so they are taken
+            // at the gate OFF: a node held back would read as a reading that
+            // says nothing there, which is the one thing those shots are for.
+            state.view.spectral_ring_gate = match shot {
+                Shot::Gate(gate) => gate,
+                _ => 0.0,
             };
             // The ring's WIDTH is what turns it off, so the MIDI shot dials it
             // to nothing rather than picking a reading that says "none" — and
@@ -392,13 +412,23 @@ mod tests {
                 _ => fresh_width,
             };
             state.view.spectral_reading = match shot {
-                Shot::Fold | Shot::Midi => harmonigraph_scene::SpectralReading::Fold,
+                Shot::Fold | Shot::Midi | Shot::Gate(_) => {
+                    harmonigraph_scene::SpectralReading::Fold
+                }
                 Shot::Spectrum(_) => harmonigraph_scene::SpectralReading::Spectrum,
             };
             // From the fresh camera each time: the pane pans the view's center
             // with the camera, so a zoom applied on top of the last one would
             // compound.
             state.camera = home;
+            // And from a fresh fade, for the same reason one step further on:
+            // every shot here is taken at ONE clock, so a ring carried over
+            // from the shot before would still be standing where that shot's
+            // Gate put it (`RingFade` steps against the clock, so a second
+            // frame at the same moment moves nothing). These are pictures of
+            // settings rather than frames of an animation, and a fresh fade is
+            // what the first frame of each of them draws.
+            state.ring_fade = harmonigraph_scene::RingFade::default();
             state.camera.zoom_by(zoom);
             let output = context.run_ui(
                 egui::RawInput {

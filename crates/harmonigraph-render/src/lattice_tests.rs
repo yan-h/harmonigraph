@@ -338,6 +338,9 @@ fn parity_scene() -> Scene {
             bass_level: if i == 2 || i == 4 { 1.0 } else { 0.0 },
             melody_color: Vec4::new(1.0, 0.85, 0.4, 1.0),
             bass_color: Vec4::new(0.45, 0.8, 1.0, 1.0),
+            // The lattice pass draws the ring on every node it ships; the
+            // gate is the fold's answer and there is no fold here.
+            audio_ring: 1.0,
             trail: 0.0,
         });
     }
@@ -364,6 +367,11 @@ fn parity_scene() -> Scene {
         // The ground the sevens knockout clears to; the half of this
         // scene's nodes that carry a gutter exercise it.
         background: harmonigraph_scene::skin::panel_color(),
+        // The grey the octave band's unsounding slices draw, at the fresh
+        // view's own Ground — most of every node's band in this fixture.
+        lattice_ground: harmonigraph_scene::grey_of_lightness(
+            harmonigraph_scene::ViewConfig::default().lattice_ground,
+        ),
         sevens_soft: 0.24,
         node_radius: 0.34,
         mark_thickness: 0.09,
@@ -1305,6 +1313,9 @@ fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
         // which are the same color wherever the two name one sector.
         melody_color: Vec4::new(1.0, 0.85, 0.4, 1.0),
         bass_color: Vec4::new(0.45, 0.8, 1.0, 1.0),
+        // The lattice pass draws the ring on every node it ships; the
+        // gate is the fold's answer and there is no fold here.
+        audio_ring: 1.0,
         trail: 0.0,
     }];
     scene.grid.clear();
@@ -1687,6 +1698,124 @@ fn the_audio_ring_reads_the_spectrum_around_each_octave() {
         0,
         "a sounding partial drew something with the ring switched off",
     );
+}
+
+/// A node the gate holds back draws exactly the picture it would draw with the
+/// ring layer OFF: the annulus goes, and the octave band, the marks and the
+/// node's own body stay pixel for pixel.
+///
+/// Two claims in one comparison, and the second is the one worth the GPU. That
+/// the gate removes the ring is arithmetic anyone can read off the shader; that
+/// it removes NOTHING ELSE is a property of where the test sits in the fragment
+/// program, and the ways it can fail all draw a plausible picture — a gate
+/// applied before the wedge walk instead of inside it, or one that fell through
+/// to the layer under it, would take the band's ghost or the glyph's edge with
+/// it and read as a node that changed shape when the music went quiet.
+#[test]
+fn a_gated_node_loses_its_ring_and_nothing_else() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut gpu) = Shooter::new(SIZE) else {
+        return;
+    };
+    let fresh_range = harmonigraph_scene::ViewConfig::default().spectral_ring_range;
+    // A node with an octave held and a partial sounding at that same octave, so
+    // both rings have something to draw and the two can be told apart in the
+    // shot.
+    let slot = harmonigraph_scene::MIDDLE_C_SLOT;
+    let sounding = slot as f32 * 12.0;
+    let lit = ringing_node(Some(slot), Some(sounding), fresh_range);
+    let ringing = gpu.shot(&lit);
+
+    // The same node held back by the gate...
+    let mut gated = ringing_node(Some(slot), Some(sounding), fresh_range);
+    gated.nodes[0].audio_ring = 0.0;
+    // ...against the same node with the LAYER off, which is the picture a gated
+    // node has to come out as.
+    let mut layer_off = ringing_node(Some(slot), Some(sounding), fresh_range);
+    layer_off.spectral.inner = 0.0;
+    layer_off.spectral.outer = 0.0;
+
+    let dark = gpu.shot(&gated);
+    assert!(
+        differing_pixels(&ringing, &dark) > 0,
+        "the ungated node drew no ring, so there is nothing for the gate to take",
+    );
+    assert_eq!(
+        differing_pixels(&dark, &gpu.shot(&layer_off)),
+        0,
+        "a gated node is not the picture the ring layer being off draws",
+    );
+    // And the ring is what went: the light that differs sits in the audio
+    // ring's own annulus, well inside the band. (`light_over` is the ungated
+    // shot less the gated one, so what it holds is exactly the ring.)
+    let ring = light_about_center(&light_over(&ringing, &dark), SIZE);
+    let bare = gpu.shot(&ringing_node(None, None, fresh_range));
+    let band = light_about_center(&light_over(&ringing, &bare), SIZE);
+    assert!(ring.weight > 0.0, "nothing at all was taken away");
+    assert!(
+        ring.far + 2.0 < band.far,
+        "what the gate took reaches {:.1} px, past the node's own band at {:.1}",
+        ring.far,
+        band.far,
+    );
+}
+
+/// A ring part way through its fade is the ring drawn OVER the picture without
+/// it, at a fraction of its coverage — every pixel of the node between the two
+/// pictures the ends of the fade draw, and no pixel outside the annulus moved.
+///
+/// What the fade has to be if it is to read as a ring arriving rather than as
+/// the node changing: the level scales the RING's coverage, so what shows
+/// through is the octave layer under it. The ways it can fail all draw a
+/// plausible picture and none of them is this — a level mixed into the wedge's
+/// COLOUR would draw a reading of a quieter spectrum, and one applied to the
+/// composite would fade the band and the marks with it.
+///
+/// A quarter and not a half, so that a shot which merely picked one END of the
+/// fade cannot pass by landing between the two.
+#[test]
+fn a_ring_part_way_through_its_fade_sits_between_the_two() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut gpu) = Shooter::new(SIZE) else {
+        return;
+    };
+    let fresh_range = harmonigraph_scene::ViewConfig::default().spectral_ring_range;
+    let slot = harmonigraph_scene::MIDDLE_C_SLOT;
+    let sounding = slot as f32 * 12.0;
+    let full = gpu.shot(&ringing_node(Some(slot), Some(sounding), fresh_range));
+
+    let mut none = ringing_node(Some(slot), Some(sounding), fresh_range);
+    none.nodes[0].audio_ring = 0.0;
+    let none = gpu.shot(&none);
+
+    let mut part = ringing_node(Some(slot), Some(sounding), fresh_range);
+    part.nodes[0].audio_ring = 0.25;
+    let part = gpu.shot(&part);
+
+    assert!(differing_pixels(&full, &none) > 0, "the ring drew nothing to fade");
+    assert!(differing_pixels(&part, &none) > 0, "a quarter of a ring drew nothing at all");
+    assert!(differing_pixels(&part, &full) > 0, "a quarter of a ring is the whole of one");
+
+    // Between the two, channel by channel. The slack is the compositing's own
+    // rounding — the ring is blended in 8-bit twice over — and not a tolerance
+    // on the claim: a level that reached the colour instead would leave the
+    // wedges the same coverage and paint them a different colour, which lands
+    // outside the pair wherever the ramp is not monotone in the channel.
+    let mut moved = 0;
+    for ((p, a), b) in part.chunks(4).zip(full.chunks(4)).zip(none.chunks(4)) {
+        for c in 0..3 {
+            let (low, high) = (a[c].min(b[c]), a[c].max(b[c]));
+            assert!(
+                i32::from(p[c]) >= i32::from(low) - 2 && i32::from(p[c]) <= i32::from(high) + 2,
+                "a quarter-faded pixel reads {} where the ends read {low} and {high}",
+                p[c],
+            );
+        }
+        if a != b {
+            moved += 1;
+        }
+    }
+    assert!(moved > 0, "the two ends of the fade drew one picture");
 }
 
 /// A melody/bass mark stands off the OUTERMOST RING the node draws, which on a
@@ -3077,8 +3206,9 @@ fn an_indicator_is_drawn_at_its_own_pitchs_angle() {
             let slot =
                 (harmonigraph_scene::MIDDLE_C_SLOT as i32 + offset).clamp(first + 1, last - 1);
             let mut scene = octave_wheel_scene(layout, cents);
-            // One octave sounding. The silent slots still ghost in behind it
-            // at GHOST_LEVEL, which the brightness threshold below sorts out.
+            // One octave sounding. The silent slots still carry the ring's
+            // ground behind it, which the brightness threshold below sorts
+            // out.
             scene.nodes[0].octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
             scene.nodes[0].octaves[slot as usize] = 1.0;
 
@@ -3155,14 +3285,19 @@ fn an_indicator_is_drawn_at_its_own_pitchs_angle() {
 /// released one runs out against it.
 ///
 /// A slot painted in PLACE of its ghost — opacity by a max(), color by a
-/// `level > 0` switch — fails the first two checks below, and which one goes
-/// first is worth knowing. The ghost is the WHITENED node color, so the final
-/// frame's switch is a step up in light and the never-brightens loop is what
-/// actually fires; the tail-spread check catches the same fault, and is the
-/// one that would still hold if a ghost ever came out darker than the pitch it
-/// takes over from. The last check is neither: at level 0 both shaders run the
-/// same line, so it can only say the finished ring is one backdrop, not how it
-/// got there.
+/// `level > 0` switch — is caught below, and knowing WHICH check catches it is
+/// worth stating. The ghost is the rings' own grey (`Scene::lattice_ground`),
+/// and here it is darker than anything this fixture paints over it: every
+/// `pitch_lut` entry adds up to 1.4 across its three channels, against the
+/// fresh Ground's grey at 0.57. So the switch's last frame is a step DOWN in
+/// light, the never-brightens loop passes the whole way, and the TAIL-SPREAD
+/// check is the one that fires — the slice holds its pitch to the last lit
+/// frame and then makes the entire journey to the ground in one. The loop
+/// takes the fault first only where the ground is the BRIGHTER of the two,
+/// which is a Ground bar away rather than a shader change, so the spread check
+/// is the one to read this test by. The last check is neither: at level 0 both
+/// shaders run the same line, so it can only say the finished ring is one
+/// backdrop, not how it got there.
 #[test]
 fn a_released_octave_lands_on_its_ghost_without_a_step() {
     use harmonigraph_scene::octave_layout;
@@ -3223,18 +3358,18 @@ fn a_released_octave_lands_on_its_ghost_without_a_step() {
             pair[1]
         );
     }
-    // And the last stretch of it — from the ghost's own level down to
-    // nothing, which is where an opacity that floors and a color that
-    // switches part company — is SPREAD across the frames rather than spent
-    // in one. Painted in place of its ghost instead, the slice sits still for
-    // that whole stretch and then makes the entire journey in one frame.
+    // And the last stretch of it — the bottom sixth of the envelope, where a
+    // slice is nearly the ground already — is SPREAD across the frames rather
+    // than spent in one. Painted in place of the ground instead of mixed
+    // toward it, the slice sits still for that whole stretch and then makes
+    // the entire journey in one frame.
     //
     // A share of the travel rather than a run of strict decreases: a ramp
     // this shallow moves the last few frames by less than an 8-bit channel,
     // and the pair either side of zero reads identically here BECAUSE the
-    // handoff is smooth. The cut is GHOST_LEVEL in lattice.wgsl; a stale
-    // value only widens or narrows the stretch measured, so this reads the
-    // sweep rather than asserting the constant.
+    // handoff is smooth. Where the cut falls is not the claim — a different
+    // one only widens or narrows the stretch measured, so this reads the
+    // sweep rather than asserting a level.
     let tail = &steps[TAIL.iter().position(|&level| level <= 0.16).expect("a tail to measure")..];
     let travel = apart(&tail[0], &tail[tail.len() - 1]);
     assert!(travel > 10.0, "the tail hardly moves at all ({travel:.1}), so its shape says little");
@@ -3246,7 +3381,7 @@ fn a_released_octave_lands_on_its_ghost_without_a_step() {
             pair[1]
         );
     }
-    // Landing on the ghost the silent slices are drawn in — the same grey at
+    // Landing on the ground the silent slices are drawn in — the same grey at
     // the same coverage, so the finished ring is one backdrop rather than a
     // backdrop with one slice a shade off it.
     let (quiet, quiet_wedge) = wedge_of(layout, silent, 0.0);
@@ -3317,6 +3452,97 @@ fn a_lone_notes_octave_fades_in_a_straight_line() {
     // is no backdrop left for the indicator to sit in.
     let spent = probe.mean(&gpu.shot(&scene(0.0)), mid, wedge);
     assert!(spent.iter().sum::<f32>() < 3.0, "a spent lone note leaves {spent:?} behind");
+}
+
+/// The ground reaches the shader as a UNIFORM, and the picture has to track
+/// it: a silent slice wears the grey `Scene::lattice_ground` carries, whatever
+/// that is, rather than one grey baked into the shader.
+///
+/// Every other fixture here draws at the fresh Ground alone, and the grey that
+/// names is `vec3(0.189)` — near enough a plausible literal that a shader
+/// ignoring `u.lattice_ground` entirely, or reading the ground out of the
+/// wrong vec4 of the uniform block, would render all of them pixel for pixel.
+/// So this one draws one node four times across the bar, the fresh 20 first
+/// and then a near-black, a mid grey and a near-white.
+///
+/// Full presence against a slot at level 0 is where the arithmetic leaves
+/// nothing to interpret: a silent slice's opacity IS the node's presence, so
+/// at 1.0 the wedge is the ground colour undiluted, and the byte is that
+/// colour at 8 bits. The LIT slot beside it is read from the same shot and has
+/// to stay put — at full level the ghost is nothing, so a sounding pitch owes
+/// the ground no part of its colour, and a ground that moved it would be the
+/// mix leaking into the one place it must not reach.
+///
+/// A channel and a half, tighter than the 2.5 the fade probes above allow, and
+/// honestly so: those read points ON an envelope, where the level's own 8-bit
+/// packing is inside the measurement, and nothing here fades. One flat colour
+/// into an 8-bit target rounds by half a channel and by nothing else, and the
+/// closest pair of grounds measured lands 29 channels apart — twenty times the
+/// tolerance — so nothing here passes by being loose.
+#[test]
+fn a_silent_slice_wears_the_ground_the_scene_names() {
+    use harmonigraph_scene::{grey_of_lightness, octave_layout};
+
+    const SIZE: [u32; 2] = [384, 384];
+    let Some(mut gpu) = Shooter::new(SIZE) else {
+        return;
+    };
+    // The even five-octave wheel the release tests use: a 72-degree slice is
+    // room to sample well inside one and well inside its neighbour.
+    let layout = octave_layout(5, 60.0, 0, 1.0, 0.0);
+    let lit = harmonigraph_scene::MIDDLE_C_SLOT;
+    let quiet = lit + 1;
+    // Both inside the ring this wheel draws: `sector` CLAMPS a slot outside it
+    // rather than refusing, which would leave the two readings below taken on
+    // one wedge and agreeing for a reason that has nothing to do with the
+    // ground.
+    let (low, high) = layout.slots(0.0);
+    for slot in [lit, quiet] {
+        assert!((low..=high).contains(&(slot as i32)), "slot {slot} is outside {low}..={high}");
+    }
+    let scene_at = |ground: f32| {
+        let mut scene = octave_wheel_scene(layout, 0.0);
+        scene.lattice_ground = grey_of_lightness(ground);
+        let node = &mut scene.nodes[0];
+        node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
+        node.octaves[lit] = 1.0;
+        // The note fully down, so every silent slice on the ring is opaque and
+        // the wedge below reads the ground rather than a share of it.
+        node.activation = 1.0;
+        scene
+    };
+
+    let (lit_mid, lit_wedge) = wedge_of(layout, lit, 0.0);
+    let (quiet_mid, quiet_wedge) = wedge_of(layout, quiet, 0.0);
+    let mut pitch: Option<[f32; 3]> = None;
+    for ground in [20.0f32, 6.0, 45.0, 80.0] {
+        let px = gpu.shot(&scene_at(ground));
+        // Calibrated along the SOUNDING slice, which is the one ray that is
+        // bright at every ground: a band drawn in a near-black ground is the
+        // dark end of the bar, and the radii are the scene's either way.
+        let probe = BandProbe::new(&px, SIZE, lit_mid);
+        let got = probe.mean(&px, quiet_mid, quiet_wedge);
+        let want = grey_of_lightness(ground).truncate() * 255.0;
+        for j in 0..3 {
+            assert!(
+                (got[j] - want[j]).abs() < 1.5,
+                "at Ground {ground} the silent slice reads {got:?}, not {want:?}"
+            );
+        }
+        let sounding = probe.mean(&px, lit_mid, lit_wedge);
+        match pitch {
+            None => pitch = Some(sounding),
+            Some(first) => {
+                for j in 0..3 {
+                    assert!(
+                        (sounding[j] - first[j]).abs() < 1.5,
+                        "at Ground {ground} the lit slice reads {sounding:?}, and at the \
+                         first ground it read {first:?}"
+                    );
+                }
+            }
+        }
+    }
 }
 
 /// The seams between a chord's colors run at ONE width from the rim to the
@@ -3903,6 +4129,52 @@ fn an_open_ring_ships_every_idle_node() {
         cb.instances.len(),
         scene.nodes.len(),
         "with the ring on, a node with nothing else to draw still wears the floor colour",
+    );
+}
+
+/// ...and the other end of that term: a node whose ring has faded out owes no
+/// annulus, so the ring layer being ON is not on its own a reason to ship it.
+///
+/// The whole cost argument for the gate is here rather than in the picture —
+/// a gated-off idle node ships nothing at all, where an ungated ring forces
+/// every node in the window onto the bus. Nothing else can see it: a shipped
+/// node with no ring and nothing else to draw is transparent at every
+/// fragment, so no pixel test can tell it from one that was never sent, and
+/// [`an_open_ring_ships_every_idle_node`] only ever drives the term's true
+/// side.
+///
+/// Part way through the fade is the case that says it is a LEVEL and not the
+/// gate's own bit: a ring on its way out is drawn, so it is shipped for
+/// exactly as long as it is drawn.
+#[test]
+fn a_faded_out_ring_ships_no_idle_node() {
+    let fresh = harmonigraph_scene::ViewConfig::default();
+    let mut scene = idle_scene();
+    assert!(!scene.nodes.is_empty(), "the fixture has to carry idle nodes");
+    (scene.spectral.inner, scene.spectral.outer) = fresh.rings().audio;
+    let ships = |scene: &Scene| {
+        LatticeCallback::from_scene(
+            scene,
+            LatticeLabels::default(),
+            egui::vec2(256.0, 256.0),
+            wgpu::TextureFormat::Rgba8Unorm,
+            32,
+            None,
+        )
+        .instances
+        .len()
+    };
+    for node in &mut scene.nodes {
+        node.audio_ring = 0.0;
+    }
+    assert_eq!(ships(&scene), 0, "an idle node with no ring left was still shipped");
+    for node in &mut scene.nodes {
+        node.audio_ring = 0.5;
+    }
+    assert_eq!(
+        ships(&scene),
+        scene.nodes.len(),
+        "an idle node part way through its fade draws a ring and has to be shipped",
     );
 }
 

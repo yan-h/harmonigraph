@@ -1322,6 +1322,11 @@ fn track_color(shapes: &[egui::epaint::ClippedShape], y: f32) -> egui::Color32 {
 /// alone, or that gated a bar on the reading without the ring, still leaves the
 /// pane looking operable while nothing under it can be moved.
 ///
+/// Gate is live under BOTH readings, which is the one bar here that is: it says
+/// which nodes wear the ring rather than how either reading is measured, so a
+/// version that tied it to one of them would leave the other's rings ungateable
+/// while every claim below still held.
+///
 /// Read off the PAINTED track rather than a response flag, because a gate egui
 /// honours and a gate the pane merely believes in look the same from inside the
 /// pane — the tint is the painter's, so the colour is the one reading that has
@@ -1344,6 +1349,12 @@ fn each_readings_own_bar_is_the_one_that_is_live() {
                 .find(|y| *y > reading_row && *y < zoom)
                 .expect("the Audio section's Tolerance bar sits between Reading and Zoom"),
             "Zoom" => zoom,
+            // Between the Reading row and Zoom, by position for the same
+            // reason: it is the section's own bar or this measures nothing.
+            "Gate" => text_ys(&shapes, "Gate")
+                .into_iter()
+                .find(|y| *y > reading_row && *y < zoom)
+                .expect("the Audio section's Gate bar sits between Reading and Zoom"),
             other => panic!("{other:?} is not a bar in the Audio section"),
         };
         track_color(&shapes, y)
@@ -1354,15 +1365,19 @@ fn each_readings_own_bar_is_the_one_that_is_live() {
     let dead = row((SpectralReading::Fold, WIDE), "Zoom");
     assert_ne!(live, dead, "a bar's track paints the same greyed and live, so nothing below bites");
 
-    for (state, want_width, want_range) in [
-        ((SpectralReading::Fold, WIDE), live, dead),
-        ((SpectralReading::Spectrum, WIDE), dead, live),
-        // The ring dialled off: both readings' bars have nothing to size.
-        ((SpectralReading::Fold, 0.0), dead, dead),
-        ((SpectralReading::Spectrum, 0.0), dead, dead),
+    for (state, want_width, want_range, want_gate) in [
+        ((SpectralReading::Fold, WIDE), live, dead, live),
+        ((SpectralReading::Spectrum, WIDE), dead, live, live),
+        // The ring dialled off: both readings' bars have nothing to size and
+        // the gate has no ring to hold back. Every bar this section holds is
+        // dead there, which is the state the doc above argues about — what
+        // turns the ring back on is the Layers bar, two sections up.
+        ((SpectralReading::Fold, 0.0), dead, dead, dead),
+        ((SpectralReading::Spectrum, 0.0), dead, dead, dead),
     ] {
         assert_eq!(row(state, "Tolerance"), want_width, "{state:?}: Tolerance is the wrong way");
         assert_eq!(row(state, "Zoom"), want_range, "{state:?}: Zoom is the wrong way");
+        assert_eq!(row(state, "Gate"), want_gate, "{state:?}: Gate is the wrong way");
     }
 }
 

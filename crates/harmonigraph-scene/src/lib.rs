@@ -36,7 +36,9 @@ pub mod trail;
 pub mod view;
 
 pub use camera::{Camera, Projection, Projector, VisibleSheet};
-pub use color::{gradient_color, hue_circle, pitch_lut_color, pitch_ramp_lut, HUE_CIRCLE_N};
+pub use color::{
+    gradient_color, grey_of_lightness, hue_circle, pitch_lut_color, pitch_ramp_lut, HUE_CIRCLE_N,
+};
 pub use derive::derive_scene;
 pub use octaves::{
     clamp_center, clamp_wheel, octave_layout, OctaveLayout, Ring, DEFAULT_CENTER, DEFAULT_COUNT,
@@ -44,14 +46,15 @@ pub use octaves::{
     MIN_EXTRA_SIZE, MIN_SPAN, OCTAVE_SLOTS, PITCH_CEIL, PITCH_FLOOR,
 };
 pub use spectral::{
-    bucket_pitch, ring_gradient, SpectralLevels, SpectralPaint, SpectralReading, SPECTRAL_AXIS,
-    SPECTRAL_BUCKETS, SPECTRAL_BUCKETS_PER_SEMITONE, SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN,
+    bucket_pitch, ring_gradient, RingFade, RingGate, SpectralLevels, SpectralPaint,
+    SpectralReading, SPECTRAL_AXIS, SPECTRAL_BUCKETS, SPECTRAL_BUCKETS_PER_SEMITONE,
+    SPECTRAL_GATE_MAX, SPECTRAL_GATE_MIN, SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN,
 };
 pub use style::{Gradient, Pulse, SevensLabel};
 pub use view::{DrawnWindow, FrameParams, RingStack, ViewConfig};
 
 use glam::{Vec3, Vec4};
-use harmonigraph_core::LatticePos;
+use harmonigraph_core::{Envelope, LatticePos};
 
 /// Axis mapping, matching v1's orientation: major thirds run horizontally
 /// (x), fifths vertically (y), and harmonic sevenths in depth (z).
@@ -337,6 +340,41 @@ pub struct NodeInstance {
     /// unfolded pitch would then sit a register off the sector it extends.
     pub melody_color: Vec4,
     pub bass_color: Vec4,
+    /// How much of the audio ring this node wears, 0..=1 — the gate's answer
+    /// for its wedges ([`RingGate`]) carried on the note Fade ([`RingFade`]),
+    /// and never less than the node's own [`activation`](Self::activation).
+    ///
+    /// A LEVEL and not the gate's own yes or no, because a ring is a layer of a
+    /// node and every other layer of a node arrives and leaves on the Fade: a
+    /// ring that switched off at the instant the spectrum crossed the bar would
+    /// flicker on a breathing partial, and would leave part way through the
+    /// release the rest of the node is still drawing.
+    ///
+    /// The floor under it is the whole of what the KEYS have to say here: a
+    /// node the player is holding wears its ring for as long as the note lasts
+    /// and fades out with it, whatever the analyzer reads there. The gate is
+    /// then a question about the nodes nobody is playing — where a partial is
+    /// sounding on a lattice the keys have not lit — which is where a
+    /// reading-per-node was worth holding back.
+    ///
+    /// Beyond that floor it says nothing about the MIDI picture: a node whose
+    /// ring is gone keeps its disc, its octave band and its marks exactly as
+    /// the keys drew them, and loses only the annulus between the core and the
+    /// band.
+    ///
+    /// `1.0` out of [`derive_scene`], which is not a decision but the absence
+    /// of one — nothing in this crate reads audio, so a scene derived without
+    /// [`Scene::wear_audio_rings`] behind it is a scene where nothing has been
+    /// measured and nothing can be held back.
+    ///
+    /// It says nothing about a shell that forgets the pass, which is the
+    /// tempting reading and the wrong one: such a shell keeps
+    /// [`SpectralPaint::silent`]'s empty annulus, so the ring layer is off and
+    /// no node draws one whatever this holds. Where the value is load-bearing
+    /// is a scene assembled BY HAND with the annulus filled in — a test, a
+    /// fixture — and there the ungated picture is the one that cannot be
+    /// mistaken for a bug.
+    pub audio_ring: f32,
     /// How strongly the music is remembered here (see [`trail`]): 0 where
     /// it has never been, up to 1 where it has.
     ///
@@ -438,6 +476,27 @@ pub struct Scene {
     /// stacked rings, between one octave sector and the next, and between the
     /// outermost ring and the mark strip alike. Already clamped.
     pub ring_gap: f32,
+    /// The lattice at rest — its grid, and both of a node's rings where
+    /// nothing is lit — already resolved from
+    /// [`ViewConfig::lattice_ground`]'s `L*` to the neutral grey it names.
+    ///
+    /// A COLOUR here and an `L*` in the view, because the two ends want
+    /// different things: the bar is a brightness a person reads and drags, and
+    /// what the shader needs is three channels it can lay down without solving
+    /// for a luminance per fragment. Resolved once per frame in
+    /// [`derive_scene`] — the audio ring's own copy is
+    /// the `t` = 0 end of [`spectral`](Self::spectral)'s table, baked from the
+    /// same number, so the two agree by construction rather than by both being
+    /// aimed at the skin.
+    ///
+    /// Read by the OCTAVE band, which is what a silent slice draws and what a
+    /// sounding one's pitch is painted over as the note fades. The lattice's
+    /// two other at-rest surfaces carry the same grey without reading this
+    /// field, because neither reaches the shader as a uniform: every
+    /// [`grid`](Self::grid) segment carries it as its own colour, and the audio
+    /// ring carries it as the `t` = 0 end of its table. Three copies of one
+    /// resolve, not three answers.
+    pub lattice_ground: Vec4,
     /// The lattice's AUDIO channel: what the analyzer measured, where the
     /// ring that draws it sits, and the ramp every audio-lit element on the
     /// node is painted from (see [`spectral`]).
@@ -459,10 +518,12 @@ pub struct Scene {
     /// its own octaves fall against the center pitch, which is what makes an
     /// indicator's ANGLE mean an absolute pitch.
     pub octave_layout: OctaveLayout,
-    /// The faint background grid (see [`derive_grid`](derive::derive_grid)): one segment per
-    /// adjacent pair of visible positions, inset so every node position
-    /// keeps a circular gap where its disc draws while sounding. Reuses
-    /// [`EdgeInstance`]; `strength` carries the line opacity.
+    /// The background grid (see [`derive_grid`](derive::derive_grid)): one
+    /// segment per adjacent pair of visible positions, inset so every node
+    /// position keeps a circular gap where its disc draws while sounding.
+    /// Reuses [`EdgeInstance`]; `strength` carries the line opacity, and every
+    /// segment's colour is [`lattice_ground`](Self::lattice_ground) — so a
+    /// resting line IS that grey and a sevens link fades in to it.
     pub grid: Vec<EdgeInstance>,
     /// Grid line thickness as a multiple of the shader's built-in grid
     /// width (see [`ViewConfig::grid_thickness`]), already clamped.
@@ -554,6 +615,51 @@ impl Scene {
         // A clock or a speed that is not finite reaches here as a NaN, and a
         // NaN slide is a lattice of NaN colors rather than a wrong sheet.
         if slide.is_finite() { slide as f32 } else { 0.0 }
+    }
+
+    /// Decide how much of the audio ring each node wears — [`SpectralPaint::gate`]
+    /// against what its wedges reach, carried on `env` by `fade`, and floored by
+    /// the node's own envelope — and write it into
+    /// [`NodeInstance::audio_ring`].
+    ///
+    /// Run after the levels are measured in, which is the whole reason it is a
+    /// pass of its own rather than part of [`derive_scene`]: nothing in this
+    /// crate reads audio, so the question has no answer until the shell's fold
+    /// has filled [`Scene::spectral`] (`panes::spectral_fold::apply` is the one
+    /// caller, and it calls this last).
+    ///
+    /// A method on the scene and not a free function over the three parts,
+    /// because the parts are only right together: the levels, the wheel the
+    /// wedges are laid on and the nodes being gated all have to come from ONE
+    /// frame, and a caller assembling them by hand is a caller who can pair
+    /// last frame's grid with this frame's wheel. The `fade` is the one thing
+    /// that must OUTLIVE the frame, which is why it is passed in rather than
+    /// held here: a scene is built afresh every frame and a transition is
+    /// exactly what cannot be.
+    ///
+    /// The gate at its FLOOR runs the reduction like any other setting, though
+    /// the floor admits every node and the answer is a foregone yes: the fade
+    /// is what needs it. A lattice arriving at the floor has rings still on
+    /// their way in, and skipping the pass would leave them standing where the
+    /// bar's last position put them.
+    pub fn wear_audio_rings(&mut self, fade: &mut RingFade, env: &Envelope, now: f64) {
+        // Nothing to hold back on a ring dialled to no width, and nothing to
+        // carry either: the layer is off, so the fade keeps whatever it last
+        // held and picks the reading up again when the width bar brings a ring
+        // back.
+        if !self.spectral.ring_draws() {
+            return;
+        }
+        let gate = RingGate::new(&self.spectral);
+        fade.advance(&gate, env, now);
+        let layout = &self.octave_layout;
+        for node in &mut self.nodes {
+            // The keys' own floor. `activation` and not the octave word beside
+            // it, though the two carry the same envelopes: this is the level
+            // the node's disc and its clearing are drawn at, so the ring leaves
+            // exactly with the rest of the node rather than a slot at a time.
+            node.audio_ring = fade.level(layout, node.cents).max(node.activation);
+        }
     }
 }
 

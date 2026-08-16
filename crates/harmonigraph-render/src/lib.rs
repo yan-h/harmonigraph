@@ -39,11 +39,16 @@ use egui_wgpu::{CallbackResources, CallbackTrait, ScreenDescriptor};
 use harmonigraph_scene::Scene;
 
 /// The piano roll's own callback — a different picture with the same
-/// problem, solved the same way. It shares this crate's wgpu version and
-/// buffer helpers and nothing else; the lattice's offscreen target, depth
-/// buffer and bloom chain are all beside the point for a flat ribbon.
+/// problem, solved the same way. It shares this crate's wgpu version, buffer
+/// helpers and [`BloomChain`]; the lattice's offscreen target and depth buffer
+/// are beside the point for a flat ribbon.
 mod roll;
 pub use roll::{roll_paint_callback, RollAxes, RollInstance};
+
+/// A halo alone, over marks a pane drew for itself — the third caller of
+/// [`BloomChain`], and the one that draws no picture of its own.
+mod glow;
+pub use glow::{glow_paint_callback, GlowDot};
 
 /// Label text, for the same reason the roll has its own callback: what a
 /// label costs is the rim, and the rim was the text drawn again once per
@@ -118,10 +123,10 @@ const BLIT_SRC: &str = include_str!("shaders/blit.wgsl");
 /// the ceiling.
 ///
 /// One function rather than a bound at each place a strength is read, because
-/// the lattice and the piano roll take the SAME number and the whole claim
-/// [`BloomChain`] rests on is that it means one halo in both pictures. A bound
-/// applied to one of them alone is a light a node has that its ribbon does
-/// not, which is a difference between the two that says nothing.
+/// the lattice, the piano roll and the spiral's dots take the SAME number and
+/// the whole claim [`BloomChain`] rests on is that it means one halo in every
+/// picture. A bound applied to one of them alone is a light a node has that its
+/// ribbon does not, which is a difference between them that says nothing.
 pub fn bloom_strength(raw: f32) -> f32 {
     raw.clamp(0.0, 4.0)
 }
@@ -272,6 +277,16 @@ struct Uniforms {
     /// on the picture rather than as a hole through it. See
     /// `Scene::background`.
     background: [f32; 4],
+    /// The unlit ground a node's two rings stand on (`Scene::lattice_ground`): the
+    /// neutral grey the OCTAVE band's silent slices are, and the colour a
+    /// sounding one's pitch is painted over as it fades.
+    ///
+    /// A slot of its own beside `background` rather than three of the retired
+    /// scalars: it is a colour, the buffer's other colour has one, and a grey
+    /// split across the seam between two vec4s would be read by nothing that
+    /// wanted the halves apart. The audio ring's own copy of it is `t` = 0 of
+    /// `spectral_lut` below, baked on the CPU from the same `L*`.
+    lattice_ground: [f32; 4],
     /// The wheel's pitch axis. x: octaves one turn is cut into
     /// (`OctaveLayout::span`); y: the MIDI pitch at the top of every node
     /// (`OctaveLayout::center`).
@@ -314,9 +329,9 @@ struct Uniforms {
     /// The FREQUENCY colour scheme's ramp — the analyzer's own gradient
     /// (`SpectrumConfig::spectrogram_gradient`) through `pitch_ramp_lut`, the
     /// same gradient the spectrogram's cells and the Spiral pane's segments
-    /// are read off, with the bottom of its lightness range raised to the
-    /// lattice's own bed (`harmonigraph_scene::ring_gradient`) so a level reads
-    /// as the same light over a grey ground as it does over their black one.
+    /// are read off, with its silent end moved onto the node's own ground
+    /// (`harmonigraph_scene::ring_gradient`) so a level reads as the same light
+    /// over a grey ground as it does over their black one.
     /// Indexed by a LEVEL where `pitch_lut` beside it is indexed by a pitch,
     /// which is the whole difference between the two schemes.
     spectral_lut: [[f32; 4]; harmonigraph_scene::PITCH_LUT_N],
@@ -404,6 +419,19 @@ struct GpuInstance {
     /// sheet), y = knockout gutter width in uv units (0 on the home sheet).
     /// See `NodeInstance::scale` / `::gutter`.
     sevens: [f32; 2],
+    /// How much of the audio ring this node wears, 0..=1: the gate's answer for
+    /// its wedges carried on the note Fade, floored by the node's own envelope
+    /// (`NodeInstance::audio_ring`).
+    ///
+    /// A DECISION already taken and not the node's own peak level with the gate
+    /// beside it in the uniforms, though there is a free slot there for one:
+    /// the rule is "the loudest wedge reaches the gate", the levels and the
+    /// wheel it is measured over both live on the CPU, and splitting the
+    /// comparison across the bus would leave two places able to disagree about
+    /// which nodes ring. What crosses is where that decision has GOT to, which
+    /// is a level because a ring arrives and leaves on the Fade like every
+    /// other layer of a node (see `harmonigraph_scene::RingFade`).
+    ring: f32,
 }
 
 impl GpuInstance {
@@ -412,9 +440,11 @@ impl GpuInstance {
         step_mode: wgpu::VertexStepMode::Instance,
         // Locations 5 and 9 are absent, not renumbered. Both are retired
         // slots — 5 the home-sheet flag, 9 the trail level, each read only by
-        // an idle marker the nodes do not draw; the audio ring needs no slot
-        // here at all, since it reads one shared spectrum in the uniforms
-        // rather than a per-node word. The macro
+        // an idle marker the nodes do not draw. The audio ring's own slot is
+        // 11, and it carries how far the layer is on at this node rather than
+        // a reading: WHAT the ring says is a window onto the shared spectrum
+        // in the uniforms, and how much of one this node wears is the
+        // per-node half of it (`GpuInstance::ring`). The macro
         // names each location and takes each OFFSET from the sequence, so a
         // dropped entry shrinks the stride to match the struct without moving
         // the rest off their numbers — which is what keeps this list and
@@ -422,7 +452,7 @@ impl GpuInstance {
         attributes: &wgpu::vertex_attr_array![
             0 => Float32x3, 1 => Float32x4, 2 => Float32x3, 3 => Uint32x3,
             4 => Float32, 6 => Uint32x2,
-            7 => Float32x4, 8 => Float32x4, 10 => Float32x2
+            7 => Float32x4, 8 => Float32x4, 10 => Float32x2, 11 => Float32
         ],
     };
 }
@@ -734,6 +764,7 @@ impl LatticeCallback {
                 melody_color: n.melody_color.to_array(),
                 bass_color: n.bass_color.to_array(),
                 sevens: [n.scale, gutter],
+                ring: n.audio_ring,
         };
 
         let split = order
@@ -758,13 +789,19 @@ impl LatticeCallback {
         //
         // The audio RING is why this is not a property of the node alone: the
         // ring is a window onto the spectrum rather than a level a node
-        // carries, so with it on every node in the window paints one, silence
-        // included — that is what "the ring reads raw" means as a cost. The
-        // shader's idle branch pays it back per fragment, keeping an otherwise
-        // idle node to the ring's own annulus.
+        // carries, so it takes BOTH the layer being on and this node wearing
+        // some of the ring (`Scene::wear_audio_rings`) for the node to owe an
+        // annulus. With the gate at its floor that is every node in the window,
+        // silence included — the ungated picture, and what "the ring reads raw"
+        // costs; dialled up, an idle node with nothing sounding at it goes back
+        // to shipping nothing at all, ONCE ITS FADE HAS RUN OUT — the level
+        // reaches exactly 0 rather than approaching it, so a ring on its way
+        // out is shipped for exactly as long as it is drawn. The shader's idle
+        // branch pays the rest per fragment, keeping an otherwise idle node to
+        // the ring's own annulus.
         let ringing = scene.spectral.ring_draws();
         let paints = |g: &GpuInstance| {
-            ringing
+            (ringing && g.ring > 0.0)
                 || g.params[0] > 0.0
                 || g.params[1] > 0.0
                 || g.params[2] > 0.0
@@ -843,6 +880,7 @@ impl LatticeCallback {
                 misc5: [scene.grid_thickness, 0.0, scene.ring_gap, scene.mark_thickness],
                 misc6: [0.0, 0.0, scene.sevens_soft, scene.pulse_marks.shader_index() as f32],
                 background: scene.background.to_array(),
+                lattice_ground: scene.lattice_ground.to_array(),
                 misc7: [
                     scene.octave_layout.span as f32,
                     scene.octave_layout.center,
@@ -1240,11 +1278,12 @@ struct OffscreenShared<'a> {
 /// into half the picture's SCREEN size, a plain downsample to a quarter, then
 /// a separable blur ping-ponging between two quarter-res textures.
 ///
-/// One chain, both pictures. The lattice feeds it the scene without its
+/// One chain, every picture. The lattice feeds it the scene without its
 /// labels; the piano roll feeds it the notes rendered again offscreen
-/// (`crate::roll`). That they are the same four steps in the same order over
-/// the same fractions is the whole of what makes one bloom strength mean one
-/// halo, and it is a claim a second copy cannot keep: the step that matters
+/// (`crate::roll`); the spiral's dots feed it through `crate::glow`. That they
+/// are the same four steps in the same order over the same fractions is the
+/// whole of what makes one bloom strength mean one halo, and it is a claim a
+/// second copy cannot keep: the step that matters
 /// most is WHERE the threshold sits, and a chain that thresholds after the
 /// downsample instead of before it measures a thin shape that has already been
 /// averaged twice, so a ribbon gets a fraction of the halo the node it lit up
@@ -1271,9 +1310,9 @@ struct BloomChain {
 
 /// The four pipelines [`BloomChain::run`] steps through, in that order.
 ///
-/// Passed in rather than held: they are built per target format, and the two
-/// callers have their own (the lattice writes an offscreen texture, the roll
-/// the surface egui handed it).
+/// Passed in rather than held: they are built per target format, and each
+/// caller has its own (the lattice writes an offscreen texture, the roll and
+/// the glow the surface egui handed them).
 struct BloomPipelines<'a> {
     bright: &'a wgpu::RenderPipeline,
     downsample: &'a wgpu::RenderPipeline,
@@ -1590,6 +1629,40 @@ fn create_pipelines(
         ),
     )
 }
+
+/// egui's own blend state, verbatim (see egui-wgpu's renderer): premultiplied
+/// color, and alpha accumulated so the pass composites the same way over a
+/// transparent framebuffer.
+///
+/// The three callbacks that draw their own geometry take it — the roll's
+/// notes, the glyphs of [`crate::text`], and the halo of [`crate::glow`]. On a
+/// halo that is what makes it pure LIGHT: it carries zero alpha, so the color
+/// term adds and the alpha term leaves the destination's own alone.
+///
+/// One definition rather than one per callback, because them agreeing is what
+/// makes them composite identically — the roll's notes over the spectrogram,
+/// the spiral's halo over its disc — where copies agree only until one is
+/// edited.
+///
+/// The lattice's `fs_composite` is the one thing here that does NOT name it,
+/// and deliberately: it spells the same operator as
+/// `PREMULTIPLIED_ALPHA_BLENDING`, which is `a(1-b)+b` where this is
+/// `a+b(1-a)` — the same arithmetic written from the other side, as
+/// [`crate::text::create_text_pipeline`]'s own doc sets out. Pointing it here
+/// would rename a difference that is real in the source and absent in every
+/// pixel.
+const EGUI_BLEND: wgpu::BlendState = wgpu::BlendState {
+    color: wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::One,
+        dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+        operation: wgpu::BlendOperation::Add,
+    },
+    alpha: wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::OneMinusDstAlpha,
+        dst_factor: wgpu::BlendFactor::One,
+        operation: wgpu::BlendOperation::Add,
+    },
+};
 
 /// One post-process pipeline over the blit.wgsl module: a fullscreen quad
 /// with the given fragment entry point. The composite (into the egui

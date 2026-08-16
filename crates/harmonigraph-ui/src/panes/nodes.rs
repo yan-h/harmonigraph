@@ -15,7 +15,8 @@ use crate::widgets::{button_row, choice_row, OctaveStrip, StackBar, ValueBar};
 use crate::SharedState;
 use harmonigraph_scene::{
     Pulse, SpectralReading, ViewConfig, GAP_MAX, MARK_DELAY_MAX, MIN_EXTRA_SIZE, PITCH_CEIL,
-    PITCH_FLOOR, SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN, SPECTRAL_WIDTH_MAX, SPECTRAL_WIDTH_MIN,
+    PITCH_FLOOR, SPECTRAL_GATE_MAX, SPECTRAL_GATE_MIN, SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN,
+    SPECTRAL_WIDTH_MAX, SPECTRAL_WIDTH_MIN,
 };
 
 /// The sounding-note controls: the whole note first — the time it takes to
@@ -159,10 +160,12 @@ fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // that ring is off — so the only thing left to say about it is how thick it
     // is.
     //
-    // No Solidity and no Backdrop bar: both are fixed at 1. The glyphs are
-    // always the crisp classic shapes, and the silent octaves always ghost
-    // in behind the sounding ones — that backdrop is what completes the
-    // ring, so a lone octave still reads as a whole note.
+    // No Solidity bar and no Backdrop switch: the glyphs are always the crisp
+    // classic shapes, and the silent octaves always stand in behind the
+    // sounding ones — that backdrop is what completes the ring, so a lone
+    // octave still reads as a whole note. How BRIGHT it stands is the At rest
+    // section's Ground bar at the foot of the page, which is not this layer's
+    // to own: the audio ring's silence and the grid's lines are the same grey.
     //
     // No Shimmer row either: the glyphs are what says which octaves sound, and
     // a sheet laid over that reading costs it — so the sweep belongs to the
@@ -382,6 +385,41 @@ fn audio_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
             ],
         );
     });
+    // WHICH NODES wear the ring, where the Layers bar up in Note is how thick
+    // it is: a node whose loudest wedge does not reach this level draws no ring
+    // at all. Both readings, so it sits above the pair of bars that are each one
+    // reading's own — it is a question about the layer rather than about a
+    // measurement.
+    //
+    // It asks about the nodes NOBODY IS PLAYING, and that is worth knowing
+    // while dragging it: a node the keys have lit keeps its ring for as long as
+    // the note lasts whatever this says, and a ring comes and goes on the Note
+    // section's Fade rather than at the instant the level crosses. Both are in
+    // the hover text for the same reason — a bar that looks inert on the node
+    // you are watching is a bar that reads as broken.
+    //
+    // Greyed with the ring off, like the Reading row above it: there is no ring
+    // for it to hold back, and it is not what would bring one back. The switch
+    // that would is the layer's own width, which is the Layers bar's second
+    // handle — never greyed, since a control that greyed itself out at 0 could
+    // not be dragged off it.
+    ui.add_enabled_ui(view.spectral_ring_draws(), |ui| {
+        ValueBar::new(&mut view.spectral_ring_gate, SPECTRAL_GATE_MIN..=SPECTRAL_GATE_MAX, "Gate")
+            // A percentage of the Level window, which is the axis the ring's
+            // own colours are read off — so what the number names is a colour
+            // on the ring rather than a dB the analyzer's window could move
+            // out from under.
+            .display(|level| format!("{:.0}%", level * 100.0))
+            .show(ui)
+            .on_hover_text(
+                "How loud a node's loudest wedge has to read before that node \
+                 draws a ring at all, as a share of the analyzer's Level \
+                 window. 0 rings every node, silence included; dialled up, a \
+                 ring means something is sounding there. A node you are playing \
+                 rings whatever this says, and rings arrive and leave on the \
+                 Fade.",
+            );
+    });
     // The FOLD's kernel, and so inert under Spectrum rather than merely
     // without audio: the spectrum reading shows a whole window of pitch per
     // wedge, and a kernel there would blur the one axis the window exists to
@@ -431,10 +469,10 @@ fn audio_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
 /// around itself.
 ///
 /// One section rather than a heading apiece, because they are one idea: none
-/// is about the core, the octave glyphs or the melody/bass marks in
-/// particular, and all apply to whichever of those happen to be drawn. Fade
-/// especially — one time for the node rather than one per layer, so a release
-/// reads as a single gesture instead of pieces of the node going dark at
+/// is about the core, the octave glyphs, the audio ring or the melody/bass
+/// marks in particular, and all apply to whichever of those happen to be drawn.
+/// Fade especially — one time for the node rather than one per layer, so a
+/// release reads as a single gesture instead of pieces of the node going dark at
 /// different moments.
 fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBackend) {
     section(ui, "Note");
@@ -444,8 +482,8 @@ fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBack
     // is where they have to LOOK like the one setting they are.
     param_bar(ui, params, ParamKey::Fade).on_hover_text(
         "Seconds a note takes to arrive, and to leave once released — the whole \
-         node at once. Short notes still reach full brightness. 0 switches on \
-         and off outright.",
+         node at once, the audio ring's coming and going included. Short notes \
+         still reach full brightness. 0 switches on and off outright.",
     );
     // Linear like every bar around it, and for the same reason: the whole
     // range is one unit, so every hundredth of it — the readout's own

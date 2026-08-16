@@ -1,8 +1,9 @@
-//! The skin: one struct owning every color the product draws, so a look is
+//! The skin: one struct owning every color the CHROME draws, so a look is
 //! defined in exactly one place. `harmonigraph-ui::theme` converts the bytes
-//! into egui colors for the panel chrome; the scene reaches the same bytes
-//! through [`grid_line`] and [`panel_color`], which is what keeps the picture
-//! and the panel around it the same grey rather than two greys that agree.
+//! into egui colors for the panel chrome; the scene reaches them through
+//! [`panel_color`], the ground it is composited over, and through
+//! [`surface_faint_color`], the rung a fresh
+//! [`ViewConfig::lattice_ground`](crate::ViewConfig) opens on.
 //!
 //! Only one built-in skin exists so far (the original dark look). Adding a
 //! skin = another `Skin` value plus a way to select it (a `set_skin`
@@ -17,8 +18,11 @@ use glam::Vec4;
 #[derive(Clone, Debug)]
 pub struct Skin {
     // ---- UI chrome (sRGB bytes; converted to egui colors in theme) ----
-    // The scene has no colors of its own here: the one it used to keep, the
-    // home grid's, is `hairline` (see `grid_line`).
+    // CHROME only. What the lattice is drawn AT REST in — its grid, both of
+    // a node's rings where nothing is lit — is a view setting rather than a
+    // skin color (`ViewConfig::lattice_ground`), because it is a thing to be
+    // dialled while a picture is being read. The skin's part in it is
+    // `surface_faint`, the rung that setting opens on.
     /// Window/panel background.
     pub panel: [u8; 3],
     /// Recessed areas: console scrollback, tab bar, meters.
@@ -96,32 +100,6 @@ pub fn active_skin() -> &'static Skin {
     ACTIVE.get_or_init(Skin::default)
 }
 
-/// How faint an unlit home-sheet grid line draws — the alpha half of
-/// [`grid_line`], and the whole of what separates the picture's rules from
-/// the panel's. Opaque, the structure reads as firmly as the notes standing
-/// on it, which is the wrong way round: the grid is what the lattice looks
-/// like at rest, not a thing to be looked at.
-///
-/// Only a home-sheet line takes it. `color::idle_color` reads the same grey
-/// at full alpha as the color a node with no voice on it falls back to —
-/// which nothing draws while it holds it, an idle node painting no pixel.
-const GRID_LINE_ALPHA: f32 = 0.62;
-
-/// The home grid's color: the chrome's [`hairline`](Skin::hairline) grey, at
-/// [`GRID_LINE_ALPHA`].
-///
-/// The same grey that rules a settings pane rules the lattice, which is the
-/// point — the grid and the hairline are the same object seen in two places,
-/// one drawn by egui and one by the shader, and a skin that gave the scene
-/// its own near-copy of a chrome color could only ever drift from it. It was
-/// within four points per channel of `hairline` when it was its own field.
-pub fn grid_line() -> Vec4 {
-    let [r, g, b] = active_skin().hairline;
-    let mut c = ground_color((r, g, b));
-    c.w = GRID_LINE_ALPHA;
-    c
-}
-
 /// An sRGB byte triple as the opaque RGBA vector the renderer wants.
 ///
 /// A straight divide by 255, deliberately, not a gamma decode: the shader's
@@ -146,20 +124,32 @@ pub fn panel_color() -> Vec4 {
 }
 
 /// The active skin's `surface_faint`: the grey a subtly raised surface of the
-/// chrome sits at, and the BED the lattice's audio ring's ramp is anchored to
-/// ([`ring_gradient`](crate::ring_gradient)).
+/// chrome sits at, and the rung [`ViewConfig::lattice_ground`](crate::ViewConfig)
+/// opens on — what the whole lattice is drawn in at rest: its grid, and both of
+/// a node's rings where nothing is lit.
 ///
-/// Which rung of the ladder is the whole of what this choice is, and the ladder
-/// is short: the well at `L*` 4.7, [`panel_color`] — the lattice's own ground —
-/// at 8.8, and this at 20.0. The bed has to sit ABOVE the ground, so that a
-/// quiet ring reads as a faintly raised backdrop rather than as a mark on the
-/// surface: at 20.0 it lands flush with the octave band's own unlit ghost
-/// (`L*` 21.8), which is the picture beside it and the one it should agree
-/// with. The well is BELOW the ground and reads as black against both, which is
-/// a hole punched through the lattice; the panel is the ground exactly, and a
-/// silent ring bedded there vanishes into it — which is what a ring dialled to
-/// no width looks like, the off switch
-/// ([`ViewConfig::spectral_ring_width`](crate::ViewConfig)).
+/// Which rung of the ladder is the whole of what that default is, and the
+/// ladder is short: the well at `L*` 4.7, [`panel_color`] — the ground the
+/// lattice is composited OVER — at 8.8, and this at 20.0. The lattice's ground
+/// has to sit ABOVE the panel, so that a quiet ring and an idle grid line read
+/// as faintly raised structure rather than as marks on the surface. The well is
+/// BELOW it and reads as black against both, which is a hole punched through
+/// the lattice; the panel is the pane exactly, and structure standing there
+/// vanishes into it — which is what a ring dialled to no width looks like, the
+/// off switch ([`ViewConfig::spectral_ring_width`](crate::ViewConfig)).
+///
+/// A step DOWN from the chrome's own [`hairline`](Skin::hairline), which is
+/// the other grey the grid could rule itself with — the argument for that one
+/// being that the picture and the panel around it then cannot drift. What it
+/// costs is the whole reason this is the rung instead: it holds the lattice's
+/// structure to a CHROME decision, so the lines answer to the settings pane's
+/// dividers rather than to the rings a gap away from them, and no bar can move
+/// any of it. The rings are on the same sheet as the grid; the dividers are
+/// not.
+///
+/// A DEFAULT and not the value itself: the bar reaches the whole `L*` axis, and
+/// `the_fresh_ground_is_the_skins_faint_surface` is what keeps this rung and
+/// that default the same number.
 pub fn surface_faint_color() -> Vec4 {
     let [r, g, b] = active_skin().surface_faint;
     ground_color((r, g, b))

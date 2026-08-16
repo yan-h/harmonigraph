@@ -347,13 +347,15 @@ pub struct ViewConfig {
     /// which is the lattice read as a spectrum with the keys marking only its
     /// outer voices.
     pub band_width: f32,
-    // The octave layer's backdrop and solidity are fixed at 1 in the shader
-    // and have no fields here. The backdrop — the silent octaves ghosted
-    // faintly behind the sounding sectors, in the note color — is what makes
-    // the annulus complete, so a lone octave still reads as a whole note;
-    // and the glyphs are always the crisp classic shapes. Saved blobs may
-    // still carry the keys these rode on (`outer_backdrop`, first a bool and
-    // then an opacity under `outer_backdrop_alpha`, and `outer_solidity`);
+    // The octave layer's backdrop and solidity are fixed on in the shader and
+    // have no fields of their own. The backdrop — the silent octaves standing
+    // in the rings' own ground behind the sounding sectors — is what makes
+    // the annulus complete, so a lone octave still reads as a whole note; and
+    // the glyphs are always the crisp classic shapes. How bright that backdrop
+    // is IS a field, and it is [`lattice_ground`](Self::lattice_ground) below, one
+    // number under this layer and the audio ring together. Saved blobs may
+    // still carry the keys the pair rode on (`outer_backdrop`, first a bool
+    // and then an opacity under `outer_backdrop_alpha`, and `outer_solidity`);
     // serde ignores unknown keys, so such a blob loads intact and simply
     // drops them on the next save.
     /// The one padding on a node, in quad UV units: the RADIAL gap between one
@@ -374,6 +376,43 @@ pub struct ViewConfig {
     /// A gap is only ever spent between two DRAWN layers, so a ring dialled to
     /// 0 costs its own slot and the gap that would have stood it off together.
     pub ring_gap: f32,
+    /// The whole lattice AT REST, as an `L*` 0..100 — one neutral grey under
+    /// the three surfaces that draw where nothing is sounding:
+    ///
+    /// - the **grid** between node positions, every segment of it, and the
+    ///   colour a sevens link fades in to as a note hangs from it
+    ///   ([`derive_grid`](crate::derive::derive_grid));
+    /// - the **audio ring** wherever it reads silence, which its ramp is
+    ///   re-anchored to open on ([`ring_gradient`](crate::ring_gradient));
+    /// - the **MIDI ring**'s octave slices that are not sounding, which ARE
+    ///   this colour, with a sounding octave's pitch painted over them.
+    ///
+    /// One number under all three, like [`ring_gap`](Self::ring_gap) above it,
+    /// and for the same reason: they are one picture read together — two annuli
+    /// a gap apart with the lines of the lattice running into them — so a
+    /// ground that differed between them says the three are different KINDS of
+    /// thing when the only thing they have in common is being empty. Each
+    /// deriving its own ground instead — the audio ring off the analyzer's
+    /// gradient (whose dark end carries that gradient's own hue), the MIDI ring
+    /// off the note's colour whitened and laid on at a fixed opacity, the grid
+    /// off the CHROME's hairline at another — lands three near-greys a hair
+    /// apart in tint, and no bar can dial three routes onto one value.
+    ///
+    /// **Neutral**, because the ground is what they have in common rather than
+    /// a colour any of them owns: it carries no hue, and each surface's light
+    /// is added over it.
+    ///
+    /// Stated in `L*` because that is the axis the ask is on: perceived
+    /// brightness, the same units [`Gradient::lightness`](crate::Gradient) is
+    /// authored in, so a ground and a gradient can be compared by their
+    /// numbers. There is no off position and it needs none — each layer has its
+    /// own ([`grid_thickness`](Self::grid_thickness) for the lines, a width for
+    /// each ring). What the bottom of the bar reaches is black, which against
+    /// this skin's panel reads as holes punched through the lattice; a little
+    /// above it, at the panel's own `L*` (8.8 on the fresh skin), the whole
+    /// resting picture vanishes into the pane together and only sounding notes
+    /// draw.
+    pub lattice_ground: f32,
     /// How many octaves one turn of a node covers at FULL SIZE (see
     /// [`octaves`](crate::octaves)), 1..=11 — not how many it draws, which is
     /// this plus twice [`octave_extras`](Self::octave_extras). Each is exactly
@@ -464,7 +503,10 @@ pub struct ViewConfig {
     pub spectral_width: f32,
     /// How thick the audio ring is, in the same quad UV units as the octave
     /// band's own width ([`band_width`](Self::band_width)) — and **0 turns the
-    /// ring off**, which is the only switch it has.
+    /// ring off**, which is the only switch the LAYER has. Which nodes wear it
+    /// is the gate's ([`spectral_ring_gate`](Self::spectral_ring_gate)), and
+    /// the two are asked in that order: no width is no ring anywhere, and the
+    /// gate never runs.
     ///
     /// It sits between the core and the band in the stack
     /// ([`rings`](Self::rings)), so its inner edge is the core's radius plus a
@@ -503,6 +545,44 @@ pub struct ViewConfig {
     /// a seventh of the wedge apart rather than a fiftieth, which is the
     /// difference between reading a detuning and taking it on trust.
     pub spectral_ring_range: f32,
+    /// How loud the loudest thing a node's ring shows has to read before that
+    /// node draws a ring at all, as a level on the analyzer's own Level window
+    /// (0..=1, the axis the ring's colours are read off — see
+    /// [`SPECTRAL_GATE_MIN`](crate::SPECTRAL_GATE_MIN)).
+    ///
+    /// The ring is a window onto ONE grid the whole lattice shares, so without
+    /// this every node in view wears one whatever is sounding, and a stretch of
+    /// spectrum with nothing in it draws as a ring at the ramp's floor rather
+    /// than as no ring. That is an honest reading and a poor picture: the
+    /// lattice is hundreds of nodes, and a reading every one of them carries
+    /// says only where the nodes are. This is what buys back the other half —
+    /// a ring is then a node with something sounding at it, and where the rings
+    /// ARE is the picture.
+    ///
+    /// Per node and not per wedge, and the two readings answer it differently
+    /// only in what a wedge reaches: the fold's wedge is one level at that
+    /// octave's own pitch, and the spectrum's is the loudest bucket in the
+    /// window it spreads across its arc
+    /// ([`spectral_ring_range`](Self::spectral_ring_range)).
+    ///
+    /// Both ends are usable settings rather than guard rails. 0 is the gate off
+    /// — every node rings, which is the picture to go back to when what is
+    /// wanted is the analyzer's whole reading at once. The top asks for a
+    /// full-scale wedge, where a ring is a rare event on the loudest node in a
+    /// phrase.
+    ///
+    /// **It selects far more sharply under the fold than under the spectrum**,
+    /// and that is the two readings rather than anything here. A fold wedge is
+    /// energy concentrated AT its octave's pitch over a local noise floor, so
+    /// most nodes read near nothing and a gate picks out the constellation; a
+    /// spectrum wedge is a whole window of the raw grid, and in dense material
+    /// there is something loud within a hundred cents of nearly every pitch
+    /// class, so the nodes' levels sit close together and the bar tips from
+    /// most rings to none over a short stretch of its travel. Measured on a
+    /// sawtooth 24 dB down over the fresh window: the fold rings 601 nodes of
+    /// 1025 at 0.1 and 177 at 0.4, where the spectrum rings all 1025 at both
+    /// and none by 0.6.
+    pub spectral_ring_gate: f32,
     // ---- Note envelope ---------------------------------------------------
     // How a note ARRIVES and how it LEAVES, for every layer of the node at
     // once. The DURATION of both is the host-automatable Fade param and lives
@@ -740,12 +820,14 @@ pub struct ViewConfig {
     pub shimmer_softness: f32,
 
     // ---- Home grid -------------------------------------------------------
-    // The faint structural grid between node positions (see `derive_grid`),
-    // and with no idle marker under it, the whole of what an unplayed lattice
-    // draws. Line width and inset are its settings; its COLOR is not among
-    // them — it draws in the skin's hairline grey (`skin::grid_line`), the
-    // same one the panel rules itself with, and a lit segment takes its
-    // note's color.
+    // The structural grid between node positions (see `derive_grid`), and with
+    // no idle marker under it, the whole of what an unplayed lattice draws.
+    // Line width and inset are its settings HERE; its colour is
+    // [`lattice_ground`](Self::lattice_ground), up with the note's own layers,
+    // because that one grey is the whole at-rest picture — this grid and both
+    // of a node's rings where nothing is lit — and a bar that moved only the
+    // lines would take the lattice apart. A lit segment is the same ground,
+    // arrived rather than brighter.
     /// Grid line thickness as a multiple of the built-in width. 1 is the
     /// classic hairline; the shader scales its grid half-width by this, so 0
     /// takes the lines away and with them the lattice's resting picture.
@@ -1138,12 +1220,34 @@ impl ViewConfig {
         }
     }
 
+    /// [`lattice_ground`](Self::lattice_ground) as an `L*` the colour path can
+    /// actually solve for: on the axis, and a real number.
+    ///
+    /// One function for the same reason [`rings`](Self::rings) is one: the two
+    /// layers standing on this ground resolve it in different crates' reach —
+    /// `derive_scene` for the octave band, [`SpectralPaint::new`](crate::SpectralPaint)
+    /// for the audio ring's table — and a ground repaired two ways is two
+    /// grounds. The repair
+    /// is here rather than in [`sanitize`](Self::sanitize) alone for that
+    /// function's own reason: the drawing code is reached by more routes than
+    /// the persist door, and a NaN walks through a `clamp` untouched into a
+    /// Newton solve that answers with whatever its guard parks on.
+    pub fn lattice_ground_lightness(&self) -> f32 {
+        if self.lattice_ground.is_finite() {
+            self.lattice_ground.clamp(0.0, 100.0)
+        } else {
+            DEFAULT_RING_GROUND
+        }
+    }
+
     /// Whether the audio ring is drawn at all: a width to draw it with, and
     /// room left inside the quad to draw it in.
     ///
-    /// The ring's own switch, and the whole of it —
+    /// The LAYER's own switch, and the whole of it —
     /// [`spectral_reading`](Self::spectral_reading) says which of two readings
-    /// fills the annulus, never whether there is one.
+    /// fills the annulus, never whether there is one, and
+    /// [`spectral_ring_gate`](Self::spectral_ring_gate) says which nodes wear
+    /// what this turns on.
     pub fn spectral_ring_draws(&self) -> bool {
         let (inner, outer) = self.rings().audio;
         outer > inner
@@ -1592,6 +1696,25 @@ impl ViewConfig {
         // it sits and why.
         self.spectral_ring_range = finite_or(self.spectral_ring_range, fresh.spectral_ring_range)
             .clamp(crate::SPECTRAL_RANGE_MIN, crate::SPECTRAL_RANGE_MAX);
+        // The gate, repaired to its OFF position rather than to the fresh value
+        // the two above take: a level nobody can read is a reason to draw every
+        // ring, never to hide one, and a blob holding a NaN here would
+        // otherwise open on a lattice with no rings and no way to tell that
+        // from an analyzer with nothing to say. `SpectralPaint::new` repairs
+        // the same way for the shells that never come through this door.
+        self.spectral_ring_gate = finite_or(self.spectral_ring_gate, crate::SPECTRAL_GATE_MIN)
+            .clamp(crate::SPECTRAL_GATE_MIN, crate::SPECTRAL_GATE_MAX);
+
+        // The ground both rings stand on, against that same hole. It is an
+        // `L*`, so the clamp is the axis itself: off either end the Newton
+        // solve behind a neutral grey is asked for a luminance sRGB does not
+        // hold, and a non-finite one takes the ANALYZER's ramp with it — the
+        // audio ring's table is re-anchored to open here, so a NaN ground is a
+        // NaN gradient and the whole ring goes to whatever the clamp in
+        // `oklab_srgb` lands on. Both rings read the repaired number, which is
+        // what keeps the bar's readout and the grey on screen the same value.
+        self.lattice_ground =
+            finite_or(self.lattice_ground, fresh.lattice_ground).clamp(0.0, 100.0);
 
         self.shimmer_speed = finite_or(self.shimmer_speed, fresh.shimmer_speed);
         self.shimmer_width = finite_or(self.shimmer_width, fresh.shimmer_width);
@@ -1613,6 +1736,16 @@ fn finite_or(value: f32, fallback: f32) -> f32 {
         fallback
     }
 }
+
+/// The `L*` a fresh [`ViewConfig::lattice_ground`] opens on, named because
+/// [`ViewConfig::lattice_ground_lightness`] needs it without building a whole
+/// fresh view to read one field off. Named, and not a second value: the
+/// `Default` below is written in terms of it, the way it is written in terms of
+/// `octaves::DEFAULT_COUNT`.
+///
+/// Which grey this is, and why that rung, is at
+/// [`skin::surface_faint_color`](crate::skin::surface_faint_color).
+const DEFAULT_RING_GROUND: f32 = 20.0;
 
 /// The look a fresh view starts in, and the single source of every field's
 /// fallback: the container-level `#[serde(default)]` on the struct means a
@@ -1721,6 +1854,15 @@ impl Default for ViewConfig {
             // stack is core (0.256), gap, audio ring, gap, band, gap, marks.
             band_width: 0.190_065_75,
             ring_gap: 0.051_732_67,
+            // The rung of the chrome's own ladder the rings stand on: `L*` 20.0
+            // is the skin's `surface_faint`, a step ABOVE the lattice's panel
+            // ground (8.8) and well clear of the well grey (4.7), which beside
+            // the panel reads as black rather than as a raised surface. A quiet
+            // ring is therefore a faintly raised backdrop that is plainly still
+            // a reading — `the_fresh_ground_is_the_skins_faint_surface` holds
+            // the number to the skin, so retuning that rung and leaving this
+            // behind is a test failure rather than a drift.
+            lattice_ground: DEFAULT_RING_GROUND,
             // Five octaves to the turn with middle C straight up — C1..C5 in
             // the DAW's numbering, the register a keyboard part lives in, at
             // 72 degrees an octave, with a two-octave fringe either end (see
@@ -1756,6 +1898,28 @@ impl Default for ViewConfig {
             // A whole tone across a wedge — see the field for why that width
             // and not the octave that makes the ring continuous.
             spectral_ring_range: 200.0,
+            // Two fifths of the way up the Level window — on the fresh window
+            // (−60 dB to 0) a ring for anything down to 36 dB under a
+            // full-scale sine, and on a window pulled in to −35 dB, down to 21.
+            // It is a share of the window rather than a dB deliberately, so
+            // what it says is "no ring dimmer than this much of the ramp" and
+            // moving the window moves the gate with the colours it is judging.
+            //
+            // Measured over the fresh window's 1025 nodes under the fold:
+            // silence rings nothing at all — the picture this arrived for,
+            // where ungated every one of them wears the ramp's floor — a lone
+            // full-scale sine rings 95 (its own pitch class, and the comma
+            // neighbours the analyzer cannot resolve from it), a sawtooth 24 dB
+            // down rings 177 and one 12 dB down rings 765. So loud dense
+            // material still rings most of the lattice, which is what it is
+            // actually doing; quiet material rings its constellation.
+            //
+            // Permissive at the top end on purpose: hiding a ring that had
+            // something to show is the failure a person cannot see, where too
+            // many rings is one they can, and the bar is right there. The
+            // spectrum reading discriminates far less at any setting, and that
+            // is the reading rather than the gate — see the field.
+            spectral_ring_gate: 0.4,
             // Near enough a square law (the exponent lands at 2.05): enough
             // that a release leaves promptly and settles instead of sliding
             // out at one rate, and not so much that the tail is over before

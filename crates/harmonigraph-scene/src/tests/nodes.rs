@@ -160,6 +160,165 @@ fn neither_end_of_the_curve_leaves_the_chroma_axis() {
     }
 }
 
+/// Every channel of a colour is a number a rasterizer can lay down: finite,
+/// and inside the 0..1 an sRGB channel holds.
+fn drawable(c: glam::Vec4) -> bool {
+    c.to_array().iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v))
+}
+
+/// The lattice's ground, as a scene draws it: the field itself, every grid
+/// segment's colour, and what an unplayed node falls back to — three copies of
+/// one resolve ([`Scene::lattice_ground`]), which is why a single poisoned
+/// number can be asked about all three at once.
+fn ground_of(view: &ViewConfig) -> (Vec4, Vec<Vec4>, Vec4) {
+    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), view, &plain_frame(), 0.0);
+    let lines: Vec<Vec4> = scene.grid.iter().map(|s| s.color).collect();
+    assert!(
+        scene.grid.iter().any(|s| s.strength > 0.0),
+        "the home sheet has to draw a resting grid, or the lines below test nothing",
+    );
+    let idle = scene
+        .nodes
+        .iter()
+        .find(|n| n.activation == 0.0)
+        .expect("nothing is playing, so every node is idle")
+        .color;
+    (scene.lattice_ground, lines, idle)
+}
+
+/// A ground that is not a number still draws the lattice a grey, all the way
+/// out to what the instance buffer carries.
+///
+/// The failure it guards is silent at every step. `f32::clamp` hands a NaN
+/// straight back — every comparison against one is false — so the number walks
+/// through the axis check into [`grey_of_lightness`](crate::grey_of_lightness),
+/// whose Newton solve answers with whatever its own guard parks on, and what
+/// reaches the shader is a colour with no channels: nothing panics, nothing is
+/// logged, and the whole resting picture is whatever the rasterizer makes of a
+/// NaN. [`ViewConfig::lattice_ground_lightness`] is the repair, and this is
+/// what keeps it from being deleted as redundant with the clamps downstream of
+/// it.
+///
+/// Through the DERIVE and not through the accessor alone, because the accessor
+/// exists precisely because the drawing code is reached by more routes than the
+/// persist door: the scene's ground, every grid line and an idle node's
+/// fallback are all resolved from it, and so is the audio ring's table one
+/// crate over. A repair missing from any of them is the same bug.
+#[test]
+fn a_non_finite_ground_still_draws_the_lattice_a_grey() {
+    let fresh = ViewConfig::default().lattice_ground;
+    for broken in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        let view = ViewConfig { lattice_ground: broken, ..plain_view() };
+        assert_eq!(
+            view.lattice_ground_lightness(),
+            fresh,
+            "a ground of {broken} resolves to an L* no colour can be solved for",
+        );
+        let want = crate::grey_of_lightness(fresh);
+        let (ground, lines, idle) = ground_of(&view);
+        assert!(drawable(ground), "a ground of {broken} put {ground:?} in the scene");
+        assert_eq!(ground, want, "a ground of {broken} is not repaired to the fresh grey");
+        for line in lines {
+            assert_eq!(line, ground, "a ground of {broken} drew a grid line {line:?}");
+        }
+        assert_eq!(idle, ground, "a ground of {broken} left an idle node at {idle:?}");
+        // And the ring's table, the accessor's other reader: the two rings sit
+        // a gap apart on one node, so a ground repaired for one of them and not
+        // the other is two grounds — which is the whole reason the repair is a
+        // function rather than a clamp at each site.
+        let silent = crate::SpectralPaint::new(&view, Gradient::default()).lut[0];
+        let step = (silent.truncate() - ground.truncate()).abs().max_element();
+        assert!(
+            step * 255.0 < 0.5,
+            "at a ground of {broken} the audio ring's silence is {silent:?} \
+             against the lattice's {ground:?}",
+        );
+    }
+}
+
+/// A ground past either end of the bar is held to the `L*` axis rather than
+/// carried off it.
+///
+/// The number leaves this struct as a BRIGHTNESS rather than as a colour — the
+/// `L*` a neutral grey is solved for and the one the audio ring's ramp is
+/// re-anchored to open on — and off the axis it names a luminance sRGB does not
+/// hold: 500 is brighter than white and -50 is a negative one.
+///
+/// Both of today's readers clamp again on their own account
+/// ([`grey_of_lightness`](crate::grey_of_lightness) and
+/// [`ring_gradient`](crate::ring_gradient)), so the greys below come out the
+/// same either way and the picture cannot report on this arm at all. The
+/// accessor is therefore asked directly as well: it is what a THIRD reader
+/// would get, and the reason it holds the axis itself rather than trusting
+/// whatever it is handed to.
+#[test]
+fn a_ground_past_either_end_of_the_bar_is_held_to_the_l_star_axis() {
+    for (asked, want) in [(-50.0f32, 0.0f32), (0.0, 0.0), (20.0, 20.0), (500.0, 100.0)] {
+        let view = ViewConfig { lattice_ground: asked, ..plain_view() };
+        assert_eq!(
+            view.lattice_ground_lightness(),
+            want,
+            "a ground of {asked} resolves to an L* off the axis",
+        );
+        let (ground, lines, idle) = ground_of(&view);
+        assert!(drawable(ground), "a ground of {asked} put {ground:?} in the scene");
+        assert_eq!(
+            ground,
+            crate::grey_of_lightness(want),
+            "a ground of {asked} draws a grey the axis does not name",
+        );
+        for line in lines {
+            assert_eq!(line, ground, "a ground of {asked} drew a grid line {line:?}");
+        }
+        assert_eq!(idle, ground, "a ground of {asked} left an idle node at {idle:?}");
+    }
+}
+
+/// A ground that is PRESENT and unusable is repaired at the blob's door, so
+/// the number the Ground bar reads back is the grey on screen.
+///
+/// The accessor above keeps the picture drawable whatever the field holds,
+/// which is exactly why this is a separate claim: with the repair only there,
+/// a hand-edited blob would draw the fresh grey while the bar sat on NaN and
+/// the file kept it — a value read out one way and drawn another, which is a
+/// bug at any compat policy. [`ViewConfig::sanitize`] is what makes the two the
+/// same number.
+#[test]
+fn a_broken_ground_reads_back_as_the_grey_it_draws() {
+    let fresh = ViewConfig::default().lattice_ground;
+    let broken_grounds = [
+        (f32::NAN, fresh),
+        (f32::INFINITY, fresh),
+        (f32::NEG_INFINITY, fresh),
+        (-50.0, 0.0),
+        (500.0, 100.0),
+    ];
+    for (broken, want) in broken_grounds {
+        let mut view = ViewConfig { lattice_ground: broken, ..plain_view() };
+        view.sanitize();
+        assert_eq!(
+            view.lattice_ground, want,
+            "the blob's door left a ground of {broken} as it was",
+        );
+        let (ground, ..) = ground_of(&view);
+        assert!(drawable(ground), "a repaired ground of {broken} still draws {ground:?}");
+        assert_eq!(
+            ground,
+            crate::grey_of_lightness(view.lattice_ground),
+            "the bar reads L* {} and the lattice draws {ground:?}",
+            view.lattice_ground,
+        );
+        // Nothing left for the drawing side to repair: a sanitized view is one
+        // the accessor passes straight through, so the bar's number and the
+        // picture's cannot come apart later.
+        assert_eq!(
+            view.lattice_ground_lightness(),
+            view.lattice_ground,
+            "a sanitized ground is still being moved on the way to the picture",
+        );
+    }
+}
+
 /// A chroma ramp spends COLOR on pitch, the way a brightness ramp spends
 /// brightness: the vivid end of it is the one its sign names, and at 0 every
 /// note asks for the same fraction as every other.
@@ -1065,4 +1224,184 @@ fn the_reading_leaves_the_midi_picture_alone() {
             assert_eq!(now.bass_slots, was.bass_slots, "{reading:?} moved {at:?}'s bass mark");
         }
     }
+}
+
+/// A scene with the ring dialled on and a single partial measured into it, at
+/// `gate` — the shape the Lattice pane's fold hands over, with the analysis it
+/// does replaced by one bucket band nobody has to run an FFT to predict.
+///
+/// One frame off a fresh [`RingFade`], which is the gate's own answer with no
+/// transition in it: the first step of all settles rather than fading in (see
+/// [`RingFade::advance`]), so every claim below is about the gate and not about
+/// how fast a ring follows it. `a_rings_coming_and_going_runs_on_the_fade` is
+/// the other half, and it drives two.
+fn gated_scene(gate: f32, pitch: f32) -> Scene {
+    gated_scene_of(&sounding(), gate, pitch)
+}
+
+/// [`gated_scene`] over a tracker of the caller's, for the claims that are
+/// about what the KEYS have to say about a ring.
+fn gated_scene_of(tracker: &NoteTracker, gate: f32, pitch: f32) -> Scene {
+    let view = ViewConfig { spectral_ring_gate: gate, ..plain_view() };
+    let mut scene = scene_of(tracker, &Tuning::just(), &view, &plain_frame(), 0.5);
+    let mut paint = SpectralPaint::new(&view, Gradient::default());
+    for (bucket, level) in paint.levels.iter_mut().enumerate() {
+        if ((bucket_pitch(bucket) - pitch) * 100.0).abs() <= 10.0 {
+            *level = 255;
+        }
+    }
+    scene.spectral = paint;
+    scene.wear_audio_rings(
+        &mut RingFade::default(),
+        &view.envelope(&plain_frame()),
+        0.5,
+    );
+    scene
+}
+
+/// The gate decides RINGS and nothing else: a node held back keeps every part
+/// of the MIDI picture it had, and the nodes it keeps are the ones with a
+/// partial at one of their octaves.
+///
+/// The claim the whole feature rests on, made where the pass runs. The failure
+/// it is against is a gate that reached the node's own body — dimming a node
+/// with nothing sounding at it, say, which would look like a reasonable picture
+/// and would have thrown the player's part away wherever the two disagree, this
+/// fixture's held C4 against a partial at F# included.
+#[test]
+fn the_gate_takes_the_ring_and_leaves_the_node() {
+    let midi = gated_scene(SPECTRAL_GATE_MIN, 66.0);
+    let gated = gated_scene(0.5, 66.0);
+    assert!(
+        midi.nodes.iter().all(|n| n.audio_ring > 0.0),
+        "the gate at its floor held a node back, so there is no ungated picture to compare",
+    );
+    let (mut rings, mut dark) = (0, 0);
+    for (now, was) in gated.nodes.iter().zip(&midi.nodes) {
+        let at = was.lattice_pos;
+        assert_eq!(now.activation, was.activation, "the gate changed {at:?}'s activation");
+        assert_eq!(now.octaves, was.octaves, "the gate changed {at:?}'s held octaves");
+        assert_eq!(now.color, was.color, "the gate repainted {at:?}");
+        assert_eq!(now.gutter, was.gutter, "the gate changed what {at:?} clears");
+        assert_eq!(now.melody_slots, was.melody_slots, "the gate moved {at:?}'s melody mark");
+        // The partial is an F#, and the wheel gives every node its own octaves
+        // of that class — so a node rings where its class is the partial's,
+        // whatever the keys are doing. The fixture's partial is a band 10¢
+        // either side of MIDI 66, so a class inside that is lit, one well
+        // outside it is dark, and the cents between are the band's own edge and
+        // are nobody's claim.
+        let off = (now.cents - 600.0).abs();
+        let off = off.min(1200.0 - off);
+        if off < 5.0 {
+            let cents = now.cents;
+            assert!(now.audio_ring > 0.0, "{at:?} at {cents}¢ stayed dark under the partial");
+        }
+        // The KEYS are the other way a node comes to wear a ring, and the
+        // fixture is holding a C — so the claim about a node the gate has shut
+        // is about a node nobody is playing
+        // (`a_node_the_keys_have_lit_rings_whatever_the_gate_says` is the
+        // other side of it).
+        if off > 20.0 && now.activation == 0.0 {
+            let cents = now.cents;
+            assert_eq!(now.audio_ring, 0.0, "{at:?} at {cents}¢ rang {off}¢ off the partial");
+        }
+        *(if now.audio_ring > 0.0 { &mut rings } else { &mut dark }) += 1;
+    }
+    assert!(rings > 0 && dark > 0, "the gate rang {rings} nodes and darkened {dark}");
+}
+
+/// A node the keys have lit wears its ring whatever the gate says, and wears
+/// exactly as much of it as the note is drawn at.
+///
+/// The rule that keeps the two pictures one gesture: every other layer of a
+/// node — its disc, its band, its marks, the gutter it clears — arrives and
+/// leaves on the note's own envelope, and a ring vanishing from under a note
+/// still sounding reads as a piece of the node dropping out. So the gate is a
+/// question about the nodes NOBODY IS PLAYING, which is where a ring at every
+/// node was worth holding back.
+///
+/// At the gate's ceiling over a grid with nothing in it, so the analyzer's
+/// answer is no everywhere and the only thing that can be lighting a ring is
+/// the key.
+#[test]
+fn a_node_the_keys_have_lit_rings_whatever_the_gate_says() {
+    let view = ViewConfig { spectral_ring_gate: SPECTRAL_GATE_MAX, ..plain_view() };
+    let mut scene = scene_of(&sounding(), &Tuning::just(), &view, &plain_frame(), 0.5);
+    scene.spectral = SpectralPaint::new(&view, Gradient::default());
+    scene.wear_audio_rings(&mut RingFade::default(), &view.envelope(&plain_frame()), 0.5);
+    let (mut lit, mut idle) = (0, 0);
+    for node in &scene.nodes {
+        if node.activation > 0.0 {
+            lit += 1;
+            assert!(
+                node.audio_ring >= node.activation,
+                "{:?} is lit at {} and wears {} of its ring",
+                node.lattice_pos,
+                node.activation,
+                node.audio_ring,
+            );
+        } else {
+            idle += 1;
+            assert_eq!(
+                node.audio_ring, 0.0,
+                "{:?} rang at the gate's ceiling with nothing sounding at it",
+                node.lattice_pos,
+            );
+        }
+    }
+    assert!(lit > 0 && idle > 0, "the fixture lit {lit} nodes and left {idle} idle");
+}
+
+/// A ring LEAVES with its note: mid-release a played node wears exactly what
+/// the rest of it is drawn at, and once the fade has run out it wears nothing.
+///
+/// The half a held note cannot show. What this is against is a ring floored at
+/// "the node has a voice at all", which passes the test above and then holds
+/// the annulus at full through the whole release before dropping it in one
+/// frame — the pop the Fade exists to spend time avoiding.
+#[test]
+fn a_played_nodes_ring_leaves_on_the_notes_own_fade() {
+    let mut tracker = NoteTracker::new();
+    tracker.handle_event(NoteEvent::on(0.0, 0, 60, 1.0));
+    tracker.handle_event(NoteEvent::off(1.0, 0, 60));
+    let view = ViewConfig { spectral_ring_gate: SPECTRAL_GATE_MAX, ..plain_view() };
+    // A fade to sample along, where the shared fixture's is 0 — and an arrival
+    // of the same length with it, which the note has had by the time it is
+    // released.
+    let frame = FrameParams { fade_time: 1.0, ..plain_frame() };
+    let ring_at = |now: f64| {
+        let mut scene = scene_of(&tracker, &Tuning::just(), &view, &frame, now);
+        scene.spectral = SpectralPaint::new(&view, Gradient::default());
+        scene.wear_audio_rings(&mut RingFade::default(), &view.envelope(&frame), now);
+        let node = origin_node(&scene);
+        (node.activation, node.audio_ring)
+    };
+    for now in [1.25, 1.5, 1.75] {
+        let (activation, ring) = ring_at(now);
+        assert!((0.0..1.0).contains(&activation), "the note reads {activation} mid-release");
+        assert_eq!(ring, activation, "the ring is not what the node is drawn at, {now}s in");
+    }
+    let (activation, ring) = ring_at(2.5);
+    assert_eq!((activation, ring), (0.0, 0.0), "the note is over and its ring is not");
+}
+
+/// With the ring dialled OFF the gate decides nothing, and says so by leaving
+/// every node where `derive_scene` left it.
+///
+/// Not a saving but a definition: whether there is a ring at all is the width
+/// bar's answer, in the geometry (`SpectralPaint::inner`/`outer`), and a second
+/// place able to say "no ring here" is a second thing to keep in step. What it
+/// buys as well is the whole reduction over the grid skipped on a frame that
+/// draws no ring.
+#[test]
+fn a_ring_dialled_off_is_gated_by_nothing() {
+    let view = ViewConfig { spectral_ring_width: 0.0, spectral_ring_gate: 1.0, ..plain_view() };
+    let mut scene = scene_of(&sounding(), &Tuning::just(), &view, &plain_frame(), 0.5);
+    scene.spectral = SpectralPaint::new(&view, Gradient::default());
+    assert!(!scene.spectral.ring_draws(), "the fixture's ring drew with no width");
+    scene.wear_audio_rings(&mut RingFade::default(), &view.envelope(&plain_frame()), 0.5);
+    assert!(
+        scene.nodes.iter().all(|n| n.audio_ring == 1.0),
+        "a gate answered on a lattice with no ring to answer about",
+    );
 }
