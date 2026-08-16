@@ -4116,6 +4116,49 @@ mod tests {
         }
     }
 
+    /// The composed picture is drawn through [`ROW_WEIGHT`], and a wide row
+    /// comes out BELOW the loudest bucket it covers.
+    ///
+    /// [`Shades`] carries the table so the read takes it as a parameter, which
+    /// puts the picture's weighting behind a field that one line sets and
+    /// nothing else observes. Every other test that composes a weighted `Mean`
+    /// compares one `Shades` against itself — `fill_column_into` against
+    /// `fill_pixels`, or against an `expect` built from the same value — so all
+    /// of them agree with each other whatever that field holds. Pointing it at
+    /// a flat table restyles every settled zoomed-out pixel in the editor and
+    /// in every export, and leaves the suite green.
+    ///
+    /// Both halves are the assertion. Against the read reached independently,
+    /// so the field has to be [`ROW_WEIGHT`] and not merely some table; and
+    /// strictly below the run's max, so a table that flattens is caught even by
+    /// a reader who changes what the first half compares against. A flat table
+    /// is exactly the degenerate case: every weight 1 makes the sum the run's
+    /// length, the log2 zero, and the power mean collapse to the plain
+    /// [`RowRead::Max`] the pitch axis exists not to draw.
+    #[test]
+    fn the_composed_column_is_weighted_by_row_weight() {
+        let cfg = SpectrumConfig::default();
+        // One row over a run wide enough to weight, reading a slab whose
+        // buckets SPREAD — a uniform run has the same mean under any table.
+        let bins = [Bin { read: RowRead::Mean { from: 0, to: 8 }, midi: 60.0, t: 0.0 }];
+        let mut slab = vec![0 as BucketDb; SPECTRUM_BINS];
+        for (b, v) in slab[0..8].iter_mut().enumerate() {
+            *v = (40 + b * 20) as BucketDb;
+        }
+        let top = slab[0..8].iter().copied().max().expect("a populated run");
+
+        let shades = Shades::new(&cfg, &bins);
+        let mut column = Vec::new();
+        fill_column_into(&shades, &bins, &slab, &mut column);
+
+        let read = RowRead::Mean { from: 0, to: 8 }.of(&slab, &ROW_WEIGHT);
+        assert_eq!(column[0], shades.at(0, read), "the compose reads through `ROW_WEIGHT`");
+        assert!(
+            read < top,
+            "a weighted mean of a spread run sits below its max: {read} vs {top}",
+        );
+    }
+
     /// Every texel the window reads holds ITS OWN slab's column — asserted
     /// against the uploaded texture, not against the ring's account of it.
     ///
