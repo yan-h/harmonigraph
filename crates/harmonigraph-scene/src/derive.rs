@@ -23,19 +23,22 @@ use harmonigraph_core::{HeldEnd, LatticePos, NoteTracker, Time, Tuning, VoiceSta
 /// One voice entire, rather than the union of every marking voice's slot
 /// under the strongest one's level, because the node carries ONE level: a
 /// weaker voice's slot admitted alongside it would be drawn at the winner's
-/// brightness. That is not a near-miss — it is a link pointing at an octave
-/// whose ring is half gone (or has not started), at full. Two voices reach
-/// one node's mark only through a handoff inside a single pitch class, where
-/// the loser is by definition the dimmer of a crossfading pair, so what the
-/// union would buy is exactly the reading that cannot be drawn honestly.
+/// brightness. That is not a near-miss — it is a mark on an octave that is
+/// half gone (or has not started), at full. Two voices reach one node's mark
+/// only through a handoff inside a single pitch class, where the loser is by
+/// definition the dimmer of a crossfading pair, so what the union would buy
+/// is exactly the reading that cannot be drawn honestly.
 ///
-/// The cost is that the sector a ring links to JUMPS at the crossover instead
-/// of both being lit through it. The level does not jump — the two curves are
-/// equal at the moment the argmax changes, which is what makes the switch
-/// invisible on the ring itself. Lighting both honestly wants a level per
-/// slot, which is `OCTAVE_SLOTS` more floats per node in the instance buffer
-/// and a shader that reads them; that is the price, and it buys one frame's
-/// worth of a link in one voicing.
+/// The cost is that the mark JUMPS to the other sector at the crossover
+/// instead of both being lit through it, and the jump is the whole SHAPE
+/// moving one wedge round the node — a mark is its sector's slice continued
+/// outward, so it has no body that stays put while the sector changes under
+/// it. The level is continuous across the switch (the two curves are equal at
+/// the moment the argmax changes), so what moves is the position and not the
+/// brightness. Lighting both honestly wants a level per slot, which is
+/// `OCTAVE_SLOTS` more floats per node in the instance buffer and a shader
+/// that reads them; that is the price, and it buys one frame's worth of a
+/// second mark in one voicing.
 #[derive(Default)]
 struct Mark {
     /// The slot as a MASK, so 0 is "unmarked" without an `Option` — which is
