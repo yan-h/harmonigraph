@@ -73,7 +73,10 @@ The performance overlay's bottom line reads `build  <branch> @<sha>` — the
 branch with its `worktree-` prefix stripped, so it is exactly the argument
 `./load-plugin.sh <branch>` takes. It is stamped at compile time by
 `crates/harmonigraph-perf/build.rs`. The overlay carrying it ships OFF, so reading
-the tag takes one tick first: **System pane → Performance → Performance overlay**.
+the tag takes one tick first: **Display tab → System page → Performance →
+Performance overlay**. System is a PAGE behind the Display tab's picker, not a
+tab of its own — a session that tells Yan to open a System pane is naming
+something the dock does not have.
 It opens in the editor's bottom-right corner and is DRAGGED from there, so
 wherever it was last left is where it is — no session can say which corner to
 look in.
