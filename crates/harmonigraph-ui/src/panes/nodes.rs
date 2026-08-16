@@ -169,10 +169,12 @@ fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
              inside it; 0 removes the layer, and the marks close over its \
              space.",
         );
-    // No Solidity and no Backdrop bar: both are fixed at 1. The glyphs are
-    // always the crisp classic shapes, and the silent octaves always ghost
-    // in behind the sounding ones — that backdrop is what completes the
-    // ring, so a lone octave still reads as a whole note.
+    // No Solidity bar and no Backdrop switch: the glyphs are always the crisp
+    // classic shapes, and the silent octaves always stand in behind the
+    // sounding ones — that backdrop is what completes the ring, so a lone
+    // octave still reads as a whole note. How BRIGHT it stands is the At rest
+    // section's Ground bar at the foot of the page, which is not this layer's
+    // to own: the audio ring's silence and the grid's lines are the same grey.
     //
     // No Shimmer row either: the glyphs are what says which octaves sound, and
     // a sheet laid over that reading costs it — so the sweep belongs to the
