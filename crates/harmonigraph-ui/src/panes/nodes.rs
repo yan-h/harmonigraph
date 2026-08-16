@@ -1,13 +1,12 @@
-//! The Display tab's Nodes section: how a sounding note is drawn — its core
-//! mark, the octave ring around it, the melody/bass marks on the outer held
-//! notes, and the fade and cleared gutter the whole node wears. Everything
-//! here is a layer of the *played note*, or the whole of one.
+//! The node settings on the Display tab's Lattice page: how a sounding note is
+//! drawn — its core mark, the audio ring and octave band around it, the
+//! melody/bass marks on the outer held notes, and the fade and cleared gutter
+//! the whole node wears. Everything here is a layer of the *played note*, or
+//! the whole of one.
 //!
-//! The pitch gradient and Bloom are NOT here, though a node wears both: the
-//! Analyzer's ribbons read the one and its piano roll blooms off the other, so
-//! filing them under a node's own layers would name them for the narrower of
-//! the two pictures they paint. They are [`super::color`]. The text a node
-//! carries is [`super::labels`], kept out for the same reason in miniature — a
+//! The pitch gradient and Bloom are NOT here, though a node wears both: they
+//! are color, so they are on the Colors page ([`super::color`]) with the other
+//! table. The text a node carries is [`super::labels`], kept out because a
 //! label rides a hovered and a remembered node as readily as a sounding one.
 
 use super::{edge_bar, param_bar, section};
@@ -20,23 +19,28 @@ use harmonigraph_scene::{
     SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN, SPECTRAL_WIDTH_MAX, SPECTRAL_WIDTH_MIN,
 };
 
-/// The sounding-note controls: what the audio ring measures, then the whole
-/// note — the time it takes to arrive and leave, and the gutter it clears —
-/// then each layer of it reading outward from the center, and last the sweep
-/// the outermost layer can be set to run.
+/// The sounding-note controls: the whole note first — the time it takes to
+/// arrive and leave, and the gutter it clears — then each layer of it reading
+/// outward from the center, and last the sweep the outermost layer can be set
+/// to run.
 ///
-/// Whole-note before the layers, because those settings are the ones reached
-/// for most and because none of them belongs to a layer — the Gap especially,
-/// which is one number spacing every layer of the node from the one inside it.
-/// Ordering them after Core, Octaves and the marks would read more consistently
-/// outward, and would put the section's most-used controls under the ones
-/// reached for least. Reading outward is what orders the rest. Audio comes
-/// above even those, being the one section that says what a layer MEASURES
-/// where the rest only size and colour what is already there.
+/// **Whole-note before the layers, because none of those settings belongs to a
+/// layer** — the Gap especially, which is one number spacing every layer of the
+/// node from the one inside it — and because they are the ones reached for
+/// most. Filing them after Core, Octaves and the marks would put the most-used
+/// controls under the ones reached for least, on the strength of an outward
+/// reading they are not part of.
+///
+/// The layers then run in stack order, from the center out: Core, the audio
+/// ring a Gap outside it, the octave band a Gap outside that, and the
+/// melody/bass marks past the band — the same order [`ViewConfig::rings`] lays
+/// them down in, so the column reads down as the node reads outward. Shimmer is
+/// last because it is the sweep the outermost layer carries rather than a layer
+/// of its own.
 pub(super) fn nodes_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBackend) {
-    audio_section(ui, &mut state.view);
     note_section(ui, &mut state.view, params);
     core_section(ui, &mut state.view);
+    audio_section(ui, &mut state.view);
     octaves_section(ui, &mut state.view);
     melody_bass_section(ui, &mut state.view);
     shimmer_section(ui, &mut state.view);
@@ -369,15 +373,14 @@ fn shimmer_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     });
 }
 
-/// Audio: what the ring inside the octave band measures — one reading of the
-/// analyzer's spectrum, or none.
+/// Audio ring: what the ring between the core and the octave band measures —
+/// one reading of the analyzer's spectrum, or none.
 ///
-/// First in the pane, and above even the note-wide settings, because it is the
-/// one control here that adds a LAYER where the rest size and colour the ones
-/// already there. It is a plain heading for that reason too — it is the top of
-/// the section body, where `section`'s leading rule would sit directly under
-/// the Display pane's own Nodes header. (The View and Analyzer section bodies,
-/// and the Tuning and System panes, open the same way.)
+/// Second of the layers, which is where it sits in the stack: a Gap out from
+/// the Core above it, a Gap in from the octave Band below. It is the one
+/// section here that says what a layer MEASURES where the rest only size and
+/// colour what is already there, and the name carries the "ring" so the heading
+/// says which layer that is.
 ///
 /// One choice row and not two boxes, because there is one indicator here and
 /// two ways to fill it: both readings answer "what is sounding at this node",
@@ -392,7 +395,7 @@ fn shimmer_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
 /// swapped in and out, so the section keeps its height and the bars keep their
 /// place as the row is clicked along.
 fn audio_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
-    ui.heading("Audio");
+    section(ui, "Audio ring");
     // "Reading" and not "Ring", though the ring is what it fills: the bar
     // below is already called Ring, being the ring's WIDTH, and two settings a
     // row apart under one name are told apart only by hovering both. What this

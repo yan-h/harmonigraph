@@ -1,13 +1,13 @@
-//! The System pane: the plugin's own knobs rather than the lattice's — how
-//! sharply and how hard it renders, and how the panes are arranged. None of
-//! this is part of the picture; it's what surrounds it. Kept out of the
-//! [`super::view`] pane, where it would sit at the bottom looking like a view
-//! setting.
+//! The Display tab's System page: the plugin's own knobs rather than the
+//! lattice's — how sharply and how hard it renders, and how the panes are
+//! arranged. None of this is part of a picture; it's what surrounds them, which
+//! is why it is a page of its own rather than the foot of [`super::view`],
+//! where it would sit under the camera looking like a view setting.
 //!
-//! Called System because the tab bar is where a name has to do its work.
-//! "Panel" names the thing being looked AT rather than what the tab changes,
-//! and sits one letter from "pane", which is what every other tab in the dock
-//! is.
+//! Called System because the picker is where a name has to do its work.
+//! "Panel" names the thing being looked AT rather than anything the page
+//! changes, and sits one letter from "pane", which is what every tab in the
+//! dock is.
 
 use super::section;
 use crate::widgets::{button_row, choice_row, ValueBar};

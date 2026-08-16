@@ -3,17 +3,17 @@
 //! in docking, and gets the shared state (hover, console, tracker) for free.
 //!
 //! [`tuning`] is how the lattice is tuned, and [`display`] is how everything
-//! is drawn, one collapsible section each and widest scope first (the rule is
-//! written out in [`display`]): [`color`] (the table every pitch-colored shape
-//! is painted through, and the bloom over it), [`view`] (which of the lattice
-//! you are looking at and from where), [`nodes`] (a played note's own layers),
-//! [`labels`] (the text on them), [`grid`] (the lines between them) and the
-//! analyzer settings. [`system`] is the plugin's own render/layout knobs.
-//! Alongside are the [`spectral`] display, the [`spiral`] one beside it (the
-//! same analyzer wound onto a chroma circle), [`render`] (the Video tab), and
-//! [`notes`] (Console + Notes). This file holds the `Tab` enum, the
-//! `TabViewer` that dispatches to them, and the small helpers more than one
-//! pane needs.
+//! is drawn — four PAGES behind a picker, one picture each (the rule that says
+//! which page a setting lands on is written out in [`display`]): Colors
+//! ([`color`], both color tables and the bloom over one of them), Lattice
+//! ([`view`] for what is framed, [`nodes`] for a played note's own layers,
+//! [`labels`] for the text on them, [`grid`] for the lines between them),
+//! Analyzer ([`spectral`]'s own settings), and System ([`system`], the
+//! plugin's render/layout knobs). Alongside are the [`spectral`] display, the
+//! [`spiral`] one beside it (the same analyzer wound onto a chroma circle),
+//! [`render`] (the Video tab), and [`notes`] (Console + Notes). This file holds
+//! the `Tab` enum, the `TabViewer` that dispatches to them, and the small
+//! helpers more than one pane needs.
 //!
 //! Each tab's name covers everything in it, which is the whole job a tab bar
 //! does: a subject its name omits is one nobody opens the tab to find.
@@ -47,7 +47,6 @@ use notes::{console_pane, notes_pane};
 use render::render_pane;
 use spectral::spectral_pane;
 use spiral::spiral_pane;
-use system::system_pane;
 use tuning::tuning_pane;
 
 /// Wrap degrees into -180..=180 for display (orbit accumulates yaw
@@ -65,9 +64,9 @@ pub(super) const KEY_NAMES: [&str; 12] = [
 ];
 
 /// A MIDI note as a key name and octave — "C1", "C8" — so a range's ends read
-/// as pitches rather than bare numbers. Shared by the Nodes section's octave
-/// Center and Color & light's color range, which is why it is here rather than
-/// in either.
+/// as pitches rather than bare numbers. Shared by the Octaves section's Center
+/// and the Colors page's color range, which is why it is here rather than in
+/// either.
 ///
 /// It ROUNDS, which is exact for the octave Center (its bar lands on whole
 /// semitones) and a reading for the color range (whose ends are a continuous
@@ -94,10 +93,10 @@ pub enum Tab {
     /// Where the lattice's nodes sit in pitch: the prime bars, and the commas
     /// it tempers out.
     Tuning,
-    /// How everything on screen is drawn: the Color & light, View, Nodes,
-    /// Labels, Grid and Analyzer settings, one collapsible section each — see
-    /// [`display`] for why one tab carries all six, and for the rule that says
-    /// which section a setting lands in.
+    /// How everything on screen is drawn: the Colors, Lattice, Analyzer and
+    /// System pages, one picture each behind a picker row — see [`display`] for
+    /// why one tab carries all four, and for the rule that says which page a
+    /// setting lands on.
     Display,
     Console,
     /// The Spectral display: FFT curve, voices, and piano roll. Titled
@@ -111,11 +110,6 @@ pub enum Tab {
     /// A live preview of the offline video frame, composed and adjusted here.
     /// Titled "Video".
     Video,
-    /// The plugin's own render-quality and pane-layout knobs. Titled "System"
-    /// rather than "Panel", which would name the thing being looked at rather
-    /// than anything the tab changes — and sits one letter from "pane", which
-    /// is what every tab in this dock is.
-    System,
 }
 
 impl Tab {
@@ -167,15 +161,14 @@ pub fn tab_title(tab: &Tab) -> &'static str {
         Tab::Tuning => "Tuning",
         Tab::Display => "Display",
         Tab::Console => "Console",
-        // Deliberately the same name as the Display tab's Analyzer section:
-        // the display and the settings for it are one feature, and they sit
-        // on different surfaces, so the pair reads as "the analyzer, and its
+        // Deliberately the same name as the Display tab's Analyzer page: the
+        // display and the settings for it are one feature, and they sit on
+        // different surfaces, so the pair reads as "the analyzer, and its
         // knobs" rather than as two things to tell apart.
         Tab::Spectral => "Analyzer",
         Tab::Spiral => "Spiral",
         Tab::Notes => "Notes",
         Tab::Video => "Video",
-        Tab::System => "System",
     }
 }
 
@@ -261,7 +254,6 @@ impl egui_dock::TabViewer for Viewer<'_> {
             Tab::Spiral => spiral_pane(ui, self.state, self.now),
             Tab::Notes => notes_pane(ui, self.state),
             Tab::Video => render_pane(ui, self.state, self.now),
-            Tab::System => system_pane(ui, self.state),
         }
     }
 
@@ -416,7 +408,7 @@ pub(super) fn param_bar(
 }
 
 /// A two-handle [`RangeBar`] over a PAIR of parameters — one control for a
-/// range whose ends are both automatable params (Color & light's color range).
+/// range whose ends are both automatable params (the Colors page's color range).
 /// `label` names the bar and `display` formats each end's readout.
 ///
 /// Both params are bracketed for the whole drag and written every changed
@@ -516,10 +508,9 @@ pub(super) fn edge_bar(
 
 /// The rule that separates a section from the one above it, so the FIRST
 /// section in a pane has nothing to separate from and takes a bare heading.
-/// The Nodes and View bodies write that case out by hand — they are built
-/// from section functions in a fixed order, so each knows whether it leads
-/// (and the Display sections that are one group apiece take no heading at
-/// all, the fold-out header above them being the name it would carry).
+/// The Display pages write that case out by hand — each is built from section
+/// functions in a fixed order, so the one that leads knows it does and draws a
+/// plain `ui.heading` instead.
 ///
 /// A pane whose first section depends on the shell cannot know: the Video
 /// pane leads with Record under a host and with Frame in the standalone,
@@ -536,9 +527,8 @@ pub(super) fn edge_bar(
 /// the two apart — which is why `the_video_pane_does_not_start_with_a_rule`
 /// goes through the real dock.
 ///
-/// Shared by `section`'s plain heading and `display::fold_out`'s
-/// collapsible one — a settings pane's header and Display's fold-out draw
-/// the same rule the same way.
+/// Called by [`section`] and by nothing else — a rule under a heading is what
+/// a section is, so the two travel together.
 pub(super) fn section_separator(ui: &mut egui::Ui) {
     if ui.cursor().top() > ui.max_rect().top() + 0.5 {
         ui.add_space(4.0);

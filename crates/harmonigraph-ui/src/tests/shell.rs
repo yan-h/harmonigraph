@@ -10,7 +10,7 @@ use super::harness::*;
 /// would share their body state — scrolling one pane scrolls the other.
 /// Variant-keyed ids are what leave a name free to be repeated, and the dock
 /// still trades on that freedom across surfaces: the Spectral pane wears
-/// "Analyzer", the same word as the Display section that holds its settings,
+/// "Analyzer", the same word as the Display page that holds its settings,
 /// because the display and its knobs are one feature.
 #[test]
 fn every_tab_has_its_own_id_whatever_its_title_says() {
@@ -26,15 +26,14 @@ fn every_tab_has_its_own_id_whatever_its_title_says() {
         panes::Tab::Spiral,
         panes::Tab::Notes,
         panes::Tab::Video,
-        panes::Tab::System,
     ];
     let mut viewer = panes::Viewer { state: &mut state, params: &params, now: 0.0 };
 
     // The sharing the variant-keyed id keeps safe is real, not hypothetical.
     assert_eq!(
         panes::tab_title(&panes::Tab::Spectral),
-        panes::display::Section::Analyzer.title(),
-        "the Spectral pane and the Display section holding its settings are \
+        panes::display::DisplayPage::Analyzer.title(),
+        "the Spectral pane and the Display page holding its settings are \
          meant to share the Analyzer name",
     );
 
@@ -67,7 +66,7 @@ fn the_picture_panes_do_not_scroll() {
     // VERTICALLY only: a both-axes area gives the body unbounded width, and the
     // panes that fill the space then never report vertical overflow, so the
     // wheel can't scroll them. Horizontal off; vertical on.
-    for tab in [panes::Tab::Tuning, panes::Tab::Display, panes::Tab::System] {
+    for tab in [panes::Tab::Tuning, panes::Tab::Display, panes::Tab::Video] {
         assert_eq!(viewer.scroll_bars(&tab), [false, true], "{tab:?} cannot scroll vertically");
     }
 }
@@ -97,9 +96,9 @@ fn the_picture_panes_do_not_scroll() {
 ///
 /// The default-window row is what the Display merge bought, and the margin it
 /// bought is worth knowing when adding a tab: a tab per settings pane wants
-/// 1428pt of window at seven tabs where this bar's four have about 270pt of
+/// 1428pt of window at seven tabs where this bar's three have about 270pt of
 /// column to share at 1000pt — so the room for a NEW tab is real but shallow,
-/// and a new settings surface should be a Display section first (#287).
+/// and a new settings surface should be a Display page first (#287).
 #[test]
 fn every_settings_tab_fits_on_its_tab_bar() {
     // Two windows: the one this UI is dialled against (and the one the column
@@ -115,12 +114,7 @@ fn every_settings_tab_fits_on_its_tab_bar() {
     harness.settle(&mut state);
     let output = harness.frame(&mut state, vec![]);
 
-    let column = [
-        panes::Tab::Tuning,
-        panes::Tab::Display,
-        panes::Tab::Video,
-        panes::Tab::System,
-    ];
+    let column = [panes::Tab::Tuning, panes::Tab::Display, panes::Tab::Video];
     // The settings leaf's own rect, so a title is only counted where this bar
     // drew it. Scoping rather than matching text anywhere on screen is what
     // makes the Analyzer row mean anything: `tab_title` gives the display pane

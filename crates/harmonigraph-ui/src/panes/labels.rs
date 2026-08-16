@@ -1,6 +1,6 @@
-//! The Display tab's Labels section: the text on the lattice as one subject —
-//! what a node's label says (its name, its cents), how big it draws, and how
-//! long it outlives the note that put it there.
+//! The Labels section of the Display tab's Lattice page: the text on the
+//! lattice as one subject — what a node's label says (its name, its cents), how
+//! big it draws, and how long it outlives the note that put it there.
 //!
 //! Per-node text, but not per-note styling, which is what keeps it out of
 //! [`super::nodes`]: a label rides a hovered node, a sounding one and a
@@ -17,12 +17,10 @@ use harmonigraph_scene::ViewConfig;
 
 /// What a label says and how big it draws, then how long it stays.
 ///
-/// The leading group takes no heading, unlike the Nodes and View bodies: the
-/// only name it could carry is "Labels", which the fold-out header directly
-/// above it already draws. Trail below it does take one — it names something
-/// narrower than the section, which is the whole of when a heading earns its
-/// row here.
+/// Trail takes a heading of its own below them — it names something narrower
+/// than the section, which is the whole of when a heading earns its row here.
 pub(super) fn labels_pane(ui: &mut egui::Ui, state: &mut SharedState) {
+    section(ui, "Labels");
     ui.checkbox(&mut state.view.show_labels, "Note names");
     // Cents ride on the labels, so the toggle grays out with them off.
     ui.add_enabled(

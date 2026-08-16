@@ -329,9 +329,6 @@ fn profile_settings_panes() {
 
     println!("\n-- one settings pane at 300 points wide, ms per frame --");
     for pane in SETTINGS_PANES {
-        // Each section alone: `install` opens flags on the shared state, and a
-        // flag left over from the previous row would profile two bodies as one.
-        state.display_sections = Default::default();
         let tab = pane.install(&mut state);
         let mut samples = Vec::new();
         let mut shapes = 0;
