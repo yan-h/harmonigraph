@@ -363,11 +363,15 @@ pub struct NodeInstance {
     /// `1.0` out of [`derive_scene`], which is not a decision but the absence
     /// of one — nothing in this crate reads audio, so a scene derived without
     /// [`Scene::wear_audio_rings`] behind it is a scene where nothing has been
-    /// measured and nothing can be held back. The failure that shape is chosen
-    /// against is the other one: a shell that forgets the pass would otherwise
-    /// draw a lattice with no rings anywhere and nothing on screen saying why,
-    /// where this draws the ring at every node, which is the picture the gate
-    /// was added to improve on and is plainly not a missing layer.
+    /// measured and nothing can be held back.
+    ///
+    /// It says nothing about a shell that forgets the pass, which is the
+    /// tempting reading and the wrong one: such a shell keeps
+    /// [`SpectralPaint::silent`]'s empty annulus, so the ring layer is off and
+    /// no node draws one whatever this holds. Where the value is load-bearing
+    /// is a scene assembled BY HAND with the annulus filled in — a test, a
+    /// fixture — and there the ungated picture is the one that cannot be
+    /// mistaken for a bug.
     pub audio_ring: f32,
     /// How strongly the music is remembered here (see [`trail`]): 0 where
     /// it has never been, up to 1 where it has.
