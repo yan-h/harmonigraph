@@ -1507,12 +1507,14 @@ impl Default for ViewConfig {
             // opens on, and a second ring on every node is a reading to ask
             // for.
             spectral_ring: false,
-            // Centred in the annulus the fresh core and the fresh octave band
-            // leave between them — 0.256 to 0.661 — with room to spare on
-            // the node clear either side. The gaps are what make it a third
+            // Inside the clear annulus the fresh core and the fresh octave
+            // band leave between them — 0.256 to 0.661 — sitting toward its
+            // inner end, a sixteenth of the node clear of the core and three
+            // times that clear of the band. The gaps are what make it a third
             // ring rather than a thick edge on the core: the eye reads the
             // three bands (core, audio, octaves) as separate the moment none
-            // of them touches.
+            // of them touches. Both marks are outside the band, so the room
+            // above it is the band's to take, not a mark's.
             spectral_ring_inner: 0.32,
             spectral_ring_outer: 0.47,
             // A whole tone across a wedge — see the field for why that width
@@ -1524,28 +1526,30 @@ impl Default for ViewConfig {
             // the ear has finished the note. The straight line is still one
             // drag away.
             fade_shape: 0.35,
-            // Both ends marked: the rings are subtle enough to live with
+            // Both ends marked: the marks are subtle enough to live with
             // always on, and a chord's outer voices are worth seeing without
             // having to go turn something on first.
             mark_melody: true,
             mark_bass: true,
-            // Thin rings, slit at the marked octave's boundaries.
+            // A shallow step past the band — about a third of the band's own
+            // width, so a mark reads as its slice carrying on rather than as a
+            // second ring around everything.
             mark_thickness: 0.078_269_88,
             // Just past a passing sixteenth — 125ms at 120bpm — which is
             // where the wait stops rejecting notes anyone is listening to and
             // starts rejecting the ones nobody is. Not the 0 the bar's low
-            // end offers, because a ring outlives its key (see `mark_delay`):
-            // at 0 every momentary crowning rings its way OUT over the whole
-            // Fade, so lifting a chord one key at a time leaves a fading ring
+            // end offers, because a mark outlives its key (see `mark_delay`):
+            // at 0 every momentary crowning fades its way OUT over the whole
+            // Fade, so lifting a chord one key at a time leaves a fading mark
             // on nearly every note of it, and opening there would ship the
             // mechanism switched off.
             mark_delay: 0.15,
             pulse_marks: Pulse::Bands,
-            // The sheet the rings above wear. A period well under one node's
-            // spacing puts several of them across every ring, so this reads as
+            // The sheet the marks above wear. A period well under one node's
+            // spacing puts several of them across every mark, so this reads as
             // a fine texture ON the marks rather than as light crossing the
             // lattice — which is what keeps it off the reading of the octave
-            // slice each ring points at, the one place the sheet touches the
+            // slice each mark extends, the one place the sheet touches the
             // glyph layer. Half depth and a slow pace hold it there; wider
             // and deeper it would be a sweep crossing the lattice instead.
             shimmer_speed: 0.335_761_5,
