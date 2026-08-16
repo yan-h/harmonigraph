@@ -798,7 +798,7 @@ impl LatticeCallback {
         // reaches exactly 0 rather than approaching it, so a ring on its way
         // out is shipped for exactly as long as it is drawn. The shader's idle
         // branch pays the rest per fragment, keeping an otherwise idle node to
-        // the ring's own annulus.
+        // the ring's own annulus and the hole that ring clears around it.
         let ringing = scene.spectral.ring_draws();
         let paints = |g: &GpuInstance| {
             (ringing && g.ring > 0.0)

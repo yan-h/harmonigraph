@@ -4306,7 +4306,8 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
     };
     // The audio ring on, which has two early-outs of its own: the annulus
     // skip inside `spectral_ring`, and the idle branch's radial exception,
-    // which keeps an otherwise idle node's fragments only where the ring is.
+    // which keeps an otherwise idle node's fragments where the ring is and out
+    // to the edge of the hole that ring clears.
     // Both are answers about a layer NO other fixture here draws — the ring is
     // off in `parity_scene` — so without this the two switches would be
     // compiled and never compared.

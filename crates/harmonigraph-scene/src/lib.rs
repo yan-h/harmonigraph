@@ -465,9 +465,10 @@ pub struct Scene {
     /// where the band is off and something inside it is the last layer on (see
     /// [`RingStack::outer`]).
     ///
-    /// What the melody/bass marks stand off and what the node's gutter is
-    /// measured from, so a node whose band is dialled away still wears both
-    /// where its picture actually ends.
+    /// What the melody/bass marks stand off and what the node's billboard is
+    /// sized on, so a node whose band is dialled away still wears its marks
+    /// where its picture actually ends. The clearing is bounded by this and
+    /// measured per layer instead (see [`NodeInstance::gutter`]).
     pub rings_outer: f32,
     /// Where the melody/bass mark strip starts (see
     /// [`RingStack::mark_inner`]) — a padding out from
@@ -535,9 +536,9 @@ pub struct Scene {
     /// width (see [`ViewConfig::grid_thickness`]), already clamped.
     pub grid_thickness: f32,
     /// How wide the sevens knockout's fade is, in the uv of a full-size
-    /// node (see [`ViewConfig::sevens_gutter_soft`]). View-wide, unlike the
-    /// per-node reach, which the envelope and the node's own rim both bear
-    /// on. Already clamped.
+    /// node (see [`ViewConfig::sevens_gutter_soft`]). View-wide, as the reach
+    /// beside it is — what varies node to node is the STRENGTH, which the
+    /// shader takes per layer from that layer's own level. Already clamped.
     pub sevens_soft: f32,
     /// The ground the lattice is drawn onto: the pane fill this pass gets
     /// composited over, which is the skin's `panel` (what `egui_dock`'s

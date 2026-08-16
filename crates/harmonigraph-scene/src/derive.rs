@@ -229,7 +229,7 @@ pub fn derive_scene(
     let sevens_size = view.sevens_size.clamp(0.15, 1.0);
     // Bounded well inside the billboard: the quad reaches QUAD_MARGIN (1.6)
     // in uv, and the gutter has to finish inside it or it would be clipped
-    // square instead of ending as a circle.
+    // square instead of ending on the node's own outline.
     let sevens_gutter = view.sevens_gutter.clamp(0.0, 0.5);
     // The octave wheel is a pitch axis, so it is a property of the VIEW and is
     // built once: every node draws the same slice WIDTHS. Which octaves those

@@ -2035,10 +2035,12 @@ fn node_paint(in: VsOut) -> vec4<f32> {
     let active_alpha = glyph + base_alpha * (1.0 - glyph);
     let active_rgb = glyph_rgb * glyph + base_rgb * (1.0 - glyph);
 
-    // The knockout gutter (off-sheet nodes only; in.gutter is 0 on the home
-    // sheet). This is what lets the sevens layer overlap the home sheet
-    // instead of needing clearance of its own: the node clears its own
-    // footprint out of whatever was drawn before it and sits in the hole.
+    // The knockout gutter, which every node the scene ships carries — the
+    // reach is the view's constant, and what decides whether a hole appears is
+    // the per-layer level `node_clearing` scales each term by. This is what
+    // lets the sevens layer overlap the home sheet instead of needing clearance
+    // of its own: the node clears its own footprint out of whatever was drawn
+    // before it and sits in the hole.
     //
     // THREE things make it read as a hole rather than a dark blob stuck on the
     // picture, and it needs all of them:

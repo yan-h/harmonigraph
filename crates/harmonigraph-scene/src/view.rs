@@ -1002,9 +1002,10 @@ pub struct RingStack {
     /// The outer edge of the outermost ring DRAWN — the core's radius where
     /// nothing outside it is on, and 0 on a node with no layers at all.
     ///
-    /// What the melody/bass marks stand off, and what a node's gutter is
-    /// measured from, so neither has to know which of the rings inside it
-    /// happened to be the last one on.
+    /// What the melody/bass marks stand off, and what a node's billboard is
+    /// sized on, so neither has to know which of the rings inside it
+    /// happened to be the last one on. It BOUNDS the node's clearing without
+    /// shaping it: each layer's hole is measured from that layer's own radii.
     pub outer: f32,
     /// Where the melody/bass mark strip STARTS: a gap out from
     /// [`outer`](Self::outer), or the node's center when the stack is empty
