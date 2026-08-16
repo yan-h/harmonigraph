@@ -219,6 +219,17 @@ pub(crate) struct StyleMotion {
     ///
     /// [`observe`]: StyleMotion::observe
     moving: bool,
+    /// Whether the press that is down now is the one that was down at the last
+    /// style CHANGE — the press DRIVING the gesture, as against any other
+    /// button held somewhere in the editor.
+    ///
+    /// Set from the pointer at each change and cleared the moment the pointer
+    /// comes up, so it can only stay true across a continuous hold that was
+    /// already down when the style last moved. `any_down` cannot tell the two
+    /// apart on its own, and the difference is the whole reason a Span drag
+    /// may carry a gesture across a ladder rung while a grab on the
+    /// performance overlay may not.
+    held: bool,
 }
 
 impl StyleMotion {
@@ -239,14 +250,23 @@ impl StyleMotion {
     /// would defer is the same build, still owed a settle later, with a
     /// coarse restart now added in front of it).
     ///
-    /// The gesture then stays open while the pointer stays down, however long
-    /// the style holds still — not just for `STYLE_SETTLE` past the last
+    /// The gesture then stays open while the DRIVING press stays down, however
+    /// long the style holds still — not just for `STYLE_SETTLE` past the last
     /// change. The Span drag is why: the slab ladder holds the width across a
     /// rung, so a drag changes the style only at crossings a couple of tenths
     /// of a second apart, and a settle window alone would close the gesture
-    /// and pay a full-quality build between every pair. With the pointer up,
-    /// the settle window is what closes it, so letting go reads as the
-    /// picture snapping into focus.
+    /// and pay a full-quality build between every pair. Otherwise the settle
+    /// window is what closes it, so letting go reads as the picture snapping
+    /// into focus.
+    ///
+    /// The driving press is the one that was down at the last CHANGE and has
+    /// not come up since, not merely a button down somewhere. `pointer_down`
+    /// reports any button anywhere in the editor, and the editor is full of
+    /// long holds that move no style: the performance overlay's plate is an
+    /// `Area` over the whole rect, the Spiral pans, the dock has dividers, the
+    /// roll has notes to drag. Reading one of those as evidence the gesture is
+    /// still running holds the picture coarse for as long as a button happens
+    /// to be down, with no bound on it at all.
     ///
     /// First sight of a surface is a fresh pane, not a gesture, so it builds
     /// at full height straight away — and a pointer already down over it
@@ -270,6 +290,7 @@ impl StyleMotion {
                 m.style = style.clone();
                 m.changed_at = t - STYLE_SETTLE;
                 m.moving = false;
+                m.held = false;
                 false
             }
             // Holding still: the gesture runs on while the pointer is down —
@@ -281,11 +302,17 @@ impl StyleMotion {
             // flag. A style that was never moving stays sharp however
             // recently it changed.
             Some(m) if m.style == *style => {
-                m.moving = m.moving && (pointer_down || t - m.changed_at < STYLE_SETTLE);
+                // The hold has to be the SAME hold: cleared the moment the
+                // pointer comes up, so a press that begins after this frame
+                // reaches the arm with the latch already down and carries
+                // nothing.
+                m.held = m.held && pointer_down;
+                m.moving = m.moving && (m.held || t - m.changed_at < STYLE_SETTLE);
                 m.moving
             }
             Some(m) => {
                 m.moving = pointer_down || t - m.changed_at < STYLE_SETTLE;
+                m.held = pointer_down;
                 m.style = style.clone();
                 m.changed_at = t;
                 m.moving
@@ -295,6 +322,7 @@ impl StyleMotion {
                     style: style.clone(),
                     changed_at: t - STYLE_SETTLE,
                     moving: false,
+                    held: false,
                 });
                 false
             }
@@ -3177,7 +3205,7 @@ mod tests {
         // the NEW clock catches the old stamp: minutes of coarse picture for
         // reopening the editor.
         let mut slot =
-            Some(StyleMotion { style: a.clone(), changed_at: 600.0, moving: true });
+            Some(StyleMotion { style: a.clone(), changed_at: 600.0, moving: true, held: true });
         assert!(
             !StyleMotion::observe(&mut slot, &a, 0.5, false),
             "a restarted clock reads as settled, not as ten minutes of gesture",
@@ -3190,7 +3218,7 @@ mod tests {
         // The pointer does not change the reopen: a button already held while
         // the editor comes back is first sight on this clock, not a gesture.
         let mut slot =
-            Some(StyleMotion { style: a.clone(), changed_at: 600.0, moving: true });
+            Some(StyleMotion { style: a.clone(), changed_at: 600.0, moving: true, held: true });
         assert!(
             !StyleMotion::observe(&mut slot, &a, 0.5, true),
             "a restarted clock reads as settled with the pointer down too",
@@ -3298,6 +3326,56 @@ mod tests {
             );
         }
         assert!(StyleMotion::observe(&mut slot, &c, 20.39, true), "and the next rung still is");
+    }
+
+    /// A gesture the WHEEL opened is not held open by a press that arrives
+    /// after it.
+    ///
+    /// The pointer carries a gesture across the gap between ladder rungs
+    /// because it is the pointer DRIVING that gesture. A button pressed on
+    /// something else entirely drives nothing, and `any_down` is any button
+    /// anywhere in the editor — the performance overlay's plate, which is an
+    /// `Area` over the whole editor rect, the Spiral's pan, a dock divider, a
+    /// note dragged in the roll. Only the last of those existed when the
+    /// pointer term was written.
+    ///
+    /// The latch already refuses to REOPEN off an unrelated press
+    /// (`a_pointer_down_that_changes_nothing_is_not_a_gesture`); this is the
+    /// other side of it, where the press arrives while a gesture is open and
+    /// extends it with no bound but the button. The picture that buys is the
+    /// heatmap held at half its rows with wide rows read as a max rather than
+    /// the order-4 power mean — a visibly softer pitch axis over a noise floor
+    /// several dB high — for as long as the hold lasts.
+    #[test]
+    fn a_press_that_arrives_after_a_wheel_gesture_does_not_hold_it_open() {
+        let cfg = SpectrumConfig::default();
+        let a = ColumnStyle::new(100, false, 0.1, 40.0, 48.0, &cfg);
+        let b = ColumnStyle::new(100, false, 0.2, 40.0, 48.0, &cfg);
+        let c = ColumnStyle::new(100, false, 0.4, 40.0, 48.0, &cfg);
+        let mut slot = None;
+        assert!(!StyleMotion::observe(&mut slot, &a, 10.0, false), "first sight is not a gesture");
+        assert!(!StyleMotion::observe(&mut slot, &b, 10.1, false), "one notch is not a gesture");
+        assert!(
+            StyleMotion::observe(&mut slot, &c, 10.15, false),
+            "a second notch inside the settle window opens one",
+        );
+        // The button goes down after the wheel stopped, on something that
+        // moves no style. Still inside the settle window, so the gesture is
+        // legitimately open here and the press is not what is holding it.
+        assert!(
+            StyleMotion::observe(&mut slot, &c, 10.15 + STYLE_SETTLE * 0.5, true),
+            "the settle window has not run out yet",
+        );
+        // Past the window with the button still held: nothing is driving the
+        // style, so the gesture is over however long the hold goes on.
+        assert!(
+            !StyleMotion::observe(&mut slot, &c, 10.15 + STYLE_SETTLE * 1.01, true),
+            "a press that opened nothing carried the gesture past its settle",
+        );
+        assert!(
+            !StyleMotion::observe(&mut slot, &c, 30.0, true),
+            "and went on carrying it for as long as the button was down",
+        );
     }
 
     /// Release settles: with the pointer up, the settle window past the last
