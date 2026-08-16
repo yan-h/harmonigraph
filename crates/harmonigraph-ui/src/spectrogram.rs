@@ -505,7 +505,6 @@ impl RowRead {
             }
         }
     }
-
 }
 
 /// Where the visible slabs sit in the uploaded texture, and what pitch range
@@ -3115,9 +3114,9 @@ mod tests {
         db[5] = 40;
         db[6] = 200;
         db[7] = 120;
-        let w: &[f32; 256] = &ROW_WEIGHT;
-        assert_eq!(RowRead::Max { from: 5, to: 8 }.of(&db, w), 200);
-        assert_eq!(RowRead::Max { from: 8, to: 10 }.of(&db, w), 0, "an empty run is silence");
+        let weight: &[f32; 256] = &ROW_WEIGHT;
+        assert_eq!(RowRead::Max { from: 5, to: 8 }.of(&db, weight), 200);
+        assert_eq!(RowRead::Max { from: 8, to: 10 }.of(&db, weight), 0, "an empty run is silence");
 
         // A zoomed-out scale, so rows are wider than buckets: each coarse row
         // covers exactly the run its settled twin takes the mean over.
@@ -4716,7 +4715,7 @@ mod tests {
     /// baseline by 2x, which is the same warning #363 carries.
     ///
     /// The figure that matters most here is not a ratio at all. In one clean
-    /// run the settled zoomed-out build is 13.0 ms and the gesture-rows coarse
+    /// run the settled zoomed-out build is 13.2 ms and the gesture-rows coarse
     /// one is 3.3 ms, both SERIAL — so building a gesture's first frame coarse
     /// is a 3.9x cut where parallelising that same build is 2.5x, and it costs
     /// no threads inside the host process. Threads are what is left AFTER that,
@@ -4786,7 +4785,7 @@ mod tests {
     /// Scratch: where [`RowRead::Mean`] spends a settled compose, and why both
     /// of the targets inside it are shut. Not an assertion.
     ///
-    /// Where the loop goes: the shipping read is 7.5 ms of the 13.0 ms compose
+    /// Where the loop goes: the shipping read is 7.5 ms of the 13.2 ms compose
     /// `timing_zoom_costs` measures at these dimensions, about three fifths of
     /// it. Read that share as a FLOOR rather than as a number — one slab is read
     /// here over and over, so the buckets sit in L1 throughout, where the
@@ -4862,7 +4861,7 @@ mod tests {
 
         // The table reached exactly as [`fill_column_into`] reaches it: derefed
         // once, outside every loop that follows.
-        let w: &[f32; 256] = &ROW_WEIGHT;
+        let weight: &[f32; 256] = &ROW_WEIGHT;
 
         // The baseline goes through [`RowRead::of`] itself. A copy of the
         // arithmetic would read identically and measure whatever it had drifted
@@ -4876,7 +4875,7 @@ mod tests {
             for _ in 0..200 {
                 for b in &bins {
                     if matches!(b.read, RowRead::Mean { .. }) {
-                        sink += u32::from(b.read.of(&slab, w));
+                        sink += u32::from(b.read.of(&slab, weight));
                     }
                 }
             }
@@ -4897,7 +4896,7 @@ mod tests {
                         sink += u32::from(top);
                         continue;
                     }
-                    let sum: f32 = r.iter().map(|&v| w[usize::from(top - v)]).sum();
+                    let sum: f32 = r.iter().map(|&v| weight[usize::from(top - v)]).sum();
                     let steps = -log(sum / r.len() as f32) * ROW_MEAN_STEPS;
                     sink += u32::from(top.saturating_sub(steps.round() as u8));
                 }
@@ -4931,10 +4930,20 @@ mod tests {
         // Four arms, because three questions are being asked and no one pair
         // answers two of them. The SHARE of a compose has to be read off the
         // shipping path; the worth of the `log2` off a pair differing in the
-        // logarithm and in nothing else; the cost of the `LazyLock` off a pair
-        // differing in where the table comes from and in nothing else. Reading
-        // either ratio against the shipping arm instead would credit it with
-        // whatever margin the copy carries of its own.
+        // logarithm and in nothing else; the cost of the `LazyLock` off the
+        // closest pair there is to one differing only in where the table comes
+        // from. Reading either ratio against the shipping arm instead would
+        // credit it with whatever margin the copy carries of its own.
+        // `global` against `copy` is NOT that clean pair, and the gap is worth
+        // knowing before the ratio is quoted: `copy` reaches its logarithm
+        // through a `fn(f32) -> f32` it takes as a parameter, because it has to
+        // serve both the libm and the bit-trick arm, while `global` calls
+        // `log2` directly. So their ratio carries the indirection as well as
+        // the table. A fifth arm holding the logarithm fixed would close it;
+        // what makes that not worth writing is that nothing rests on the
+        // number — the table's cost is argued from the COMPOSE (see
+        // [`RowRead::of`]), and this arm is here so the shape stays measurable
+        // at all rather than to size it.
         // Interleaved rounds, each arm scored by its BEST. One pass of an arm is
         // some 20 us, which is short enough that a scheduler decision or a walk
         // onto an efficiency core outweighs the thing being measured — run in
