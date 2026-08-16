@@ -248,10 +248,10 @@ struct Uniforms {
     /// x: grid line thickness as a multiple of the shader's built-in grid
     /// width; y unused (a retired slot rather than a repack, like `misc3.w`);
     /// z: padding inside the octave layer in quad UV units — the gap between
-    /// neighbouring sectors AND between the band and the mark rings;
-    /// w: the melody/bass mark rings' thickness, same units, where 0 means no
-    /// rings (so this slot is NOT free — `mark_ring_thickness` reads it, and
-    /// the octave layer gates the rings on it). Every earlier misc slot is
+    /// neighbouring sectors AND between the band and the marks;
+    /// w: how far a melody/bass mark reaches past the band, same units, where
+    /// 0 means no marks (so this slot is NOT free — `mark_extension` reads it,
+    /// and the octave layer gates the marks on it). Every earlier misc slot is
     /// spoken for, so the grid's knob starts a new one — safe per the note on
     /// `misc4`.
     misc5: [f32; 4],
@@ -259,7 +259,7 @@ struct Uniforms {
     /// when a memory was a change to the idle marker rather than a kept note
     /// name. Retired in place.
     /// z: the sevens knockout's fade width, in the uv of a full-size node
-    /// (`Scene::sevens_soft`); w: the melody/bass mark rings' shimmer pattern
+    /// (`Scene::sevens_soft`); w: the melody/bass marks' shimmer pattern
     /// (0 off, then one index per pattern — see `Pulse::shader_index`).
     misc6: [f32; 4],
     /// The ground the lattice is drawn onto — the pane fill this pass gets

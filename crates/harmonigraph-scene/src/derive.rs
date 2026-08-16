@@ -71,7 +71,7 @@ struct FrameVoice<'a> {
     /// Whether this voice's departure has begun (see
     /// [`NodeInstance::departing`](crate::NodeInstance::departing)).
     departing: bool,
-    /// What this voice's melody ring draws at, or `None` where it wears no
+    /// What this voice's melody mark draws at, or `None` where it wears no
     /// melody end. The RELEASE alone under the ring's own ease — see the ease
     /// in [`derive_scene`], and
     /// [`Voice::activation`](harmonigraph_core::Voice::activation) for why the
@@ -535,13 +535,13 @@ pub fn derive_scene(
         mark_thickness,
         // A mark sheet reaches the ring AND the octave slice that ring points
         // at, so with the ring layer off — no end marked, or no thickness to
-        // draw one with, which is `mark_rings_draw` and is exactly what the
+        // draw one with, which is `marks_draw` and is exactly what the
         // pane grays the row on — the ring half is multiplied away by a
         // coverage of zero and the SLICE half is not: the glyph layer draws
         // that either way, so without this fold the sheet would go on
         // sweeping from a control the user can no longer reach. Folded here
         // so the picture and the control agree by construction.
-        pulse_marks: if view.mark_rings_draw() { view.pulse_marks } else { Pulse::Off },
+        pulse_marks: if view.marks_draw() { view.pulse_marks } else { Pulse::Off },
         shimmer_speed: view.shimmer_speed.clamp(0.0, 40.0),
         // Strictly positive: the pattern's phase divides by this. The floor is
         // a small fraction of a node (radius `spacing` × NODE_RADIUS_FACTOR),

@@ -505,8 +505,8 @@ fn a_note_shorter_than_the_fade_still_lights_every_layer_fully() {
     let node = origin_node(&scene);
     assert_eq!(node.activation, 1.0, "the core reaches full on a note held for a twelfth of it");
     assert_eq!(node.octaves[MIDDLE_C_SLOT], 1.0, "and the octave glyph with it");
-    assert_eq!(node.melody_level, 1.0, "and the melody ring");
-    assert_eq!(node.bass_level, 1.0, "and the bass ring — a lone note wears both ends");
+    assert_eq!(node.melody_level, 1.0, "and the melody mark");
+    assert_eq!(node.bass_level, 1.0, "and the bass mark — a lone note wears both ends");
 
     // And the whole fade is still ahead of it: the departure starts where the
     // arrival landed, not back at the key.
@@ -518,7 +518,7 @@ fn a_note_shorter_than_the_fade_still_lights_every_layer_fully() {
 
 #[test]
 fn one_fade_time_carries_every_layer_of_the_node() {
-    // The core, the octave glyphs and the melody/bass rings all ride the
+    // The core, the octave glyphs and the melody/bass marks all ride the
     // single Fade param: release a two-note chord and half a fade later every
     // one of them is half-way down. One time for the whole node, so a release
     // reads as one gesture rather than as layers leaving at their own pace.
@@ -549,26 +549,26 @@ fn one_fade_time_carries_every_layer_of_the_node() {
     let origin = origin_node(&scene);
     half("the core", origin.activation);
     half("the octave glyph", origin.octaves[MIDDLE_C_SLOT]);
-    // ...and so is the bass ring it left with. C4 was the bottom of the
+    // ...and so is the bass mark it left with. C4 was the bottom of the
     // chord, so its slot is still marked, at the same level as the glyph
     // under it rather than at nothing or at full.
     assert_eq!(origin.bass_slots, 1 << MIDDLE_C_SLOT, "C4 left wearing the bass end");
-    half("the bass ring", origin.bass_level);
+    half("the bass mark", origin.bass_level);
     assert_eq!(origin.bass_level, origin.octaves[MIDDLE_C_SLOT], "ring and sector leave as one");
     assert_eq!(origin.melody_slots, 0, "C4 was never the melody");
-    // And the melody ring is on G's node, on the same envelope. G also leaves
+    // And the melody mark is on G's node, on the same envelope. G also leaves
     // wearing the BASS: C4's key came up first, which left G the lone note
     // down and so both ends of a one-note chord for the instant before its
     // own key followed. A momentary crowning, and what the Delay exists to
     // filter — see `the_delay_is_what_keeps_a_released_chord_from_smearing_rings`.
     let melody = node_at(&scene, LatticePos::new(1, 0, 0));
     assert_eq!(melody.melody_slots, 1 << MIDDLE_C_SLOT, "G4 left wearing the melody end");
-    half("the melody ring", melody.melody_level);
+    half("the melody mark", melody.melody_level);
 }
 
 #[test]
 fn the_delay_is_what_keeps_a_released_chord_from_smearing_rings() {
-    // The bug this guards was a chord release smearing a melody/bass ring
+    // The bug this guards was a chord release smearing a melody/bass mark
     // across most pitch classes: lifting the keys one at a time re-crowns a
     // new momentary extreme on every lift, and each of those crownings rings.
     //
@@ -962,7 +962,7 @@ fn a_lit_octave_indicator_stands_for_the_pitch_it_is_drawn_at() {
     // sits on -- the mismatch the one colour table exists to have ruled out.
     let marked: Vec<usize> =
         (0..OCTAVE_SLOTS).filter(|&s| origin.melody_slots >> s & 1 == 1).collect();
-    assert_eq!(marked, lit, "the melody ring marks the octave that sounds");
+    assert_eq!(marked, lit, "the melody mark names the octave that sounds");
     let frame = FrameParams::default();
     // The gradient the scene was built with — `view`'s, which is not
     // `Gradient::default()`: that is the gradient type's own default,
@@ -976,21 +976,20 @@ fn a_lit_octave_indicator_stands_for_the_pitch_it_is_drawn_at() {
 }
 
 /// The fresh audio ring sits in CLEAR SPACE: the annulus the core disc and the
-/// melody ring leave between them, with a visible gap at each end.
+/// octave band leave between them, with a visible gap at each end.
 ///
 /// Arithmetic on the fresh values rather than a picture, because that is what
-/// the gaps are — the melody ring's inner edge is the band's inner radius less
-/// the layer's padding and the ring's own thickness, and the core ends at its
-/// radius. Written out here so that retuning any of those four moves this
-/// test, which is the point: the ring is placed against them and nothing in
-/// its own two fields knows they exist.
+/// the gaps are — the core ends at its radius, and the band begins at its
+/// inner one. Written out here so that retuning either moves this test, which
+/// is the point: the ring is placed against them and nothing in its own two
+/// fields knows they exist.
+///
+/// The band is the neighbour above rather than a melody mark, because both
+/// marks now sit OUTSIDE the band: the space this ring is dropped into runs
+/// clear from the core to the band's inner edge.
 #[test]
-fn the_fresh_audio_ring_sits_clear_of_the_core_and_the_melody_ring() {
+fn the_fresh_audio_ring_sits_clear_of_the_core_and_the_octave_band() {
     let view = ViewConfig::default();
-    // Where the melody ring starts, from the shader's own construction: the
-    // band's inner radius, back one padding to the ring's outer edge, and back
-    // its thickness to its inner one.
-    let melody_inner = view.outer_inner - view.outer_gap - view.mark_thickness;
     // A gap a reader can see, not merely a positive number. A twentieth of the
     // node's radius is about the padding inside the octave layer (0.052
     // fresh), which is the rhythm the rest of the node is spaced on.
@@ -1002,9 +1001,10 @@ fn the_fresh_audio_ring_sits_clear_of_the_core_and_the_melody_ring() {
         view.core_radius,
     );
     assert!(
-        melody_inner - view.spectral_ring_outer > CLEAR,
-        "the ring ends at {} against a melody ring starting at {melody_inner}",
+        view.outer_inner - view.spectral_ring_outer > CLEAR,
+        "the ring ends at {} against a band starting at {}",
         view.spectral_ring_outer,
+        view.outer_inner,
     );
 }
 

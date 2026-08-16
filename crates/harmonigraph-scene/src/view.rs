@@ -341,13 +341,14 @@ pub struct ViewConfig {
     // drops them on the next save.
     /// Padding inside the octave layer, in quad UV units: the constant
     /// gap between one octave sector and the next, AND the gap separating
-    /// the melody/bass rings from the band. One number, because they read
-    /// as one rhythm — a ring sitting closer to the band than the sectors
-    /// sit to each other looks like a mistake.
+    /// the melody/bass marks from the band. One number, because they read
+    /// as one rhythm — and a mark IS its sector continued outward, so a
+    /// stand-off narrower than the gap to the next sector would read as a
+    /// join rather than as the same interruption seen twice.
     ///
-    /// Was fixed at 0.12 (the sectors' gap; the rings used a narrower one
+    /// Was fixed at 0.12 (the sectors' gap; the marks used a narrower one
     /// of their own). 0 closes the sectors into a solid annulus and seats
-    /// the rings right against it.
+    /// the marks right against it.
     pub outer_gap: f32,
     /// How many octaves one turn of a node covers at FULL SIZE (see
     /// [`octaves`](crate::octaves)), 1..=11 — not how many it draws, which is
@@ -379,7 +380,7 @@ pub struct ViewConfig {
     /// strength — and it is inert without two extras to differ.
     pub octave_extra_blend: f32,
     // Which shimmer sweeps the octave glyphs has no field here: the sheet is
-    // the melody/bass rings' alone (`pulse_marks`), and the octave layer draws
+    // the melody/bass marks' alone (`pulse_marks`), and the octave layer draws
     // steady whatever those are doing. Saved blobs still carry the
     // `pulse_octaves` key, naming a pattern nothing reads any more; serde
     // ignores unknown keys, so such a blob loads intact, opens on the steady
@@ -447,7 +448,7 @@ pub struct ViewConfig {
     /// An ADDITION rather than a source switch, which is what makes it a
     /// different picture from [`spectral_light`](Self::spectral_light) rather
     /// than a second way of asking for it: MIDI keeps everything it draws —
-    /// the node body, the octave band, the melody and bass rings — and the
+    /// the node body, the octave band, the melody and bass marks — and the
     /// measurement is a ring of its own, in the analyzer's colours rather than
     /// the pitch ramp's, so neither reading can be mistaken for the other.
     ///
@@ -473,9 +474,9 @@ pub struct ViewConfig {
     /// to a visible span by `derive_scene`.
     ///
     /// Fresh, they sit in the empty annulus between the core disc (which ends
-    /// at 0.256) and the melody ring (which starts at 0.531), with a gap
+    /// at 0.256) and the octave band (which starts at 0.661), with a gap
     /// either side, so the ring reads as a layer of its own rather than as a
-    /// fringe on the core or a second mark ring. Settings rather than
+    /// fringe on the core or an edge of the band. Settings rather than
     /// constants because that annulus is itself a setting: a dialled-up core
     /// or a band pulled inward closes it, and the ring has to be movable
     /// without a recompile.
@@ -548,68 +549,72 @@ pub struct ViewConfig {
     // differing only by slot.
     /// Mark the highest held note.
     ///
-    /// Independent of [`mark_bass`](Self::mark_bass), which is what the two
-    /// of them are: the rings are told apart by radius (melody inside the
-    /// octave band, bass outside) rather than by hue, so a note that is at
-    /// once the highest and the lowest — a lone held note, or a chord whose
-    /// top and bottom share a pitch class — simply gets both.
+    /// Independent of [`mark_bass`](Self::mark_bass), and they share one
+    /// strip: a mark is its own octave's slice continued outward, so what
+    /// tells the two apart is WHICH slice each one extends — the slices are
+    /// ordered by pitch round the node, and the higher marked one is the
+    /// melody. A note that is at once the highest and the lowest — a lone
+    /// held note, or a chord whose top and bottom share a pitch class — is
+    /// one slice extended once, which is the whole of what there is to say
+    /// about it.
     pub mark_melody: bool,
     /// Mark the lowest held note. See [`mark_melody`](Self::mark_melody).
     pub mark_bass: bool,
-    /// How thick each melody/bass ring is, in quad UV units — the same
-    /// units as the band radii and [`outer_gap`](Self::outer_gap), so the
-    /// three read against each other directly. One thickness for both
-    /// rings: they are one mark seen at two radii, and letting them differ
-    /// would say something that isn't true.
+    /// How far a melody/bass mark reaches past the octave band, in quad UV
+    /// units — the same units as the band radii and
+    /// [`outer_gap`](Self::outer_gap), so the three read against each other
+    /// directly. One depth for both ends: they are one kind of mark, and
+    /// letting them differ would say something that isn't true.
     ///
-    /// A ring is a whole circle, slit at the two sector boundaries of the
-    /// octave responsible for it — the slit IS the gap between two octaves,
-    /// continued outward, so the ring says which octave without giving up
-    /// the shape. A [`outer_gap`](Self::outer_gap) of 0 leaves no slit to
-    /// draw.
+    /// A mark is an annular sector on exactly the angles of the octave
+    /// responsible for it, standing off the band by
+    /// [`outer_gap`](Self::outer_gap) — the same padding that separates one
+    /// indicator from the next, so the mark reads as that indicator
+    /// continued. An `outer_gap` of 0 closes the stand-off, and the mark
+    /// meets its slice.
     ///
-    /// 0 turns the rings off, as a radius of 0 turns the core off. Was
-    /// fixed at 0.16 of the band's WIDTH, which moved the rings whenever
+    /// 0 turns the marks off, as a radius of 0 turns the core off. Was
+    /// fixed at 0.16 of the band's WIDTH, which moved the marks whenever
     /// the band was resized; absolute holds them still.
     pub mark_thickness: f32,
-    /// How long a note must HOLD an end before its ring begins to ease in,
+    /// How long a note must HOLD an end before its mark begins to ease in,
     /// in seconds. The wait sits in front of the ease rather than stretching
-    /// it: the ring is at 0 for this long and then arrives on the same Fade
+    /// it: the mark is at 0 for this long and then arrives on the same Fade
     /// ramp ([`envelope`](Self::envelope)) every other layer arrives on.
     ///
     /// The wait is also a THRESHOLD: an end that changes hands again before
-    /// the delay is up never draws a ring at all. That is what the setting is
+    /// the delay is up never draws a mark at all. That is what the setting is
     /// for. Playing fast, the top and bottom of what is down change every few
-    /// notes, and a ring easing in on each of them reads as flicker over the
+    /// notes, and a mark easing in on each of them reads as flicker around the
     /// octave band rather than as the line it is tracing — so the delay is
     /// how long a note has to be the melody before it counts as the melody.
     ///
-    /// A ring outlives its key (it fades out on the note's release), so the
+    /// A mark outlives its key (it fades out on the note's release), so the
     /// threshold is answered AT the key-up — `derive_scene`'s `ease` — and
     /// only the ramp runs on from there. Left to the ramp alone, an end
     /// dropped mid-delay would climb past the threshold while the note was
-    /// already fading and ring a note that never was the melody, which is the
+    /// already fading and mark a note that never was the melody, which is the
     /// very flicker this setting buys off.
     ///
     /// Not derived from the note Fade, which is the other end of the same
     /// note and reads as the natural pair: a fade is how long a note takes to
     /// LEAVE, and tying the two would mean a long release could not be paired
-    /// with a ring that answers immediately. The delay is measured from the
+    /// with a mark that answers immediately. The delay is measured from the
     /// handoff the tracker stamps ([`HeldEnd`](harmonigraph_core::HeldEnd)),
     /// which is exactly why that stamp cannot come off the released voice:
     /// any delay past the Fade would outlive the note that handed the end
     /// over.
     ///
-    /// 0 is the ring arriving with its note, and is deliberately not what a
+    /// 0 is the mark arriving with its note, and is deliberately not what a
     /// fresh view opens on — see `impl Default`, where the wait that stops
     /// the chord-release smear is written out.
     pub mark_delay: f32,
-    /// Which shimmer sweeps the melody/bass rings (see [`Pulse`]): the sheet
-    /// takes both rings AND the octave slice each one points at. That reach
-    /// into the other layer is the mark being the ring together with the slice
-    /// it names, so light crossing one crosses the other — and it is the whole
+    /// Which shimmer sweeps the melody/bass marks (see [`Pulse`]): the sheet
+    /// takes both marks AND the octave slice each one extends. That reach
+    /// into the other layer is the mark being one slice in two pieces, so
+    /// light crossing one crosses the other — and it is the whole
     /// of where the sheet goes, the octave layer drawing steady everywhere a
-    /// ring does not point. [`Pulse::Bands`] fresh, so the sweep is on out of
+    /// mark does not reach. [`Pulse::Bands`] fresh, so the sweep is on out of
     /// the box; a blob with no `pulse_marks` key gets that same value, the
     /// container-level `#[serde(default)]` making `impl Default` the one
     /// fallback for this field as for every other.
@@ -885,12 +890,12 @@ impl ViewConfig {
         }
     }
 
-    /// Whether a melody/bass ring can be drawn at all: an end has to be
-    /// marked for there to BE a ring, and the thickness has to leave it
+    /// Whether a melody/bass mark can be drawn at all: an end has to be
+    /// marked for there to BE a mark, and the depth has to leave it
     /// something to draw with.
     ///
     /// One predicate because three places have to agree on it — the pane
-    /// grays the ring's own controls, `derive_scene` folds
+    /// grays the marks' own controls, `derive_scene` folds
     /// [`pulse_marks`](Self::pulse_marks) off, and the Shimmer bars gray on
     /// the same thing, that pattern being the only thing they size — and three
     /// copies of a two-term condition is how they come to disagree. They did:
@@ -898,9 +903,9 @@ impl ViewConfig {
     /// kept shipping a live pulse mode, and the Shimmer bars tested neither and
     /// stayed draggable with nothing to drag.
     ///
-    /// Says nothing about whether a ring is drawn NOW — that is a held note's
+    /// Says nothing about whether a mark is drawn NOW — that is a held note's
     /// business, per node. This is whether the layer is switched on.
-    pub fn mark_rings_draw(&self) -> bool {
+    pub fn marks_draw(&self) -> bool {
         self.mark_thickness > 0.0 && (self.mark_melody || self.mark_bass)
     }
 
@@ -1494,8 +1499,8 @@ impl Default for ViewConfig {
             // opens on, and a second ring on every node is a reading to ask
             // for.
             spectral_ring: false,
-            // Centred in the annulus the fresh core and the fresh melody ring
-            // leave between them — 0.256 to 0.531 — with about a fifteenth of
+            // Centred in the annulus the fresh core and the fresh octave band
+            // leave between them — 0.256 to 0.661 — with room to spare on
             // the node clear either side. The gaps are what make it a third
             // ring rather than a thick edge on the core: the eye reads the
             // three bands (core, audio, octaves) as separate the moment none
@@ -1582,7 +1587,7 @@ pub struct FrameParams {
     ///
     /// One time per LAYER too, so an arrival or a release reads as a single
     /// gesture instead of pieces of the node moving at different rates. The
-    /// octave sectors and the melody/bass rings arrive on the same ramp as
+    /// octave sectors and the melody/bass marks arrive on the same ramp as
     /// the core they sit on, because a ring and the sector it links back to
     /// belong to one note — [`ViewConfig::mark_delay`] moves a ring's ramp
     /// LATER without changing its rate, which is the one thing that may

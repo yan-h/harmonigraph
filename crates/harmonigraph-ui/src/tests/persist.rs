@@ -492,7 +492,7 @@ fn a_blob_written_against_the_taper_keeps_what_it_still_says() {
 
 /// The octave glyphs' own shimmer is gone, and a project saved against it
 /// carries a `pulse_octaves` key nothing reads now. It has to open with the
-/// glyphs steady and every other setting intact — including the mark rings'
+/// glyphs steady and every other setting intact — including the marks'
 /// pattern, which is the one that survived and which sits next to it in the
 /// blob, so a reader that choked on the retired key would take the live one
 /// down with it.
@@ -507,7 +507,7 @@ fn a_blob_written_against_the_octave_shimmer_opens_with_the_glyphs_steady() {
     state.camera.yaw = 1.23;
     state.view.pulse_marks = harmonigraph_scene::Pulse::Hex;
     let saved = state.save_persist();
-    // Where the retired key sat: beside the mark rings' own pattern, written
+    // Where the retired key sat: beside the marks' own pattern, written
     // bare as RON writes a unit variant.
     let marks = "pulse_marks:Hex,";
     let with_octaves = saved.replace(marks, &format!("pulse_octaves:Bands,{marks}"));

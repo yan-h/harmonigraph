@@ -349,7 +349,7 @@ mod tests {
         // Two distances, because the two questions are asked at different
         // ones. Whether the constellation READS is a question about a screen
         // full of nodes; whether the ring sits clear of the core and the
-        // melody ring, and what one wedge is actually showing, is one about a
+        // octave band, and what one wedge is actually showing, is one about a
         // single node — and at reading distance a wedge is a dozen pixels.
         //
         // The Range sweep runs at both, because the setting trades exactly

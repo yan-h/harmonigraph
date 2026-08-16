@@ -1049,7 +1049,7 @@ mod tests {
     /// is decided by what it MEASURES rather than by which pane it is on.
     ///
     /// - **MIDI**: `ViewConfig::pitch_gradient` indexed by a PITCH. The
-    ///   lattice's nodes, wedges and mark rings, and the roll's ribbons.
+    ///   lattice's nodes, wedges and marks, and the roll's ribbons.
     /// - **FREQUENCY**: `SpectrumConfig::spectrogram_gradient` indexed by a
     ///   LEVEL. The spectrum curve, the spectrogram's cells, the Spiral pane's
     ///   segments, and everything the lattice lights from audio.

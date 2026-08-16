@@ -163,16 +163,14 @@ fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
              whole ring in or out.",
         );
     // One padding for the whole layer: between sectors, and
-    // between the band and the melody/bass rings.
+    // between the band and the melody/bass marks.
     ValueBar::new(&mut view.outer_gap, 0.0..=0.4, "Gap")
         .show(ui)
         .on_hover_text(
             "Padding inside the octave layer: between one octave \
              and the next, and between the band and the \
-             melody/bass rings. 0 closes the octaves into a solid \
-             annulus and seats the rings against it. Wide values \
-             push the bass ring in toward the core -- raise Band \
-             inner to make room",
+             melody/bass marks. 0 closes the octaves into a solid \
+             annulus and seats the marks against it",
         );
     // No Solidity and no Backdrop bar: both are fixed at 1. The glyphs are
     // always the crisp classic shapes, and the silent octaves always ghost
@@ -182,7 +180,7 @@ fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // No Shimmer row either: the glyphs are what says which octaves sound, and
     // a sheet laid over that reading costs it — so the sweep belongs to the
     // marks, which carry no such reading. What reaches this layer is the mark
-    // sheet crossing the one slice each ring points at, from the row in
+    // sheet crossing the one slice each mark extends, from the row in
     // Melody/bass below.
 }
 
@@ -191,9 +189,10 @@ fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
 fn melody_bass_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     section(ui, "Melody / bass");
     // Two boxes, not a four-way row: the marks are independent, they are
-    // told apart by radius rather than by hue, and a note that is at once
-    // the highest and the lowest -- a lone held note, or a chord whose top
-    // and bottom share a pitch class -- simply gets both.
+    // told apart by which slice each one extends rather than by hue, and a
+    // note that is at once the highest and the lowest -- a lone held note, or
+    // a chord whose top and bottom share a pitch class -- is one slice
+    // extended once.
     //
     // Side by side, because they are that pair: two ends of one idea, both
     // named in the heading above them, and short enough that a column of two
@@ -202,36 +201,37 @@ fn melody_bass_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // the edge.
     button_row(ui, |ui| {
         ui.checkbox(&mut view.mark_melody, "Melody")
-            .on_hover_text("Ring the highest held note, just inside the octave band");
+            .on_hover_text("Extend the highest held note's octave slice past the band");
         ui.checkbox(&mut view.mark_bass, "Bass")
-            .on_hover_text("Ring the lowest held note, just outside the octave band");
+            .on_hover_text("Extend the lowest held note's octave slice past the band");
     });
-    // The marks are full rings bracketing the octave band (melody
-    // inside, bass outside), each slit either side of the octave
-    // responsible so that stretch reads as its own piece.
+    // A mark is the marked octave's own slice continued outward, standing off
+    // the band by Gap -- the same padding one sector stands off the next, so
+    // it reads as that indicator's own piece rather than as a ring around
+    // everything.
     ui.add_enabled_ui(view.mark_melody || view.mark_bass, |ui| {
-        ValueBar::new(&mut view.mark_thickness, 0.0..=0.3, "Ring thickness")
+        ValueBar::new(&mut view.mark_thickness, 0.0..=0.3, "Mark depth")
             .show(ui)
             .on_hover_text(
-                "How thick both mark rings are, in the same units as \
-                 the band radii and Gap. 0 turns the rings off; thick \
-                 values grow the bass ring in over the core, so raise \
-                 Band inner to make room",
+                "How far a mark reaches past the octave band, in the same \
+                 units as the band radii and Gap. 0 turns the marks off; \
+                 a band dialled right out with a wide Gap leaves less room \
+                 than this asks for, and the mark stops at the node's edge",
             );
-        // The Delay is about a ring that is DRAWN — when it arrives — so it is
-        // gated on there being one. Ring thickness 0 is the documented off position,
-        // where `mark_ring` returns no coverage (the Core section gates its own
-        // Solidity on a radius of 0 the same way). The enclosing block already
+        // The Delay is about a mark that is DRAWN — when it arrives — so it is
+        // gated on there being one. A depth of 0 is the documented off position,
+        // where `mark_extension` returns no coverage (the Core section gates its
+        // own Solidity on a radius of 0 the same way). The enclosing block already
         // grays this on both marks being off, so what it is gated on either way
-        // is `mark_rings_draw` — the same predicate `derive_scene` folds the
+        // is `marks_draw` — the same predicate `derive_scene` folds the
         // shimmer on, and the one the Shimmer section reads. Written as the
-        // thickness alone because that is the half this block adds; the pair is
+        // depth alone because that is the half this block adds; the pair is
         // what has to agree.
         ui.add_enabled_ui(view.mark_thickness > 0.0, |ui| {
-            // How long an end has to be HELD before its ring answers. Here
+            // How long an end has to be HELD before its mark answers. Here
             // rather than in with the note-wide settings at the head of the
-            // pane, because it is about these two rings alone: the octave
-            // sectors under them and the core answer immediately whatever
+            // pane, because it is about these two marks alone: the octave
+            // sectors they continue and the core answer immediately whatever
             // this says.
             //
             // Linear, unlike the wide bars that need easing to be draggable
@@ -246,16 +246,16 @@ fn melody_bass_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                 .show(ui)
                 .on_hover_text(
                     "How long a note has to stay the melody or the bass \
-                     before its ring starts fading in. A note that loses the \
-                     end again first never rings at all, which is what keeps \
-                     fast playing from flickering rings across the band. 0 \
-                     rings every note the moment it takes an end",
+                     before its mark starts fading in. A note that loses the \
+                     end again first is never marked at all, which is what \
+                     keeps fast playing from flickering marks around the \
+                     band. 0 marks every note the moment it takes an end",
                 );
         });
     });
 }
 
-/// The patterns the mark rings' sheet can be laid in, for the Shimmer row.
+/// The patterns the marks' sheet can be laid in, for the Shimmer row.
 ///
 /// A table beside the row rather than four arms written into it: a pattern is a
 /// shape the light takes, and each one's description is a sentence about that
@@ -294,15 +294,15 @@ const SHIMMER_PATTERNS: &[(Pulse, &str, &str)] = &[
 /// below it splits one feature across two places and spends its name twice.
 ///
 /// The two gates are different questions and are written as two. The pattern
-/// needs a ring to lay light on, so it follows [`ViewConfig::mark_rings_draw`]
+/// needs a mark to lay light on, so it follows [`ViewConfig::marks_draw`]
 /// — the same predicate `derive_scene` folds `pulse_marks` off with, so a view
-/// carrying a pattern with no end marked, or no ring thickness, is not
+/// carrying a pattern with no end marked, or no mark depth, is not
 /// shimmering. The bars need light to shape, so they additionally follow
 /// [`Pulse::sweeps`]: with the pattern Off they have nothing to move. Gating
 /// the pattern on `sweeps()` too would strand it — Off could never be left.
 fn shimmer_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     section(ui, "Shimmer");
-    ui.add_enabled_ui(view.mark_rings_draw(), |ui| {
+    ui.add_enabled_ui(view.marks_draw(), |ui| {
         // Off is its own option rather than a checkbox beside the row: one row
         // says both whether the marks shimmer and how.
         choice_row(ui, "Pattern", &mut view.pulse_marks, SHIMMER_PATTERNS);
@@ -427,7 +427,7 @@ fn source_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     });
     // Where the ring sits, as one control over its two radii — the same shape
     // as the octave band's own Band bar, because it is the same question about
-    // a second annulus. Fresh it lands in the gap the core and the melody ring
+    // a second annulus. Fresh it lands in the gap the core and the octave band
     // leave; a dialled-up core or a band pulled inward closes that gap, and
     // this is what moves the ring out of the way.
     ui.add_enabled_ui(view.spectral_ring, |ui| {
@@ -443,7 +443,7 @@ fn source_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
             "The audio ring's inner and outer radius, in the same units as the \
              octave Band. Drag between the handles to move the whole ring in \
              or out; fresh it sits in the clear space between the core and the \
-             melody ring, with a gap either side so the three read as separate \
+             octave band, with a gap either side so the three read as separate \
              layers",
         );
         // The ring's ZOOM, beside its radius, because the two are the whole of
@@ -476,7 +476,7 @@ fn source_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
 /// around itself.
 ///
 /// One section rather than a heading apiece, because they are one idea: none
-/// is about the core, the octave glyphs or the melody/bass rings in
+/// is about the core, the octave glyphs or the melody/bass marks in
 /// particular, and all apply to whichever of those happen to be drawn. Fade
 /// especially — one time for the node rather than one per layer, so a release
 /// reads as a single gesture instead of pieces of the node going dark at
@@ -490,9 +490,9 @@ fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBack
     param_bar(ui, params, ParamKey::Fade).on_hover_text(
         "Seconds a note takes to arrive, and to leave once it's released — \
          the pitch class core, its glow, the octave glyphs and the \
-         melody/bass rings together. A short note is not dimmed by it: the \
+         melody/bass marks together. A short note is not dimmed by it: the \
          node reaches full brightness whatever the key did, and starts \
-         leaving from there. (A ring waits out the Delay above first, so it \
+         leaving from there. (A mark waits out the Delay above first, so it \
          still comes in graded on notes shorter than the two put together.) \
          0 switches the note on and off outright",
     );

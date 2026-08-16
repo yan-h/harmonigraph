@@ -32,7 +32,7 @@ fn off(time: f64, note: u8) -> NoteEvent {
 
 /// The envelope duration these tests run on, pinned here and deliberately NOT
 /// the Fade's own default — a constant that happened to equal it would keep
-/// passing for a reason this doc denies. They are about WHEN a ring arrives —
+/// passing for a reason this doc denies. They are about WHEN a mark arrives —
 /// the delay, the handoff, the threshold — and the ramp is only the clock they
 /// read that off. Pinning it keeps them measuring the delay rather than the
 /// day someone retunes the default, and lets them sample the ramp at a half
@@ -87,14 +87,14 @@ fn melody_and_bass_mark_the_outer_held_notes() {
     assert!(melody_nodes > 0 && bass_nodes > 0);
     // And the marks are DRAWN at the instant this reads them, which is what
     // makes the masks above a statement about the picture rather than about
-    // the bookkeeping behind it: a slot bit with no level is a ring nobody
+    // the bookkeeping behind it: a slot bit with no level is a mark nobody
     // sees, and every assertion here would hold over a blank lattice.
     for n in &scene.nodes {
         if n.melody_slots != 0 {
-            assert_eq!(n.melody_level, 1.0, "the melody ring is up, not just recorded");
+            assert_eq!(n.melody_level, 1.0, "the melody mark is up, not just recorded");
         }
         if n.bass_slots != 0 {
-            assert_eq!(n.bass_level, 1.0, "and the bass ring with it");
+            assert_eq!(n.bass_level, 1.0, "and the bass mark with it");
         }
     }
 
@@ -162,15 +162,15 @@ fn a_chord_inside_one_pitch_class_separates_on_the_octave_layer() {
 }
 
 #[test]
-fn a_handoff_inside_one_pitch_class_rings_whichever_end_is_stronger() {
+fn a_handoff_inside_one_pitch_class_marks_whichever_end_is_stronger() {
     // C4 and C5 share a pitch class, so they light ONE node — and once C5 is
     // released BOTH wear a melody: C4 the live end it inherited, C5 the stamp
-    // it left with. A node carries one ring at one level, so it takes the
+    // it left with. A node carries one mark at one level, so it takes the
     // stronger voice entire, slot and level together (see `derive::Mark`).
     //
     // Admitting both slots under the one level is the thing being ruled out:
     // it draws the loser's link at the winner's brightness, which says the
-    // octave it points at is ringing when it is half gone — or, right after
+    // octave it names is marked when it is half gone — or, right after
     // the handoff, that the incoming one is at full before it has begun.
     let mut tracker = NoteTracker::new();
     for note in [60u8, 72] {
@@ -178,7 +178,7 @@ fn a_handoff_inside_one_pitch_class_rings_whichever_end_is_stronger() {
     }
     tracker.handle_event(NoteEvent::off(1.0, 0, 72));
     let view = delayed_view(0.0);
-    // The key-up is a whole duration past the note-on, so the leaving ring is
+    // The key-up is a whole duration past the note-on, so the leaving mark is
     // leaving and nothing here is still arriving.
     let frame = attack_frame();
     let at = |now: f64| {
@@ -186,15 +186,15 @@ fn a_handoff_inside_one_pitch_class_rings_whichever_end_is_stronger() {
         *origin_node(&scene)
     };
 
-    // A quarter of the way through the handoff the DEPARTING ring is still the
+    // A quarter of the way through the handoff the DEPARTING mark is still the
     // stronger of the two: C5 is a quarter into its fade while C4's inherited
-    // ring is a quarter up its ease. So the ring points at C5's octave, at
+    // mark is a quarter up its ease. So the mark names C5's octave, at
     // C5's own level — it does not blink out at the key.
     let just_after = at(1.0 + ATTACK * 0.25);
     assert_eq!(
         just_after.melody_slots,
         1 << (MIDDLE_C_SLOT + 1),
-        "the ring still links to the released C5, which is what is still bright",
+        "the mark still names the released C5, which is what is still bright",
     );
     assert!(
         (just_after.melody_level - 0.75).abs() < 1e-5,
@@ -202,14 +202,14 @@ fn a_handoff_inside_one_pitch_class_rings_whichever_end_is_stronger() {
         just_after.melody_level
     );
 
-    // Three quarters through, the two have crossed: C4's ring is the stronger
-    // and the sector the ring links to has moved with it. The level is
+    // Three quarters through, the two have crossed: C4's mark is the stronger
+    // and the sector the mark extends has moved with it. The level is
     // continuous across that switch — one duration drives both, so the two
     // curves are exactly equal half way — and what the viewer sees move is
     // the link rather than the brightness.
     let later = at(1.0 + ATTACK * 0.75);
     assert_eq!(later.activation, 1.0, "the held C4 keeps the node lit throughout");
-    assert_eq!(later.melody_slots, 1 << MIDDLE_C_SLOT, "the ring has moved to the held C4");
+    assert_eq!(later.melody_slots, 1 << MIDDLE_C_SLOT, "the mark has moved to the held C4");
     assert!(
         (later.melody_level - 0.75).abs() < 1e-5,
         "at C4's own arriving level, got {}",
@@ -218,8 +218,8 @@ fn a_handoff_inside_one_pitch_class_rings_whichever_end_is_stronger() {
     assert_eq!(later.bass_slots, 1 << MIDDLE_C_SLOT, "only C4 was ever the bass");
 
     // The OCTAVE layer is per slot, so it shows both notes the whole time —
-    // the released C5 fading on its own envelope under a ring that has left
-    // it. That layer is where a doubling stays legible; the ring is one ring.
+    // the released C5 fading on its own envelope under a mark that has left
+    // it. That layer is where a doubling stays legible; the mark is one mark.
     assert!(
         (later.octaves[MIDDLE_C_SLOT + 1] - 0.25).abs() < 1e-5,
         "the released C5's octave is three quarters gone, got {}",
@@ -228,12 +228,12 @@ fn a_handoff_inside_one_pitch_class_rings_whichever_end_is_stronger() {
     assert_eq!(later.octaves[MIDDLE_C_SLOT], 1.0, "the held C4's octave is at full");
 }
 
-/// A ring that never cleared the Delay contributes no SLOT either, not just no
-/// level. The mask is what the shader slits the ring at, so a rejected voice
-/// left in it would cut the ring of the note that did earn one at an octave
-/// the wait was there to reject — a link pointing at a note that never rang.
+/// A mark that never cleared the Delay contributes no SLOT either, not just no
+/// level. The mask is what the shader extends a slice for, so a rejected voice
+/// left in it would draw a mark on an octave
+/// the wait was there to reject — a mark on a note that never earned one.
 #[test]
-fn an_end_dropped_inside_the_delay_does_not_slit_the_ring_that_replaced_it() {
+fn an_end_dropped_inside_the_delay_does_not_mark_the_octave_that_replaced_it() {
     const DELAY: f64 = 0.2;
     let mut tracker = NoteTracker::new();
     // C4 and C5 hold the node; C6 takes the melody for less than the wait.
@@ -248,7 +248,7 @@ fn an_end_dropped_inside_the_delay_does_not_slit_the_ring_that_replaced_it() {
     // statement about how long C6 has been gone, not just about the fade.
     const SPAN: f64 = 0.4;
     let frame = FrameParams { fade_time: SPAN as f32, ..FrameParams::default() };
-    // C5 retook the melody at 0.55; one wait and one ease later its ring is
+    // C5 retook the melody at 0.55; one wait and one ease later its mark is
     // whole, and the C6 that came and went inside the wait is still in the
     // tracker's released tail.
     let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, 0.55 + DELAY + SPAN);
@@ -256,7 +256,7 @@ fn an_end_dropped_inside_the_delay_does_not_slit_the_ring_that_replaced_it() {
     // Sampled at the ramp's own endpoint, which the delay puts a sum of three
     // f64s away from a round number — so the claim is "up", not a bit pattern.
     let level = origin.melody_level;
-    assert!((level - 1.0).abs() < 1e-5, "C5's ring is up, got {level}");
+    assert!((level - 1.0).abs() < 1e-5, "C5's mark is up, got {level}");
     assert_eq!(
         origin.melody_slots,
         1 << (MIDDLE_C_SLOT + 1),
@@ -264,12 +264,12 @@ fn an_end_dropped_inside_the_delay_does_not_slit_the_ring_that_replaced_it() {
     );
 }
 
-/// A ring leaves on the note's own release rather than with its key, and
+/// A mark leaves on the note's own release rather than with its key, and
 /// leaves on exactly the envelope the octave sector beside it does — the two
-/// belong to one note, and a ring that outlived or predeceased its sector
+/// belong to one note, and a mark that outlived or predeceased its sector
 /// would read as a second thing happening.
 #[test]
-fn a_lone_notes_ring_fades_out_with_it() {
+fn a_lone_notes_mark_fades_out_with_it() {
     let mut tracker = NoteTracker::new();
     tracker.handle_event(on(0.0, 60));
     tracker.handle_event(off(1.0, 60));
@@ -284,20 +284,20 @@ fn a_lone_notes_ring_fades_out_with_it() {
     assert_eq!(at(1.0), (1.0, 1.0, 1.0), "at the key-up it is still whole");
     let (melody, bass, octave) = at(1.0 + ATTACK * 0.5);
     assert!((melody - 0.5).abs() < 1e-5, "half a fade later, half gone: got {melody}");
-    assert_eq!(melody, bass, "a lone note's two rings leave together");
+    assert_eq!(melody, bass, "a lone note's two marks leave together");
     assert_eq!(melody, octave, "and on the sector's own envelope");
     assert_eq!(at(1.0 + ATTACK), (0.0, 0.0, 0.0), "gone at the end of the fade");
 }
 
-/// A note shorter than its arrival leaves its ring LEVEL with the sector it
-/// brackets, the whole way through. The ring's ramp runs on past the key
+/// A note shorter than its arrival leaves its mark LEVEL with the sector it
+/// extends, the whole way through. The mark's ramp runs on past the key
 /// exactly as the disc's does; frozen where the key-up found it, a staccato
-/// note would ring at a fraction of the octave it points at until it was gone
+/// note would mark at a fraction of the octave it names until it was gone
 /// — one layer disagreeing with the next about how fast the note arrived,
 /// which is what a shared curve is there to prevent. Both reach FULL on the
 /// way (`Voice::release_level`), so the level they agree on is the whole one.
 #[test]
-fn a_note_shorter_than_its_arrival_still_rings_level_with_its_sector() {
+fn a_note_shorter_than_its_arrival_still_marks_level_with_its_sector() {
     let mut tracker = NoteTracker::new();
     tracker.handle_event(on(0.0, 60));
     // Lifted a third of the way up the ramp, so a frozen reading and a running
@@ -305,7 +305,7 @@ fn a_note_shorter_than_its_arrival_still_rings_level_with_its_sector() {
     tracker.handle_event(off(ATTACK / 3.0, 60));
     let view = delayed_view(0.0);
     let frame = attack_frame();
-    let ring = |now: f64| {
+    let mark = |now: f64| {
         let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, now);
         let n = *origin_node(&scene);
         (n.melody_level, n.bass_level, n.octaves[MIDDLE_C_SLOT])
@@ -313,22 +313,22 @@ fn a_note_shorter_than_its_arrival_still_rings_level_with_its_sector() {
 
     for step in 1..=6 {
         let now = ATTACK * f64::from(step) / 3.0;
-        let (melody, bass, octave) = ring(now);
-        assert_eq!(melody, octave, "at {now}s the ring and the sector it links to disagree");
-        assert_eq!(melody, bass, "and a lone note's two rings leave together");
+        let (melody, bass, octave) = mark(now);
+        assert_eq!(melody, octave, "at {now}s the mark and the sector it extends disagree");
+        assert_eq!(melody, bass, "and a lone note's two marks leave together");
     }
     // And it is a rising ramp being read rather than a flat one: the note goes
     // on getting brighter after its own key-up, which is the whole reason the
     // attack outlives the key.
-    assert!(ring(ATTACK).0 > ring(ATTACK / 3.0).0, "the ring still climbs past the key");
+    assert!(mark(ATTACK).0 > mark(ATTACK / 3.0).0, "the mark still climbs past the key");
 }
 
-/// The Delay stays a THRESHOLD now that a ring outlives its key. An end
-/// dropped before the wait is up never rang, and must not ring on the way out:
+/// The Delay stays a THRESHOLD now that a mark outlives its key. An end
+/// dropped before the wait is up was never marked, and must not be on the way out:
 /// the threshold is answered at the key-up, so the ramp that runs on from
 /// there has nothing to carry.
 #[test]
-fn an_end_dropped_inside_the_delay_never_rings_on_its_way_out() {
+fn an_end_dropped_inside_the_delay_is_never_marked_on_its_way_out() {
     const DELAY: f64 = 0.5;
     let mut tracker = NoteTracker::new();
     tracker.handle_event(on(0.0, 60));
@@ -340,19 +340,19 @@ fn an_end_dropped_inside_the_delay_never_rings_on_its_way_out() {
     for now in [0.2, 0.5, 1.0, 2.0, 3.0] {
         let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, now);
         let n = origin_node(&scene);
-        assert_eq!(n.melody_level, 0.0, "a ring appeared at {now}s on a note that never rang");
-        assert_eq!(n.bass_level, 0.0, "and a bass ring at {now}s");
+        assert_eq!(n.melody_level, 0.0, "a mark appeared at {now}s on a note that never had one");
+        assert_eq!(n.bass_level, 0.0, "and a bass mark at {now}s");
     }
 }
 
 #[test]
 fn a_fresh_mark_eases_in_with_the_octave_it_links_to() {
-    // A ring arriving at full the frame its note claims an end is the
+    // A mark arriving at full the frame its note claims an end is the
     // jumpiest thing on the node, since the octave sector underneath it
     // eases in. Both ride the one ramp, so a note's outer layer arrives
     // as a single gesture — and the ramp is the note's own attack, which is
-    // what keeps the ring from arriving as the SQUARE of the sector's ease
-    // (the ring carries its own attack, so only the release goes under it).
+    // what keeps the mark from arriving as the SQUARE of the sector's ease
+    // (the mark carries its own attack, so only the release goes under it).
     let mut tracker = NoteTracker::new();
     // C4: the origin node, in middle C's octave slot.
     tracker.handle_event(NoteEvent::on(0.0, 0, 60, 1.0));
@@ -368,7 +368,7 @@ fn a_fresh_mark_eases_in_with_the_octave_it_links_to() {
     let (melody, bass, octave) = at(ATTACK * 0.5);
     assert!((melody - 0.5).abs() < 1e-5, "half way in, got {melody}");
     assert_eq!(melody, bass, "a lone note's two ends arrive together");
-    assert_eq!(melody, octave, "the ring rides the sector's own ramp");
+    assert_eq!(melody, octave, "the mark rides the sector's own ramp");
 
     assert_eq!(at(ATTACK), (1.0, 1.0, 1.0), "full by the end of the attack");
 }
@@ -377,11 +377,11 @@ fn a_fresh_mark_eases_in_with_the_octave_it_links_to() {
 fn an_inherited_end_eases_in_from_the_handoff_not_from_its_note_on() {
     // Hold C4 and G4, then lift the top: the melody drops to C4, whose own
     // note-on is long past. Easing from THAT would be no ease at all — the
-    // ring has to grow from the moment it moved. C4's bass ring never
+    // mark has to grow from the moment it moved. C4's bass mark never
     // changed hands, so it stays at full right through the handoff.
     //
     // A fifth apart rather than an octave, so the two notes land on their own
-    // nodes: the outgoing ring fades out where G is drawn and the incoming
+    // nodes: the outgoing mark fades out where G is drawn and the incoming
     // one eases in at C, and neither reading is mixed into the other by one
     // node having to carry both.
     let mut tracker = NoteTracker::new();
@@ -408,9 +408,9 @@ fn an_inherited_end_eases_in_from_the_handoff_not_from_its_note_on() {
     assert_eq!(bass, 1.0, "the end that never moved does not re-attack");
     assert_eq!(at(1.0 + ATTACK), (1.0, 1.0));
 
-    // The other half of the same handoff: G's ring leaves as C's arrives,
+    // The other half of the same handoff: G's mark leaves as C's arrives,
     // on G's own release rather than on the incoming ramp.
-    assert_eq!(leaving(1.0), 1.0, "the outgoing ring is whole at the key-up");
+    assert_eq!(leaving(1.0), 1.0, "the outgoing mark is whole at the key-up");
     assert!(
         (leaving(1.0 + ATTACK * 0.5) - 0.5).abs() < 1e-5,
         "and half gone half a fade later — exactly as the incoming one is half in",
@@ -419,8 +419,8 @@ fn an_inherited_end_eases_in_from_the_handoff_not_from_its_note_on() {
 }
 
 #[test]
-fn a_delay_holds_the_ring_off_until_its_note_has_worn_the_end_that_long() {
-    // The wait sits in FRONT of the ease rather than stretching it: the ring
+fn a_delay_holds_the_mark_off_until_its_note_has_worn_the_end_that_long() {
+    // The wait sits in FRONT of the ease rather than stretching it: the mark
     // is at nothing for the whole delay and then arrives on the same ramp it
     // always did, so the two settings say when and how fast independently.
     const DELAY: f64 = 0.25;
@@ -445,20 +445,20 @@ fn a_delay_holds_the_ring_off_until_its_note_has_worn_the_end_that_long() {
     assert_eq!(melody, bass, "a lone note's two ends wait together");
     assert_eq!(at(DELAY + ATTACK).0, 1.0, "full one attack after the wait");
 
-    // The layer UNDER the ring keeps its own timing: a sector eases from its
-    // note-on whatever this bar says, so the delay reads as the ring arriving
+    // The layer UNDER the mark keeps its own timing: a sector eases from its
+    // note-on whatever this bar says, so the delay reads as the mark arriving
     // late over a lit octave rather than as the whole outer layer being late.
-    assert_eq!(octave, 1.0, "the octave sector is not delayed with the ring");
+    assert_eq!(octave, 1.0, "the octave sector is not delayed with the mark");
 }
 
 #[test]
-fn an_end_given_up_inside_the_delay_never_rings_at_all() {
+fn an_end_given_up_inside_the_delay_is_never_marked_at_all() {
     // The flicker the setting exists for. Playing fast, the top of what is
-    // down changes every few notes, and a ring easing in on each of them
+    // down changes every few notes, and a mark easing in on each of them
     // reads as flicker over the band rather than as the line being traced.
-    // A note that has lost the end again before its wait is up draws no ring
+    // A note that has lost the end again before its wait is up draws no mark
     // at any point: it never cleared the threshold while it was down, and a
-    // released voice that never cleared it has no ring to fade out.
+    // released voice that never cleared it has no mark to fade out.
     const DELAY: f64 = 0.25;
     let mut tracker = NoteTracker::new();
     tracker.handle_event(on(0.0, 60)); // C4, held right through
@@ -466,21 +466,21 @@ fn an_end_given_up_inside_the_delay_never_rings_at_all() {
     tracker.handle_event(off(0.15, 67)); // ...and hands it back inside the wait
     let view = delayed_view(DELAY as f32);
     let frame = attack_frame();
-    let ring = |now: f64| {
+    let mark = |now: f64| {
         let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, now);
-        // The loudest melody ring ANYWHERE: G4 and C4 light different nodes,
+        // The loudest melody mark ANYWHERE: G4 and C4 light different nodes,
         // and the claim is about the whole picture, not one node of it.
         scene.nodes.iter().fold(0.0f32, |peak, n| peak.max(n.melody_level))
     };
 
     for step in 0..=10 {
         let now = 0.15 + DELAY * f64::from(step) / 10.0;
-        assert!(ring(now) < 1e-6, "a ring rang at {now}, inside C4's own wait");
+        assert!(mark(now) < 1e-6, "a mark drew at {now}, inside C4's own wait");
     }
-    // C4 re-took the melody at the handoff, so its ring is due one wait and
+    // C4 re-took the melody at the handoff, so its mark is due one wait and
     // one attack after THAT — not after its own note-on, which is older than
     // both put together.
-    assert_eq!(ring(0.15 + DELAY + ATTACK), 1.0, "and then C4's ring arrives");
+    assert_eq!(mark(0.15 + DELAY + ATTACK), 1.0, "and then C4's mark arrives");
     // The bass end never changed hands through any of it, so it is measured
     // from C4's note-on — one wait and one ease after that, and unmoved since.
     let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, 0.15 + DELAY + ATTACK);
@@ -494,7 +494,7 @@ fn a_delay_past_the_note_fade_still_measures_from_the_handoff() {
     // — but the note that handed it over is pruned one Fade later, and the
     // Fade's whole range is shorter than most of this bar. Read the moment
     // off the released tail and any longer delay would lose it mid-wait and
-    // land the ring at full in a single frame, which is the pop the wait was
+    // land the mark at full in a single frame, which is the pop the wait was
     // set to avoid. The tracker's own stamp is what survives the pruning.
     //
     // The Fade named here is shorter than the default, so the pruning happens
@@ -528,13 +528,13 @@ fn a_delay_past_the_note_fade_still_measures_from_the_handoff() {
 /// deliberately does range work for nothing, only finiteness — so a view out
 /// of range comes from a file and lands here. Both ends matter and they fail
 /// in opposite directions: a negative delay starts the ramp BEFORE the note
-/// took the end, which is every ring at full the frame it is claimed, exactly
+/// took the end, which is every mark at full the frame it is claimed, exactly
 /// what easing them in exists to prevent; a huge one is the mark layer gone
 /// for as long as the take lasts, from a bar that cannot say so.
 ///
 /// Asserted on the LEVEL rather than on a scene field, because unlike every
 /// other clamp in `derive_scene` this one reaches the picture only through
-/// the ring's ease — there is no `Scene::mark_delay` to read back.
+/// the mark's ease — there is no `Scene::mark_delay` to read back.
 #[test]
 fn the_mark_delay_is_clamped_to_the_bar_its_own_ends() {
     let tracker = held(60);
@@ -548,19 +548,19 @@ fn the_mark_delay_is_clamped_to_the_bar_its_own_ends() {
     // clamps below a range rather than a constant.
     assert!(level(0.5, 0.5 + ATTACK * 0.5) > 0.4, "a delay inside the bar still eases");
 
-    // Below the bar: floored at 0, the ring arriving with its note as it
+    // Below the bar: floored at 0, the mark arriving with its note as it
     // always did — not ahead of it.
     assert_eq!(level(-5.0, 0.0), 0.0, "a negative delay must not pre-start the ramp");
     assert_eq!(level(-5.0, ATTACK), 1.0, "it is the undelayed ramp, not a broken one");
 
-    // Above it: capped at the bar's end, so the rings still arrive.
+    // Above it: capped at the bar's end, so the marks still arrive.
     assert_eq!(level(1e9, MARK_DELAY_MAX as f64 + ATTACK), 1.0, "a huge delay stops at 1s");
 }
 
 /// A non-finite delay is the one value that would take the mark layer down
 /// silently: `clamp` passes a NaN straight through (every comparison against
 /// it is false), the ease comes out NaN, and `Mark::add`'s `>=` is false
-/// against it — so the node keeps a level of 0 and no slot at all. No ring
+/// against it — so the node keeps a level of 0 and no slot at all. No mark
 /// anywhere, and nothing to say why. `ViewConfig::sanitize` is the only
 /// guard, and this is the test that keeps it from being deleted as redundant
 /// with the clamp above.
@@ -572,15 +572,15 @@ fn a_non_finite_delay_loads_as_no_delay_at_all() {
     assert_eq!(view.mark_delay, 0.0, "the blob's door is where a NaN is repaired");
 
     let scene = scene_of(&tracker, &Tuning::default(), &view, &plain_frame(), ATTACK);
-    assert_eq!(origin_node(&scene).melody_level, 1.0, "and the rings draw as they always did");
+    assert_eq!(origin_node(&scene).melody_level, 1.0, "and the marks draw as they always did");
 }
 
 #[test]
 fn held_extremes_never_names_a_released_voice() {
-    // A released voice rings from its own stamp (above), and is for that very
+    // A released voice is marked from its own stamp (above), and is for that very
     // reason out of the running for the LIVE ends: letting it stay "the
     // melody" would steal that from the note that actually replaced it, and
-    // leave the incoming ring nothing to ease from.
+    // leave the incoming mark nothing to ease from.
     let mut tracker = NoteTracker::new();
     for note in [60u8, 67] {
         tracker.handle_event(NoteEvent::on(0.0, 0, note, 1.0));
@@ -590,7 +590,7 @@ fn held_extremes_never_names_a_released_voice() {
     let (melody, bass) = held_extremes(&tracker, true, true);
     assert_eq!(melody.map(|e| e.key), Some((0, 60)), "the released G must not stay the melody");
     assert_eq!(bass.map(|e| e.key), Some((0, 60)));
-    // And C took the melody at the handoff, not at its own note-on: the ring
+    // And C took the melody at the handoff, not at its own note-on: the mark
     // grows from the moment it moved (see `an_inherited_end_eases_in_...`).
     assert_eq!(melody.map(|e| e.since), Some(0.1));
     assert_eq!(bass.map(|e| e.since), Some(0.0), "the end that never moved keeps its stamp");
@@ -648,9 +648,9 @@ fn sector_color(node: &NodeInstance, slot: u32, frame: &FrameParams) -> Vec4 {
 #[test]
 fn a_mark_is_the_color_of_the_sector_it_brackets() {
     // The reported bug: move the octave wheel off the register being played
-    // and the melody/bass rings stop matching the note they mark. A note past
-    // either end folds onto the outermost slot, so a ring carrying the VOICE's
-    // color paints C7 around the C6 indicator it is bracketing. The ring is
+    // and the melody/bass marks stop matching the note they mark. A note past
+    // either end folds onto the outermost slot, so a mark carrying the VOICE's
+    // color paints C7 onto the C6 indicator it is extending. The mark is
     // part of the octave layer, so it takes the color of the slot it links
     // back to — whatever the wheel, and whether or not the note folded.
     //
@@ -671,14 +671,14 @@ fn a_mark_is_the_color_of_the_sector_it_brackets() {
                 assert_eq!(node.melody_slots, node.bass_slots, "a lone note is both ends");
 
                 let slot = node.melody_slots.trailing_zeros();
-                folded |= note == 96 && slot != 8; // C7's own slot, when the ring reaches it
+                folded |= note == 96 && slot != 8; // C7's own slot, when the wheel reaches it
                 off_c |= node.cents != 0.0;
                 ramp_top |= slot as f32 * 12.0 + node.cents / 100.0 >= frame.brightest_pitch;
                 let sector = sector_color(node, slot, &frame);
                 let where_ =
                     format!("note {note}, span {count} at {center}, {:?}", node.lattice_pos);
-                assert_eq!(node.melody_color, sector, "melody ring: {where_}");
-                assert_eq!(node.bass_color, sector, "bass ring: {where_}");
+                assert_eq!(node.melody_color, sector, "melody mark: {where_}");
+                assert_eq!(node.bass_color, sector, "bass mark: {where_}");
             }
         }
     }
@@ -688,11 +688,11 @@ fn a_mark_is_the_color_of_the_sector_it_brackets() {
 }
 
 #[test]
-fn the_two_rings_on_one_node_carry_their_own_sectors_colors() {
+fn the_two_marks_on_one_node_carry_their_own_sectors_colors() {
     // A chord voiced inside one pitch class puts both ends on ONE node, in
     // different octaves — which is the case that says the color has to be
     // derived per slot and not once per voice. Deriving it once and handing it
-    // to both would paint the bass ring at the top of the ramp.
+    // to both would paint the bass mark at the top of the ramp.
     let (scene, frame) = marked(&[36, 96], 9, 60.0); // C2 and C7
     let node = origin_node(&scene);
     let (melody, bass) = (node.melody_slots.trailing_zeros(), node.bass_slots.trailing_zeros());
@@ -705,10 +705,10 @@ fn the_two_rings_on_one_node_carry_their_own_sectors_colors() {
 #[test]
 fn a_folded_note_keeps_its_own_color_and_marks_the_lit_sector_on_the_ramp() {
     // Every voice is colored by pitch, so which PITCH each shape reads is the
-    // whole of what separates the disc from the ring around it: the disc is
-    // the note's own pitch, the ring the pitch of the sector it brackets. A
+    // whole of what separates the disc from the mark outside it: the disc is
+    // the note's own pitch, the mark the pitch of the sector it extends. A
     // note past the end of the wheel folds onto the outermost slot, so the
-    // two come apart there — and a ring following the note instead would
+    // two come apart there — and a mark following the note instead would
     // paint C7 around the C6 indicator it points at.
     let (node, frame) = lone_mark(96, 4, 48.0); // C7, above a wheel centered on C3
     let slot = node.melody_slots.trailing_zeros();
@@ -728,28 +728,28 @@ fn a_folded_note_keeps_its_own_color_and_marks_the_lit_sector_on_the_ramp() {
 }
 
 
-/// The mark rings' shimmer folds off with the rings themselves.
+/// The marks' shimmer folds off with the marks themselves.
 ///
-/// A thickness of 0 is the rings' documented off position, where `mark_ring`
+/// A depth of 0 is the marks' documented off position, where `mark_extension`
 /// returns no coverage, and the pane grays the row there.
 ///
 /// The fold is needed because a mark sheet also sweeps the octave SLICE a
-/// ring points at, which the glyph layer draws and no ring coverage
-/// multiplies away: without it, switching the rings off leaves the marked
+/// mark extends, which the glyph layer draws and no mark coverage
+/// multiplies away: without it, switching the marks off leaves the marked
 /// octaves sweeping from a control the user can no longer reach to stop.
 /// Every pattern is folded, not only the ones that reach furthest — which
 /// pattern is safe to leave standing is a fact about where it draws, and
-/// pinning that to today's answer would make a pattern reaching past the ring
+/// pinning that to today's answer would make a pattern reaching past the mark
 /// later a silent bug rather than an edit here.
-/// The rings go off two ways, and BOTH have to fold the mode: no thickness to
+/// The marks go off two ways, and BOTH have to fold the mode: no depth to
 /// draw one with, and no end marked for one to belong to
-/// ([`ViewConfig::mark_rings_draw`], which the pane grays the row on). The
+/// ([`ViewConfig::marks_draw`], which the pane grays the row on). The
 /// marks-off half is the easier one to leave out, because nothing is visibly
 /// wrong when it is: no slot is marked, so `in.marks` is 0 and the slice the
 /// sheet would reach collapses to zero on its own. That is the accident this
 /// fold exists not to depend on.
 #[test]
-fn the_mark_pulse_folds_off_when_the_rings_are_off() {
+fn the_mark_pulse_folds_off_when_the_marks_are_off() {
     let pulse = |mark_thickness: f32, marked: bool, pulse_marks: Pulse| {
         let view = ViewConfig {
             mark_thickness,
@@ -772,19 +772,19 @@ fn the_mark_pulse_folds_off_when_the_rings_are_off() {
         assert_eq!(
             pulse(0.0, true, mode),
             Pulse::Off,
-            "{mode:?} survived the ring thickness going to 0, where it keeps \
+            "{mode:?} survived the mark depth going to 0, where it keeps \
              drawing -- on the marked octave's own slice",
         );
         assert_eq!(
             pulse(0.09, false, mode),
             Pulse::Off,
-            "{mode:?} survived both marks coming off, where there is no ring for it \
+            "{mode:?} survived both marks coming off, where there is no mark for it \
              to animate and the pane has grayed its row",
         );
         assert_eq!(
             pulse(0.09, true, mode),
             mode,
-            "{mode:?} must survive a ring it can animate",
+            "{mode:?} must survive a mark it can animate",
         );
     }
 }

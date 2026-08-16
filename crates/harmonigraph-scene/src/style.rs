@@ -370,7 +370,7 @@ impl Gradient {
     }
 }
 
-/// Which shimmer the melody/bass rings run: one sheet of soft light laid over
+/// Which shimmer the melody/bass marks run: one sheet of soft light laid over
 /// the lattice, in the pattern this names, or [`Off`](Pulse::Off) for the
 /// steady picture.
 ///
