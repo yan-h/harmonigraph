@@ -21,6 +21,14 @@
 //! its audio ring measured from the spectrum), and the two are told apart by
 //! their colour as much as by their radius.
 //!
+//! That the lattice carries both AT ONCE is the shape of the whole audio
+//! channel here rather than a happy accident. The MIDI picture — the node
+//! bodies, the octave band, the melody and bass marks — is never lit from the
+//! analyzer; the measurement gets a ring of its own inside the band, and
+//! [`SpectralReading`] picks which of two readings fills it. So neither
+//! picture can be mistaken for the other, and neither has to be given up to
+//! see the other.
+//!
 //! Nothing in this crate reads audio, so [`SpectralPaint`] arrives already
 //! measured — `harmonigraph-ui`'s `panes::spectral_fold` is what fills it, and
 //! a scene derived without that pass carries [`SpectralPaint::silent`], which
@@ -61,6 +69,73 @@ pub const SPECTRAL_BUCKETS: usize = SPECTRUM_BINS;
 /// See [`SPECTRAL_BUCKETS`].
 pub const SPECTRAL_BUCKETS_PER_SEMITONE: usize = BINS_PER_SEMITONE;
 
+/// Which reading of the analyzer the audio ring carries — the one control that
+/// says what the lattice's spectrum indicator IS.
+///
+/// The ring is where a measurement of the sound goes, and the MIDI picture —
+/// the node bodies, the octave band, the melody and bass marks — is never any
+/// of it. So this is a question about the RING and not about the lattice: it
+/// picks which of two readings fills the annulus, and the picture around it is
+/// unchanged either way.
+///
+/// The two are one measurement asked at two zooms, which is what makes them a
+/// choice rather than a pair of features. Each wedge of the ring names one
+/// octave of the node's pitch class, and:
+///
+/// - [`Fold`](Self::Fold) answers with ONE number for that octave — is this
+///   pitch class sounding here — so a wedge is flat, and what the ring says is
+///   read across the lattice rather than within a node.
+/// - [`Spectrum`](Self::Spectrum) spreads a window of pitch across the wedge —
+///   what is sounding NEAR that octave, and how far off it sits — so a wedge
+///   reads as a detuning, and what the ring says is read within one node.
+///
+/// One choice and not two boxes, because they cannot both fill one annulus and
+/// a second annulus is not what either is worth: they answer the same question
+/// about the same stretch of sound, and which answer is wanted is a decision
+/// about how closely the music is being looked at.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum SpectralReading {
+    /// No ring at all: the picture is the MIDI one, whole.
+    #[default]
+    Off,
+    /// One level per wedge, measured at that octave's own pitch: the FOLD — a
+    /// Gaussian kernel of [`ViewConfig::spectral_width`](crate::ViewConfig)
+    /// cents over a local noise floor, so what survives is energy concentrated
+    /// AT the node's pitch rather than energy near it.
+    ///
+    /// The lattice's native reading. A partial sits at an exact rational
+    /// multiple of its fundamental, so folded to pitch class the first sixteen
+    /// harmonics occupy six 7-limit nodes and a timbre draws as a
+    /// CONSTELLATION anchored at its fundamental — a shape made of many nodes,
+    /// which needs each of them to answer with one number per octave for the
+    /// shape to be legible at all.
+    Fold,
+    /// A window of the RAW spectrum across each wedge, spanning
+    /// [`ViewConfig::spectral_ring_range`](crate::ViewConfig) cents centred on
+    /// that octave's own pitch: a segment of the spiral spectrogram, bent into
+    /// the wedge's arc.
+    ///
+    /// No kernel and no floor, and that is the design rather than an omission:
+    /// a wedge shows a window of PITCH, and every smoothing that helps the
+    /// fold is a blur across the one axis the window exists to resolve. A
+    /// partial dead on the node paints down the middle of its wedge and one a
+    /// comma sharp paints to the clockwise side, in the direction pitch rises
+    /// everywhere else on the wheel.
+    ///
+    /// What it costs is stated rather than hidden: with nothing sounding a
+    /// wedge is not empty, it is the ramp's floor colour, and every node in
+    /// the window wears one. A stretch of spectrum with nothing in it is a
+    /// reading, not a gap.
+    Spectrum,
+}
+
+impl SpectralReading {
+    /// Whether the ring is asked for at all — anything but [`Off`](Self::Off).
+    pub fn draws(self) -> bool {
+        self != SpectralReading::Off
+    }
+}
+
 /// The analyzer's loudness at every bucket of its pitch grid, quantized to a
 /// byte apiece.
 ///
@@ -87,15 +162,15 @@ pub struct SpectralPaint {
     /// segments are already read off. Every audio-lit element on the lattice
     /// indexes it by its own LEVEL, exactly as those do.
     pub lut: [Vec4; PITCH_LUT_N],
-    /// The node bodies and the octave band are lit from the analyzer rather
-    /// than from the keys ([`ViewConfig::spectral_light`]), so they take their
-    /// colour off [`lut`](Self::lut) at their own level instead of off the
-    /// pitch ramp at their own pitch.
+    /// Each wedge of the ring is ONE reading taken at its own octave's pitch
+    /// ([`SpectralReading::Fold`]) rather than a window of pitch spread across
+    /// it ([`SpectralReading::Spectrum`]).
     ///
-    /// A flag on the paint and not on the view, because it is what the SHADER
-    /// has to know: the octave word carries a level either way, and which of
-    /// the two schemes that level is painted in is the whole difference.
-    pub lit: bool,
+    /// A flag on the paint and not the reading itself, because it is the whole
+    /// of what the SHADER has to know: [`levels`](Self::levels) carries a grid
+    /// either way — folded here, raw there — and where in the wedge that grid
+    /// is sampled is the entire difference between the two pictures.
+    pub folded: bool,
     /// The audio ring's inner and outer radius in quad UV units, already
     /// clamped to a drawable span. **Both 0 when the ring is off** — an empty
     /// annulus is the one thing that says the ring is not drawn, so the toggle
@@ -107,10 +182,20 @@ pub struct SpectralPaint {
     /// that wedge's own octave ([`ViewConfig::spectral_ring_range`]). Already
     /// clamped into [`SPECTRAL_RANGE_MIN`]..=[`SPECTRAL_RANGE_MAX`].
     pub range: f32,
-    /// The analyzer's own reading, bucket by bucket. All zeros where nothing
-    /// has been measured, which the ring draws as the ramp's floor colour
-    /// everywhere rather than as an empty annulus: the ring is a MEASUREMENT
-    /// of a range, and a range with nothing in it is a reading, not a gap.
+    /// The reading the ring paints, bucket by bucket of the analyzer's own
+    /// pitch grid — the raw spectrum or the fold over it, whichever
+    /// [`folded`](Self::folded) says, both already through the analyzer's Level
+    /// window.
+    ///
+    /// ONE grid for the whole lattice, which is what makes the ring cost the
+    /// same whatever the extents are: a node's wedges are a window onto this
+    /// table, and which part of it each of them reads is the shader's
+    /// arithmetic off the node's own pitch class.
+    ///
+    /// All zeros where nothing has been measured, which the ring draws as the
+    /// ramp's floor colour everywhere rather than as an empty annulus: the
+    /// ring is a MEASUREMENT of a range, and a range with nothing in it is a
+    /// reading, not a gap.
     pub levels: Box<SpectralLevels>,
 }
 
@@ -123,7 +208,7 @@ impl SpectralPaint {
     pub fn silent() -> SpectralPaint {
         SpectralPaint {
             lut: [Vec4::ZERO; PITCH_LUT_N],
-            lit: false,
+            folded: false,
             inner: 0.0,
             outer: 0.0,
             range: SPECTRAL_RANGE_MAX,
@@ -141,7 +226,7 @@ impl SpectralPaint {
     /// still come out as an annulus somebody can see rather than as a ring
     /// that silently is not there while the bar reads out a number.
     pub fn new(view: &ViewConfig, lut: [Vec4; PITCH_LUT_N]) -> SpectralPaint {
-        let (inner, outer) = if view.spectral_ring {
+        let (inner, outer) = if view.spectral_reading.draws() {
             let inner = clamp_or(view.spectral_ring_inner, 0.0, 0.0, 1.0 - SPECTRAL_RING_MIN_SPAN);
             (
                 inner,
@@ -152,7 +237,7 @@ impl SpectralPaint {
         };
         SpectralPaint {
             lut,
-            lit: view.spectral_light,
+            folded: view.spectral_reading == SpectralReading::Fold,
             inner,
             outer,
             range: clamp_or(
@@ -202,7 +287,7 @@ mod tests {
 
     fn ringed(inner: f32, outer: f32, range: f32) -> ViewConfig {
         ViewConfig {
-            spectral_ring: true,
+            spectral_reading: SpectralReading::Spectrum,
             spectral_ring_inner: inner,
             spectral_ring_outer: outer,
             spectral_ring_range: range,
@@ -244,16 +329,39 @@ mod tests {
         }
     }
 
-    /// The ring OFF is an empty annulus, which is how the toggle reaches the
-    /// shader: one thing says whether the ring draws, so the flag and the
-    /// picture cannot disagree.
+    /// The reading OFF is an empty annulus, which is how the selector reaches
+    /// the shader: one thing says whether the ring draws, so the setting and
+    /// the picture cannot disagree.
     #[test]
     fn the_ring_off_is_an_empty_annulus() {
-        let view = ViewConfig { spectral_ring: false, ..ringed(0.3, 0.5, 200.0) };
+        let view = ViewConfig { spectral_reading: SpectralReading::Off, ..ringed(0.3, 0.5, 200.0) };
         let paint = SpectralPaint::new(&view, [Vec4::ZERO; PITCH_LUT_N]);
-        assert!(!paint.ring_draws(), "the ring drew with the toggle off");
+        assert!(!paint.ring_draws(), "the ring drew with the reading Off");
         assert_eq!((paint.inner, paint.outer), (0.0, 0.0));
         assert!(!SpectralPaint::silent().ring_draws(), "a silent scene drew a ring");
+    }
+
+    /// BOTH readings fill the same annulus, at the same radii, and are told
+    /// apart by nothing but where in a wedge the grid is sampled.
+    ///
+    /// The whole shape of the selector, stated where the flag is set: a
+    /// version that gave the fold its own geometry — a different ring, or the
+    /// band relit — would pass every other test here and quietly be two
+    /// features again rather than one control over one indicator.
+    #[test]
+    fn the_two_readings_share_one_annulus() {
+        let raw = ringed(0.3, 0.5, 200.0);
+        let fold = ViewConfig { spectral_reading: SpectralReading::Fold, ..raw };
+        let lut = [Vec4::ZERO; PITCH_LUT_N];
+        let (fold, raw) = (SpectralPaint::new(&fold, lut), SpectralPaint::new(&raw, lut));
+        assert!(fold.ring_draws() && raw.ring_draws(), "a reading drew no ring");
+        assert_eq!(
+            (fold.inner, fold.outer),
+            (raw.inner, raw.outer),
+            "the two readings drew at different radii",
+        );
+        assert!(fold.folded, "the fold is not read at its wedges' own pitches");
+        assert!(!raw.folded, "the raw spectrum lost its window across the wedge");
     }
 
     /// A bucket stands for its own centre, and the grid covers the axis the

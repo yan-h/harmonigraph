@@ -15,24 +15,24 @@ use crate::params::{seconds, ParamBackend, ParamKey};
 use crate::widgets::{button_row, choice_row, OctaveStrip, RangeBar, ValueBar};
 use crate::SharedState;
 use harmonigraph_scene::{
-    Pulse, ViewConfig, MARK_DELAY_MAX, MIN_EXTRA_SIZE, PITCH_CEIL, PITCH_FLOOR,
+    Pulse, SpectralReading, ViewConfig, MARK_DELAY_MAX, MIN_EXTRA_SIZE, PITCH_CEIL, PITCH_FLOOR,
     SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN, SPECTRAL_RING_MIN_SPAN, SPECTRAL_WIDTH_MAX,
     SPECTRAL_WIDTH_MIN,
 };
 
-/// The sounding-note controls: what lights a node at all, then the whole note
-/// — the time it takes to arrive and leave, and the gutter it clears — then
-/// each layer of it reading outward from the center, and last the sweep the
-/// outermost layer can be set to run.
+/// The sounding-note controls: what the audio ring measures, then the whole
+/// note — the time it takes to arrive and leave, and the gutter it clears —
+/// then each layer of it reading outward from the center, and last the sweep
+/// the outermost layer can be set to run.
 ///
 /// Whole-note before the layers, because those settings are the ones reached
 /// for most and because none of them belongs to a layer. Ordering them after
 /// Core, Octaves and the marks would read more consistently outward, and would
 /// put the section's most-used controls under the ones reached for least.
-/// Reading outward is what orders the rest. Source comes above even those,
-/// being the one control that changes what all of them are about.
+/// Reading outward is what orders the rest. Audio comes above even those,
+/// being the one control that adds a layer rather than sizing one.
 pub(super) fn nodes_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBackend) {
-    source_section(ui, &mut state.view);
+    audio_section(ui, &mut state.view);
     note_section(ui, &mut state.view, params);
     core_section(ui, &mut state.view);
     octaves_section(ui, &mut state.view);
@@ -359,78 +359,72 @@ fn shimmer_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     });
 }
 
-/// Source: what lights a node at all — which notes are HELD, which sine waves
-/// are SOUNDING, or both at once.
+/// Audio: what the ring inside the octave band measures — one reading of the
+/// analyzer's spectrum, or none.
 ///
 /// First in the pane, and above even the note-wide settings, because it is the
-/// one control here that changes what every other one is ABOUT: Fade, the core,
-/// the wheel and the rings all describe a lit node, and this says what makes
-/// one. It is a plain heading for that reason too — it is the top of the
-/// section body, where `section`'s leading rule would sit directly under the
-/// Display pane's own Nodes header. (The View and Analyzer section bodies, and
-/// the Tuning and System panes, open the same way.)
+/// one control here that adds a LAYER where the rest size and colour the ones
+/// already there. It is a plain heading for that reason too — it is the top of
+/// the section body, where `section`'s leading rule would sit directly under
+/// the Display pane's own Nodes header. (The View and Analyzer section bodies,
+/// and the Tuning and System panes, open the same way.)
 ///
-/// Two independent boxes rather than a three-way choice row, because they are
-/// not three states of one thing: the first REPLACES what lights a node, the
-/// second ADDS a ring beside it, and each is worth having with the other off.
-/// Both on is redundant — the ring then draws what the band already draws —
-/// and harmless, which is a cheaper thing to explain than a row that hides one
-/// of the readings behind the other.
-fn source_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
-    ui.heading("Source");
-    ui.checkbox(&mut view.spectral_light, "Light from audio")
-        .on_hover_text(
-            "Light the lattice from the analyzer's spectrum instead of from \
-             the MIDI notes: which sine waves are sounding, rather than which \
-             keys are down. A partial sits at an exact ratio of its \
-             fundamental, so a timbre draws as a constellation around its own \
-             node — a fifth up for the 3rd harmonic, a third up for the 5th, \
-             the sevenths axis for the 7th — and each node's wheel says which \
-             octaves those partials are in. It REPLACES the notes rather than \
-             joining them, and with no audio flowing the lattice is dark",
-        );
-    ui.checkbox(&mut view.spectral_ring, "Audio ring")
-        .on_hover_text(
-            "Draw the raw pitch spectrum as a second ring inside the octave \
-             band, leaving the MIDI picture alone. Each wedge is a segment of \
-             the spiral spectrogram bent into its arc: angle across the wedge \
-             is a pitch window around that octave, so a partial dead on the \
-             node paints down the middle and one a comma sharp paints to the \
-             clockwise side. In the analyzer's own colours, not the pitch \
-             ramp's, so the two readings on a node are never mistaken for each \
-             other — and with nothing sounding a wedge is the ramp's floor \
-             colour rather than empty, because the ring always measured",
-        );
-    // Inert without the LIGHTING, and not merely without audio: the kernel is
-    // the fold's own, and the fold is what `Light from audio` runs. The ring
-    // reads the spectrum raw and shows a whole window per wedge, so a kernel
-    // there would blur the one axis the window exists to resolve — its zoom is
-    // the Range bar below.
-    ui.add_enabled_ui(view.spectral_light, |ui| {
-        ValueBar::new(
-            &mut view.spectral_width,
-            SPECTRAL_WIDTH_MIN..=SPECTRAL_WIDTH_MAX,
-            "Width",
-        )
-        .display(|cents| format!("{cents:.0}¢"))
-        .show(ui)
-        .on_hover_text(
-            "How far off a node's own pitch a partial may sit and still light \
-             it, in cents. A weight and not a cutoff: distance reads as \
-             dimness, so a detuned partial fades rather than switching off and \
-             vibrato breathes instead of flickering. Narrow is right for just \
-             intonation, where partials land dead on the nodes; equal-tempered \
-             material wants it wider, a tempered third's 5th harmonic sitting \
-             13.7 ¢ off its node and a 7th harmonic 31 ¢. Lights the nodes \
-             only — the audio ring does not fold",
-        );
-    });
+/// One choice row and not two boxes, because there is one indicator here and
+/// two ways to fill it: both readings answer "what is sounding at this node",
+/// both draw in the same annulus in the same colours, and neither touches the
+/// MIDI picture. Two boxes would have to say what BOTH ticked means, and the
+/// only honest answer — one drawn over the other in the same ring — is a
+/// picture nobody can read.
+///
+/// Each reading's own setting sits under the row, greyed when the other is
+/// chosen: Width is the fold's kernel and Range is the spectrum's zoom, and
+/// neither means anything to the other. Both are shown either way rather than
+/// swapped in and out, so the section keeps its height and the bars keep their
+/// place as the row is clicked along.
+fn audio_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
+    ui.heading("Audio");
+    choice_row(
+        ui,
+        "Ring",
+        &mut view.spectral_reading,
+        &[
+            (
+                SpectralReading::Off,
+                "Off",
+                "No ring: the lattice is the MIDI picture, whole",
+            ),
+            (
+                SpectralReading::Fold,
+                "Fold",
+                "Each wedge one reading, taken at that octave's own pitch: how \
+                 much is sounding THERE, folded onto the node the way the \
+                 lattice already folds a note. A partial sits at an exact \
+                 ratio of its fundamental, so a timbre lights a constellation \
+                 around its own node — a fifth up for the 3rd harmonic, a \
+                 third up for the 5th, the sevenths axis for the 7th — and \
+                 each node's wedges say which octaves those partials are in. \
+                 The reading to look at a screenful of nodes with",
+            ),
+            (
+                SpectralReading::Spectrum,
+                "Spectrum",
+                "Each wedge a window of the raw spectrum, bent into its arc — \
+                 a segment of the spiral spectrogram. Angle across the wedge \
+                 is a pitch window around that octave, so a partial dead on \
+                 the node paints down the middle and one a comma sharp paints \
+                 to the clockwise side: this one reads a DETUNING, which a \
+                 number per octave cannot say. The reading to look at ONE node \
+                 with",
+            ),
+        ],
+    );
     // Where the ring sits, as one control over its two radii — the same shape
     // as the octave band's own Band bar, because it is the same question about
     // a second annulus. Fresh it lands in the gap the core and the octave band
     // leave; a dialled-up core or a band pulled inward closes that gap, and
-    // this is what moves the ring out of the way.
-    ui.add_enabled_ui(view.spectral_ring, |ui| {
+    // this is what moves the ring out of the way. Both readings, since both
+    // draw in this one annulus.
+    ui.add_enabled_ui(view.spectral_reading.draws(), |ui| {
         RangeBar::new(
             &mut view.spectral_ring_inner,
             &mut view.spectral_ring_outer,
@@ -446,8 +440,33 @@ fn source_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
              octave band, with a gap either side so the three read as separate \
              layers",
         );
-        // The ring's ZOOM, beside its radius, because the two are the whole of
-        // what the ring is: where it sits and how much spectrum it shows there.
+    });
+    // The FOLD's kernel, and so inert under Spectrum rather than merely
+    // without audio: the spectrum reading shows a whole window of pitch per
+    // wedge, and a kernel there would blur the one axis the window exists to
+    // resolve. Its own setting is the Range bar below.
+    ui.add_enabled_ui(view.spectral_reading == SpectralReading::Fold, |ui| {
+        ValueBar::new(
+            &mut view.spectral_width,
+            SPECTRAL_WIDTH_MIN..=SPECTRAL_WIDTH_MAX,
+            "Width",
+        )
+        .display(|cents| format!("{cents:.0}¢"))
+        .show(ui)
+        .on_hover_text(
+            "How far off an octave's own pitch a partial may sit and still \
+             light its wedge, in cents. A weight and not a cutoff: distance \
+             reads as dimness, so a detuned partial fades rather than \
+             switching off and vibrato breathes instead of flickering. Narrow \
+             is right for just intonation, where partials land dead on the \
+             nodes; equal-tempered material wants it wider, a tempered third's \
+             5th harmonic sitting 13.7 ¢ off its node and a 7th harmonic 31 ¢. \
+             The Fold reading's alone — Spectrum does not fold",
+        );
+    });
+    // The SPECTRUM reading's zoom, under the Width it stands opposite: how much
+    // pitch a wedge shows, where Width is how much of it counts as the node's.
+    ui.add_enabled_ui(view.spectral_reading == SpectralReading::Spectrum, |ui| {
         ValueBar::new(
             &mut view.spectral_ring_range,
             SPECTRAL_RANGE_MIN..=SPECTRAL_RANGE_MAX,
@@ -466,7 +485,8 @@ fn source_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
              readable fraction of the wedge; at the top of the bar a wedge \
              spans exactly its octave, so neighbouring wedges meet at the \
              pitch they share and the ring becomes one continuous reading — \
-             the same picture on every node, turned",
+             the same picture on every node, turned. The Spectrum reading's \
+             alone — a folded wedge is one number and has no window to size",
         );
     });
 }

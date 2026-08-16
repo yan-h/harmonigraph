@@ -11,6 +11,10 @@ harmonigraph-core = { workspace = true }
 harmonigraph-ui = { workspace = true }
 harmonigraph-render = { workspace = true }
 harmonigraph-take = { workspace = true }
+# View settings this crate only ever NAMES — the picture is `harmonigraph-ui`'s
+# to draw. The probes set them, so a `SharedState` field whose type lives in
+# `harmonigraph-scene` has to be nameable here.
+harmonigraph-scene = { workspace = true }
 egui = { workspace = true }
 egui-wgpu = { workspace = true }
 serde = { workspace = true }
