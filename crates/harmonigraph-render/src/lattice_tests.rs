@@ -2353,14 +2353,26 @@ fn a_node_wearing_only_an_audio_ring_clears_around_it() {
         hole.far,
     );
 
-    // ...and with the gate closed there is no ink and no hole. (The scene ships
-    // no such node at all, which is the CPU's own half of the same answer.)
-    let quiet_bare = gpu.shot(&silent(0.0, 0.0));
-    let quiet = gpu.shot(&silent(0.0, CLEAR_REACH));
-    assert_eq!(
-        differing_pixels(&quiet, &quiet_bare),
-        0,
-        "a node with no note and no ring cleared a hole in empty lattice",
+    // ...and with the gate closed there is no ink and nothing to clear around.
+    // That half is the CULL's, and it is asked of the cull directly: a node
+    // with no note, no marks and no ring ships no instance, so its reach never
+    // reaches the shader. Two shots would prove nothing here — the node is gone
+    // from both, and comparing two empty images passes whatever the shader
+    // does. The shader's own half of the answer, a closed gate falling back to
+    // the layers that ARE drawn, is measured in
+    // `a_clearing_follows_the_audio_ring_its_node_wears`.
+    let quiet = LatticeCallback::from_scene(
+        &silent(0.0, CLEAR_REACH),
+        LatticeLabels::default(),
+        egui::vec2(SIZE[0] as f32, SIZE[1] as f32),
+        wgpu::TextureFormat::Rgba8Unorm,
+        31,
+        None,
+    );
+    assert!(
+        quiet.instances.is_empty(),
+        "a node with no note and no ring still shipped, carrying a reach that would \
+         clear a hole around ink nobody draws",
     );
 }
 
