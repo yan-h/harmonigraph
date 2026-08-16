@@ -200,6 +200,23 @@ fn quad_margin(rim: f32, g: f32) -> f32 {
 // are an optimization, and the test is what keeps them one.
 const EARLY_OUT: bool = true;
 
+// Where a clearing of reach `reach` ends, as a distance from the footprint it
+// is measured around — the reach itself, with a floor under it so that a
+// smoothstep across it is a band rather than a step answering a half everywhere.
+//
+// One function because THREE places have to agree on it exactly: `paint_reach`
+// just below, `gutter_coverage`, and the idle branch in `node_paint`, the two
+// of which discard the fragments past this. A second spelling of the floor in
+// either is a hairline of clearing dropped on one pipeline and kept on the
+// other, which is precisely what the parity test compares.
+//
+// It is load-bearing beyond the fade, too: `gutter_coverage` clamps into
+// [0, edge - 0.001], and a `clamp` whose low bound exceeds its high one is
+// undefined in WGSL. This floor is what keeps that range from inverting.
+fn clearing_edge(reach: f32) -> f32 {
+    return max(reach, 0.001);
+}
+
 // How far from the node's center anything can paint, in its own uv.
 //
 // The billboard is deliberately bigger than the node: QUAD_MARGIN of
@@ -220,16 +237,18 @@ const EARLY_OUT: bool = true;
 //     solidity axis can ask for;
 //   - the marks taper off at QUAD_MARGIN, but only exist while a slot
 //     is marked;
-//   - the knockout clears one gutter past the node's body, which fits inside
-//     the circle of radius rim, so rim + gutter bounds it in every direction
-//     and meets it in the one the marks reach.
+//   - the knockout clears to `clearing_edge` past the node's body, which fits
+//     inside the circle of radius rim, so rim + that bounds it in every
+//     direction and meets it in the one the marks reach. The edge rather than
+//     the raw reach because a bound that stops short of what the coverage
+//     paints is a discarded fragment the slow pipeline fills.
 fn paint_reach(in: VsOut, aa: f32) -> f32 {
     var reach = max(GLYPH_FADE_LIMIT, u.misc3.x + CORE_EDGE_SOFT + aa);
     if in.marks.x != 0u || in.marks.y != 0u {
         reach = max(reach, QUAD_MARGIN);
     }
     if in.gutter > 0.0 {
-        reach = max(reach, in.rim + in.gutter);
+        reach = max(reach, in.rim + clearing_edge(in.gutter));
     }
     return reach;
 }
@@ -1466,18 +1485,6 @@ fn sector_distance(uv: vec2<f32>, edges: vec2<f32>, r: f32) -> f32 {
     let arc = length(q) - r;
     let edge = length(q - e * clamp(dot(q, e), 0.0, r));
     return max(arc, edge * sign(e.y * q.x - e.x * q.y));
-}
-
-// Where a clearing of reach `reach` ends, as a distance from the footprint it
-// is measured around — the reach itself, with a floor under it so that a
-// smoothstep across it is a band rather than a step answering a half everywhere.
-//
-// One function because two places have to agree on it exactly: the coverage
-// below, and the idle branch in `node_paint`, which discards the fragments past
-// this. A second spelling of the floor there is a hairline of clearing dropped
-// on one pipeline and kept on the other.
-fn clearing_edge(reach: f32) -> f32 {
-    return max(reach, 0.001);
 }
 
 // How much of the destination one layer's knockout clears, `sd` out from that
