@@ -350,13 +350,14 @@ pub(crate) fn apply(scene: &mut Scene, state: &SharedState, now: f64) {
     let cfg = state.spectrum_config;
     let mut paint = SpectralPaint::new(&state.view, pitch_ramp_lut(cfg.spectrogram_gradient));
     if let Some(levels) = state.spectrum.display(now) {
-        match reading {
-            SpectralReading::Off => {}
-            SpectralReading::Fold => {
-                fill_grid(&mut paint, &cfg, Fold::measure(levels, state.view.spectral_width).grid())
-            }
-            SpectralReading::Spectrum => fill_grid(&mut paint, &cfg, levels),
-        }
+        // The kernel is the FOLD's; `Spectrum` hands the analyzer's own grid
+        // through untouched. A `bool` and not a `match`, because a match here
+        // owes an arm for `Off` that the guard above has already returned
+        // past — a branch nothing can reach, sitting where a reader would take
+        // it for a case that is covered.
+        let folded = (reading == SpectralReading::Fold)
+            .then(|| Fold::measure(levels, state.view.spectral_width));
+        fill_grid(&mut paint, &cfg, folded.as_ref().map_or(levels, Fold::grid));
     }
     scene.spectral = paint;
 }
