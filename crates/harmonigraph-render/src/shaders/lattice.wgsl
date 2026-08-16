@@ -33,7 +33,9 @@ struct Uniforms {
     // z > y where the band draws at all, and hands both as 0 where it does
     // not). w: the outer edge of the outermost RING the node draws — z, save
     // where the band is off and a ring inside it is the last one on — which is
-    // what the marks stand off and what the clearing is shaped on.
+    // what the marks stand off and what the billboard is sized on (`node_rim`).
+    // It BOUNDS the clearing without describing it: `node_clearing` measures
+    // each layer from that layer's own radii, so a hole is never read off w.
     misc3: vec4<f32>,
     // Pitch->color lookup for the octave glyphs. The disc is colored through
     // this same table on the CPU, so a glyph and the disc under it match
