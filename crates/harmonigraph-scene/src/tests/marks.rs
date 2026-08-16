@@ -228,6 +228,67 @@ fn a_handoff_inside_one_pitch_class_marks_whichever_end_is_stronger() {
     assert_eq!(later.octaves[MIDDLE_C_SLOT], 1.0, "the held C4's octave is at full");
 }
 
+/// The two ends can cross: a released melody marks a LOWER slice than the live
+/// bass beside it, for the length of one release.
+///
+/// Worth a test because it is the one case the mark's shape cannot speak for.
+/// Both ends draw in one strip, so which is which is read off which slice each
+/// extends — the higher one being the melody — and that ordering holds for LIVE
+/// ends by construction. A released voice claims each end from its own stamp
+/// (`wore_high`/`wore_low`), which is what puts a fading melody underneath.
+///
+/// C3 held alone wears both ends, so its release stamps both. C5 and E5 then
+/// come in under it: E5 is the live melody and a different pitch class, so it
+/// is a different node entirely; C5 is the live bass and shares C3's class, so
+/// the two land on ONE node. Once C5's ease passes C3's release the bass moves
+/// up to C5's slot while the melody is still on C3's, and the node draws a
+/// melody below a bass.
+///
+/// Pinned rather than fixed. Ordering the two would mean dropping a mark the
+/// music earned — the melody really was C3 and really is still fading — and
+/// the radius that told them apart is exactly what the shared strip spends.
+/// This is the record of that trade, so a reader meets it here rather than in
+/// the DAW.
+#[test]
+fn a_released_end_can_mark_a_lower_slice_than_the_live_one() {
+    let mut tracker = NoteTracker::new();
+    tracker.handle_event(on(0.0, 48));
+    tracker.handle_event(off(1.0, 48));
+    tracker.handle_event(on(1.0, 72));
+    tracker.handle_event(on(1.0, 76));
+    let view = delayed_view(0.0);
+    let frame = attack_frame();
+    let at = |now: f64| {
+        let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, now);
+        *origin_node(&scene)
+    };
+
+    // Half way through, the two claimants are level and the bass is still C3's
+    // own slot — one slice wearing both ends, which is the ordinary picture.
+    let level = at(1.0 + ATTACK * 0.5);
+    assert_eq!(level.melody_slots, level.bass_slots, "both ends are still C3's");
+
+    // Three quarters through, C5's ease has passed C3's release and the bass
+    // has moved up two slots while the melody has not moved at all.
+    let crossed = at(1.0 + ATTACK * 0.75);
+    assert_eq!(crossed.melody_slots, 1 << (MIDDLE_C_SLOT - 1), "the melody is still C3's");
+    assert_eq!(crossed.bass_slots, 1 << (MIDDLE_C_SLOT + 1), "the bass has moved to C5");
+    assert!(
+        crossed.melody_level > 0.0 && crossed.bass_level > 0.0,
+        "both marks are drawing ({} melody, {} bass), which is what makes the \
+         crossing visible",
+        crossed.melody_level,
+        crossed.bass_level,
+    );
+    // Which is the crossing itself: the melody's slice sits BELOW the bass's.
+    assert!(
+        crossed.melody_slots < crossed.bass_slots,
+        "melody slots {:b} against bass {:b}",
+        crossed.melody_slots,
+        crossed.bass_slots,
+    );
+}
+
 /// A mark that never cleared the Delay contributes no SLOT either, not just no
 /// level. The mask is what the shader extends a slice for, so a rejected voice
 /// left in it would draw a mark on an octave

@@ -552,11 +552,19 @@ pub struct ViewConfig {
     /// Independent of [`mark_bass`](Self::mark_bass), and they share one
     /// strip: a mark is its own octave's slice continued outward, so what
     /// tells the two apart is WHICH slice each one extends — the slices are
-    /// ordered by pitch round the node, and the higher marked one is the
-    /// melody. A note that is at once the highest and the lowest — a lone
-    /// held note, or a chord whose top and bottom share a pitch class — is
-    /// one slice extended once, which is the whole of what there is to say
-    /// about it.
+    /// ordered by pitch round the node, and the higher marked one is
+    /// ordinarily the melody. A note that is at once the highest and the
+    /// lowest — a lone held note, or a chord whose top and bottom share a
+    /// pitch class — is one slice extended once, which is the whole of what
+    /// there is to say about it.
+    ///
+    /// That ordering is the usual case rather than a guarantee. A mark
+    /// outlives its key and a released voice claims each end from its own
+    /// stamp, so through one release a fading melody can sit on a LOWER slice
+    /// than the live bass beside it, with nothing in the picture to say which
+    /// is which — the radius that used to say it is what the shared strip
+    /// spends. `a_released_end_can_mark_a_lower_slice_than_the_live_one`
+    /// builds that state and is where the window is measured.
     pub mark_melody: bool,
     /// Mark the lowest held note. See [`mark_melody`](Self::mark_melody).
     pub mark_bass: bool,

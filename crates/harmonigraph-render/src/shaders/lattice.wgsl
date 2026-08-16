@@ -1281,19 +1281,28 @@ fn octave_glow_color(
 // sector's color rather than a fixed livery.
 //
 // The shape is the whole of what says WHICH octave is the melody -- the
-// question a full ring at its own radius could not answer, and the one that is
+// question a full ring at its own radius cannot answer, and the one that is
 // everything on a chord voiced inside a single pitch class, where every note
-// lands on one node and differs only by slot. An earlier pass drew rings
-// bracketing the band and slit them at the marked sector's boundaries to point
-// back at it; extending the slice itself is that link with nothing left over.
+// lands on one node and differs only by slot. A ring bracketing the band and
+// slit at the marked sector's boundaries points back at it; extending the
+// slice itself is that link with nothing left over.
 //
 // What the shared strip gives up is telling the two ENDS apart by radius.
-// Nothing is lost: a mark names a slice, the slices are ordered by pitch round
-// the node, and so the higher of two marked slices IS the melody. Where one
-// note is both ends -- a lone held note, or a chord whose top and bottom share
-// a pitch class -- the two marks are one slice and draw as one extension, in
-// the one color they both carry (each takes its SECTOR's pitch, and it is the
-// same sector).
+// Mostly that costs nothing: a mark names a slice, the slices are ordered by
+// pitch round the node, so the higher of two marked slices is the melody. Where
+// one note is both ends -- a lone held note, or a chord whose top and bottom
+// share a pitch class -- the two marks are one slice and draw as one extension,
+// in the one color they both carry (each takes its SECTOR's pitch, and it is
+// the same sector).
+//
+// The ordering is not an invariant, and the exception is worth knowing because
+// the strip is what gave up the other cue. A mark outlives its key, and a
+// RELEASED voice claims each end from its own stamp, so a lone note that wore
+// both can hold the melody on a low slice while a live note takes the bass on a
+// higher one -- for the length of one release, the melody draws below the bass.
+// `a_released_end_can_mark_a_lower_slice_than_the_live_one` builds that state.
+// Telling them apart by radius drew it unambiguously; this does not, and the
+// alternative is a second cue that would undo the shape above.
 
 // Floor on the strip's depth (the view sets the rest, u.misc5.w), in
 // soft-band widths — about a couple of render pixels, so a thin setting
