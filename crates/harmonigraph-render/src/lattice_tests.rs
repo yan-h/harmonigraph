@@ -364,6 +364,11 @@ fn parity_scene() -> Scene {
         // The ground the sevens knockout clears to; the half of this
         // scene's nodes that carry a gutter exercise it.
         background: harmonigraph_scene::skin::panel_color(),
+        // The grey the octave band's unsounding slices draw, at the fresh
+        // view's own Ground — most of every node's band in this fixture.
+        ring_ground: harmonigraph_scene::grey_of_lightness(
+            harmonigraph_scene::ViewConfig::default().ring_ground,
+        ),
         sevens_soft: 0.24,
         node_radius: 0.34,
         mark_thickness: 0.09,
@@ -3076,8 +3081,9 @@ fn an_indicator_is_drawn_at_its_own_pitchs_angle() {
             let slot =
                 (harmonigraph_scene::MIDDLE_C_SLOT as i32 + offset).clamp(first + 1, last - 1);
             let mut scene = octave_wheel_scene(layout, cents);
-            // One octave sounding. The silent slots still ghost in behind it
-            // at GHOST_LEVEL, which the brightness threshold below sorts out.
+            // One octave sounding. The silent slots still carry the ring's
+            // ground behind it, which the brightness threshold below sorts
+            // out.
             scene.nodes[0].octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
             scene.nodes[0].octaves[slot as usize] = 1.0;
 
@@ -3222,18 +3228,18 @@ fn a_released_octave_lands_on_its_ghost_without_a_step() {
             pair[1]
         );
     }
-    // And the last stretch of it — from the ghost's own level down to
-    // nothing, which is where an opacity that floors and a color that
-    // switches part company — is SPREAD across the frames rather than spent
-    // in one. Painted in place of its ghost instead, the slice sits still for
-    // that whole stretch and then makes the entire journey in one frame.
+    // And the last stretch of it — the bottom sixth of the envelope, where a
+    // slice is nearly the ground already — is SPREAD across the frames rather
+    // than spent in one. Painted in place of the ground instead of mixed
+    // toward it, the slice sits still for that whole stretch and then makes
+    // the entire journey in one frame.
     //
     // A share of the travel rather than a run of strict decreases: a ramp
     // this shallow moves the last few frames by less than an 8-bit channel,
     // and the pair either side of zero reads identically here BECAUSE the
-    // handoff is smooth. The cut is GHOST_LEVEL in lattice.wgsl; a stale
-    // value only widens or narrows the stretch measured, so this reads the
-    // sweep rather than asserting the constant.
+    // handoff is smooth. Where the cut falls is not the claim — a different
+    // one only widens or narrows the stretch measured, so this reads the
+    // sweep rather than asserting a level.
     let tail = &steps[TAIL.iter().position(|&level| level <= 0.16).expect("a tail to measure")..];
     let travel = apart(&tail[0], &tail[tail.len() - 1]);
     assert!(travel > 10.0, "the tail hardly moves at all ({travel:.1}), so its shape says little");
@@ -3245,7 +3251,7 @@ fn a_released_octave_lands_on_its_ghost_without_a_step() {
             pair[1]
         );
     }
-    // Landing on the ghost the silent slices are drawn in — the same grey at
+    // Landing on the ground the silent slices are drawn in — the same grey at
     // the same coverage, so the finished ring is one backdrop rather than a
     // backdrop with one slice a shade off it.
     let (quiet, quiet_wedge) = wedge_of(layout, silent, 0.0);

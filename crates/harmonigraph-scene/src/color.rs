@@ -742,11 +742,14 @@ pub fn hue_circle(lightness: f32, chroma: f32) -> [Vec4; HUE_CIRCLE_N] {
 ///
 /// It is a LIT pitch that this draws: a sounding glyph stands for a position
 /// on the pitch axis rather than for the voice that lit it, and so do the
-/// glow's lobes once two octaves sound. The band's ghosts and a solo voice's
-/// glow keep the node's own color instead, deliberately — that color is the
-/// ramp at the VOICE's pitch, which is not the lit slot's whenever the two
-/// name different pitches (see the paragraph below), so a lone voice keeps
-/// its exact color rather than the one its indicator wears. Do not simplify
+/// glow's lobes once two octaves sound. A solo voice's glow keeps the node's
+/// own color instead, deliberately — that color is the ramp at the VOICE's
+/// pitch, which is not the lit slot's whenever the two name different pitches
+/// (see the paragraph below), so a lone voice keeps its exact color rather
+/// than the one its indicator wears. The band's unsounding slices are off this
+/// ramp altogether: they wear the rings' ground
+/// ([`ViewConfig::ring_ground`](crate::ViewConfig)), which is a brightness
+/// rather than a pitch. Do not simplify
 /// `octave_glow_color`'s `count < 2u` fallback away on the strength of this
 /// function's name.
 ///
@@ -810,6 +813,25 @@ pub fn gradient_color(t: f32, gradient: Gradient) -> Vec4 {
     with_lut(gradient, |lut| {
         lut[i0].lerp(lut[(i0 + 1).min(PITCH_LUT_N - 1)], f - f.floor())
     })
+}
+
+/// The NEUTRAL grey of a given `L*`: no hue, no chroma, and the luminance that
+/// lightness names.
+///
+/// The one place a colour is asked for by brightness alone, which is what the
+/// rings' ground is (see [`ViewConfig::ring_ground`](crate::ViewConfig)). Off
+/// the same [`oklab_srgb`] the gradient's own colours come through, rather than
+/// a gamma encode written out a second time here: at chroma 0 that path is the
+/// neutral axis exactly — Oklab `L` IS the cube root of luminance there, so the
+/// Newton solve starts on its own answer and the three channels come back
+/// equal — and sharing it means a grey and a ramp colour of one `L*` cannot
+/// disagree about how bright that is.
+///
+/// The hue handed in is arbitrary and unread: it enters only multiplied by the
+/// chroma. 0 rather than a caller's, so nothing suggests the answer depends on
+/// one.
+pub fn grey_of_lightness(l_star: f32) -> Vec4 {
+    oklab_srgb(f64::from(l_star.clamp(0.0, 100.0)), 0.0, 0.0)
 }
 
 /// [`max_chroma`], for the test that keeps [`Gradient`]'s quoted figures

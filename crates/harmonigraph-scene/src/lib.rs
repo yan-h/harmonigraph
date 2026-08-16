@@ -36,7 +36,9 @@ pub mod trail;
 pub mod view;
 
 pub use camera::{Camera, Projection, Projector, VisibleSheet};
-pub use color::{gradient_color, hue_circle, pitch_lut_color, pitch_ramp_lut, HUE_CIRCLE_N};
+pub use color::{
+    gradient_color, grey_of_lightness, hue_circle, pitch_lut_color, pitch_ramp_lut, HUE_CIRCLE_N,
+};
 pub use derive::derive_scene;
 pub use octaves::{
     clamp_center, clamp_wheel, octave_layout, OctaveLayout, Ring, DEFAULT_CENTER, DEFAULT_COUNT,
@@ -438,6 +440,21 @@ pub struct Scene {
     /// stacked rings, between one octave sector and the next, and between the
     /// outermost ring and the mark strip alike. Already clamped.
     pub ring_gap: f32,
+    /// The unlit ground a node's two rings stand on, already resolved from
+    /// [`ViewConfig::ring_ground`]'s `L*` to the neutral grey it names.
+    ///
+    /// A COLOUR here and an `L*` in the view, because the two ends want
+    /// different things: the bar is a brightness a person reads and drags, and
+    /// what the shader needs is three channels it can lay down without solving
+    /// for a luminance per fragment. Resolved once per frame in
+    /// [`derive_scene`] — the audio ring's own copy is
+    /// the `t` = 0 end of [`spectral`](Self::spectral)'s table, baked from the
+    /// same number, so the two agree by construction rather than by both being
+    /// aimed at the skin.
+    ///
+    /// Read by the OCTAVE band alone: it is what a silent slice draws, and what
+    /// a sounding one's pitch is painted over as the note fades.
+    pub ring_ground: Vec4,
     /// The lattice's AUDIO channel: what the analyzer measured, where the
     /// ring that draws it sits, and the ramp every audio-lit element on the
     /// node is painted from (see [`spectral`]).

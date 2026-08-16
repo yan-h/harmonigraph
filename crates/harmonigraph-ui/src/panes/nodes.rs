@@ -169,10 +169,12 @@ fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
              inside it; 0 removes the layer, and the marks close over its \
              space.",
         );
-    // No Solidity and no Backdrop bar: both are fixed at 1. The glyphs are
-    // always the crisp classic shapes, and the silent octaves always ghost
-    // in behind the sounding ones — that backdrop is what completes the
-    // ring, so a lone octave still reads as a whole note.
+    // No Solidity bar and no Backdrop switch: the glyphs are always the crisp
+    // classic shapes, and the silent octaves always stand in behind the
+    // sounding ones — that backdrop is what completes the ring, so a lone
+    // octave still reads as a whole note. How BRIGHT it stands is the Note
+    // section's Ground bar, filed there because the audio ring's own silence
+    // is the same grey and one bar moves the two.
     //
     // No Shimmer row either: the glyphs are what says which octaves sound, and
     // a sheet laid over that reading costs it — so the sweep belongs to the
@@ -519,6 +521,30 @@ fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBack
         .on_hover_text(
             "The one padding on a node: between its rings, between octave \
              sectors, and before the marks. 0 closes the node up solid.",
+        );
+    // Beside the Gap, and a whole-note setting for the Gap's own reason: it is
+    // one number under two layers. The audio ring at silence and the octave
+    // band's unsounding slices are the same grey, so this bar moves the empty
+    // state of both — filing it under either heading would say it belonged to
+    // that layer.
+    //
+    // No off position, and none is missing: the widths are each layer's own
+    // switch, and every setting here draws SOMETHING. The bottom of the bar is
+    // black rather than nothing, which against the panel reads as a hole
+    // punched through the lattice — the picture worth reaching, and worth
+    // reaching by dragging rather than by falling off the end.
+    ValueBar::new(&mut view.ring_ground, 0.0..=100.0, "Ground")
+        // L*, the units the gradients' own Brightness is authored in, so a
+        // ground and a gradient can be compared by their numbers. Whole
+        // points: the axis is 100 wide and a tenth of one is under a
+        // quantization step of the grey it names.
+        .integer()
+        .show(ui)
+        .on_hover_text(
+            "How bright the unlit ground under both rings is — the audio \
+             ring where it reads silence, the octave band where an octave is \
+             not sounding. One grey for the two. Around 9 it sinks into the \
+             lattice's own background; 20 is the fresh raised grey.",
         );
     // Here rather than with the sevens-layer controls, where a "Sevenths" name
     // misreads what it does: the clearance is cut by every sounding node on

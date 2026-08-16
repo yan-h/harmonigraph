@@ -390,9 +390,9 @@ pub fn derive_scene(
                     // is the whole of the difference: the shader tints a lit
                     // glyph by the pitch it is DRAWN at and asks nothing about
                     // the voice, and a mark is part of that glyph's layer.
-                    // Only the lit glyph — the band's ghosts wear the whitened
-                    // node color and a solo voice's glow keeps the voice's
-                    // own, both of them on purpose. No extra lift on top of
+                    // Only the lit glyph — the band's unsounding slices wear
+                    // the rings' own ground and a solo voice's glow keeps the
+                    // voice's color, both of them on purpose. No extra lift on top of
                     // the ramp here: the sector's glyph wears it as it comes,
                     // and a lightened mark would read a shade off the slice
                     // it continues.
@@ -527,6 +527,7 @@ pub fn derive_scene(
         rings_outer: rings.outer,
         mark_inner: rings.mark_inner,
         ring_gap: rings.gap,
+        ring_ground: crate::grey_of_lightness(view.ring_ground_lightness()),
         // The MIDI picture, whole: nothing here reads audio, so the audio
         // channel arrives empty and the Lattice pane's fold is what fills it.
         spectral: SpectralPaint::silent(),

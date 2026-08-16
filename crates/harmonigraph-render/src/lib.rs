@@ -272,6 +272,16 @@ struct Uniforms {
     /// on the picture rather than as a hole through it. See
     /// `Scene::background`.
     background: [f32; 4],
+    /// The unlit ground a node's two rings stand on (`Scene::ring_ground`): the
+    /// neutral grey the OCTAVE band's silent slices are, and the colour a
+    /// sounding one's pitch is painted over as it fades.
+    ///
+    /// A slot of its own beside `background` rather than three of the retired
+    /// scalars: it is a colour, the buffer's other colour has one, and a grey
+    /// split across the seam between two vec4s would be read by nothing that
+    /// wanted the halves apart. The audio ring's own copy of it is `t` = 0 of
+    /// `spectral_lut` below, baked on the CPU from the same `L*`.
+    ring_ground: [f32; 4],
     /// The wheel's pitch axis. x: octaves one turn is cut into
     /// (`OctaveLayout::span`); y: the MIDI pitch at the top of every node
     /// (`OctaveLayout::center`).
@@ -314,9 +324,9 @@ struct Uniforms {
     /// The FREQUENCY colour scheme's ramp — the analyzer's own gradient
     /// (`SpectrumConfig::spectrogram_gradient`) through `pitch_ramp_lut`, the
     /// same gradient the spectrogram's cells and the Spiral pane's segments
-    /// are read off, with the bottom of its lightness range raised to the
-    /// lattice's own bed (`harmonigraph_scene::ring_gradient`) so a level reads
-    /// as the same light over a grey ground as it does over their black one.
+    /// are read off, with its silent end moved onto the node's own ground
+    /// (`harmonigraph_scene::ring_gradient`) so a level reads as the same light
+    /// over a grey ground as it does over their black one.
     /// Indexed by a LEVEL where `pitch_lut` beside it is indexed by a pitch,
     /// which is the whole difference between the two schemes.
     spectral_lut: [[f32; 4]; harmonigraph_scene::PITCH_LUT_N],
@@ -843,6 +853,7 @@ impl LatticeCallback {
                 misc5: [scene.grid_thickness, 0.0, scene.ring_gap, scene.mark_thickness],
                 misc6: [0.0, 0.0, scene.sevens_soft, scene.pulse_marks.shader_index() as f32],
                 background: scene.background.to_array(),
+                ring_ground: scene.ring_ground.to_array(),
                 misc7: [
                     scene.octave_layout.span as f32,
                     scene.octave_layout.center,

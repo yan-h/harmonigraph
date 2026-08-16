@@ -347,13 +347,15 @@ pub struct ViewConfig {
     /// which is the lattice read as a spectrum with the keys marking only its
     /// outer voices.
     pub band_width: f32,
-    // The octave layer's backdrop and solidity are fixed at 1 in the shader
-    // and have no fields here. The backdrop — the silent octaves ghosted
-    // faintly behind the sounding sectors, in the note color — is what makes
-    // the annulus complete, so a lone octave still reads as a whole note;
-    // and the glyphs are always the crisp classic shapes. Saved blobs may
-    // still carry the keys these rode on (`outer_backdrop`, first a bool and
-    // then an opacity under `outer_backdrop_alpha`, and `outer_solidity`);
+    // The octave layer's backdrop and solidity are fixed on in the shader and
+    // have no fields of their own. The backdrop — the silent octaves standing
+    // in the rings' own ground behind the sounding sectors — is what makes
+    // the annulus complete, so a lone octave still reads as a whole note; and
+    // the glyphs are always the crisp classic shapes. How bright that backdrop
+    // is IS a field, and it is [`ring_ground`](Self::ring_ground) below, one
+    // number under this layer and the audio ring together. Saved blobs may
+    // still carry the keys the pair rode on (`outer_backdrop`, first a bool
+    // and then an opacity under `outer_backdrop_alpha`, and `outer_solidity`);
     // serde ignores unknown keys, so such a blob loads intact and simply
     // drops them on the next save.
     /// The one padding on a node, in quad UV units: the RADIAL gap between one
@@ -374,6 +376,37 @@ pub struct ViewConfig {
     /// A gap is only ever spent between two DRAWN layers, so a ring dialled to
     /// 0 costs its own slot and the gap that would have stood it off together.
     pub ring_gap: f32,
+    /// The unlit GROUND both rings stand on, as an `L*` 0..100 — one neutral
+    /// grey, drawn wherever the audio ring reads silence and wherever the MIDI
+    /// ring's octave is not sounding.
+    ///
+    /// One number under two layers, like [`ring_gap`](Self::ring_gap) above it,
+    /// and for the same reason: the two annuli sit a gap apart on the same node
+    /// and are read together, so a ground that differed between them would say
+    /// the rings were measuring in different units when the only difference is
+    /// which one is empty. That is what it looked like when each layer arrived
+    /// at its ground by its own route — the audio ring off the analyzer's
+    /// gradient (whose dark end carries that gradient's own hue), the MIDI ring
+    /// off the note's colour whitened and laid on at a fixed opacity — two
+    /// near-greys a hair apart in tint that never quite agreed and could not be
+    /// dialled at all.
+    ///
+    /// **Neutral, and the same grey on both**: the ground is what the rings
+    /// have in common when nothing is lit, so it carries no hue of its own and
+    /// each layer's light is added over it —
+    /// [`ring_gradient`](crate::ring_gradient) re-anchors the analyzer's ramp
+    /// to open here, and the MIDI ring's silent slices ARE this colour, with a
+    /// sounding octave's pitch painted over them.
+    ///
+    /// Stated in `L*` because that is the axis the ask is on: perceived
+    /// brightness, the same units [`Gradient::lightness`](crate::Gradient) is
+    /// authored in, so a ground and a gradient can be compared by their
+    /// numbers. There is no off position and it needs none — the widths are
+    /// each layer's own off switch. What the bottom of the bar reaches is
+    /// black, which against this skin's panel reads as a hole punched through
+    /// the lattice; the ground vanishes into the panel a little above it, at
+    /// the panel's own `L*` (8.8 on the fresh skin).
+    pub ring_ground: f32,
     /// How many octaves one turn of a node covers at FULL SIZE (see
     /// [`octaves`](crate::octaves)), 1..=11 — not how many it draws, which is
     /// this plus twice [`octave_extras`](Self::octave_extras). Each is exactly
@@ -1084,6 +1117,26 @@ impl ViewConfig {
         }
     }
 
+    /// [`ring_ground`](Self::ring_ground) as an `L*` the colour path can
+    /// actually solve for: on the axis, and a real number.
+    ///
+    /// One function for the same reason [`rings`](Self::rings) is one: the two
+    /// layers standing on this ground resolve it in different crates' reach —
+    /// `derive_scene` for the octave band, [`SpectralPaint::new`](crate::SpectralPaint)
+    /// for the audio ring's table — and a ground repaired two ways is two
+    /// grounds. The repair
+    /// is here rather than in [`sanitize`](Self::sanitize) alone for that
+    /// function's own reason: the drawing code is reached by more routes than
+    /// the persist door, and a NaN walks through a `clamp` untouched into a
+    /// Newton solve that answers with whatever its guard parks on.
+    pub fn ring_ground_lightness(&self) -> f32 {
+        if self.ring_ground.is_finite() {
+            self.ring_ground.clamp(0.0, 100.0)
+        } else {
+            DEFAULT_RING_GROUND
+        }
+    }
+
     /// Whether the audio ring is drawn at all: a width to draw it with, and
     /// room left inside the quad to draw it in.
     ///
@@ -1539,6 +1592,16 @@ impl ViewConfig {
         self.spectral_ring_range = finite_or(self.spectral_ring_range, fresh.spectral_ring_range)
             .clamp(crate::SPECTRAL_RANGE_MIN, crate::SPECTRAL_RANGE_MAX);
 
+        // The ground both rings stand on, against that same hole. It is an
+        // `L*`, so the clamp is the axis itself: off either end the Newton
+        // solve behind a neutral grey is asked for a luminance sRGB does not
+        // hold, and a non-finite one takes the ANALYZER's ramp with it — the
+        // audio ring's table is re-anchored to open here, so a NaN ground is a
+        // NaN gradient and the whole ring goes to whatever the clamp in
+        // `oklab_srgb` lands on. Both rings read the repaired number, which is
+        // what keeps the bar's readout and the grey on screen the same value.
+        self.ring_ground = finite_or(self.ring_ground, fresh.ring_ground).clamp(0.0, 100.0);
+
         self.shimmer_speed = finite_or(self.shimmer_speed, fresh.shimmer_speed);
         self.shimmer_width = finite_or(self.shimmer_width, fresh.shimmer_width);
         self.shimmer_intensity = finite_or(self.shimmer_intensity, fresh.shimmer_intensity);
@@ -1559,6 +1622,16 @@ fn finite_or(value: f32, fallback: f32) -> f32 {
         fallback
     }
 }
+
+/// The `L*` a fresh [`ViewConfig::ring_ground`] opens on, named because
+/// [`ViewConfig::ring_ground_lightness`] needs it without building a whole
+/// fresh view to read one field off. Named, and not a second value: the
+/// `Default` below is written in terms of it, the way it is written in terms of
+/// `octaves::DEFAULT_COUNT`.
+///
+/// Which grey this is, and why that rung, is at
+/// [`skin::surface_faint_color`](crate::skin::surface_faint_color).
+const DEFAULT_RING_GROUND: f32 = 20.0;
 
 /// The look a fresh view starts in, and the single source of every field's
 /// fallback: the container-level `#[serde(default)]` on the struct means a
@@ -1667,6 +1740,15 @@ impl Default for ViewConfig {
             // stack is core (0.256), gap, audio ring, gap, band, gap, marks.
             band_width: 0.190_065_75,
             ring_gap: 0.051_732_67,
+            // The rung of the chrome's own ladder the rings stand on: `L*` 20.0
+            // is the skin's `surface_faint`, a step ABOVE the lattice's panel
+            // ground (8.8) and well clear of the well grey (4.7), which beside
+            // the panel reads as black rather than as a raised surface. A quiet
+            // ring is therefore a faintly raised backdrop that is plainly still
+            // a reading — `the_fresh_ground_is_the_skins_faint_surface` holds
+            // the number to the skin, so retuning that rung and leaving this
+            // behind is a test failure rather than a drift.
+            ring_ground: DEFAULT_RING_GROUND,
             // Five octaves to the turn with middle C straight up — C1..C5 in
             // the DAW's numbering, the register a keyboard part lives in, at
             // 72 degrees an octave, with a two-octave fringe either end (see

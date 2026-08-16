@@ -1005,12 +1005,13 @@ mod tests {
         let scene = scene_of(&state);
 
         // The ring's ramp is the heatmap's gradient, entry for entry, with its
-        // lightness range standing on the lattice's bed instead of on the
+        // silent end standing on the node's own ground instead of on the
         // heatmap's black plane. So a wedge at a level and a cell at that level
         // are one reading rather than two, and where the ramp opens is the
         // whole of the difference.
         let ring = harmonigraph_scene::pitch_ramp_lut(harmonigraph_scene::ring_gradient(
             cfg.spectrogram_gradient,
+            state.view.ring_ground_lightness(),
         ));
         for (k, entry) in scene.spectral.lut.iter().enumerate() {
             let got = crate::panes::scene_color(*entry, 1.0);
@@ -1018,9 +1019,9 @@ mod tests {
             assert_eq!(got, want, "entry {k} of the ring's ramp is not the heatmap's light");
         }
         // The top of the range is where the two tables MEET: the anchoring
-        // moves the bottom of the lightness ramp and leaves the top exactly
-        // where the analyzer put it, so a loud wedge and a loud cell are one
-        // colour rather than two that nearly agree.
+        // moves the ramp's silent end and leaves the loud one exactly where
+        // the analyzer put it, so a loud wedge and a loud cell are one colour
+        // rather than two that nearly agree.
         let top = harmonigraph_scene::PITCH_LUT_N - 1;
         assert_eq!(
             crate::panes::scene_color(scene.spectral.lut[top], 1.0),
@@ -1031,23 +1032,21 @@ mod tests {
             "the loudest wedge is not the colour the heatmap draws at that level",
         );
         // Every analyzer preset opens at black, because the heatmap's plane is
-        // black; on the lattice that floor stands at the bed's own lightness. A
+        // black; on the lattice that end stands on the node's own ground, the
+        // same grey the octave band beside it draws where nothing sounds. A
         // silent wedge is drawn deliberately — a reading, not a gap — so this
         // is most of the ring most of the time, and unanchored it is a hole at
         // every node.
+        //
+        // Against `scene.ring_ground` and not against a number: that field IS
+        // what the shader lays down for the band, so this is the two layers
+        // measured against each other through the whole path a frame takes.
         let floor = scene.spectral.lut[0];
-        let l_star = |c: glam::Vec4| {
-            harmonigraph_scene::color::lightness_of_encoded(
-                f64::from(c.x),
-                f64::from(c.y),
-                f64::from(c.z),
-            )
-        };
-        let bed = l_star(harmonigraph_scene::skin::surface_faint_color());
+        let step = (floor.truncate() - scene.ring_ground.truncate()).abs().max_element();
         assert!(
-            (l_star(floor) - bed).abs() < 0.2,
-            "a silent wedge draws {floor:?} at L* {}, not the bed's own L* {bed}",
-            l_star(floor),
+            step * 255.0 < 0.5,
+            "a silent wedge draws {floor:?} where the octave band draws {:?}",
+            scene.ring_ground,
         );
 
         // ...and the MIDI half: a ribbon and the node it lit are one colour off

@@ -146,20 +146,23 @@ pub fn panel_color() -> Vec4 {
 }
 
 /// The active skin's `surface_faint`: the grey a subtly raised surface of the
-/// chrome sits at, and the BED the lattice's audio ring's ramp is anchored to
-/// ([`ring_gradient`](crate::ring_gradient)).
+/// chrome sits at, and the rung [`ViewConfig::ring_ground`](crate::ViewConfig)
+/// opens on — the ground BOTH of a lattice node's rings stand on when nothing
+/// is lit.
 ///
-/// Which rung of the ladder is the whole of what this choice is, and the ladder
-/// is short: the well at `L*` 4.7, [`panel_color`] — the lattice's own ground —
-/// at 8.8, and this at 20.0. The bed has to sit ABOVE the ground, so that a
-/// quiet ring reads as a faintly raised backdrop rather than as a mark on the
-/// surface: at 20.0 it lands flush with the octave band's own unlit ghost
-/// (`L*` 21.8), which is the picture beside it and the one it should agree
-/// with. The well is BELOW the ground and reads as black against both, which is
-/// a hole punched through the lattice; the panel is the ground exactly, and a
-/// silent ring bedded there vanishes into it — which is what a ring dialled to
-/// no width looks like, the off switch
+/// Which rung of the ladder is the whole of what that default is, and the
+/// ladder is short: the well at `L*` 4.7, [`panel_color`] — the lattice's own
+/// ground — at 8.8, and this at 20.0. The rings' ground has to sit ABOVE the
+/// panel, so that a quiet ring reads as a faintly raised backdrop rather than
+/// as a mark on the surface. The well is BELOW it and reads as black against
+/// both, which is a hole punched through the lattice; the panel is that ground
+/// exactly, and a silent ring standing there vanishes into it — which is what a
+/// ring dialled to no width looks like, the off switch
 /// ([`ViewConfig::spectral_ring_width`](crate::ViewConfig)).
+///
+/// A DEFAULT and not the value itself: the bar reaches the whole `L*` axis, and
+/// `the_fresh_ground_is_the_skins_faint_surface` is what keeps this rung and
+/// that default the same number.
 pub fn surface_faint_color() -> Vec4 {
     let [r, g, b] = active_skin().surface_faint;
     ground_color((r, g, b))

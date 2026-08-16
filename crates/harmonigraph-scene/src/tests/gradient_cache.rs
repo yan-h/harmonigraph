@@ -17,7 +17,7 @@
 //! at its key at all.
 
 use crate::color::{LUT_SLOTS, REBUILDS};
-use crate::{gradient_color, hue_circle, Gradient};
+use crate::{gradient_color, hue_circle, Gradient, ViewConfig};
 
 /// One gradient per number, differing in a knob that certainly changes the
 /// table — a hue arc nothing else in the tree opens on.
@@ -81,10 +81,11 @@ fn two_gradients_alternating_are_both_resident() {
 fn a_frame_of_a_drag_rebuilds_only_what_the_drag_changed() {
     // The analyzer's picture and the audio ring's copy of it, which stand still
     // while the lattice's own gradient is dragged. Opening at black, as every
-    // analyzer preset does, so the copy really is a second key: a gradient
-    // already clearing the bed is handed to the ring unchanged.
+    // analyzer preset does — and the ring's copy is a second key at any opening,
+    // its silent end being pinned to the node's ground rather than floored at
+    // it.
     let analyzer = Gradient { lightness: 50.0, lightness_ramp: 100.0, ..nth(3) };
-    let ring = crate::ring_gradient(analyzer);
+    let ring = crate::ring_gradient(analyzer, ViewConfig::default().ring_ground);
     assert_ne!(ring, analyzer.sanitized(), "the ring's table is the analyzer's own entry");
     // Ten frames of a drag, each writing a gradient one step further round the
     // circle — which is what a bar being dragged does.
