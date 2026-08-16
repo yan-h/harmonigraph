@@ -32,12 +32,12 @@ use harmonigraph_scene::{
 /// reading they are not part of.
 ///
 /// **Every layer's size is one bar, and each section below is then what that
-/// layer IS.** The four widths were never four independent numbers — a layer's
-/// inner edge is a sum over everything inside it, so a bar apiece could say how
-/// thick a ring was and never where it landed — and splitting them across four
-/// headings put the one question a size on a node is asked, where does this sit,
-/// in four places that each held a quarter of the answer. The Layers bar in Note
-/// is the whole of it ([`StackBar`]), and what is left under each heading is the
+/// layer IS.** The four widths are not four independent numbers — a layer's
+/// inner edge is a sum over everything inside it, so a bar apiece can say how
+/// thick a ring is and never where it lands — and a heading apiece would split
+/// the one question a size on a node is asked, where does this sit, across four
+/// places holding a quarter of the answer each. The Layers bar in Note is the
+/// whole of it ([`StackBar`]), and what is left under each heading is the
 /// reading it carries, the colours it wears and the switches that are its own.
 ///
 /// The layers then run in stack order, from the center out: Core, the audio

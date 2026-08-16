@@ -20,17 +20,17 @@ use crate::theme;
 /// a node draws" would run to and which spends two fifths of itself on room
 /// nothing goes. A ring past the quad edge is refused, so 1.0 is where three of
 /// the four layers stop for good, and the only thing out past it is a strip
-/// that can be [`MARK_THICKNESS_MAX`] deep. Every point of the bar past that
-/// was travel no handle could use and length the layers' names could have had:
-/// a fresh node ends at 0.98, which is three quarters of this axis and under
-/// two thirds of the billboard's.
+/// that can be [`MARK_THICKNESS_MAX`] deep. A bar carrying anything past that
+/// carries travel no handle can use, at the price of the length the layers'
+/// names need: a fresh node ends at 0.98, which is three quarters of this axis
+/// and under two thirds of the billboard's.
 ///
 /// What it costs is the corner where the rings are pushed hard against the quad
 /// edge, which leaves the strip starting a gap PAST 1.0 with the last of its
 /// depth off the end of the axis. The billboard's reach caps that same corner —
 /// a gap at its own maximum puts the strip's outer edge at 1.7, past the 1.6
-/// the shader has eased it away by — so this is the trade that was already
-/// being made, at a number that pays for it.
+/// the shader eases it away by — so it is a trade an axis of any length here
+/// makes, at a number that pays for it.
 const AXIS_TOP: f32 = 1.0 + MARK_THICKNESS_MAX;
 
 /// Closest two of the four thumbs are ever DRAWN, and so the least bar any one
@@ -212,11 +212,20 @@ fn resized(k: usize, to: f32, rings: &RingStack, current: f32) -> f32 {
 /// closer than `sep` and the innermost stands clear of the bar's end.
 ///
 /// Pushed OUTWARD, so the innermost thumb of a pile is the one telling the
-/// truth and the drift is spent on the layers that have collapsed onto it —
-/// which are, by construction, the ones with no width for the drift to
-/// misreport. A pile of all four is the widest lie this can tell, three
-/// separations of a thumb's width apiece, and it is the state a node with one
-/// layer left is genuinely in.
+/// truth and the drift falls on the layers stacked onto it. A pile of all four
+/// is the widest lie this can tell, three separations of a thumb's width
+/// apiece, and it is the state a node with one layer left is genuinely in.
+///
+/// **The drift can land on a layer that IS drawn**, and the case is worth
+/// naming because it is the one a node dialled down reaches: switch the core,
+/// the audio ring and the band off and the strip is the innermost layer on, so
+/// it starts at the node's center with three off boundaries piled on 0 in front
+/// of it. Its own thumb is then pushed past its cell, and the presses over that
+/// cell go to the three layers that are not there. What that buys is the only
+/// thing this bar cannot do without — every layer reachable from its own handle
+/// — and what it costs is a press on the last visible layer taking a layer
+/// inside it. The alternative is a node with one layer left that can never grow
+/// a second.
 ///
 /// The innermost is pushed clear of the bar's own end as well, so a layer sized
 /// to nothing at the bottom of the axis is still something to take hold of.
@@ -247,11 +256,16 @@ fn spread(xs: [f32; 4], (left, right): (f32, f32), sep: f32) -> [f32; 4] {
 /// Which layer a press at `x` takes hold of: the innermost thumb standing at or
 /// past it, and the outermost for a press past them all.
 ///
-/// By REGION and not by the nearer thumb, which is what gives every layer a
-/// stretch of bar that means it — a layer's own body, and the gap it stands off
-/// by — so pressing on a ring and dragging is that ring widening. A
-/// nearest-thumb rule would hand the inner half of every layer to the boundary
-/// inside it, and a press on the middle of the audio ring would move the core.
+/// By REGION and not by the nearer thumb, which is what gives a layer a stretch
+/// of bar that means it — its own body, and the gap it stands off by — so
+/// pressing on a ring and dragging is that ring widening. A nearest-thumb rule
+/// would hand the inner half of every layer to the boundary inside it, and a
+/// press on the middle of the audio ring would move the core.
+///
+/// The regions follow the thumbs where [`spread`] pushes them, not where the
+/// boundaries are, so a layer whose thumb was pushed off its own cell has a
+/// region that does not cover it. That is the same bargain read from the other
+/// end, and `spread` is where it is argued.
 ///
 /// The empty track past the outermost thumb belongs to the marks, which is the
 /// layer a press out there is aiming at: it is the only one whose room is out
@@ -341,13 +355,13 @@ const NAMES: [&str; 4] = ["Core", "Audio", "MIDI", "Marks"];
 /// band and the melody/bass strip, each a cell as long as it is thick and
 /// carrying its own name, with the Gap standing between them as bare track.
 ///
-/// **One control rather than four, because the four were never independent
-/// numbers.** Each layer's inner edge is a sum over every layer inside it, so
-/// four bars asking for four widths could only be read one at a time and none
-/// of them said where its layer actually landed — the one question a size on a
-/// node is asked. Here the answer is the picture, and the drag is the same
-/// gesture the reading is: a handle is a layer's outer edge, and pulling it out
-/// is that layer getting thicker.
+/// **One control rather than four, because the four are not independent
+/// numbers.** Each layer's inner edge is a sum over every layer inside it, so a
+/// bar apiece asking for a width can only be read one at a time and none of
+/// them says where its layer lands — the one question a size on a node is
+/// asked. Here the answer is the picture, and the drag is the same gesture the
+/// reading is: a handle is a layer's outer edge, and pulling it out is that
+/// layer getting thicker.
 ///
 /// **Four handles for four layers**, each standing at the boundary its layer
 /// ends on — the audio ring's inner radius closes the core, the band's closes
@@ -370,8 +384,8 @@ const NAMES: [&str; 4] = ["Core", "Audio", "MIDI", "Marks"];
 /// than a hole where the layer was.
 ///
 /// **Each layer is named rather than numbered**, and the bar carries no name of
-/// its own: four widths in a row said how thick each layer was and never which
-/// layer was which, where a name laid along the stretch whose LENGTH is that
+/// its own: a row of four widths says how thick each layer is and never which
+/// layer is which, where a name laid along the stretch whose LENGTH is that
 /// width says both at once. So the row leads with "Core" where its neighbours
 /// lead with their own names, in the same place, and what follows it along the
 /// bar is the rest of the node.
