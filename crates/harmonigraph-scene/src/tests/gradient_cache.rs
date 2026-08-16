@@ -52,38 +52,56 @@ fn two_gradients_alternating_are_both_resident() {
     assert_eq!(built, 0, "a resident pair must not rebuild at all");
 }
 
-/// A frame of a GRADIENT DRAG asks for three, and only the newest of them is a
+/// A frame of a GRADIENT DRAG asks for four, and only the newest of them is a
 /// fair rebuild.
 ///
 /// The live set is not "one gradient per picture" but one per picture plus the
 /// one a bar is in the middle of writing, because a settings pane draws AFTER
 /// the display panes: everything above the bar in a frame reads the value the
-/// bar wrote LAST frame, and then the bar writes and paints a new one. So a
-/// drag frame walks the lattice's gradient, the heatmap's previous value, and
-/// the heatmap's new value — three keys, of which two were already built.
+/// bar wrote LAST frame, and then the bar writes and paints a new one. Three
+/// pictures are live — the lattice's nodes, the Spectral pane's curve, and the
+/// audio ring, whose table is the analyzer's gradient re-anchored onto the
+/// lattice's bed (`SpectralPaint::new`) and so a KEY OF ITS OWN — so a drag
+/// frame walks four keys, of which three were already built.
+///
+/// The drag here is the LATTICE's, which is where a slot short of four shows
+/// up: the ring's key and the Spectral pane's hold still through the whole
+/// gesture, and it is exactly those two that a cache one short evicts and
+/// rebuilds every frame for nothing. Dragging the ANALYZER's gradient moves two
+/// pictures at once instead — the pane's and the ring's copy — and still walks
+/// four keys, since the ring reads last frame's value like every other display;
+/// two of its four rebuilds are then fair.
 ///
 /// Held as the rebuild count over several frames rather than over one: the
 /// first frame of a drag legitimately misses on everything, and what this is
 /// about is the steady state a held drag settles into.
 #[test]
 fn a_frame_of_a_drag_rebuilds_only_what_the_drag_changed() {
-    let lattice = nth(10);
+    // The analyzer's picture and the audio ring's copy of it, which stand still
+    // while the lattice's own gradient is dragged. Opening at black, as every
+    // analyzer preset does, so the copy really is a second key: a gradient
+    // already clearing the bed is handed to the ring unchanged.
+    let analyzer = Gradient { lightness: 50.0, lightness_ramp: 100.0, ..nth(3) };
+    let ring = crate::ring_gradient(analyzer);
+    assert_ne!(ring, analyzer.sanitized(), "the ring's table is the analyzer's own entry");
     // Ten frames of a drag, each writing a gradient one step further round the
     // circle — which is what a bar being dragged does.
     let dragged = |frame: u32| Gradient { hue_start: 200.0 + frame as f32, ..Gradient::default() };
     // Warm the state the drag begins from, so the count below is the steady
     // state rather than the arrival.
-    gradient_color(0.5, lattice);
     gradient_color(0.5, dragged(0));
+    gradient_color(0.5, ring);
+    gradient_color(0.5, analyzer);
     let built = rebuilds(|| {
         for frame in 1..=10 {
-            // The order a frame actually draws in: lattice, then the Spectral
-            // display reading the config the bar wrote last frame, then the
-            // roll's ribbons off the lattice's gradient again, then the bar
-            // itself painting what it has just written.
-            gradient_color(0.5, lattice);
+            // The order a frame actually draws in: the lattice's nodes off the
+            // value the bar wrote last frame, its audio ring, the Spectral
+            // display's own curve, the roll's ribbons off the lattice's
+            // gradient again, then the bar itself painting what it has just
+            // written.
             gradient_color(0.5, dragged(frame - 1));
-            gradient_color(0.5, lattice);
+            gradient_color(0.5, ring);
+            gradient_color(0.5, analyzer);
             gradient_color(0.5, dragged(frame - 1));
             gradient_color(0.5, dragged(frame));
         }
@@ -91,7 +109,7 @@ fn a_frame_of_a_drag_rebuilds_only_what_the_drag_changed() {
     assert_eq!(
         built, 10,
         "a drag frame may rebuild the one table its own step invalidated and no \
-         more; {built} builds over 10 frames means the panes are evicting each \
+         more; {built} builds over 10 frames means the pictures are evicting each \
          other",
     );
 }
