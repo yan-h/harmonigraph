@@ -25,16 +25,40 @@ fn baked_shader_validates() {
 /// is not a validation error either. naga sees a well-formed shader both ways,
 /// `min_binding_size: None` means an over-long buffer never complains, and the
 /// scene tests read PITCH_LUT_N symbolically, so they pass at any value.
+///
+/// Each table is named in its own needle rather than looked for by shape.
+/// There are TWO of that length now — `pitch_lut`, walked by pitch, and the
+/// `spectral_lut` the audio ring walks by level — and an unnamed
+/// `array<vec4<f32>, N>` is satisfied by whichever of them still matches, so
+/// it would pass with one table bumped and the other left behind. That is the
+/// worse half of the mismatch, not a lesser one: the two sit in one uniform
+/// block, so a length that disagrees with the CPU's upload moves every field
+/// after it — `spectrum` included — to an offset the shader does not read it
+/// at, and the picture that comes back is wrong everywhere rather than in one
+/// ramp.
 #[test]
-fn the_shaders_pitch_lut_is_the_length_the_scene_says() {
+fn the_shaders_pitch_luts_are_the_length_the_scene_says() {
     let n = harmonigraph_scene::PITCH_LUT_N;
-    for needle in [format!("array<vec4<f32>, {n}>"), format!("const PITCH_LUT_N: u32 = {n}u;")] {
+    let needles = [
+        format!("pitch_lut: array<vec4<f32>, {n}>"),
+        format!("spectral_lut: array<vec4<f32>, {n}>"),
+        format!("const PITCH_LUT_N: u32 = {n}u;"),
+    ];
+    for needle in &needles {
         assert!(
-            SHADER_SRC.contains(&needle),
+            SHADER_SRC.contains(needle),
             "lattice.wgsl must declare `{needle}` to match harmonigraph_scene::PITCH_LUT_N \
              ({n}); the CPU uploads that many entries and the GPU would index a different table",
         );
     }
+    // And no third table of that shape has appeared without a needle of its
+    // own, which is how the two got down to one check in the first place.
+    assert_eq!(
+        SHADER_SRC.matches(&format!("array<vec4<f32>, {n}>")).count(),
+        2,
+        "lattice.wgsl declares a table of {n} vec4s that this test does not name; give it a \
+         needle, or a one-sided bump to it passes here",
+    );
 }
 
 /// The field names `struct {name} { ... }` declares in `src`, in order — a
