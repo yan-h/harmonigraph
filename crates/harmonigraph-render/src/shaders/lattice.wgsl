@@ -1390,8 +1390,10 @@ fn octave_glow_color(
 // ---- Melody / bass marks ---------------------------------------------------
 // A mark is its octave's SLICE, continued outward: an annular sector in the
 // strip just past the octave band, on exactly the angles the marked indicator
-// spans, separated from it by the same padding that separates one indicator
-// from the next. Both ends draw in that one strip, and both draw in their own
+// spans, with its SIDES cut by the same padding that separates one indicator
+// from the next. How far past the band the strip stands is the node's other
+// padding, the radial one, and it arrives as `mark_inner` rather than as a gap
+// this reads. Both ends draw in that one strip, and both draw in their own
 // sector's color rather than a fixed livery.
 //
 // The shape is the whole of what says WHICH octave is the melody -- the
@@ -1798,9 +1800,12 @@ fn node_paint(in: VsOut) -> vec4<f32> {
     var glyph_rgb = u.lattice_ground.rgb;
 
     // Melody/bass mark geometry: one strip outside the octave band, standing
-    // off it by the same padding one indicator stands off the next, so an
-    // extension reads as its slice continued rather than as a second thing
-    // stuck to the end of it.
+    // off it by the node's RADIAL padding (already spent — the strip's inner
+    // edge arrives as misc4.y) and cut down its sides by the ANGULAR one, the
+    // same padding one indicator stands off the next. That second one is what
+    // makes an extension read as its slice continued rather than as a second
+    // thing stuck to the end of it, and it holds however far out the first
+    // stands the strip.
     let band_in = u.misc3.y;
     let band_out = u.misc3.z;
     let mark_thick = u.misc5.w;
