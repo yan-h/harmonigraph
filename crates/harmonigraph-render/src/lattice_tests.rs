@@ -4029,6 +4029,52 @@ fn an_open_ring_ships_every_idle_node() {
     );
 }
 
+/// ...and the other end of that term: a node whose ring has faded out owes no
+/// annulus, so the ring layer being ON is not on its own a reason to ship it.
+///
+/// The whole cost argument for the gate is here rather than in the picture —
+/// a gated-off idle node ships nothing at all, where an ungated ring forces
+/// every node in the window onto the bus. Nothing else can see it: a shipped
+/// node with no ring and nothing else to draw is transparent at every
+/// fragment, so no pixel test can tell it from one that was never sent, and
+/// [`an_open_ring_ships_every_idle_node`] only ever drives the term's true
+/// side.
+///
+/// Part way through the fade is the case that says it is a LEVEL and not the
+/// gate's own bit: a ring on its way out is drawn, so it is shipped for
+/// exactly as long as it is drawn.
+#[test]
+fn a_faded_out_ring_ships_no_idle_node() {
+    let fresh = harmonigraph_scene::ViewConfig::default();
+    let mut scene = idle_scene();
+    assert!(!scene.nodes.is_empty(), "the fixture has to carry idle nodes");
+    (scene.spectral.inner, scene.spectral.outer) = fresh.rings().audio;
+    let ships = |scene: &Scene| {
+        LatticeCallback::from_scene(
+            scene,
+            LatticeLabels::default(),
+            egui::vec2(256.0, 256.0),
+            wgpu::TextureFormat::Rgba8Unorm,
+            32,
+            None,
+        )
+        .instances
+        .len()
+    };
+    for node in &mut scene.nodes {
+        node.audio_ring = 0.0;
+    }
+    assert_eq!(ships(&scene), 0, "an idle node with no ring left was still shipped");
+    for node in &mut scene.nodes {
+        node.audio_ring = 0.5;
+    }
+    assert_eq!(
+        ships(&scene),
+        scene.nodes.len(),
+        "an idle node part way through its fade draws a ring and has to be shipped",
+    );
+}
+
 /// A ring wedge takes its colour from the analyzer's ramp at ITS OWN level —
 /// not from the node's pitch colour scaled by that level, which is the octave
 /// band's MIDI logic and the exact scheme confusion the two tables exist to
