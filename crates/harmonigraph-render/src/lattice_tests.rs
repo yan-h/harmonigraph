@@ -1740,6 +1740,77 @@ fn a_mark_stands_off_the_outermost_ring_the_node_draws() {
     );
 }
 
+/// An octave band the stack switched off — the empty pair (0, 0) — paints
+/// NOTHING, rather than a dot at the node's centre.
+///
+/// `glyph_band` is two soft edges multiplied together, and at inner == outer
+/// they cross instead of cancelling: a pixel at the node's centre is half inside
+/// each, so the layer answers a quarter coverage where the whole point of the
+/// pair was that there is no layer. It is the one radius pair whose arithmetic
+/// draws a shape, which is why the shader gates the band on `band_out > band_in`
+/// rather than trusting the geometry to say off by drawing nothing.
+///
+/// Measured against a frame with NO node in it, because the artifact is what a
+/// node with every layer off still paints. Differencing two shots that both
+/// carry the band — how `a_mark_stands_off_the_outermost_ring_the_node_draws`
+/// reads the mark out — is exactly what cannot see this: the dot is in both and
+/// cancels.
+#[test]
+fn a_band_dialled_off_paints_no_dot_at_the_nodes_centre() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut gpu) = Shooter::new(SIZE) else {
+        return;
+    };
+
+    // Every layer of the node off: no core, no audio ring, no marks, and the
+    // octave band at the empty pair the stack hands over when it cannot fit the
+    // layer. What is left for the node to draw is nothing — and with `node`
+    // false, the same frame with no node in it at all, which is the ground.
+    //
+    // The padding is 0 because the sector gaps all CONVERGE on the node's
+    // centre, which is where the artifact is: at the fresh gap they eat most of
+    // it, and the dot this is looking for shows at its own size.
+    let collapsed = |node: bool| -> Scene {
+        let mut scene = single_marked_node(0, 0);
+        scene.core_radius = 0.0;
+        scene.mark_thickness = 0.0;
+        scene.rings_outer = 0.0;
+        scene.ring_gap = 0.0;
+        (scene.outer_inner, scene.outer_outer) = (0.0, 0.0);
+        scene.spectral = harmonigraph_scene::SpectralPaint::silent();
+        if !node {
+            scene.nodes.clear();
+        }
+        scene
+    };
+
+    // Any deviation at all, rather than a threshold: what the node is allowed
+    // to paint here is nothing, so the ground IS the answer, pixel for pixel.
+    // The dot is dim as well as small — six pixels at up to 5/255 over black,
+    // which is under a fifth of what `light_about_center` calls lit — so a
+    // brightness floor would read it as absent.
+    let ground = gpu.shot(&collapsed(false));
+    let painted = gpu.shot(&collapsed(true));
+    let px = differing_pixels(&painted, &ground);
+    let light = light_about_center(&light_over(&painted, &ground), SIZE);
+    eprintln!("a node with every layer off: {px} px, {:.0} of light", light.weight);
+    assert_eq!(
+        px, 0,
+        "a node with every layer off painted {px} px, {:.0} of light",
+        light.weight,
+    );
+
+    // Not a vacuous fixture: hand the same node a real annulus and the same
+    // measurement finds it. Without this, a node that drew nothing for some
+    // other reason — discarded, off screen, black on black — would read as the
+    // empty pair being honoured.
+    let mut drawn = collapsed(true);
+    (drawn.outer_inner, drawn.outer_outer) = (0.4, 0.7);
+    drawn.rings_outer = 0.7;
+    let band = light_about_center(&light_over(&gpu.shot(&drawn), &ground), SIZE);
+    assert!(band.weight > 0.0, "the fixture paints no band even when it is given one");
+}
+
 /// The FOLD reading fills the same wedges of the same annulus, and reads each
 /// of them at its own octave's PITCH: a wedge is flat, so nothing about the
 /// picture depends on Range and a detuned partial dims rather than moving.
