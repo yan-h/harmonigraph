@@ -332,9 +332,9 @@ fn readout_lefts(row: ReadoutRow) -> (f32, f32) {
 /// about a sixth of the axis at the width the settings column opens at, a
 /// tenth on a bar twice that wide.
 ///
-/// Most bars only reach it while the low end is DRAGGED there: the two that
-/// open at the full axis stand their low handle a point clear of the name, and
-/// the Level range and Band bars open at 40% and 66% of theirs. The two
+/// Most bars only reach it while the low end is DRAGGED there: a bar that
+/// opens at the full axis stands its low handle a point clear of the name, and
+/// the Level range bar opens at 40% of its axis. The two
 /// [`fade_span`](RangeBar::fade_span) bars rest inside it, and the Clearance
 /// does so at a fresh install — its low end is where the gap stops being solid,
 /// which on a nearly-fully-soft default is 1.4% of the axis, so the thumb
@@ -1275,8 +1275,9 @@ mod tests {
     /// [`SpreadBar`]'s are: the thumb is drawn in the same near-white as the
     /// digits, so a crossing swallows a character whichever of the two paints
     /// last, and "-60 dB" reading "-60 B" is the concrete thing this holds
-    /// off. The Level range bar's ceiling and the Band bar's outer radius both rest
-    /// past four fifths of their axes, which is where a parked run is crossed.
+    /// off. The Level range bar's ceiling and the Pitch range's high end both
+    /// rest past four fifths of their axes, which is where a parked run is
+    /// crossed.
     ///
     /// SWEPT, not sampled at the resting spans, and that is the point of it:
     /// sampled at the three placements the panes open at, this passed while a
@@ -1786,9 +1787,9 @@ mod tests {
     ///
     /// `min_span` bounds what the bar PRODUCES, not what it is handed, so
     /// every bar that declares one can still be given a pair that breaks it:
-    /// The Colors page's Color range is two host params with nothing between
-    /// them, and the Band bar's pair reaches `ViewConfig` from a blob
-    /// unsanitized. The slide is what a closed span needs and it carries its
+    /// the Colors page's Color range is two host params with nothing between
+    /// them (the stored pairs, `SpectrumConfig::sanitize` repairs before any
+    /// bar sees them). The slide is what a closed span needs and it carries its
     /// width forward, so without the floor below it carries a zero — and the
     /// bar, whose whole job is to repair such a pair by being dragged, would
     /// hold it shut instead. `Grab::apply` promises the opposite in as many
