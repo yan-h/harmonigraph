@@ -51,7 +51,7 @@ pub(super) fn span_readout(seconds: f32) -> String {
 /// Settings for the Spectral pane's display and analyzer (persisted with
 /// the UI state). The Display tab's Analyzer page.
 pub(crate) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState) {
-    use crate::{SpectralOrientation, SpectrumWindow};
+    use crate::{SpectralOrientation, SpectrumTapers, SpectrumWindow};
 
     // What the page reaches, said once at the top rather than repeated on the
     // sections: every setting here is the analyzer's, and the Spiral is the
@@ -151,6 +151,25 @@ pub(crate) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
                     SpectrumWindow::Precise => "sharp bass pitch, slower response",
                 },
             ));
+        }
+    });
+    // Beside the window rather than folded into it: the window trades time
+    // against pitch, this trades cost and contrast against the estimate's own
+    // noise, and no single row of buttons can name both.
+    button_row(ui, |ui| {
+        ui.label("Tapers");
+        for (tapers, label) in [
+            (SpectrumTapers::One, "1"),
+            (SpectrumTapers::Three, "3"),
+            (SpectrumTapers::Five, "5"),
+        ] {
+            ui.selectable_value(&mut cfg.tapers, tapers, label).on_hover_text(match tapers {
+                SpectrumTapers::One => "one window: the sharpest picture, and the speckliest",
+                SpectrumTapers::Three => "three looks at the same audio: about half the \
+                     speckle, ~4.7 dB less room between a partial and the haze",
+                SpectrumTapers::Five => "five looks: steadier again, and coarser at the \
+                     bottom of the axis",
+            });
         }
     });
 

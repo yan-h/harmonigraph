@@ -59,6 +59,16 @@ pub fn hz_to_midi(hz: f32) -> f32 {
 /// precision at runtime.
 pub const DEFAULT_FFT_SIZE: usize = 8192;
 
+/// The most tapers an estimate averages: 8.
+///
+/// The ceiling is the sine family's own bandwidth, not arithmetic or memory. A
+/// `count`-taper estimate resolves `(count + 1)` bins rather than the ~4 a Hann
+/// window does, so at 8 the main lobe is over twice as wide as the picture is
+/// drawn against — and the ring reads a 200¢ window whose bottom octave already
+/// fills at one taper. Past a handful the variance a taper removes costs more
+/// pitch than the reading has to give.
+pub const MAX_TAPERS: usize = 8;
+
 /// How far up the spectrum magnitudes are taken: a few bins past the crossover
 /// below which a pitch bucket is narrower than the FFT's bin spacing, and so the
 /// spectrum between the bins has to be reconstructed rather than sampled.
@@ -90,11 +100,24 @@ pub struct SpectrumAnalyzer {
     write: usize,
     /// Samples pushed since (re)configuration, saturating at `fft_size`.
     filled: usize,
-    /// Hann window, precomputed.
-    window: Vec<f32>,
+    /// The tapers, precomputed: [`taper_count`](Self::tapers) of them laid end
+    /// to end, each `fft_size` long. See [`build_tapers`].
+    tapers: Vec<f32>,
+    /// How many of them, so the flat `tapers` can be walked without dividing.
+    taper_count: usize,
+    /// The scale that puts a full-scale sine at 1.0, precomputed alongside the
+    /// tapers it is a property of — see [`taper_norm_power`].
+    norm_power: f32,
     /// FFT scratch (allocated per configuration).
     re: Vec<f32>,
     im: Vec<f32>,
+    /// Power per bin, SUMMED across the tapers by
+    /// [`pitch_spectrum`](SpectrumAnalyzer::pitch_spectrum) — the one place the
+    /// taper count stops being visible, since everything downstream of it reads
+    /// one number per bin however many looks went into it. Half the window
+    /// long: the bins above Nyquist mirror the ones below and no branch reads
+    /// them.
+    bin_power: Vec<f32>,
     /// Magnitude per bin, filled by
     /// [`pitch_spectrum`](SpectrumAnalyzer::pitch_spectrum) for the bins its
     /// reconstructing branch reads — see [`INTERP_BIN_CEILING`]. Only the low
@@ -111,30 +134,33 @@ impl SpectrumAnalyzer {
             ring: Vec::new(),
             write: 0,
             filled: 0,
-            window: Vec::new(),
+            tapers: Vec::new(),
+            taper_count: 0,
+            norm_power: 0.0,
             re: Vec::new(),
             im: Vec::new(),
+            bin_power: Vec::new(),
             bin_mag: Vec::new(),
         };
-        analyzer.configure(DEFAULT_FFT_SIZE);
+        analyzer.configure(DEFAULT_FFT_SIZE, 1);
         analyzer
     }
 
-    /// (Re)allocate every buffer for `fft_size` and clear the window.
-    fn configure(&mut self, fft_size: usize) {
+    /// (Re)allocate every buffer for `fft_size` and `taper_count`, and clear
+    /// the window.
+    fn configure(&mut self, fft_size: usize, taper_count: usize) {
         assert!(fft_size.is_power_of_two(), "radix-2 FFT needs a power of two");
+        let taper_count = taper_count.clamp(1, MAX_TAPERS);
         self.fft_size = fft_size;
+        self.taper_count = taper_count;
         self.ring = vec![0.0; fft_size];
         self.write = 0;
         self.filled = 0;
-        self.window = (0..fft_size)
-            .map(|i| {
-                let phase = std::f32::consts::TAU * i as f32 / fft_size as f32;
-                0.5 * (1.0 - phase.cos())
-            })
-            .collect();
+        self.tapers = build_tapers(fft_size, taper_count);
+        self.norm_power = taper_norm_power(&self.tapers, fft_size);
         self.re = vec![0.0; fft_size];
         self.im = vec![0.0; fft_size];
+        self.bin_power = vec![0.0; fft_size / 2];
         self.bin_mag = vec![0.0; fft_size / 2];
     }
 
@@ -143,8 +169,25 @@ impl SpectrumAnalyzer {
     /// No-op at the current size, so calling every frame is fine.
     pub fn set_fft_size(&mut self, fft_size: usize) {
         if fft_size != self.fft_size {
-            self.configure(fft_size);
+            self.configure(fft_size, self.taper_count);
         }
+    }
+
+    /// Change how many tapers the estimate averages: more = a steadier reading
+    /// of the same audio, at one FFT apiece and a wider main lobe. A change
+    /// empties the buffer, exactly as a window-length change does — the tapers
+    /// are what the buffer is read THROUGH, so a spectrum measured half under
+    /// one set and half under another is a measurement of neither. No-op at the
+    /// current count, so calling every frame is fine.
+    pub fn set_tapers(&mut self, taper_count: usize) {
+        if taper_count.clamp(1, MAX_TAPERS) != self.taper_count {
+            self.configure(self.fft_size, taper_count);
+        }
+    }
+
+    /// How many tapers the estimate currently averages.
+    pub fn tapers(&self) -> usize {
+        self.taper_count
     }
 
     /// Seconds of audio one spectrum is measured over.
@@ -226,25 +269,36 @@ impl SpectrumAnalyzer {
             return None;
         }
 
-        // Unroll the ring into time order, windowed.
-        for i in 0..self.fft_size {
-            let src = (self.write + i) % self.fft_size;
-            self.re[i] = self.ring[src] * self.window[i];
-            self.im[i] = 0.0;
+        // One transform per taper, summed into `bin_power`. The tapers are
+        // independent LOOKS at one window of audio rather than more audio, so
+        // what this loop buys is a steadier reading of the same 171 ms and not
+        // a longer one; `build_tapers` carries why that is worth an FFT.
+        //
+        // The sum stays a sum — the mean's divisor is folded into
+        // `taper_norm_power` instead, so no pass over the bins exists only to
+        // divide by a constant.
+        self.bin_power.fill(0.0);
+        for k in 0..self.taper_count {
+            let taper = k * self.fft_size;
+            // Unroll the ring into time order, tapered.
+            for i in 0..self.fft_size {
+                let src = (self.write + i) % self.fft_size;
+                self.re[i] = self.ring[src] * self.tapers[taper + i];
+                self.im[i] = 0.0;
+            }
+            fft_in_place(&mut self.re, &mut self.im);
+            for (power, (re, im)) in self.bin_power.iter_mut().zip(self.re.iter().zip(&self.im)) {
+                *power += re * re + im * im;
+            }
         }
-        fft_in_place(&mut self.re, &mut self.im);
 
-        // Amplitude normalization so a unit sine reads as ~1.0: |X| for a
-        // real sine of amplitude A is A * sum(window) / 2.
-        let window_sum: f32 = self.window.iter().sum();
-        let norm = 2.0 / window_sum;
-
-        // The buckets are POWER and every branch below produces `|X|^2` without
-        // ever taking a root, so the normalization is squared once here instead.
-        let norm_power = norm * norm;
+        // Amplitude normalization so a unit sine reads as ~1.0, precomputed
+        // with the tapers it is a property of (`taper_norm_power`). The buckets
+        // are POWER and every branch below produces `|X|^2` without ever taking
+        // a root, so it is squared there rather than here.
+        let norm_power = self.norm_power;
 
         let bin_hz = self.sample_rate / self.fft_size as f32;
-        let power = |re: &[f32], im: &[f32], k: usize| re[k] * re[k] + im[k] * im[k];
         // Usable bins: skip DC and bin 1 (where the window's own leakage
         // dominates) and stay clear of Nyquist. Anything the axis asks for
         // outside this reads as nothing, which is the truth — a 4096-point
@@ -260,7 +314,7 @@ impl SpectrumAnalyzer {
         // the same four square roots.
         let mag_to = (INTERP_BIN_CEILING + 1).min(last + 1);
         for k in first..mag_to {
-            self.bin_mag[k] = power(&self.re, &self.im, k).sqrt();
+            self.bin_mag[k] = self.bin_power[k].sqrt();
         }
         // The bin below the first usable one, HELD at its value rather than
         // measured. `reconstruct` reads one bin either side of the pair it
@@ -292,7 +346,7 @@ impl SpectrumAnalyzer {
             let p = if k1 >= k0 && k0 >= first as f32 {
                 // Wider than the bin spacing: the loudest bin it contains.
                 let (k0, k1) = (k0 as usize, k1 as usize);
-                (k0..=k1).fold(0.0f32, |acc, k| acc.max(power(&self.re, &self.im, k)))
+                (k0..=k1).fold(0.0f32, |acc, k| acc.max(self.bin_power[k]))
             } else {
                 // Narrower: reconstruct the spectrum between the bins either
                 // side of the bucket's center, so the log axis comes out smooth
@@ -449,6 +503,17 @@ impl ChannelBank {
         }
     }
 
+    /// How many tapers every channel's estimate averages — see
+    /// [`SpectrumAnalyzer::set_tapers`]. One setting for the bank, because the
+    /// channels are combined per bucket by [`power_sum`](Self::power_sum) and
+    /// two channels measured through different estimators do not add up to a
+    /// reading of anything.
+    pub fn set_tapers(&mut self, taper_count: usize) {
+        for analyzer in &mut self.per_channel {
+            analyzer.set_tapers(taper_count);
+        }
+    }
+
     pub fn set_sample_rate(&mut self, sample_rate: f32) {
         self.sample_rate = sample_rate;
         for analyzer in &mut self.per_channel {
@@ -513,6 +578,105 @@ impl ChannelBank {
         }
         Some(total)
     }
+}
+
+/// The `count` tapers for a window of `n` samples, laid end to end.
+///
+/// ## Why more than one window
+///
+/// A spectrum measured through ONE window is a chi-squared estimate on two
+/// degrees of freedom, whose standard deviation equals its mean — ±5.6 dB on
+/// every bucket of every column, forever. Lengthening the window does not touch
+/// that; it trades time resolution for frequency resolution and leaves the
+/// variance where it is. Averaging columns barely touches it either, because at
+/// an 8 ms hop through a 171 ms window consecutive columns are 95% the same
+/// audio, so there is almost nothing independent to average until the filter is
+/// longer than the window.
+///
+/// Averaging over ORTHOGONAL tapers is the way to get independent looks at one
+/// window of audio. `count` of them give ~`2 * count` degrees of freedom, so the
+/// noise on a bucket falls as `1/sqrt(count)`: 5.6 dB at one taper, 2.7 dB at
+/// three. That is the speckle, and it is bought with FFTs rather than with
+/// latency, which is what separates this from a smoothing filter.
+///
+/// ## One taper is Hann; more than one is the sine family
+///
+/// The two settings are two whole estimators rather than a family with Hann at
+/// its head, because the variance reduction rests on the tapers being mutually
+/// orthogonal and Hann is orthogonal to none of the sine tapers. Keeping Hann
+/// at `count == 1` is what makes the single-taper picture the one this analyzer
+/// draws with no toggle at all — the same window, and (see [`taper_norm_power`])
+/// the same arithmetic under it.
+///
+/// The sine (Riedel-Sidorenko) tapers are the closed form
+/// `sqrt(2/(n+1)) * sin(pi * (k+1) * (i+1) / (n+1))`, which is why they are here
+/// rather than the DPSS/Slepian set the literature leads with: DPSS needs an
+/// eigenproblem solved per window length, these need a sine, and the variance
+/// they remove is within a few percent of each other at the counts worth
+/// offering. They are unit-energy by construction, so no taper is louder than
+/// another.
+fn build_tapers(n: usize, count: usize) -> Vec<f32> {
+    if count <= 1 {
+        return (0..n)
+            .map(|i| {
+                let phase = std::f32::consts::TAU * i as f32 / n as f32;
+                0.5 * (1.0 - phase.cos())
+            })
+            .collect();
+    }
+    let scale = (2.0 / (n as f32 + 1.0)).sqrt();
+    let mut tapers = Vec::with_capacity(count * n);
+    for k in 0..count {
+        let order = (k + 1) as f32;
+        tapers.extend((0..n).map(|i| {
+            let phase = std::f32::consts::PI * order * (i as f32 + 1.0) / (n as f32 + 1.0);
+            scale * phase.sin()
+        }));
+    }
+    tapers
+}
+
+/// The scale that puts a full-scale sine at 1.0, for `tapers` of `n` samples
+/// each — applied to the power SUMMED over them, not to the mean.
+///
+/// A real sine of amplitude `A` at a bin centre transforms, through a taper `w`,
+/// to `|X| = A * sum(w) / 2`. So the summed power over the tapers is
+/// `(A/2)^2 * sum_k (sum_n w_k)^2`, and dividing that into `4` returns `A^2`.
+///
+/// **`2/sum(w)` does not generalize, and the reason is worth stating**: the
+/// sine tapers of even order are odd-symmetric and sum to ~0, so a
+/// per-taper amplitude normalization divides by nothing on half of them. The
+/// sum of squared sums is the same quantity read over the whole set, and it is
+/// finite for every count.
+///
+/// What this holds is the contract the rest of the plugin rests on — 0 dB is a
+/// full-scale sine at every pitch, which is what makes the Level window's ends
+/// absolute dB, what the tilt pivots against, and what makes the audio ring's
+/// Gate a fixed position rather than a drifting one. What it does NOT hold is
+/// the NOISE FLOOR, which reads higher as tapers are added (~3.5 dB by three):
+/// a line spread across a wider main lobe has to be scaled back up to reach 1.0,
+/// and flat noise comes up with it. That is a real cost in contrast, it is the
+/// estimator's and not this function's, and
+/// `the_noise_floor_reads_higher_as_tapers_are_added` measures it.
+///
+/// The single-taper case is written as `(2/sum)^2` rather than as `4/sum^2` so
+/// that it is bit-identical to a Hann analyzer and not merely equal to one:
+/// the two orders round differently in f32, and the toggle's off position is
+/// worth having cost exactly nothing.
+fn taper_norm_power(tapers: &[f32], n: usize) -> f32 {
+    if tapers.len() <= n {
+        let sum: f32 = tapers.iter().sum();
+        let norm = 2.0 / sum;
+        return norm * norm;
+    }
+    let response: f32 = tapers
+        .chunks(n)
+        .map(|taper| {
+            let sum: f32 = taper.iter().sum();
+            sum * sum
+        })
+        .sum();
+    4.0 / response
 }
 
 /// Iterative radix-2 Cooley-Tukey, in place. Lengths are compile-time
@@ -1099,5 +1263,207 @@ mod tests {
             assert_eq!(bits(&ar), bits(&br), "real part differs at n = {n}");
             assert_eq!(bits(&ai), bits(&bi), "imaginary part differs at n = {n}");
         }
+    }
+
+    // ---- Tapers -----------------------------------------------------------
+
+    /// Deterministic white noise. These tests measure the VARIANCE of an
+    /// estimate, so the samples have to be random and the run has to repeat
+    /// exactly — a flaky variance test is worse than none, since the number it
+    /// is asserting about is the one that moves.
+    struct Noise(u32);
+
+    impl Noise {
+        fn sample(&mut self) -> f32 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 17;
+            self.0 ^= self.0 << 5;
+            (self.0 as f32 / u32::MAX as f32) * 2.0 - 1.0
+        }
+    }
+
+    fn mean(values: &[f32]) -> f32 {
+        values.iter().sum::<f32>() / values.len() as f32
+    }
+
+    fn std_dev(values: &[f32]) -> f32 {
+        let m = mean(values);
+        (values.iter().map(|v| (v - m) * (v - m)).sum::<f32>() / values.len() as f32).sqrt()
+    }
+
+    /// One bucket's level in dB across `trials` INDEPENDENT windows of white
+    /// noise. Independent because each push replaces the window whole, which is
+    /// the one condition under which the spread below is the estimator's own
+    /// and not the overlap's.
+    fn noise_levels(tapers: usize, trials: usize, bucket: usize) -> Vec<f32> {
+        let sample_rate = 48_000.0f32;
+        let window = 1024;
+        let mut analyzer = SpectrumAnalyzer::new(sample_rate);
+        analyzer.set_fft_size(window);
+        analyzer.set_tapers(tapers);
+        let mut noise = Noise(0x1234_5678);
+        (0..trials)
+            .map(|_| {
+                let samples: Vec<f32> = (0..window).map(|_| noise.sample()).collect();
+                analyzer.push_samples(&samples);
+                let buckets = analyzer.pitch_spectrum().expect("a whole window went in");
+                10.0 * buckets[bucket].max(1e-12).log10()
+            })
+            .collect()
+    }
+
+    /// A bucket in the middle of the axis at the 1024-point window: 2 kHz is
+    /// well above the first usable bin and well under Nyquist at every rate the
+    /// tests use.
+    fn mid_axis_bucket() -> usize {
+        bucket_of_midi(hz_to_midi(2000.0))
+    }
+
+    /// The toggle's off position is the analyzer with no toggle in it — same
+    /// window, same arithmetic, not merely the same answer to three decimals.
+    #[test]
+    fn one_taper_is_the_hann_window_and_the_arithmetic_under_it() {
+        let n = 256;
+        let tapers = build_tapers(n, 1);
+        assert_eq!(tapers.len(), n, "one taper is one window long");
+        for (i, w) in tapers.iter().enumerate() {
+            let phase = std::f32::consts::TAU * i as f32 / n as f32;
+            assert_eq!(w.to_bits(), (0.5 * (1.0 - phase.cos())).to_bits(), "taper[{i}]");
+        }
+        // `(2/sum)^2` and `4/sum^2` are the same algebra and different f32, and
+        // this is the one that keeps a single-taper render matching a build
+        // with no tapers in it at all.
+        let sum: f32 = tapers.iter().sum();
+        let norm = 2.0 / sum;
+        assert_eq!(taper_norm_power(&tapers, n).to_bits(), (norm * norm).to_bits());
+    }
+
+    /// The contract every absolute dB in the plugin rests on: 0 dB is a
+    /// full-scale sine, whatever the estimator underneath. If this drifts, the
+    /// Level window's ends stop meaning dB, the tilt pivots against nothing,
+    /// and the audio ring's Gate quietly selects a different set of nodes.
+    #[test]
+    fn a_full_scale_sine_reads_unity_at_every_taper_count() {
+        for tapers in 1..=MAX_TAPERS {
+            let sample_rate = 48_000.0f32;
+            let mut analyzer = SpectrumAnalyzer::new(sample_rate);
+            analyzer.set_tapers(tapers);
+            let samples: Vec<f32> = (0..DEFAULT_FFT_SIZE + 1234)
+                .map(|i| {
+                    let t = i as f32 / sample_rate;
+                    (std::f32::consts::TAU * 2000.0 * t).sin()
+                })
+                .collect();
+            for chunk in samples.chunks(701) {
+                analyzer.push_samples(chunk);
+            }
+            let buckets = analyzer.pitch_spectrum().expect("window filled");
+            let peak = buckets[peak_bucket(&buckets)];
+            let db = 10.0 * peak.max(1e-12).log10();
+            assert!(
+                db.abs() < 1.5,
+                "{tapers} tapers read a full-scale sine at {db:.2} dB, not 0"
+            );
+        }
+    }
+
+    /// The whole point: more tapers, a steadier reading of the same audio.
+    /// Theory says the spread falls as `1/sqrt(count)` — 5.6 dB at one taper,
+    /// 2.7 dB at three — and the bar is set loose of that because what is being
+    /// defended is the DIRECTION and the rough size, not the constant.
+    #[test]
+    fn more_tapers_steady_a_bucket_against_noise() {
+        let bucket = mid_axis_bucket();
+        let one = std_dev(&noise_levels(1, 240, bucket));
+        let three = std_dev(&noise_levels(3, 240, bucket));
+        let five = std_dev(&noise_levels(5, 240, bucket));
+        assert!(three < one * 0.8, "three tapers: {three:.2} dB against one's {one:.2} dB");
+        assert!(five < three, "five tapers: {five:.2} dB against three's {three:.2} dB");
+    }
+
+    /// The cost, measured rather than argued about: holding a full-scale sine
+    /// at 0 dB means a line spread over a wider main lobe is scaled back up to
+    /// reach it, and flat noise comes up with it. So the picture's CONTRAST
+    /// between a partial and the floor narrows as tapers are added, which is
+    /// what a reader of the ring's Gate sees as more nodes opening at one
+    /// setting.
+    ///
+    /// The bound is a range and not a point: it is the estimator's property,
+    /// and pinning it to two decimals would fail on a taper-family change that
+    /// is otherwise exactly what this test wants to allow.
+    #[test]
+    fn the_noise_floor_reads_higher_as_tapers_are_added() {
+        let bucket = mid_axis_bucket();
+        let one = mean(&noise_levels(1, 240, bucket));
+        let three = mean(&noise_levels(3, 240, bucket));
+        let rise = three - one;
+        assert!(
+            (1.0..6.0).contains(&rise),
+            "three tapers lift the noise floor {rise:.2} dB, outside the 1..6 dB this trades"
+        );
+    }
+
+    /// The table the two tests above assert loose bounds on, printed in full,
+    /// plus what a column costs at each count. Asserts nothing and is
+    /// `#[ignore]`d: it is here because choosing a taper count is a judgement
+    /// against three numbers that move together, and rebuilding the harness to
+    /// see them is the expensive part.
+    ///
+    /// `cargo test -p harmonigraph-core -- --ignored --nocapture the_taper_table`
+    #[test]
+    #[ignore]
+    fn the_taper_table() {
+        let bucket = mid_axis_bucket();
+        let base = mean(&noise_levels(1, 480, bucket));
+        eprintln!("\n tapers |  noise sd | floor vs 1 | ms/column @8192");
+        eprintln!("--------|-----------|------------|----------------");
+        for tapers in 1..=MAX_TAPERS {
+            let levels = noise_levels(tapers, 480, bucket);
+            let sample_rate = 48_000.0f32;
+            let mut analyzer = SpectrumAnalyzer::new(sample_rate);
+            analyzer.set_tapers(tapers);
+            analyzer.push_samples(&vec![0.2; DEFAULT_FFT_SIZE]);
+            let started = std::time::Instant::now();
+            let columns = 20;
+            for _ in 0..columns {
+                std::hint::black_box(analyzer.pitch_spectrum());
+            }
+            let ms = started.elapsed().as_secs_f64() * 1000.0 / f64::from(columns);
+            eprintln!(
+                "   {tapers}    |  {:5.2} dB |  {:+5.2} dB  |     {ms:6.3}",
+                std_dev(&levels),
+                mean(&levels) - base
+            );
+        }
+        eprintln!();
+    }
+
+    /// The same contract [`set_fft_size`](SpectrumAnalyzer::set_fft_size) holds,
+    /// and for the same reason: the tapers are what the buffer is read through,
+    /// so a change has to drop what was measured through the old set rather
+    /// than blend the two.
+    #[test]
+    fn set_tapers_resets_the_window_and_noops_at_the_current_count() {
+        let mut analyzer = SpectrumAnalyzer::new(48_000.0);
+        analyzer.push_samples(&vec![0.2; DEFAULT_FFT_SIZE]);
+        assert!(analyzer.pitch_spectrum().is_some());
+        assert_eq!(analyzer.tapers(), 1, "one taper with no toggle touched");
+
+        analyzer.set_tapers(1);
+        assert!(analyzer.pitch_spectrum().is_some(), "no-op at the current count");
+
+        analyzer.set_tapers(3);
+        assert_eq!(analyzer.tapers(), 3);
+        assert!(analyzer.pitch_spectrum().is_none(), "a change empties the window");
+        analyzer.push_samples(&vec![0.2; DEFAULT_FFT_SIZE]);
+        assert!(analyzer.pitch_spectrum().is_some());
+
+        // Out of range clamps rather than panicking or allocating the moon: a
+        // hand-edited blob reaches this through the config, and every count
+        // still has to come out as a spectrum somebody can see.
+        analyzer.set_tapers(0);
+        assert_eq!(analyzer.tapers(), 1);
+        analyzer.set_tapers(usize::MAX);
+        assert_eq!(analyzer.tapers(), MAX_TAPERS);
     }
 }

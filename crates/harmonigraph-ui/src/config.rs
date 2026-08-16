@@ -31,6 +31,52 @@ impl SpectrumWindow {
     }
 }
 
+/// How many tapers the analyzer averages, picked in the Analyzer settings
+/// section beside the window length.
+///
+/// The window length above trades TIME against PITCH and leaves the estimate's
+/// noise exactly where it is; this trades COST and CONTRAST against that noise,
+/// which is a different axis and the reason it is a second control rather than
+/// more entries on the first. `harmonigraph_core::spectrum::build_tapers`
+/// carries the mechanism; what a reader of this needs is the shape of the
+/// trade, measured at a mid-axis bucket under white noise:
+///
+/// | tapers | noise sd | floor | per column |
+/// |---|---|---|---|
+/// | 1 | 4.55 dB | — | 0.17 ms |
+/// | 3 | 2.67 dB | +4.7 dB | 0.40 ms |
+/// | 5 | 2.01 dB | +7.1 dB | 0.66 ms |
+///
+/// The floor column is the catch, and it is not a defect: holding a full-scale
+/// sine at 0 dB means a line spread over a wider main lobe is scaled back up to
+/// reach it, and flat noise rises with it. So more tapers draw a steadier
+/// picture with LESS room between a partial and the haze. At three tapers the
+/// audio ring's Gate wants about `+0.08` to select the same nodes it does at
+/// one, since the Gate is a fraction of a 60 dB Level window.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum SpectrumTapers {
+    /// One Hann window: the estimator with no averaging in it, and the picture
+    /// this analyzer draws with the control untouched.
+    #[default]
+    One,
+    /// Three sine tapers — the count where the noise roughly halves and the
+    /// main lobe is still about a Hann window wide.
+    Three,
+    /// Five sine tapers: steadier again, and wide enough that the bottom of the
+    /// axis loses pitch it does not have to spare.
+    Five,
+}
+
+impl SpectrumTapers {
+    pub fn count(self) -> usize {
+        match self {
+            SpectrumTapers::One => 1,
+            SpectrumTapers::Three => 3,
+            SpectrumTapers::Five => 5,
+        }
+    }
+}
+
 /// Which way the Spectral pane runs, named for the side the NOW-line is on —
 /// which is the spectrum's own edge, the one the roll's notes arrive at and
 /// the heatmap's newest column sits against. Time runs away from it into the
@@ -245,6 +291,10 @@ pub struct SpectrumConfig {
     /// flip.
     pub orientation: SpectralOrientation,
     pub window: SpectrumWindow,
+    /// How many tapers the estimate averages; see [`SpectrumTapers`]. The
+    /// window above says how much AUDIO one column is measured over, this says
+    /// how many independent looks are taken at it.
+    pub tapers: SpectrumTapers,
     /// Bottom of the dB height scale: what reads as silence. A full-scale
     /// sine sits at 0 dB.
     pub floor_db: f32,
@@ -770,6 +820,11 @@ impl Default for SpectrumConfig {
         SpectrumConfig {
             orientation: SpectralOrientation::Left,
             window: SpectrumWindow::Balanced,
+            // One taper — the picture with no averaging in it. The steadier
+            // counts cost contrast as well as CPU (see `SpectrumTapers`), so
+            // which of them is worth it is a judgement about material, and the
+            // fresh look is the one that presumes nothing.
+            tapers: SpectrumTapers::One,
             floor_db: -60.0,
             ceiling_db: DEFAULT_CEILING_DB,
             smoothing: 0.55,

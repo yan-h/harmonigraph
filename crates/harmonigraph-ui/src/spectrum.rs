@@ -262,6 +262,7 @@ impl WholeSong {
     ) -> WholeSong {
         let mut analyzer = harmonigraph_core::spectrum::ChannelBank::new(sample_rate, channels);
         analyzer.set_fft_size(config.window.samples());
+        analyzer.set_tapers(config.tapers.count());
         let channels = analyzer.channels();
         let sr = (sample_rate as f64).max(1.0);
         let hop = (span / crate::spectrogram::WHOLE_SONG_SLAB_CAP as f64
@@ -391,11 +392,12 @@ impl AudioSpectrum {
         if samples.is_empty() {
             return;
         }
-        // Any of the three empties the analyzers' rings, so nothing comes out
+        // Any of the four empties the analyzers' rings, so nothing comes out
         // until they have refilled. The hop grid keeps its phase across that gap
         // rather than restarting on it.
         self.analyzer.set_channels(channels);
         self.analyzer.set_fft_size(config.window.samples());
+        self.analyzer.set_tapers(config.tapers.count());
         self.analyzer.set_sample_rate(sample_rate);
         self.last_samples = Some(now);
 
