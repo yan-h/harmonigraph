@@ -57,7 +57,9 @@ fn core_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
         .on_hover_text(
             "Core size (disc and glow together), measured from the node's \
              center; 0 turns it off, 0.46 is the classic disc. The rings \
-             outside it stack on top, so widening the core pushes them out",
+             outside it stack on top, so widening the core pushes them out — \
+             and past the node's edge OFF it: a ring with no room left for its \
+             whole width is not drawn, rather than squeezed into a hairline",
         );
     ui.add_enabled_ui(view.core_radius > 0.0, |ui| {
         ValueBar::new(&mut view.core_solidity, 0.0..=1.0, "Solidity")
@@ -156,22 +158,28 @@ fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
             );
     });
     // No on/off beside it: 0 IS the off position, as it is on every other
-    // layer of the node, and the bar reaches every size from a hairline to
-    // more than the quad from there.
+    // layer of the node, and from there the bar reaches every width up to
+    // RING_WIDTH_MAX — more than half the quad's radius, which is a band no
+    // stack that also carries a core and an audio ring has room for.
     //
     // One number rather than the pair of radii the band could be given: where
     // it SITS is the stack's answer (`ViewConfig::rings`) — a gap out from the
     // audio ring, or from the core where that ring is off — so the only thing
     // left to say about it is how thick it is. That is what makes the four size
     // bars independent: none of them can be dragged behind its neighbour, and
-    // widening one slides the ones outside it rather than crushing them.
+    // widening one slides the ones outside it out as far as the quad edge.
+    // There the sliding stops and the outermost layer that no longer fits whole
+    // is dropped instead, so a band the node has no room left for is not drawn
+    // rather than drawn as a hairline this bar's value does not match.
     ValueBar::new(&mut view.band_width, 0.0..=RING_WIDTH_MAX, "Band")
         .show(ui)
         .on_hover_text(
             "How thick the octave band is. It sits a Gap out from the audio \
              ring — or from the core, with that ring off — and the melody/bass \
              marks stack outside it. 0 turns the octave layer off entirely, and \
-             the marks close up over the space it leaves",
+             the marks close up over the space it leaves. A layer the node has \
+             no room left for is not drawn at all: widen what is inside it far \
+             enough and the band goes, rather than thinning to a hairline",
         );
     // No Solidity and no Backdrop bar: both are fixed at 1. The glyphs are
     // always the crisp classic shapes, and the silent octaves always ghost

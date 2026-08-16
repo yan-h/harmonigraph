@@ -871,12 +871,19 @@ pub struct ViewConfig {
 /// The bars are WIDTHS (the core's radius being its width, measured from the
 /// center it starts at), and a ring's inner edge is wherever the last drawn
 /// layer ended plus one [`gap`](Self::gap). That is the whole of what stacking
-/// buys: widening one layer slides everything outside it out, no bar can be
-/// dragged behind its neighbour, and a layer dialled to 0 hands its slot AND
-/// its gap back to the ones around it instead of leaving a hole.
+/// buys: widening one layer slides everything outside it out as far as the quad
+/// edge, no bar can be dragged behind its neighbour, and a layer dialled to 0
+/// hands its slot AND its gap back to the ones around it instead of leaving a
+/// hole.
 ///
-/// A ring that would start at the quad edge comes out empty rather than
-/// inside-out, which is what makes `outer > inner` the one test for "this ring
+/// The quad edge is where sliding stops and DROPPING starts: a ring is the
+/// width its bar reads or it is not drawn, so the first layer the stack can no
+/// longer fit whole comes out as an empty pair, and every layer outside it goes
+/// the same way. Widen the core far enough and the node loses the band, then the
+/// audio ring, and ends as the core alone — rather than wearing two hairlines
+/// whose bars read out sizes nothing on screen matches (`stacked`).
+///
+/// An empty pair is also what makes `outer > inner` the one test for "this ring
 /// draws": there is nothing else to ask, and no second flag that could
 /// disagree with the geometry.
 #[derive(Clone, Copy, Debug, PartialEq)]
