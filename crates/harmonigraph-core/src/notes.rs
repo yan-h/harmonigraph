@@ -245,7 +245,7 @@ pub struct Voice {
     ///
     /// Held apart from [`HeldEnd`], which stays strictly about what is down
     /// now, because this is the opposite question: not "who is the melody"
-    /// but "who was, on their way out". A melody/bass ring fades with its
+    /// but "who was, on their way out". A melody/bass mark fades with its
     /// note rather than snapping off at the key, and this is what it fades
     /// FROM — the stamp its ease was running against, so the ring leaves at
     /// the level it had reached rather than jumping to full or to nothing.
@@ -348,12 +348,12 @@ impl Voice {
     /// function so a note cannot arrive at one rate and leave at another, nor
     /// have one layer disagree with the next about either.
     ///
-    /// The melody/bass rings are the deliberate exception and take
-    /// [`release_level`](Self::release_level) instead: a ring runs its own
+    /// The melody/bass marks are the deliberate exception and take
+    /// [`release_level`](Self::release_level) instead: a mark runs its own
     /// ease from the moment its note TOOK the end (plus whatever wait
     /// `mark_delay` asks), and multiplying the note's attack in on top would
     /// square the two wherever those moments coincide — the usual case —
-    /// leaving a ring visibly slower than the sector it brackets.
+    /// leaving a mark visibly slower than the sector it extends.
     pub fn activation(&self, now: Time, env: &Envelope) -> f32 {
         env.attack(now, self.on_time) * self.release_level(now, env)
     }

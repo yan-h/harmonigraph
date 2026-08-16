@@ -729,7 +729,7 @@ pub fn hue_circle(lightness: f32, chroma: f32) -> [Vec4; HUE_CIRCLE_N] {
 /// The pitch gradient, evaluated: [`pitch_ramp_lut`] sampled at `pitch` and
 /// interpolated between entries exactly as `pitch_lut_color` in `lattice.wgsl`
 /// does. Every pitch-colored shape reaches the ramp through this one walk —
-/// the disc, the trail, the piano roll and the melody/bass rings on the CPU,
+/// the disc, the trail, the piano roll and the melody/bass marks on the CPU,
 /// the lit octave glyphs on the GPU.
 ///
 /// It is a LIT pitch that this draws: a sounding glyph stands for a position

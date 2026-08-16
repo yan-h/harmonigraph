@@ -112,17 +112,17 @@ const NODE_RADIUS_FACTOR: f32 = 0.25;
 /// 1.2ms over 14877.
 pub const MAX_DRAWN_NODES: usize = 20480;
 
-/// The longest wait the Delay bar offers before a melody/bass ring starts
+/// The longest wait the Delay bar offers before a melody/bass mark starts
 /// easing in ([`ViewConfig::mark_delay`]), and the clamp `derive_scene` holds
 /// a hand-edited view to. ONE constant for the two so the bar's end and the
 /// picture's cannot drift apart — which is not the same as saying a view out
 /// of range reads correctly: the bar fills to its end and reads out the value
 /// it actually holds, so a blob carrying five seconds says "5.00 s" over a
-/// full bar while the rings behave as one. Dragging it writes a value in
+/// full bar while the marks behave as one. Dragging it writes a value in
 /// range and the two agree again.
 ///
 /// A second, because that is where the setting stops being about flicker and
-/// starts being about tempo: at 120bpm it rings only what is held for a whole
+/// starts being about tempo: at 120bpm it marks only what is held for a whole
 /// beat, and the useful settings — a passing sixteenth is 125ms — sit in the
 /// first quarter of the bar. Past a second a chord would have to be held
 /// deliberately still before its ends read at all, which is a different
@@ -273,8 +273,8 @@ pub struct NodeInstance {
     /// being marked. One voice lights every node its pitch class matches
     /// under the tuning tolerance, and the mark follows the same rule.
     ///
-    /// One bit at a time: the node carries one melody ring at one level, so
-    /// the mask names the one sector that ring links back to (see
+    /// One bit at a time: the node carries one melody mark at one level, so
+    /// the mask names the one sector that mark extends (see
     /// `derive::Mark`). A MASK rather than a slot index because 0 then says
     /// "unmarked" on its own, which a `0` index could not — and because it is
     /// what the shader tests a slot against.
@@ -282,42 +282,43 @@ pub struct NodeInstance {
     /// The same for the bass — the lowest held note. A slot set in BOTH
     /// masks is a note that is at once the melody and the bass (a lone held
     /// note, or the two ends of a chord voiced inside one octave). The two
-    /// marks are drawn as rings at different radii, so that costs nothing:
-    /// they simply both draw. See [`ViewConfig::mark_melody`].
+    /// marks are then one slice extended once, in the one colour they both
+    /// carry — the mark says that slice is an end of the chord, and it is
+    /// both. See [`ViewConfig::mark_melody`].
     pub bass_slots: u32,
-    /// How far each mark has eased in, 0..1: a ring grows on over the Fade
+    /// How far each mark has eased in, 0..1: a mark grows on over the Fade
     /// duration ([`FrameParams::fade_time`]) from the moment its note TOOK
     /// that end (plus whatever wait [`ViewConfig::mark_delay`] asks for
     /// first), rather than appearing at full the frame it is claimed.
     /// Separate from `activation` because a mark can be arriving while the
-    /// node it sits on has been fully lit for a while — the ring has to
+    /// node it sits on has been fully lit for a while — the mark has to
     /// follow its own note, not the disc's.
     ///
     /// Both directions: the ease in above, times what is left of the note's
-    /// own release, so a ring leaves with its note rather than snapping off
+    /// own release, so a mark leaves with its note rather than snapping off
     /// at the key (see [`derive`](mod@derive)). [`ViewConfig::mark_delay`] is
-    /// answered as a threshold AT the key-up — a ring that had not earned its
+    /// answered as a threshold AT the key-up — a mark that had not earned its
     /// way past the wait must not climb into one while the note is already
     /// fading — and the ramp itself then runs on at the current frame, like
     /// the sector's, so the two halves of one arrival never disagree about
     /// how fast it happened.
     ///
-    /// Per node rather than per slot because the mark is a ring around the
-    /// whole node; the slots above only say which sector it links back to.
+    /// Per node rather than per slot because one node carries at most one
+    /// mark of each kind; the slots above say which sector it extends.
     pub melody_level: f32,
     pub bass_level: f32,
-    /// Each mark's color: the color of the SECTOR it links back to — the pitch
+    /// Each mark's color: the color of the SECTOR it extends — the pitch
     /// of that slot on this node, through [`color::pitch_lut_color`] — so a
-    /// ring reads as belonging to the indicator it points at rather than as a
-    /// fixed livery. Taken from the strongest marking voice (they can differ
+    /// mark reads as that indicator continued rather than as a fixed livery.
+    /// Taken from the strongest marking voice (they can differ
     /// mid-crossfade). No lift on top of the ramp: the disc, the roll and the
     /// glyphs all wear it as the table hands it over, whatever the gradient's
-    /// brightness is dialled to, so a ring that lightened its own copy would
-    /// sit a shade whiter than the band it brackets.
+    /// brightness is dialled to, so a mark that lightened its own copy would
+    /// sit a shade whiter than the slice it continues.
     ///
     /// The slot's pitch rather than the marking VOICE's: a note past either end
-    /// of the ring folds onto the outermost slot, and a ring carrying the
-    /// unfolded pitch would then sit a register off the sector it brackets.
+    /// of the ring folds onto the outermost slot, and a mark carrying the
+    /// unfolded pitch would then sit a register off the sector it extends.
     pub melody_color: Vec4,
     pub bass_color: Vec4,
     /// How strongly the music is remembered here (see [`trail`]): 0 where
@@ -449,15 +450,15 @@ pub struct Scene {
     /// is invisible over empty lattice and only shows as a clearing where it
     /// actually crosses something.
     pub background: Vec4,
-    /// Melody/bass ring thickness in quad UV units, 0 = off (see
-    /// [`ViewConfig::mark_thickness`]). Already clamped.
+    /// How far a melody/bass mark reaches past the octave band, in quad UV
+    /// units; 0 = off (see [`ViewConfig::mark_thickness`]). Already clamped.
     pub mark_thickness: f32,
-    /// Which shimmer sweeps the melody/bass rings (see [`Pulse`] and
+    /// Which shimmer sweeps the melody/bass marks (see [`Pulse`] and
     /// [`ViewConfig::pulse_marks`]).
     ///
-    /// Folded to [`Pulse::Off`] when the rings are off — which is
-    /// [`ViewConfig::mark_rings_draw`], a thickness of 0 OR neither end
-    /// switched on, not the thickness alone — where there is no ring
+    /// Folded to [`Pulse::Off`] when the marks are off — which is
+    /// [`ViewConfig::marks_draw`], a thickness of 0 OR neither end
+    /// switched on, not the thickness alone — where there is no mark
     /// to animate and the mark's own octave slice must not go on shimmering
     /// under a control the pane has grayed out.
     pub pulse_marks: Pulse,

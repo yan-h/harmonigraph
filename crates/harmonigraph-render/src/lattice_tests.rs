@@ -301,10 +301,15 @@ fn parity_scene() -> Scene {
             gutter: if i % 2 == 0 { 0.0 } else { 0.12 },
             comma: if i % 2 == 0 { 0.0 } else { -27.26 },
             cents: f * 190.0,
-            // Exercise the mark paths: one node marked melody, one bass,
-            // and one claiming both slots at once (the split mark).
+            // Exercise the mark paths: one node marked melody, one bass, and
+            // one wearing both — on its two lit slots, so the pair is drawn as
+            // two extensions rather than as one slice claimed twice.
             melody_slots: if i == 0 || i == 4 { 1 << slot(i as usize) } else { 0 },
-            bass_slots: if i == 2 || i == 4 { 1 << slot(i as usize) } else { 0 },
+            bass_slots: match i {
+                2 => 1 << slot(i as usize),
+                4 => 1 << slot(i as usize + 5),
+                _ => 0,
+            },
             melody_level: if i == 0 || i == 4 { 1.0 } else { 0.0 },
             bass_level: if i == 2 || i == 4 { 1.0 } else { 0.0 },
             melody_color: Vec4::new(1.0, 0.85, 0.4, 1.0),
@@ -1267,7 +1272,8 @@ fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
         melody_level: f32::from(melody_slots != 0),
         bass_level: f32::from(bass_slots != 0),
         // Distinct hues so the both-ends check below can tell the two
-        // rings apart; in the app these are the marked SECTORS' colors.
+        // marks apart; in the app these are the marked SECTORS' colors,
+        // which are the same color wherever the two name one sector.
         melody_color: Vec4::new(1.0, 0.85, 0.4, 1.0),
         bass_color: Vec4::new(0.45, 0.8, 1.0, 1.0),
         trail: 0.0,
@@ -1279,8 +1285,25 @@ fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
     scene
 }
 
+/// The slot beside middle C's, as a mask — a second sector for the two ends to
+/// land on separately.
+///
+/// Taken off the layout the fixture actually draws rather than named: a mark on
+/// a slot outside the drawn ring has no sector to extend and no angle to be
+/// drawn at, so it would read as the mark having vanished.
+fn slot_beside_middle_c() -> u32 {
+    let (low, high) = harmonigraph_scene::OctaveLayout::default().slots(0.0);
+    let c = harmonigraph_scene::MIDDLE_C_SLOT as i32;
+    let beside = if c < high { c + 1 } else { c - 1 };
+    assert!(
+        (low..=high).contains(&beside) && beside != c,
+        "the fresh wheel draws {low}..={high}, which has no second slot beside {c}",
+    );
+    1 << beside
+}
+
 #[test]
-fn melody_bass_marks_are_visible_as_rings_around_the_band() {
+fn a_melody_bass_mark_extends_the_slice_it_names() {
     const SIZE: [u32; 2] = [256, 256];
     let Some(mut gpu) = Shooter::new(SIZE) else {
         return;
@@ -1300,43 +1323,52 @@ fn melody_bass_marks_are_visible_as_rings_around_the_band() {
     // thing it is marking, at whatever size it happens to be drawn.
     let node_px = unmarked.chunks(4).filter(|px| px[..3] != [0, 0, 0]).count();
     let melody = gpu.shot(&single_marked_node(MIDDLE_C, 0));
-    let both_px = changed_px(&melody);
-    eprintln!("node {node_px} px; mark {both_px}");
+    let melody_px = changed_px(&melody);
+    eprintln!("node {node_px} px; mark {melody_px}");
     // A floor, not a target, measured against the node's whole lit
-    // footprint (glow included). The mark is a full ring bracketing the
-    // octave band, so it claims a real share; the floor exists because an
-    // early version drew a sub-pixel arc that read as nothing at all in the
-    // DAW (well under 1%), which is what this catches. Current: ~36%.
+    // footprint (glow included). A mark is ONE octave's slice continued
+    // outward, so it claims a wedge rather than a ring — a fifth of the turn
+    // on the fresh five-octave wheel. The floor exists because an early
+    // version drew a sub-pixel arc that read as nothing at all in the DAW
+    // (well under 1%), which is what this catches. Current: ~8%.
     assert!(
-        both_px * 8 > node_px,
-        "the mark ring covers too little of the node to find: \
-         {both_px} px of {node_px}"
+        melody_px * 32 > node_px,
+        "the mark covers too little of the node to find: \
+         {melody_px} px of {node_px}"
     );
 
     // Nothing marked draws no mark at all.
     let off = gpu.shot(&single_marked_node(0, 0));
     assert_eq!(changed_px(&off), 0, "an unmarked node must draw no mark");
 
-    // A note claimed by BOTH ends -- a lone held note, or a chord whose top
-    // and bottom share a pitch class -- must not be blanked: that vanishes
-    // the mark exactly when two things are true at once. The two ends are
-    // rings at DIFFERENT radii, so both simply draw: the result must cover
-    // at least as much as one end alone. This guards that.
-    let split = gpu.shot(&single_marked_node(MIDDLE_C, MIDDLE_C));
-    let split_px = changed_px(&split);
-    eprintln!("split mark {split_px} px of {node_px}");
-    assert!(
-        split_px >= both_px,
-        "a mark claimed by both ends all but disappeared: \
-         {split_px} px against {both_px} for one end alone"
+    // A note claimed by BOTH ends on ONE octave -- a lone held note, or a
+    // chord whose top and bottom share a pitch class -- must not be blanked:
+    // that vanishes the mark exactly when two things are true at once. The
+    // two name one slice, so what draws is that slice extended ONCE, over
+    // exactly the pixels either end alone would have covered.
+    let shared = gpu.shot(&single_marked_node(MIDDLE_C, MIDDLE_C));
+    let shared_px = changed_px(&shared);
+    eprintln!("both ends on one slice: {shared_px} px against {melody_px}");
+    assert_eq!(
+        shared_px, melody_px,
+        "both ends on one octave drew a different shape from one end alone",
     );
 
-    // ...and it really is BOTH rings, not one end quietly winning: the
-    // melody-only and bass-only pictures must each differ from it.
-    let bass_only = gpu.shot(&single_marked_node(0, MIDDLE_C));
+    // Both ends on DIFFERENT octaves is the case only the shape can say: two
+    // slices, each extended, so the picture covers more than either end alone
+    // and matches neither.
+    let beside = slot_beside_middle_c();
+    let apart = gpu.shot(&single_marked_node(MIDDLE_C, beside));
+    let apart_px = changed_px(&apart);
+    let bass_only = gpu.shot(&single_marked_node(0, beside));
+    eprintln!("two slices marked: {apart_px} px");
     assert!(
-        differing_pixels(&split, &melody) > 0 && differing_pixels(&split, &bass_only) > 0,
-        "a both-ends mark is indistinguishable from a single-ended one"
+        apart_px > melody_px && apart_px > changed_px(&bass_only),
+        "two marked octaves drew no more than one: {apart_px} px",
+    );
+    assert!(
+        differing_pixels(&apart, &melody) > 0 && differing_pixels(&apart, &bass_only) > 0,
+        "a two-octave mark is indistinguishable from a single-ended one",
     );
 }
 
@@ -1357,7 +1389,7 @@ const PARTIAL_HALF_CENTS: f32 = 40.0;
 ///
 /// The fresh radii rather than the fixture's, because the claim below is about
 /// the shipped picture: that the ring lands in the space the core and the
-/// melody ring leave, on a node nobody has dialled. The core is the one thing
+/// octave band leave, on a node nobody has dialled. The core is the one thing
 /// turned off — its glow is light at every radius the measurements read, and
 /// what is being measured is where two annuli are.
 ///

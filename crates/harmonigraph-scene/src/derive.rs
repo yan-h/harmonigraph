@@ -14,28 +14,31 @@ use crate::{
 use glam::Vec4;
 use harmonigraph_core::{HeldEnd, LatticePos, NoteTracker, Time, Tuning, VoiceState};
 
-/// A melody- or bass-ring accumulator for one node: the octave slot it marks,
+/// A melody or bass mark accumulator for one node: the octave slot it marks,
 /// plus the color and drawn level, all three read off the STRONGEST marking
-/// voice — the voice's envelope times how far its ring has eased in. The `>=`
+/// voice — the voice's envelope times how far its mark has eased in. The `>=`
 /// in [`Mark::add`] means ties favor the later voice, so a release
 /// crossfading two voices lands on the newer color.
 ///
 /// One voice entire, rather than the union of every marking voice's slot
 /// under the strongest one's level, because the node carries ONE level: a
 /// weaker voice's slot admitted alongside it would be drawn at the winner's
-/// brightness. That is not a near-miss — it is a link pointing at an octave
-/// whose ring is half gone (or has not started), at full. Two voices reach
-/// one node's mark only through a handoff inside a single pitch class, where
-/// the loser is by definition the dimmer of a crossfading pair, so what the
-/// union would buy is exactly the reading that cannot be drawn honestly.
+/// brightness. That is not a near-miss — it is a mark on an octave that is
+/// half gone (or has not started), at full. Two voices reach one node's mark
+/// only through a handoff inside a single pitch class, where the loser is by
+/// definition the dimmer of a crossfading pair, so what the union would buy
+/// is exactly the reading that cannot be drawn honestly.
 ///
-/// The cost is that the sector a ring links to JUMPS at the crossover instead
-/// of both being lit through it. The level does not jump — the two curves are
-/// equal at the moment the argmax changes, which is what makes the switch
-/// invisible on the ring itself. Lighting both honestly wants a level per
-/// slot, which is `OCTAVE_SLOTS` more floats per node in the instance buffer
-/// and a shader that reads them; that is the price, and it buys one frame's
-/// worth of a link in one voicing.
+/// The cost is that the mark JUMPS to the other sector at the crossover
+/// instead of both being lit through it, and the jump is the whole SHAPE
+/// moving one wedge round the node — a mark is its sector's slice continued
+/// outward, so it has no body that stays put while the sector changes under
+/// it. The level is continuous across the switch (the two curves are equal at
+/// the moment the argmax changes), so what moves is the position and not the
+/// brightness. Lighting both honestly wants a level per slot, which is
+/// `OCTAVE_SLOTS` more floats per node in the instance buffer and a shader
+/// that reads them; that is the price, and it buys one frame's worth of a
+/// second mark in one voicing.
 #[derive(Default)]
 struct Mark {
     /// The slot as a MASK, so 0 is "unmarked" without an `Option` — which is
@@ -62,7 +65,7 @@ impl Mark {
 struct FrameVoice<'a> {
     voice: &'a harmonigraph_core::Voice,
     /// The pitch color the DISC and its octave sector take. The melody/bass
-    /// rings do not reuse it — they belong to the octave layer, colored by
+    /// marks do not reuse it — they belong to the octave layer, colored by
     /// axis position (see the mark color in [`derive_scene`]).
     color: Vec4,
     /// The note's own envelope, attack times what is left of the release:
@@ -71,8 +74,8 @@ struct FrameVoice<'a> {
     /// Whether this voice's departure has begun (see
     /// [`NodeInstance::departing`](crate::NodeInstance::departing)).
     departing: bool,
-    /// What this voice's melody ring draws at, or `None` where it wears no
-    /// melody end. The RELEASE alone under the ring's own ease — see the ease
+    /// What this voice's melody mark draws at, or `None` where it wears no
+    /// melody end. The RELEASE alone under the mark's own ease — see the ease
     /// in [`derive_scene`], and
     /// [`Voice::activation`](harmonigraph_core::Voice::activation) for why the
     /// note's attack is not multiplied in on top.
@@ -87,13 +90,13 @@ struct FrameVoice<'a> {
 ///
 /// Held only, which is the tracker's own answer ([`HeldEnd`]): these are the
 /// LIVE ends, the notes actually down, and a released voice is never one of
-/// them however brightly its ring is still drawn. What a released voice wears
+/// them however brightly its mark is still drawn. What a released voice wears
 /// is the stamp it left with
 /// ([`Voice::wore_high`](harmonigraph_core::Voice::wore_high)), read in
-/// [`marks`] — a ring on its way out, not a claim on the end.
+/// [`marks`] — a mark on its way out, not a claim on the end.
 ///
 /// The two must not be conflated: a released voice allowed back in here would
-/// keep the end from the note that replaced it, and the incoming ring would
+/// keep the end from the note that replaced it, and the incoming mark would
 /// have nothing to ease from.
 pub(crate) fn held_extremes(
     tracker: &NoteTracker,
@@ -111,21 +114,21 @@ pub(crate) fn held_extremes(
 /// note is its own melody and bass.
 ///
 /// A held voice wears the live end. A released one wears the stamp it left
-/// the held set with, so its ring fades out with the note instead of snapping
+/// the held set with, so its mark fades out with the note instead of snapping
 /// off at the key — which is the same envelope every other layer of the node
-/// leaves on, and the reason a handoff reads as one ring crossing to another
+/// leaves on, and the reason a handoff reads as one mark crossing to another
 /// rather than as one vanishing and a second appearing.
 ///
 /// The released stamps are gated on the same two flags here that
 /// [`held_extremes`] applies to the live ends, and on the flags as they are
-/// NOW. They have to be: a stamp is left whatever the view says, so a ring
+/// NOW. They have to be: a stamp is left whatever the view says, so a mark
 /// turned off mid-fade would otherwise go on drawing until the note it
 /// belongs to is pruned.
 ///
-/// Turned back on mid-fade, the rings of notes released while it was off
+/// Turned back on mid-fade, the marks of notes released while it was off
 /// appear at the level their fade has reached. That is a toggle behaving like
 /// a toggle rather than a hole — switching the melody on over a held chord
-/// puts its ring up at full the same frame, the end having been taken long
+/// puts its mark up at full the same frame, the end having been taken long
 /// ago. The alternative is recording the flag at the release, which is a view
 /// setting baked into the tracker: the stamp is a fact about the music, and
 /// what is drawn from it is the view's to re-answer every frame (see
@@ -183,31 +186,31 @@ pub fn derive_scene(
     let live_extremes = held_extremes(tracker, view.mark_melody, view.mark_bass);
     let mark_delay = view.mark_delay.clamp(0.0, MARK_DELAY_MAX) as f64;
     let env = view.envelope(frame);
-    // How far a ring taken at `since` has eased in, for the voice `state`.
+    // How far a mark taken at `since` has eased in, for the voice `state`.
     //
     // The delay simply moves the ramp's start later, so an end held for less
-    // than it never draws a ring at all. That is what the setting is for: at
-    // speed the ends change hands every few frames, and a ring easing in on
+    // than it never draws a mark at all. That is what the setting is for: at
+    // speed the ends change hands every few frames, and a mark easing in on
     // each of them reads as flicker rather than as the top line.
     //
-    // A ring outlives its key, so for a RELEASED voice the wait is checked as
+    // A mark outlives its key, so for a RELEASED voice the wait is checked as
     // a threshold at the key-up and the ramp then runs on at `now` like every
     // other layer's. The two are separate rules and the threshold is the one
     // the delay is: a note that gave the end back inside its wait never rang
     // while it was down, and an ease left running would sail past the
-    // threshold during the release and put a ring on it afterwards — the very
+    // threshold during the release and put a mark on it afterwards — the very
     // flicker the setting buys off.
     //
     // The RAMP is not that rule, and freezing it where the key happened to
     // find it costs the other half: a note shorter than the attack would keep
-    // a ring dimmer than the sector it brackets for its whole release, since
+    // a mark dimmer than the sector it extends for its whole release, since
     // the disc's own attack keeps climbing past the note-off (see
     // `Envelope::attack`). One layer arriving slower than the next is exactly
     // the disagreement one shared curve exists to prevent.
     let ease = |since: Time, state: VoiceState| {
         if let VoiceState::Released { at } = state {
             if at < since + mark_delay {
-                // Never earned a ring, so there is none to fade out.
+                // Never earned a mark, so there is none to fade out.
                 return 0.0;
             }
         }
@@ -237,7 +240,7 @@ pub fn derive_scene(
     // Each voice's color and envelope, computed once here rather than re-run
     // on every node the voice matches. All of it depends on the voice, the
     // frame and `now` alone — never on the node — so this lifts the ramp walk
-    // and the envelope's four `powf`s (two ends, times the disc and the ring)
+    // and the envelope's four `powf`s (two ends, times the disc and the mark)
     // out of the O(nodes × voices) loop below. One pitch class lights every
     // node that spells it, so on a wide window that is tens of nodes per
     // voice.
@@ -261,34 +264,34 @@ pub fn derive_scene(
             // a frame-wide answer and the stamps are the voice's own.
             let (melody_since, bass_since) =
                 marks(voice, live_extremes, view.mark_melody, view.mark_bass);
-            // The RELEASE alone under the ring's own ease, not the node's full
-            // activation: the attack is in that, and the ring already carries
+            // The RELEASE alone under the mark's own ease, not the node's full
+            // activation: the attack is in that, and the mark already carries
             // one from the moment its note took the end. Multiplying both in
             // would square the ramp wherever those two moments coincide —
             // which is the ordinary case, a note arriving as the new outer
-            // voice — and a ring rising as the square of the sector it
-            // brackets is precisely the disagreement about how fast the note
+            // voice — and a mark rising as the square of the sector it
+            // extends is precisely the disagreement about how fast the note
             // arrived that one shared rate exists to prevent.
             //
             // The release this rides waits out the NOTE's arrival
             // (`Voice::release_level`), which is the rule that keeps a stab's
-            // DISC at full — and it covers the ring only where the ring's own
+            // DISC at full — and it covers the mark only where the mark's own
             // ease starts with the note. Whatever moves that ease later moves
             // it out from under the rule, and both things that can are
             // deliberate: the mark Delay, and an end taken by inheritance
             // part way through a note.
             //
-            // So a ring comes in GRADED over the band between the Delay and
+            // So a mark comes in GRADED over the band between the Delay and
             // the Delay plus the Fade. At the fresh view (Delay 0.15, Fade
             // 0.15) a note held 160ms peaks at 0.30, 200ms at 0.57, 250ms at
             // 0.89, and 300ms and longer at full — while the disc under it is
             // at full for every one of them. That band is the threshold
             // softened rather than a second one: the Delay's own claim is
             // that an end held briefly should not read as the line being
-            // traced, and a Delay of 0 puts the ring back exactly on the
+            // traced, and a Delay of 0 puts the mark back exactly on the
             // note's rule.
             let release = voice.release_level(now, &env);
-            let ring = |since: Option<Time>| since.map(|s| release * ease(s, voice.state));
+            let mark = |since: Option<Time>| since.map(|s| release * ease(s, voice.state));
             FrameVoice {
                 voice,
                 color,
@@ -297,8 +300,8 @@ pub fn derive_scene(
                 // release holds at 1 until the key comes up AND the arrival
                 // has landed, so this cannot be a note still easing in.
                 departing: release < 1.0,
-                melody: ring(melody_since),
-                bass: ring(bass_since),
+                melody: mark(melody_since),
+                bass: mark(bass_since),
             }
         })
         .collect();
@@ -368,33 +371,33 @@ pub fn derive_scene(
                 // every node the voice matches, exactly as its activation
                 // is, so the mark can't disagree with the lighting.
                 //
-                // The ring is the strongest marking voice ON THIS NODE,
+                // The mark is the strongest marking voice ON THIS NODE,
                 // entire (see [`Mark`]). It eases in while its end is held
                 // and fades out with the note when the key comes up, on the
-                // note's own release — so a handoff is one ring crossing to
+                // note's own release — so a handoff is one mark crossing to
                 // another rather than one vanishing as a second appears.
                 if lit.melody.is_some() || lit.bass.is_some() {
                     // The mark takes the color of the SECTOR it links back to
                     // — the pitch of that slot on this node, through the very
-                    // table the shader tints the lit glyph from — so the ring
+                    // table the shader tints the lit glyph from — so the mark
                     // is never a shade off the one indicator it is pointing
                     // at. The voice's own color is the wrong one to reuse
                     // here: a note past either end of the ring folds onto
-                    // the outermost slot, so its ring would carry a pitch
+                    // the outermost slot, so its mark would carry a pitch
                     // that is nowhere on the axis it is drawn around.
                     //
                     // Both pitches are on the one ramp, so which pitch is read
                     // is the whole of the difference: the shader tints a lit
                     // glyph by the pitch it is DRAWN at and asks nothing about
-                    // the voice, and a ring is part of that glyph's layer.
+                    // the voice, and a mark is part of that glyph's layer.
                     // Only the lit glyph — the band's ghosts wear the whitened
                     // node color and a solo voice's glow keeps the voice's
                     // own, both of them on purpose. No extra lift on top of
                     // the ramp here: the sector's glyph wears it as it comes,
-                    // and a lightened ring would read a shade off the one it
-                    // brackets.
+                    // and a lightened mark would read a shade off the slice
+                    // it continues.
                     //
-                    // The ring eases in on the SAME ramp as that sector, from
+                    // The mark eases in on the SAME ramp as that sector, from
                     // when the note took the end — which is not always its
                     // note-on, and is the tracker's own answer rather than
                     // anything derived here (`HeldEnd` while the note is
@@ -533,15 +536,15 @@ pub fn derive_scene(
         grid,
         grid_thickness: view.grid_thickness.clamp(0.0, 8.0),
         mark_thickness,
-        // A mark sheet reaches the ring AND the octave slice that ring points
-        // at, so with the ring layer off — no end marked, or no thickness to
-        // draw one with, which is `mark_rings_draw` and is exactly what the
-        // pane grays the row on — the ring half is multiplied away by a
+        // A mark sheet reaches the extension AND the octave slice it extends,
+        // so with the mark layer off — no end marked, or no depth to
+        // draw one with, which is `marks_draw` and is exactly what the
+        // pane grays the row on — the extension half is multiplied away by a
         // coverage of zero and the SLICE half is not: the glyph layer draws
         // that either way, so without this fold the sheet would go on
         // sweeping from a control the user can no longer reach. Folded here
         // so the picture and the control agree by construction.
-        pulse_marks: if view.mark_rings_draw() { view.pulse_marks } else { Pulse::Off },
+        pulse_marks: if view.marks_draw() { view.pulse_marks } else { Pulse::Off },
         shimmer_speed: view.shimmer_speed.clamp(0.0, 40.0),
         // Strictly positive: the pattern's phase divides by this. The floor is
         // a small fraction of a node (radius `spacing` × NODE_RADIUS_FACTOR),

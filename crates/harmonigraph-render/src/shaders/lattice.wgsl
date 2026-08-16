@@ -46,13 +46,14 @@ struct Uniforms {
     // x: grid line thickness, a multiple of the built-in grid width.
     // y: unused.
     // z: padding inside the octave layer, in quad UV units — the gap
-    // between neighbouring sectors AND between the band and the mark
-    // rings. w: melody/bass ring thickness, same units; 0 = no rings.
+    // between neighbouring sectors AND between the band and the
+    // melody/bass marks. w: how deep those marks reach past the band, same
+    // units; 0 = no marks.
     misc5: vec4<f32>,
     // x/y: unused — they carried the trail's mark style and strength, from
     //    when a memory was a change to the idle marker rather than a kept
     //    note name. z: the sevens knockout's fade width, read below by the
-    //    vertex stage. w: the melody/bass mark rings' shimmer pattern
+    //    vertex stage. w: the melody/bass marks' shimmer pattern
     //    (0 off, then one index per pattern; see Pulse::shader_index), read
     //    by mark_pulse — NOT a free slot.
     misc6: vec4<f32>,
@@ -112,14 +113,14 @@ const TAU: f32 = 6.2831853;
 // and its uv are both scaled by this, so the uv->world mapping is
 // unchanged (disc, band, glyphs, glow all render identically) but there is
 // margin out to this radius for things that live OUTSIDE the band -- the
-// mark rings, which at the default band (outer 1.0) sit entirely out here.
+// marks, which at the default band (outer 1.0) sit entirely out here.
 // Costs a bit of fill (bigger quads, which alpha-blend and discard where
 // empty).
 const QUAD_MARGIN: f32 = 1.6;
 // Where the octave layer's overflow past uv 1.0 -- the aa fringe of a band
 // dialed right out to the edge -- finishes easing off, rather than being
 // cut flat by the quad boundary. Pinned to what QUAD_MARGIN was when this
-// fade was tuned, so widening the billboard for the mark rings doesn't
+// fade was tuned, so widening the billboard for the marks doesn't
 // quietly restyle the glyph edges.
 const GLYPH_FADE_LIMIT: f32 = 1.3;
 // Where the glow's window closes: past this the exponential is multiplied by
@@ -132,29 +133,34 @@ const GLOW_LIMIT: f32 = 0.95;
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
 
-// The node's own outermost feature, in ITS uv. That is the BASS ring when
-// this node is wearing one — the bass ring is the outer of the two, riding
-// just past the octave band — and the band's own outer edge when it is not.
+// The node's own outermost feature, in ITS uv. That is a MARK when this node
+// is wearing one — both marks ride the strip just past the octave band — and
+// the band's own outer edge when it is not.
 //
-// Per node, not per view: assuming the ring is always there made every
-// clearing as wide as the widest node's, so a node with no ring sat in a
+// Per node, not per view: assuming the mark is always there made every
+// clearing as wide as the widest node's, so a node with no mark sat in a
 // gap visibly bigger than itself.
 //
-// Scaled by the ring's own LEVEL rather than switched on the moment it is
+// Scaled by the mark's own LEVEL rather than switched on the moment it is
 // claimed: the rim sets how wide this node clears the sheets behind it, and a
-// rim that jumped to its full reach ahead of the ring leaves the hole in the
-// lattice popping open around a ring still fading up. The level is both ends
-// of the ring's envelope, so the rim closes as gradually as the ring leaves —
-// a released ring fades out with its note rather than snapping off at the key.
-fn node_rim(bass: f32) -> f32 {
-    let ring = max(u.misc5.z, 0.0) + u.misc5.w;
-    return u.misc3.z + select(0.0, ring * bass, u.misc5.w > 0.0);
+// rim that jumped to its full reach ahead of the mark leaves the hole in the
+// lattice popping open around a mark still fading up. The level is both ends
+// of the mark's envelope, so the rim closes as gradually as the mark leaves —
+// a released mark fades out with its note rather than snapping off at the key.
+fn node_rim(mark: f32) -> f32 {
+    let strip = max(u.misc5.z, 0.0) + u.misc5.w;
+    return u.misc3.z + select(0.0, strip * mark, u.misc5.w > 0.0);
 }
 
-// How much of the outer (bass) ring this node is wearing, 0..1: it needs
-// both a slot to link back to and a level to draw at.
-fn bass_ring_level(marks: vec2<u32>, params: vec3<f32>) -> f32 {
-    return select(0.0, clamp(params.z, 0.0, 1.0), marks.y != 0u);
+// How much of the mark strip this node is wearing, 0..1: a mark needs both a
+// slot to extend and a level to draw at. The two ends share one strip, so the
+// rim is the further along of them — a node wearing either reaches exactly as
+// far as a node wearing both.
+fn mark_strip_level(marks: vec2<u32>, params: vec3<f32>) -> f32 {
+    return max(
+        select(0.0, clamp(params.y, 0.0, 1.0), marks.x != 0u),
+        select(0.0, clamp(params.z, 0.0, 1.0), marks.y != 0u),
+    );
 }
 
 // How far the billboard has to reach, in uv, for a clearing of reach `g` to
@@ -175,7 +181,7 @@ const EARLY_OUT: bool = true;
 // How far from the node's center anything can paint, in its own uv.
 //
 // The billboard is deliberately bigger than the node: QUAD_MARGIN of
-// headroom for the mark rings and a soft glyph's overflow, more when a
+// headroom for the marks and a soft glyph's overflow, more when a
 // gutter has to finish inside it. Between that circle of content and the
 // square quad lies a lot of fragment — most of a quad, once the corners are
 // counted — where every layer below computes its coverage, arrives at zero,
@@ -190,7 +196,7 @@ const EARLY_OUT: bool = true;
 //     GLYPH_FADE_LIMIT;
 //   - the core disc ends at its radius plus the widest edge softness the
 //     solidity axis can ask for;
-//   - the mark rings taper off at QUAD_MARGIN, but only exist while a slot
+//   - the marks taper off at QUAD_MARGIN, but only exist while a slot
 //     is marked;
 //   - the knockout clears out to rim + gutter, and nothing beyond.
 fn paint_reach(in: VsOut, aa: f32) -> f32 {
@@ -224,13 +230,12 @@ struct Instance {
     // pitch's color.
     @location(4) cents: f32,
     // Melody/bass marks: x = melody slots, y = bass slots, one bit per
-    // octave slot. Which SECTOR each mark's ring links back to (see
-    // mark_ring); the ring itself is per node, and its fade level rides
-    // params.y/params.z.
+    // octave slot. Which SECTOR each mark continues outward (see
+    // mark_extension); its fade level rides params.y/params.z.
     @location(6) marks: vec2<u32>,
     // Each mark's own color: its own sector's pitch off the ramp, with no lift
-    // on top of it (see NodeInstance::melody_color), so a ring reads as
-    // belonging to the indicator it points at rather than as a fixed livery.
+    // on top of it (see NodeInstance::melody_color), so a mark reads as the
+    // indicator it extends rather than as a fixed livery.
     @location(7) melody_color: vec4<f32>,
     @location(8) bass_color: vec4<f32>,
     // The sevens layer: x = billboard size factor (1 on the home sheet,
@@ -296,7 +301,7 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
     // by the scale converts the setting from "of this node" back to "of a
     // full-size node", i.e. one fixed distance everywhere.
     let gutter_uv = max(inst.sevens.y, 0.0) / scale;
-    let rim = node_rim(bass_ring_level(inst.marks, inst.params));
+    let rim = node_rim(mark_strip_level(inst.marks, inst.params));
     // ...which can want more room than the standard billboard has, on the
     // smallest sheets. Only then does the quad grow: uv 1.0 still maps to
     // the same world distance either way, so nothing about the node's own
@@ -506,11 +511,10 @@ fn oct_slot_level(octaves: vec3<u32>, s: i32) -> f32 {
     return octave_level(octaves, u32(s));
 }
 // Whether a pixel's angle falls inside sector `edges`'s own arc (between its
-// two boundaries), 0..1 with a soft edge over `aa`. Shared by `outer_glyph`
-// (where it decides which wedge owns the pixel) and `mark_ring_alpha` (where
-// it decides how much of the pulse's "near the marked slice" phase a pixel
-// gets), so the two agree on exactly the same wedge rather than each running
-// its own copy that could drift.
+// two boundaries), 0..1 with a soft edge over `aa`. `outer_glyph`'s test for
+// which wedge owns a pixel, and so — through it — the octave indicator's arc
+// and its mark extension's alike, which is what makes them one wedge rather
+// than two constructions that could drift.
 //
 // A wedge under a half turn is the INTERSECTION of its two half-planes; one
 // PAST a half turn is their union, and reading it as an intersection would
@@ -526,7 +530,7 @@ fn oct_arc_coverage(edges: vec2<f32>, uv: vec2<f32>, aa: f32) -> f32 {
     return select(s1 * s2, 1.0 - (1.0 - s1) * (1.0 - s2), edges.x - edges.y > TAU * 0.5);
 }
 
-// The melody/bass mark rings' shimmer pattern (u.misc6.w — see `Pulse`).
+// The melody/bass marks' shimmer pattern (u.misc6.w — see `Pulse`).
 fn pulse_marks_mode() -> u32 {
     return u32(u.misc6.w + 0.5);
 }
@@ -535,11 +539,11 @@ fn pulse_marks_mode() -> u32 {
 // Every pulse mode but 0, and the same animation in each: a pattern of light
 // laid over the layer, travelling. What the mode picks is its SHAPE.
 //
-// WHICH pixels it covers is not quite the same question. The sheet is the mark
-// rings', and it takes the octave slices those rings point at (`mark_slice` in
-// `fs_main`) as well as the annuli themselves, because a mark is the ring
-// together with the octave it names rather than the annulus alone. The rest of
-// the octave layer draws steady.
+// WHICH pixels it covers is not quite the same question. The sheet is the
+// marks', and it takes the octave slices those marks extend (`mark_slice` in
+// `fs_main`) as well as the extensions themselves, because a mark is one slice
+// in two pieces rather than the outer piece alone. The rest of the octave layer
+// draws steady.
 //
 // The field is SHARED. Every node samples the same sheet at its own place on
 // `in.field` — the plane the billboards face, in world units — so the light
@@ -947,7 +951,7 @@ fn shimmer_light(rgb: vec3<f32>, terms: vec2<f32>) -> vec3<f32> {
 // clear hub instead of an N-way mush point.
 //
 // The gap's full width is u.misc5.z (the view's Gap bar), in quad UV units.
-// The SAME value separates the mark rings from the band, so one number is
+// The SAME value separates the marks from the band, so one number is
 // the padding everywhere in the octave layer.
 fn slice_gap_half() -> f32 {
     return max(u.misc5.z, 0.0) * 0.5;
@@ -1022,8 +1026,7 @@ fn outer_glyph(
     // between them 336 degrees.
     // That extreme, and the floor that keeps it under a whole turn, are
     // `an_indicator_can_pass_a_half_turn_but_never_a_whole_one` and `MIN_SPAN`
-    // in harmonigraph-scene. (The test itself is `oct_arc_coverage`, shared
-    // with `mark_ring_alpha`'s pulse split so the two agree on one wedge.)
+    // in harmonigraph-scene. (The test itself is `oct_arc_coverage`.)
     let own = oct_arc_coverage(edges, uv, aa);
     // Each edge's gap is cut only on the side the edge actually runs to. The
     // boundary LINE passes just as close on the far side of the node, which
@@ -1097,7 +1100,7 @@ fn octave_slot_color(pitch: f32, level: f32) -> vec3<f32> {
 // every node in the window wears one. A range with nothing in it is a reading.
 //
 // The radius is its own (u.misc7.z/w, an annulus the fresh view puts in the
-// gap the core and the melody ring leave); the slices are the band's, off the
+// gap the core and the octave band leave); the slices are the band's, off the
 // same `OctRing`, so the two rings share one rhythm of wedges and one meaning
 // for an angle.
 
@@ -1271,94 +1274,74 @@ fn octave_glow_color(
 // by a ceiling on how loud a mark may get.
 
 // ---- Melody / bass marks ---------------------------------------------------
-// Two full rings concentric with the octave band: the melody just INSIDE
-// it, the bass just OUTSIDE. Radius is what tells them apart -- each ring is
-// drawn in its own sector's color, not a fixed livery -- and because they
-// never share one, both draw at full weight even when ONE note is both ends
-// of the chord (a lone held note, or a chord whose top and bottom share a
-// pitch class). Earlier passes had to split a rim between two colors to say
-// that, and the pass before them dropped the mark on the floor entirely.
+// A mark is its octave's SLICE, continued outward: an annular sector in the
+// strip just past the octave band, on exactly the angles the marked indicator
+// spans, separated from it by the same padding that separates one indicator
+// from the next. Both ends draw in that one strip, and both draw in their own
+// sector's color rather than a fixed livery.
 //
-// What a full ring cannot say is WHICH of the node's octaves is the melody,
-// and on a chord voiced inside one pitch class that is the whole question --
-// so a link device ties the ring back to the sector responsible. See
-// MarkLink for the candidates; the modes here mirror its shader_index.
+// The shape is the whole of what says WHICH octave is the melody -- the
+// question a full ring at its own radius cannot answer, and the one that is
+// everything on a chord voiced inside a single pitch class, where every note
+// lands on one node and differs only by slot. A ring bracketing the band and
+// slit at the marked sector's boundaries points back at it; extending the
+// slice itself is that link with nothing left over.
+//
+// What the shared strip gives up is telling the two ENDS apart by radius.
+// Mostly that costs nothing: a mark names a slice, the slices are ordered by
+// pitch round the node, so the higher of two marked slices is the melody. Where
+// one note is both ends -- a lone held note, or a chord whose top and bottom
+// share a pitch class -- the two marks are one slice and draw as one extension,
+// in the one color they both carry (each takes its SECTOR's pitch, and it is
+// the same sector).
+//
+// The ordering is not an invariant, and the exception is worth knowing because
+// the strip is what gave up the other cue. A mark outlives its key, and a
+// RELEASED voice claims each end from its own stamp, so a lone note that wore
+// both can hold the melody on a low slice while a live note takes the bass on a
+// higher one -- for the length of one release, the melody draws below the bass.
+// `a_released_end_can_mark_a_lower_slice_than_the_live_one` builds that state.
+// Telling them apart by radius drew it unambiguously; this does not, and the
+// alternative is a second cue that would undo the shape above.
 
-// Floor on the ring's thickness (the view sets the rest, u.misc5.w), in
+// Floor on the strip's depth (the view sets the rest, u.misc5.w), in
 // soft-band widths — about a couple of render pixels, so a thin setting
 // can't go sub-pixel on a densely packed lattice and read as nothing. A
 // thickness of exactly 0 is the off state and skips the floor.
 const MARK_RING_MIN_AA: f32 = 1.5;
 
-// The ring's opacity at this pixel, given the slot(s) the mark came from.
+// Coverage of the marks in `slots`, in the strip whose radial coverage at this
+// pixel is `strip`.
 //
-// Each ring is slit at the responsible sector's two angular boundaries. A
-// slit IS the gap between two octaves continued outward: the same
-// perpendicular-distance test against the same boundary line, with the same
-// soft band, measured on the pixel ITSELF -- projecting to the band first
-// would scale both the width and the blur by the ring's radius over the
-// band's, which reads as a wider, softer cut.
-//
-// The slits are the whole of the link. An `Unlinked` opacity would fade the
-// stretch of ring on the far side of them, down to just the arc over the
-// marked sector; the ring being a whole circle that the slits merely break is
-// what says which octave WITHOUT spending the shape to say it.
-//
-// The facing gate throws away the antipode: a boundary line runs through the
-// origin, so it passes just as close on the far side of the node and would
-// otherwise cut the ring twice. It is taken per EDGE rather than against the
-// sector's bisector, which is the same cut while a sector is narrow and the
-// right one once a fringe has made it wide (past a half turn, a point by one
-// edge faces away from the bisector entirely).
+// The sector geometry is `outer_glyph`'s, called on the mark strip's coverage
+// where the octave layer calls it on the band's -- one body, so an extension
+// lines up with the indicator it continues at every gap width, sector count and
+// fringe size, rather than agreeing with it by two constructions that have to be
+// kept in step.
 //
 // A slot mask can name more than one sector: releasing the top of a chord
 // leaves the old melody fading on its slot while the new one takes another,
-// and both are the melody for as long as that lasts.
-fn mark_ring_alpha(slots: u32, ring: OctRing, uv: vec2<f32>, aa: f32) -> f32 {
-    let half = slice_gap_half();
+// and both are the melody for as long as that lasts. Slots the ring has no room
+// for are skipped — a mark reaches for octaves the packing may not show, and
+// `oct_sector` has no angle to put one at.
+fn mark_extension(slots: u32, ring: OctRing, uv: vec2<f32>, strip: f32, aa: f32) -> f32 {
+    // Off the strip entirely: the sectors below only ever scale this coverage,
+    // so walking the slots for them would be an 11-iteration answer to a pixel
+    // that is already zero. The strip is a thin annulus in a billboard reaching
+    // QUAD_MARGIN — the margin it lives in is the one the marks are the reason
+    // for — so that is nearly all of them.
+    if EARLY_OUT && strip <= 0.0 {
+        return 0.0;
+    }
     let top = ring.base + i32(oct_span()) - 1;
-    var slit = 0.0;
+    var cov = 0.0;
     for (var i = 0u; i < OCTAVE_SLOTS; i = i + 1u) {
         let s = i32(i);
         if (slots & (1u << i)) != 0u && s >= ring.base && s <= top {
-            let edges = oct_sector(s, ring);
-            let b1 = vec2<f32>(cos(edges.x), sin(edges.x));
-            let b2 = vec2<f32>(cos(edges.y), sin(edges.y));
-            let c1 = uv.x * b1.y - uv.y * b1.x;
-            let c2 = uv.x * b2.y - uv.y * b2.x;
-            let cut = max(
-                aa_inside(half, abs(c1), aa) * smoothstep(-aa, aa, dot(uv, b1)),
-                aa_inside(half, abs(c2), aa) * smoothstep(-aa, aa, dot(uv, b2)),
-            );
-            slit = max(slit, cut);
+            cov = max(cov, outer_glyph(s, ring, uv, strip, aa));
         }
     }
-    return 1.0 - slit;
-}
-
-// Coverage of one mark ring, `r_in..r_out`. Radii are passed rather than
-// derived so the bass ring (outside the band) and the melody ring (inside)
-// can share this one body.
-fn mark_ring(
-    slots: u32, oct: OctRing,
-    uv: vec2<f32>, r_in: f32, r_out: f32, aa: f32,
-) -> f32 {
-    // No room for this ring: the band's inner radius can be dialed to 0
-    // (pie wedges), which leaves the inner ring nothing to sit in.
-    if r_out <= 0.0 || r_out <= r_in {
-        return 0.0;
-    }
-    let d = length(uv);
-    let ring = aa_inside(r_out, d, aa) * (1.0 - aa_inside(max(r_in, 0.0), d, aa));
-    // Off the ring entirely: the slits below only ever scale this coverage, so
-    // walking the slots for them would be an 11-iteration answer to a pixel
-    // that is already zero. A ring is a thin annulus in a billboard reaching
-    // QUAD_MARGIN — the margin it lives in is the one the rings are the
-    // reason for — so that is nearly all of them.
-    if EARLY_OUT && ring <= 0.0 {
-        return 0.0;
-    }
-    return ring * mark_ring_alpha(slots, oct, uv, aa);
+    return cov;
 }
 
 // How much of the destination a node's knockout clears at radius `d`.
@@ -1384,7 +1367,7 @@ fn gutter_coverage(d: f32, rim: f32, reach: f32, soft: f32) -> f32 {
 // glow's `window` closes at GLOW_LIMIT, and the disc's coverage runs out at
 // its radius plus the widest edge the solidity axis can ask for -- the same
 // bound `paint_reach` takes for this layer. It is worth taking because the
-// layer is the expensive one and its reach is SHORT: the mark rings live out
+// layer is the expensive one and its reach is SHORT: the marks live out
 // at QUAD_MARGIN and the glyph fade runs to GLYPH_FADE_LIMIT, so the outer
 // half of a lit node's billboard is past it -- an atan2 and an 11-slot color
 // blend for a coverage of zero.
@@ -1566,19 +1549,22 @@ fn node_paint(in: VsOut) -> vec4<f32> {
     var glyph = 0.0;
     var glyph_rgb = node_glyph_rgb;
 
-    // Melody/bass ring geometry.
+    // Melody/bass mark geometry: one strip outside the octave band, standing
+    // off it by the same padding one indicator stands off the next, so an
+    // extension reads as its slice continued rather than as a second thing
+    // stuck to the end of it.
     let band_in = u.misc3.y;
     let band_out = u.misc3.z;
-    let ring_thick = u.misc5.w;
-    let ring_w = select(max(ring_thick, aa * MARK_RING_MIN_AA), 0.0, ring_thick <= 0.0);
-    let ring_gap = slice_gap_half() * 2.0;
-    // Headroom: the band's outer radius can be dialed to 1.0, so the outer
-    // ring lives in the QUAD_MARGIN margin. Cap it inside the billboard (a
-    // circle of radius QUAD_MARGIN fits the square quad) and ease it off
-    // there, rather than letting the corner clip it flat.
+    let mark_thick = u.misc5.w;
+    let mark_w = select(max(mark_thick, aa * MARK_RING_MIN_AA), 0.0, mark_thick <= 0.0);
+    let mark_gap = slice_gap_half() * 2.0;
+    // Headroom: the band's outer radius can be dialed to 1.0, so the strip
+    // lives in the QUAD_MARGIN margin. Cap it inside the billboard (a circle
+    // of radius QUAD_MARGIN fits the square quad) and ease it off there,
+    // rather than letting the corner clip it flat.
     let lim = QUAD_MARGIN - 0.02;
-    let outer_in = min(band_out + ring_gap, lim);
-    let inner_out = band_in - ring_gap;
+    let mark_in = min(band_out + mark_gap, lim);
+    let mark_out = min(mark_in + mark_w, lim);
     // Sounding slots draw bright, tinted by their own pitch, each fading on
     // its own envelope; the silent ones draw as the backdrop's ghosts in the
     // loop below, riding the note's own presence so the whole ring fades
@@ -1599,16 +1585,16 @@ fn node_paint(in: VsOut) -> vec4<f32> {
     // none of them varies — so it is taken here beside the band rather than
     // rebuilt per slot inside the loop.
     let ghost_a = GHOST_LEVEL * presence;
-    // The slots a melody or bass ring is pointing at (in.marks, the same
-    // bitmasks `mark_ring` reads below), which is where the MARK layer's
+    // The slots a melody or bass mark is extending (in.marks, the same
+    // bitmasks `mark_extension` reads below), which is where the MARK layer's
     // sheet reaches into this one.
     let extreme_slots = in.marks.x | in.marks.y;
-    // How much of this pixel is a slice a melody or bass ring points at, and
-    // how strongly that ring is drawing there: the weight the MARK layer's
+    // How much of this pixel is a slice a melody or bass mark extends, and
+    // how strongly that mark is drawing there: the weight the MARK layer's
     // shimmer reaches the octave glyphs with, below. The slice's own shape,
     // so the sweep fades in exactly with the wedge's edges instead of at a
-    // boundary of its own, times the same mark level the ring itself is
-    // scaled by -- a released melody's slice stops shimmering as its ring
+    // boundary of its own, times the same mark level the extension itself is
+    // scaled by -- a released melody's slice stops shimmering as its mark
     // goes, rather than outliving it.
     var mark_slice = 0.0;
     for (var i = 0u; i < oct_span() && (!EARLY_OUT || band > 0.0); i = i + 1u) {
@@ -1708,12 +1694,12 @@ fn node_paint(in: VsOut) -> vec4<f32> {
     // eased to zero by GLYPH_FADE_LIMIT.
     glyph = glyph * (1.0 - smoothstep(1.0, GLYPH_FADE_LIMIT, d));
     // The mark layer's sheet, which the glyphs take too -- over the slices a
-    // melody or bass ring points at, and nowhere else. A mark is the ring
-    // TOGETHER with the octave it names (the ring is slit at that slice's own
-    // boundaries to say so), so light crossing the one crosses the other; a
-    // sweep that stopped at the ring's edge would cut the mark in half at the
-    // gap. It is taken here rather than with the rings below because this is
-    // where the glyph layer is finished, and it is the same terms the rings
+    // melody or bass mark extends, and nowhere else. A mark is the octave it
+    // names TOGETHER with the extension that says so, one slice in two
+    // pieces, so light crossing the one crosses the other; a sweep that
+    // stopped at the extension's edge would cut the mark in half at the gap.
+    // It is taken here rather than with the marks below because this is where
+    // the glyph layer is finished, and it is the same terms the marks
     // themselves use -- one sheet, read twice, not two sweeps that could
     // disagree.
     //
@@ -1741,7 +1727,7 @@ fn node_paint(in: VsOut) -> vec4<f32> {
     glyph_rgb = shimmer_light(glyph_rgb, glyph_shimmer);
 
     // The audio ring, over the octave layer. A layer of its own, and radially
-    // disjoint from the band above and the mark rings below, so the four bands
+    // disjoint from the band above and the marks below, so the four bands
     // of a node — core, audio ring, octave band, marks — simply stack outward.
     // OVER rather than under so that a hand-dialled pair of radii that does
     // overlap the band still shows the measurement: the band's own reading is
@@ -1756,31 +1742,34 @@ fn node_paint(in: VsOut) -> vec4<f32> {
         / max(audio.w + glyph * (1.0 - audio.w), 1e-4);
     glyph = audio.w + glyph * (1.0 - audio.w);
 
-    // Melody/bass rings, bracketing the octave band: melody inside, bass
-    // outside — the ring's radius echoes where its note sits in the chord.
-    // Their own layer, composited over the glyphs — a sector's color is its
-    // pitch, which is what the octave layer is FOR, so nothing here
-    // repaints one.
-    let melody_cov = mark_ring(
-        in.marks.x, oct, in.uv,
-        inner_out - ring_w, inner_out,
-        aa,
-    ) * in.params.y;
-    let bass_cov = mark_ring(
-        in.marks.y, oct, in.uv,
-        outer_in, min(outer_in + ring_w, lim),
-        aa,
-    ) * in.params.z;
-    // Disjoint radii, so at most one of the two covers any given pixel.
+    // Melody/bass marks: each one its own octave's slice, continued into the
+    // strip past the band. Their own layer, composited over the glyphs — a
+    // sector's color is its pitch, which is what the octave layer is FOR, so
+    // nothing here repaints one.
+    //
+    // The strip's radial coverage is taken once for both ends, and guarded
+    // rather than left to `glyph_band`: with no thickness to draw at all the
+    // two radii meet, and an annulus of zero width is not a coverage of zero —
+    // the edge in and the edge out are the same smoothstep, and the product of
+    // one with the other's complement peaks at a quarter halfway through it.
+    // That is a quarter-covered mark on a node whose marks are switched off.
+    let mark_strip =
+        select(0.0, glyph_band(d, mark_in, mark_out, aa), mark_out > mark_in);
+    let melody_cov = mark_extension(in.marks.x, oct, in.uv, mark_strip, aa) * in.params.y;
+    let bass_cov = mark_extension(in.marks.y, oct, in.uv, mark_strip, aa) * in.params.z;
+    // The two ends share the strip, so where they name DIFFERENT slices they
+    // are angularly disjoint and where they name the same one they are the
+    // same wedge in the same color — either way the stronger owns the pixel,
+    // and the crossfade between two adjacent extensions is the one the octave
+    // layer already runs between two adjacent indicators.
     var mark = max(melody_cov, bass_cov);
-    // The rings' own shimmer (`mark_shimmer`, taken with the glyph layer's
-    // above). ONE direction for both rings, not one each: they are concentric
-    // and never overlap, so a single sweep crossing both reads as light
-    // passing over the node, where two would read as two unrelated animations
-    // stacked at different radii. The ring's own color is what the fit is
-    // measured on, which is why this is a second call and not the glyph
-    // layer's result reused -- a ring and the slice under it are different
-    // colors with different room above them.
+    // The marks' own shimmer (`mark_shimmer`, taken with the glyph layer's
+    // above). ONE direction for both, not one each: they lie in one strip and
+    // never overlap, so a single sweep crossing both reads as light passing
+    // over the node, where two would read as two unrelated animations. The
+    // mark's own color is what the fit is measured on, which is why this is a
+    // second call and not the glyph layer's result reused -- a mark and the
+    // slice it continues are different colors with different room above them.
     let mark_rgb = shimmer_light(
         select(in.bass_color.rgb, in.melody_color.rgb, melody_cov > bass_cov),
         mark_shimmer,
@@ -1788,7 +1777,7 @@ fn node_paint(in: VsOut) -> vec4<f32> {
     // Safety taper only. The radii above are already capped inside the
     // billboard (a circle of radius QUAD_MARGIN fits the square quad), so
     // this just keeps a soft edge from ending on the boundary; starting it
-    // any earlier eats the ring, which at the default band (outer 1.0)
+    // any earlier eats the mark, which at the default band (outer 1.0)
     // lives entirely in this margin.
     mark = mark * (1.0 - smoothstep(QUAD_MARGIN - 0.04, QUAD_MARGIN, d));
     glyph_rgb = (mark_rgb * mark + glyph_rgb * glyph * (1.0 - mark))

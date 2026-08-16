@@ -7,7 +7,7 @@
 //! - **MIDI** — [`ViewConfig::pitch_gradient`](crate::ViewConfig) spread over
 //!   the Color range, read through
 //!   [`pitch_lut_color`](crate::pitch_lut_color). A note's disc, its octave
-//!   wedges, its melody and bass rings and its ribbon on the piano roll all
+//!   wedges, its melody and bass marks and its ribbon on the piano roll all
 //!   come off that one table, so a pitch is one colour wherever it is drawn.
 //! - **FREQUENCY** — the analyzer's own ramp
 //!   (`SpectrumConfig::spectrogram_gradient`) against its own Level window,
