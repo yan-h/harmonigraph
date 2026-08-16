@@ -255,11 +255,12 @@ struct Instance {
     // factor so the gap comes out the same width whatever the node's size.
     // 0 means no gutter. See ViewConfig::sevens_size / _gutter.
     @location(10) sevens: vec2<f32>,
-    // Whether this node draws the audio ring: 1 where at least one of its
-    // wedges reaches the gate the view sets, 0 where none does. The CPU
-    // decides it (harmonigraph_scene's RingGate, against the same u.spectrum
+    // How much of the audio ring this node wears, 0..1: the gate the view sets
+    // answered against this node's own wedges, carried on the note Fade and
+    // floored by the node's envelope. The CPU decides it
+    // (harmonigraph_scene's RingGate and RingFade, against the same u.spectrum
     // this shader reads), so the ring's annulus is the layer's own off switch
-    // and this is which NODES the layer is on at.
+    // and this is which NODES the layer is on at, and how far.
     @location(11) ring: f32,
 };
 
@@ -288,7 +289,7 @@ struct VsOut {
     // node. Interpolated rather than flat for the same reason: a band has to
     // cross a node, not step from one to the next.
     @location(13) field: vec2<f32>,
-    // The audio ring's own gate for this node (see Instance::ring), which
+    // How much of the audio ring this node wears (see Instance::ring), which
     // multiplies the ring's coverage and nothing else on the node.
     @location(14) @interpolate(flat) ring: f32,
 };
@@ -1135,9 +1136,12 @@ fn folded() -> bool {
 // ground — so a silent ring is a faintly raised backdrop rather than a hole
 // punched through the surface, and still plainly not the ring switched off.
 //
-// WHICH nodes wear one is in.ring, decided on the CPU: a node draws its ring
-// when one of its wedges reaches the view's Gate (harmonigraph_scene's
-// RingGate). At the gate's floor that is every node in the window, silence
+// WHICH nodes wear one, and how much of it, is in.ring, decided on the CPU: a
+// node draws its ring when one of its wedges reaches the view's Gate
+// (harmonigraph_scene's RingGate), and a ring comes and goes on the note Fade
+// rather than at the instant that answer changes (RingFade). A node the KEYS
+// have lit wears its ring whatever the gate says, so the two pictures leave
+// together. At the gate's floor every node in the window rings, silence
 // included — the reading in full, and hundreds of rings saying only where the
 // nodes are.
 //
@@ -1210,10 +1214,11 @@ fn spectral_ring(in: VsOut, oct: OctRing, d: f32, aa: f32) -> vec4<f32> {
         return vec4<f32>(0.0);
     }
     // ...and this node's own gate: the layer is on, and nothing this ring would
-    // show reaches the level the view asks for. Decided on the CPU against this
-    // same u.spectrum (harmonigraph_scene's RingGate) rather than rediscovered
-    // here, since the question is about the node's whole ring and this is one
-    // fragment of one wedge of it.
+    // show reaches the level the view asks for — nor has the node been played,
+    // and nor is either still fading out. Decided on the CPU against this same
+    // u.spectrum (harmonigraph_scene's RingGate and RingFade) rather than
+    // rediscovered here, since the question is about the node's whole ring and
+    // this is one fragment of one wedge of it.
     if in.ring <= 0.0 {
         return vec4<f32>(0.0);
     }
@@ -1255,7 +1260,11 @@ fn spectral_ring(in: VsOut, oct: OctRing, d: f32, aa: f32) -> vec4<f32> {
         let across = wedge_fraction(oct_sector(owner, oct), in.uv);
         pitch = pitch + (across - 0.5) * u.misc9.x / 100.0;
     }
-    return vec4<f32>(spectral_lut_color(spectrum_at(pitch)), cov);
+    // The node's own level taken out of the COVERAGE and not out of the colour:
+    // a ring on its way in is the octave layer showing through it, where a
+    // wedge mixed toward the bed would be a reading of a quieter spectrum. The
+    // caller composites by coverage, so this is the one place it belongs.
+    return vec4<f32>(spectral_lut_color(spectrum_at(pitch)), cov * in.ring);
 }
 
 // ---- The core's color ------------------------------------------------------
@@ -1549,14 +1558,16 @@ fn node_paint(in: VsOut) -> vec4<f32> {
     // this branch discards what the full path would have discarded, not an
     // approximation of it.
     //
-    // The RING is the exception, and it is not a level a node carries: it is a
-    // window onto one shared spectrum, so it draws on every node whatever the
-    // keys are doing — silence included, at the ramp's floor color, which stands
-    // a step above the lattice's ground and so reads as a raised backdrop rather
-    // than a hole. What is left to skip is therefore radial rather than per node,
-    // and it is most of the quad: the ring is a narrow annulus in a billboard
-    // reaching QUAD_MARGIN. `spectral_ring` skips the same band from the other
-    // side.
+    // The RING is the exception, and what it reads is not a level a node
+    // carries: it is a window onto one shared spectrum, so it draws wherever
+    // the view's Gate lets it whatever the keys are doing — silence included, at
+    // the ramp's floor color, which stands a step above the lattice's ground and
+    // so reads as a raised backdrop rather than a hole. What is left to skip is
+    // therefore radial rather than per node, and it is most of the quad: the
+    // ring is a narrow annulus in a billboard reaching QUAD_MARGIN.
+    // `spectral_ring` skips the same band from the other side, and it is also
+    // where a node wearing NONE of its ring leaves — an idle node the gate has
+    // closed is culled on the CPU and never reaches this shader at all.
     let audio_annulus = spectral_radii();
     let in_audio_ring = audio_annulus.y > audio_annulus.x
         && d >= audio_annulus.x - aa

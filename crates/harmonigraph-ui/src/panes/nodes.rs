@@ -414,6 +414,13 @@ fn audio_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // readings, so it sits above the pair of bars that are each one reading's
     // own — it is a question about the layer rather than about a measurement.
     //
+    // It asks about the nodes NOBODY IS PLAYING, and that is worth knowing
+    // while dragging it: a node the keys have lit keeps its ring for as long as
+    // the note lasts whatever this says, and a ring comes and goes on the Note
+    // section's Fade rather than at the instant the level crosses. Both are in
+    // the hover text for the same reason — a bar that looks inert on the node
+    // you are watching is a bar that reads as broken.
+    //
     // Greyed with the ring off, like the Reading row and unlike Ring width:
     // there is no ring for it to hold back, and it is not the switch that would
     // bring one back.
@@ -429,7 +436,9 @@ fn audio_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                 "How loud a node's loudest wedge has to read before that node \
                  draws a ring at all, as a share of the analyzer's Level \
                  window. 0 rings every node, silence included; dialled up, a \
-                 ring means something is sounding there.",
+                 ring means something is sounding there. A node you are playing \
+                 rings whatever this says, and rings arrive and leave on the \
+                 Fade.",
             );
     });
     // The FOLD's kernel, and so inert under Spectrum rather than merely
@@ -481,10 +490,10 @@ fn audio_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
 /// around itself.
 ///
 /// One section rather than a heading apiece, because they are one idea: none
-/// is about the core, the octave glyphs or the melody/bass marks in
-/// particular, and all apply to whichever of those happen to be drawn. Fade
-/// especially — one time for the node rather than one per layer, so a release
-/// reads as a single gesture instead of pieces of the node going dark at
+/// is about the core, the octave glyphs, the audio ring or the melody/bass
+/// marks in particular, and all apply to whichever of those happen to be drawn.
+/// Fade especially — one time for the node rather than one per layer, so a
+/// release reads as a single gesture instead of pieces of the node going dark at
 /// different moments.
 fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBackend) {
     section(ui, "Note");
@@ -494,8 +503,8 @@ fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBack
     // is where they have to LOOK like the one setting they are.
     param_bar(ui, params, ParamKey::Fade).on_hover_text(
         "Seconds a note takes to arrive, and to leave once released — the whole \
-         node at once. Short notes still reach full brightness. 0 switches on \
-         and off outright.",
+         node at once, the audio ring's coming and going included. Short notes \
+         still reach full brightness. 0 switches on and off outright.",
     );
     // Linear like every bar around it, and for the same reason: the whole
     // range is one unit, so every hundredth of it — the readout's own

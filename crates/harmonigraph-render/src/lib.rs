@@ -404,19 +404,18 @@ struct GpuInstance {
     /// sheet), y = knockout gutter width in uv units (0 on the home sheet).
     /// See `NodeInstance::scale` / `::gutter`.
     sevens: [f32; 2],
-    /// Whether this node draws the audio ring: 1 where at least one of its
-    /// wedges reaches the gate, 0 where none does
+    /// How much of the audio ring this node wears, 0..=1: the gate's answer for
+    /// its wedges carried on the note Fade, floored by the node's own envelope
     /// (`NodeInstance::audio_ring`).
     ///
-    /// A DECISION and not the node's own peak level with the gate beside it in
-    /// the uniforms, though there is a free slot there for one: the rule is
-    /// "the loudest wedge reaches the gate", the levels and the wheel it is
-    /// measured over both live on the CPU, and splitting the comparison across
-    /// the bus would leave two places able to disagree about which nodes ring.
-    /// A float and not a `u32` because a vertex attribute has no bool and the
-    /// shader tests it as a level; it is 0 or 1 all the same, the gate being a
-    /// question about whether a ring is on the screen (see
-    /// `SpectralPaint::gate`).
+    /// A DECISION already taken and not the node's own peak level with the gate
+    /// beside it in the uniforms, though there is a free slot there for one:
+    /// the rule is "the loudest wedge reaches the gate", the levels and the
+    /// wheel it is measured over both live on the CPU, and splitting the
+    /// comparison across the bus would leave two places able to disagree about
+    /// which nodes ring. What crosses is where that decision has GOT to, which
+    /// is a level because a ring arrives and leaves on the Fade like every
+    /// other layer of a node (see `harmonigraph_scene::RingFade`).
     ring: f32,
 }
 
@@ -749,7 +748,7 @@ impl LatticeCallback {
                 melody_color: n.melody_color.to_array(),
                 bass_color: n.bass_color.to_array(),
                 sevens: [n.scale, gutter],
-                ring: f32::from(u8::from(n.audio_ring)),
+                ring: n.audio_ring,
         };
 
         let split = order
@@ -774,14 +773,16 @@ impl LatticeCallback {
         //
         // The audio RING is why this is not a property of the node alone: the
         // ring is a window onto the spectrum rather than a level a node
-        // carries, so it takes BOTH the layer being on and this node having
-        // been let through the gate (`Scene::gate_audio_rings`) for the node to
-        // owe an annulus. With the gate at its floor that is every node in the
-        // window, silence included — the ungated picture, and what "the ring
-        // reads raw" costs; dialled up, an idle node with nothing sounding at
-        // it goes back to shipping nothing at all. The shader's idle branch
-        // pays the rest per fragment, keeping an otherwise idle node to the
-        // ring's own annulus.
+        // carries, so it takes BOTH the layer being on and this node wearing
+        // some of the ring (`Scene::wear_audio_rings`) for the node to owe an
+        // annulus. With the gate at its floor that is every node in the window,
+        // silence included — the ungated picture, and what "the ring reads raw"
+        // costs; dialled up, an idle node with nothing sounding at it goes back
+        // to shipping nothing at all, ONCE ITS FADE HAS RUN OUT — the level
+        // reaches exactly 0 rather than approaching it, so a ring on its way
+        // out is shipped for exactly as long as it is drawn. The shader's idle
+        // branch pays the rest per fragment, keeping an otherwise idle node to
+        // the ring's own annulus.
         let ringing = scene.spectral.ring_draws();
         let paints = |g: &GpuInstance| {
             (ringing && g.ring > 0.0)

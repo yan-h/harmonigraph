@@ -50,6 +50,13 @@
 //! when one of its wedges reaches [`SpectralPaint::gate`], so where the rings
 //! ARE is a reading in itself.
 //!
+//! A ring comes and goes on the note Fade rather than at the instant the gate's
+//! answer changes ([`RingFade`]), and a node the KEYS have lit wears its ring
+//! for as long as they light it, whatever the gate says
+//! ([`Scene::wear_audio_rings`](crate::Scene)). Those are one rule read from
+//! two ends: the ring is a layer of a node, and every other layer of a node
+//! arrives and leaves on that one duration.
+//!
 //! Nothing in this crate reads audio, so [`SpectralPaint`] arrives already
 //! measured — `harmonigraph-ui`'s `panes::spectral_fold` is what fills it, and
 //! a scene derived without that pass carries [`SpectralPaint::silent`], which
@@ -61,6 +68,7 @@ use glam::Vec4;
 use harmonigraph_core::spectrum::{
     BINS_PER_SEMITONE, SPECTRUM_BINS, SPECTRUM_MAX_MIDI, SPECTRUM_MIN_MIDI,
 };
+use harmonigraph_core::Envelope;
 
 use crate::{pitch_ramp_lut, Gradient, OctaveLayout, ViewConfig, PITCH_LUT_N};
 
@@ -251,9 +259,15 @@ pub struct SpectralPaint {
     /// last byte: a partial drifting off a node dims smoothly, which is what
     /// makes vibrato breathe instead of flicker (`panes::spectral_fold`'s
     /// "weight, don't gate"). What this decides is whether the ring is on the
-    /// screen, and there is no smooth version of that — the ring costs its
-    /// annulus at every node in the window whatever it reads, and the cost of
-    /// carrying it at a node with nothing in it is the picture around it.
+    /// screen at all — the ring costs its annulus at every node in the window
+    /// whatever it reads, and the cost of carrying it at a node with nothing in
+    /// it is the picture around it.
+    ///
+    /// A THRESHOLD, then, and its answer is still a yes or a no; what is smooth
+    /// is how fast a ring follows it. [`RingFade`] carries each answer on the
+    /// note Fade, so a level breathing across this bar is a ring dimming and
+    /// coming back rather than one flickering, and a level that stays across is
+    /// a ring that goes.
     ///
     /// [`SpectralPaint`] carries it so that the decision and the levels it is
     /// made against are read from one place; [`RingGate`] is where it is
@@ -417,6 +431,108 @@ impl RingGate {
     pub fn draws(&self, layout: &OctaveLayout, cents: f32) -> bool {
         self.peak(layout, cents) >= self.gate
     }
+
+    /// Whether a wedge reading bucket `bucket` reaches the gate — the same
+    /// question [`draws`](Self::draws) asks of a whole node, asked of one
+    /// bucket of the grid so that [`RingFade`] can carry the answer across
+    /// frames.
+    ///
+    /// Read at the bucket's own centre, which is where a wedge sitting on it
+    /// reads: [`level_at`] interpolates between the two buckets a pitch falls
+    /// between, and at a centre that blend is the bucket itself.
+    fn opens(&self, bucket: usize) -> bool {
+        f32::from(self.peaks[bucket]) / 255.0 >= self.gate
+    }
+}
+
+/// How far open the gate stands at every bucket of the analyzer's grid, carried
+/// across frames so that a ring ARRIVES and LEAVES on the Note section's Fade
+/// rather than switching on and off with the spectrum.
+///
+/// The gate is a threshold and a threshold flickers: what it is asked of is a
+/// live measurement, so a partial breathing across the level the view names
+/// takes its node's whole annulus with it every time it crosses. One Fade under
+/// the decision makes that a ring dimming and coming back, which is the same
+/// reading drawn at a speed an eye can follow — and it is the Fade rather than
+/// a smoothing of its own because the ring is a LAYER OF A NODE: the node's
+/// disc, its band and its marks all leave on that one duration, so a release
+/// reads as a single gesture instead of the ring snapping off part way through
+/// it.
+///
+/// Kept per BUCKET and not per node, for the reason the reading itself is one
+/// grid: which nodes are in view is the camera's business and changes as it
+/// pans, where the spectrum is the same measurement wherever the lattice is
+/// looked at from. A node's own level is then a read of this grid at each of
+/// its wedges, exactly as [`RingGate::peak`] is.
+///
+/// The one cost of that is stated rather than hidden: a wedge landing BETWEEN
+/// an open bucket and a closed one wears a fraction of its ring, where the
+/// gate's own answer is a yes or a no. Those buckets are 3.125¢ apart, so the
+/// band it can happen in is under two cents wide, and what it draws there is a
+/// ring on its way in — which is what this type is for.
+pub struct RingFade {
+    /// How much of its ring a wedge reading each bucket wears, 0..=1 — the
+    /// gate's own answer once it has settled, and part way between while a
+    /// transition is running.
+    open: Box<[f32; SPECTRUM_BINS]>,
+    /// The clock the levels above stand at, or `None` before the first step.
+    ///
+    /// A moment and not a duration, so that a pane drawn TWICE in one frame —
+    /// the docked lattice and the Video tab's preview, off one clock — steps
+    /// the fade once: the second call's `dt` is zero and every bucket answers
+    /// where it already was.
+    at: Option<f64>,
+}
+
+impl Default for RingFade {
+    fn default() -> RingFade {
+        RingFade { open: Box::new([0.0; SPECTRUM_BINS]), at: None }
+    }
+}
+
+impl RingFade {
+    /// Carry every bucket toward what `gate` says of it now, on `env`.
+    ///
+    /// The FIRST step of all settles rather than fading in, and so does one
+    /// after a jump in the clock: there is no transition to draw when nothing
+    /// was on screen to transition from, and a lattice whose ring layer has
+    /// just been switched on should show what the analyzer is saying rather
+    /// than a fade-in from a picture nobody saw. (A jump lands the same way
+    /// through the arithmetic rather than through a case of its own — a `dt`
+    /// past the Fade runs the transition out.)
+    ///
+    /// Buckets already at their target are skipped, which is nearly all of
+    /// them nearly always: the grid is 3828 buckets and what is moving through
+    /// a transition at any moment is the edge of whatever is sounding.
+    pub fn advance(&mut self, gate: &RingGate, env: &Envelope, now: f64) {
+        let dt = self.at.map(|at| now - at);
+        self.at = Some(now);
+        for (bucket, level) in self.open.iter_mut().enumerate() {
+            let open = gate.opens(bucket);
+            let target = if open { 1.0 } else { 0.0 };
+            if *level == target {
+                continue;
+            }
+            *level = match dt {
+                Some(dt) => env.carried(*level, dt, open),
+                None => target,
+            };
+        }
+    }
+
+    /// How much of its ring a node of pitch class `cents` wears, 0..=1: the
+    /// most open any of its wedges stands.
+    ///
+    /// The shape of [`RingGate::peak`] and for the same reasons — every slot
+    /// the wheel DRAWS and no others, read through the same grid arithmetic the
+    /// shader uses — so that what a node wears follows what its own wedges
+    /// show.
+    pub fn level(&self, layout: &OctaveLayout, cents: f32) -> f32 {
+        let (low, high) = layout.slots(cents);
+        (low..=high)
+            .map(|slot| open_at(&self.open, layout.slot_pitch(slot, cents)))
+            .fold(0.0, f32::max)
+    }
 }
 
 /// Cents one bucket of the analyzer's grid spans: 3.125.
@@ -484,14 +600,38 @@ fn window_max(levels: &SpectralLevels, half: usize) -> Box<SpectralLevels> {
 /// two have to read the grid the same way or a node is hidden while showing a
 /// partial the gate never saw.
 fn level_at(grid: &SpectralLevels, pitch: f32) -> f32 {
+    let Some((bucket, next, across)) = grid_at(pitch) else {
+        return 0.0;
+    };
+    let (low, high) = (f32::from(grid[bucket]) / 255.0, f32::from(grid[next]) / 255.0);
+    low + (high - low) * across
+}
+
+/// [`RingFade`]'s reading of its own grid, which holds a level per bucket
+/// already rather than a byte — the same walk as [`level_at`], so a node's ring
+/// comes and goes at the pitch its wedges are gated at.
+fn open_at(grid: &[f32; SPECTRUM_BINS], pitch: f32) -> f32 {
+    let Some((bucket, next, across)) = grid_at(pitch) else {
+        return 0.0;
+    };
+    grid[bucket] + (grid[next] - grid[bucket]) * across
+}
+
+/// The two buckets `pitch` falls between and how far across the pair it sits,
+/// or `None` where the analyzer's axis does not reach it.
+///
+/// One definition of where a pitch lands on the grid, because three readers
+/// have to agree on it — the gate's levels, the fade's own openness, and the
+/// shader's `spectrum_at`, which is the one that draws. The half bucket is the
+/// grid's own convention ([`bucket_pitch`]): a bucket stands for its CENTRE,
+/// and dropping it puts every partial half a bucket flat of where it sounds.
+fn grid_at(pitch: f32) -> Option<(usize, usize, f32)> {
     let x = (pitch - SPECTRUM_MIN_MIDI) * BINS_PER_SEMITONE as f32 - 0.5;
     if x < 0.0 || x > (SPECTRUM_BINS - 1) as f32 {
-        return 0.0;
+        return None;
     }
     let bucket = x as usize;
-    let (low, high) = (grid[bucket], grid[(bucket + 1).min(SPECTRUM_BINS - 1)]);
-    let (low, high) = (f32::from(low) / 255.0, f32::from(high) / 255.0);
-    low + (high - low) * (x - bucket as f32)
+    Some((bucket, (bucket + 1).min(SPECTRUM_BINS - 1), x - bucket as f32))
 }
 
 /// The analyzer's gradient as the RING reads it: the same arc, with the bottom
@@ -1004,6 +1144,111 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A straight-line envelope of a stated length, so half a duration in
+    /// reads half way along and a claim can be made in fractions.
+    fn fade_of(seconds: f32) -> Envelope {
+        Envelope { attack_time: seconds, fade_time: seconds, shape: 0.0 }
+    }
+
+    /// A ring COMES and GOES on the Fade: a class the gate has just opened
+    /// wears part of its ring part way through the duration and all of it at
+    /// the end, and the same in reverse once the gate shuts.
+    ///
+    /// The whole of what this type is for, and the failure it is against is the
+    /// picture before it: a threshold over a live measurement, so a partial
+    /// breathing across the bar takes a node's whole annulus with it every time
+    /// it crosses, several times a second.
+    ///
+    /// The first step of all is the exception and is checked here too, because
+    /// it is what every other test in this file rests on: with nothing on
+    /// screen to transition FROM there is no transition to draw, so a fresh
+    /// fade answers the gate exactly.
+    #[test]
+    fn a_rings_coming_and_going_runs_on_the_fade() {
+        let wheel = wheel();
+        let view = gated(0.5, SpectralReading::Fold);
+        let env = fade_of(1.0);
+        let sounding = gate_of(&view, partial(60.0, 10.0));
+        let silent = gate_of(&view, empty());
+
+        let mut fade = RingFade::default();
+        fade.advance(&sounding, &env, 0.0);
+        assert_eq!(fade.level(&wheel, 0.0), 1.0, "the first frame faded a ring in from nothing");
+
+        // ...and out, on the gate shutting: a straight line, so a quarter of
+        // the duration in is a quarter of the way down.
+        fade.advance(&silent, &env, 0.25);
+        let quarter = fade.level(&wheel, 0.0);
+        assert!((quarter - 0.75).abs() < 1e-4, "a quarter of a Fade out reads {quarter}");
+        fade.advance(&silent, &env, 0.75);
+        let most = fade.level(&wheel, 0.0);
+        assert!((most - 0.25).abs() < 1e-4, "three quarters of a Fade out reads {most}");
+
+        // Turned around part way, the ring goes back up from where it had got
+        // to rather than restarting from nothing — which is the whole reason
+        // the level is carried and not the moment (`Envelope::carried`).
+        fade.advance(&sounding, &env, 1.0);
+        let back = fade.level(&wheel, 0.0);
+        assert!(back > most, "a reopened gate dropped the ring from {most} to {back}");
+        assert!(back < 1.0, "a reopened gate jumped the ring straight back to full");
+
+        // And it LANDS: a fade running past its duration is over, exactly, so
+        // an idle node stops being shipped at all rather than carrying a ring
+        // nobody can see (`paints`, in harmonigraph-render).
+        fade.advance(&silent, &env, 99.0);
+        assert_eq!(fade.level(&wheel, 0.0), 0.0, "a ring long gone still wears something");
+    }
+
+    /// A Fade of 0 is the gate switching outright, which is the setting a
+    /// player who wants the reading raw drags to — and the state every test
+    /// written before the fade existed assumed.
+    #[test]
+    fn a_fade_of_nothing_is_the_gate_itself() {
+        let wheel = wheel();
+        let view = gated(0.5, SpectralReading::Fold);
+        let env = fade_of(0.0);
+        let mut fade = RingFade::default();
+        fade.advance(&gate_of(&view, partial(60.0, 10.0)), &env, 0.0);
+        assert_eq!(fade.level(&wheel, 0.0), 1.0);
+        fade.advance(&gate_of(&view, empty()), &env, 0.001);
+        assert_eq!(fade.level(&wheel, 0.0), 0.0, "a Fade of 0 left a ring behind");
+    }
+
+    /// One frame drawn twice steps the fade ONCE: the lattice is drawn by the
+    /// docked pane and by the Video tab's preview off one clock, and a
+    /// transition that ran per call would move at twice the speed in an editor
+    /// and at once the speed in an export.
+    ///
+    /// Stated here rather than in the shell because it is this type's guarantee
+    /// — the clock is what it steps against, and a caller cannot get it wrong.
+    #[test]
+    fn a_frame_drawn_twice_steps_the_fade_once() {
+        let wheel = wheel();
+        let view = gated(0.5, SpectralReading::Fold);
+        // A CURVED envelope, where every other claim here is on a straight
+        // line: the second call's step is zero, and a zero step is only exact
+        // if it is answered as one — walking the curve out and back is a pair
+        // of `powf`s that land a rounding apart, which on a straight line they
+        // do not.
+        let env = Envelope { attack_time: 1.0, fade_time: 1.0, shape: 0.6 };
+        let sounding = gate_of(&view, partial(60.0, 10.0));
+        let silent = gate_of(&view, empty());
+        let twice = {
+            let mut fade = RingFade::default();
+            fade.advance(&sounding, &env, 0.0);
+            fade.advance(&silent, &env, 0.5);
+            fade.advance(&silent, &env, 0.5);
+            fade.level(&wheel, 0.0)
+        };
+        let once = {
+            let mut fade = RingFade::default();
+            fade.advance(&sounding, &env, 0.0);
+            fade.advance(&silent, &env, 0.5);
+            fade.level(&wheel, 0.0)
+        };
+        assert_eq!(twice, once, "a pane drawn twice ran the fade twice");
     }
 
     /// A bucket stands for its own centre, and the grid covers the axis the

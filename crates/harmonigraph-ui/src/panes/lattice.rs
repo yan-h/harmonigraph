@@ -739,7 +739,7 @@ mod tests {
             bass_color: glam::Vec4::ONE,
             // The lattice pass draws the ring on every node it ships; the
             // gate is the fold's answer and there is no fold here.
-            audio_ring: true,
+            audio_ring: 1.0,
             trail: 0.0,
         }
     }

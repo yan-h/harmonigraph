@@ -340,7 +340,7 @@ fn parity_scene() -> Scene {
             bass_color: Vec4::new(0.45, 0.8, 1.0, 1.0),
             // The lattice pass draws the ring on every node it ships; the
             // gate is the fold's answer and there is no fold here.
-            audio_ring: true,
+            audio_ring: 1.0,
             trail: 0.0,
         });
     }
@@ -1310,7 +1310,7 @@ fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
         bass_color: Vec4::new(0.45, 0.8, 1.0, 1.0),
         // The lattice pass draws the ring on every node it ships; the
         // gate is the fold's answer and there is no fold here.
-        audio_ring: true,
+        audio_ring: 1.0,
         trail: 0.0,
     }];
     scene.grid.clear();
@@ -1723,7 +1723,7 @@ fn a_gated_node_loses_its_ring_and_nothing_else() {
 
     // The same node held back by the gate...
     let mut gated = ringing_node(Some(slot), Some(sounding), fresh_range);
-    gated.nodes[0].audio_ring = false;
+    gated.nodes[0].audio_ring = 0.0;
     // ...against the same node with the LAYER off, which is the picture a gated
     // node has to come out as.
     let mut layer_off = ringing_node(Some(slot), Some(sounding), fresh_range);
@@ -1753,6 +1753,64 @@ fn a_gated_node_loses_its_ring_and_nothing_else() {
         ring.far,
         band.far,
     );
+}
+
+/// A ring part way through its fade is the ring drawn OVER the picture without
+/// it, at a fraction of its coverage — every pixel of the node between the two
+/// pictures the ends of the fade draw, and no pixel outside the annulus moved.
+///
+/// What the fade has to be if it is to read as a ring arriving rather than as
+/// the node changing: the level scales the RING's coverage, so what shows
+/// through is the octave layer under it. The ways it can fail all draw a
+/// plausible picture and none of them is this — a level mixed into the wedge's
+/// COLOUR would draw a reading of a quieter spectrum, and one applied to the
+/// composite would fade the band and the marks with it.
+///
+/// A quarter and not a half, so that a shot which merely picked one END of the
+/// fade cannot pass by landing between the two.
+#[test]
+fn a_ring_part_way_through_its_fade_sits_between_the_two() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut gpu) = Shooter::new(SIZE) else {
+        return;
+    };
+    let fresh_range = harmonigraph_scene::ViewConfig::default().spectral_ring_range;
+    let slot = harmonigraph_scene::MIDDLE_C_SLOT;
+    let sounding = slot as f32 * 12.0;
+    let full = gpu.shot(&ringing_node(Some(slot), Some(sounding), fresh_range));
+
+    let mut none = ringing_node(Some(slot), Some(sounding), fresh_range);
+    none.nodes[0].audio_ring = 0.0;
+    let none = gpu.shot(&none);
+
+    let mut part = ringing_node(Some(slot), Some(sounding), fresh_range);
+    part.nodes[0].audio_ring = 0.25;
+    let part = gpu.shot(&part);
+
+    assert!(differing_pixels(&full, &none) > 0, "the ring drew nothing to fade");
+    assert!(differing_pixels(&part, &none) > 0, "a quarter of a ring drew nothing at all");
+    assert!(differing_pixels(&part, &full) > 0, "a quarter of a ring is the whole of one");
+
+    // Between the two, channel by channel. The slack is the compositing's own
+    // rounding — the ring is blended in 8-bit twice over — and not a tolerance
+    // on the claim: a level that reached the colour instead would leave the
+    // wedges the same coverage and paint them a different colour, which lands
+    // outside the pair wherever the ramp is not monotone in the channel.
+    let mut moved = 0;
+    for ((p, a), b) in part.chunks(4).zip(full.chunks(4)).zip(none.chunks(4)) {
+        for c in 0..3 {
+            let (low, high) = (a[c].min(b[c]), a[c].max(b[c]));
+            assert!(
+                i32::from(p[c]) >= i32::from(low) - 2 && i32::from(p[c]) <= i32::from(high) + 2,
+                "a quarter-faded pixel reads {} where the ends read {low} and {high}",
+                p[c],
+            );
+        }
+        if a != b {
+            moved += 1;
+        }
+    }
+    assert!(moved > 0, "the two ends of the fade drew one picture");
 }
 
 /// A melody/bass mark stands off the OUTERMOST RING the node draws, which on a

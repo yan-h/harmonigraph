@@ -171,8 +171,8 @@ impl Envelope {
     /// through the branch that looks safe.
     ///
     /// A poisoned SHAPE straightens instead, there being a real duration to
-    /// run out: a NaN through `clamp` stays a NaN, and `min` would answer with
-    /// the bound and silently pin the curve at its sharpest.
+    /// run out; [`power`](Self::power) is where that is done, for both readings
+    /// of the curve at once.
     fn approach(&self, elapsed: Time, duration: f32) -> f32 {
         if !elapsed.is_finite() {
             // Over, whatever the duration says, so the two poisoned inputs
@@ -195,11 +195,93 @@ impl Envelope {
         // Finite by the guard above, so this floor is only the transition
         // that has not started yet — a ring inside its mark Delay.
         let p = (elapsed.max(0.0) as f32 / duration).min(1.0);
+        1.0 - (1.0 - p).powf(self.power())
+    }
+
+    /// The curve's exponent: 1 at the flat end of the shape bar, [`MAX_POWER`]
+    /// at the sharp one.
+    ///
+    /// Its own function because two readings of the curve need it — the
+    /// approach above walks it forward, and [`carried`](Self::carried) solves
+    /// it backward — and a second copy of the mapping is how the two would come
+    /// to draw different curves from one bar.
+    ///
+    /// A NaN shape straightens rather than clamping: a NaN through `clamp`
+    /// stays a NaN, and `min` would answer with the bound and silently pin the
+    /// curve at its sharpest.
+    fn power(&self) -> f32 {
         let shape = if self.shape.is_finite() { self.shape.clamp(0.0, 1.0) } else { 0.0 };
         // Exponent 1 is the straight line and `powf` returns it exactly, so
         // the flat end of the bar needs no case of its own.
-        let power = 1.0 + shape * (MAX_POWER - 1.0);
-        1.0 - (1.0 - p).powf(power)
+        1.0 + shape * (MAX_POWER - 1.0)
+    }
+
+    /// `level` carried `dt` seconds further along this envelope — toward 1
+    /// while `arriving`, toward 0 once it is not — on the same curve
+    /// [`attack`](Self::attack) and [`release`](Self::release) run.
+    ///
+    /// A LEVEL in and a level out, where those two take the MOMENT a transition
+    /// began, and the difference is what is being faded rather than a
+    /// convenience. A note has a note-on to run from and keeps it for the whole
+    /// of its life, so the level it has reached is always re-derivable from the
+    /// setting on screen — the rule [`Voice::wore_high`] states. The audio
+    /// ring's gate has no such moment: it opens when the spectrum crosses a
+    /// threshold and can cross back before the fade it started has landed, and
+    /// a transition restarted from a stamp would jump the picture to whatever
+    /// the new ramp reads at zero. Carrying the level is what makes a reversal
+    /// continuous.
+    ///
+    /// The DURATION and the shape are still read fresh every step, so a drag on
+    /// either reaches a transition already under way; only where it has got to
+    /// is remembered. Progress is linear in time and the curve is a fixed
+    /// bijection over it, so stepping is exact: the same clock walked in one
+    /// step or in twenty lands on the same level, which is what keeps a render
+    /// at 60 fps and a live pane at 144 drawing one picture.
+    ///
+    /// The poisoned inputs land where [`approach`](Self::approach) puts them,
+    /// and for the same reason: a duration that is not a positive real number
+    /// is no ramp to walk, so the transition is a STEP to where it was going,
+    /// and a clock that is not a number is a step as well. Both make a ring
+    /// appear or vanish at once rather than hanging part way through a fade
+    /// that can never finish. A `dt` running BACKWARD is the one case that
+    /// holds instead of stepping — a clock that moves back is a picture from
+    /// another moment, not a transition — and it is what keeps a pane drawn
+    /// twice in one frame from stepping the fade twice.
+    pub fn carried(&self, level: f32, dt: Time, arriving: bool) -> f32 {
+        let target = if arriving { 1.0 } else { 0.0 };
+        let (duration, remaining) =
+            if arriving { (self.attack_time, 1.0 - level) } else { (self.fade_time, level) };
+        if !dt.is_finite() || !duration.is_finite() || duration <= 0.0 || !remaining.is_finite() {
+            return target;
+        }
+        // A step of nothing, or a clock that has moved BACK. Answered here and
+        // not left to the arithmetic, because the arithmetic is not the
+        // identity at `dt` = 0: recovering the progress and walking it forward
+        // again is a pair of `powf`s, and they land a rounding away. A pane
+        // drawn twice in one frame has to come out with the level it already
+        // had, exactly, or the picture depends on how many panes are open.
+        if dt <= 0.0 {
+            return level.clamp(0.0, 1.0);
+        }
+        let remaining = remaining.clamp(0.0, 1.0);
+        if remaining <= 0.0 {
+            return target;
+        }
+        // How far into the transition this level stands: `approach` leaves
+        // `(1 - p)^n` of the distance to go, so this is that solved for p.
+        let power = self.power();
+        let p = 1.0 - remaining.powf(1.0 / power);
+        let p = (p + dt as f32 / duration).min(1.0);
+        // Arriving at exactly the target is load-bearing rather than tidy: a
+        // ring that only approaches nothing is a ring every idle node goes on
+        // shipping an instance for. `p` reaches exactly 1 above, and `0^n` is
+        // exactly 0.
+        let left = (1.0 - p).powf(power);
+        if arriving {
+            1.0 - left
+        } else {
+            left
+        }
     }
 
     /// How far a note that arrived at `since` has eased in, 0..=1.
@@ -996,6 +1078,95 @@ mod tests {
         // clock ahead of the transition — the mark Delay, which is the whole
         // reason `approach` distinguishes the two at all.
         assert_eq!(env.attack(0.5, 1.0), 0.0, "a start still ahead has not started");
+    }
+
+    /// [`Envelope::carried`] walks the same curve [`Envelope::attack`] does,
+    /// and lands in the same place: a level carried from 0 for `t` is the
+    /// attack at `t`, at any shape.
+    ///
+    /// The claim that makes the two readings one curve. What it is against is a
+    /// second easing written beside the first — the audio ring's gate would
+    /// then fade on a shape the Fade curve bar does not draw, and the bar's own
+    /// preview would be telling the truth about the notes and not about the
+    /// rings.
+    #[test]
+    fn a_carried_level_walks_the_curve_the_attack_does() {
+        for shape in [0.0f32, 0.35, 1.0] {
+            let env = Envelope { attack_time: 2.0, fade_time: 2.0, shape };
+            for t in [0.25f64, 0.5, 1.0, 1.9] {
+                let carried = env.carried(0.0, t, true);
+                let attacked = env.attack(t, 0.0);
+                assert!(
+                    (carried - attacked).abs() < 1e-5,
+                    "shape {shape} at {t}s: carried {carried}, attacked {attacked}",
+                );
+                // ...and the departure is that mirrored, which is what
+                // `release` answers off the same approach.
+                let left = env.carried(1.0, t, false);
+                let released = env.release(t, 0.0);
+                assert!(
+                    (left - released).abs() < 1e-5,
+                    "shape {shape} at {t}s: carried {left} left, released {released}",
+                );
+            }
+        }
+    }
+
+    /// Carrying a level in STEPS lands where carrying it in one does, because
+    /// progress is linear in time and the curve over it is fixed.
+    ///
+    /// Not a nicety: the live pane steps this per frame at whatever rate the
+    /// host is running and the offline renderer steps it at the export's own,
+    /// so a transition that depended on how it was cut up would draw one
+    /// picture on screen and another in the mp4.
+    #[test]
+    fn carrying_a_level_in_steps_lands_where_one_step_does() {
+        let env = Envelope { attack_time: 1.0, fade_time: 1.0, shape: 0.6 };
+        let once = env.carried(0.0, 0.5, true);
+        let mut stepped = 0.0;
+        for _ in 0..20 {
+            stepped = env.carried(stepped, 0.025, true);
+        }
+        assert!((once - stepped).abs() < 1e-4, "one step {once}, twenty steps {stepped}");
+        // A step of nothing is the picture standing still, which is what keeps
+        // a pane drawn twice in one frame from running the fade twice.
+        assert_eq!(env.carried(0.4, 0.0, true), 0.4);
+        assert_eq!(env.carried(0.4, 0.0, false), 0.4);
+        // A clock that moves BACK holds as well: it is a picture from another
+        // moment rather than a transition to run backward.
+        assert_eq!(env.carried(0.4, -3.0, false), 0.4);
+    }
+
+    /// A carried level ARRIVES: past the duration it is exactly 1 or exactly 0,
+    /// which is what lets an idle node whose ring has gone stop being drawn at
+    /// all rather than carrying a ring nobody can see.
+    #[test]
+    fn a_carried_level_lands_exactly_on_its_target() {
+        let env = Envelope { attack_time: 0.5, fade_time: 0.5, shape: 0.8 };
+        assert_eq!(env.carried(0.3, 0.5, false), 0.0);
+        assert_eq!(env.carried(0.3, 900.0, false), 0.0);
+        assert_eq!(env.carried(0.3, 0.5, true), 1.0);
+    }
+
+    /// The guards, which reach this the way they reach the ramp: a duration
+    /// that is not a positive real number is no ramp to walk, so the transition
+    /// STEPS to where it was going, and so does a clock that is not a number.
+    /// Both make a ring appear or vanish at once rather than hanging part way
+    /// through a fade that can never finish.
+    #[test]
+    fn a_non_finite_carry_steps_rather_than_hangs() {
+        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -1.0] {
+            let env = Envelope { attack_time: bad, fade_time: bad, shape: 0.0 };
+            assert_eq!(env.carried(0.5, 0.1, true), 1.0, "attack_time {bad} hung on the way in");
+            assert_eq!(env.carried(0.5, 0.1, false), 0.0, "fade_time {bad} hung on the way out");
+        }
+        let env = Envelope { attack_time: 1.0, fade_time: 1.0, shape: 0.0 };
+        assert_eq!(env.carried(0.5, f64::NAN, false), 0.0, "a NaN clock hung the fade");
+        assert_eq!(env.carried(f32::NAN, 0.1, false), 0.0, "a NaN level hung the fade");
+        // A poisoned SHAPE straightens, the durations being real: the level
+        // still moves, and it moves on the line every layer fades on.
+        let curve = Envelope { attack_time: 1.0, fade_time: 1.0, shape: f32::NAN };
+        assert_eq!(curve.carried(1.0, 0.25, false), 0.75);
     }
 
     #[test]

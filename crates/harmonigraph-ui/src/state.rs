@@ -193,6 +193,18 @@ pub struct SharedState {
     /// The Spectral pane's settings (the Display tab's Analyzer page;
     /// persisted).
     pub spectrum_config: SpectrumConfig,
+    /// How far open the audio ring's Gate stands at each bucket of the
+    /// analyzer's grid, so a ring arrives and leaves on the note Fade rather
+    /// than at the instant the spectrum crosses the bar
+    /// ([`RingFade`](harmonigraph_scene::RingFade)). Runtime-only.
+    ///
+    /// Here rather than in the pane because it is the one thing about the
+    /// lattice that must survive a frame, and because this struct is exactly
+    /// what the offline renderer carries between frames — a transition kept
+    /// anywhere else would draw one picture live and another in an export.
+    /// Stepped against the clock (`panes::spectral_fold::apply`), so the two
+    /// lattices an editor frame draws step it once between them.
+    pub ring_fade: harmonigraph_scene::RingFade,
     /// Where the analyzer's divider stands on the DOCKED pane as that pane is
     /// resized — the spectrum keeps its size and the spectrogram takes the
     /// difference. See [`panes::spectral::SpectrumHold`].
@@ -665,6 +677,7 @@ impl SharedState {
             take: TakeState::default(),
             spectrum: AudioSpectrum::default(),
             spectrum_config: SpectrumConfig::default(),
+            ring_fade: harmonigraph_scene::RingFade::default(),
             spectrum_hold: panes::spectral::SpectrumHold::default(),
             spiral_view: panes::spiral::SpiralView::default(),
             whole_song: None,

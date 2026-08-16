@@ -421,6 +421,14 @@ mod tests {
             // with the camera, so a zoom applied on top of the last one would
             // compound.
             state.camera = home;
+            // And from a fresh fade, for the same reason one step further on:
+            // every shot here is taken at ONE clock, so a ring carried over
+            // from the shot before would still be standing where that shot's
+            // Gate put it (`RingFade` steps against the clock, so a second
+            // frame at the same moment moves nothing). These are pictures of
+            // settings rather than frames of an animation, and a fresh fade is
+            // what the first frame of each of them draws.
+            state.ring_fade = harmonigraph_scene::RingFade::default();
             state.camera.zoom_by(zoom);
             let output = context.run_ui(
                 egui::RawInput {
