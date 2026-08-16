@@ -128,8 +128,11 @@ fn the_gap_reaches_the_scene_and_is_clamped() {
     );
     assert_eq!(scene.ring_gap, 0.2);
 
-    // A gap wider than the band would erase every sector; the scene caps
-    // it rather than handing the shader something that draws nothing.
+    // The cap is what a hand-edited blob is held to: the same number spaces
+    // the octave sectors ANGULARLY, where anything past a fraction of a turn
+    // erases every one of them. It is no guarantee that the stack still fits
+    // — at GAP_MAX the paddings alone are more than the quad, so the band's
+    // slot ends past the node's edge and the layer comes out off.
     let wild = ViewConfig { ring_gap: 5.0, ..ViewConfig::default() };
     let scene = scene_of(
         &NoteTracker::new(),
