@@ -486,14 +486,15 @@ fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBack
     // Directly above the Gap, because the two are one idea: the sizes are the
     // layers and the Gap is the padding standing between them, the bar draws
     // both, and dragging the Gap is visibly the stack opening up.
-    StackBar::new(view, "Layers")
+    StackBar::new(view)
         .show(ui)
         .on_hover_text(
             "Every layer of a node, from its center out: the core, the audio \
-             ring, the octave band and the melody/bass strip. Drag a handle to \
-             set the layer inside it — 0 removes that layer and the ones \
-             outside close up. The line is the node's edge, which only the \
-             marks may cross. Double-click to restore.",
+             ring, the octave band and the melody/bass strip, each named on its \
+             own cell where there is room for it. Drag a handle to set the layer \
+             inside it — 0 removes that layer and the ones outside close up. The \
+             line is the node's edge, which only the marks may cross. \
+             Double-click to restore.",
         );
     // The one padding on a node, and so a whole-note setting rather than the
     // octave layer's: it spaces the rings of the stack apart, it separates one

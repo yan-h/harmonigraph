@@ -1,5 +1,6 @@
-//! [`StackBar`]: the four layers of a node in one bar — where each one ends,
-//! the gaps standing between them, and a handle apiece to size them by.
+//! [`StackBar`]: the four layers of a node in one bar — each one a cell as long
+//! as it is thick, named along its own stretch, with a handle apiece to size
+//! it by.
 
 use egui::{CornerRadius, Response, Sense, TextStyle, Ui, Vec2};
 use harmonigraph_scene::{
@@ -7,8 +8,8 @@ use harmonigraph_scene::{
 };
 
 use super::bar::{
-    aimed_at, bar_radius, bar_width, elided_name, grabbed, grip_over_text, release_grab,
-    track_fill, BAR_TEXT_PAD, HANDLE_INSET, HANDLE_W,
+    aimed_at, bar_radius, bar_width, grabbed, grip_over_text, release_grab, track_fill,
+    BAR_TEXT_PAD, HANDLE_INSET, HANDLE_W,
 };
 use crate::theme;
 
@@ -214,6 +215,11 @@ fn spread(xs: [f32; 4], (left, right): (f32, f32), sep: f32) -> [f32; 4] {
 /// The empty track past the outermost thumb belongs to the marks, which is the
 /// layer a press out there is aiming at: it is the only one whose room is out
 /// there.
+///
+/// A thumb stands in the middle of the gap its layer holds open (see
+/// [`thumb_axis`]), so a layer's stretch is its own cell plus half the gap at
+/// each end of it — the padding a layer keeps splitting between the two layers
+/// it stands between, which is the only division of it that is not a choice.
 fn aimed(x: f32, thumbs: [f32; 4], half_thumb: f32) -> Layer {
     LAYERS
         .iter()
@@ -222,10 +228,75 @@ fn aimed(x: f32, thumbs: [f32; 4], half_thumb: f32) -> Layer {
         .map_or(Layer::Mark, |(layer, _)| *layer)
 }
 
+/// The four layers as the stack DREW them, innermost first: each one's inner
+/// and outer radius, and an empty pair for a layer that is not on the node.
+///
+/// A layer is the width its handle reads or it is not on the node at all, so an
+/// empty pair is the one test for "this layer is here" and there is no second
+/// flag that could come to disagree with it.
+fn layer_spans(rings: &RingStack) -> [(f32, f32); 4] {
+    [
+        (0.0, rings.core_radius),
+        rings.audio,
+        rings.band,
+        (rings.mark_inner, rings.mark_inner + rings.mark_thickness),
+    ]
+}
+
+/// Where each thumb stands on the axis: the MIDDLE of the gap its layer holds
+/// open, rather than the boundary at the far side of that gap.
+///
+/// A layer's boundary is one [`gap`](RingStack::gap) out from where the layer
+/// itself stopped, so a thumb standing honestly on it sits flush against the
+/// NEXT cell's leading edge and reads as belonging to the layer it does not
+/// size. Half a gap in, it stands on bare track between two cells and touches
+/// neither, which is what a divider looks like — and it is the same place the
+/// eye already reads the boundary as being.
+///
+/// **The value is unchanged**: [`resized`] still answers with the boundary, and
+/// the press's own distance from it is what the gesture holds ([`Grab`]), so
+/// the thumb travels with the pointer however far the truth is from where the
+/// thumb was drawn. That is [`RangeBar`]'s bargain — a handle drawn where it
+/// reads rather than where its value is — at half a gap.
+///
+/// The marks close the stack and stand nobody off, so there is no gap out there
+/// and their thumb is on the strip's own outer edge. A layer that is OFF has no
+/// gap either, its boundary having collapsed onto the one inside it, and its
+/// thumb goes wherever [`spread`] can still find room for it.
+///
+/// [`RangeBar`]: super::range::RangeBar
+fn thumb_axis(rings: &RingStack) -> [f32; 4] {
+    let edges = rings.edges();
+    let mut out = edges;
+    for (k, (lo, hi)) in layer_spans(rings).into_iter().enumerate() {
+        if hi > lo {
+            out[k] = (hi + edges[k]) * 0.5;
+        }
+    }
+    out
+}
+
+/// What each layer is called on the bar, innermost first: the Lattice page's
+/// own sections, cut to the one word that tells them apart.
+///
+/// Short because the room a name gets is a layer's own thickness, which at a
+/// fresh view is under a fifth of the axis on three of the four. "Melody /
+/// bass" would be off the bar at every pane width, and a name that does not fit
+/// is not drawn at all — so every word here is chosen to be the longest one
+/// that still lands.
+///
+/// **Band rather than the "Octaves" heading it sits under**, which is the one
+/// place this parts company with the pane. The heading names the pitch axis
+/// drawn on that layer, where what this bar sizes is the layer — the octave
+/// band — and the band's stretch is the narrowest on the bar: at "Octaves" it
+/// goes unnamed at every width a settings column is actually dragged to, which
+/// costs more than the word does.
+const NAMES: [&str; 4] = ["Core", "Audio", "Band", "Marks"];
+
 /// The four sizes of a node's layer stack in one bar, drawn as the node's own
 /// cross-section: the core out from the center, the audio ring, the octave
-/// band and the melody/bass strip, each a cell as long as it is thick, with the
-/// Gap standing between them.
+/// band and the melody/bass strip, each a cell as long as it is thick and
+/// carrying its own name, with the Gap standing between them as bare track.
 ///
 /// **One control rather than four, because the four were never independent
 /// numbers.** Each layer's inner edge is a sum over every layer inside it, so
@@ -255,6 +326,13 @@ fn aimed(x: f32, thumbs: [f32; 4], half_thumb: f32) -> Layer {
 /// slot and its padding together, so the bar shows the stack closing up rather
 /// than a hole where the layer was.
 ///
+/// **Each layer is named rather than numbered**, and the bar carries no name of
+/// its own: four widths in a row said how thick each layer was and never which
+/// layer was which, where a name laid along the stretch whose LENGTH is that
+/// width says both at once. So the row leads with "Core" where its neighbours
+/// lead with their own names, in the same place, and what follows it along the
+/// bar is the rest of the node.
+///
 /// Double-click restores the four sizes a fresh view opens with. It is not
 /// [`ValueBar`]'s type-a-value gesture, for [`RangeBar`]'s reason doubled: a
 /// bar with four values has no single one to type into it.
@@ -263,12 +341,11 @@ fn aimed(x: f32, thumbs: [f32; 4], half_thumb: f32) -> Layer {
 /// [`RangeBar`]: super::range::RangeBar
 pub struct StackBar<'a> {
     view: &'a mut ViewConfig,
-    label: &'a str,
 }
 
 impl<'a> StackBar<'a> {
-    pub fn new(view: &'a mut ViewConfig, label: &'a str) -> Self {
-        StackBar { view, label }
+    pub fn new(view: &'a mut ViewConfig) -> Self {
+        StackBar { view }
     }
 
     pub fn show(self, ui: &mut Ui) -> Response {
@@ -292,7 +369,7 @@ impl<'a> StackBar<'a> {
         let sep = THUMB_SEP * scale;
         let half_thumb = HANDLE_W * 0.5 * scale;
         let thumbs_of = |rings: &RingStack| {
-            spread(rings.edges().map(&x_of), (track.left(), track.right()), sep)
+            spread(thumb_axis(rings).map(&x_of), (track.left(), track.right()), sep)
         };
 
         // ---- Interaction ----------------------------------------------------
@@ -335,40 +412,21 @@ impl<'a> StackBar<'a> {
 
         // ---- Paint ----------------------------------------------------------
         let rings = self.view.rings();
-        // What the stack DREW, which is what the cells are: a ring is the width
-        // its handle reads or it is not on the node at all, so an empty pair is
-        // the one test for "this layer is here" and there is no second flag to
-        // disagree with it.
-        let spans = [
-            (0.0, rings.core_radius),
-            rings.audio,
-            rings.band,
-            (rings.mark_inner, rings.mark_inner + rings.mark_thickness),
-        ];
+        let spans = layer_spans(&rings);
+        // A cell standing at the node's CENTER is drawn out to the bar's own
+        // end, past the inset the axis keeps: that inset is room for a thumb to
+        // seat in at either limit, and a layer whose inner radius is 0 starting
+        // a few points along would read as a gap in front of the node's center
+        // — a place a node has no room to leave. The layer is the innermost one
+        // ON, which is the core until the core is switched off.
+        let cells = spans.map(|(lo, hi)| {
+            let left = if lo <= 0.0 { rect.left() } else { x_of(lo) };
+            egui::Rect::from_x_y_ranges(left..=x_of(hi), rect.y_range())
+        });
         let r = bar_radius(scale);
         let radius = CornerRadius::same(r);
         let painter = ui.painter();
         painter.rect_filled(rect, radius, theme::well());
-
-        // The gaps first, under the cells that stand them off. A run of faint
-        // surface rather than bare track, so the padding the Gap bar sets reads
-        // as a part of the node — laid down between two layers — where the
-        // empty run past the outermost layer is room the node has not taken.
-        // Bare track for both would say a node with its band off and one with
-        // its band pushed out are the same picture.
-        let mut prev = 0.0f32;
-        for (lo, hi) in spans {
-            if hi > lo {
-                if lo > prev {
-                    painter.rect_filled(
-                        egui::Rect::from_x_y_ranges(x_of(prev)..=x_of(lo), rect.y_range()),
-                        CornerRadius::ZERO,
-                        theme::surface_faint(),
-                    );
-                }
-                prev = hi;
-            }
-        }
 
         let fill = track_fill(&response);
         // The strip drawn in the plain widget fill when neither end is marked:
@@ -376,11 +434,18 @@ impl<'a> StackBar<'a> {
         // room, but nothing is wearing it. The alternative is greying the whole
         // bar on a checkbox two sections down, which would take the other three
         // layers with it.
+        //
+        // The gaps between the cells are the track itself, which is what the
+        // empty run past the outermost layer is too. One ground for both, since
+        // both are the same thing — node the picture does not draw on — and a
+        // shade laid over the padding would make the Gap a fifth thing on the
+        // bar rather than the spacing between four.
         let marked = self.view.mark_melody || self.view.mark_bass;
-        for (i, (lo, hi)) in spans.into_iter().enumerate() {
+        for (i, cell) in cells.into_iter().enumerate() {
+            let (lo, hi) = spans[i];
             if hi > lo {
                 painter.rect_filled(
-                    egui::Rect::from_x_y_ranges(x_of(lo)..=x_of(hi), rect.y_range()),
+                    cell,
                     radius,
                     if i == 3 && !marked { theme::widget() } else { fill },
                 );
@@ -396,72 +461,56 @@ impl<'a> StackBar<'a> {
             egui::Stroke::new(1.0, theme::hairline()),
         );
 
-        // The name where every other bar puts its own, and the four widths
-        // parked at the far end in monospace, in stack order — digits that line
-        // up and do not wiggle as they change.
+        // Every layer that is on the node wears its own name, laid along the
+        // STRETCH OF BAR that means it — the same stretch a press there takes
+        // hold of ([`aimed`]): the layer's cell, half the gap at each end of
+        // it, and on the outermost layer the empty room past the stack, which
+        // is the marks' to grow into and the only place their name will fit at
+        // a fresh view. Naming the cell alone would leave the two thinnest
+        // layers anonymous at every width a settings column is dragged to.
         //
-        // The sizes DRAWN, which on three of the four is the handle's own value
-        // and on a layer the stack had no room for is 0: the bar is a picture of
-        // the node, and a cell that is not on screen reading out a width is the
-        // disagreement the whole control exists to close. The value is not lost
-        // — pull the core back in and the ring returns at the width it kept.
+        // The innermost name is held off the bar's end by the inset every other
+        // row in the pane holds its own name by, so the row leads with "Core"
+        // where the row above leads with "Fade curve", on the same column of
+        // pixels. The rest stand off the thumb that opens their stretch by
+        // enough to clear it.
+        //
+        // A stretch too short for its name goes WITHOUT one rather than eliding
+        // it: an ellipsis costs most of the room a four-letter name needs, and
+        // a layer dialled down to a sliver would spend its whole cell saying
+        // nothing. What the bar always shows is the picture.
         let text_color = if response.hovered() || response.dragged() {
             theme::text()
         } else {
             theme::text_dim()
         };
-        let mono = TextStyle::Monospace.resolve(ui.style());
-        let sizes = spans
-            .iter()
-            .map(|(lo, hi)| format!("{:.2}", hi - lo))
-            .collect::<Vec<_>>()
-            .join(" ");
-        let readout = painter.layout_no_wrap(sizes, mono, theme::text());
-        let text_pad = BAR_TEXT_PAD * scale;
-        // Four numbers is a long run for one row, and a column can be dragged
-        // narrower than it: parked at the far end, held off that end by the same
-        // inset the name keeps from the near one, and STOOD DOWN where that
-        // would start it inside the near inset — a run that cannot sit on the
-        // bar would otherwise be drawn off the pane, where it can be neither
-        // read nor scrolled to.
-        //
-        // Standing it down rather than eliding it, because a number is not a
-        // name: half of "0.19" is a different width, where half of "Layers" is
-        // still the word. And rather than shortening it to the layer under the
-        // pointer, which would leave the bar's one readout saying a different
-        // thing on a narrow column than on a wide one. The cells are the reading
-        // either way; the numbers are what a wide column can afford.
-        let readout_left = rect.right() - text_pad - readout.size().x;
-        let numbered = readout_left >= rect.left() + text_pad;
+        let thumbs = thumbs_of(&rings);
         let body = TextStyle::Body.resolve(ui.style());
-        let job = egui::text::LayoutJob::simple_singleline(self.label.to_owned(), body, text_color);
-        // The name takes the whole row back when the numbers stand down, so a
-        // narrow column reads "Layers" rather than an ellipsis holding room for
-        // a run that is not drawn.
-        let reserve = if numbered { readout.size().x } else { 0.0 };
-        let label = elided_name(painter, job, rect.width(), scale, reserve);
-        let centered =
-            |galley: &egui::Galley, x: f32| egui::pos2(x, rect.center().y - galley.size().y * 0.5);
-        let label_pos = centered(&label, rect.left() + text_pad);
-        let readout_pos = centered(&readout, readout_left);
-        painter.galley(label_pos, label.clone(), text_color);
-        if numbered {
-            painter.galley(readout_pos, readout.clone(), theme::text());
+        let mut runs: Vec<(egui::Pos2, std::sync::Arc<egui::Galley>)> = Vec::new();
+        for (i, (lo, hi)) in spans.into_iter().enumerate() {
+            if hi <= lo {
+                continue;
+            }
+            let from = if i == 0 { rect.left() } else { thumbs[i - 1] };
+            let to = if i == 3 { rect.right() } else { thumbs[i] };
+            let pad = if i == 0 { BAR_TEXT_PAD } else { HANDLE_INSET } * scale;
+            let name = painter.layout_no_wrap(NAMES[i].to_owned(), body.clone(), text_color);
+            if name.size().x <= (to - from - pad).max(0.0) {
+                let pos = egui::pos2(from + pad, rect.center().y - name.size().y * 0.5);
+                painter.galley(pos, name.clone(), text_color);
+                runs.push((pos, name));
+            }
         }
 
         // The thumbs last, over the text: they are the part you operate, and a
-        // digit sliding under one is a better outcome than a handle
-        // disappearing behind a digit. Both runs are knocked back out through
-        // the grip, since neither can be placed clear of four thumbs roaming
-        // one row — the name is pinned to the left and the readout parked at
-        // the right, and a stack dialled small piles every thumb on the name
-        // while a fresh one stands the outermost in the numbers.
+        // letter sliding under one is a better outcome than a handle
+        // disappearing behind a letter. Every run is knocked back out through
+        // the grip, none of them being placeable clear of four thumbs roaming
+        // one row — a name is pinned to its own cell, and the thumb that sizes
+        // that cell crosses it whenever the layer is dialled down to about the
+        // width of its name.
         let grip_radius = CornerRadius::same(theme::scaled_points(2, scale));
-        let mut runs = vec![(label_pos, label.clone())];
-        if numbered {
-            runs.push((readout_pos, readout.clone()));
-        }
-        for x in thumbs_of(&rings) {
+        for x in thumbs {
             grip_over_text(
                 painter,
                 egui::Rect::from_center_size(
@@ -480,7 +529,7 @@ impl<'a> StackBar<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::widgets::probe::{filled_rects, handles, press, shapes};
+    use crate::widgets::probe::{filled_rects, handles, press, shapes, text_boxes};
 
     /// A fresh view, which is the stack every claim here is measured against
     /// unless it says otherwise.
@@ -668,28 +717,171 @@ mod tests {
         }
     }
 
-    /// The bar paints one cell per layer that is on the node, and the gaps
-    /// between them, at the radii the stack put them at.
+    /// The bar's own rect out of a paint list, and where a value on the axis
+    /// falls across it — the reading every claim about the picture is made in.
+    fn axis_on(shapes: &[egui::Shape]) -> (egui::Rect, impl Fn(f32) -> f32) {
+        let bar = filled_rects(shapes).first().expect("the bar drew no track").0;
+        let inner = bar.shrink2(egui::vec2(HANDLE_INSET, 0.0));
+        (bar, move |v: f32| inner.left() + inner.width() * v / QUAD_MARGIN)
+    }
+
+    /// The bar paints one cell per layer that is on the node, at the radii the
+    /// stack put them at, and nothing at all between them: a gap is the track
+    /// showing through, which is what the empty run past the last layer is too.
     #[test]
     fn the_cells_are_the_stack_the_node_draws() {
         let mut view = fresh();
         let shapes = shapes(W, |ui| {
-            StackBar::new(&mut view, "Layers").show(ui);
+            StackBar::new(&mut view).show(ui);
         });
         let rings = fresh().rings();
         let fills = filled_rects(&shapes);
-        let track = fills.first().expect("the bar drew no track").0;
-        let inner = track.shrink2(egui::vec2(HANDLE_INSET, 0.0));
-        let x_of = |v: f32| inner.left() + inner.width() * v / QUAD_MARGIN;
-        for (lo, hi) in [(0.0, rings.core_radius), rings.audio, rings.band] {
+        let (_, x_of) = axis_on(&shapes);
+        for (lo, hi) in [rings.audio, rings.band] {
             assert!(
                 fills.iter().any(|(r, _)| (r.left() - x_of(lo)).abs() < 0.5
                     && (r.right() - x_of(hi)).abs() < 0.5),
                 "no cell was drawn for the layer at {lo}..{hi}",
             );
         }
-        let gaps = fills.iter().filter(|(_, c)| *c == theme::surface_faint()).count();
-        assert_eq!(gaps, 3, "a fresh node stands three gaps between its four layers");
+        // Every fill but the track and the four thumbs, which is what the cells
+        // have to be: a run of shading between two of them would be a fifth
+        // thing on a bar that draws four layers.
+        let cells = fills.iter().skip(1).filter(|(r, _)| r.width() > HANDLE_W).count();
+        assert_eq!(cells, 4, "the bar drew something over its track besides its four cells");
+    }
+
+    /// The innermost cell reaches the bar's own end, past the inset the axis
+    /// keeps for its thumbs: a node has no room to leave in front of its
+    /// center, so a cell starting at 0 starts at the end of the bar.
+    #[test]
+    fn the_cell_at_the_nodes_center_reaches_the_end_of_the_bar() {
+        let mut view = fresh();
+        let shapes = shapes(W, |ui| {
+            StackBar::new(&mut view).show(ui);
+        });
+        let fills = filled_rects(&shapes);
+        let (bar, x_of) = axis_on(&shapes);
+        let core = fills
+            .iter()
+            .skip(1)
+            .find(|(r, _)| (r.right() - x_of(fresh().core_radius)).abs() < 0.5)
+            .expect("no cell was drawn for the core")
+            .0;
+        assert!(
+            (core.left() - bar.left()).abs() < 0.5,
+            "the core's cell started at {} where the bar starts at {}",
+            core.left(),
+            bar.left(),
+        );
+    }
+
+    /// A thumb stands in the MIDDLE of the gap its layer holds open rather than
+    /// on the boundary at the far side of it — a divider between two cells,
+    /// touching neither, instead of the leading edge of the cell it does not
+    /// size.
+    #[test]
+    fn a_thumb_stands_in_the_gap_its_layer_holds_open() {
+        let rings = fresh().rings();
+        assert!(rings.gap > 0.0, "a node with no padding has no gap to stand a thumb in");
+        let spans = layer_spans(&rings);
+        let thumbs = thumb_axis(&rings);
+        for k in 0..3 {
+            assert!(
+                (thumbs[k] - (spans[k].1 + rings.gap * 0.5)).abs() < 1e-6,
+                "layer {k}'s thumb stood at {} rather than half a gap out from {}",
+                thumbs[k],
+                spans[k].1,
+            );
+        }
+        // The marks close the stack and stand nobody off, so there is no gap
+        // out there to stand in.
+        assert_eq!(thumbs[3], rings.edges()[3], "the outermost thumb left the strip's edge");
+    }
+
+    /// And a layer that is OFF holds no gap open either, so its thumb is back
+    /// on its own boundary with the ones inside it — the pile the spreading
+    /// exists to split.
+    #[test]
+    fn an_off_layer_keeps_its_thumb_on_its_boundary() {
+        let mut view = fresh();
+        Layer::Audio.set(&mut view, 0.0);
+        let rings = view.rings();
+        assert_eq!(
+            thumb_axis(&rings)[1],
+            rings.edges()[1],
+            "the audio ring's thumb kept half a gap it no longer holds open",
+        );
+    }
+
+    /// The innermost name is held off the bar's end by the inset every other
+    /// row in the pane holds its own name by, so the row leads where its
+    /// neighbours lead rather than a few points along from them.
+    #[test]
+    fn the_innermost_name_leads_where_every_other_row_leads() {
+        let mut view = fresh();
+        let shapes = shapes(W, |ui| {
+            StackBar::new(&mut view).show(ui);
+        });
+        let runs = text_boxes(&shapes);
+        let (core, _) = runs
+            .iter()
+            .find(|(_, s)| s == NAMES[0])
+            .unwrap_or_else(|| panic!("the core's cell went unnamed: {runs:?}"));
+        let (bar, _) = axis_on(&shapes);
+        assert!(
+            (core.left() - (bar.left() + BAR_TEXT_PAD)).abs() < 0.5,
+            "the core's name started at {} rather than {} in from the bar's end",
+            core.left() - bar.left(),
+            BAR_TEXT_PAD,
+        );
+    }
+
+    /// And every name drawn stays inside the stretch of bar it names — the same
+    /// stretch a press there takes hold of. A name read against the layer
+    /// beside it names the wrong layer, so a stretch too short for its name
+    /// goes without one rather than borrowing room from its neighbour.
+    #[test]
+    fn a_name_never_leaves_the_stretch_it_names() {
+        let mut view = fresh();
+        let shapes = shapes(W, |ui| {
+            StackBar::new(&mut view).show(ui);
+        });
+        let (bar, x_of) = axis_on(&shapes);
+        let thumbs = spread(
+            thumb_axis(&fresh().rings()).map(&x_of),
+            (x_of(0.0), x_of(QUAD_MARGIN)),
+            THUMB_SEP,
+        );
+        for (run, name) in text_boxes(&shapes) {
+            let k = NAMES
+                .iter()
+                .position(|n| *n == name)
+                .unwrap_or_else(|| panic!("the bar drew a run that is no layer's name: {name:?}"));
+            let from = if k == 0 { bar.left() } else { thumbs[k - 1] };
+            let to = if k == 3 { bar.right() } else { thumbs[k] };
+            assert!(
+                run.left() >= from - 0.5 && run.right() <= to + 0.5,
+                "{name:?} was drawn at {:?}, outside the {from}..{to} it names",
+                run.x_range(),
+            );
+        }
+    }
+
+    /// Every layer on the node is named, at the width a settings column is
+    /// actually dragged to. The outermost is why the names run along a layer's
+    /// whole stretch rather than its cell: the strip is a few points across at
+    /// a fresh view, and its room is the empty bar past the stack.
+    #[test]
+    fn every_layer_on_the_node_is_named() {
+        let mut view = fresh();
+        let shapes = shapes(300.0, |ui| {
+            StackBar::new(&mut view).show(ui);
+        });
+        let drawn: Vec<String> = text_boxes(&shapes).into_iter().map(|(_, s)| s).collect();
+        for name in NAMES {
+            assert!(drawn.iter().any(|s| s == name), "{name:?} went undrawn: {drawn:?}");
+        }
     }
 
     /// And one thumb per layer, four of them, on the boundaries.
@@ -697,7 +889,7 @@ mod tests {
     fn the_bar_draws_a_thumb_for_every_layer() {
         let mut view = fresh();
         let shapes = shapes(W, |ui| {
-            StackBar::new(&mut view, "Layers").show(ui);
+            StackBar::new(&mut view).show(ui);
         });
         assert_eq!(handles(&shapes).len(), 4);
     }
@@ -729,7 +921,7 @@ mod tests {
                     events,
                     ..Default::default()
                 },
-                |ui| bar.set(StackBar::new(view, "Layers").show(ui).rect),
+                |ui| bar.set(StackBar::new(view).show(ui).rect),
             );
         };
         // A frame with no input first: egui resolves the pointer against the
