@@ -1774,8 +1774,9 @@ fn a_mark_stands_off_the_outermost_ring_the_node_draws() {
 /// melody/bass mark is the only layer the node has left — and it reaches the
 /// node's CENTRE, rather than standing a padding off nothing.
 ///
-/// [`stacked`](harmonigraph_scene::ViewConfig::rings) writes that rule down
-/// for every layer it owns: the gap is skipped at a cursor of 0, where there
+/// The stack ([`ViewConfig::rings`](harmonigraph_scene::ViewConfig::rings))
+/// writes that rule down for every layer it owns: the gap is skipped at a
+/// cursor of 0, where there
 /// is nothing to stand off, so the innermost layer closes into a disc instead
 /// of opening a hole the size of a padding around nothing. The mark is the one
 /// layer it does NOT own — the strip's inner edge is re-derived in WGSL off

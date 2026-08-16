@@ -270,7 +270,7 @@ fn a_layer_with_no_room_left_in_the_node_is_not_drawn() {
         }
         let (audio_on, band_on) = (rings.audio != (0.0, 0.0), rings.band != (0.0, 0.0));
         assert!(
-            !(band_on && !audio_on),
+            !band_on || audio_on,
             "a core of {core} refused the audio ring and drew the band at {:?} outside it — \
              the slot the room could not fit went to the layer further out",
             rings.band,

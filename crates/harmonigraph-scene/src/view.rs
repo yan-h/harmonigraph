@@ -911,7 +911,7 @@ pub struct RingStack {
     /// and there is nothing to stand off.
     ///
     /// Settled here rather than left to the renderer because that second
-    /// clause is [`stacked`]'s rule, and a layer deriving its own inner edge
+    /// clause is [`Stack::take`]'s rule, and a layer deriving its own inner edge
     /// downstream is a layer that does not get it: the marks are the one slot
     /// `stacked` cannot hand out, since they alone may run past the quad edge
     /// into the billboard's margin instead of being refused there.
