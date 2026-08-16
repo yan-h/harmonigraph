@@ -403,6 +403,13 @@ const ROW_MEAN_STEPS: f32 = 10.0
 /// the arithmetic in range: at order 4 an absolute weight spans `10^-48` across
 /// the stored dB range and flushes to zero in an `f32`, where relative weights
 /// run from exactly 1 downward and their sum can never fall below 1.
+///
+/// A `LazyLock` and not a plain `static` because `powf` is not const-evaluable,
+/// and that costs something the type does not advertise: indexing it carries an
+/// atomic load of the lock's state. So nothing indexes it by name inside a read
+/// — it is derefed ONCE per build, onto [`Shades::weight`], and handed to
+/// [`RowRead::of`] as a plain `&[f32; 256]`, which is worth 1.3-2.8 ms of a
+/// settled compose depending on the Span, on byte-identical pixels.
 static ROW_WEIGHT: std::sync::LazyLock<[f32; 256]> = std::sync::LazyLock::new(|| {
     std::array::from_fn(|j| {
         let db = j as f32 * harmonigraph_core::spectrogram::DB_STEP;
@@ -449,7 +456,27 @@ impl RowRead {
     /// is also the domain the ramp reads, so interpolating in it is
     /// interpolating exactly what will be drawn. `db` is a whole spectrum,
     /// [`SPECTRUM_BINS`] long.
-    fn of(self, db: &[BucketDb]) -> BucketDb {
+    ///
+    /// `weight` is [`ROW_WEIGHT`], taken as a parameter rather than reached by
+    /// name, and that is load-bearing: naming the `LazyLock` here puts an atomic
+    /// load of the lock's state inside the read, and the caller derefs it once
+    /// per BUILD instead, off [`Shades::weight`]. Measured on the compose, it is
+    /// worth 1.3-2.8 ms of a settled build across the Span range, on
+    /// byte-identical pixels (`timing_zoom_costs`, four runs each side).
+    ///
+    /// **What the saving is NOT is one atomic per read.** It barely scales with
+    /// how many rows index the table: zoomed IN, where 1022 of 1408 rows are
+    /// `Lerp` and provably never reach it, the compose drops 1.9 ms against the
+    /// 2.2 ms it drops zoomed out with every row a `Mean`. A `Lerp` executes no
+    /// check at all, so the gap cannot be the check running. What is left is an
+    /// effect on the compose loop as a whole rather than on the arm that reads
+    /// the table, and its exact shape is unpinned. `timing_mean_log`'s `global`
+    /// arm does put a number on the index in isolation, and it is deliberately
+    /// not quoted here: it is a copy-vs-copy ratio below the 1.25x that bench's
+    /// own doc calls code layout, so it cannot carry an argument the compose is
+    /// already making. Reason about this as "keep the global out of the loop",
+    /// never as a per-read cost you can count.
+    fn of(self, db: &[BucketDb], weight: &[f32; 256]) -> BucketDb {
         match self {
             RowRead::Mean { from, to } => {
                 let run = &db[from..to];
@@ -465,7 +492,7 @@ impl RowRead {
                 // Denominated against `top` (hence the subtraction, never
                 // negative), so the sum runs from 1 up to the run's length and
                 // the answer can only come DOWN from the loudest bucket.
-                let sum: f32 = run.iter().map(|&v| ROW_WEIGHT[usize::from(top - v)]).sum();
+                let sum: f32 = run.iter().map(|&v| weight[usize::from(top - v)]).sum();
                 let steps = -(sum / run.len() as f32).log2() * ROW_MEAN_STEPS;
                 // A float cast saturates, so a run long enough to fall more than
                 // 255 steps lands on 0 rather than wrapping.
@@ -1790,6 +1817,16 @@ fn write_ring(
 /// The table is built per build (a few microseconds against the repaint it
 /// serves) rather than cached, because everything it depends on — the ramp, the
 /// dB window, the tilt — is already what [`ColumnStyle`] restarts the ring for.
+///
+/// [`ROW_WEIGHT`] rides along, and it is worth saying why it is here rather than
+/// where it belongs: that table decides the READ and not the colour, so on
+/// meaning alone it wants to travel beside `bins`. What puts it here is that
+/// this is the one per-build value both callers of [`RowRead::of`] already hold,
+/// and once per build is the whole point of hoisting it. The alternative is a
+/// fifth parameter threaded through every call of [`fill_column_into`] to arrive
+/// at the same place; that reads truer and costs eight call sites, and
+/// [`fill_pixels`] would still need its own hoist because it reaches `of`
+/// directly.
 struct Shades {
     /// [`cell_color`](crate::panes::spectral::spectrogram::cell_color) at the centre
     /// of each of [`SHADES`] equal level slices.
@@ -1798,6 +1835,9 @@ struct Shades {
     step: f32,
     /// Level at a stored `0`, per row — the tilt is the only thing that varies.
     row0: Vec<f32>,
+    /// [`ROW_WEIGHT`] with its `LazyLock` resolved, so a read indexes an array
+    /// and not a lock — see [`RowRead::of`] for what the difference costs.
+    weight: &'static [f32; 256],
 }
 
 /// Levels the ramp is sampled at.
@@ -1840,6 +1880,7 @@ impl Shades {
             step: loudness_raw(cfg, db0 + harmonigraph_core::spectrogram::DB_STEP, 0.0)
                 - loudness_raw(cfg, db0, 0.0),
             row0: bins.iter().map(|b| loudness_raw(cfg, db0, b.midi)).collect(),
+            weight: &ROW_WEIGHT,
         }
     }
 
@@ -1873,8 +1914,9 @@ fn slab_of(power: &[BucketDb], i: usize) -> &[BucketDb] {
 /// Into a caller-owned buffer: a restart paints a thousand columns, and a fresh
 /// `Vec` each was a thousand allocations of a few kilobytes inside one frame.
 fn fill_column_into(shades: &Shades, bins: &[Bin], slab: &[BucketDb], out: &mut Vec<Color32>) {
+    let weight = shades.weight;
     out.clear();
-    out.extend(bins.iter().enumerate().map(|(r, b)| shades.at(r, b.read.of(slab))));
+    out.extend(bins.iter().enumerate().map(|(r, b)| shades.at(r, b.read.of(slab, weight))));
 }
 
 /// One cell's 0..1 loudness from its stored byte, evaluated directly — the
@@ -1918,6 +1960,7 @@ pub(crate) fn bin_level_for_test(cfg: &SpectrumConfig, bucket: BucketDb, midi: f
 fn fill_pixels(cfg: &SpectrumConfig, w: usize, bins: &[Bin], power: &[BucketDb]) -> Vec<Color32> {
     let h = bins.len();
     let shades = Shades::new(cfg, bins);
+    let weight = shades.weight;
     let mut pixels = vec![Color32::BLACK; w * h];
     // A slab of `power` is one column of the image, so this is a transpose, and
     // taken a whole column at a time it misses cache on every texel — the same
@@ -1929,7 +1972,7 @@ fn fill_pixels(cfg: &SpectrumConfig, w: usize, bins: &[Bin], power: &[BucketDb])
         for (y, bin) in bins.iter().enumerate() {
             let base = y * w;
             for x in x0..x1 {
-                pixels[base + x] = shades.at(y, bin.read.of(slab_of(power, x)));
+                pixels[base + x] = shades.at(y, bin.read.of(slab_of(power, x), weight));
             }
         }
     }
@@ -2028,7 +2071,8 @@ mod tests {
 
                 let curve = 10.0
                     * crate::panes::spectral::spectrogram::power_mean(&powers).max(1e-30).log10();
-                let heat = db_of(RowRead::Mean { from: 0, to: run_len }.of(&col.db[..]));
+                let read = RowRead::Mean { from: 0, to: run_len };
+                let heat = db_of(read.of(&col.db[..], &ROW_WEIGHT));
                 assert!(
                     (curve - heat).abs() <= 2.0 * step,
                     "a run of {run_len}: curve {curve:.3} dB, heatmap {heat:.3} dB",
@@ -2079,7 +2123,7 @@ mod tests {
                     db_of(if by_max {
                         column.db[i..j].iter().copied().max().unwrap()
                     } else {
-                        RowRead::Mean { from: i, to: j }.of(&column.db[..])
+                        RowRead::Mean { from: i, to: j }.of(&column.db[..], &ROW_WEIGHT)
                     })
                 })
                 .sum::<f32>()
@@ -3070,8 +3114,9 @@ mod tests {
         db[5] = 40;
         db[6] = 200;
         db[7] = 120;
-        assert_eq!(RowRead::Max { from: 5, to: 8 }.of(&db), 200);
-        assert_eq!(RowRead::Max { from: 8, to: 10 }.of(&db), 0, "an empty run is silence");
+        let weight: &[f32; 256] = &ROW_WEIGHT;
+        assert_eq!(RowRead::Max { from: 5, to: 8 }.of(&db, weight), 200);
+        assert_eq!(RowRead::Max { from: 8, to: 10 }.of(&db, weight), 0, "an empty run is silence");
 
         // A zoomed-out scale, so rows are wider than buckets: each coarse row
         // covers exactly the run its settled twin takes the mean over.
@@ -4071,6 +4116,49 @@ mod tests {
         }
     }
 
+    /// The composed picture is drawn through [`ROW_WEIGHT`], and a wide row
+    /// comes out BELOW the loudest bucket it covers.
+    ///
+    /// [`Shades`] carries the table so the read takes it as a parameter, which
+    /// puts the picture's weighting behind a field that one line sets and
+    /// nothing else observes. Every other test that composes a weighted `Mean`
+    /// compares one `Shades` against itself — `fill_column_into` against
+    /// `fill_pixels`, or against an `expect` built from the same value — so all
+    /// of them agree with each other whatever that field holds. Pointing it at
+    /// a flat table restyles every settled zoomed-out pixel in the editor and
+    /// in every export, and leaves the suite green.
+    ///
+    /// Both halves are the assertion. Against the read reached independently,
+    /// so the field has to be [`ROW_WEIGHT`] and not merely some table; and
+    /// strictly below the run's max, so a table that flattens is caught even by
+    /// a reader who changes what the first half compares against. A flat table
+    /// is exactly the degenerate case: every weight 1 makes the sum the run's
+    /// length, the log2 zero, and the power mean collapse to the plain
+    /// [`RowRead::Max`] the pitch axis exists not to draw.
+    #[test]
+    fn the_composed_column_is_weighted_by_row_weight() {
+        let cfg = SpectrumConfig::default();
+        // One row over a run wide enough to weight, reading a slab whose
+        // buckets SPREAD — a uniform run has the same mean under any table.
+        let bins = [Bin { read: RowRead::Mean { from: 0, to: 8 }, midi: 60.0, t: 0.0 }];
+        let mut slab = vec![0 as BucketDb; SPECTRUM_BINS];
+        for (b, v) in slab[0..8].iter_mut().enumerate() {
+            *v = (40 + b * 20) as BucketDb;
+        }
+        let top = slab[0..8].iter().copied().max().expect("a populated run");
+
+        let shades = Shades::new(&cfg, &bins);
+        let mut column = Vec::new();
+        fill_column_into(&shades, &bins, &slab, &mut column);
+
+        let read = RowRead::Mean { from: 0, to: 8 }.of(&slab, &ROW_WEIGHT);
+        assert_eq!(column[0], shades.at(0, read), "the compose reads through `ROW_WEIGHT`");
+        assert!(
+            read < top,
+            "a weighted mean of a spread run sits below its max: {read} vs {top}",
+        );
+    }
+
     /// Every texel the window reads holds ITS OWN slab's column — asserted
     /// against the uploaded texture, not against the ring's account of it.
     ///
@@ -4606,7 +4694,7 @@ mod tests {
     /// Scratch: whether the compose's row read scales across cores. Not an
     /// assertion.
     ///
-    /// The read is about two thirds of a settled compose (`timing_mean_log`, a
+    /// The read is about three fifths of a settled compose (`timing_mean_log`, a
     /// floor on the share), and it is the
     /// term a gesture's frames and its opening full-quality frame BOTH pay, so
     /// it is the only candidate that helps whichever of the two is the symptom.
@@ -4627,11 +4715,11 @@ mod tests {
     /// baseline by 2x, which is the same warning #363 carries.
     ///
     /// The figure that matters most here is not a ratio at all. In one clean
-    /// run the settled zoomed-out build is 17.7 ms and the gesture-rows coarse
-    /// one is 4.8 ms, both SERIAL — so building a gesture's first frame coarse
-    /// is a 3.7x cut where parallelising that same build is 2.5x, and it costs
+    /// run the settled zoomed-out build is 13.2 ms and the gesture-rows coarse
+    /// one is 3.3 ms, both SERIAL — so building a gesture's first frame coarse
+    /// is a 3.9x cut where parallelising that same build is 2.5x, and it costs
     /// no threads inside the host process. Threads are what is left AFTER that,
-    /// and they are worth about 2.7 ms on each of a gesture's own frames.
+    /// and they are worth about 2 ms on each of a gesture's own frames.
     ///
     /// `cargo test -p harmonigraph-ui --release timing_compose_scaling -- --ignored --nocapture`
     #[test]
@@ -4662,6 +4750,7 @@ mod tests {
             let bins = bins_for(h_rows, scale, coarse);
             let h = bins.len();
             let shades = Shades::new(&cfg, &bins);
+            let weight = shades.weight;
             let mut tile = vec![Color32::BLACK; w * h];
             let mut base = 0.0f64;
             let mut line = format!("{label} {h:>4} rows:");
@@ -4676,7 +4765,7 @@ mod tests {
                                 for c in 0..chunk.len() / h {
                                     let slab = slab_of(power, t * per + c);
                                     for (r, b) in bins.iter().enumerate() {
-                                        chunk[c * h + r] = shades.at(r, b.read.of(slab));
+                                        chunk[c * h + r] = shades.at(r, b.read.of(slab, weight));
                                     }
                                 }
                             });
@@ -4693,36 +4782,52 @@ mod tests {
         }
     }
 
-    /// Scratch: where [`RowRead::Mean`] spends a settled compose, and the
-    /// answer that the `log2` is NOT where. Not an assertion.
+    /// Scratch: where [`RowRead::Mean`] spends a settled compose, and why both
+    /// of the targets inside it are shut. Not an assertion.
     ///
-    /// The `log2` is the inviting target — one per ROW per COLUMN, 1408 x 752
-    /// of them on a full-height 2x pane, and the answer is quantized to a `u8`
-    /// step the moment it lands, so the accuracy a libm call buys is thrown
-    /// away before anything reads it. Standing a bit-trick in its place is
-    /// worth **1.20x** on the loop. That is not a frame, and it is the whole of
-    /// what removing the call could ever pay, so the careful version — one that
-    /// has to argue its error stays inside the rounding — is not worth writing.
+    /// Where the loop goes: the shipping read is 7.5 ms of the 13.2 ms compose
+    /// `timing_zoom_costs` measures at these dimensions, about three fifths of
+    /// it. Read that share as a FLOOR rather than as a number — one slab is read
+    /// here over and over, so the buckets sit in L1 throughout, where the
+    /// compose it is scaled against walks 752 distinct slabs, some 2.9 MB, once
+    /// each. The in-situ read can only be dearer, which moves the share up and
+    /// leaves the ratios alone, since every arm shares the residency.
     ///
-    /// What the same run says instead is where the loop DOES go: the shipping
-    /// read is 10.7 ms of the 16.5 ms compose `timing_zoom_costs` measures at
-    /// these dimensions, about two thirds of it. Read that share as a FLOOR
-    /// rather than as a number — one slab is read here over and over, so the
-    /// buckets sit in L1 throughout, where the compose it is scaled against
-    /// walks 752 distinct slabs, some 2.9 MB, once each. The in-situ read can
-    /// only be dearer, which moves the share up and leaves the ratios alone,
-    /// since every arm shares the residency.
+    /// **The weight table is a PARAMETER of [`RowRead::of`], and the `global`
+    /// arm stands for the version that reaches for it by name.** [`ROW_WEIGHT`]
+    /// is a `LazyLock`, so naming it inside the read carries an atomic load of
+    /// the lock's state — and the cost of that is read off the COMPOSE, not off
+    /// this bench: a settled build at 1408 rows is 13.2 ms in
+    /// `timing_zoom_costs` against 15.4 ms reaching the global, on
+    /// byte-identical pixels. `global` is here so the shape stays measurable at
+    /// all, and it puts the index at **1.12x** of the read — well short of what
+    /// the compose gains, which is the discrepancy to respect rather than
+    /// explain away. The compose's saving barely tracks how many rows index the
+    /// table (zoomed in, with 1022 of 1408 rows a `Lerp` that never reaches it,
+    /// it is still 1.9 of the 2.2 ms), while this bench's does. So the two are
+    /// not measuring one thing, and the compose is the one that decides.
     ///
-    /// And a lead this was not looking for: the hand-copied arm beats
-    /// [`RowRead::of`] by **1.35x** on byte-identical output, which is 2.8 ms of
-    /// a full-quality compose sitting in codegen rather than in arithmetic. Both
-    /// walk the same run and take the same branch; what differs is that one is a
-    /// call and the other is not. That is worth someone's afternoon before any
-    /// of the threading in `timing_compose_scaling`, because it costs no picture
-    /// and no host threads — but it is a lead and not a result, since nothing
-    /// here has looked at what the compiler actually emits.
+    /// **The `log2` is the other target, and it stays.** One per ROW per COLUMN,
+    /// 1408 x 752 of them on a full-height 2x pane, and the answer is quantized
+    /// to a `u8` step the moment it lands, so the accuracy a libm call buys is
+    /// thrown away before anything reads it. Standing a bit-trick in its place
+    /// measures **1.2x** on the loop, which is an upper bound (see below) and
+    /// still not a frame. It is the whole of what removing the call could ever
+    /// pay, so the careful version — one that has to argue its error stays
+    /// inside the rounding — is not worth writing.
     ///
-    /// Inside the read the cost is the `ROW_WEIGHT[top - v]` gather and its sum —
+    /// **No copy-vs-copy ratio here is worth tuning against under about 1.25x.**
+    /// Two byte-identical copies of this arithmetic sitting in different
+    /// functions of one binary measure 1.23x apart on code layout alone, which
+    /// is the same order as everything the copies are being asked about. Both
+    /// figures above survive it — one because the compose confirms it in situ,
+    /// the other because a bound is all it needs — but a NEW one at this size
+    /// would be a statement about where the linker put things. The `shipping`
+    /// and `copy+libm` pair is the one to watch it on: they are the same
+    /// arithmetic reached through the call and hand-inlined, they measure the
+    /// same, and a gap opening between them is layout and not a lead.
+    ///
+    /// Inside the read the cost is the `weight[top - v]` gather and its sum —
     /// a dependent load per bucket, over runs that jointly cover the whole
     /// spectrum whatever the row count. That does not vectorize, which is why
     /// the coarse [`RowRead::Max`] rather than a faster mean is what a gesture
@@ -4754,25 +4859,53 @@ mod tests {
             *v = (40 + (i * 7) % 180) as u8;
         }
 
+        // The table reached exactly as [`fill_column_into`] reaches it: derefed
+        // once, outside every loop that follows.
+        let weight: &[f32; 256] = &ROW_WEIGHT;
+
         // The baseline goes through [`RowRead::of`] itself. A copy of the
         // arithmetic would read identically and measure whatever it had drifted
-        // into: this bench's conclusion is a RATIO against the shipping mean, so
-        // a baseline that is merely a good imitation of it answers a question
-        // nobody asked. Only the swapped arm below is a copy, and only because
-        // there is no way to reach inside `of` to replace the call.
+        // into: this bench's conclusions are RATIOS against the shipping mean,
+        // so a baseline that is merely a good imitation of it answers a question
+        // nobody asked. The copies below are copies only because there is no way
+        // to reach inside `of` and change one thing.
         let shipping = || {
             let t0 = Instant::now();
             let mut sink = 0u32;
             for _ in 0..200 {
                 for b in &bins {
                     if matches!(b.read, RowRead::Mean { .. }) {
-                        sink += u32::from(b.read.of(&slab));
+                        sink += u32::from(b.read.of(&slab, weight));
                     }
                 }
             }
             (t0.elapsed().as_secs_f64() * 1000.0 / 200.0, sink)
         };
-        let swapped = |log: fn(f32) -> f32| {
+        let copy = |log: fn(f32) -> f32| {
+            let t0 = Instant::now();
+            let mut sink = 0u32;
+            for _ in 0..200 {
+                for b in &bins {
+                    let (from, to) = match b.read {
+                        RowRead::Mean { from, to } => (from, to),
+                        _ => continue,
+                    };
+                    let r = &slab[from..to];
+                    let top = r.iter().copied().max().unwrap_or(0);
+                    if r.len() < 2 {
+                        sink += u32::from(top);
+                        continue;
+                    }
+                    let sum: f32 = r.iter().map(|&v| weight[usize::from(top - v)]).sum();
+                    let steps = -log(sum / r.len() as f32) * ROW_MEAN_STEPS;
+                    sink += u32::from(top.saturating_sub(steps.round() as u8));
+                }
+            }
+            (t0.elapsed().as_secs_f64() * 1000.0 / 200.0, sink)
+        };
+        // The same copy with [`ROW_WEIGHT`] named INSIDE the run — the whole of
+        // the difference, and what the parameter on `of` buys.
+        let global = || {
             let t0 = Instant::now();
             let mut sink = 0u32;
             for _ in 0..200 {
@@ -4788,42 +4921,57 @@ mod tests {
                         continue;
                     }
                     let sum: f32 = r.iter().map(|&v| ROW_WEIGHT[usize::from(top - v)]).sum();
-                    let steps = -log(sum / r.len() as f32) * ROW_MEAN_STEPS;
+                    let steps = -(sum / r.len() as f32).log2() * ROW_MEAN_STEPS;
                     sink += u32::from(top.saturating_sub(steps.round() as u8));
                 }
             }
             (t0.elapsed().as_secs_f64() * 1000.0 / 200.0, sink)
         };
-        // Three arms, because two questions are being asked and one pair cannot
-        // answer both. The SHARE of a compose has to be read off the shipping
-        // path; the worth of the `log2` has to be read off a pair that differs
-        // in the call and in nothing else. Reading the log2 ratio against the
-        // shipping arm instead would credit it with the copy's own margin.
+        // Four arms, because three questions are being asked and no one pair
+        // answers two of them. The SHARE of a compose has to be read off the
+        // shipping path; the worth of the `log2` off a pair differing in the
+        // logarithm and in nothing else; the cost of the `LazyLock` off the
+        // closest pair there is to one differing only in where the table comes
+        // from. Reading either ratio against the shipping arm instead would
+        // credit it with whatever margin the copy carries of its own.
+        // `global` against `copy` is NOT that clean pair, and the gap is worth
+        // knowing before the ratio is quoted: `copy` reaches its logarithm
+        // through a `fn(f32) -> f32` it takes as a parameter, because it has to
+        // serve both the libm and the bit-trick arm, while `global` calls
+        // `log2` directly. So their ratio carries the indirection as well as
+        // the table. A fifth arm holding the logarithm fixed would close it;
+        // what makes that not worth writing is that nothing rests on the
+        // number — the table's cost is argued from the COMPOSE (see
+        // [`RowRead::of`]), and this arm is here so the shape stays measurable
+        // at all rather than to size it.
         // Interleaved rounds, each arm scored by its BEST. One pass of an arm is
         // some 20 us, which is short enough that a scheduler decision or a walk
         // onto an efficiency core outweighs the thing being measured — run in
-        // sequence and scored by a single reading, these three swap order
-        // between runs. The minimum is the run that was not interrupted, and
+        // sequence and scored by a single reading, these swap order between
+        // runs. The minimum is the run that was not interrupted, and
         // interleaving keeps a slow patch of machine from landing on one arm.
-        let (mut ship_ms, mut libm_ms, mut fast_ms) = (f64::MAX, f64::MAX, f64::MAX);
-        let (mut a, mut b, mut c) = (0, 0, 0);
+        let (mut ship_ms, mut glob_ms) = (f64::MAX, f64::MAX);
+        let (mut libm_ms, mut fast_ms) = (f64::MAX, f64::MAX);
+        let (mut a, mut b, mut c, mut d) = (0, 0, 0, 0);
         for _ in 0..9 {
             let s = shipping();
-            let l = swapped(f32::log2);
-            let f = swapped(fast_log2);
-            (ship_ms, libm_ms, fast_ms) =
-                (ship_ms.min(s.0), libm_ms.min(l.0), fast_ms.min(f.0));
-            (a, b, c) = (s.1, l.1, f.1);
+            let g = global();
+            let l = copy(f32::log2);
+            let f = copy(fast_log2);
+            (ship_ms, glob_ms) = (ship_ms.min(s.0), glob_ms.min(g.0));
+            (libm_ms, fast_ms) = (libm_ms.min(l.0), fast_ms.min(f.0));
+            (a, b, c, d) = (s.1, g.1, l.1, f.1);
         }
-        assert_eq!((a, b), (b, c), "the three arms must compute the same column");
+        assert_eq!((a, b, c), (b, c, d), "the four arms must compute the same column");
         println!(
-            "{means} Mean rows of {}: shipping {ship_ms:.3} | copy+libm {libm_ms:.3} | \
-             copy+bit-trick {fast_ms:.3} ms/column",
+            "{means} Mean rows of {}: shipping {ship_ms:.4} | global {glob_ms:.4} | \
+             copy+libm {libm_ms:.4} | copy+bit-trick {fast_ms:.4} ms/column",
             bins.len(),
         );
         println!(
-            "  log2 is worth {:.2}x (copy vs copy) | the COPY beats `RowRead::of` by \
-             {:.2}x on identical output",
+            "  a LazyLock index inside the run costs {:.2}x | log2 is worth {:.2}x \
+             (both copy vs copy) | `RowRead::of` against its own hand copy {:.2}x",
+            glob_ms / libm_ms,
             libm_ms / fast_ms,
             ship_ms / libm_ms,
         );
@@ -4847,8 +4995,10 @@ mod tests {
         let target_cols = 1024usize;
         let keep = target_cols + RING_HEADROOM;
 
-        // Zoomed out (the full axis: every read a Mean) and zoomed in
-        // (12 semitones: every read a Lerp).
+        // Zoomed out (the full axis: every read a Mean) and zoomed in (12
+        // semitones: 1022 of 1408 rows a Lerp, the other 386 a Mean over a run
+        // of two — narrow enough that the two arms split the pane, not narrow
+        // enough that one of them is gone).
         let full = PitchScale { min_midi: 16.0, max_midi: 135.0, span: 119.0 };
         let tight = PitchScale { min_midi: 57.0, max_midi: 69.0, span: 12.0 };
 
