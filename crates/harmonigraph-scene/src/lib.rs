@@ -172,6 +172,25 @@ pub const MARK_THICKNESS_MAX: f32 = 0.3;
 /// its bar is short: at the top of it the gaps alone are more than the quad.
 pub const GAP_MAX: f32 = 0.4;
 
+/// How far from a node's center anything on it is still drawn, in the same
+/// quad units as the four sizes above: the billboard's own reach, past which
+/// the melody/bass strip has been eased to nothing and every other layer
+/// finished long before.
+///
+/// **A mirror of the lattice shader's `QUAD_MARGIN`**, which is where the
+/// number is used — the billboard is scaled by it and the mark strip is faded
+/// out over its last few hundredths. Kept here because it is the top of the
+/// Layers bar's axis, and that axis is the node's whole drawn reach: the quad
+/// edge at 1.0 is where a RING stops fitting, and the room past it is the
+/// margin the marks alone are allowed into. A bar that stopped at the quad
+/// would have no room to put the outer half of that strip.
+///
+/// The one number here the shader can change out from under: the two are
+/// separate declarations of one constant. Change either and change both — what
+/// drifting costs is the bar's last stretch describing room the marks cannot
+/// reach, or stopping short of room they can.
+pub const QUAD_MARGIN: f32 = 1.6;
+
 /// Samples in the pitch->color lookup EVERYTHING pitch-colored reads: the
 /// disc, the trail and the piano roll on the CPU, the octave glyphs and their
 /// glow in the shader. The shader mirrors this length, and `harmonigraph-render`

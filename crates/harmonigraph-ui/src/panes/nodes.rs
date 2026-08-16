@@ -11,12 +11,11 @@
 
 use super::{edge_bar, param_bar, section};
 use crate::params::{seconds, ParamBackend, ParamKey};
-use crate::widgets::{button_row, choice_row, OctaveStrip, ValueBar};
+use crate::widgets::{button_row, choice_row, OctaveStrip, StackBar, ValueBar};
 use crate::SharedState;
 use harmonigraph_scene::{
-    Pulse, SpectralReading, ViewConfig, CORE_RADIUS_MAX, GAP_MAX, MARK_DELAY_MAX,
-    MARK_THICKNESS_MAX, MIN_EXTRA_SIZE, PITCH_CEIL, PITCH_FLOOR, RING_WIDTH_MAX,
-    SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN, SPECTRAL_WIDTH_MAX, SPECTRAL_WIDTH_MIN,
+    Pulse, SpectralReading, ViewConfig, GAP_MAX, MARK_DELAY_MAX, MIN_EXTRA_SIZE, PITCH_CEIL,
+    PITCH_FLOOR, SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN, SPECTRAL_WIDTH_MAX, SPECTRAL_WIDTH_MIN,
 };
 
 /// The sounding-note controls: the whole note first — the time it takes to
@@ -25,11 +24,21 @@ use harmonigraph_scene::{
 /// to run.
 ///
 /// **Whole-note before the layers, because none of those settings belongs to a
-/// layer** — the Gap especially, which is one number spacing every layer of the
-/// node from the one inside it — and because they are the ones reached for
-/// most. Filing them after Core, Octaves and the marks would put the most-used
+/// layer** — the SIZES especially, which are one stack read outward from the
+/// node's center, and the Gap, which is the one number standing every layer of
+/// it off the one inside — and because they are the ones reached for most.
+/// Filing them after Core, Octaves and the marks would put the most-used
 /// controls under the ones reached for least, on the strength of an outward
 /// reading they are not part of.
+///
+/// **Every layer's size is one bar, and each section below is then what that
+/// layer IS.** The four widths were never four independent numbers — a layer's
+/// inner edge is a sum over everything inside it, so a bar apiece could say how
+/// thick a ring was and never where it landed — and splitting them across four
+/// headings put the one question a size on a node is asked, where does this sit,
+/// in four places that each held a quarter of the answer. The Layers bar in Note
+/// is the whole of it ([`StackBar`]), and what is left under each heading is the
+/// reading it carries, the colours it wears and the switches that are its own.
 ///
 /// The layers then run in stack order, from the center out: Core, the audio
 /// ring a Gap outside it, the octave band a Gap outside that, and the
@@ -46,23 +55,13 @@ pub(super) fn nodes_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dy
     shimmer_section(ui, &mut state.view);
 }
 
-/// Core: the mark at a sounding node's center. One continuous shape sized by
-/// the radius (0 = off, like Bloom) and morphed by Solidity from a soft glow
-/// (0) to the classic solid orb (1), painted as one calm disc that blends the
-/// sounding octaves' colors. Two bars and no style row: the paint is not a
-/// choice. Independent of the Octaves layer.
+/// Core: the mark at a sounding node's center. One continuous shape, sized by
+/// the innermost handle of the Layers bar (0 = off, like Bloom) and morphed by
+/// Solidity from a soft glow (0) to the classic solid orb (1), painted as one
+/// calm disc that blends the sounding octaves' colors. One bar and no style row:
+/// the paint is not a choice. Independent of the Octaves layer.
 fn core_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     section(ui, "Core");
-    // The one size on the node measured from its CENTER, and the bottom of the
-    // stack: every ring below is a width laid on top of this one, so dragging
-    // it moves the whole node outward rather than eating the ring above it.
-    ValueBar::new(&mut view.core_radius, 0.0..=CORE_RADIUS_MAX, "Radius")
-        .show(ui)
-        .on_hover_text(
-            "Core size, measured from the node's center — 0 is off, 0.46 the \
-             classic disc. The rings outside stack on top, so widening the core \
-             pushes them out.",
-        );
     ui.add_enabled_ui(view.core_radius > 0.0, |ui| {
         ValueBar::new(&mut view.core_solidity, 0.0..=1.0, "Solidity")
             .show(ui)
@@ -78,10 +77,11 @@ fn core_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
 /// pitch axis that runs once round the node. Independent of the Core.
 fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     section(ui, "Octaves");
-    // Octaves, Center and the fringe are the axis; Band width below is how thick
-    // the ring it is drawn on is. The padding between one indicator and the next is
-    // the node-wide Gap, up in Note: it is the same number that spaces the
-    // rings apart and stands the melody/bass marks off the band.
+    // Octaves, Center and the fringe are the axis; how thick the ring they are
+    // drawn on is, and where it sits, is the Layers bar up in Note — the third
+    // of its four handles. The padding between one indicator and the next is the
+    // node-wide Gap, beside it: it is the same number that spaces the rings
+    // apart and stands the melody/bass marks off the band.
     //
     // COUNTS and a CENTER rather than a pitch range: a slice is always exactly
     // one octave, so an indicator can never stand for less pitch than it
@@ -148,27 +148,13 @@ fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                  outermost extra inward. The outermost never moves.",
             );
     });
-    // No on/off beside it: 0 IS the off position, as it is on every other
-    // layer of the node, and from there the bar reaches every width up to
-    // RING_WIDTH_MAX — more than half the quad's radius, which is a band no
-    // stack that also carries a core and an audio ring has room for.
+    // No size bar under these, and no on/off either: both are the Layers bar's,
+    // where 0 is this layer's off position as it is on every other. The band is
+    // one WIDTH there rather than a pair of radii, because where it sits is the
+    // stack's answer — a gap out from the audio ring, or from the core where
+    // that ring is off — so the only thing left to say about it is how thick it
+    // is.
     //
-    // One number rather than the pair of radii the band could be given: where
-    // it SITS is the stack's answer (`ViewConfig::rings`) — a gap out from the
-    // audio ring, or from the core where that ring is off — so the only thing
-    // left to say about it is how thick it is. That is what makes the four size
-    // bars independent: none of them can be dragged behind its neighbour, and
-    // widening one slides the ones outside it out as far as the quad edge.
-    // There the sliding stops and the outermost layer that no longer fits whole
-    // is dropped instead, so a band the node has no room left for is not drawn
-    // rather than drawn as a hairline this bar's value does not match.
-    ValueBar::new(&mut view.band_width, 0.0..=RING_WIDTH_MAX, "Band width")
-        .show(ui)
-        .on_hover_text(
-            "How thick the octave band is. It sits a Gap out from the ring \
-             inside it; 0 removes the layer, and the marks close over its \
-             space.",
-        );
     // No Solidity and no Backdrop bar: both are fixed at 1. The glyphs are
     // always the crisp classic shapes, and the silent octaves always ghost
     // in behind the sounding ones — that backdrop is what completes the
@@ -207,21 +193,16 @@ fn melody_bass_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // it reads as that indicator's own piece rather than as a ring around
     // everything.
     ui.add_enabled_ui(view.mark_melody || view.mark_bass, |ui| {
-        ValueBar::new(&mut view.mark_thickness, 0.0..=MARK_THICKNESS_MAX, "Mark width")
-            .show(ui)
-            .on_hover_text(
-                "How deep a melody or bass mark draws past the band — the same \
-                 units as the ring widths. 0 turns the marks off.",
-            );
         // The Delay is about a mark that is DRAWN — when it arrives — so it is
-        // gated on there being one. A width of 0 is the documented off position,
-        // where `mark_extension` returns no coverage (the Core section gates its
-        // own Solidity on a radius of 0 the same way). The enclosing block already
-        // grays this on both marks being off, so what it is gated on either way
-        // is `marks_draw` — the same predicate `derive_scene` folds the
-        // shimmer on, and the one the Shimmer section reads. Written as the
-        // width alone because that is the half this block adds; the pair is
-        // what has to agree.
+        // gated on there being one. The strip's depth is the Layers bar's
+        // outermost handle, and 0 is its off position, where `mark_extension`
+        // returns no coverage (the Core section gates its own Solidity on a
+        // radius of 0 the same way). The enclosing block already grays this on
+        // both marks being off, so what it is gated on either way is
+        // `marks_draw` — the same predicate `derive_scene` folds the shimmer
+        // on, and the one the Shimmer section reads. Written as the depth alone
+        // because that is the half this block adds; the pair is what has to
+        // agree.
         ui.add_enabled_ui(view.mark_thickness > 0.0, |ui| {
             // How long an end has to be HELD before its mark answers. Here
             // rather than in with the note-wide settings at the head of the
@@ -360,20 +341,19 @@ fn shimmer_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
 /// place as the row is clicked along.
 fn audio_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     section(ui, "Audio ring");
-    // "Reading" and not "Ring", though the ring is what it fills: the bar
-    // below is already called Ring width, and two settings a row apart both
-    // leading with the same word are told apart only by hovering both. What this
-    // row picks is which of two measurements the ring carries, which is the
-    // word the rest of the audio channel uses for it.
+    // "Reading" and not "Ring", though the ring is what it fills: what this row
+    // picks is which of two measurements the ring carries, which is the word the
+    // rest of the audio channel uses for it, and a row named for the layer would
+    // read as the layer's own switch when it is nothing of the kind.
     //
-    // No Off among the readings, and the Ring width bar under it is why: a width
-    // of 0 turns the ring off, the way a radius of 0 turns the core off and a
-    // mark width of 0 turns the marks off. An Off here would be a second switch for this
-    // one layer, in a place no other layer keeps one, and the two would then
-    // have to be read together to know whether there is a ring.
+    // No Off among the readings, and the Layers bar is why: a width of 0 turns
+    // the ring off, the way it turns the core, the band and the marks off. An
+    // Off here would be a second switch for this one layer, in a place no other
+    // layer keeps one, and the two would then have to be read together to know
+    // whether there is a ring.
     //
     // Grayed with the ring off rather than hidden, so the section keeps its
-    // height and its rows keep their place as the bar is dragged to nothing.
+    // height and its rows keep their place as the handle is dragged to nothing.
     ui.add_enabled_ui(view.spectral_ring_draws(), |ui| {
         choice_row(
             ui,
@@ -398,16 +378,6 @@ fn audio_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
             ],
         );
     });
-    // How thick the ring is, and so whether there is one — the same shape as
-    // the octave band's own Band width bar, because it is the same question
-    // about a second annulus. Never grayed: it is this layer's off switch as well
-    // as its size, and a bar that grayed itself out at 0 could not be dragged back.
-    ValueBar::new(&mut view.spectral_ring_width, 0.0..=RING_WIDTH_MAX, "Ring width")
-        .show(ui)
-        .on_hover_text(
-            "How thick the audio ring is — the same units as Band width. 0 \
-             removes the layer, and the band closes over its space.",
-        );
     // The FOLD's kernel, and so inert under Spectrum rather than merely
     // without audio: the spectrum reading shows a whole window of pitch per
     // wedge, and a kernel there would blur the one axis the window exists to
@@ -504,6 +474,26 @@ fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBack
             "The curve both ends of the Fade run on, drawn as an arrival. 0 is \
              a straight line; higher moves fast and settles slowly, the way a \
              struck note decays.",
+        );
+    // Every layer's size, in the one bar that can show where each of them
+    // lands: the four widths are one stack read outward from the node's center,
+    // and the picture on the bar is the node's own cross-section (`StackBar`).
+    // A whole-note setting rather than any layer's, which is why it is here and
+    // not split four ways across the headings below — none of the four could be
+    // read without the other three, since a layer's inner edge is a sum over
+    // everything inside it.
+    //
+    // Directly above the Gap, because the two are one idea: the sizes are the
+    // layers and the Gap is the padding standing between them, the bar draws
+    // both, and dragging the Gap is visibly the stack opening up.
+    StackBar::new(view, "Layers")
+        .show(ui)
+        .on_hover_text(
+            "Every layer of a node, from its center out: the core, the audio \
+             ring, the octave band and the melody/bass strip. Drag a handle to \
+             set the layer inside it — 0 removes that layer and the ones \
+             outside close up. The line is the node's edge, which only the \
+             marks may cross. Double-click to restore.",
         );
     // The one padding on a node, and so a whole-note setting rather than the
     // octave layer's: it spaces the rings of the stack apart, it separates one

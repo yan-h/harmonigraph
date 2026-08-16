@@ -119,6 +119,10 @@ const TAU: f32 = 6.2831853;
 // marks, which at the default band (outer 1.0) sit entirely out here.
 // Costs a bit of fill (bigger quads, which alpha-blend and discard where
 // empty).
+//
+// `harmonigraph_scene::QUAD_MARGIN` mirrors this, being the top of the Layers
+// bar's axis — the bar draws a node's whole reach, and the marks are the one
+// layer that reaches out here. Change either and change both.
 const QUAD_MARGIN: f32 = 1.6;
 // Where the octave layer's overflow past uv 1.0 -- the aa fringe of a band
 // dialed right out to the edge -- finishes easing off, rather than being

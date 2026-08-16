@@ -20,12 +20,14 @@ mod octave;
 mod probe;
 mod range;
 mod rows;
+mod stack;
 mod value;
 
 pub use gradient::{GradientPreview, SpectrumBar, SpreadBar};
 pub use octave::OctaveStrip;
 pub use range::RangeBar;
 pub use rows::{button_row, choice_row, option_label, record_button, row_field, toggle_switch};
+pub use stack::StackBar;
 pub use value::{progress_bar, ValueBar};
 
 // The rest of the crate's own surface, and all of it is reached for from the
