@@ -415,8 +415,9 @@ pub struct ViewConfig {
     // at once: the keys keep everything they draw, and the measurement gets a
     // ring of its own inside the octave band. What is settled here is which of
     // two readings that ring carries, how thick it is — which is also whether
-    // it is there at all — and how each of the two is measured. See the fold in `harmonigraph-ui`, which is where all of
-    // the analysis lives — nothing in this crate reads audio.
+    // it is there at all — and how each of the two is measured. See the fold in
+    // `harmonigraph-ui`, which is where all of the analysis lives — nothing in
+    // this crate reads audio.
     /// Which reading of the analyzer the audio ring carries.
     ///
     /// The one control that says what the spectrum indicator IS: both readings

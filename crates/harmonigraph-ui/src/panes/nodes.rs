@@ -563,7 +563,7 @@ fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBack
     // The one padding on a node, and so a whole-note setting rather than the
     // octave layer's: it spaces the rings of the stack apart, it separates one
     // octave sector from the next, and it is what a melody/bass mark stands off
-    // the band by. Under the octave heading it read as the sectors' own, which
+    // the band by. Under the octave heading it reads as the sectors' own, which
     // is one of the three things it does.
     //
     // One number for the radial gaps and the angular ones together, because a
