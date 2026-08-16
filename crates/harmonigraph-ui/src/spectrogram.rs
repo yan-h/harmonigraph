@@ -408,8 +408,8 @@ const ROW_MEAN_STEPS: f32 = 10.0
 /// and that costs something the type does not advertise: indexing it carries an
 /// atomic load of the lock's state. So nothing indexes it by name inside a read
 /// — it is derefed ONCE per build, onto [`Shades::weight`], and handed to
-/// [`RowRead::of`] as a plain `&[f32; 256]`, which is worth 2.5 ms of a settled
-/// compose.
+/// [`RowRead::of`] as a plain `&[f32; 256]`, which is worth 1.3-2.8 ms of a
+/// settled compose depending on the Span, on byte-identical pixels.
 static ROW_WEIGHT: std::sync::LazyLock<[f32; 256]> = std::sync::LazyLock::new(|| {
     std::array::from_fn(|j| {
         let db = j as f32 * harmonigraph_core::spectrogram::DB_STEP;
@@ -459,15 +459,22 @@ impl RowRead {
     ///
     /// `weight` is [`ROW_WEIGHT`], taken as a parameter rather than reached by
     /// name, and that is load-bearing: naming the `LazyLock` here puts an atomic
-    /// load of the lock's state inside the read, worth 1.4x of this function on
-    /// byte-identical output (`timing_mean_log`) and 2.5 ms of a settled compose
-    /// (`timing_zoom_costs`). What it costs does not scale with the RUN, which
-    /// is the surprise and the reason to state it: a compose whose rows are all
-    /// `Mean` over 3.7 buckets and one where 1022 of 1408 rows are `Lerp` and
-    /// never index the table at all both drop by the same 2.5 ms, which is
-    /// 2.4 ns per call of `of` either way. The check lands once per READ, on
-    /// whichever arm is taken. The caller derefs it once per BUILD instead, off
-    /// [`Shades::weight`].
+    /// load of the lock's state inside the read, and the caller derefs it once
+    /// per BUILD instead, off [`Shades::weight`]. Measured on the compose, it is
+    /// worth 1.3-2.8 ms of a settled build across the Span range, on
+    /// byte-identical pixels (`timing_zoom_costs`, four runs each side).
+    ///
+    /// **What the saving is NOT is one atomic per read.** It barely scales with
+    /// how many rows index the table: zoomed IN, where 1022 of 1408 rows are
+    /// `Lerp` and provably never reach it, the compose drops 1.9 ms against the
+    /// 2.2 ms it drops zoomed out with every row a `Mean`. A `Lerp` executes no
+    /// check at all, so the gap cannot be the check running — and the same
+    /// comparison in a microbench does scale with the `Mean` count, five times
+    /// smaller over 98 rows than over 1408 (`timing_mean_log`'s `global` arm
+    /// puts the index itself at 1.12x). What is left is an effect on the
+    /// compose loop as a whole rather than on the arm that reads the table, and
+    /// its exact shape is unpinned. Reason about this as "keep the global out
+    /// of the loop", never as a per-read cost you can count.
     fn of(self, db: &[BucketDb], weight: &[f32; 256]) -> BucketDb {
         match self {
             RowRead::Mean { from, to } => {
@@ -498,34 +505,6 @@ impl RowRead {
         }
     }
 
-    /// PROBE (uncommitted): `of` reaching the table by name — the pre-PR shape.
-    #[cfg(test)]
-    fn of_global(self, db: &[BucketDb]) -> BucketDb {
-        match self {
-            RowRead::Mean { from, to } => {
-                let run = &db[from..to];
-                let top = run.iter().copied().max().unwrap_or(0);
-                if run.len() < 2 {
-                    return top;
-                }
-                let sum: f32 = run.iter().map(|&v| ROW_WEIGHT[usize::from(top - v)]).sum();
-                let steps = -(sum / run.len() as f32).log2() * ROW_MEAN_STEPS;
-                top.saturating_sub(steps.round() as u8)
-            }
-            RowRead::Max { from, to } => db[from..to].iter().copied().max().unwrap_or(0),
-            RowRead::Lerp { lo, f } => {
-                let (a, b) = (db[lo], db[(lo + 1).min(SPECTRUM_BINS - 1)]);
-                (f32::from(a) + (f32::from(b) - f32::from(a)) * f).round() as BucketDb
-            }
-        }
-    }
-
-    /// PROBE (uncommitted): the shipping shape, denied inlining.
-    #[cfg(test)]
-    #[inline(never)]
-    fn of_noinline(self, db: &[BucketDb], weight: &[f32; 256]) -> BucketDb {
-        self.of(db, weight)
-    }
 }
 
 /// Where the visible slabs sit in the uploaded texture, and what pitch range
@@ -4775,14 +4754,15 @@ mod tests {
     /// arm stands for the version that reaches for it by name.** [`ROW_WEIGHT`]
     /// is a `LazyLock`, so naming it inside the read carries an atomic load of
     /// the lock's state — and the cost of that is read off the COMPOSE, not off
-    /// this bench: a settled build at 1408 rows is 13.0 ms in
-    /// `timing_zoom_costs` against 15.5 ms reaching the global, on
-    /// byte-identical pixels. It lands once per READ rather than per bucket, so
-    /// the zoomed-IN compose pays it too, where 1022 of 1408 rows are `Lerp` and
-    /// never touch the table: both scales drop by the same 2.5 ms, 2.4 ns per
-    /// call of `of`. `global` is here so the shape stays measurable at all, and
-    /// it understates the gap — a copy inlined into the caller's own loop gets
-    /// more of the check lifted off it than one behind a call does.
+    /// this bench: a settled build at 1408 rows is 13.2 ms in
+    /// `timing_zoom_costs` against 15.4 ms reaching the global, on
+    /// byte-identical pixels. `global` is here so the shape stays measurable at
+    /// all, and it puts the index at **1.12x** of the read — well short of what
+    /// the compose gains, which is the discrepancy to respect rather than
+    /// explain away. The compose's saving barely tracks how many rows index the
+    /// table (zoomed in, with 1022 of 1408 rows a `Lerp` that never reaches it,
+    /// it is still 1.9 of the 2.2 ms), while this bench's does. So the two are
+    /// not measuring one thing, and the compose is the one that decides.
     ///
     /// **The `log2` is the other target, and it stays.** One per ROW per COLUMN,
     /// 1408 x 752 of them on a full-height 2x pane, and the answer is quantized
@@ -4944,104 +4924,6 @@ mod tests {
         );
         // Scaled to the column count a full-width pane composes.
         println!("  over 752 slabs: shipping {:.1} ms", ship_ms * 752.0);
-    }
-
-    /// PROBE (uncommitted): does the global cost land on the arm that reads it?
-    ///
-    /// The claim under test is "the check lands once per READ, on whichever arm
-    /// is taken". A pure-`Lerp` workload settles it: no row indexes the table at
-    /// all, so if naming the global in the `Mean` arm still costs time here, the
-    /// cost cannot be the check executing.
-    #[test]
-    #[ignore]
-    fn probe_mechanism() {
-        use std::time::Instant;
-
-        let mut slab = [0u8; SPECTRUM_BINS];
-        for (i, v) in slab.iter_mut().enumerate() {
-            *v = (40 + (i * 7) % 180) as u8;
-        }
-        let mix = |bins: &[Bin]| {
-            let mean = bins.iter().filter(|b| matches!(b.read, RowRead::Mean { .. })).count();
-            let lerp = bins.iter().filter(|b| matches!(b.read, RowRead::Lerp { .. })).count();
-            (mean, lerp, bins.len())
-        };
-        // The two scales `timing_zoom_costs` uses, so the read mix behind the
-        // 2.5 ms claim is CHECKED rather than taken on trust.
-        let full = PitchScale { min_midi: 16.0, max_midi: 135.0, span: 119.0 };
-        let tight = PitchScale { min_midi: 57.0, max_midi: 69.0, span: 12.0 };
-        // And a hard zoom, where every row is narrower than a bucket.
-        let hard = PitchScale { min_midi: 60.0, max_midi: 63.0, span: 3.0 };
-        for (label, scale) in [("full 119st", &full), ("tight 12st", &tight), ("hard 3st", &hard)] {
-            let (mean, lerp, all) = mix(&bins_for(1408, scale, false));
-            println!("  {label}: {mean} Mean, {lerp} Lerp, of {all} rows");
-        }
-
-        // Two workloads. `hard` barely touches the table (98 of 1408 rows);
-        // `full` is every row. If the cost is the CHECK, the saving must scale
-        // with the Mean count and the ratio of the two deltas is ~0.07. If it
-        // is per CALL, both deltas are the same and the ratio is ~1.
-        let run = |bins: &[Bin]| {
-            let a = || {
-                let t0 = Instant::now();
-                let mut sink = 0u32;
-                for _ in 0..200 {
-                    for b in bins {
-                        sink += u32::from(b.read.of_global(&slab));
-                    }
-                }
-                (t0.elapsed().as_secs_f64() * 1000.0 / 200.0, sink)
-            };
-            let b_arm = || {
-                let w: &[f32; 256] = &ROW_WEIGHT;
-                let t0 = Instant::now();
-                let mut sink = 0u32;
-                for _ in 0..200 {
-                    for b in bins {
-                        sink += u32::from(b.read.of(&slab, w));
-                    }
-                }
-                (t0.elapsed().as_secs_f64() * 1000.0 / 200.0, sink)
-            };
-            // Denied inlining: tells "the global blocked inlining" apart from
-            // "the global degraded the loop it sits in".
-            let c = || {
-                let w: &[f32; 256] = &ROW_WEIGHT;
-                let t0 = Instant::now();
-                let mut sink = 0u32;
-                for _ in 0..200 {
-                    for b in bins {
-                        sink += u32::from(b.read.of_noinline(&slab, w));
-                    }
-                }
-                (t0.elapsed().as_secs_f64() * 1000.0 / 200.0, sink)
-            };
-            let (mut am, mut bm, mut cm) = (f64::MAX, f64::MAX, f64::MAX);
-            let mut sinks = (0, 0, 0);
-            for _ in 0..9 {
-                let (x, y, z) = (a(), b_arm(), c());
-                (am, bm, cm) = (am.min(x.0), bm.min(y.0), cm.min(z.0));
-                sinks = (x.1, y.1, z.1);
-            }
-            assert_eq!(sinks.0, sinks.1, "the arms must compute the same column");
-            assert_eq!(sinks.1, sinks.2);
-            (am, bm, cm)
-        };
-
-        for (label, scale) in [("hard 3st (98 Mean)", &hard), ("full 119st (1408 Mean)", &full)] {
-            let bins = bins_for(1408, scale, false);
-            let (mean, _, _) = mix(&bins);
-            let (am, bm, cm) = run(&bins);
-            println!(
-                "  {label}: A global {am:.4} | B param {bm:.4} | C param+noinline {cm:.4} ms/col",
-            );
-            println!(
-                "    A-B delta {:.4} ms/col over {mean} Mean rows | A/B {:.2}x | C/B {:.2}x",
-                am - bm,
-                am / bm,
-                cm / bm,
-            );
-        }
     }
 
     /// Scratch harness for the zoom-performance audit: prints where a zoom
