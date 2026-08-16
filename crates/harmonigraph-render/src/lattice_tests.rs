@@ -361,8 +361,9 @@ fn parity_scene() -> Scene {
         outer_inner: 0.545,
         outer_outer: 0.795,
         // The band is the outermost ring here, as it is on a fresh node, so it
-        // is what the marks stand off.
+        // is what the marks stand off — a gap out from its edge.
         rings_outer: 0.795,
+        mark_inner: 0.795 + 0.12,
         ring_gap: 0.12,
         // No analyzer: the ring off, under either reading. It is a whole layer
         // more light in the middle of every node, and the sweep and mark
@@ -1430,6 +1431,7 @@ fn ringing_node(held: Option<usize>, sounding: Option<f32>, range: f32) -> Scene
     scene.outer_inner = rings.band.0;
     scene.outer_outer = rings.band.1;
     scene.rings_outer = rings.outer;
+    scene.mark_inner = rings.mark_inner;
     scene.ring_gap = rings.gap;
 
     let mut paint = harmonigraph_scene::SpectralPaint::silent();
@@ -1700,7 +1702,11 @@ fn a_mark_stands_off_the_outermost_ring_the_node_draws() {
         (paint.inner, paint.outer) = rings.audio;
         scene.spectral = paint;
         (scene.outer_inner, scene.outer_outer) = if band { rings.band } else { (0.0, 0.0) };
+        // A ring is on either way here, so the strip is owed its padding in
+        // both — the case where it is not is
+        // `a_mark_with_no_ring_under_it_reaches_the_nodes_centre`.
         scene.rings_outer = if band { rings.band.1 } else { rings.audio.1 };
+        scene.mark_inner = scene.rings_outer + rings.gap;
         scene
     };
 
@@ -1737,6 +1743,101 @@ fn a_mark_stands_off_the_outermost_ring_the_node_draws() {
         without.near > rings.audio.1 as f64 * scale - 4.0,
         "with the band off the mark starts at {:.1} px, inside the audio ring's own edge",
         without.near,
+    );
+}
+
+/// With the core, the audio ring and the octave band ALL dialled off, the
+/// melody/bass mark is the only layer the node has left — and it reaches the
+/// node's CENTRE, rather than standing a padding off nothing.
+///
+/// [`stacked`](harmonigraph_scene::ViewConfig::rings) writes that rule down
+/// for every layer it owns: the gap is skipped at a cursor of 0, where there
+/// is nothing to stand off, so the innermost layer closes into a disc instead
+/// of opening a hole the size of a padding around nothing. The mark is the one
+/// layer it does NOT own — the strip's inner edge is re-derived in WGSL off
+/// `rings_outer`, which is handed the cursor and not the rule — so the two
+/// answers part company at exactly the one cursor the rule is about.
+///
+/// The state is a reduction the Lattice page's own bars reach: Core radius,
+/// Ring width and Band width all have 0 as their off position, and reading the
+/// lattice as melody/bass marks alone is what taking all three there is for.
+/// Every other fixture in this file leaves a ring under the mark, where the
+/// gap is owed and both answers agree.
+#[test]
+fn a_mark_with_no_ring_under_it_reaches_the_nodes_centre() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut gpu) = Shooter::new(SIZE) else {
+        return;
+    };
+
+    // Two stacks off one view at the probe's wide padding: the band alone, and
+    // nothing at all.
+    //
+    // The strip is dialled to its deepest on purpose. A sector's gap is a
+    // constant EUCLIDEAN thickness at every radius (`outer_glyph`), so the two
+    // edge lines blank a disc of half a padding about the node's centre — and
+    // a strip no deeper than that disc would have nothing left to measure once
+    // it reached the centre, which is the very state under test.
+    let fresh = harmonigraph_scene::ViewConfig {
+        ring_gap: PROBE_GAP,
+        core_radius: 0.0,
+        spectral_ring_width: 0.0,
+        mark_thickness: harmonigraph_scene::MARK_THICKNESS_MAX,
+        ..harmonigraph_scene::ViewConfig::default()
+    };
+    let band_only = fresh.rings();
+    let empty = harmonigraph_scene::ViewConfig { band_width: 0.0, ..fresh.clone() }.rings();
+    assert!(band_only.outer > 0.0, "the reference stack must draw a ring");
+    assert_eq!(empty.outer, 0.0, "the fixture must empty the stack to test anything");
+
+    let staged = |rings: &harmonigraph_scene::RingStack, mark: bool| -> Scene {
+        let mut scene = single_marked_node(MIDDLE_C, 0);
+        scene.core_radius = rings.core_radius;
+        scene.ring_gap = rings.gap;
+        scene.mark_thickness = rings.mark_thickness;
+        // Silent paint carries the empty pair, so the audio ring is off the
+        // way the bar leaves it rather than merely unlit.
+        scene.spectral = harmonigraph_scene::SpectralPaint::silent();
+        (scene.outer_inner, scene.outer_outer) = rings.band;
+        scene.rings_outer = rings.outer;
+        scene.mark_inner = rings.mark_inner;
+        if !mark {
+            scene.nodes[0].melody_slots = 0;
+            scene.nodes[0].melody_level = 0.0;
+        }
+        scene
+    };
+
+    // The mark alone, read off the same node with the marks off, so what the
+    // difference holds is the strip and nothing under it.
+    let mark_light = |gpu: &mut Shooter, rings: &harmonigraph_scene::RingStack| -> Light {
+        let bare = gpu.shot(&staged(rings, false));
+        light_about_center(&light_over(&gpu.shot(&staged(rings, true)), &bare), SIZE)
+    };
+
+    let reference = mark_light(&mut gpu, &band_only);
+    let stripped = mark_light(&mut gpu, &empty);
+    assert!(reference.weight > 0.0 && stripped.weight > 0.0, "the mark drew nothing");
+
+    // The strip's OUTER edge is what both readings are taken from: it is the
+    // one end the octave gap does not eat into, since a sector is wider than
+    // the padding out there and narrower than it near the node's centre.
+    // Calibrated on the reference, where a ring IS under the strip and the
+    // padding is genuinely owed.
+    let want_ref = (band_only.mark_inner + band_only.mark_thickness) as f64;
+    let scale = reference.far / want_ref;
+    let far_uv = stripped.far / scale;
+    eprintln!(
+        "band under it: {:.1} px = {want_ref:.4} uv ({:.1} px/uv); \
+         nothing under it: {:.1} px = {far_uv:.4} uv, thickness {:.4}, gap {:.4}",
+        reference.far, scale, stripped.far, empty.mark_thickness, empty.gap,
+    );
+    assert!(
+        (far_uv - empty.mark_thickness as f64).abs() < empty.gap as f64 / 2.0,
+        "with every ring off the strip reaches {far_uv:.4} uv, not the {:.4} it is deep — \
+         it is standing a padding off nothing, with a hole at the node's centre. \
+         `stacked` skips the gap at a cursor of 0 and the strip has to skip it too",
+        empty.mark_thickness,
     );
 }
 

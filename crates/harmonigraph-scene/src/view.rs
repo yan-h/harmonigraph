@@ -904,11 +904,20 @@ pub struct RingStack {
     /// measured from, so neither has to know which of the rings inside it
     /// happened to be the last one on.
     pub outer: f32,
-    /// How deep the melody/bass mark strip is (see
-    /// [`ViewConfig::mark_thickness`]); 0 = off. Its inner edge is
-    /// [`outer`](Self::outer) plus [`gap`](Self::gap), which the renderer
-    /// applies itself because the strip is allowed to run out into the
-    /// billboard's margin past the quad.
+    /// Where the melody/bass mark strip STARTS: a gap out from
+    /// [`outer`](Self::outer), or the node's center when the stack is empty
+    /// and there is nothing to stand off.
+    ///
+    /// Settled here rather than left to the renderer because that second
+    /// clause is [`stacked`]'s rule, and a layer deriving its own inner edge
+    /// downstream is a layer that does not get it: the marks are the one slot
+    /// `stacked` cannot hand out, since they alone may run past the quad edge
+    /// into the billboard's margin instead of being refused there.
+    pub mark_inner: f32,
+    /// How deep the mark strip is from [`mark_inner`](Self::mark_inner) (see
+    /// [`ViewConfig::mark_thickness`]); 0 = off. The OUTER edge is the one
+    /// thing about the marks still left to the renderer, which eases the strip
+    /// off its own billboard edge.
     pub mark_thickness: f32,
     /// The padding between two drawn layers, and between one octave sector and
     /// the next (see [`ViewConfig::ring_gap`]).
@@ -1040,10 +1049,11 @@ impl ViewConfig {
             audio,
             band,
             outer: cursor,
-            // The marks are the one layer whose outer edge is not settled here:
-            // they live in the billboard's margin past the quad, where the
-            // renderer eases them off its own edge, so what it is handed is
-            // where the strip STARTS and how deep it is.
+            // The strip's own slot, on `stacked`'s terms — a gap out from the
+            // last layer drawn, or the node's center when nothing was. Only
+            // the outer edge is left to the renderer, because that is the one
+            // the billboard's margin lets run past the quad.
+            mark_inner: if cursor > 0.0 { cursor + gap } else { 0.0 },
             mark_thickness: size(self.mark_thickness, MARK_THICKNESS_MAX),
             gap,
         }

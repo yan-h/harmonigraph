@@ -525,6 +525,7 @@ pub fn derive_scene(
         outer_inner: rings.band.0,
         outer_outer: rings.band.1,
         rings_outer: rings.outer,
+        mark_inner: rings.mark_inner,
         ring_gap: rings.gap,
         // The MIDI picture, whole: nothing here reads audio, so the audio
         // channel arrives empty and the Lattice pane's fold is what fills it.
