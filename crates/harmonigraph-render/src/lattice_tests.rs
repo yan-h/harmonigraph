@@ -1443,9 +1443,9 @@ const PROBE_GAP: f32 = 0.12;
 /// measured is where two annuli are.
 ///
 /// The PADDING is the fixture's own, and it is the one number here that has to
-/// be: one Gap separates every layer of a node, and the fresh 0.052 of it is
-/// under three pixels on the 52-px node this renders, where the two annuli's
-/// anti-aliased edges meet inside it. A wider gap measures the geometry
+/// be: the Ring gap is what separates every layer of a node, and the fresh
+/// 0.052 of it is under three pixels on the 52-px node this renders, where the
+/// two annuli's anti-aliased edges meet inside it. A wider gap measures the geometry
 /// rather than the edge softness. It is the same picture a fresh node draws,
 /// read at a size a person looks at one from.
 ///
@@ -3515,7 +3515,7 @@ fn gap_at(profile: &[bool], at_degrees: f32) -> f32 {
 }
 
 /// Every unlit run around the profile, in degrees. On a closed ring of
-/// indicators the only unlit stretches are the Gap setting's slits, one per
+/// indicators the only unlit stretches are the Octave gap's slits, one per
 /// boundary between neighbours — so counting these counts the indicators,
 /// and a missing one shows as two slits merged into a wider hole.
 fn unlit_runs(profile: &[bool]) -> Vec<f32> {
@@ -3545,7 +3545,7 @@ fn unlit_runs(profile: &[bool]) -> Vec<f32> {
 /// than on the layout that feeds it: every octave of the span gets an
 /// indicator and together they close the ring — whatever the counts, the
 /// center, the fringe or the node's pitch class. So the only unlit stretches
-/// are the Gap setting's slits, one per boundary, and the seam is one of them
+/// are the Octave gap's slits, one per boundary, and the seam is one of them
 /// on every node, wherever that node's turn has carried it.
 ///
 /// Reading it off rendered pixels is the point. The layout's own tests pin
@@ -3573,7 +3573,7 @@ fn every_octave_in_the_range_is_drawn_and_they_close_the_ring() {
     // not, one of them the tritone that turns furthest.
     //
     // An even wheel, a flat fringe, a graded one, and then a fringe thin
-    // enough to be eaten by the Gap.
+    // enough to be eaten by the Octave gap.
     const FRINGES: [(f32, f32); 4] = [(1.0, 0.0), (0.6, 0.0), (0.6, 1.0), (0.15, 0.0)];
     for (count, extras, center) in [
         (11u32, 0u32, 60.0f32),
@@ -3606,7 +3606,7 @@ fn every_octave_in_the_range_is_drawn_and_they_close_the_ring() {
                 let want = layout.span as usize;
                 let runs = unlit_runs(&profile);
                 // Except under a thin fringe, and that is the settings talking
-                // rather than a missing indicator: the Gap is cut out of every
+                // rather than a missing indicator: the Octave gap is cut out of every
                 // sector from both sides at full width, so an extra thinner
                 // than twice that padding has its two slits meet and reads as
                 // no indicator at all. At 0.6 of an even slice they still
@@ -3620,7 +3620,7 @@ fn every_octave_in_the_range_is_drawn_and_they_close_the_ring() {
                     assert!(
                         runs.len() + lost >= want && runs.len() <= want,
                         "{case}: unlit runs {runs:?} for {want} sectors — at most the \
-                         {lost} extras can be lost to the Gap"
+                         {lost} extras can be lost to the Octave gap"
                     );
                 }
 
@@ -3674,7 +3674,7 @@ fn an_indicator_is_drawn_at_its_own_pitchs_angle() {
         // wheel, where a wrong anchor or a wrong direction shows.
         //
         // Both held INSIDE the ring rather than at its edges: a thin fringe
-        // leaves the extras narrower than the Gap's slits, and a centroid
+        // leaves the extras narrower than the Octave gap's slits, and a centroid
         // needs an arc to measure. That the edges reach the seam at all is
         // `every_octave_in_the_range_is_drawn_and_they_close_the_ring`.
         for (cents, offset) in [(0.0f32, 0i32), (700.0, 0), (0.0, 2), (700.0, 2)] {
