@@ -1982,7 +1982,7 @@ fn the_shimmers_speed_and_width_reach_the_picture_and_only_speed_carries_the_clo
     );
     assert!(
         differing_pixels(&base, &gpu.shot(&sweep(1.6, 2.5, 0.4))) > 0,
-        "the Width bar did not resize the bands",
+        "the Spacing bar did not resize the bands",
     );
 
     // Held still: the sheet is where it started at every instant, and stays
@@ -2160,7 +2160,7 @@ fn shimmer_intensity_scales_the_sweep_and_bottoms_out_at_the_steady_layer() {
     );
 }
 
-/// The tight end of the Width bar puts SEVERAL bands across one node at once
+/// The tight end of the Spacing bar puts SEVERAL bands across one node at once
 /// — a texture on the node rather than a sheet passing between nodes — which
 /// is a different picture from the wide end and not just a smaller number.
 ///
@@ -2327,7 +2327,7 @@ fn a_width_finer_than_the_pixels_fades_out_instead_of_aliasing() {
     // The same width the test above counts fifteen band edges at, which this
     // node's pixels carry comfortably.
     let resolvable = differing_pixels(&steady, &gpu.shot(&at(0.35)));
-    // The floor `derive_scene` clamps the Width bar to.
+    // The floor `derive_scene` clamps the Spacing bar to.
     let finest = differing_pixels(&steady, &gpu.shot(&at(0.02)));
     eprintln!("pixels swept: {resolvable} at a resolvable width, {finest} at the floor");
     assert!(

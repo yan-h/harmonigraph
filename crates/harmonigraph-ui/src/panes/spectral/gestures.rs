@@ -421,7 +421,7 @@ pub(super) fn drag_zoom(
                     // Only the ceiling moves. The floor IS the baseline the curve
                     // stands on, so it is the fixed end of this zoom the way `now`
                     // is the fixed end of the Span's; sliding the window bodily is
-                    // the Level bar's gesture, and there is one depth axis to drag
+                    // the Level range bar's gesture, and there is one depth axis to drag
                     // along, not two.
                     let window = (cfg.ceiling_db - cfg.floor_db).max(crate::LEVEL_RANGE_MIN_SPAN);
                     let window = (window * (-outward * DEPTH_ZOOM_PER_DRAG_POINT).exp())

@@ -123,6 +123,38 @@ fn derived_key(comma: tuning::Comma) -> ParamKey {
     }
 }
 
+/// What each tuning bar says, for the plain (untempered) bar. A derived axis
+/// draws [`tempered_bar`] instead, whose hover names the lock that is holding
+/// it rather than the axis.
+fn tuning_hint(key: ParamKey) -> &'static str {
+    match key {
+        ParamKey::COffset => {
+            "Where C sits, in cents from standard. Moves every node's pitch \
+             together."
+        }
+        ParamKey::Three => {
+            "The fifths axis: one step, in cents. 701.96 is just (3:2), 700 is \
+             12-TET."
+        }
+        ParamKey::Five => {
+            "The thirds axis: one step, in cents. 386.31 is just (5:4), 400 is \
+             12-TET. Tempering Meantone locks it to the fifth."
+        }
+        ParamKey::Seven => {
+            "The sevenths axis: one step, in cents. 968.83 is just (7:4), 1000 \
+             is 12-TET. Tempering Marvel locks it to the fifth and third."
+        }
+        ParamKey::Tolerance => {
+            "How far off a node's pitch a note may land and still light it, in \
+             cents. Also decides the Notes pane's node column and the \
+             Analyzer's off-lattice band."
+        }
+        // Not on this pane: Fade is a node setting and the two pitch ends are
+        // the Colors page's Color range.
+        ParamKey::Fade | ParamKey::DarkestPitch | ParamKey::BrightestPitch => "",
+    }
+}
+
 /// The comma currently deriving this axis, if any. At most one: each comma
 /// derives a different axis.
 fn comma_deriving(key: ParamKey, view: &harmonigraph_scene::ViewConfig) -> Option<tuning::Comma> {
@@ -244,13 +276,20 @@ pub(super) fn tuning_pane(
         match comma_deriving(key, &state.view) {
             Some(comma) => tempered_bar(ui, state, params, comma),
             None => {
-                param_bar(ui, params, key);
+                param_bar(ui, params, key).on_hover_text(tuning_hint(key));
             }
         }
     }
 
     button_row(ui, |ui| {
-        if ui.button("Just").clicked() {
+        if ui
+            .button("Just")
+            .on_hover_text(
+                "Pure ratios on every axis — 3:2, 5:4, 7:4 — and both \
+                 temperaments released.",
+            )
+            .clicked()
+        {
             params.set(ParamKey::Three, tuning::THREE_JUST);
             params.set(ParamKey::Five, tuning::FIVE_JUST);
             params.set(ParamKey::Seven, tuning::SEVEN_JUST);
@@ -261,7 +300,14 @@ pub(super) fn tuning_pane(
                 *state.view.temper_mut(comma) = false;
             }
         }
-        if ui.button("12-TET").clicked() {
+        if ui
+            .button("12-TET")
+            .on_hover_text(
+                "Equal-tempered steps — 700, 400, 1000 cents. Matches a plain \
+                 MIDI keyboard.",
+            )
+            .clicked()
+        {
             params.set(ParamKey::Three, tuning::THREE_12TET);
             params.set(ParamKey::Five, tuning::FIVE_12TET);
             params.set(ParamKey::Seven, tuning::SEVEN_12TET);

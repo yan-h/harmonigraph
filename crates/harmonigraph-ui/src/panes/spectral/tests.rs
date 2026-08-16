@@ -806,7 +806,7 @@ fn dragging_the_spectrum_outward_closes_the_level_window() {
             after.ceiling_db,
         );
         // The floor IS the baseline this zoom is about, so it does not move:
-        // a window that slid bodily would be the Level bar's other gesture.
+        // a window that slid bodily would be the Level range bar's other gesture.
         assert_eq!(after.floor_db, cfg.floor_db, "{orientation:?}: the floor moved");
     }
 }
@@ -925,7 +925,7 @@ fn a_pan_that_leans_slightly_along_depth_is_still_a_pan() {
 }
 
 /// However far the drag runs, the window stops at the closest the pair may
-/// come — the same limit the Level bar holds to, both of them writing the
+/// come — the same limit the Level range bar holds to, both of them writing the
 /// same pair.
 #[test]
 fn the_level_zoom_stops_at_the_minimum_span() {
@@ -1224,7 +1224,7 @@ fn the_volume_grid_follows_the_level_zoom_in_both_directions() {
             .collect()
     };
 
-    // Zoomed IN to the narrowest window the Level bar allows. A 10 dB step has
+    // Zoomed IN to the narrowest window the Level range bar allows. A 10 dB step has
     // one line to give here, which brackets the picture instead of measuring
     // it — so even the shortest axis subdivides rather than rule it, which is
     // the whole of what the sparse bound is for.
@@ -1424,7 +1424,7 @@ fn the_numbers_are_as_dense_as_the_type_allows() {
     assert!(ruled.contains(&-45.0), "a 900-point axis kept a 10 dB step: {ruled:?}");
     assert_eq!(numbered_db(&cfg, 900.0, 60.0), ruled);
 
-    // ...and closed to the narrowest window the Level bar allows, the numbers
+    // ...and closed to the narrowest window the Level range bar allows, the numbers
     // reach 2 dB. Pinned to tens this axis would carry exactly one number.
     let tight = level_cfg(-32.0, -20.0);
     assert_eq!(
@@ -1508,7 +1508,7 @@ fn a_collapsed_level_window_rules_nothing() {
     assert_eq!(level_window(&repaired), (-60.0, -60.0 + crate::LEVEL_RANGE_MIN_SPAN));
     assert!(!level_grid(&repaired, 400.0, 60.0).is_empty());
 
-    // The Level bar cannot collapse the window — `level_window` holds the pair
+    // The Level range bar cannot collapse the window — `level_window` holds the pair
     // apart — so an ordered one always has something to rule.
     assert!(!level_grid(&level_cfg(-20.0, -20.0), 400.0, 60.0).is_empty());
 }
@@ -2296,14 +2296,14 @@ fn every_level_number_sits_on_the_side_its_peaks_reach() {
 /// A number with no room on that side is not written, rather than set on the
 /// other one — the side is what makes a column of them readable at a glance.
 ///
-/// The ceiling is the end that can run out, being wherever the Level bar was
+/// The ceiling is the end that can run out, being wherever the Level range bar was
 /// dragged rather than a rung, so a ruling can sit hard against it. The lowest
 /// rung is exempt: the bottom of the scale is stated whatever it costs.
 #[test]
 fn a_level_number_with_no_room_is_not_written() {
     // A ceiling dragged to half a dB above a rung, so the topmost ruling sits
     // hard against it with too little room left for a number — reachable
-    // wherever the Level bar lands.
+    // wherever the Level range bar lands.
     let cfg = level_cfg(-60.0, -29.5);
     let grid = level_grid(&cfg, 400.0, 60.0);
     let ruled: Vec<f32> = grid.iter().map(|r| r.db).collect();

@@ -301,7 +301,7 @@ fn readout_lefts(row: ReadoutRow) -> (f32, f32) {
 /// The pair does NOT park together at the right, the way [`SpreadBar`]
 /// spells its two ends into one readout, and the reason is the thumb rather
 /// than the room: a parked run is crossed by any handle dragged past about
-/// four fifths of the bar, which is where the Level bar's ceiling and the Band
+/// four fifths of the bar, which is where the Level range bar's ceiling and the Band
 /// bar's outer radius both sit at rest. A number goes in a run of CLEAR bar
 /// instead, which is what keeps a thumb's own width between it and every thumb;
 /// swept with the pitch range's `hz_readout`, the widest readout any pane asks
@@ -334,11 +334,11 @@ fn readout_lefts(row: ReadoutRow) -> (f32, f32) {
 ///
 /// Most bars only reach it while the low end is DRAGGED there: the two that
 /// open at the full axis stand their low handle a point clear of the name, and
-/// the Level and Band bars open at 40% and 66% of theirs. The two
-/// [`fade_span`](RangeBar::fade_span) bars rest inside it, and the Gutter does
-/// so at a fresh install — its low end is where the gutter stops being solid,
+/// the Level range and Band bars open at 40% and 66% of theirs. The two
+/// [`fade_span`](RangeBar::fade_span) bars rest inside it, and the Clearance
+/// does so at a fresh install — its low end is where the gap stops being solid,
 /// which on a nearly-fully-soft default is 1.4% of the axis, so the thumb
-/// stands on the "G".
+/// stands on the "C".
 ///
 /// **That costs no letter**, and it is why the fresh look does not have to be
 /// chosen around it. The name is painted a second time clipped to the thumb, in
@@ -743,7 +743,7 @@ impl<'a> RangeBar<'a> {
         // numbers out too would give the placement somewhere soft to fail into
         // and cost that check its teeth. The name has no such option: it is
         // pinned to the left of the bar and a thumb comes to rest on it — which
-        // for the two `fade_span` bars and a fresh Gutter is where they OPEN.
+        // for the two `fade_span` bars and a fresh Clearance is where they OPEN.
         let grip_radius =
             CornerRadius::same(if self.fade_span { r } else { theme::scaled_points(2, scale) });
         for x in [lgx, hgx] {
@@ -1077,8 +1077,8 @@ mod tests {
 
     /// A [`RangeBar::fade_span`] bar is knocked out like any other, and it is
     /// the one that needs it most: the two of them rest with a thumb inside the
-    /// name's own share of the bar, and a fresh Gutter stands its low end on
-    /// the "G". Every other bar has to be dragged there.
+    /// name's own share of the bar, and a fresh Clearance stands its low end on
+    /// the "C". Every other bar has to be dragged there.
     ///
     /// It is also the bar that stretches the square clip furthest. Its thumb
     /// takes the BAR's corner rather than a grip's, which on a 6pt width epaint
@@ -1089,7 +1089,7 @@ mod tests {
     /// knockout happens, on the thumb, in the panel colour.
     #[test]
     fn a_fade_span_bars_name_is_knocked_out_where_its_thumb_rests_on_it() {
-        // A low end just inside the name, the way a fresh Gutter opens.
+        // A low end just inside the name, the way a fresh Clearance opens.
         let (mut lo, mut hi) = (AXIS.0 + 3.0, AXIS.0 + 20.0);
         let out = painted(300.0, |ui| {
             RangeBar::new(&mut lo, &mut hi, AXIS.0..=AXIS.1, NAME)
@@ -1275,7 +1275,7 @@ mod tests {
     /// [`SpreadBar`]'s are: the thumb is drawn in the same near-white as the
     /// digits, so a crossing swallows a character whichever of the two paints
     /// last, and "-60 dB" reading "-60 B" is the concrete thing this holds
-    /// off. The Level bar's ceiling and the Band bar's outer radius both rest
+    /// off. The Level range bar's ceiling and the Band bar's outer radius both rest
     /// past four fifths of their axes, which is where a parked run is crossed.
     ///
     /// SWEPT, not sampled at the resting spans, and that is the point of it:

@@ -409,7 +409,7 @@ fn every_bar_in_a_settings_pane_is_the_width_of_the_pane() {
     // The floor is a count of the bars a fresh view draws LIVE, and a gated bar
     // is not in it: [`bar_track_widths`] finds a track by the well's own fill,
     // and a disabled `Ui` fades its painter, so a greyed track is no longer
-    // that color. Sevenths size is inert at the fresh sevenths extent of 0, and
+    // that color. Sheet size is inert with Sheets at its fresh 0, and
     // half the node layers gate on something — hence a floor well under the
     // count. What the floor watches for is the paint going away, which takes
     // every bar at once; a control coming, going or greying is not what it is
@@ -1305,9 +1305,9 @@ fn track_color(shapes: &[egui::epaint::ClippedShape], y: f32) -> egui::Color32 {
         .1
 }
 
-/// Each reading's own bar is the LIVE one — Width under Fold, Range under
-/// Spectrum — and Ring is live throughout, being the one bar that is also this
-/// layer's off switch.
+/// Each reading's own bar is the LIVE one — Tolerance under Fold, Zoom under
+/// Spectrum — and Ring width is live throughout, being the one bar that is also
+/// this layer's off switch.
 ///
 /// Nothing else in the tree looks at these gates. They are two `add_enabled_ui`
 /// predicates twenty lines apart that each name the other's enum variant, which
@@ -1315,8 +1315,8 @@ fn track_color(shapes: &[egui::epaint::ClippedShape], y: f32) -> egui::Color32 {
 /// its only draggable bar the one that does nothing, while every other test
 /// here stays green.
 ///
-/// Ring is the case worth naming. It is greyed by nothing, and a version that
-/// gated it on the ring drawing — the shape every other bar in the section
+/// Ring width is the case worth naming. It is greyed by nothing, and a version
+/// that gated it on the ring drawing — the shape every other bar in the section
 /// takes — would strand it: dragging it to 0 is what turns the ring off, and a
 /// bar greyed at 0 could never be dragged back.
 ///
@@ -1330,27 +1330,27 @@ fn each_readings_own_bar_is_the_one_that_is_live() {
 
     let row = |(reading, width): (SpectralReading, f32), name: &str| {
         let shapes = audio_section_shapes(reading, width);
-        let ring = one_text_y(&shapes, "Ring");
-        let range = one_text_y(&shapes, "Range");
+        let ring = one_text_y(&shapes, "Ring width");
+        let zoom = one_text_y(&shapes, "Zoom");
         let y = match name {
-            // "Width" is painted twice in this pane — the fold's kernel here,
-            // the shimmer's further down. Taken by POSITION and not by paint
-            // order, so a section moved out from under the Audio heading fails
-            // here rather than silently measuring the other bar.
-            "Width" => text_ys(&shapes, "Width")
+            // Taken by POSITION and not by paint order, so the row measured is
+            // provably the Audio section's: a Tolerance drawn anywhere but
+            // between Ring width and Zoom fails here rather than being read as
+            // this section's bar.
+            "Tolerance" => text_ys(&shapes, "Tolerance")
                 .into_iter()
-                .find(|y| *y > ring && *y < range)
-                .expect("the Audio section's Width bar sits between its Ring and Range bars"),
-            "Ring" => ring,
-            "Range" => range,
+                .find(|y| *y > ring && *y < zoom)
+                .expect("the Audio section's Tolerance bar sits between Ring width and Zoom"),
+            "Ring width" => ring,
+            "Zoom" => zoom,
             other => panic!("{other:?} is not a bar in the Audio section"),
         };
         track_color(&shapes, y)
     };
 
     const WIDE: f32 = 0.3;
-    let live = row((SpectralReading::Fold, WIDE), "Ring");
-    let dead = row((SpectralReading::Fold, WIDE), "Range");
+    let live = row((SpectralReading::Fold, WIDE), "Ring width");
+    let dead = row((SpectralReading::Fold, WIDE), "Zoom");
     assert_ne!(live, dead, "a bar's track paints the same greyed and live, so nothing below bites");
 
     for (state, want_ring, want_width, want_range) in [
@@ -1361,9 +1361,13 @@ fn each_readings_own_bar_is_the_one_that_is_live() {
         ((SpectralReading::Fold, 0.0), live, dead, dead),
         ((SpectralReading::Spectrum, 0.0), live, dead, dead),
     ] {
-        assert_eq!(row(state, "Ring"), want_ring, "{state:?}: Ring is live/greyed the wrong way");
-        assert_eq!(row(state, "Width"), want_width, "{state:?}: Width is the wrong way");
-        assert_eq!(row(state, "Range"), want_range, "{state:?}: Range is the wrong way");
+        assert_eq!(
+            row(state, "Ring width"),
+            want_ring,
+            "{state:?}: Ring width is live/greyed the wrong way",
+        );
+        assert_eq!(row(state, "Tolerance"), want_width, "{state:?}: Tolerance is the wrong way");
+        assert_eq!(row(state, "Zoom"), want_range, "{state:?}: Zoom is the wrong way");
     }
 }
 

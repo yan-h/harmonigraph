@@ -156,7 +156,7 @@ fn a_blob_naming_more_wheel_than_fits_opens_on_what_fits() {
 /// inside the host, as a project opens. `loudness_raw`'s own guard answers an
 /// inverted or collapsed pair and cannot answer this one.
 ///
-/// Two controls write the pair now — the Level bar and the drag across the
+/// Two controls write the pair now — the Level range bar and the drag across the
 /// spectrum — and neither can produce either shape, which is what makes the
 /// blob the only way in.
 #[test]
@@ -249,7 +249,7 @@ fn a_double_click_on_a_soft_edge_restores_the_fresh_pair() {
                     ui,
                     (reach, fade),
                     0.5,
-                    "Gutter",
+                    "Clearance",
                     (fresh.sevens_gutter, fresh.sevens_gutter_soft),
                     |v| format!("{v:.2}"),
                 );

@@ -266,7 +266,7 @@ pub(crate) fn spectral_pane(
     // step fits the analyzer it is drawn on (see `level_grid`). The two grids
     // answer the two questions the pane is read for — WHERE in the spectrum a
     // band sits, and HOW LOUD it is — and the second had no answer at all
-    // beyond the Level bar's two end values, which are numbers about the pane
+    // beyond the Level range bar's two end values, which are numbers about the pane
     // rather than marks on it.
     //
     // Measured against the spectrum's depth BUDGET rather than its whole share:

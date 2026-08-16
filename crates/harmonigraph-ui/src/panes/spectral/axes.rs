@@ -268,7 +268,7 @@ pub(crate) fn loudness_raw(cfg: &crate::SpectrumConfig, power_db: f32, midi: f32
     (db - floor) / (ceiling - floor)
 }
 
-/// The dB window the depth axis spans: the Level bar's floor, and a ceiling
+/// The dB window the depth axis spans: the Level range bar's floor, and a ceiling
 /// held at least [`LEVEL_RANGE_MIN_SPAN`](crate::LEVEL_RANGE_MIN_SPAN) above
 /// it.
 ///
@@ -594,7 +594,7 @@ pub(super) fn frequency_grid(scale: &PitchScale, pitch_len: f32) -> Vec<Ruling> 
 /// [`frequency_grid`] rules the other axis by.
 ///
 /// A ladder rather than the one step, because the level axis is the one axis
-/// on this pane whose SPAN is dialled: the Level bar and the drag across the
+/// on this pane whose SPAN is dialled: the Level range bar and the drag across the
 /// spectrum move the window between 12 dB and 100 dB while the pane it is drawn
 /// on stays the size it is. At the wide end a 10 dB step on a short analyzer
 /// closes to a wash, and at the narrow end it rules a single line across a whole
@@ -659,7 +659,7 @@ pub(super) const MAX_LEVEL_GAP_PT: f32 = 160.0;
 /// Most rulings the level grid will return.
 ///
 /// Not a look — it is what keeps a hand-edited state blob from turning a draw
-/// into a hundred-million-shape loop. The Level bar and `sanitize` hold the
+/// into a hundred-million-shape loop. The Level range bar and `sanitize` hold the
 /// window inside 100 dB, where the ladder's finest rung yields a hundred lines;
 /// a blob that names a floor of -1e9 gets a bounded, meaningless grid instead of
 /// a hung editor.
@@ -673,7 +673,7 @@ pub(super) struct LevelRuling {
     /// ceiling. The pane scales this by its depth budget, which is what makes a
     /// ruling land exactly where the curve reaching that level lands.
     pub(super) level: f32,
-    /// The level itself, in the dB the Level bar is quoted in.
+    /// The level itself, in the dB the Level range bar is quoted in.
     pub(super) db: f32,
     /// Carries a number — and, because it does, the stronger of the pane's two
     /// ruling inks.
@@ -828,7 +828,7 @@ pub(super) fn level_grid(
             let level = (db - floor) / span;
             // Every number is set on the CEILING side of its ruling, so the one
             // end that can run out of room is that one — and a ruling can sit
-            // hard against it, the ceiling being wherever the Level bar was
+            // hard against it, the ceiling being wherever the Level range bar was
             // dragged rather than a rung. A number with no room there is not
             // written rather than set somewhere else: which side they sit on is
             // what makes a column of them readable at a glance, and one number

@@ -73,11 +73,20 @@ pub(super) fn view_pane(ui: &mut egui::Ui, state: &mut SharedState) {
         let mut degrees = state.camera.cabinet_angle.to_degrees();
         if ValueBar::new(&mut degrees, 0.0..=90.0, "Sevenths angle")
             .show(ui)
+            .on_hover_text(
+                "Which way the sevenths axis points on screen, in degrees from \
+                 horizontal.",
+            )
             .changed()
         {
             state.camera.cabinet_angle = degrees.to_radians();
         }
-        ValueBar::new(&mut state.camera.cabinet_scale, 0.1..=1.0, "Sevenths length").show(ui);
+        ValueBar::new(&mut state.camera.cabinet_scale, 0.1..=1.0, "Sevenths length")
+            .show(ui)
+            .on_hover_text(
+                "How long a sevenths step draws, as a share of a front-plane \
+                 step. 0.5 is classic cabinet, 1 cavalier.",
+            );
     }
     // Camera angles are meaningless under cabinet (fixed viewpoint), so
     // this whole block hides there (the cabinet knobs show instead).
@@ -88,6 +97,10 @@ pub(super) fn view_pane(ui: &mut egui::Ui, state: &mut SharedState) {
         let mut yaw_deg = normalize_deg(state.camera.yaw.to_degrees());
         if ValueBar::new(&mut yaw_deg, -180.0..=180.0, "Camera yaw")
             .show(ui)
+            .on_hover_text(
+                "Turn around the lattice, in degrees. 0 faces the fifths/thirds \
+                 sheet head-on.",
+            )
             .changed()
         {
             state.camera.yaw = yaw_deg.to_radians();
@@ -96,6 +109,7 @@ pub(super) fn view_pane(ui: &mut egui::Ui, state: &mut SharedState) {
         let mut pitch_deg = state.camera.pitch.to_degrees();
         if ValueBar::new(&mut pitch_deg, -pitch_limit_deg..=pitch_limit_deg, "Camera pitch")
             .show(ui)
+            .on_hover_text("Look down on the lattice or up at it, in degrees.")
             .changed()
         {
             state.camera.pitch = pitch_deg.to_radians();
@@ -157,7 +171,14 @@ pub(super) fn view_pane(ui: &mut egui::Ui, state: &mut SharedState) {
                 .hint_text("preset name")
                 .desired_width(PRESET_NAME_WIDTH * crate::theme::ui_scale(ui.ctx()));
             ui.add(field);
-            if ui.button("Save angle").clicked() {
+            if ui
+                .button("Save angle")
+                .on_hover_text(
+                    "Save the current yaw and pitch as a preset button on the \
+                     Angle row.",
+                )
+                .clicked()
+            {
                 let trimmed = state.preset_name.trim();
                 let name = if trimmed.is_empty() {
                     // Nameless saves still get a self-describing label.
@@ -183,10 +204,10 @@ pub(super) fn view_pane(ui: &mut egui::Ui, state: &mut SharedState) {
 }
 
 /// The depth axis, whole: how many sheets there are, which one is home, and how
-/// the ones behind the home sheet draw. Size and label are inert with the
-/// sevenths extent at 0 (a flat lattice has only the home sheet), so they
-/// disable themselves rather than pretending otherwise; the extent and the
-/// center are what turn depth on, and are live whatever it is set to.
+/// the ones behind the home sheet draw. Sheet size and Sheet labels are inert
+/// with Sheets at 0 (a flat lattice has only the home sheet), so they disable
+/// themselves rather than pretending otherwise; Sheets and Home sheet are what
+/// turn depth on, and are live whatever it is set to.
 ///
 /// One section rather than an Extents heading over the first two: an extent
 /// here is how many SHEETS there are, so it is the same subject as how those
@@ -202,42 +223,53 @@ pub(super) fn view_pane(ui: &mut egui::Ui, state: &mut SharedState) {
 /// to find, it is drawn over the home one at an offset, so how many there are
 /// is a thing only a control can answer.
 ///
-/// What the size and the label are for: the 5-limit sheet wants its pitch
+/// What the size and the labels are for: the 5-limit sheet wants its pitch
 /// classes as large as they will go, and turning depth on asks the same
 /// rectangle to hold three or five times the nodes. The way out is not to
 /// shrink the home sheet — that is the picture — but to let the sevens layer sit
-/// ON it, smaller and clearing its own gutter.
+/// ON it, smaller and clearing its own space.
 ///
-/// The gutter itself is with the node settings, not here. It is cleared by every
-/// sounding node on every sheet, so it is a property of the node rather than
-/// of this layer, whatever its field names say.
+/// The Clearance bar itself is with the node settings, not here. It is cut by
+/// every sounding node on every sheet, so it is a property of the node rather
+/// than of this layer, whatever its field names say.
 fn sevens_section(ui: &mut egui::Ui, state: &mut SharedState) {
     section(ui, "Sevenths");
-    for (extent, range, label) in [
+    for (extent, range, label, hover) in [
         // Ranges must contain the ViewConfig defaults or the bar could never
         // drag back to them.
-        (&mut state.view.extent_sevens, 0.0..=4.0, "Sevenths extent"),
+        (
+            &mut state.view.extent_sevens,
+            0.0..=4.0,
+            "Sheets",
+            "How many sheets draw beyond the home one, each a sevenths step \
+             away. 0 keeps the lattice flat.",
+        ),
         // Which sheet is home, in lattice steps from C (v1's Grid Z).
-        (&mut state.view.center_sevens, -20.0..=20.0, "Sevenths center"),
+        (
+            &mut state.view.center_sevens,
+            -20.0..=20.0,
+            "Home sheet",
+            "Which sheet is home — in sevenths steps from C's.",
+        ),
     ] {
         let mut value = *extent as f32;
-        if ValueBar::new(&mut value, range, label).integer().show(ui).changed() {
+        if ValueBar::new(&mut value, range, label).integer().show(ui).on_hover_text(hover).changed()
+        {
             *extent = value as i32;
         }
     }
     let has_depth = state.view.extent_sevens != 0;
     ui.add_enabled_ui(has_depth, |ui| {
-        ValueBar::new(&mut state.view.sevens_size, 0.15..=1.0, "Sevenths size")
+        ValueBar::new(&mut state.view.sevens_size, 0.15..=1.0, "Sheet size")
             .show(ui)
             .on_hover_text(
-                "How much smaller a node draws for each step off the home \
-                 sheet. Smaller BOTH ways -- this is distance from the home \
-                 sheet, not depth toward you -- so the home sheet stays the \
-                 largest thing on screen. 1 draws every sheet alike",
+                "How much smaller a node draws for each sheet away from home — \
+                 both directions, so the home sheet stays largest. 1 draws \
+                 every sheet alike.",
             );
         choice_row(
             ui,
-            "Sevenths label",
+            "Sheet labels",
             &mut state.view.sevens_label,
             &[
                 (

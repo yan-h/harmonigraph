@@ -128,7 +128,9 @@ fn frame_controls(ui: &mut egui::Ui, state: &mut SharedState) {
     // numbers, not one enum value, so there is nothing for choice_row's
     // `selectable_value` to compare against.
     button_row(ui, |ui| {
-        ui.label("Aspect");
+        ui.label("Aspect").on_hover_text(
+            "The frame's shape. Resolution below sets how big it renders.",
+        );
         let f = &mut state.take.render_config.frame;
         for (w, h) in [(16u32, 9u32), (9, 16), (1, 1), (4, 5), (21, 9)] {
             let on = f.aspect_w == w && f.aspect_h == h;
@@ -180,7 +182,10 @@ fn frame_controls(ui: &mut egui::Ui, state: &mut SharedState) {
     // lattice or all spectrum is what the `lattice` and `spectral` layout
     // presets are for, and they say so in the render rather than by a slider
     // pushed to its stop.
-    ValueBar::new(&mut f.split, 0.05..=0.95, label).show(ui);
+    ValueBar::new(&mut f.split, 0.05..=0.95, label).show(ui).on_hover_text(
+        "How much of the frame the lattice takes; the spectral pane gets the \
+         rest.",
+    );
 }
 
 /// Empty the three things that accumulate, in one press, next to the button
@@ -442,11 +447,9 @@ fn record_controls(ui: &mut egui::Ui, state: &mut SharedState) {
     section(ui, "Record");
     let rolling = state.take.rolling;
     record_button(ui, &mut state.take.recording, rolling, "Record take").on_hover_text(
-        "Record the performance — notes, bends, parameter automation, the \
-         current look, and the plugin's audio input — to a .take file. Press \
-         again to stop; the take then renders to video (its audio becomes the \
-         spectrogram and a playhead sweeps the piece). Events are stamped with \
-         transport position, so nothing is captured until the transport rolls.",
+        "Record the performance — notes, automation, the current look, and the \
+         plugin's audio — to a .take file, stamped with transport position. \
+         Press again to stop; the take then renders to video.",
     );
     if !state.take.status.is_empty() {
         ui.weak(&state.take.status);

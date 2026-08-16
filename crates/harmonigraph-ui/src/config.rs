@@ -740,7 +740,7 @@ pub(crate) const LEVEL_MAX_DB: f32 = 0.0;
 /// this is all edge and no picture — and, unclamped, a collapsed one divides
 /// by zero in `loudness` and paints the NaN geometry egui panics on.
 ///
-/// Two controls hold to it, as with the Span: the Analyzer section's Level bar and
+/// Two controls hold to it, as with the Span: the Analyzer section's Level range bar and
 /// the drag across the spectrum. A gesture clamping to its own idea of how
 /// close the pair may come would push the bar past its own end.
 pub(crate) const LEVEL_RANGE_MIN_SPAN: f32 = 12.0;

@@ -521,7 +521,7 @@ pub struct Scene {
 /// here:
 ///
 /// - **f64, from the unwrapped clock.** The reduction is exact against a
-///   period the Width bar can set as low as 0.02, where the f32 product an
+///   period the Spacing bar can set as low as 0.02, where the f32 product an
 ///   hour into a song would have quantized the phase into about two dozen
 ///   steps per band and stair-stepped visibly.
 /// - **No seam.** A clock wrapped for the shader's sake — hourly, say — lands

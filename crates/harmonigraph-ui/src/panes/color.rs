@@ -48,12 +48,9 @@ pub(super) fn color_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dy
         super::pitch_readout,
     )
     .on_hover_text(
-        "The pitch span the color gradient covers: the low end takes the \
-         gradient's first color, the high end its last. Drag either end, or \
-         drag between them to slide the whole range.\n\nNot the same thing as \
-         the Analyzer's Pitch range, which is the slice of the spectrum on \
-         show: this one moves no picture, it only decides which pitches get \
-         which colors.",
+        "Which pitches the gradient spans: the low end takes its first color, \
+         the high end its last. Colors only — it moves no picture. Drag either \
+         end, or between them to slide the range.",
     );
     bloom_bar(ui, &mut state.view);
     section(ui, "Heatmap colors");
@@ -74,8 +71,8 @@ fn bloom_bar(ui: &mut egui::Ui, view: &mut ViewConfig) {
     ValueBar::new(&mut view.bloom_strength, 0.0..=1.5, "Bloom")
         .show(ui)
         .on_hover_text(
-            "Soft halo around bright notes, on the lattice's nodes and on the \
-             Analyzer's note ribbons alike; 0 turns the post-process off",
+            "Soft halo around bright notes, on the lattice and the Analyzer's \
+             ribbons alike. 0 turns it off.",
         );
 }
 
@@ -115,42 +112,23 @@ fn spectrum_group(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // frame behind the bar being dragged.
     let preview = GradientPreview::reserve(ui);
     SpectrumBar::new(&mut view.pitch_gradient).show(ui).on_hover_text(
-        "The pitch->color spectrum: how far round the color circle the pitch \
-         range walks, out of the whole turn the bar stands for. The hues it \
-         takes fill from the left, low note first; the ones it does not are \
-         dimmed. The track is hue alone — the Brightness and Saturation bars \
-         below move the picture above, not the arc. Drag the handle to widen or \
-         narrow it, drag the track to turn the circle under it, double-click \
-         to reset. The button past the right end runs the whole thing the \
-         other way round the circle.",
+        "How much of the color circle the gradient uses, and where it starts. \
+         Drag the handle to widen or narrow the arc, the track to rotate it; \
+         double-click resets. The end button reverses direction.",
     );
     SpreadBar::brightness(&mut view.pitch_gradient).show(ui).on_hover_text(
-        "The stretch of brightness the pitch range spends, in CIELab L*: the \
-         two numbers are the bottom of the pitch range and the top, in that \
-         order, so a picture with its bright end at the bottom reads out \
-         backwards. Drag either end to move it, drag between them to slide the \
-         whole stretch brighter or darker, drag one end past the other to swap \
-         which end is bright, double-click to reset. Closing the two together \
-         makes every note exactly as bright as every other and leaves hue to \
-         carry the pitch alone.",
+        "How bright each end of the pitch range draws: the first number is the \
+         lowest note, the second the highest. Drag one end past the other to \
+         flip which end is bright; double-click resets.",
     );
     SpreadBar::chroma(&mut view.pitch_gradient).show(ui).on_hover_text(
-        "The stretch of color the pitch range spends, each end one \
-         colorfulness whatever hue that note lands on — 100% is as \
-         vivid as the screen goes without distorting the color, 0 is grey. The \
-         two numbers are the bottom of the pitch range and the top, in that \
-         order, so a picture with its vivid end at the bottom reads out \
-         backwards. Drag either end to move it, drag between them to slide the \
-         whole stretch, drag one end past the other to swap which end is \
-         vivid, double-click to reset. Closing the two together gives every \
-         note the same share of the color available to it.",
+        "How vivid each end of the pitch range draws — 100% is as vivid as the \
+         screen allows, 0 is grey. The first number is the lowest note. \
+         Double-click resets.",
     );
     preview.show(ui, &view.pitch_gradient).on_hover_text(
-        "The gradient itself, low note on the left: every one of the six \
-         numbers the bars below carry, composed into the colors every \
-         pitch-colored shape is drawn with — the lattice's discs and octave \
-         glyphs, the trail, and the note ribbons in the Analyzer. A picture \
-         rather than a control — the three bars under it are what move it.",
+        "The result: the gradient every note is colored by, low note on the \
+         left. A picture, not a control — the bars above move it.",
     );
 }
 
@@ -195,10 +173,9 @@ fn spectrogram_gradient_group(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig
     let home = crate::SpectrumConfig::default().spectrogram_gradient;
     button_row(ui, |ui| {
         ui.label("Palette").on_hover_text(
-            "Four looks the heatmap opens on, each written straight into the \
-             bars below — press one and then dial it. Nothing remembers which \
-             was pressed, a look being six numbers rather than a mode: once a \
-             bar has moved, the picture is the picture.",
+            "Four starting looks, written straight into the bars below. A look \
+             is six numbers, not a mode: once a bar moves, the picture is the \
+             picture.",
         );
         for preset in SpectrogramPreset::ALL {
             if ui
@@ -213,40 +190,22 @@ fn spectrogram_gradient_group(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig
     // The row first, the colors last — see [`GradientPreview`].
     let preview = GradientPreview::reserve(ui);
     SpectrumBar::new(&mut cfg.spectrogram_gradient).home(home).show(ui).on_hover_text(
-        "The level->color spectrum: how far round the color circle the level \
-         range walks, out of the whole turn the bar stands for. The hues it \
-         takes fill from the left, silence first; the ones it does not are \
-         dimmed. The track is hue alone — the Brightness and Saturation bars \
-         below move the picture above, not the circle, which is what leaves the hues \
-         showing at Mono, where the arc itself has no width. Drag the handle \
-         to widen or narrow it, drag the track to turn the circle under it, \
-         double-click to reset. The button past the right end runs the whole \
-         thing the other way round the circle.",
+        "How much of the color circle the heatmap uses, and where it starts. \
+         Drag the handle to widen or narrow the arc, the track to rotate it; \
+         double-click resets. The end button reverses direction.",
     );
     SpreadBar::brightness(&mut cfg.spectrogram_gradient).home(home).show(ui).on_hover_text(
-        "The stretch of brightness the level range spends, in CIELab L*: the \
-         two numbers are silence and a full bucket, in that order. Silence \
-         wants 0 — the heatmap is laid on a black bed, so a lifted floor draws \
-         the plane's own edge where the history runs out, which is occasionally \
-         what you want to see. Drag either end to move it, drag between them to \
-         slide the whole stretch, drag one end past the other to draw loud dark \
-         on a pale field, double-click to reset.",
+        "How bright each end of the level range draws: the first number is \
+         silence, the second a full bucket. Silence usually wants 0 — the \
+         heatmap lies on a black bed. Double-click resets.",
     );
     SpreadBar::chroma(&mut cfg.spectrogram_gradient).home(home).show(ui).on_hover_text(
-        "The stretch of color the level range spends, each end one \
-         colorfulness whatever hue that cell lands on — 100% is as \
-         vivid as the screen goes without distorting the color, 0 is grey. The \
-         two numbers are silence and a full bucket, in that order. Closing them \
-         together gives every level the same share of the color available to \
-         it, which is what the three colored presets do; taking both to 0 is \
-         Mono. Near the top the ramp rides the gamut's own boundary, whose \
-         corners between the screen's primaries show up as steps in an \
-         otherwise smooth sweep.",
+        "How vivid each end of the level range draws — 0 is grey (Mono), 100% \
+         as vivid as the screen allows. The first number is silence. \
+         Double-click resets.",
     );
     preview.show(ui, &cfg.spectrogram_gradient).on_hover_text(
-        "The gradient itself, silence on the left and a full bucket on the \
-         right: every one of the six numbers the bars below carry, composed \
-         into the colors the heatmap draws with. A picture rather than a \
-         control — the three bars under it are what move it.",
+        "The result: the heatmap's colors, silence on the left, a full bucket \
+         on the right. A picture, not a control — the bars above move it.",
     );
 }

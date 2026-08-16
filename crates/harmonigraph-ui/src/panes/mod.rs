@@ -446,7 +446,7 @@ pub(super) fn param_range_bar(
 
 /// One bar for a soft edge: how far it REACHES past whatever it surrounds, and
 /// how much of that reach it spends FADING out. Three settings are this shape —
-/// the lattice's knockout gutter, the piano roll's note outline, and the lead a
+/// the lattice's node clearance, the piano roll's note outline, and the lead a
 /// sounding note carries over the now-line.
 ///
 /// The lead is the one whose axis is not in points, and it is worth saying that
