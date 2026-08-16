@@ -2,6 +2,7 @@
 //! per-frame [`FrameParams`] mirror of the host-automatable appearance
 //! parameters.
 
+use crate::spectral::SpectralReading;
 use crate::style::{Gradient, Pulse, SevensLabel};
 use crate::{Camera, MAX_DRAWN_NODES, NODE_RADIUS_FACTOR};
 use harmonigraph_core::{coords, Comma, Envelope, LatticePos, Tempered};
@@ -385,34 +386,35 @@ pub struct ViewConfig {
     // `pulse_octaves` key, naming a pattern nothing reads any more; serde
     // ignores unknown keys, so such a blob loads intact, opens on the steady
     // octave layer, and drops the key on the next save.
-    // ---- What lights the lattice -----------------------------------------
+    // ---- What the audio ring says ----------------------------------------
     // Which notes are HELD, or which sine waves are SOUNDING. The two are
-    // different questions about the same music, and the second one is the
-    // lattice's native coordinate system: a harmonic partial sits at an exact
-    // rational multiple of its fundamental, so folded to pitch class the first
-    // sixteen harmonics occupy six 7-limit nodes and a timbre draws as a
-    // constellation. See the fold in `harmonigraph-ui`, which is where all of
+    // different questions about the same music, and the lattice answers both
+    // at once: the keys keep everything they draw, and the measurement gets a
+    // ring of its own inside the octave band. What is settled here is which of
+    // two readings that ring carries, where it sits, and how each of the two
+    // is measured. See the fold in `harmonigraph-ui`, which is where all of
     // the analysis lives — nothing in this crate reads audio.
-    /// Light the nodes from the analyzer's spectrum instead of from MIDI.
+    /// Which reading of the analyzer the audio ring carries, or none.
     ///
-    /// A REPLACEMENT and never a blend: with this on, a node's body level and
-    /// its octave wedges come from folded spectral power alone, and a held key
-    /// that nothing is sounding for lights nothing. Two sources at once wants a
-    /// second per-slot channel through the instance packing and a shader that
-    /// can tell them apart, which is a picture to design rather than a flag to
-    /// add.
+    /// The one control that says what the spectrum indicator IS: both readings
+    /// fill the same annulus in the same colours, and neither touches the MIDI
+    /// picture around it. [`SpectralReading`] is where
+    /// the two are described and where the case for one selector over two
+    /// boxes lives.
     ///
-    /// Off fresh. Everything else about the lattice is unchanged by it —
-    /// geometry, the wheel, the marks, the camera — so the toggle is a
-    /// question about the same picture rather than a second one.
-    pub spectral_light: bool,
+    /// Off fresh — the MIDI picture is the one the plugin is about, and a ring
+    /// on every node is a reading to ask for. Everything else about the
+    /// lattice is unchanged by it — geometry, the wheel, the marks, the camera
+    /// — so this is a layer added to the picture rather than a second picture.
+    pub spectral_reading: SpectralReading,
     /// How far off a node's own pitch a partial may sit and still light it, in
     /// cents: the standard deviation of the Gaussian the fold weights power by,
     /// 1..=50.
     ///
     /// The FOLD's kernel, so it is
-    /// [`spectral_light`](Self::spectral_light)'s alone. The audio ring reads
-    /// the spectrum raw and shows a whole window of it per wedge
+    /// [`SpectralReading::Fold`](crate::SpectralReading)'s alone.
+    /// [`Spectrum`](crate::SpectralReading::Spectrum) reads the analyzer raw
+    /// and shows a whole window of it per wedge
     /// ([`spectral_ring_range`](Self::spectral_ring_range)), where a kernel
     /// would be a blur over a picture whose whole subject is where a partial
     /// sits.
@@ -434,41 +436,6 @@ pub struct ViewConfig {
     /// third's 5th harmonic sits 13.7¢ off the node it belongs to and a
     /// harmonic seventh 31¢ off.
     pub spectral_width: f32,
-    /// Draw a second ring on every node, inside the octave band: the raw pitch
-    /// spectrum, bent round the node's own wheel.
-    ///
-    /// Each wedge of it is a SEGMENT of the spiral spectrogram — angle within
-    /// the wedge is a cents offset around that octave's own pitch, over
-    /// [`spectral_ring_range`](Self::spectral_ring_range) — so the ring says
-    /// not merely whether something is sounding at this node's pitch class but
-    /// exactly how far off it sits. A partial dead on the node paints down the
-    /// middle of its wedge; one a comma sharp paints to the clockwise side of
-    /// it, in the direction pitch rises everywhere else on the wheel.
-    ///
-    /// An ADDITION rather than a source switch, which is what makes it a
-    /// different picture from [`spectral_light`](Self::spectral_light) rather
-    /// than a second way of asking for it: MIDI keeps everything it draws —
-    /// the node body, the octave band, the melody and bass marks — and the
-    /// measurement is a ring of its own, in the analyzer's colours rather than
-    /// the pitch ramp's, so neither reading can be mistaken for the other.
-    ///
-    /// Inside the band rather than outside because of which disagreement is
-    /// common: energy at a pitch class with no note held — every partial above
-    /// a played chord's roots — happens constantly, and a held note with
-    /// nothing sounding at it is rare. The common case is the one that gets
-    /// the inner ring, where a busy ring of small wedges is contained by the
-    /// band around it rather than fringing the node.
-    ///
-    /// RAW, with no fold and no noise floor behind it: what a wedge paints is
-    /// the analyzer's own buckets through the analyzer's own Level window, so
-    /// every node wears a ring at the ramp's floor colour wherever nothing is
-    /// sounding. That is the reading rather than a defect — the ring measures
-    /// a stretch of spectrum, and a stretch with nothing in it is an answer.
-    /// [`spectral_width`](Self::spectral_width) is the FOLD's kernel and has
-    /// nothing to do with this ring.
-    ///
-    /// Off fresh, and with it off the picture is exactly the MIDI one.
-    pub spectral_ring: bool,
     /// The audio ring's inner and outer radius, in the same quad UV units as
     /// the octave band's own ([`outer_inner`](Self::outer_inner)) and clamped
     /// to a visible span by `derive_scene`.
@@ -480,12 +447,27 @@ pub struct ViewConfig {
     /// constants because that annulus is itself a setting: a dialled-up core
     /// or a band pulled inward closes it, and the ring has to be movable
     /// without a recompile.
+    ///
+    /// INSIDE the band rather than outside it because of which disagreement
+    /// between the two pictures is common: energy at a pitch class with no
+    /// note held — every partial above a played chord's roots — happens
+    /// constantly, and a held note with nothing sounding at it is rare. The
+    /// common case is the one that gets the inner ring, where a busy ring of
+    /// small wedges is contained by the band around it rather than fringing
+    /// the node.
+    ///
+    /// One annulus for both readings, at these radii either way: the reading
+    /// changes what is measured and where in a wedge it is sampled, never
+    /// where the ring is.
     pub spectral_ring_inner: f32,
     /// See [`spectral_ring_inner`](Self::spectral_ring_inner).
     pub spectral_ring_outer: f32,
     /// How much of the spectrum one wedge of the audio ring shows, in cents,
-    /// centred on that wedge's own octave — the ZOOM of the segment, and the
-    /// one setting that says what the ring is for.
+    /// centred on that wedge's own octave — the ZOOM of the segment, and
+    /// [`SpectralReading::Spectrum`](crate::SpectralReading)'s alone.
+    /// [`Fold`](crate::SpectralReading::Fold) answers one number for a whole
+    /// wedge, so it has no window to size; its own setting is
+    /// [`spectral_width`](Self::spectral_width).
     ///
     /// At the ceiling ([`SPECTRAL_RANGE_MAX`](crate::SPECTRAL_RANGE_MAX), an
     /// octave) a wedge stands for exactly the octave it names, so neighbouring
@@ -1496,17 +1478,14 @@ impl Default for ViewConfig {
             octave_extras: 2,
             octave_extra_size: 0.387_534_47,
             octave_extra_blend: 0.562_241_4,
-            // MIDI, which is the picture the plugin is about: what the player
-            // meant. The spectral source is the second reading of the same
-            // music and is opened deliberately, not stumbled into.
-            spectral_light: false,
+            // MIDI alone, which is the picture the plugin is about: what the
+            // player meant. The spectrum is the second reading of the same
+            // music, and a ring on every node is asked for deliberately rather
+            // than stumbled into.
+            spectral_reading: SpectralReading::Off,
             // Narrow, for the just-tuned material this is aimed at — see the
             // field.
             spectral_width: 10.0,
-            // Off, for the same reason: the MIDI picture is the one the plugin
-            // opens on, and a second ring on every node is a reading to ask
-            // for.
-            spectral_ring: false,
             // Inside the clear annulus the fresh core and the fresh octave
             // band leave between them — 0.256 to 0.661 — sitting toward its
             // inner end, a sixteenth of the node clear of the core and three

@@ -89,11 +89,10 @@ struct Uniforms {
     // `octave_layout`) because it depends on settings alone — the alternative
     // is accumulating the same widths per pixel per sector.
     oct_bounds: array<vec4<f32>, 3>,
-    // The audio channel's knobs. x: how many cents of the spectrum one wedge
-    // of the audio ring spans, centered on that wedge's own octave; y: 1 where
-    // the node bodies and the octave band are lit from AUDIO, which is what
-    // sends their color through spectral_lut at their own level instead of
-    // through pitch_lut at their own pitch; z/w unused.
+    // The audio ring's knobs. x: how many cents of the spectrum one wedge of
+    // the ring spans, centered on that wedge's own octave, read only where y is
+    // 0; y: 1 where each wedge is ONE reading taken at its own octave's pitch
+    // (the FOLD) rather than a window of pitch spread across it; z/w unused.
     misc9: vec4<f32>,
     // The FREQUENCY color scheme's ramp: the analyzer's own gradient, the
     // table the spectrogram's cells and the Spiral pane's segments are read
@@ -218,10 +217,11 @@ struct Instance {
     // ring eases in over the scene layer's attack when its note takes that
     // end, and drops to 0 the frame the key comes up.
     @location(2) params: vec3<f32>,
-    // Per-octave activation, 8 bits per slot, little-endian packed. What it
-    // MEANS is the source: how much of that octave is held with the keys
-    // lighting the lattice, and how loud it measured with the audio lighting
-    // it (u.misc9.y), which is also what decides the ramp it is painted from.
+    // Per-octave activation, 8 bits per slot, little-endian packed: how much
+    // of that octave is HELD, and nothing else. The analyzer never writes here
+    // — its reading is the audio ring's own channel (u.spectrum), a window
+    // onto one grid the whole lattice shares rather than a level per node — so
+    // this is the MIDI picture whole and is painted off pitch_lut throughout.
     @location(3) octaves: vec3<u32>,
     // The node's pitch class in cents (0..1200). It both PLACES the octave
     // indicators and COLORS them, off the one quantity: each indicator's
@@ -1060,44 +1060,46 @@ fn spectral_lut_color(level: f32) -> vec3<f32> {
     return mix(u.spectral_lut[i0].rgb, u.spectral_lut[i1].rgb, f - floor(f));
 }
 
-// Whether the node bodies and the octave band are lit from the analyzer
-// (u.misc9.y), and so painted by LEVEL off spectral_lut rather than by PITCH
-// off pitch_lut.
-fn audio_lit() -> bool {
+// Whether each wedge of the audio ring is ONE reading taken at its own
+// octave's pitch (u.misc9.y — the FOLD) rather than a window of pitch spread
+// across the wedge. The two readings differ in what u.spectrum holds and in
+// where in the wedge it is sampled, and nowhere else.
+fn folded() -> bool {
     return u.misc9.y > 0.5;
 }
 
-// One octave slice's color: the ramp its own reading belongs to. A held octave
-// stands for a PITCH and wears the pitch ramp at it; a measured one stands for
-// a LOUDNESS and wears the analyzer's ramp at it. Both readings can be on one
-// node at once (a held band with an audio ring inside it), and this is where
-// they are kept apart.
-fn octave_slot_color(pitch: f32, level: f32) -> vec3<f32> {
-    if audio_lit() {
-        return spectral_lut_color(level);
-    }
-    return pitch_lut_color(pitch);
-}
-
 // ---- The audio ring --------------------------------------------------------
-// A second ring of the same wedges, INSIDE the octave band, and each of them a
-// SEGMENT OF THE SPIRAL SPECTROGRAM bent into its arc. The band says which
-// octaves are held; this says what is actually sounding around each of them.
+// A second ring of the same wedges, INSIDE the octave band. The band says
+// which octaves are HELD; this says what is actually SOUNDING around each of
+// them, and it never replaces any part of the MIDI picture — the two readings
+// are on one node at once, told apart by their radius and by their color
+// scheme (pitch_lut by PITCH out there, spectral_lut by LEVEL in here).
 //
-// A wedge is not one number. Angle within it runs linearly over a window of
-// u.misc9.x cents centered on that octave's own pitch — counter-clockwise edge
-// the bottom of the window, clockwise edge the top, since clockwise is the
-// direction pitch rises everywhere else on the wheel. So a partial dead on the
-// node paints down the middle of the wedge, and one a comma sharp paints to
-// the clockwise side of it: the ring reads a DETUNING, which is the one thing
-// a folded number per octave cannot say.
+// Which reading fills it is the one setting: harmonigraph_scene's
+// `SpectralReading`, reaching the shader as `folded()` above.
 //
-// Which is also why nothing here folds. There is no kernel and no noise floor
-// — u.spectrum is the analyzer's grid through the analyzer's own Level window
-// and nothing else, so a wedge is the picture the Spectral pane would draw of
-// the same stretch of frequency. The cost is stated rather than hidden: with
-// nothing sounding, a wedge is not empty, it is the ramp's floor color, and
-// every node in the window wears one. A range with nothing in it is a reading.
+// FOLD — one number for the whole wedge, read at the octave's own pitch, off a
+// u.spectrum the CPU has already folded (a Gaussian kernel over a local noise
+// floor). What survives is energy concentrated AT the node's pitch rather than
+// energy near it, so a timbre draws as a constellation across the lattice: a
+// partial sits at an exact rational multiple of its fundamental, and on a
+// 7-limit lattice the first sixteen harmonics land on six nodes.
+//
+// SPECTRUM — a wedge is not one number. Angle within it runs linearly over a
+// window of u.misc9.x cents centered on that octave's own pitch —
+// counter-clockwise edge the bottom of the window, clockwise edge the top,
+// since clockwise is the direction pitch rises everywhere else on the wheel.
+// So a partial dead on the node paints down the middle of the wedge, and one a
+// comma sharp paints to the clockwise side of it: the ring reads a DETUNING,
+// which is the one thing a folded number per octave cannot say. Nothing is
+// folded into u.spectrum for it either — no kernel and no noise floor, since
+// both are a blur across the very axis the window exists to resolve, so a
+// wedge is the picture the Spectral pane would draw of the same stretch of
+// frequency.
+//
+// One cost is shared, and stated rather than hidden: with nothing sounding a
+// wedge is not empty, it is the ramp's floor color, and every node in the
+// window wears one. A range with nothing in it is a reading.
 //
 // The radius is its own (u.misc7.z/w, an annulus the fresh view puts in the
 // gap the core and the octave band leave); the slices are the band's, off the
@@ -1194,11 +1196,17 @@ fn spectral_ring(in: VsOut, oct: OctRing, d: f32, aa: f32) -> vec4<f32> {
     if cov <= 0.0 {
         return vec4<f32>(0.0);
     }
-    // The wedge's own window of the spectrum: `range` cents wide, centered on
-    // the octave the wedge names, read at wherever across the wedge this pixel
+    // WHERE in the wedge the grid is read, which is the whole of what the two
+    // readings differ by. The fold answers one number for the octave, so every
+    // fragment of a wedge reads that octave's own pitch and the wedge comes out
+    // flat; the raw spectrum spreads a window of `range` cents across it,
+    // centered on the same pitch, read at wherever across the wedge this pixel
     // falls.
-    let across = wedge_fraction(oct_sector(owner, oct), in.uv);
-    let pitch = oct_slot_pitch(owner, in.cents) + (across - 0.5) * u.misc9.x / 100.0;
+    var pitch = oct_slot_pitch(owner, in.cents);
+    if !folded() {
+        let across = wedge_fraction(oct_sector(owner, oct), in.uv);
+        pitch = pitch + (across - 0.5) * u.misc9.x / 100.0;
+    }
     return vec4<f32>(spectral_lut_color(spectrum_at(pitch)), cov);
 }
 
@@ -1247,10 +1255,11 @@ fn octave_glow_color(
         let theta = oct_mid(i32(i), ring);
         let w = level * exp(kappa * (cos(angle - theta) - 1.0));
         // Slot i is MIDI octave i - 1, whose C is MIDI i*12; fold in this
-        // node's pitch class for the octave's true pitch. Through
-        // `octave_slot_color`, so the glow is laid out of the same colors the
-        // indicators around it wear — under either source.
-        csum = csum + octave_slot_color(f32(i) * 12.0 + cents / 100.0, level) * w;
+        // node's pitch class for the octave's true pitch. Off pitch_lut, so
+        // the glow is laid out of the same colors the indicators around it
+        // wear — the octave band is the MIDI picture whatever the audio ring
+        // inside it is reading.
+        csum = csum + pitch_lut_color(f32(i) * 12.0 + cents / 100.0) * w;
         wsum = wsum + w;
     }
     // A solo note (or none) keeps its exact node color; two or more
@@ -1674,8 +1683,7 @@ fn node_paint(in: VsOut) -> vec4<f32> {
             // The divide un-premultiplies, and wants no floor under it: this
             // branch has `level > 0`, the packing's smallest step is 1/255,
             // and `ghost_rest` is never negative, so `opacity >= level`.
-            slot_rgb =
-                (octave_slot_color(pitch, level) * level + node_glyph_rgb * ghost_rest) / opacity;
+            slot_rgb = (pitch_lut_color(pitch) * level + node_glyph_rgb * ghost_rest) / opacity;
         }
         // The wedge enters ONCE, after the two layers are resolved: they are
         // the same shape at different opacities, and compositing their COVERED

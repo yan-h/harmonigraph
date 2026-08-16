@@ -1,5 +1,9 @@
-//! Folding the analyzer's spectrum onto the lattice: per node, per octave
-//! slot, how much power is sounding at exactly that pitch.
+//! Measuring the analyzer's spectrum for the lattice's audio ring: how much
+//! power is sounding at exactly the pitch each wedge of it names.
+//!
+//! ONE grid for the whole lattice, not a reading per node. A wedge names an
+//! octave of its node's pitch class, so what it needs is a lookup at a pitch —
+//! and the shader does that lookup itself, off a table this pass fills once.
 //!
 //! The lattice's own coordinate system is the harmonic series. A partial sits
 //! at an EXACT rational multiple of its fundamental, so on a 7-limit lattice
@@ -21,23 +25,29 @@
 //!
 //! ## Two readings, and only one of them folds
 //!
-//! [`apply`] fills both audio channels the lattice has, and they are measured
-//! differently on purpose:
+//! [`apply`] fills the lattice's one audio channel — the ring inside the
+//! octave band — with whichever of two readings
+//! ([`ViewConfig::spectral_reading`](harmonigraph_scene::ViewConfig)) is
+//! asked for, and they are measured differently on purpose:
 //!
-//! - **The lighting** ([`ViewConfig::spectral_light`](harmonigraph_scene::ViewConfig))
-//!   is what everything below describes: a kernel over the grid, a noise floor
-//!   under it, folded to eleven numbers per node. It answers "is this pitch
-//!   class sounding", which is a question about a NODE.
-//! - **The ring** ([`ViewConfig::spectral_ring`](harmonigraph_scene::ViewConfig))
+//! - **The fold** ([`SpectralReading::Fold`](harmonigraph_scene::SpectralReading))
+//!   is what everything below describes: a kernel over the grid and a noise
+//!   floor under it. It answers "is this pitch class sounding", which is a
+//!   question about a NODE, and the shader reads one value of it per wedge.
+//! - **The spectrum** ([`Spectrum`](harmonigraph_scene::SpectralReading::Spectrum))
 //!   folds nothing at all. It hands the analyzer's grid to the shader whole and
 //!   each wedge shows a window of it, so it answers "what is sounding NEAR this
 //!   pitch, and how far off" — a question about a stretch of SPECTRUM, which
-//!   every smoothing that helps the fold spoils. See [`fill_ring`].
+//!   every smoothing that helps the fold spoils.
 //!
-//! Both go into one [`SpectralPaint`], which also carries the FREQUENCY colour
-//! scheme — the analyzer's own ramp — so that whatever is lit from audio here
-//! is painted the colour the spectrogram, the spectrum curve and the Spiral
-//! pane would paint it, and never the pitch ramp the MIDI picture wears.
+//! Either goes into one [`SpectralPaint`], which also carries the FREQUENCY
+//! colour scheme — the analyzer's own ramp — so that what the ring paints is
+//! the colour the spectrogram, the spectrum curve and the Spiral pane would
+//! paint it, and never the pitch ramp the MIDI picture wears.
+//!
+//! Nothing here relights a NODE. The keys keep everything they draw, so a node
+//! carries both pictures at once and neither has to be given up to see the
+//! other.
 //!
 //! ## Weight, don't gate
 //!
@@ -118,12 +128,14 @@
 //! therefore not merely simpler here, it is the only version that draws the
 //! same frame in all three places.
 
-use harmonigraph_core::spectrum::{
-    BINS_PER_SEMITONE, SPECTRUM_BINS, SPECTRUM_MAX_MIDI, SPECTRUM_MIN_MIDI,
-};
+use harmonigraph_core::spectrum::{BINS_PER_SEMITONE, SPECTRUM_BINS};
+// The axis' own ends, read by `Fold::slot_power` — which is the shader's
+// per-wedge read written out on the CPU, and so test-only along with them.
+#[cfg(test)]
+use harmonigraph_core::spectrum::{SPECTRUM_MAX_MIDI, SPECTRUM_MIN_MIDI};
 use harmonigraph_scene::{
-    bucket_pitch, pitch_ramp_lut, OctaveLayout, Scene, SpectralPaint, OCTAVE_SLOTS,
-    SPECTRAL_WIDTH_MAX, SPECTRAL_WIDTH_MIN,
+    bucket_pitch, pitch_ramp_lut, Scene, SpectralPaint, SpectralReading, SPECTRAL_WIDTH_MAX,
+    SPECTRAL_WIDTH_MIN,
 };
 
 use super::spectral::axes::loudness;
@@ -162,47 +174,9 @@ const FLOOR_SAMPLES: usize = 2 * (FLOOR_HALF / FLOOR_SAMPLE_STEP) + 1;
 /// interpolation always has a pair.
 const FLOOR_POINTS: usize = SPECTRUM_BINS.div_ceil(FLOOR_STEP) + 1;
 
-/// Octave slots the analyzer's pitch axis (MIDI 15.49..135.08) can hold an
-/// octave of a pitch class in: slot `s` is the octave whose C is MIDI `12 * s`,
-/// so this is C0 up to C10. Both ends are only PARTLY in range — which of a
-/// class's octaves are is settled per pitch, by the bounds check in
-/// [`Fold::slot_power`] — so these are where to start and stop looking rather
-/// than what is audible.
-const LOWEST_AUDIBLE_SLOT: i32 = 1;
-/// See [`LOWEST_AUDIBLE_SLOT`].
-const HIGHEST_AUDIBLE_SLOT: i32 = 11;
-
-/// One node's spectral light: how much power sounds at each of its octaves.
-///
-/// Power in the analyzer's own units throughout, NOT levels — the mapping to
-/// what is drawn is [`loudness`]'s, and doing it here would put a second copy
-/// of "how loud is loud" in the tree. It is also what lets the tests state the
-/// constellation in the dB the harmonic series predicts.
-pub(crate) struct NodeLight {
-    /// Power folded onto each drawn octave slot. Slots the wheel does not draw
-    /// are 0; energy from octaves past either end of the wheel is folded onto
-    /// the outermost slice on its side, exactly as a MIDI note past the end is.
-    pub(crate) octaves: [f32; OCTAVE_SLOTS],
-    /// The node body's power: the sum of the above, which is what makes a
-    /// timbre's constellation a set of node brightnesses rather than a set of
-    /// rings.
-    pub(crate) total: f32,
-    /// Where this node's energy SITS, as an absolute MIDI pitch: the
-    /// power-weighted mean of its lit slots' own pitches.
-    ///
-    /// Two things need a single pitch for a node whose energy is spread over
-    /// octaves — the tilt in [`loudness`], and the colour off the pitch ramp —
-    /// and the loudest slot's pitch is the tempting answer that cannot be used:
-    /// it JUMPS an octave the moment the argmax changes hands, which on a
-    /// sustained note is a hue and a brightness stepping while nothing audible
-    /// moved. A weighted mean is continuous in the power, and on a node with
-    /// one lit octave it is exactly that octave's pitch — which is the same
-    /// answer the shader's own glow falls back to for a solo voice.
-    pub(crate) pitch: f32,
-}
-
 /// The frame's fold: the kernel-weighted mean excess power at every bucket of
-/// the analyzer's grid, with a node's octave then a lookup into it.
+/// the analyzer's grid, which a wedge of the ring then reads at its own
+/// octave's pitch.
 ///
 /// **The whole fold is done once per lattice draw, not once per node**, and
 /// that is what bounds its cost. The kernel is the same shape wherever it is
@@ -211,11 +185,11 @@ pub(crate) struct NodeLight {
 /// slot, which at a deep window (1365 nodes, eleven octaves) is 1.5 million
 /// bucket reads and was measured at 2.7 ms a frame, twice over in an editor
 /// frame that draws the lattice for the pane and again for the Render preview.
-/// This is 3828 buckets whatever the extents are, and the per-node work is
-/// eleven interpolated reads.
+/// This is 3828 buckets whatever the extents are, and the per-wedge work is one
+/// interpolated read on the GPU.
 ///
-/// What it costs is a fraction of a bucket's worth of blur: a node's own pitch
-/// falls BETWEEN buckets, and where the per-node version centered its kernel
+/// What it costs is a fraction of a bucket's worth of blur: an octave's pitch
+/// falls BETWEEN buckets, and where a per-node fold would centre its kernel
 /// exactly there, this reads the two nearest smoothed buckets and interpolates.
 /// The smoothed curve is a Gaussian convolution, so it is smooth on the scale of
 /// the kernel and the error is a fraction of a percent at any width the bar can
@@ -306,8 +280,25 @@ impl Fold {
         Fold { smoothed }
     }
 
+    /// The folded grid, bucket for bucket — what the ring's wedges are read
+    /// off, in the analyzer's own power units.
+    ///
+    /// The same SHAPE as the analyzer's own grid rather than a table of its
+    /// own, which is what lets one path carry both readings from here on: the
+    /// ring is a window onto a grid of power at pitch, and whether that power
+    /// was folded first is a question nothing past [`fill_grid`] asks.
+    pub(crate) fn grid(&self) -> &[f32; SPECTRUM_BINS] {
+        &self.smoothed
+    }
+
     /// The kernel-weighted mean power above the floor at absolute MIDI `pitch`,
     /// or `None` where the analyzer's axis does not reach that pitch.
+    ///
+    /// The CPU's form of what the shader does per wedge — `spectrum_at` on the
+    /// grid above, at the octave's own pitch — and so test-only: it exists to
+    /// let a claim about the fold be made in the dB the harmonic series
+    /// predicts, rather than through a byte, a colour ramp and a GPU.
+    #[cfg(test)]
     fn slot_power(&self, pitch: f32) -> Option<f32> {
         if !(SPECTRUM_MIN_MIDI..=SPECTRUM_MAX_MIDI).contains(&pitch) {
             return None;
@@ -320,104 +311,75 @@ impl Fold {
         let t = (x - i as f32).clamp(0.0, 1.0);
         Some(self.smoothed[i] + (self.smoothed[i + 1] - self.smoothed[i]) * t)
     }
-
-    /// Fold the spectrum onto one node — a lattice position whose pitch class
-    /// is `cents` (0..1200) — laid out on `layout`'s wheel.
-    pub(crate) fn node(&self, layout: &OctaveLayout, cents: f32) -> NodeLight {
-        let (low, high) = layout.slots(cents);
-        let mut octaves = [0.0f32; OCTAVE_SLOTS];
-        for slot in LOWEST_AUDIBLE_SLOT..=HIGHEST_AUDIBLE_SLOT {
-            let Some(power) = self.slot_power(layout.slot_pitch(slot, cents)) else {
-                continue;
-            };
-            // Onto the slice that DRAWS this octave: into the wheel first, so
-            // energy past either end lands on the outermost slice on its side,
-            // and then into the packing, which holds the MIDI octaves and
-            // nothing else. The same two clamps `derive_scene` puts a played
-            // note through, for the same reasons.
-            let drawn = slot.clamp(low, high).clamp(0, OCTAVE_SLOTS as i32 - 1) as usize;
-            // The strongest octave folded here, not their sum: a slice standing
-            // in for several octaves is saying "the loudest thing out this way
-            // is this loud", which is what the MIDI rule says too. Summing
-            // would let a handful of inaudible octaves add up to a bright
-            // outermost wedge that no single pitch is responsible for.
-            octaves[drawn] = octaves[drawn].max(power);
-        }
-        let total: f32 = octaves.iter().sum();
-        let mut pitch = 0.0;
-        if total > 0.0 {
-            for (slot, &power) in octaves.iter().enumerate() {
-                pitch += power * layout.slot_pitch(slot as i32, cents);
-            }
-            pitch /= total;
-        }
-        NodeLight { octaves, total, pitch }
-    }
 }
 
-/// Give `scene` whatever the view asks the analyzer for: the MIDI lighting
-/// REPLACED ([`ViewConfig::spectral_light`](harmonigraph_scene::ViewConfig)),
-/// a ring of raw spectrum ADDED beside it
-/// ([`ViewConfig::spectral_ring`](harmonigraph_scene::ViewConfig)), or both.
+/// Fill `scene`'s audio ring with whichever reading the view asks for
+/// ([`ViewConfig::spectral_reading`](harmonigraph_scene::ViewConfig)).
 ///
-/// One entry point, and the two readings are measured differently on purpose.
-/// The lighting is FOLDED — a kernel over the grid, a noise floor under it,
-/// eleven numbers per node — because it answers "is this pitch class
-/// sounding", which is a question about a node. The ring is RAW — the grid
-/// through the analyzer's Level window and nothing else — because it answers
-/// "what is sounding NEAR this pitch", which is a question about a stretch of
-/// spectrum and is spoiled by every smoothing that helps the other.
+/// One entry point and one output — the grid the ring's wedges are windows
+/// onto — and the two readings differ only in what is measured into it:
 ///
-/// Both go into the scene as one [`SpectralPaint`], which is also what carries
-/// the FREQUENCY colour scheme: the analyzer's own ramp, so that everything
-/// lit from audio here is painted the colour the spectrogram, the spectrum
-/// curve and the Spiral pane would paint it.
+/// - [`Fold`](harmonigraph_scene::SpectralReading::Fold) is the kernel over
+///   the grid and the noise floor under it, everything above this line. It
+///   answers "is this pitch class sounding", which is a question about a NODE,
+///   and the shader reads one value of it per wedge.
+/// - [`Spectrum`](harmonigraph_scene::SpectralReading::Spectrum) folds nothing
+///   at all — the grid through the analyzer's Level window and no more —
+///   because it answers "what is sounding NEAR this pitch, and how far off",
+///   which is a question about a stretch of SPECTRUM and is spoiled by every
+///   smoothing that helps the other.
 ///
-/// With neither asked for, nothing here runs at all — not even the read of
+/// The reading goes into the scene as one [`SpectralPaint`], which is also
+/// what carries the FREQUENCY colour scheme: the analyzer's own ramp, so that
+/// what the ring paints is the colour the spectrogram, the spectrum curve and
+/// the Spiral pane would paint it.
+///
+/// Nothing here touches a NODE. The MIDI picture is `derive_scene`'s answer
+/// untouched — the bodies, the octave band, the marks, the trail, the camera —
+/// and the measurement is a ring of its own inside the band, so one node
+/// carries both readings and neither can be mistaken for the other.
+///
+/// With the reading Off, nothing here runs at all — not even the read of
 /// [`AudioSpectrum::display`](crate::AudioSpectrum::display) — so the fresh
 /// picture is exactly the picture with this pass absent.
 pub(crate) fn apply(scene: &mut Scene, state: &SharedState, now: f64) {
-    let lighting = state.view.spectral_light;
-    let ring = state.view.spectral_ring;
-    if !lighting && !ring {
+    let reading = state.view.spectral_reading;
+    if !reading.draws() {
         return;
     }
     let cfg = state.spectrum_config;
     let mut paint = SpectralPaint::new(&state.view, pitch_ramp_lut(cfg.spectrogram_gradient));
-    let levels = state.spectrum.display(now);
-    if lighting {
-        let width = state.view.spectral_width;
-        let fold = levels.map(|levels| Fold::measure(levels, width));
-        light_from_spectrum(scene, state, fold.as_ref(), &paint);
-    }
-    if ring {
-        if let Some(levels) = levels {
-            fill_ring(&mut paint, &cfg, levels);
-        }
+    if let Some(levels) = state.spectrum.display(now) {
+        // The kernel is the FOLD's; `Spectrum` hands the analyzer's own grid
+        // through untouched. A `bool` and not a `match`, because a match here
+        // owes an arm for `Off` that the guard above has already returned
+        // past — a branch nothing can reach, sitting where a reader would take
+        // it for a case that is covered.
+        let folded = (reading == SpectralReading::Fold)
+            .then(|| Fold::measure(levels, state.view.spectral_width));
+        fill_grid(&mut paint, &cfg, folded.as_ref().map_or(levels, Fold::grid));
     }
     scene.spectral = paint;
 }
 
-/// Read the analyzer's whole grid into the ring's channel: every bucket's
-/// power through the shared [`loudness`] curve, quantized to the byte the
-/// shader unpacks.
+/// Read a grid of power into the ring's channel: every bucket through the
+/// shared [`loudness`] curve, quantized to the byte the shader unpacks.
 ///
-/// RAW, and that is the design rather than an omission. No kernel, because a
-/// wedge shows a WINDOW of pitch and a kernel is a blur across the very axis
-/// the window is there to resolve; no noise-floor subtraction, because the
-/// floor is what makes a measurement of a quiet stretch read as no measurement
-/// at all, and the ring's claim is that it always measured. What a wedge
-/// paints is exactly what the Spectral pane would paint of the same
-/// frequencies.
+/// The one place either reading becomes a LEVEL, which is what keeps them in
+/// the same colour scheme: the byte in the table is what `loudness` answers,
+/// so a wedge and the Spectral pane's own curve at the same power are the same
+/// level and therefore the same colour off the same ramp. What differs between
+/// the two readings is the grid handed in — the fold's smoothed excess, or the
+/// analyzer's raw buckets — and nothing after this point knows which it was.
 ///
 /// Per BUCKET rather than per node, which is what makes the ring cost the same
 /// whatever the extents are: the grid is one reading the whole lattice shares,
 /// and each node's wedges are a window onto it (the shader's `spectrum_at`).
-/// The fold beside it cannot be shared that way — its answer depends on the
-/// node's own pitch class — which is the other half of why the two are
-/// measured apart.
-fn fill_ring(paint: &mut SpectralPaint, cfg: &crate::SpectrumConfig, levels: &SpectrumBuckets) {
-    for (bucket, power) in levels.iter().enumerate() {
+/// That holds for the fold as much as for the raw spectrum — the kernel is the
+/// same shape wherever it is centred, so folding it over the grid once answers
+/// every node and every octave at a stroke.
+fn fill_grid(paint: &mut SpectralPaint, cfg: &crate::SpectrumConfig, grid: &SpectrumBuckets) {
+    for (bucket, power) in grid.iter().enumerate() {
         // The bucket's own centre pitch, because the tilt in `loudness` is a
         // function of pitch and because the shader reads this table back on
         // the same convention.
@@ -426,90 +388,14 @@ fn fill_ring(paint: &mut SpectralPaint, cfg: &crate::SpectrumConfig, levels: &Sp
     }
 }
 
-/// Relight `scene`'s nodes from the analyzer instead of from MIDI.
-///
-/// A post-pass over a scene derived exactly as it always is, which is the whole
-/// of the seam: the geometry, the wheel, the grid, the melody/bass marks, the
-/// trail and the camera are `derive_scene`'s answers untouched, and what is
-/// overwritten is the four things a VOICE decides — how lit the node is, which
-/// of its octaves are sounding, what colour it wears, and whether it clears its
-/// gutter.
-///
-/// The colour has to come along, though the level is what the toggle is about,
-/// and it changes SCHEME as well as value. A node lit by a key stands for a
-/// PITCH and wears the pitch ramp at it; a node lit by the analyzer stands for
-/// a LOUDNESS and wears the analyzer's own ramp at it — the same table, at the
-/// same level, that the spectrogram would paint that power. So the two
-/// readings are told apart by colour and not by memory of which toggle is on,
-/// and a node left holding either the idle grey or the pitch ramp would be
-/// saying the wrong one of the two things.
-///
-/// The band's wedges take the same swap in the shader (`octave_slot_color`,
-/// off `SpectralPaint::lit`), because their level is this level per octave;
-/// what is written here is the node's own, which the disc, the glow's solo
-/// fallback and the ghosts all read.
-///
-/// No audio flowing is DARK rather than a fallback to MIDI — `fold` is `None`,
-/// and every node is cleared before it is consulted. A source toggle that
-/// quietly handed the lattice back when the input went quiet would read as the
-/// toggle failing, and the input going quiet is the one thing the picture
-/// should say plainly.
-fn light_from_spectrum(
-    scene: &mut Scene,
-    state: &SharedState,
-    fold: Option<&Fold>,
-    paint: &SpectralPaint,
-) {
-    let cfg = state.spectrum_config;
-    let gutter = state.view.sevens_gutter.clamp(0.0, 0.5);
-    let layout = scene.octave_layout;
-    for node in &mut scene.nodes {
-        node.activation = 0.0;
-        node.octaves = [0.0; OCTAVE_SLOTS];
-        // Nothing here departs: a partial has no key to come up, so the flag
-        // that means "this level is on its way out" has no answer but no. Its
-        // one reader reserves a label's brightness ahead of a trail record, and
-        // a trail is the MIDI history's — see `label_strength`.
-        node.departing = false;
-        node.gutter = 0.0;
-        let Some(fold) = fold else { continue };
-        let light = fold.node(&layout, node.cents);
-        if light.total <= 0.0 {
-            continue;
-        }
-        node.activation = loudness(&cfg, light.total, light.pitch);
-        for (slot, level) in node.octaves.iter_mut().enumerate() {
-            let pitch = layout.slot_pitch(slot as i32, node.cents);
-            *level = loudness(&cfg, light.octaves[slot], pitch);
-        }
-        if node.activation > 0.0 {
-            // Off the paint's own table rather than through
-            // `gradient_color(cfg.spectrogram_gradient, ..)`, so the disc and
-            // the wedges the shader draws around it index ONE array of
-            // colours — the same reason the pitch ramp is a table both sides
-            // read rather than a curve each evaluates.
-            node.color = lut_color(&paint.lut, node.activation);
-            node.gutter = gutter;
-        }
-    }
-}
-
-/// A level (0..1) off a gradient table, interpolated between entries exactly
-/// as `spectral_lut_color` in lattice.wgsl does — one walk, so a node's disc
-/// and the wedges around it cannot come out different colours for one level.
-fn lut_color(lut: &[glam::Vec4; harmonigraph_scene::PITCH_LUT_N], level: f32) -> glam::Vec4 {
-    let f = level.clamp(0.0, 1.0) * (harmonigraph_scene::PITCH_LUT_N - 1) as f32;
-    let i0 = f.floor() as usize;
-    lut[i0].lerp(lut[(i0 + 1).min(harmonigraph_scene::PITCH_LUT_N - 1)], f - f.floor())
-}
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::tests::probe::fresh;
     use harmonigraph_core::{spectrum::midi_to_hz, LatticePos, NoteEvent, Tuning};
-    use harmonigraph_scene::{derive_scene, octave_layout, ViewConfig};
+    use harmonigraph_scene::{
+        derive_scene, octave_layout, OctaveLayout, ViewConfig, MAX_SPAN, OCTAVE_SLOTS,
+    };
 
     const SR: f32 = 48_000.0;
 
@@ -568,7 +454,23 @@ mod tests {
             .collect()
     }
 
-    /// One signal analyzed, ready to fold nodes out of.
+    /// One node's ring as the shader reads it: the folded power at each drawn
+    /// wedge's own octave pitch.
+    ///
+    /// The CPU's form of `spectral_ring`'s fold branch, and the reason the
+    /// claims below can be stated in dB: what reaches the picture is this
+    /// through [`loudness`], a byte and a colour ramp, none of which the
+    /// harmonic series has anything to say about.
+    struct NodeRing {
+        /// Power at each drawn slot; slots the wheel does not draw are 0,
+        /// exactly as they are unpainted.
+        octaves: [f32; OCTAVE_SLOTS],
+        /// Their sum — what a reader integrates across a node's whole ring,
+        /// and where the constellation states itself.
+        total: f32,
+    }
+
+    /// One signal analyzed, ready to read rings out of.
     struct Bench {
         levels: SpectrumBuckets,
         layout: OctaveLayout,
@@ -576,10 +478,17 @@ mod tests {
     }
 
     impl Bench {
-        /// Analyze `samples` at the fresh view's own octave wheel, in JUST
+        /// Analyze `samples` on a wheel drawing EVERY octave slot, in JUST
         /// intonation — which is the material this panel is aimed at, and the
         /// whole reason the constellation is exact: a partial of a just-tuned
         /// note lands ON its node rather than near it.
+        ///
+        /// The widest wheel rather than the fresh five slices, because these
+        /// tests are about the fold and not about the wheel: a narrow wheel
+        /// would leave "the octaves below every partial stay dark" true of
+        /// slots that are not drawn at all, which is no claim about the
+        /// measurement. Where the wheel is set is `octave_layout`'s own
+        /// question and its own tests.
         fn on(samples: &[f32]) -> Bench {
             let mut state = fresh();
             // The display's EMA is the Analyzer's Smoothing control, and it is
@@ -594,9 +503,9 @@ mod tests {
             Bench {
                 levels,
                 layout: octave_layout(
-                    view.octave_count,
+                    MAX_SPAN,
                     view.octave_center,
-                    view.octave_extras,
+                    0,
                     view.octave_extra_size,
                     view.octave_extra_blend,
                 ),
@@ -604,18 +513,32 @@ mod tests {
             }
         }
 
-        fn light(&self, width: f32, pos: LatticePos) -> NodeLight {
+        fn light(&self, width: f32, pos: LatticePos) -> NodeRing {
             self.at_class(width, self.tuning.pitch_class(pos).to_cents())
         }
 
         /// The same for a pitch class named directly, which is what the
         /// selectivity tests want: they ask how far apart two classes have to
         /// be, and a lattice position is a roundabout way of naming one.
-        fn at_class(&self, width: f32, cents: f32) -> NodeLight {
-            Fold::measure(&self.levels, width).node(&self.layout, cents)
+        fn at_class(&self, width: f32, cents: f32) -> NodeRing {
+            let fold = Fold::measure(&self.levels, width);
+            let (low, high) = self.layout.slots(cents);
+            let mut octaves = [0.0f32; OCTAVE_SLOTS];
+            for slot in low..=high {
+                let Ok(drawn) = usize::try_from(slot) else { continue };
+                if drawn >= OCTAVE_SLOTS {
+                    continue;
+                }
+                // At the slot's OWN pitch and nothing folded onto it from
+                // outside the wheel: a wedge names one octave and reads there,
+                // which is the whole of what makes it one number.
+                octaves[drawn] =
+                    fold.slot_power(self.layout.slot_pitch(slot, cents)).unwrap_or(0.0);
+            }
+            NodeRing { total: octaves.iter().sum(), octaves }
         }
 
-        /// The node body's power in dB, which is where the harmonic series
+        /// The whole ring's power in dB, which is where the harmonic series
         /// states itself.
         fn db(&self, width: f32, pos: LatticePos) -> f32 {
             power_db(self.light(width, pos).total)
@@ -783,7 +706,7 @@ mod tests {
         }
     }
 
-    /// Noise does not light the lattice. Broadband sound has no partials, so
+    /// Noise does not light the rings. Broadband sound has no partials, so
     /// what the floor subtraction leaves is what did not stand above its own
     /// neighbourhood — which for white noise is a whisper.
     ///
@@ -792,7 +715,7 @@ mod tests {
     /// be: what has to hold is that a pitch and a hiss of the same power are
     /// nowhere near each other on the lattice.
     #[test]
-    fn noise_alone_does_not_light_the_lattice() {
+    fn noise_alone_does_not_light_the_rings() {
         let tone = Bench::on(&sine(60.0)).db(NARROW, LatticePos::new(0, 0, 0));
         let hiss = Bench::on(&noise());
         // The whole fresh window, and the LOUDEST node in it: a floor estimate
@@ -853,15 +776,23 @@ mod tests {
     }
 
     /// A width no bar can produce — a hand-edited blob's 0, a NaN — folds to
-    /// finite numbers rather than dividing by zero and drawing a lattice that
-    /// is silently dark.
+    /// finite numbers rather than dividing by zero and drawing a ring that is
+    /// silently dark.
+    ///
+    /// The whole grid and not one node's wedges, because the divisor is the
+    /// kernel's and the kernel is the grid's: a NaN there poisons every bucket
+    /// at once, and a byte cast from one is 0 with nothing on screen saying so.
     #[test]
     fn a_width_no_bar_can_produce_still_folds() {
         let bench = Bench::on(&sine(60.0));
         for width in [0.0, -3.0, f32::NAN, f32::INFINITY, 1e9] {
+            let fold = Fold::measure(&bench.levels, width);
+            assert!(
+                fold.grid().iter().all(|p| p.is_finite()),
+                "width {width} poisoned the grid the ring reads",
+            );
             let light = bench.light(width, LatticePos::new(0, 0, 0));
             assert!(light.total.is_finite(), "width {width} folded to {}", light.total);
-            assert!(light.pitch.is_finite(), "width {width} put the pitch at {}", light.pitch);
             assert!(
                 light.octaves.iter().all(|p| p.is_finite()),
                 "width {width} poisoned the wedges: {:?}",
@@ -871,8 +802,8 @@ mod tests {
     }
 
     /// A scene derived exactly as the Lattice pane derives it, then handed to
-    /// the fold — which reads the view's own toggles for what to do with it,
-    /// so a test says which picture it is asking for by setting them.
+    /// this pass — which reads the view's own selector for what to fill the
+    /// ring with, so a test says which reading it is asking for by setting it.
     fn scene_of(state: &SharedState) -> Scene {
         let mut scene = derive_scene(
             &state.tracker,
@@ -888,48 +819,21 @@ mod tests {
         scene
     }
 
-    /// The source toggle REPLACES. Held keys light nothing once the source is
-    /// audio, and audio lights nodes no key is down for — the two halves of
-    /// "never a blend", each of which a version that merely ADDED the fold
-    /// would pass half of.
-    #[test]
-    fn the_audio_source_replaces_the_keys() {
-        let lit = |scene: &Scene| scene.nodes.iter().filter(|n| n.activation > 0.0).count();
-
-        // A key down and nothing sounding.
-        let mut state = fresh();
-        state.frame_params.fade_time = 0.0;
-        state.tracker.handle_event(NoteEvent::on(0.0, 0, 60, 1.0));
-        assert!(lit(&scene_of(&state)) > 0, "the keys light the lattice");
-        state.view.spectral_light = true;
-        assert_eq!(
-            lit(&scene_of(&state)),
-            0,
-            "a held key lit the lattice with the source set to audio",
-        );
-
-        // ...and audio with no key down, which is the same claim from the other
-        // end: with nothing held there is nothing for a blend to be made of.
-        let mut state = fresh();
-        state.spectrum_config.smoothing = 0.0;
-        let cfg = state.spectrum_config;
-        state.spectrum.push_samples(&sawtooth(48.0), 1, SR, 1.0, &cfg);
-        assert_eq!(lit(&scene_of(&state)), 0, "nothing is held, so MIDI lights nothing");
-        state.view.spectral_light = true;
-        assert!(lit(&scene_of(&state)) > 0, "audio lit no node at all");
-    }
-
-    /// The RING adds, where the source toggle replaces: it fills a channel of
-    /// its own — one reading of the spectrum the whole lattice shares — and
-    /// leaves every MIDI answer exactly as `derive_scene` wrote it. That is
-    /// what lets one node carry both readings at once, and it is a per-node
-    /// sweep because a pass that reached into the nodes at all is the way it
-    /// would stop being true.
+    /// EITHER reading adds. The ring fills a channel of its own — one reading
+    /// of the spectrum the whole lattice shares — and leaves every MIDI answer
+    /// exactly as `derive_scene` wrote it, so one node carries both pictures at
+    /// once and neither has to be given up to see the other.
+    ///
+    /// A per-node sweep because a pass that reached into the nodes AT ALL is
+    /// the way this would stop being true, and both readings because the fold
+    /// is the one with a per-node answer to be tempted by: a fold written into
+    /// the bodies and the band would draw a plausible picture that has thrown
+    /// the player's part away.
     ///
     /// A held C4 with a C3 saw sounding, so the two channels have something to
     /// disagree about: the keys light one pitch class, the saw sounds at many.
     #[test]
-    fn the_ring_lights_beside_the_keys_rather_than_instead_of_them() {
+    fn either_reading_draws_beside_the_keys_rather_than_instead_of_them() {
         let mut state = fresh();
         state.frame_params.fade_time = 0.0;
         state.spectrum_config.smoothing = 0.0;
@@ -938,28 +842,33 @@ mod tests {
         state.spectrum.push_samples(&sawtooth(48.0), 1, SR, 1.0, &cfg);
 
         let midi = scene_of(&state);
-        assert!(!midi.spectral.ring_draws(), "the ring drew with the toggle off");
-        state.view.spectral_ring = true;
-        let both = scene_of(&state);
+        assert!(!midi.spectral.ring_draws(), "the ring drew with the reading Off");
+        assert!(
+            midi.nodes.iter().any(|n| n.activation > 0.0),
+            "the keys lit nothing, so there is no MIDI picture to leave alone",
+        );
 
-        for (was, now) in midi.nodes.iter().zip(&both.nodes) {
-            let at = was.lattice_pos;
-            assert_eq!(now.activation, was.activation, "{at:?} changed how lit it is");
-            assert_eq!(now.octaves, was.octaves, "{at:?} lost its held octaves");
-            assert_eq!(now.color, was.color, "{at:?} was repainted");
-            assert_eq!(now.gutter, was.gutter, "{at:?} changed what it clears");
-            assert_eq!(now.melody_slots, was.melody_slots, "{at:?} lost its melody mark");
+        for reading in [SpectralReading::Fold, SpectralReading::Spectrum] {
+            state.view.spectral_reading = reading;
+            let both = scene_of(&state);
+            for (was, now) in midi.nodes.iter().zip(&both.nodes) {
+                let at = was.lattice_pos;
+                assert_eq!(now.activation, was.activation, "{reading:?}: {at:?} changed how lit");
+                assert_eq!(now.octaves, was.octaves, "{reading:?}: {at:?} lost its held octaves");
+                assert_eq!(now.color, was.color, "{reading:?}: {at:?} was repainted");
+                assert_eq!(now.gutter, was.gutter, "{reading:?}: {at:?} changed what it clears");
+                assert_eq!(now.melody_slots, was.melody_slots, "{reading:?}: {at:?} lost its mark");
+            }
+            assert!(both.spectral.ring_draws(), "{reading:?} left the ring's annulus empty");
+            // The saw really is in the grid the ring reads. A count of loud
+            // buckets rather than a node count, because the reading is not per
+            // node: the ring is a window onto this one table, and what a given
+            // node shows of it is the shader's arithmetic (pinned on the GPU by
+            // `the_audio_ring_reads_the_spectrum_around_each_octave`).
+            let loud = both.spectral.levels.iter().filter(|&&level| level > 128).count();
+            eprintln!("{reading:?}: {loud} of {SPECTRUM_BINS} buckets over half the Level window");
+            assert!(loud > 0, "{reading:?} left nothing in the grid the ring reads");
         }
-        assert!(both.spectral.ring_draws(), "the ring's annulus is empty with the toggle on");
-        assert!(!both.spectral.lit, "the ring relit the nodes, which is the other toggle's job");
-        // The saw really is in the grid the ring reads. A count of loud
-        // buckets rather than a node count, because the reading is not per
-        // node: the ring is a window onto this one table, and what a given
-        // node shows of it is the shader's arithmetic (pinned on the GPU by
-        // `the_audio_ring_reads_the_spectrum_around_each_octave`).
-        let loud = both.spectral.levels.iter().filter(|&&level| level > 128).count();
-        eprintln!("{loud} of {} buckets are over half the Level window", SPECTRUM_BINS);
-        assert!(loud > 0, "the saw left nothing in the grid the ring reads");
     }
 
     /// The ring reads the analyzer RAW: bucket for bucket, its levels are the
@@ -977,7 +886,7 @@ mod tests {
     fn the_rings_levels_are_the_analyzers_own() {
         let mut state = fresh();
         state.spectrum_config.smoothing = 0.0;
-        state.view.spectral_ring = true;
+        state.view.spectral_reading = SpectralReading::Spectrum;
         let cfg = state.spectrum_config;
         state.spectrum.push_samples(&sawtooth(48.0), 1, SR, 1.0, &cfg);
 
@@ -998,50 +907,58 @@ mod tests {
         assert!(checked > 0, "no bucket was above the floor, so the comparison proves nothing");
     }
 
-    /// Both toggles at once draws two DIFFERENT readings, which is the point of
-    /// having both: the band carries the fold — a kernel and a noise floor,
-    /// per node per octave — and the ring carries the raw grid. They are
-    /// measured apart on purpose, so a change that quietly routed one through
-    /// the other's measurement would make the second ring redundant again.
+    /// The two readings are MEASURED apart, which is the whole point of having
+    /// a choice: one is a kernel over a local noise floor and the other is the
+    /// analyzer's grid untouched, so between a saw's partials the raw reading
+    /// stands well above what the fold answers at the same pitch.
+    ///
+    /// The claim that keeps the selector from being one picture with two
+    /// labels. A change that quietly routed either through the other's
+    /// measurement — a floor slipped under the raw grid, a kernel dropped from
+    /// the fold — would leave both readings drawing very nearly the same ring
+    /// and neither test above would notice.
+    ///
+    /// A sweep over the WHOLE grid rather than at chosen nodes, because that is
+    /// what a node's wedges are windows onto: the readings differ or they do
+    /// not, bucket for bucket, and no node has to be picked for it to be true.
     #[test]
-    fn the_two_sources_are_measured_apart() {
+    fn the_two_readings_are_measured_apart() {
         let mut state = fresh();
         state.spectrum_config.smoothing = 0.0;
         let cfg = state.spectrum_config;
         state.spectrum.push_samples(&sawtooth(48.0), 1, SR, 1.0, &cfg);
-        state.view.spectral_light = true;
-        state.view.spectral_ring = true;
 
-        let scene = scene_of(&state);
-        assert!(scene.spectral.lit, "the band is not lit from audio with the toggle on");
-        assert!(scene.spectral.ring_draws(), "the ring is not drawn with the toggle on");
+        state.view.spectral_reading = SpectralReading::Fold;
+        let folded = scene_of(&state);
+        state.view.spectral_reading = SpectralReading::Spectrum;
+        let raw = scene_of(&state);
+        assert!(folded.spectral.folded, "the fold is not read at its wedges' own pitches");
+        assert!(!raw.spectral.folded, "the raw reading lost its window across the wedge");
 
-        // The fold subtracts a local noise floor and the ring does not, so
-        // between a saw's partials the raw grid stands well ABOVE what the
-        // fold reads there. Measured at the node bodies against the buckets
-        // they sit on: every lit node's folded level is under the raw reading
-        // at its own pitch, and at least one is well under.
-        let layout = scene.octave_layout;
-        let mut biggest: f32 = 0.0;
-        let mut checked = 0;
-        for node in &scene.nodes {
-            if node.activation <= 0.0 {
-                continue;
-            }
-            for slot in 0..OCTAVE_SLOTS {
-                let pitch = layout.slot_pitch(slot as i32, node.cents);
-                let Some(bucket) = grid_bucket(pitch) else { continue };
-                let raw = f32::from(scene.spectral.levels[bucket]) / 255.0;
-                biggest = biggest.max(raw - node.octaves[slot]);
-                checked += 1;
-            }
+        // The FLOOR is what separates them, and it separates them downward:
+        // between a saw's partials the fold subtracts what did not stand above
+        // its own neighbourhood, so it reads far under the analyzer's own
+        // buckets there. Not everywhere, and the exception is the kernel rather
+        // than a defect — a Gaussian mean spreads a partial onto its
+        // neighbours, so a bucket in a partial's skirt can fold ABOVE its own
+        // raw level. That is the fold admitting a detuned partial, which is
+        // what the width bar is for.
+        let (mut under, mut differing) = (0.0f32, 0usize);
+        for (&fold, &grid) in folded.spectral.levels.iter().zip(raw.spectral.levels.iter()) {
+            under = under.max(f32::from(grid.saturating_sub(fold)) / 255.0);
+            // A byte's own step of slack: the two paths quantize separately.
+            differing += usize::from(fold.abs_diff(grid) > 1);
         }
-        assert!(checked > 0, "nothing was lit, so the comparison proves nothing");
-        eprintln!("the raw grid reads up to {biggest:.3} over the fold at the same pitch");
+        eprintln!("{differing} buckets differ; the raw grid reads up to {under:.3} over the fold");
         assert!(
-            biggest > 0.05,
-            "the raw ring and the folded band read the same level everywhere \
-             (largest gap {biggest:.3}), so one of them is not measuring what it claims",
+            under > 0.05,
+            "the fold never reads under the analyzer (largest gap {under:.3}), \
+             so its noise floor is not coming off",
+        );
+        assert!(
+            differing > SPECTRUM_BINS / 10,
+            "only {differing} of {SPECTRUM_BINS} buckets differ, so the two readings \
+             are very nearly one table and the choice between them says nothing",
         );
     }
 
@@ -1065,7 +982,7 @@ mod tests {
         use crate::panes::spectral::spectrogram::cell_color;
 
         let mut state = fresh();
-        state.view.spectral_ring = true;
+        state.view.spectral_reading = SpectralReading::Spectrum;
         state.spectrum_config.smoothing = 0.0;
         let cfg = state.spectrum_config;
         state.spectrum.push_samples(&sawtooth(48.0), 1, SR, 1.0, &cfg);
@@ -1098,41 +1015,35 @@ mod tests {
         }
     }
 
-    /// The bucket whose centre is nearest absolute MIDI `pitch`, or `None`
-    /// where the analyzer's axis does not reach it — the CPU's form of the
-    /// shader's `spectrum_at`, to a bucket rather than interpolated.
-    fn grid_bucket(pitch: f32) -> Option<usize> {
-        let x = (pitch - harmonigraph_scene::SPECTRAL_AXIS.0) * BINS_PER_SEMITONE as f32 - 0.5;
-        if x < 0.0 || x > (SPECTRUM_BINS - 1) as f32 {
-            return None;
-        }
-        Some(x.round() as usize)
-    }
-
-    /// Ticking the box before any audio has flowed is the design's most
+    /// Choosing a reading before any audio has flowed is the design's most
     /// contentious accepted consequence: every node wears the ring at the
     /// ramp's floor, saying "nothing sounds here" rather than nothing. So the
     /// no-audio path has to keep the annulus real and the grid at zero — a
-    /// vanishing ring would read as the toggle not taking.
+    /// vanishing ring would read as the selector not taking.
+    ///
+    /// Both readings, since the fold has a whole measuring pass of its own that
+    /// there is nothing to run.
     #[test]
     fn the_ring_draws_its_floor_before_any_audio_flows() {
-        let mut state = fresh();
-        state.view.spectral_ring = true;
-        let scene = scene_of(&state);
-        assert!(
-            scene.spectral.ring_draws(),
-            "with no audio flowing the ring vanished instead of wearing the floor",
-        );
-        assert!(
-            scene.spectral.levels.iter().all(|&level| level == 0),
-            "a grid nothing fed reads a level other than the floor",
-        );
+        for reading in [SpectralReading::Fold, SpectralReading::Spectrum] {
+            let mut state = fresh();
+            state.view.spectral_reading = reading;
+            let scene = scene_of(&state);
+            assert!(
+                scene.spectral.ring_draws(),
+                "with no audio flowing {reading:?} vanished instead of wearing the floor",
+            );
+            assert!(
+                scene.spectral.levels.iter().all(|&level| level == 0),
+                "a grid nothing fed reads a level other than the floor under {reading:?}",
+            );
+        }
     }
 
     /// A probe at a bucket's own centre reads that bucket, not a blend of it
     /// and its neighbour: the reader subtracts the grid's half-bucket offset
-    /// exactly as `bucket_pitch`, `grid_bucket` and the shader's `spectrum_at`
-    /// do, so the band's fold and the ring place a partial at the same pitch.
+    /// exactly as `bucket_pitch` and the shader's `spectrum_at` do, so both
+    /// readings place a partial at the same pitch.
     #[test]
     fn a_probe_at_a_buckets_centre_reads_that_bucket_alone() {
         let mut levels = [0.0f32; SPECTRUM_BINS];
@@ -1163,59 +1074,4 @@ mod tests {
             "a quarter-bucket flat reads {flat} and a quarter-bucket sharp reads {sharp}",
         );
     }
-
-    /// Only the LIGHTING is replaced: the geometry, the wheel, the grid and the
-    /// melody/bass marks are `derive_scene`'s answers untouched, which is what
-    /// makes this a post-pass rather than a second way of deriving a scene.
-    #[test]
-    fn the_source_leaves_everything_but_the_light_alone() {
-        let mut state = fresh();
-        state.frame_params.fade_time = 0.0;
-        state.tracker.handle_event(NoteEvent::on(0.0, 0, 60, 1.0));
-        let cfg = state.spectrum_config;
-        state.spectrum.push_samples(&sawtooth(48.0), 1, SR, 1.0, &cfg);
-        // Derived twice rather than cloned: a `Scene` is not `Clone`, and one
-        // derivation is deterministic in its inputs, which the whole offline
-        // renderer already rests on.
-        let derive = || {
-            derive_scene(
-                &state.tracker,
-                &state.tuning,
-                &state.view,
-                &state.view.reach(),
-                &state.frame_params,
-                state.camera,
-                None,
-                1.0,
-            )
-        };
-        let derived = derive();
-        let mut relit = derive();
-        let fold = state.spectrum.display(1.0).map(|levels| Fold::measure(levels, NARROW));
-        let paint = SpectralPaint::new(
-            &state.view,
-            pitch_ramp_lut(state.spectrum_config.spectrogram_gradient),
-        );
-        light_from_spectrum(&mut relit, &state, fold.as_ref(), &paint);
-
-        assert_eq!(relit.grid.len(), derived.grid.len(), "the grid was rebuilt");
-        assert_eq!(relit.octave_layout, derived.octave_layout, "the wheel moved");
-        for (was, now) in derived.nodes.iter().zip(&relit.nodes) {
-            assert_eq!(now.lattice_pos, was.lattice_pos);
-            assert_eq!(now.world_pos, was.world_pos, "{:?} moved", was.lattice_pos);
-            assert_eq!(now.scale, was.scale, "{:?} changed size", was.lattice_pos);
-            assert_eq!(now.cents, was.cents, "{:?} changed pitch class", was.lattice_pos);
-            let at = was.lattice_pos;
-            assert_eq!(now.melody_slots, was.melody_slots, "{at:?} lost its melody mark");
-            assert_eq!(now.bass_slots, was.bass_slots, "{:?} lost its bass mark", was.lattice_pos);
-            assert_eq!(now.trail, was.trail, "{:?} lost its trail", was.lattice_pos);
-        }
-        // ...and the light really did change, or the sweep above proves nothing.
-        assert!(
-            derived.nodes.iter().zip(&relit.nodes).any(|(a, b)| a.activation != b.activation),
-            "no node's lighting changed at all",
-        );
-    }
-
-
 }

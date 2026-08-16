@@ -302,11 +302,11 @@ struct Uniforms {
     /// slice boundaries, the same table for every node — four to a row, which
     /// is how a uniform array is laid out anyway.
     oct_bounds: [[f32; 4]; 3],
-    /// The audio channel's knobs (see `harmonigraph_scene::SpectralPaint`).
-    /// x: how many cents of spectrum one wedge of the audio ring spans; y: 1
-    /// where the node bodies and the octave band are lit from audio and so
-    /// take their colour off `spectral_lut` at their own level rather than off
-    /// `pitch_lut` at their own pitch; z/w unused.
+    /// The audio ring's knobs (see `harmonigraph_scene::SpectralPaint`).
+    /// x: how many cents of spectrum one wedge of the ring spans, read only
+    /// when y is 0; y: 1 where each wedge is ONE reading taken at its own
+    /// octave's pitch (`SpectralReading::Fold`) rather than a window spread
+    /// across it (`::Spectrum`); z/w unused.
     misc9: [f32; 4],
     /// The FREQUENCY colour scheme's ramp — the analyzer's own gradient
     /// (`SpectrumConfig::spectrogram_gradient`) through `pitch_ramp_lut`, the
@@ -851,7 +851,7 @@ impl LatticeCallback {
                 oct_bounds: std::array::from_fn(|row| {
                     std::array::from_fn(|col| scene.octave_layout.bounds[row * 4 + col])
                 }),
-                misc9: [scene.spectral.range, f32::from(u8::from(scene.spectral.lit)), 0.0, 0.0],
+                misc9: [scene.spectral.range, f32::from(u8::from(scene.spectral.folded)), 0.0, 0.0],
                 spectral_lut: std::array::from_fn(|k| scene.spectral.lut[k].to_array()),
                 // Zeroed rather than packed when the ring is off: `u.spectrum`
                 // is read only through `spectral_ring`, which draws nothing off

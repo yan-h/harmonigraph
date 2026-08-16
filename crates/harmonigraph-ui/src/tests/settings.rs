@@ -1257,3 +1257,110 @@ fn the_comma_tables_sideways_bar_runs_under_its_cells() {
         "the table's cells run to {lowest} and the lane of the bar under them starts at {lane_top}",
     );
 }
+
+/// The Nodes pane drawn with the audio ring set to `reading`, as the shapes it
+/// emitted.
+fn audio_section_shapes(
+    reading: harmonigraph_scene::SpectralReading,
+) -> Vec<egui::epaint::ClippedShape> {
+    let mut state = fresh();
+    state.view.spectral_reading = reading;
+    let tab = SettingsPane::Section(Section::Nodes).install(&mut state);
+    tab_body(&mut state, tab, 320.0, PANE_HEIGHT).shapes
+}
+
+/// The y every run of `needle` in `shapes` was painted at.
+fn text_ys(shapes: &[egui::epaint::ClippedShape], needle: &str) -> Vec<f32> {
+    shapes
+        .iter()
+        .filter_map(|cs| match &cs.shape {
+            egui::Shape::Text(t) if t.galley.text() == needle => Some(t.pos.y),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The y of the one run of `needle`, for the names painted once in this pane.
+fn one_text_y(shapes: &[egui::epaint::ClippedShape], needle: &str) -> f32 {
+    let ys = text_ys(shapes, needle);
+    assert_eq!(ys.len(), 1, "{needle:?} is painted {} times, not once", ys.len());
+    ys[0]
+}
+
+/// The colour of the TRACK behind the bar whose name sits at `y` — the widest
+/// rect that row is drawn on.
+///
+/// The track and not the name, though the name is what a reader looks at: a bar
+/// lays its label out in an explicit `theme::text_dim()`, and `Ui::disable`
+/// greys by tinting the colours a SHAPE carries, which for a galley with a
+/// colour of its own is the fallback nothing reads. The track is a plain rect,
+/// so the tint lands on it — which is also why a greyed bar reads as greyed on
+/// screen at all.
+fn track_color(shapes: &[egui::epaint::ClippedShape], y: f32) -> egui::Color32 {
+    shapes
+        .iter()
+        .filter_map(|cs| match &cs.shape {
+            egui::Shape::Rect(r) if r.rect.y_range().contains(y) => Some((r.rect.width(), r.fill)),
+            _ => None,
+        })
+        .max_by(|a, b| a.0.total_cmp(&b.0))
+        .unwrap_or_else(|| panic!("no bar track is drawn on the row at y {y}"))
+        .1
+}
+
+/// Each reading's own bar is the LIVE one — Width under Fold, Range under
+/// Spectrum, neither under Off — and Ring is live under both, being the one
+/// setting the two readings share.
+///
+/// Nothing else in the tree looks at these gates. They are two `add_enabled_ui`
+/// predicates twenty lines apart that each name the other's enum variant, which
+/// is exactly the shape a swap survives: exchange them and the pane ships with
+/// its only draggable bar the one that does nothing, while every other test
+/// here stays green. The narrow-column sweep draws this section at the fresh
+/// `Off`, where all three are greyed together and the question cannot come up.
+///
+/// Read off the PAINTED track rather than a response flag, because a gate egui
+/// honours and a gate the pane merely believes in look the same from inside the
+/// pane — the tint is the painter's, so the colour is the one reading that has
+/// been through it.
+#[test]
+fn each_readings_own_bar_is_the_one_that_is_live() {
+    use harmonigraph_scene::SpectralReading;
+
+    let row = |reading, name: &str| {
+        let shapes = audio_section_shapes(reading);
+        let ring = one_text_y(&shapes, "Ring");
+        let range = one_text_y(&shapes, "Range");
+        let y = match name {
+            // "Width" is painted twice in this pane — the fold's kernel here,
+            // the shimmer's further down. Taken by POSITION and not by paint
+            // order, so a section moved out from under the Audio heading fails
+            // here rather than silently measuring the other bar.
+            "Width" => text_ys(&shapes, "Width")
+                .into_iter()
+                .find(|y| *y > ring && *y < range)
+                .expect("the Audio section's Width bar sits between its Ring and Range bars"),
+            "Ring" => ring,
+            "Range" => range,
+            other => panic!("{other:?} is not a bar in the Audio section"),
+        };
+        track_color(&shapes, y)
+    };
+
+    let live = row(SpectralReading::Fold, "Ring");
+    let dead = row(SpectralReading::Off, "Ring");
+    assert_ne!(live, dead, "a bar's track paints the same greyed and live, so nothing below bites");
+
+    for (reading, want_ring, want_width, want_range) in [
+        (SpectralReading::Off, dead, dead, dead),
+        (SpectralReading::Fold, live, live, dead),
+        (SpectralReading::Spectrum, live, dead, live),
+    ] {
+        // Ring is the one setting both readings share, so it follows the
+        // selector being on at all rather than either reading in particular.
+        assert_eq!(row(reading, "Ring"), want_ring, "{reading:?}: Ring is live/greyed the wrong way");
+        assert_eq!(row(reading, "Width"), want_width, "{reading:?}: Width is the wrong way");
+        assert_eq!(row(reading, "Range"), want_range, "{reading:?}: Range is the wrong way");
+    }
+}
+

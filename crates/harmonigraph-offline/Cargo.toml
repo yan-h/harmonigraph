@@ -21,3 +21,10 @@ pollster = "0.4"
 # PNG output for single-frame checks. The moving picture goes out as raw
 # frames to ffmpeg, which needs no crate at all.
 image = { version = "0.25", default-features = false, features = ["png"] }
+
+[dev-dependencies]
+# View settings the PROBES name and nothing else here does — the picture is
+# `harmonigraph-ui`'s to draw, and this crate only ever hands it a
+# `SharedState`. A probe that sets a field whose type lives in
+# `harmonigraph-scene` has to be able to name that type.
+harmonigraph-scene = { workspace = true }

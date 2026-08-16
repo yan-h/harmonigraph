@@ -361,10 +361,11 @@ fn parity_scene() -> Scene {
         outer_inner: 0.545,
         outer_outer: 0.795,
         outer_gap: 0.12,
-        // No analyzer: the ring off and nothing audio-lit. It is a whole layer
+        // No analyzer: the ring off, under either reading. It is a whole layer
         // more light in the middle of every node, and the sweep and mark
         // measurements here are sized against the picture without it —
-        // `the_audio_ring_reads_the_spectrum_around_each_octave` and the
+        // `the_audio_ring_reads_the_spectrum_around_each_octave`,
+        // `the_folded_ring_reads_each_wedge_at_its_own_octave` and the
         // early-out parity's own `ringing` fixture are where it is turned on.
         spectral: harmonigraph_scene::SpectralPaint::silent(),
         // The plain circular division: this scene is about how the draw
@@ -1641,6 +1642,86 @@ fn the_audio_ring_reads_the_spectrum_around_each_octave() {
         differing_pixels(&gpu.shot(&off), &quiet),
         0,
         "a sounding partial drew something with the ring switched off",
+    );
+}
+
+/// The FOLD reading fills the same wedges of the same annulus, and reads each
+/// of them at its own octave's PITCH: a wedge is flat, so nothing about the
+/// picture depends on Range and a detuned partial dims rather than moving.
+///
+/// The pair of claims that make the two readings one control over one
+/// indicator rather than two features. Both are things the raw reading does
+/// the other way — its wedge is a window, so Range zooms it and a detuning
+/// slides across it — and a fold that quietly kept the window would pass
+/// every geometric claim above while drawing the wrong picture.
+#[test]
+fn the_folded_ring_reads_each_wedge_at_its_own_octave() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut gpu) = Shooter::new(SIZE) else {
+        return;
+    };
+    const UP: usize = harmonigraph_scene::MIDDLE_C_SLOT;
+    let slot_pitch = |slot: usize| slot as f32 * 12.0;
+    let fresh_range = harmonigraph_scene::ViewConfig::default().spectral_ring_range;
+    // The same fixture as the raw reading's, with the wedges read at their own
+    // pitch instead of across a window.
+    let folded = |sounding: Option<f32>, range: f32| {
+        let mut scene = ringing_node(None, sounding, range);
+        scene.spectral.folded = true;
+        scene
+    };
+
+    let base = gpu.shot(&folded(None, fresh_range));
+    let raw_base = gpu.shot(&ringing_node(None, None, fresh_range));
+
+    // It draws, in the same annulus and at the same angle the octave's own
+    // wedge stands at — the raw reading's own claim, so the two are one ring.
+    let on = {
+        let shot = gpu.shot(&folded(Some(slot_pitch(UP)), fresh_range));
+        light_about_center(&light_over(&shot, &base), SIZE)
+    };
+    assert!(on.weight > 0.0, "the folded ring drew nothing at all");
+    let raw = {
+        let shot = gpu.shot(&ringing_node(None, Some(slot_pitch(UP)), fresh_range));
+        light_about_center(&light_over(&shot, &raw_base), SIZE)
+    };
+    let apart = angle_apart(on.angle, raw.angle);
+    assert!(apart < 6.0, "the folded wedge sits {apart:.1}° off the raw one for the same octave");
+    assert!(
+        (on.near - raw.near).abs() < 3.0 && (on.far - raw.far).abs() < 3.0,
+        "the folded ring runs {:.1}..{:.1} px against the raw one's {:.1}..{:.1}",
+        on.near,
+        on.far,
+        raw.near,
+        raw.far,
+    );
+
+    // Range is inert: a wedge is one reading, so there is no window for it to
+    // zoom. Pixel-exact, since the shader does not read the setting at all
+    // down this branch.
+    let narrow = gpu.shot(&folded(Some(slot_pitch(UP)), 50.0));
+    let wide = gpu.shot(&folded(Some(slot_pitch(UP)), 1200.0));
+    assert_eq!(
+        differing_pixels(&narrow, &wide),
+        0,
+        "Range changed the folded ring, which has no window to size",
+    );
+
+    // ...and a detuned partial DIMS where the raw reading would slide it
+    // across the wedge: half the fresh window sharp is a quarter-wedge move
+    // there and no move at all here. The fixture's partial is a rectangle
+    // PARTIAL_HALF_CENTS wide, so at half a window off it has left the
+    // octave's own pitch entirely and the wedge goes dark.
+    let off_pitch = {
+        let shot = gpu.shot(&folded(Some(slot_pitch(UP) + fresh_range / 200.0), fresh_range));
+        light_about_center(&light_over(&shot, &base), SIZE)
+    };
+    eprintln!("on {:.0}, half a window off {:.0}", on.weight, off_pitch.weight);
+    assert!(
+        off_pitch.weight < 0.25 * on.weight,
+        "a partial half a window off still lit the wedge at {:.0} against {:.0} on pitch",
+        off_pitch.weight,
+        on.weight,
     );
 }
 
@@ -3371,13 +3452,13 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         scene.nodes.push(silent);
         scene
     };
-    // The band and the bodies lit from AUDIO, which is the other half of the
-    // frequency scheme reaching the shader: `octave_slot_color` takes the
-    // other branch, off the level rather than the pitch, and the glow's lobes
-    // with it.
-    let audio_lit = || {
+    // The ring's OTHER reading, which is the shader's second branch inside
+    // `spectral_ring`: every fragment of a wedge reads the octave's own pitch
+    // instead of walking a window across it, so the whole `wedge_fraction`
+    // path is skipped and a wedge comes out flat.
+    let folded = || {
         let mut scene = ringing();
-        scene.spectral.lit = true;
+        scene.spectral.folded = true;
         scene
     };
     // No all-idle fixture: an idle node paints nothing, so the cull ships
@@ -3390,7 +3471,7 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         ("fat core", fat_core()),
         ("shimmering", shimmering()),
         ("ringing", ringing()),
-        ("audio lit", audio_lit()),
+        ("folded", folded()),
     ] {
         let cb = LatticeCallback::from_scene(
             &scene,
@@ -3532,33 +3613,46 @@ fn an_open_ring_ships_every_idle_node() {
     );
 }
 
-/// An audio-lit wedge takes its colour from the analyzer's ramp at ITS OWN
-/// octave's level — not from the node's pitch colour scaled by that level,
-/// which is the band's MIDI logic and the exact scheme confusion the two
-/// tables exist to prevent. The ramp here switches hue at half: a level on
-/// one side paints blue, on the other red, and no colour-times-level path
-/// can flip a hue, so the flip is the shader indexing the ramp.
+/// A ring wedge takes its colour from the analyzer's ramp at ITS OWN level —
+/// not from the node's pitch colour scaled by that level, which is the octave
+/// band's MIDI logic and the exact scheme confusion the two tables exist to
+/// prevent. The ramp here switches hue at half: a level on one side paints
+/// blue, on the other red, and no colour-times-level path can flip a hue, so
+/// the flip is the shader indexing the ramp.
+///
+/// Read on the FOLDED branch, where a wedge is one flat level: the raw one
+/// spreads a window of the grid across the wedge, and a shot of it would be
+/// two hues at once by design.
 #[test]
-fn an_audio_lit_wedge_wears_its_own_levels_ramp_entry() {
+fn a_ring_wedge_wears_its_own_levels_ramp_entry() {
     const SIZE: [u32; 2] = [256, 256];
     let Some(mut gpu) = Shooter::new(SIZE) else {
         return;
     };
 
-    let shot_at = |gpu: &mut Shooter, level: f32| -> Vec<u8> {
+    let shot_at = |gpu: &mut Shooter, level: u8| -> Vec<u8> {
         let fresh = harmonigraph_scene::ViewConfig::default();
         let mut scene = single_marked_node(0, 0);
         let node = &mut scene.nodes[0];
+        // Nothing held, so what is on screen is the ring alone: the band's own
+        // wedges are the MIDI picture and would sum into the channels below.
         node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
-        node.octaves[harmonigraph_scene::MIDDLE_C_SLOT] = level;
+        node.activation = 1.0;
         // The core off for the same reason ringing_node turns it off: its
-        // glow is light at every radius, and the reading below is the band's.
+        // glow is light at every radius, and the reading below is the ring's.
         scene.core_radius = 0.0;
         scene.outer_inner = fresh.outer_inner;
         scene.outer_outer = fresh.outer_outer;
         scene.outer_gap = fresh.outer_gap;
         let mut paint = harmonigraph_scene::SpectralPaint::silent();
-        paint.lit = true;
+        paint.inner = fresh.spectral_ring_inner;
+        paint.outer = fresh.spectral_ring_outer;
+        paint.folded = true;
+        // The whole grid at one level, so every wedge whose octave the
+        // analyzer's axis reaches reads the same entry. Off the axis
+        // `spectrum_at` answers 0 whatever the grid holds, which this wheel
+        // stays clear of.
+        paint.levels = Box::new([level; harmonigraph_scene::SPECTRAL_BUCKETS]);
         paint.lut = std::array::from_fn(|k| {
             let t = k as f32 / (harmonigraph_scene::PITCH_LUT_N - 1) as f32;
             if t < 0.5 {
@@ -3571,19 +3665,19 @@ fn an_audio_lit_wedge_wears_its_own_levels_ramp_entry() {
         gpu.shot(&scene)
     };
 
-    let low = shot_at(&mut gpu, 0.35);
-    let high = shot_at(&mut gpu, 0.85);
+    let low = shot_at(&mut gpu, 90);
+    let high = shot_at(&mut gpu, 217);
     let sum = |px: &[u8], ch: usize| -> i64 { px.chunks(4).map(|p| p[ch] as i64).sum() };
     let (blue_low, blue_high) = (sum(&low, 2), sum(&high, 2));
     let (red_low, red_high) = (sum(&low, 0), sum(&high, 0));
     eprintln!("low: red {red_low} blue {blue_low}; high: red {red_high} blue {blue_high}");
     // The margin is a wedge's worth of one channel against antialiasing
-    // fringes; the wedge itself sums in the tens of thousands.
+    // fringes; the ring itself sums in the tens of thousands.
     const HUE_FLIP: i64 = 5_000;
     assert!(
         blue_low > blue_high + HUE_FLIP && red_high > red_low + HUE_FLIP,
-        "crossing the ramp's half did not flip the wedge's hue: the band is not \
-         indexing the analyzer's ramp at the octave's own level",
+        "crossing the ramp's half did not flip the wedge's hue: the ring is not \
+         indexing the analyzer's ramp at the wedge's own level",
     );
 }
 

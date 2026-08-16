@@ -1019,21 +1019,52 @@ fn the_fresh_audio_ring_sits_clear_of_the_core_and_the_octave_band() {
 /// audio, a standalone harness — a ring of unmeasured silence painted off a
 /// ramp nobody supplied.
 ///
+/// Both readings, since either would have to be measured somewhere and neither
+/// can be measured here.
+///
 /// (Where the clamps live now, and what a hand-edited pair comes back as, is
 /// `spectral::tests::a_hand_edited_audio_ring_still_draws_an_annulus`, beside
 /// the constructor that does the clamping.)
 #[test]
 fn a_scene_derived_without_an_analyzer_carries_no_audio() {
-    let view = ViewConfig {
-        spectral_ring: true,
-        spectral_light: true,
-        ..plain_view()
-    };
-    let scene = scene_of(&sounding(), &Tuning::just(), &view, &plain_frame(), 0.5);
-    assert!(!scene.spectral.ring_draws(), "a derived scene drew a ring with no analyzer behind it");
-    assert!(!scene.spectral.lit, "a derived scene claimed its nodes were lit from audio");
-    assert!(
-        scene.spectral.levels.iter().all(|&level| level == 0),
-        "a derived scene carried a spectrum reading",
-    );
+    for reading in [SpectralReading::Fold, SpectralReading::Spectrum] {
+        let view = ViewConfig { spectral_reading: reading, ..plain_view() };
+        let scene = scene_of(&sounding(), &Tuning::just(), &view, &plain_frame(), 0.5);
+        assert!(
+            !scene.spectral.ring_draws(),
+            "a derived scene drew a {reading:?} ring with no analyzer behind it",
+        );
+        assert!(
+            scene.spectral.levels.iter().all(|&level| level == 0),
+            "a derived scene carried a {reading:?} reading",
+        );
+    }
+}
+
+/// The MIDI picture is the SAME picture whatever the ring is asked for: the
+/// analyzer's reading is a layer added inside the octave band, and nothing
+/// about a node's own body, band, marks or clearing is a function of it.
+///
+/// The claim the whole selector rests on, and it is `derive_scene`'s to keep
+/// because that is where every one of those is decided. A version that read
+/// the setting here — dimming the band under the ring, say, or clearing a
+/// gutter for it — would make the two readings two pictures again rather than
+/// two fillings of one ring.
+#[test]
+fn the_reading_leaves_the_midi_picture_alone() {
+    let midi = scene_of(&sounding(), &Tuning::just(), &plain_view(), &plain_frame(), 0.5);
+    for reading in [SpectralReading::Fold, SpectralReading::Spectrum] {
+        let view = ViewConfig { spectral_reading: reading, ..plain_view() };
+        let scene = scene_of(&sounding(), &Tuning::just(), &view, &plain_frame(), 0.5);
+        assert_eq!(scene.nodes.len(), midi.nodes.len(), "{reading:?} changed how many nodes draw");
+        for (now, was) in scene.nodes.iter().zip(&midi.nodes) {
+            let at = was.lattice_pos;
+            assert_eq!(now.activation, was.activation, "{reading:?} changed {at:?}'s activation");
+            assert_eq!(now.octaves, was.octaves, "{reading:?} changed {at:?}'s held octaves");
+            assert_eq!(now.color, was.color, "{reading:?} repainted {at:?}");
+            assert_eq!(now.gutter, was.gutter, "{reading:?} changed what {at:?} clears");
+            assert_eq!(now.melody_slots, was.melody_slots, "{reading:?} moved {at:?}'s melody");
+            assert_eq!(now.bass_slots, was.bass_slots, "{reading:?} moved {at:?}'s bass mark");
+        }
+    }
 }

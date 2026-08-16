@@ -230,14 +230,13 @@ mod tests {
         assert_eq!(value.a, 1.0);
     }
 
-    /// Which of the lattice's three readings a shot is of: the MIDI picture
-    /// alone, the audio ring over it at a given Range, or the nodes themselves
-    /// lit from the analyzer.
+    /// Which of the ring's readings a shot is of: none of them (the MIDI
+    /// picture alone), the raw spectrum at a given Range, or the fold.
     #[derive(Clone, Copy)]
     enum Shot {
         Midi,
-        Ring(f32),
-        Lit,
+        Spectrum(f32),
+        Fold,
     }
 
     /// A sawtooth at MIDI `midi`, one second of it: every harmonic to Nyquist
@@ -277,9 +276,10 @@ mod tests {
     /// cargo test -p harmonigraph-offline -- --ignored --nocapture audio_ring
     /// ```
     ///
-    /// Same note held as sounding, so both readings are on screen at once: the
+    /// Same note held as sounding, so both pictures are on screen at once: the
     /// held C3 lights its own node's band, and the ring inside it reads the
-    /// saw's own spectrum around each of that node's octaves.
+    /// saw's own spectrum around each of that node's octaves. That holds under
+    /// either reading — the ring never replaces the MIDI picture.
     ///
     /// The RANGE sweep is what the fresh value was chosen against, and it is
     /// the reason this writes more than two shots: the setting decides whether
@@ -357,32 +357,36 @@ mod tests {
         // and the octave end is one picture repeated on every node, which only
         // shows on a screen full of them.
         //
-        // `Light from audio` rides along at both distances, because it is the
-        // OTHER half of the frequency colour scheme: the band and the bodies
-        // painted by level off the analyzer's ramp rather than by pitch off
-        // the lattice's, which is a thing to look at rather than to assert.
+        // The FOLD rides along at both distances, because it is the other half
+        // of the selector and the pair only means anything side by side: the
+        // same wedges in the same annulus, one flat per octave and one a
+        // window across it. Which of the two reads better is the judgement
+        // this probe exists to put in front of a person.
         let fresh_range = state.view.spectral_ring_range;
         let mut shots: Vec<(f32, &str, Shot)> = Vec::new();
         for (zoom, at) in [(2.5f32, ""), (9.0, "-close")] {
             shots.push((zoom, at, Shot::Midi));
             for range in [50.0f32, fresh_range, 600.0, 1200.0] {
-                shots.push((zoom, at, Shot::Ring(range)));
+                shots.push((zoom, at, Shot::Spectrum(range)));
             }
-            shots.push((zoom, at, Shot::Lit));
+            shots.push((zoom, at, Shot::Fold));
         }
 
         let home = state.camera;
         for (zoom, at, shot) in shots {
             let source = match shot {
                 Shot::Midi => "audio-ring-off".to_string(),
-                Shot::Lit => "light-from-audio".to_string(),
-                Shot::Ring(range) => {
+                Shot::Fold => "audio-ring-fold".to_string(),
+                Shot::Spectrum(range) => {
                     state.view.spectral_ring_range = range;
                     format!("audio-ring-{range:.0}c")
                 }
             };
-            state.view.spectral_ring = matches!(shot, Shot::Ring(_));
-            state.view.spectral_light = matches!(shot, Shot::Lit);
+            state.view.spectral_reading = match shot {
+                Shot::Midi => harmonigraph_scene::SpectralReading::Off,
+                Shot::Fold => harmonigraph_scene::SpectralReading::Fold,
+                Shot::Spectrum(_) => harmonigraph_scene::SpectralReading::Spectrum,
+            };
             // From the fresh camera each time: the pane pans the view's center
             // with the camera, so a zoom applied on top of the last one would
             // compound.
