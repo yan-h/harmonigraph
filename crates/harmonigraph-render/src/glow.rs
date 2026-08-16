@@ -21,13 +21,36 @@
 //! the marks from everything drawn under them — on the spiral, a spectrum that
 //! fills the disc — which is not something a pixel can be asked.
 //!
-//! **One glowing pane per frame.** The chain and its textures are held once,
-//! not per pane id, so two of these live in one frame would share them and each
-//! paint the other's halo. That is the assumption [`crate::roll`] spends a pane
-//! map to avoid, and it is worth less here: the roll has two live copies by
-//! construction (the docked pane and the Video tab's preview), where the only
-//! caller of this is a pane the dock holds one tab of. A second caller wants a
-//! pane id first.
+//! **One glowing pane per frame, and that is an assumption rather than a
+//! guarantee.** The chain and its textures are held once, not per pane id, and
+//! egui-wgpu runs every `prepare` before any `paint` — so two of these live in
+//! one frame at DIFFERENT sizes tear the chain down and rebuild it twice, and
+//! the first pane then stretches the second's halo across its own rect. It is
+//! the assumption [`crate::roll`] spends a pane map to avoid, and the roll has
+//! to: it has two live copies by construction, the docked pane and the Video
+//! tab's preview.
+//!
+//! What makes it hold HERE is narrower than "one caller", which is not true —
+//! the offline renderer draws through `harmonigraph_ui::draw_pane` as well. It
+//! is that no arrangement anything but a hand-written `.ron` can express puts
+//! two spirals in one frame: the dock holds one Spiral tab, and the Video
+//! panel's preview composes a layout that places the lattice and the spectral
+//! pane and nothing else. A layout file naming `Spiral` twice is the case that
+//! breaks it, and `harmonigraph_ui::draw_pane` already carries the same
+//! assumption for the spectrogram's texture slot — fixing either properly means
+//! giving that function the placement's index, which is issue #396 and not this
+//! module's to decide.
+//!
+//! **The pane is never evicted, and cannot usefully be.** [`crate::roll`]
+//! sweeps its map on a clock of `prepare` calls, which works because a closed
+//! roll leaves another one still preparing to sweep with. A hidden Spiral tab
+//! stops calling back and nothing else here calls at all, so a TTL would have
+//! no clock to age against and would never run. What that costs is one pane's
+//! worth of textures — the half-size copy, the thresholded half and the two
+//! quarters, about 2.7 MB for a 600x450-point tab on a Retina display — held
+//! until the pane is next drawn at a different size. Bounded, and bounded by
+//! one rather than by however many tabs were ever opened, which is the
+//! difference that makes the roll's sweep worth its map and this one not.
 
 use egui_wgpu::{CallbackResources, CallbackTrait, ScreenDescriptor};
 
@@ -157,7 +180,9 @@ struct GlowResources {
     /// `None` until a frame asks for a halo, and rebuilt when the pane
     /// resizes — a strength of 0 pays for none of it.
     ///
-    /// Held once rather than per pane id: see this module's head.
+    /// Held once rather than per pane id, and never swept. Both are the
+    /// module head's to justify; the second is why nothing here counts
+    /// `prepare` calls the way [`crate::roll`] does.
     pane: Option<GlowPane>,
 }
 
