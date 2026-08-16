@@ -383,9 +383,14 @@ fn shimmer_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
 /// place as the row is clicked along.
 fn audio_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     ui.heading("Audio");
+    // "Reading" and not "Ring", though the ring is what it fills: the bar two
+    // rows down is already called Ring, being the ring's RADIUS, and two
+    // settings a row apart under one name are told apart only by hovering
+    // both. What this row picks is which of two measurements the ring carries,
+    // which is the word the rest of the audio channel uses for it.
     choice_row(
         ui,
-        "Ring",
+        "Reading",
         &mut view.spectral_reading,
         &[
             (
