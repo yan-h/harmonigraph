@@ -778,22 +778,58 @@ mod tests {
         );
     }
 
-    /// Every one of the four thumbs can be pressed, on a node dialled down to
-    /// nothing but its core — the state where all four boundaries stand on one
-    /// point, and the state a bar that placed them honestly could not be
-    /// dragged out of.
+    /// Every one of the four thumbs can be pressed, on a node with nothing left
+    /// on it at all — the state where all four boundaries stand on one point,
+    /// and the state a bar that placed them honestly could never be dragged out
+    /// of, no handle on it having any bar of its own to be pressed.
+    ///
+    /// Derived from the view rather than from a pile written down here, so what
+    /// it holds is the whole chain a press goes through — the boundaries, where
+    /// they fall on the axis, the spreading and the region split. A hardcoded
+    /// pile would test `spread` and `aimed` against each other and say nothing
+    /// about whether a node can reach that state or what its thumbs do there.
     #[test]
     fn a_pile_of_thumbs_still_answers_four_presses() {
         let mut view = fresh();
-        for layer in &LAYERS[1..] {
+        for layer in LAYERS {
             layer.set(&mut view, 0.0);
         }
-        let edges = view.rings().edges();
-        assert_eq!(edges[0], edges[3], "the four boundaries were meant to be piled here");
-        let thumbs = spread([100.0; 4], (0.0, 400.0), THUMB_SEP);
+        let rings = view.rings();
+        assert_eq!(
+            thumb_axis(&rings),
+            [0.0; 4],
+            "a node with no layers was meant to pile all four thumbs at its center",
+        );
+        let thumbs = spread(
+            thumb_axis(&rings).map(|v| axis(v) * W),
+            (axis(0.0) * W, axis(AXIS_TOP) * W),
+            THUMB_SEP,
+        );
         let taken: Vec<Layer> =
             thumbs.iter().map(|&x| aimed(x, thumbs, HANDLE_W * 0.5)).collect();
         assert_eq!(taken, LAYERS.to_vec(), "a press on each thumb did not take each layer");
+    }
+
+    /// The strip's cell draws in the plain widget fill when neither end is
+    /// ticked: sized, with the node keeping the room, but nothing wearing it.
+    /// Greying the bar instead would take the other three layers with it, on a
+    /// pair of checkboxes two sections down that say nothing about them.
+    #[test]
+    fn an_unmarked_strip_draws_in_the_plain_widget_fill() {
+        let mut view = fresh();
+        view.mark_melody = false;
+        view.mark_bass = false;
+        let rings = view.rings();
+        assert!(rings.mark_thickness > 0.0, "the strip is still sized with neither end marked");
+        let shapes = shapes(W, |ui| {
+            StackBar::new(&mut view).show(ui);
+        });
+        let (_, x_of) = axis_on(&shapes);
+        let (_, fill) = filled_rects(&shapes)
+            .into_iter()
+            .find(|(r, _)| (r.left() - x_of(rings.mark_inner)).abs() < 0.5)
+            .expect("no cell was drawn for the strip");
+        assert_eq!(fill, theme::widget(), "the strip took the accent with nothing wearing it");
     }
 
     /// A press inside a layer's own stretch of bar takes that layer, not the
@@ -1119,6 +1155,45 @@ mod tests {
             after.mark_thickness,
         );
         assert_eq!(after.band_width, before.band_width, "the band moved with it");
+    }
+
+    /// Letting go forgets what the drag had hold of, so the next press decides
+    /// for itself. egui's temp store has no expiry, and a grab left behind is
+    /// inherited whole: the second gesture would go on moving the first one's
+    /// layer, from wherever on the bar it was aimed.
+    #[test]
+    fn a_second_gesture_on_the_bar_chooses_for_itself() {
+        let rings = fresh().rings();
+        let band = axis((rings.band.0 + rings.band.1) * 0.5);
+        let core = axis(rings.core_radius * 0.5);
+        let mut view = fresh();
+        gesture(&mut view, |bar| {
+            let at = |x: f32| egui::pos2(bar.left() + bar.width() * x, bar.center().y);
+            let step = 12.0 / bar.width();
+            vec![
+                // A drag on the band, and this time it is let go of.
+                vec![egui::Event::PointerMoved(at(band))],
+                vec![egui::Event::PointerMoved(at(band)), press(at(band), true)],
+                vec![egui::Event::PointerMoved(at(band + step))],
+                vec![egui::Event::PointerMoved(at(band + 0.05))],
+                vec![press(at(band + 0.05), false)],
+                // Then one aimed at the core, which is a different layer.
+                vec![egui::Event::PointerMoved(at(core))],
+                vec![egui::Event::PointerMoved(at(core)), press(at(core), true)],
+                vec![egui::Event::PointerMoved(at(core - step))],
+                vec![egui::Event::PointerMoved(at(core - 0.04))],
+            ]
+        });
+        assert!(
+            view.band_width > fresh().band_width,
+            "the first gesture did not widen the band: {}",
+            view.band_width,
+        );
+        assert!(
+            view.core_radius < fresh().core_radius,
+            "the second gesture did not reach the core, so the first one's grab outlived it: {}",
+            view.core_radius,
+        );
     }
 
     /// Double-click puts the four sizes back where a fresh view opens them.
