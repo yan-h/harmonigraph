@@ -341,22 +341,24 @@ impl Fold {
 /// and the measurement is a ring of its own inside the band, so one node
 /// carries both readings and neither can be mistaken for the other.
 ///
-/// With the reading Off, nothing here runs at all — not even the read of
-/// [`AudioSpectrum::display`](crate::AudioSpectrum::display) — so the fresh
-/// picture is exactly the picture with this pass absent.
+/// With the ring's width at 0 — its off position, and the only one it has —
+/// nothing here runs at all, not even the read of
+/// [`AudioSpectrum::display`](crate::AudioSpectrum::display), so the picture is
+/// exactly the picture with this pass absent. The GEOMETRY is what is tested
+/// rather than the reading beside it: a ring nobody can see is a measurement
+/// nobody asked for, whichever of the two it would have carried.
 pub(crate) fn apply(scene: &mut Scene, state: &SharedState, now: f64) {
-    let reading = state.view.spectral_reading;
-    if !reading.draws() {
+    if !state.view.spectral_ring_draws() {
         return;
     }
+    let reading = state.view.spectral_reading;
     let cfg = state.spectrum_config;
     let mut paint = SpectralPaint::new(&state.view, pitch_ramp_lut(cfg.spectrogram_gradient));
     if let Some(levels) = state.spectrum.display(now) {
         // The kernel is the FOLD's; `Spectrum` hands the analyzer's own grid
-        // through untouched. A `bool` and not a `match`, because a match here
-        // owes an arm for `Off` that the guard above has already returned
-        // past — a branch nothing can reach, sitting where a reader would take
-        // it for a case that is covered.
+        // through untouched. A `bool` and not a `match` over two arms that
+        // would read as a table of readings, where what this settles is one
+        // question about one of them.
         let folded = (reading == SpectralReading::Fold)
             .then(|| Fold::measure(levels, state.view.spectral_width));
         fill_grid(&mut paint, &cfg, folded.as_ref().map_or(levels, Fold::grid));
@@ -843,8 +845,13 @@ mod tests {
         let cfg = state.spectrum_config;
         state.spectrum.push_samples(&sawtooth(48.0), 1, SR, 1.0, &cfg);
 
+        // The MIDI picture alone, taken with the ring dialled to no width —
+        // its one off switch, and the state every comparison below is against.
+        let ring_width = state.view.spectral_ring_width;
+        state.view.spectral_ring_width = 0.0;
         let midi = scene_of(&state);
-        assert!(!midi.spectral.ring_draws(), "the ring drew with the reading Off");
+        assert!(!midi.spectral.ring_draws(), "the ring drew with no width to draw in");
+        state.view.spectral_ring_width = ring_width;
         assert!(
             midi.nodes.iter().any(|n| n.activation > 0.0),
             "the keys lit nothing, so there is no MIDI picture to leave alone",

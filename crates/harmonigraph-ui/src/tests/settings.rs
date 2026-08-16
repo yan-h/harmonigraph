@@ -1258,13 +1258,15 @@ fn the_comma_tables_sideways_bar_runs_under_its_cells() {
     );
 }
 
-/// The Nodes pane drawn with the audio ring set to `reading`, as the shapes it
-/// emitted.
+/// The Nodes pane drawn with the audio ring `width` thick and carrying
+/// `reading`, as the shapes it emitted.
 fn audio_section_shapes(
     reading: harmonigraph_scene::SpectralReading,
+    width: f32,
 ) -> Vec<egui::epaint::ClippedShape> {
     let mut state = fresh();
     state.view.spectral_reading = reading;
+    state.view.spectral_ring_width = width;
     let tab = SettingsPane::Section(Section::Nodes).install(&mut state);
     tab_body(&mut state, tab, 320.0, PANE_HEIGHT).shapes
 }
@@ -1309,15 +1311,19 @@ fn track_color(shapes: &[egui::epaint::ClippedShape], y: f32) -> egui::Color32 {
 }
 
 /// Each reading's own bar is the LIVE one — Width under Fold, Range under
-/// Spectrum, neither under Off — and Ring is live under both, being the one
-/// setting the two readings share.
+/// Spectrum — and Ring is live throughout, being the one bar that is also this
+/// layer's off switch.
 ///
 /// Nothing else in the tree looks at these gates. They are two `add_enabled_ui`
 /// predicates twenty lines apart that each name the other's enum variant, which
 /// is exactly the shape a swap survives: exchange them and the pane ships with
 /// its only draggable bar the one that does nothing, while every other test
-/// here stays green. The narrow-column sweep draws this section at the fresh
-/// `Off`, where all three are greyed together and the question cannot come up.
+/// here stays green.
+///
+/// Ring is the case worth naming. It is greyed by nothing, and a version that
+/// gated it on the ring drawing — the shape every other bar in the section
+/// takes — would strand it: dragging it to 0 is what turns the ring off, and a
+/// bar greyed at 0 could never be dragged back.
 ///
 /// Read off the PAINTED track rather than a response flag, because a gate egui
 /// honours and a gate the pane merely believes in look the same from inside the
@@ -1327,8 +1333,8 @@ fn track_color(shapes: &[egui::epaint::ClippedShape], y: f32) -> egui::Color32 {
 fn each_readings_own_bar_is_the_one_that_is_live() {
     use harmonigraph_scene::SpectralReading;
 
-    let row = |reading, name: &str| {
-        let shapes = audio_section_shapes(reading);
+    let row = |(reading, width): (SpectralReading, f32), name: &str| {
+        let shapes = audio_section_shapes(reading, width);
         let ring = one_text_y(&shapes, "Ring");
         let range = one_text_y(&shapes, "Range");
         let y = match name {
@@ -1347,20 +1353,22 @@ fn each_readings_own_bar_is_the_one_that_is_live() {
         track_color(&shapes, y)
     };
 
-    let live = row(SpectralReading::Fold, "Ring");
-    let dead = row(SpectralReading::Off, "Ring");
+    const WIDE: f32 = 0.3;
+    let live = row((SpectralReading::Fold, WIDE), "Ring");
+    let dead = row((SpectralReading::Fold, WIDE), "Range");
     assert_ne!(live, dead, "a bar's track paints the same greyed and live, so nothing below bites");
 
-    for (reading, want_ring, want_width, want_range) in [
-        (SpectralReading::Off, dead, dead, dead),
-        (SpectralReading::Fold, live, live, dead),
-        (SpectralReading::Spectrum, live, dead, live),
+    for (state, want_ring, want_width, want_range) in [
+        ((SpectralReading::Fold, WIDE), live, live, dead),
+        ((SpectralReading::Spectrum, WIDE), live, dead, live),
+        // The ring dialled off: both readings' bars have nothing to size, and
+        // the bar that turned it off is still there to turn it back on.
+        ((SpectralReading::Fold, 0.0), live, dead, dead),
+        ((SpectralReading::Spectrum, 0.0), live, dead, dead),
     ] {
-        // Ring is the one setting both readings share, so it follows the
-        // selector being on at all rather than either reading in particular.
-        assert_eq!(row(reading, "Ring"), want_ring, "{reading:?}: Ring is live/greyed the wrong way");
-        assert_eq!(row(reading, "Width"), want_width, "{reading:?}: Width is the wrong way");
-        assert_eq!(row(reading, "Range"), want_range, "{reading:?}: Range is the wrong way");
+        assert_eq!(row(state, "Ring"), want_ring, "{state:?}: Ring is live/greyed the wrong way");
+        assert_eq!(row(state, "Width"), want_width, "{state:?}: Width is the wrong way");
+        assert_eq!(row(state, "Range"), want_range, "{state:?}: Range is the wrong way");
     }
 }
 

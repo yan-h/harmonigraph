@@ -25,9 +25,10 @@
 //! the lattice's ground ([`SpectralPaint::new`]): a black floor would punch a
 //! hole through a grey lattice at every node, which is a picture of a gap
 //! where the table means silence. The bed is the skin's WELL grey and not its
-//! panel grey, because a ring bedded on the panel would vanish into it and an
-//! invisible ring is what the ring being [`Off`](SpectralReading::Off) looks
-//! like; recessed, a silent ring is a groove that is plainly still a reading.
+//! panel grey, because a ring bedded on the panel would vanish into it, and an
+//! invisible ring is what a ring dialled to no width IS — the off switch
+//! ([`ViewConfig::spectral_ring_width`]); recessed, a silent ring is a groove
+//! that is plainly still a reading.
 //!
 //! The scheme is chosen by what the element MEASURES, never by which pane it
 //! is on: the lattice carries both at once (a node's body held by the keys,
@@ -52,7 +53,7 @@ use harmonigraph_core::spectrum::{
     BINS_PER_SEMITONE, SPECTRUM_BINS, SPECTRUM_MAX_MIDI, SPECTRUM_MIN_MIDI,
 };
 
-use crate::{ViewConfig, PITCH_LUT_N, SPECTRAL_RING_MIN_SPAN};
+use crate::{ViewConfig, PITCH_LUT_N};
 
 /// The narrowest and widest a wedge of the audio ring may be dialled to span
 /// ([`ViewConfig::spectral_ring_range`]), in cents.
@@ -91,6 +92,12 @@ pub const SPECTRAL_BUCKETS_PER_SEMITONE: usize = BINS_PER_SEMITONE;
 /// picks which of two readings fills the annulus, and the picture around it is
 /// unchanged either way.
 ///
+/// It carries no Off, and that is the point of it: whether the ring is drawn is
+/// its WIDTH ([`ViewConfig::spectral_ring_width`]), the same off switch every
+/// other layer of a node has and in the same place. An Off here would be a
+/// second one for this layer alone, and every reader would then have to know
+/// which of the two wins.
+///
 /// The two are one measurement asked at two zooms, which is what makes them a
 /// choice rather than a pair of features. Each wedge of the ring names one
 /// octave of the node's pitch class, and:
@@ -108,9 +115,6 @@ pub const SPECTRAL_BUCKETS_PER_SEMITONE: usize = BINS_PER_SEMITONE;
 /// about how closely the music is being looked at.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum SpectralReading {
-    /// No ring at all: the picture is the MIDI one, whole.
-    #[default]
-    Off,
     /// One level per wedge, measured at that octave's own pitch: the FOLD — a
     /// Gaussian kernel of [`ViewConfig::spectral_width`](crate::ViewConfig)
     /// cents over a local noise floor, so what survives is energy concentrated
@@ -122,6 +126,7 @@ pub enum SpectralReading {
     /// CONSTELLATION anchored at its fundamental — a shape made of many nodes,
     /// which needs each of them to answer with one number per octave for the
     /// shape to be legible at all.
+    #[default]
     Fold,
     /// A window of the RAW spectrum across each wedge, spanning
     /// [`ViewConfig::spectral_ring_range`](crate::ViewConfig) cents centred on
@@ -141,13 +146,6 @@ pub enum SpectralReading {
     /// node in the window wears one. A stretch of spectrum with nothing in it
     /// is a reading, not a gap.
     Spectrum,
-}
-
-impl SpectralReading {
-    /// Whether the ring is asked for at all — anything but [`Off`](Self::Off).
-    pub fn draws(self) -> bool {
-        self != SpectralReading::Off
-    }
 }
 
 /// The analyzer's loudness at every bucket of its pitch grid, quantized to a
@@ -245,22 +243,17 @@ impl SpectralPaint {
     /// arrives as the analyzer's gradient, which opens at black because the
     /// spectrogram's bed IS black, and the ring's bed is the lattice.
     ///
-    /// The clamps live here and not in `ViewConfig::sanitize`, for the reason
-    /// every other geometry clamp does: the drawing code is reached by more
-    /// routes than the persist door — a take replay, the offline renderer's
-    /// layout, a standalone harness — and a hand-edited or inverted pair must
-    /// still come out as an annulus somebody can see rather than as a ring
-    /// that silently is not there while the bar reads out a number.
+    /// Where the ring sits is [`ViewConfig::rings`]'s answer rather than a
+    /// second reading of the same bars, because the ring's inner edge is a sum
+    /// over the layers INSIDE it: the core's radius, this ring's own gap, and
+    /// whether either is dialled to nothing. That sum belongs in one place, and
+    /// its clamps are there rather than in `ViewConfig::sanitize` for the
+    /// reason every other geometry clamp is — the drawing code is reached by
+    /// more routes than the persist door (a take replay, the offline
+    /// renderer's layout, a standalone harness), and a hand-edited view must
+    /// still come out as a node somebody can see.
     pub fn new(view: &ViewConfig, lut: [Vec4; PITCH_LUT_N]) -> SpectralPaint {
-        let (inner, outer) = if view.spectral_reading.draws() {
-            let inner = clamp_or(view.spectral_ring_inner, 0.0, 0.0, 1.0 - SPECTRAL_RING_MIN_SPAN);
-            (
-                inner,
-                clamp_or(view.spectral_ring_outer, 1.0, inner + SPECTRAL_RING_MIN_SPAN, 1.0),
-            )
-        } else {
-            (0.0, 0.0)
-        };
+        let (inner, outer) = view.rings().audio;
         SpectralPaint {
             lut: rebed(lut, crate::skin::well_color()),
             folded: view.spectral_reading == SpectralReading::Fold,
@@ -343,38 +336,42 @@ pub const SPECTRAL_AXIS: (f32, f32) = (SPECTRUM_MIN_MIDI, SPECTRUM_MAX_MIDI);
 mod tests {
     use super::*;
 
-    fn ringed(inner: f32, outer: f32, range: f32) -> ViewConfig {
+    fn ringed(width: f32, range: f32) -> ViewConfig {
         ViewConfig {
             spectral_reading: SpectralReading::Spectrum,
-            spectral_ring_inner: inner,
-            spectral_ring_outer: outer,
+            spectral_ring_width: width,
             spectral_ring_range: range,
             ..ViewConfig::default()
         }
     }
 
-    /// The ring's radii and its range reach the picture drawable, whatever a
+    /// The ring's width and its range reach the picture drawable, whatever a
     /// hand-edited blob holds — a NaN (which walks through a `clamp`
-    /// untouched), an infinity, a pair dialled inside out, a pair off both
-    /// ends of the range.
+    /// untouched), an infinity, a negative width, a value off either end of
+    /// its bar.
     ///
-    /// The alternative to each is a ring that silently is not there, or one
-    /// whose wedges span a pitch window of nothing, while the bar reads out a
-    /// number.
+    /// A non-finite width is the one case that answers with NO ring, and
+    /// deliberately: 0 is the width bar's own off position, so reading a NaN
+    /// as it draws the picture some setting could have asked for. Every finite
+    /// width above zero has to come out as an annulus somebody can see — the
+    /// alternative is a ring that silently is not there while the bar reads out
+    /// a number.
     #[test]
     fn a_hand_edited_audio_ring_still_draws_an_annulus() {
-        for (inner, outer, range) in [
-            (f32::NAN, 0.4, 200.0),
-            (0.3, f32::NAN, 200.0),
-            (f32::INFINITY, f32::NEG_INFINITY, f32::NAN),
-            (0.6, 0.2, -80.0),
-            (-3.0, 9.0, 1e9),
-            (0.98, 0.99, 0.0),
+        for (width, range) in [
+            (0.2, f32::NAN),
+            (0.3, 200.0),
+            (9.0, 1e9),
+            (0.05, -80.0),
+            (f32::INFINITY, 0.0),
+            (f32::NAN, 200.0),
+            (-3.0, 200.0),
         ] {
-            let paint = SpectralPaint::new(&ringed(inner, outer, range), [Vec4::ZERO; PITCH_LUT_N]);
-            assert!(
-                paint.outer - paint.inner >= SPECTRAL_RING_MIN_SPAN - 1e-6,
-                "({inner}, {outer}) reached the picture as ({}, {})",
+            let paint = SpectralPaint::new(&ringed(width, range), [Vec4::ZERO; PITCH_LUT_N]);
+            assert_eq!(
+                paint.ring_draws(),
+                width.is_finite() && width > 0.0,
+                "a width of {width} reached the picture as ({}, {})",
                 paint.inner,
                 paint.outer,
             );
@@ -387,16 +384,41 @@ mod tests {
         }
     }
 
-    /// The reading OFF is an empty annulus, which is how the selector reaches
-    /// the shader: one thing says whether the ring draws, so the setting and
-    /// the picture cannot disagree.
+    /// A width of 0 is an empty annulus, which is how the ring's one off switch
+    /// reaches the shader: the setting IS the geometry, so the two cannot
+    /// disagree, and the reading beside it says nothing about whether there is
+    /// a ring.
     #[test]
-    fn the_ring_off_is_an_empty_annulus() {
-        let view = ViewConfig { spectral_reading: SpectralReading::Off, ..ringed(0.3, 0.5, 200.0) };
-        let paint = SpectralPaint::new(&view, [Vec4::ZERO; PITCH_LUT_N]);
-        assert!(!paint.ring_draws(), "the ring drew with the reading Off");
-        assert_eq!((paint.inner, paint.outer), (0.0, 0.0));
+    fn a_ring_of_no_width_is_an_empty_annulus() {
+        for reading in [SpectralReading::Fold, SpectralReading::Spectrum] {
+            let view = ViewConfig { spectral_reading: reading, ..ringed(0.0, 200.0) };
+            let paint = SpectralPaint::new(&view, [Vec4::ZERO; PITCH_LUT_N]);
+            assert!(!paint.ring_draws(), "{reading:?} drew a ring with no width");
+            assert_eq!((paint.inner, paint.outer), (0.0, 0.0));
+        }
         assert!(!SpectralPaint::silent().ring_draws(), "a silent scene drew a ring");
+    }
+
+    /// The ring sits where the STACK puts it: a gap out from the core, and
+    /// moved by every layer inside it rather than by a radius of its own.
+    ///
+    /// The whole of what the width bars buy, checked at the one place a second
+    /// copy of the sum would drift — the audio channel is built from
+    /// `ViewConfig` on its own, without the scene the octave band comes out of.
+    #[test]
+    fn the_ring_sits_a_gap_out_from_the_core() {
+        let view = ringed(0.25, 200.0);
+        let paint = SpectralPaint::new(&view, [Vec4::ZERO; PITCH_LUT_N]);
+        assert_eq!(paint.inner, view.core_radius + view.ring_gap);
+        assert_eq!(paint.outer, paint.inner + 0.25);
+
+        // The core off, and the ring reaches the node's center: no layer to
+        // stand off, so no gap is spent on one.
+        let bare = SpectralPaint::new(
+            &ViewConfig { core_radius: 0.0, ..view.clone() },
+            [Vec4::ZERO; PITCH_LUT_N],
+        );
+        assert_eq!((bare.inner, bare.outer), (0.0, 0.25));
     }
 
     /// BOTH readings fill the same annulus, at the same radii, and are told
@@ -408,7 +430,7 @@ mod tests {
     /// features again rather than one control over one indicator.
     #[test]
     fn the_two_readings_share_one_annulus() {
-        let raw = ringed(0.3, 0.5, 200.0);
+        let raw = ringed(0.2, 200.0);
         let fold = ViewConfig { spectral_reading: SpectralReading::Fold, ..raw };
         let lut = [Vec4::ZERO; PITCH_LUT_N];
         let (fold, raw) = (SpectralPaint::new(&fold, lut), SpectralPaint::new(&raw, lut));
@@ -435,7 +457,7 @@ mod tests {
     fn the_rings_silence_sits_on_the_lattice_rather_than_under_it() {
         let mut lut = [Vec4::new(0.4, 0.5, 0.6, 1.0); PITCH_LUT_N];
         lut[0] = Vec4::new(0.0, 0.0, 0.0, 1.0);
-        let paint = SpectralPaint::new(&ringed(0.3, 0.5, 200.0), lut);
+        let paint = SpectralPaint::new(&ringed(0.3, 200.0), lut);
         let bed = crate::skin::well_color();
         let floor = paint.lut[0];
         assert!(
@@ -461,7 +483,7 @@ mod tests {
         let mut lut = [mid; PITCH_LUT_N];
         lut[0] = dark;
         lut[PITCH_LUT_N - 1] = Vec4::ONE;
-        let paint = SpectralPaint::new(&ringed(0.3, 0.5, 200.0), lut);
+        let paint = SpectralPaint::new(&ringed(0.3, 200.0), lut);
         let bed = crate::skin::well_color();
         // White is the one entry the bed cannot move at all, which is what
         // makes the bound tightest exactly where the ring is brightest.

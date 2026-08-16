@@ -18,8 +18,9 @@ fn persist_round_trips_camera_and_view() {
     // Radius 0 is the off state; this proves it (and solidity) persist.
     state.view.core_radius = 0.0;
     state.view.core_solidity = 0.4;
-    state.view.outer_inner = 0.1;
-    state.view.outer_outer = 0.7;
+    state.view.band_width = 0.7;
+    state.view.spectral_ring_width = 0.1;
+    state.view.ring_gap = 0.02;
     // Melody alone: both marks on is the default, and this test's whole
     // point is that the fields prove they round-trip rather than
     // matching the defaults by luck.
@@ -66,8 +67,9 @@ fn persist_round_trips_camera_and_view() {
     assert_eq!(restored.view.extent_sevens, 3);
     assert_eq!(restored.view.core_radius, 0.0, "off (radius 0) round-trips");
     assert_eq!(restored.view.core_solidity, 0.4);
-    assert_eq!(restored.view.outer_inner, 0.1);
-    assert_eq!(restored.view.outer_outer, 0.7);
+    assert_eq!(restored.view.band_width, 0.7);
+    assert_eq!(restored.view.spectral_ring_width, 0.1);
+    assert_eq!(restored.view.ring_gap, 0.02);
     assert!(restored.view.mark_melody);
     assert!(!restored.view.mark_bass, "bass off round-trips");
     assert_eq!((restored.view.octave_count, restored.view.octave_center), (7, 64.5));
