@@ -44,8 +44,9 @@ pub use octaves::{
     MIN_EXTRA_SIZE, MIN_SPAN, OCTAVE_SLOTS, PITCH_CEIL, PITCH_FLOOR,
 };
 pub use spectral::{
-    bucket_pitch, ring_gradient, SpectralLevels, SpectralPaint, SpectralReading, SPECTRAL_AXIS,
-    SPECTRAL_BUCKETS, SPECTRAL_BUCKETS_PER_SEMITONE, SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN,
+    bucket_pitch, ring_gradient, RingGate, SpectralLevels, SpectralPaint, SpectralReading,
+    SPECTRAL_AXIS, SPECTRAL_BUCKETS, SPECTRAL_BUCKETS_PER_SEMITONE, SPECTRAL_GATE_MAX,
+    SPECTRAL_GATE_MIN, SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN,
 };
 pub use style::{Gradient, Pulse, SevensLabel};
 pub use view::{DrawnWindow, FrameParams, RingStack, ViewConfig};
@@ -337,6 +338,23 @@ pub struct NodeInstance {
     /// unfolded pitch would then sit a register off the sector it extends.
     pub melody_color: Vec4,
     pub bass_color: Vec4,
+    /// Whether this node draws the audio ring — at least one of its wedges
+    /// reaching [`SpectralPaint::gate`] (see [`RingGate`]).
+    ///
+    /// The one field on a node the ANALYZER writes, and it says nothing about
+    /// the MIDI picture: a node gated off keeps its disc, its octave band and
+    /// its marks exactly as the keys drew them, and loses only the annulus
+    /// between the core and the band.
+    ///
+    /// `true` out of [`derive_scene`], which is not a decision but the absence
+    /// of one — nothing in this crate reads audio, so a scene derived without
+    /// [`Scene::gate_audio_rings`] behind it is a scene where nothing has been
+    /// measured and nothing can be held back. The failure that shape is chosen
+    /// against is the other one: a shell that forgets the pass would otherwise
+    /// draw a lattice with no rings anywhere and nothing on screen saying why,
+    /// where this draws the ring at every node, which is the picture the gate
+    /// was added to improve on and is plainly not a missing layer.
+    pub audio_ring: bool,
     /// How strongly the music is remembered here (see [`trail`]): 0 where
     /// it has never been, up to 1 where it has.
     ///
@@ -554,6 +572,36 @@ impl Scene {
         // A clock or a speed that is not finite reaches here as a NaN, and a
         // NaN slide is a lattice of NaN colors rather than a wrong sheet.
         if slide.is_finite() { slide as f32 } else { 0.0 }
+    }
+
+    /// Decide which nodes draw the audio ring — [`SpectralPaint::gate`] against
+    /// what each node's wedges reach — and write it into
+    /// [`NodeInstance::audio_ring`].
+    ///
+    /// Run after the levels are measured in, which is the whole reason it is a
+    /// pass of its own rather than part of [`derive_scene`]: nothing in this
+    /// crate reads audio, so the question has no answer until the shell's fold
+    /// has filled [`Scene::spectral`] (`panes::spectral_fold::apply` is the one
+    /// caller, and it calls this last).
+    ///
+    /// A method on the scene and not a free function over the three parts,
+    /// because the parts are only right together: the levels, the wheel the
+    /// wedges are laid on and the nodes being gated all have to come from ONE
+    /// frame, and a caller assembling them by hand is a caller who can pair
+    /// last frame's grid with this frame's wheel.
+    pub fn gate_audio_rings(&mut self) {
+        // Nothing to hold back — the bar at its floor is the ungated picture —
+        // and nothing to hold it back FROM on a ring dialled to no width. Both
+        // skip the reduction over the grid rather than merely answering true
+        // for every node.
+        if !self.spectral.ring_draws() || self.spectral.gate <= SPECTRAL_GATE_MIN {
+            return;
+        }
+        let gate = RingGate::new(&self.spectral);
+        let layout = &self.octave_layout;
+        for node in &mut self.nodes {
+            node.audio_ring = gate.draws(layout, node.cents);
+        }
     }
 }
 

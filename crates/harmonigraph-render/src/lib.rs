@@ -404,6 +404,20 @@ struct GpuInstance {
     /// sheet), y = knockout gutter width in uv units (0 on the home sheet).
     /// See `NodeInstance::scale` / `::gutter`.
     sevens: [f32; 2],
+    /// Whether this node draws the audio ring: 1 where at least one of its
+    /// wedges reaches the gate, 0 where none does
+    /// (`NodeInstance::audio_ring`).
+    ///
+    /// A DECISION and not the node's own peak level with the gate beside it in
+    /// the uniforms, though there is a free slot there for one: the rule is
+    /// "the loudest wedge reaches the gate", the levels and the wheel it is
+    /// measured over both live on the CPU, and splitting the comparison across
+    /// the bus would leave two places able to disagree about which nodes ring.
+    /// A float and not a `u32` because a vertex attribute has no bool and the
+    /// shader tests it as a level; it is 0 or 1 all the same, the gate being a
+    /// question about whether a ring is on the screen (see
+    /// `SpectralPaint::gate`).
+    ring: f32,
 }
 
 impl GpuInstance {
@@ -412,9 +426,10 @@ impl GpuInstance {
         step_mode: wgpu::VertexStepMode::Instance,
         // Locations 5 and 9 are absent, not renumbered. Both are retired
         // slots — 5 the home-sheet flag, 9 the trail level, each read only by
-        // an idle marker the nodes do not draw; the audio ring needs no slot
-        // here at all, since it reads one shared spectrum in the uniforms
-        // rather than a per-node word. The macro
+        // an idle marker the nodes do not draw. The audio ring's own slot is
+        // 11, and it carries one bit rather than a reading: WHAT the ring says
+        // is a window onto the shared spectrum in the uniforms, and only
+        // whether this node draws one at all is a per-node answer. The macro
         // names each location and takes each OFFSET from the sequence, so a
         // dropped entry shrinks the stride to match the struct without moving
         // the rest off their numbers — which is what keeps this list and
@@ -422,7 +437,7 @@ impl GpuInstance {
         attributes: &wgpu::vertex_attr_array![
             0 => Float32x3, 1 => Float32x4, 2 => Float32x3, 3 => Uint32x3,
             4 => Float32, 6 => Uint32x2,
-            7 => Float32x4, 8 => Float32x4, 10 => Float32x2
+            7 => Float32x4, 8 => Float32x4, 10 => Float32x2, 11 => Float32
         ],
     };
 }
@@ -734,6 +749,7 @@ impl LatticeCallback {
                 melody_color: n.melody_color.to_array(),
                 bass_color: n.bass_color.to_array(),
                 sevens: [n.scale, gutter],
+                ring: f32::from(u8::from(n.audio_ring)),
         };
 
         let split = order
@@ -758,13 +774,17 @@ impl LatticeCallback {
         //
         // The audio RING is why this is not a property of the node alone: the
         // ring is a window onto the spectrum rather than a level a node
-        // carries, so with it on every node in the window paints one, silence
-        // included — that is what "the ring reads raw" means as a cost. The
-        // shader's idle branch pays it back per fragment, keeping an otherwise
-        // idle node to the ring's own annulus.
+        // carries, so it takes BOTH the layer being on and this node having
+        // been let through the gate (`Scene::gate_audio_rings`) for the node to
+        // owe an annulus. With the gate at its floor that is every node in the
+        // window, silence included — the ungated picture, and what "the ring
+        // reads raw" costs; dialled up, an idle node with nothing sounding at
+        // it goes back to shipping nothing at all. The shader's idle branch
+        // pays the rest per fragment, keeping an otherwise idle node to the
+        // ring's own annulus.
         let ringing = scene.spectral.ring_draws();
         let paints = |g: &GpuInstance| {
-            ringing
+            (ringing && g.ring > 0.0)
                 || g.params[0] > 0.0
                 || g.params[1] > 0.0
                 || g.params[2] > 0.0

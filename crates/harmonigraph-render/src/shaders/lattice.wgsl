@@ -255,6 +255,12 @@ struct Instance {
     // factor so the gap comes out the same width whatever the node's size.
     // 0 means no gutter. See ViewConfig::sevens_size / _gutter.
     @location(10) sevens: vec2<f32>,
+    // Whether this node draws the audio ring: 1 where at least one of its
+    // wedges reaches the gate the view sets, 0 where none does. The CPU
+    // decides it (harmonigraph_scene's RingGate, against the same u.spectrum
+    // this shader reads), so the ring's annulus is the layer's own off switch
+    // and this is which NODES the layer is on at.
+    @location(11) ring: f32,
 };
 
 struct VsOut {
@@ -282,6 +288,9 @@ struct VsOut {
     // node. Interpolated rather than flat for the same reason: a band has to
     // cross a node, not step from one to the next.
     @location(13) field: vec2<f32>,
+    // The audio ring's own gate for this node (see Instance::ring), which
+    // multiplies the ring's coverage and nothing else on the node.
+    @location(14) @interpolate(flat) ring: f32,
 };
 
 @vertex
@@ -335,6 +344,7 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
     out.bass_color = inst.bass_color;
     out.gutter = gutter_uv;
     out.rim = rim;
+    out.ring = inst.ring;
     // The shimmer's shared coordinate — see VsOut::field. Taken off the
     // CORNER's world position rather than the node's center, so the field
     // varies across the quad and the interpolator hands the fragment shader
@@ -1119,12 +1129,17 @@ fn folded() -> bool {
 // frequency.
 //
 // One cost is shared, and stated rather than hidden: with nothing sounding a
-// wedge is not empty, it is the ramp's floor color, and every node in the
-// window wears one. A range with nothing in it is a reading. That floor stands
-// at the lightness of the skin's surface_faint grey — the ramp reaches here
-// anchored on it, a step ABOVE the lattice's own ground — so a silent ring is a
-// faintly raised backdrop rather than a hole punched through the surface, and
-// still plainly not the ring switched off.
+// wedge is not empty, it is the ramp's floor color. A range with nothing in it
+// is a reading. That floor stands at the lightness of the skin's surface_faint
+// grey — the ramp reaches here anchored on it, a step ABOVE the lattice's own
+// ground — so a silent ring is a faintly raised backdrop rather than a hole
+// punched through the surface, and still plainly not the ring switched off.
+//
+// WHICH nodes wear one is in.ring, decided on the CPU: a node draws its ring
+// when one of its wedges reaches the view's Gate (harmonigraph_scene's
+// RingGate). At the gate's floor that is every node in the window, silence
+// included — the reading in full, and hundreds of rings saying only where the
+// nodes are.
 //
 // The radius is its own (u.misc7.z/w, an annulus the fresh view puts in the
 // gap the core and the octave band leave); the slices are the band's, off the
@@ -1192,6 +1207,14 @@ fn spectral_ring(in: VsOut, oct: OctRing, d: f32, aa: f32) -> vec4<f32> {
     let radii = spectral_radii();
     // Off, or an annulus dialled inside out: nothing to draw either way.
     if radii.y <= radii.x {
+        return vec4<f32>(0.0);
+    }
+    // ...and this node's own gate: the layer is on, and nothing this ring would
+    // show reaches the level the view asks for. Decided on the CPU against this
+    // same u.spectrum (harmonigraph_scene's RingGate) rather than rediscovered
+    // here, since the question is about the node's whole ring and this is one
+    // fragment of one wedge of it.
+    if in.ring <= 0.0 {
         return vec4<f32>(0.0);
     }
     // The ring is a narrow annulus in a billboard reaching QUAD_MARGIN, so

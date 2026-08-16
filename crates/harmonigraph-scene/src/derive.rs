@@ -491,6 +491,10 @@ pub fn derive_scene(
             bass_level: bass.level,
             melody_color: melody.color,
             bass_color: bass.color,
+            // Nothing has been measured yet, so nothing can be held back: the
+            // audio channel arrives empty here and `Scene::gate_audio_rings` is
+            // what answers this once the shell's fold has filled it.
+            audio_ring: true,
             trail: 0.0,
         });
         node_pcs.push(node_pc);

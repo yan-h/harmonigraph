@@ -338,6 +338,9 @@ fn parity_scene() -> Scene {
             bass_level: if i == 2 || i == 4 { 1.0 } else { 0.0 },
             melody_color: Vec4::new(1.0, 0.85, 0.4, 1.0),
             bass_color: Vec4::new(0.45, 0.8, 1.0, 1.0),
+            // The lattice pass draws the ring on every node it ships; the
+            // gate is the fold's answer and there is no fold here.
+            audio_ring: true,
             trail: 0.0,
         });
     }
@@ -1305,6 +1308,9 @@ fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
         // which are the same color wherever the two name one sector.
         melody_color: Vec4::new(1.0, 0.85, 0.4, 1.0),
         bass_color: Vec4::new(0.45, 0.8, 1.0, 1.0),
+        // The lattice pass draws the ring on every node it ships; the
+        // gate is the fold's answer and there is no fold here.
+        audio_ring: true,
         trail: 0.0,
     }];
     scene.grid.clear();
@@ -1686,6 +1692,66 @@ fn the_audio_ring_reads_the_spectrum_around_each_octave() {
         differing_pixels(&gpu.shot(&off), &quiet),
         0,
         "a sounding partial drew something with the ring switched off",
+    );
+}
+
+/// A node the gate holds back draws exactly the picture it would draw with the
+/// ring layer OFF: the annulus goes, and the octave band, the marks and the
+/// node's own body stay pixel for pixel.
+///
+/// Two claims in one comparison, and the second is the one worth the GPU. That
+/// the gate removes the ring is arithmetic anyone can read off the shader; that
+/// it removes NOTHING ELSE is a property of where the test sits in the fragment
+/// program, and the ways it can fail all draw a plausible picture — a gate
+/// applied before the wedge walk instead of inside it, or one that fell through
+/// to the layer under it, would take the band's ghost or the glyph's edge with
+/// it and read as a node that changed shape when the music went quiet.
+#[test]
+fn a_gated_node_loses_its_ring_and_nothing_else() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut gpu) = Shooter::new(SIZE) else {
+        return;
+    };
+    let fresh_range = harmonigraph_scene::ViewConfig::default().spectral_ring_range;
+    // A node with an octave held and a partial sounding at that same octave, so
+    // both rings have something to draw and the two can be told apart in the
+    // shot.
+    let slot = harmonigraph_scene::MIDDLE_C_SLOT;
+    let sounding = slot as f32 * 12.0;
+    let lit = ringing_node(Some(slot), Some(sounding), fresh_range);
+    let ringing = gpu.shot(&lit);
+
+    // The same node held back by the gate...
+    let mut gated = ringing_node(Some(slot), Some(sounding), fresh_range);
+    gated.nodes[0].audio_ring = false;
+    // ...against the same node with the LAYER off, which is the picture a gated
+    // node has to come out as.
+    let mut layer_off = ringing_node(Some(slot), Some(sounding), fresh_range);
+    layer_off.spectral.inner = 0.0;
+    layer_off.spectral.outer = 0.0;
+
+    let dark = gpu.shot(&gated);
+    assert!(
+        differing_pixels(&ringing, &dark) > 0,
+        "the ungated node drew no ring, so there is nothing for the gate to take",
+    );
+    assert_eq!(
+        differing_pixels(&dark, &gpu.shot(&layer_off)),
+        0,
+        "a gated node is not the picture the ring layer being off draws",
+    );
+    // And the ring is what went: the light that differs sits in the audio
+    // ring's own annulus, well inside the band. (`light_over` is the ungated
+    // shot less the gated one, so what it holds is exactly the ring.)
+    let ring = light_about_center(&light_over(&ringing, &dark), SIZE);
+    let bare = gpu.shot(&ringing_node(None, None, fresh_range));
+    let band = light_about_center(&light_over(&ringing, &bare), SIZE);
+    assert!(ring.weight > 0.0, "nothing at all was taken away");
+    assert!(
+        ring.far + 2.0 < band.far,
+        "what the gate took reaches {:.1} px, past the node's own band at {:.1}",
+        ring.far,
+        band.far,
     );
 }
 

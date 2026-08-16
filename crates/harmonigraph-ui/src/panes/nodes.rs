@@ -16,7 +16,8 @@ use crate::SharedState;
 use harmonigraph_scene::{
     Pulse, SpectralReading, ViewConfig, CORE_RADIUS_MAX, GAP_MAX, MARK_DELAY_MAX,
     MARK_THICKNESS_MAX, MIN_EXTRA_SIZE, PITCH_CEIL, PITCH_FLOOR, RING_WIDTH_MAX,
-    SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN, SPECTRAL_WIDTH_MAX, SPECTRAL_WIDTH_MIN,
+    SPECTRAL_GATE_MAX, SPECTRAL_GATE_MIN, SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN,
+    SPECTRAL_WIDTH_MAX, SPECTRAL_WIDTH_MIN,
 };
 
 /// The sounding-note controls: the whole note first — the time it takes to
@@ -408,6 +409,29 @@ fn audio_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
             "How thick the audio ring is — the same units as Band width. 0 \
              removes the layer, and the band closes over its space.",
         );
+    // WHICH NODES wear the ring, where the bar above is how thick it is: a node
+    // whose loudest wedge does not reach this level draws no ring at all. Both
+    // readings, so it sits above the pair of bars that are each one reading's
+    // own — it is a question about the layer rather than about a measurement.
+    //
+    // Greyed with the ring off, like the Reading row and unlike Ring width:
+    // there is no ring for it to hold back, and it is not the switch that would
+    // bring one back.
+    ui.add_enabled_ui(view.spectral_ring_draws(), |ui| {
+        ValueBar::new(&mut view.spectral_ring_gate, SPECTRAL_GATE_MIN..=SPECTRAL_GATE_MAX, "Gate")
+            // A percentage of the Level window, which is the axis the ring's
+            // own colours are read off — so what the number names is a colour
+            // on the ring rather than a dB the analyzer's window could move
+            // out from under.
+            .display(|level| format!("{:.0}%", level * 100.0))
+            .show(ui)
+            .on_hover_text(
+                "How loud a node's loudest wedge has to read before that node \
+                 draws a ring at all, as a share of the analyzer's Level \
+                 window. 0 rings every node, silence included; dialled up, a \
+                 ring means something is sounding there.",
+            );
+    });
     // The FOLD's kernel, and so inert under Spectrum rather than merely
     // without audio: the spectrum reading shows a whole window of pitch per
     // wedge, and a kernel there would blur the one axis the window exists to

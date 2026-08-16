@@ -1066,3 +1066,85 @@ fn the_reading_leaves_the_midi_picture_alone() {
         }
     }
 }
+
+/// A scene with the ring dialled on and a single partial measured into it, at
+/// `gate` — the shape the Lattice pane's fold hands over, with the analysis it
+/// does replaced by one bucket band nobody has to run an FFT to predict.
+fn gated_scene(gate: f32, pitch: f32) -> Scene {
+    let view = ViewConfig { spectral_ring_gate: gate, ..plain_view() };
+    let mut scene = scene_of(&sounding(), &Tuning::just(), &view, &plain_frame(), 0.5);
+    let mut paint = SpectralPaint::new(&view, Gradient::default());
+    for (bucket, level) in paint.levels.iter_mut().enumerate() {
+        if ((bucket_pitch(bucket) - pitch) * 100.0).abs() <= 10.0 {
+            *level = 255;
+        }
+    }
+    scene.spectral = paint;
+    scene.gate_audio_rings();
+    scene
+}
+
+/// The gate decides RINGS and nothing else: a node held back keeps every part
+/// of the MIDI picture it had, and the nodes it keeps are the ones with a
+/// partial at one of their octaves.
+///
+/// The claim the whole feature rests on, made where the pass runs. The failure
+/// it is against is a gate that reached the node's own body — dimming a node
+/// with nothing sounding at it, say, which would look like a reasonable picture
+/// and would have thrown the player's part away wherever the two disagree, this
+/// fixture's held C4 against a partial at F# included.
+#[test]
+fn the_gate_takes_the_ring_and_leaves_the_node() {
+    let midi = gated_scene(SPECTRAL_GATE_MIN, 66.0);
+    let gated = gated_scene(0.5, 66.0);
+    assert!(
+        midi.nodes.iter().all(|n| n.audio_ring),
+        "the gate at its floor held a node back, so there is no ungated picture to compare",
+    );
+    let (mut rings, mut dark) = (0, 0);
+    for (now, was) in gated.nodes.iter().zip(&midi.nodes) {
+        let at = was.lattice_pos;
+        assert_eq!(now.activation, was.activation, "the gate changed {at:?}'s activation");
+        assert_eq!(now.octaves, was.octaves, "the gate changed {at:?}'s held octaves");
+        assert_eq!(now.color, was.color, "the gate repainted {at:?}");
+        assert_eq!(now.gutter, was.gutter, "the gate changed what {at:?} clears");
+        assert_eq!(now.melody_slots, was.melody_slots, "the gate moved {at:?}'s melody mark");
+        // The partial is an F#, and the wheel gives every node its own octaves
+        // of that class — so a node rings where its class is the partial's,
+        // whatever the keys are doing. The fixture's partial is a band 10¢
+        // either side of MIDI 66, so a class inside that is lit, one well
+        // outside it is dark, and the cents between are the band's own edge and
+        // are nobody's claim.
+        let off = (now.cents - 600.0).abs();
+        let off = off.min(1200.0 - off);
+        if off < 5.0 {
+            assert!(now.audio_ring, "{at:?} at {}¢ stayed dark under the partial", now.cents);
+        }
+        if off > 20.0 {
+            assert!(!now.audio_ring, "{at:?} at {}¢ rang {off}¢ off the partial", now.cents);
+        }
+        *(if now.audio_ring { &mut rings } else { &mut dark }) += 1;
+    }
+    assert!(rings > 0 && dark > 0, "the gate rang {rings} nodes and darkened {dark}");
+}
+
+/// With the ring dialled OFF the gate decides nothing, and says so by leaving
+/// every node where `derive_scene` left it.
+///
+/// Not a saving but a definition: whether there is a ring at all is the width
+/// bar's answer, in the geometry (`SpectralPaint::inner`/`outer`), and a second
+/// place able to say "no ring here" is a second thing to keep in step. What it
+/// buys as well is the whole reduction over the grid skipped on a frame that
+/// draws no ring.
+#[test]
+fn a_ring_dialled_off_is_gated_by_nothing() {
+    let view = ViewConfig { spectral_ring_width: 0.0, spectral_ring_gate: 1.0, ..plain_view() };
+    let mut scene = scene_of(&sounding(), &Tuning::just(), &view, &plain_frame(), 0.5);
+    scene.spectral = SpectralPaint::new(&view, Gradient::default());
+    assert!(!scene.spectral.ring_draws(), "the fixture's ring drew with no width");
+    scene.gate_audio_rings();
+    assert!(
+        scene.nodes.iter().all(|n| n.audio_ring),
+        "a gate answered on a lattice with no ring to answer about",
+    );
+}

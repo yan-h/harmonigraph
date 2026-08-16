@@ -43,17 +43,26 @@
 //! picture can be mistaken for the other, and neither has to be given up to
 //! see the other.
 //!
+//! WHICH nodes wear that ring is the other half, and it is [`RingGate`]: the
+//! reading is one grid the whole lattice shares, so without a gate every node
+//! in view carries a ring of it whatever is sounding, and a lattice where
+//! everything is marked says only where the nodes are. A node draws its ring
+//! when one of its wedges reaches [`SpectralPaint::gate`], so where the rings
+//! ARE is a reading in itself.
+//!
 //! Nothing in this crate reads audio, so [`SpectralPaint`] arrives already
 //! measured — `harmonigraph-ui`'s `panes::spectral_fold` is what fills it, and
 //! a scene derived without that pass carries [`SpectralPaint::silent`], which
 //! paints nothing at all.
+
+use std::collections::VecDeque;
 
 use glam::Vec4;
 use harmonigraph_core::spectrum::{
     BINS_PER_SEMITONE, SPECTRUM_BINS, SPECTRUM_MAX_MIDI, SPECTRUM_MIN_MIDI,
 };
 
-use crate::{pitch_ramp_lut, Gradient, ViewConfig, PITCH_LUT_N};
+use crate::{pitch_ramp_lut, Gradient, OctaveLayout, ViewConfig, PITCH_LUT_N};
 
 /// The narrowest and widest a wedge of the audio ring may be dialled to span
 /// ([`ViewConfig::spectral_ring_range`]), in cents.
@@ -75,6 +84,30 @@ pub const SPECTRAL_RANGE_MIN: f32 = 0.5;
 /// See [`SPECTRAL_RANGE_MIN`].
 pub const SPECTRAL_RANGE_MAX: f32 = 1200.0;
 
+/// The two ends of the audio ring's gate ([`ViewConfig::spectral_ring_gate`]):
+/// how loud the loudest thing a node's ring shows has to read before that ring
+/// is drawn at all.
+///
+/// A LEVEL and not a power or a dB, because it is the level the ring's own
+/// colours are read at: the gate and the ramp index one axis, so the setting
+/// says "dimmer than THIS colour and the ring goes away" rather than naming a
+/// number that has to be converted before it means anything on screen. Where
+/// that axis sits in dB is the analyzer's Level window, and moving that window
+/// moves the gate with it — which is the same thing it does to every other
+/// reading of the spectrum.
+///
+/// The floor is the gate's OFF position, and it is off rather than nearly off:
+/// the test is `peak >= gate`, so 0 admits every node including one whose ring
+/// is silent through and through. That is the picture with no gate at all, and
+/// it has to be reachable — a ring at the ramp's floor is a reading (nothing
+/// sounds here), and whether it is worth the screen it takes is exactly what
+/// this bar is for.
+pub const SPECTRAL_GATE_MIN: f32 = 0.0;
+/// See [`SPECTRAL_GATE_MIN`]. The ceiling is a full-scale reading — the top of
+/// the Level window, where nothing short of the loudest thing the analyzer can
+/// report opens a ring.
+pub const SPECTRAL_GATE_MAX: f32 = 1.0;
+
 /// Buckets the analyzer's pitch grid holds, and how many of them a semitone
 /// spans — `harmonigraph_core::spectrum`'s own numbers, named again here
 /// because `harmonigraph-render` sizes its uniform row and walks the grid by
@@ -92,11 +125,13 @@ pub const SPECTRAL_BUCKETS_PER_SEMITONE: usize = BINS_PER_SEMITONE;
 /// picks which of two readings fills the annulus, and the picture around it is
 /// unchanged either way.
 ///
-/// It carries no Off, and that is the point of it: whether the ring is drawn is
-/// its WIDTH ([`ViewConfig::spectral_ring_width`]), the same off switch every
+/// It carries no Off, and that is the point of it: whether the LAYER is drawn
+/// is its WIDTH ([`ViewConfig::spectral_ring_width`]), the same off switch every
 /// other layer of a node has and in the same place. An Off here would be a
 /// second one for this layer alone, and every reader would then have to know
-/// which of the two wins.
+/// which of the two wins. (Which NODES wear the layer is a third question and a
+/// different kind of one — see [`ViewConfig::spectral_ring_gate`], which asks
+/// what the ring says rather than how big it is.)
 ///
 /// The two are one measurement asked at two zooms, which is what makes them a
 /// choice rather than a pair of features. Each wedge of the ring names one
@@ -143,8 +178,12 @@ pub enum SpectralReading {
     /// What it costs is stated rather than hidden: with nothing sounding a
     /// wedge is not empty, it is the ramp's floor — the bed the ring's ramp is
     /// anchored on, a step above the lattice's own ground (see
-    /// [`ring_gradient`]) — and every node in the window wears one. A stretch
-    /// of spectrum with nothing in it is a reading, not a gap.
+    /// [`ring_gradient`]). A stretch of spectrum with nothing in it is a
+    /// reading, not a gap. Whether a node with nothing but that to show is
+    /// worth its annulus is the gate's question
+    /// ([`ViewConfig::spectral_ring_gate`]), and it is asked of both readings —
+    /// though it selects far less sharply here, a window of raw spectrum
+    /// finding something loud near almost every pitch class in dense material.
     Spectrum,
 }
 
@@ -197,6 +236,29 @@ pub struct SpectralPaint {
     /// that wedge's own octave ([`ViewConfig::spectral_ring_range`]). Already
     /// clamped into [`SPECTRAL_RANGE_MIN`]..=[`SPECTRAL_RANGE_MAX`].
     pub range: f32,
+    /// The level a node's loudest wedge has to reach for that node to draw a
+    /// ring at all ([`ViewConfig::spectral_ring_gate`], already clamped into
+    /// [`SPECTRAL_GATE_MIN`]..=[`SPECTRAL_GATE_MAX`]).
+    ///
+    /// Per NODE and not per wedge, which is the whole shape of it: a ring is
+    /// read as one object — a constellation's worth of wedges, or one node's
+    /// spectrum bent round a wheel — so a node either has something to say or
+    /// is backdrop, and hiding the quiet wedges of a ring that stays would put
+    /// a gap in a reading rather than removing one.
+    ///
+    /// It is a GATE where everything else in this module is a weight, and the
+    /// two are not in the same argument. What a wedge SAYS is a weight to the
+    /// last byte: a partial drifting off a node dims smoothly, which is what
+    /// makes vibrato breathe instead of flicker (`panes::spectral_fold`'s
+    /// "weight, don't gate"). What this decides is whether the ring is on the
+    /// screen, and there is no smooth version of that — the ring costs its
+    /// annulus at every node in the window whatever it reads, and the cost of
+    /// carrying it at a node with nothing in it is the picture around it.
+    ///
+    /// [`SpectralPaint`] carries it so that the decision and the levels it is
+    /// made against are read from one place; [`RingGate`] is where it is
+    /// answered per node.
+    pub gate: f32,
     /// The reading the ring paints, bucket by bucket of the analyzer's own
     /// pitch grid — the raw spectrum or the fold over it, whichever
     /// [`folded`](Self::folded) says, both already through the analyzer's Level
@@ -233,6 +295,11 @@ impl SpectralPaint {
             inner: 0.0,
             outer: 0.0,
             range: SPECTRAL_RANGE_MAX,
+            // Nothing held back, for the same reason the table above is zeros:
+            // there is no ring here to decide about, and the one state a gate
+            // must never be invented in is the one where nobody asked for a
+            // reading at all.
+            gate: SPECTRAL_GATE_MIN,
             levels: Box::new([0; SPECTRUM_BINS]),
         }
     }
@@ -269,6 +336,16 @@ impl SpectralPaint {
                 SPECTRAL_RANGE_MIN,
                 SPECTRAL_RANGE_MAX,
             ),
+            // A hand-edited NaN falls back to the gate's OFF position, where
+            // the range above falls back to a value that draws something: this
+            // is the one setting the ring has that can empty the lattice, and a
+            // blob nobody can read must not be able to do that silently.
+            gate: clamp_or(
+                view.spectral_ring_gate,
+                SPECTRAL_GATE_MIN,
+                SPECTRAL_GATE_MIN,
+                SPECTRAL_GATE_MAX,
+            ),
             levels: Box::new([0; SPECTRUM_BINS]),
         }
     }
@@ -277,6 +354,144 @@ impl SpectralPaint {
     pub fn ring_draws(&self) -> bool {
         self.outer > self.inner
     }
+}
+
+/// Which nodes' rings have anything to say — [`SpectralPaint::gate`] answered
+/// against the levels the ring would actually paint, per pitch class.
+///
+/// Built once for a frame and asked per node, because the expensive half is
+/// shared: under [`SpectralReading::Spectrum`] a wedge shows a WINDOW of the
+/// grid, so the level it reaches is the loudest bucket in that window rather
+/// than the one at its own pitch, and walking the window per node per wedge is
+/// the same few hundred reads over and over (1365 nodes by eleven wedges by 64
+/// buckets is 960 000 of them at the fresh zoom). [`window_max`] does that
+/// reduction once over the grid, and a node's question is then one read per
+/// wedge whichever reading is on.
+///
+/// It answers for a PITCH CLASS rather than for a node, which is what makes it
+/// testable in the units the claim is about: a ring is a function of the class,
+/// the wheel and the spectrum, and nothing else about the node reaches it.
+pub struct RingGate {
+    /// The grid a wedge's level is read off: [`SpectralPaint::levels`] under
+    /// the fold, where a wedge is one reading at its own pitch, and the loudest
+    /// level within half a wedge's window either side of each bucket under the
+    /// raw spectrum, where a wedge shows a stretch of the grid at once.
+    peaks: Box<SpectralLevels>,
+    /// [`SpectralPaint::gate`], carried so the pair cannot be read from two
+    /// frames.
+    gate: f32,
+}
+
+impl RingGate {
+    /// The gate `paint` asks for, with its grid reduced to what each wedge of
+    /// the ring actually reaches.
+    pub fn new(paint: &SpectralPaint) -> RingGate {
+        // Half a wedge's window, in buckets: the fold reads ONE pitch per wedge
+        // and so has no window at all, and the raw spectrum spreads `range`
+        // cents across the arc, centred on the wedge's own pitch.
+        let half = if paint.folded { 0 } else { window_half(paint.range) };
+        RingGate { peaks: window_max(&paint.levels, half), gate: paint.gate }
+    }
+
+    /// The loudest level any wedge of the ring reaches on a node whose pitch
+    /// class is `cents`, 0..1 on the analyzer's Level window.
+    ///
+    /// Every slot the wheel DRAWS and no others, which is why the layout is
+    /// asked rather than the octave slots being walked: a ring near the pitch
+    /// limits names octaves no note can reach, and they are wedges on screen
+    /// like any other — a partial the analyzer hears there is a reason to draw
+    /// the ring, and a slot the wheel does not draw is not.
+    pub fn peak(&self, layout: &OctaveLayout, cents: f32) -> f32 {
+        let (low, high) = layout.slots(cents);
+        (low..=high)
+            .map(|slot| level_at(&self.peaks, layout.slot_pitch(slot, cents)))
+            .fold(0.0, f32::max)
+    }
+
+    /// Whether the ring on a node of pitch class `cents` draws: at least one of
+    /// its wedges reaching the gate.
+    ///
+    /// `>=`, so that a gate at [`SPECTRAL_GATE_MIN`] admits every node — the
+    /// floor is the bar's off position and has to give back the ungated
+    /// picture, silent rings and all.
+    pub fn draws(&self, layout: &OctaveLayout, cents: f32) -> bool {
+        self.peak(layout, cents) >= self.gate
+    }
+}
+
+/// Cents one bucket of the analyzer's grid spans: 3.125.
+const CENTS_PER_BUCKET: f32 = 1200.0 / (12 * BINS_PER_SEMITONE) as f32;
+
+/// Buckets either side of a wedge's own pitch that wedge shows, at a window of
+/// `range` cents across.
+///
+/// Rounded rather than floored so a window lands on the buckets it covers to
+/// within half of one, and floored at 1: at the range bar's own floor (half a
+/// cent) the window is a fraction of a bucket, and a zero here would read the
+/// wedge's centre bucket alone while the wedge on screen still blends its two
+/// neighbours.
+fn window_half(range: f32) -> usize {
+    ((range * 0.5 / CENTS_PER_BUCKET).round() as usize).max(1)
+}
+
+/// `levels` with every bucket replaced by the loudest one within `half` buckets
+/// either side — what a wedge centred there reaches, rather than what it reads
+/// at its own pitch.
+///
+/// A monotonic queue, so the whole grid costs one pass whatever the window is:
+/// each bucket is pushed and popped once, and the front of the queue is the
+/// window's maximum. The window is clamped at the axis ends rather than
+/// shortened, which over-reports by nothing — a wedge hanging off the end of
+/// the axis draws the floor there (the shader answers 0 past the last bucket),
+/// and what is inside the axis is what it can reach.
+fn window_max(levels: &SpectralLevels, half: usize) -> Box<SpectralLevels> {
+    let mut peaks = Box::new([0u8; SPECTRUM_BINS]);
+    if half == 0 {
+        peaks.copy_from_slice(levels);
+        return peaks;
+    }
+    // Indices, loudest first: a bucket no longer able to be the maximum of any
+    // window still to come — one to its left and no louder — is dropped as it
+    // is passed, so the queue holds a descending run and its front is the
+    // answer.
+    let mut queue: VecDeque<usize> = VecDeque::new();
+    let mut next = 0usize;
+    for (bucket, peak) in peaks.iter_mut().enumerate() {
+        let high = (bucket + half).min(SPECTRUM_BINS - 1);
+        while next <= high {
+            while queue.back().is_some_and(|&b| levels[b] <= levels[next]) {
+                queue.pop_back();
+            }
+            queue.push_back(next);
+            next += 1;
+        }
+        let low = bucket.saturating_sub(half);
+        while queue.front().is_some_and(|&b| b < low) {
+            queue.pop_front();
+        }
+        *peak = queue.front().map_or(0, |&b| levels[b]);
+    }
+    peaks
+}
+
+/// The level `grid` holds at absolute MIDI `pitch`, interpolated between the
+/// two buckets either side of it, or 0 where the analyzer's axis does not reach
+/// that pitch.
+///
+/// The CPU's form of the shader's `spectrum_at`, down to the half-bucket offset
+/// ([`bucket_pitch`]) and to answering zero rather than the nearest end past
+/// the axis: what the gate is measuring is what the ring would paint, so the
+/// two have to read the grid the same way or a node is hidden while showing a
+/// partial the gate never saw.
+fn level_at(grid: &SpectralLevels, pitch: f32) -> f32 {
+    let x = (pitch - SPECTRUM_MIN_MIDI) * BINS_PER_SEMITONE as f32 - 0.5;
+    if x < 0.0 || x > (SPECTRUM_BINS - 1) as f32 {
+        return 0.0;
+    }
+    let bucket = x as usize;
+    let (low, high) = (grid[bucket], grid[(bucket + 1).min(SPECTRUM_BINS - 1)]);
+    let (low, high) = (f32::from(low) / 255.0, f32::from(high) / 255.0);
+    low + (high - low) * (x - bucket as f32)
 }
 
 /// The analyzer's gradient as the RING reads it: the same arc, with the bottom
@@ -579,6 +794,216 @@ mod tests {
             paint.lut[0], analyzer[0],
             "the ring's floor is the analyzer's black, so nothing was anchored at all",
         );
+    }
+
+    /// The fresh wheel, which every gate claim below is read on: five octaves
+    /// to the turn around middle C with a fringe either end, so a node's ring
+    /// names slots 3..=9 and a partial can be put on one of them by name.
+    fn wheel() -> OctaveLayout {
+        let view = ViewConfig::default();
+        crate::octave_layout(
+            view.octave_count,
+            view.octave_center,
+            view.octave_extras,
+            view.octave_extra_size,
+            view.octave_extra_blend,
+        )
+    }
+
+    /// A grid holding one partial: full level within `half` cents of absolute
+    /// MIDI `pitch`, and nothing anywhere else.
+    ///
+    /// A BAND rather than a single bucket because that is the shape a partial
+    /// has in the analyzer — one Hann main lobe spans several buckets — and
+    /// because a claim about a window has to be made against something the
+    /// window can miss by a stated distance.
+    fn partial(pitch: f32, half: f32) -> Box<SpectralLevels> {
+        let mut levels = Box::new([0u8; SPECTRUM_BINS]);
+        for (bucket, level) in levels.iter_mut().enumerate() {
+            if ((bucket_pitch(bucket) - pitch) * 100.0).abs() <= half {
+                *level = 255;
+            }
+        }
+        levels
+    }
+
+    /// The gate a view asks for, over a grid handed in — the pair
+    /// [`RingGate::new`] reads, assembled the way the fold's pass assembles it.
+    fn gate_of(view: &ViewConfig, levels: Box<SpectralLevels>) -> RingGate {
+        let mut paint = SpectralPaint::new(view, Gradient::default());
+        paint.levels = levels;
+        RingGate::new(&paint)
+    }
+
+    /// The fresh view at a stated gate and reading.
+    fn gated(gate: f32, reading: SpectralReading) -> ViewConfig {
+        ViewConfig {
+            spectral_ring_gate: gate,
+            spectral_reading: reading,
+            ..ViewConfig::default()
+        }
+    }
+
+    /// A node rings where one of its wedges reaches the gate, and not where
+    /// none of them does — the whole of what the setting says, read on a pitch
+    /// class rather than on a node.
+    ///
+    /// A partial on middle C opens every C node on the lattice, because a wedge
+    /// names an OCTAVE of the node's class and one of C's octaves is where the
+    /// partial is. The tritone away is the node that must stay dark: it is the
+    /// furthest any class can be from a partial, and if it rings then the gate
+    /// is reading something other than this node's own wedges.
+    #[test]
+    fn a_node_rings_where_one_of_its_wedges_reaches_the_gate() {
+        let wheel = wheel();
+        let gate = gate_of(&gated(0.5, SpectralReading::Fold), partial(60.0, 10.0));
+        assert!(gate.draws(&wheel, 0.0), "a C node stayed dark with a partial on middle C");
+        assert!(!gate.draws(&wheel, 600.0), "the tritone from a lone partial rang");
+        // ...and the level it answers is the level the ring paints there, not
+        // merely something over the line: a full-scale partial reads full.
+        let peak = gate.peak(&wheel, 0.0);
+        assert!((peak - 1.0).abs() < 0.01, "a full-scale partial reads {peak} at its own class");
+        assert_eq!(gate.peak(&wheel, 600.0), 0.0, "the tritone reads a level with nothing on it");
+    }
+
+    /// A gate ABOVE what a node's loudest wedge reaches closes it, and one
+    /// below opens it — the bar doing the one thing it is for, on one class.
+    ///
+    /// Off a partial at half level, so both directions are a real setting
+    /// rather than one of them being the empty grid.
+    #[test]
+    fn the_bar_decides_a_node_either_way() {
+        let wheel = wheel();
+        let mut levels = partial(60.0, 10.0);
+        for level in levels.iter_mut() {
+            *level /= 2;
+        }
+        let peak = gate_of(&gated(0.0, SpectralReading::Fold), levels.clone()).peak(&wheel, 0.0);
+        assert!((0.1..0.9).contains(&peak), "the fixture's partial reads {peak}, not mid-scale");
+        assert!(
+            gate_of(&gated(peak - 0.05, SpectralReading::Fold), levels.clone()).draws(&wheel, 0.0),
+            "a gate under the node's own peak closed it",
+        );
+        assert!(
+            !gate_of(&gated(peak + 0.05, SpectralReading::Fold), levels).draws(&wheel, 0.0),
+            "a gate over the node's own peak left it open",
+        );
+    }
+
+    /// The gate at its floor is the UNGATED picture: every node rings, silence
+    /// included.
+    ///
+    /// The claim that keeps the bar's low end a setting rather than a corner —
+    /// a silent ring is a reading (nothing sounds here), and going back to a
+    /// lattice of them has to be one drag away. `>=` is what makes it true, and
+    /// `>` is the version that passes every other test here while leaving no
+    /// way to ask for the old picture.
+    #[test]
+    fn the_gates_floor_rings_every_node() {
+        let wheel = wheel();
+        let silent = gate_of(&gated(SPECTRAL_GATE_MIN, SpectralReading::Fold), empty());
+        for cents in [0.0, 100.0, 386.0, 600.0, 1100.0] {
+            assert!(silent.draws(&wheel, cents), "a gate at its floor held back {cents}¢");
+        }
+    }
+
+    /// A grid with nothing measured into it.
+    fn empty() -> Box<SpectralLevels> {
+        Box::new([0u8; SPECTRUM_BINS])
+    }
+
+    /// The two readings answer the gate the way they DRAW, which is the one
+    /// place the reading reaches this at all: a fold wedge is one level at its
+    /// octave's own pitch, and a spectrum wedge is the loudest thing in the
+    /// window it spreads across its arc.
+    ///
+    /// So a partial 60¢ off a node — well inside the fresh 200¢ window and well
+    /// outside anything the node's own pitch reads — opens that node under
+    /// Spectrum and leaves it dark under Fold. Both are correct, because both
+    /// are what is on the screen: the spectrum wedge is showing that partial,
+    /// off-centre in its arc, and the fold wedge is not.
+    ///
+    /// A gate that read one grid for both would fail this in whichever
+    /// direction it chose: hiding a node whose wedge is plainly lit, or ringing
+    /// a node whose wedge is plainly empty.
+    #[test]
+    fn each_reading_is_gated_on_what_its_own_wedge_shows() {
+        let wheel = wheel();
+        let off = partial(60.6, 10.0);
+        let fold = gate_of(&gated(0.5, SpectralReading::Fold), off.clone());
+        let spectrum = gate_of(&gated(0.5, SpectralReading::Spectrum), off);
+        assert!(
+            !fold.draws(&wheel, 0.0),
+            "the fold rang a node whose own pitch reads {}",
+            fold.peak(&wheel, 0.0),
+        );
+        assert!(spectrum.draws(&wheel, 0.0), "the spectrum missed a partial inside its window");
+        // ...and the window has an edge where the Zoom bar puts it: the same
+        // partial, read at a window narrow enough not to reach it, closes the
+        // node again. Otherwise this passes just as well for a gate that
+        // searched the whole grid.
+        let narrow = ViewConfig {
+            spectral_ring_range: 40.0,
+            ..gated(0.5, SpectralReading::Spectrum)
+        };
+        assert!(
+            !gate_of(&narrow, partial(60.6, 10.0)).draws(&wheel, 0.0),
+            "a partial 60¢ off opened a node whose wedge shows 20¢ either side",
+        );
+    }
+
+    /// The window reduction reaches exactly as far as a wedge does and no
+    /// further: an isolated bucket spreads `half` buckets either side of itself.
+    ///
+    /// The arithmetic under the claim above, pinned on its own because the
+    /// failure is a quiet one — a window an octave wide answers "something is
+    /// sounding" for nearly every node in dense material, and reads as a gate
+    /// that does not bite rather than as a wrong window.
+    #[test]
+    fn the_window_reaches_exactly_as_far_as_a_wedge_shows() {
+        let mut levels = Box::new([0u8; SPECTRUM_BINS]);
+        let lit = 2000;
+        levels[lit] = 255;
+        for half in [1usize, 8, 32, 192] {
+            let peaks = window_max(&levels, half);
+            assert_eq!(peaks[lit], 255, "the lit bucket lost its own level at half {half}");
+            assert_eq!(peaks[lit - half], 255, "the window falls short below at half {half}");
+            assert_eq!(peaks[lit + half], 255, "the window falls short above at half {half}");
+            assert_eq!(peaks[lit - half - 1], 0, "the window reaches too far below at half {half}");
+            assert_eq!(peaks[lit + half + 1], 0, "the window reaches too far above at half {half}");
+        }
+        // The fold's window is no window at all — a wedge is one reading at one
+        // pitch — so the grid comes through bucket for bucket.
+        assert_eq!(*window_max(&levels, 0), *levels, "the fold's grid was widened");
+    }
+
+    /// A gate no bar can produce — a hand-edited NaN, an infinity, a level off
+    /// either end — reaches the picture as a setting somebody can see, and a
+    /// NaN reaches it as the gate OFF.
+    ///
+    /// The direction matters and is the reason this is its own test: every
+    /// other hand-edited value in this module is repaired toward the fresh
+    /// look, and this one is repaired toward drawing MORE. A gate is the one
+    /// setting here that can empty the lattice, and a blob nobody can read must
+    /// not be able to do that with nothing on screen to say why.
+    #[test]
+    fn a_hand_edited_gate_never_empties_the_lattice() {
+        let wheel = wheel();
+        for gate in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -2.0, 7.0] {
+            let view = gated(gate, SpectralReading::Fold);
+            let paint = SpectralPaint::new(&view, Gradient::default());
+            assert!(
+                (SPECTRAL_GATE_MIN..=SPECTRAL_GATE_MAX).contains(&paint.gate),
+                "a gate of {gate} reached the picture as {}",
+                paint.gate,
+            );
+            if !gate.is_finite() {
+                assert!(
+                    gate_of(&view, empty()).draws(&wheel, 0.0),
+                    "a gate of {gate} held back a node",
+                );
+            }
+        }
     }
 
     /// A bucket stands for its own centre, and the grid covers the axis the
