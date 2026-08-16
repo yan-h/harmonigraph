@@ -3160,14 +3160,19 @@ fn an_indicator_is_drawn_at_its_own_pitchs_angle() {
 /// released one runs out against it.
 ///
 /// A slot painted in PLACE of its ghost — opacity by a max(), color by a
-/// `level > 0` switch — fails the first two checks below, and which one goes
-/// first is worth knowing. The ghost is the WHITENED node color, so the final
-/// frame's switch is a step up in light and the never-brightens loop is what
-/// actually fires; the tail-spread check catches the same fault, and is the
-/// one that would still hold if a ghost ever came out darker than the pitch it
-/// takes over from. The last check is neither: at level 0 both shaders run the
-/// same line, so it can only say the finished ring is one backdrop, not how it
-/// got there.
+/// `level > 0` switch — is caught below, and knowing WHICH check catches it is
+/// worth stating. The ghost is the rings' own grey (`Scene::lattice_ground`),
+/// and here it is darker than anything this fixture paints over it: every
+/// `pitch_lut` entry adds up to 1.4 across its three channels, against the
+/// fresh Ground's grey at 0.57. So the switch's last frame is a step DOWN in
+/// light, the never-brightens loop passes the whole way, and the TAIL-SPREAD
+/// check is the one that fires — the slice holds its pitch to the last lit
+/// frame and then makes the entire journey to the ground in one. The loop
+/// takes the fault first only where the ground is the BRIGHTER of the two,
+/// which is a Ground bar away rather than a shader change, so the spread check
+/// is the one to read this test by. The last check is neither: at level 0 both
+/// shaders run the same line, so it can only say the finished ring is one
+/// backdrop, not how it got there.
 #[test]
 fn a_released_octave_lands_on_its_ghost_without_a_step() {
     use harmonigraph_scene::octave_layout;
@@ -3322,6 +3327,97 @@ fn a_lone_notes_octave_fades_in_a_straight_line() {
     // is no backdrop left for the indicator to sit in.
     let spent = probe.mean(&gpu.shot(&scene(0.0)), mid, wedge);
     assert!(spent.iter().sum::<f32>() < 3.0, "a spent lone note leaves {spent:?} behind");
+}
+
+/// The ground reaches the shader as a UNIFORM, and the picture has to track
+/// it: a silent slice wears the grey `Scene::lattice_ground` carries, whatever
+/// that is, rather than one grey baked into the shader.
+///
+/// Every other fixture here draws at the fresh Ground alone, and the grey that
+/// names is `vec3(0.189)` — near enough a plausible literal that a shader
+/// ignoring `u.lattice_ground` entirely, or reading the ground out of the
+/// wrong vec4 of the uniform block, would render all of them pixel for pixel.
+/// So this one draws one node four times across the bar, the fresh 20 first
+/// and then a near-black, a mid grey and a near-white.
+///
+/// Full presence against a slot at level 0 is where the arithmetic leaves
+/// nothing to interpret: a silent slice's opacity IS the node's presence, so
+/// at 1.0 the wedge is the ground colour undiluted, and the byte is that
+/// colour at 8 bits. The LIT slot beside it is read from the same shot and has
+/// to stay put — at full level the ghost is nothing, so a sounding pitch owes
+/// the ground no part of its colour, and a ground that moved it would be the
+/// mix leaking into the one place it must not reach.
+///
+/// A channel and a half, tighter than the 2.5 the fade probes above allow, and
+/// honestly so: those read points ON an envelope, where the level's own 8-bit
+/// packing is inside the measurement, and nothing here fades. One flat colour
+/// into an 8-bit target rounds by half a channel and by nothing else, and the
+/// closest pair of grounds measured lands 29 channels apart — twenty times the
+/// tolerance — so nothing here passes by being loose.
+#[test]
+fn a_silent_slice_wears_the_ground_the_scene_names() {
+    use harmonigraph_scene::{grey_of_lightness, octave_layout};
+
+    const SIZE: [u32; 2] = [384, 384];
+    let Some(mut gpu) = Shooter::new(SIZE) else {
+        return;
+    };
+    // The even five-octave wheel the release tests use: a 72-degree slice is
+    // room to sample well inside one and well inside its neighbour.
+    let layout = octave_layout(5, 60.0, 0, 1.0, 0.0);
+    let lit = harmonigraph_scene::MIDDLE_C_SLOT;
+    let quiet = lit + 1;
+    // Both inside the ring this wheel draws: `sector` CLAMPS a slot outside it
+    // rather than refusing, which would leave the two readings below taken on
+    // one wedge and agreeing for a reason that has nothing to do with the
+    // ground.
+    let (low, high) = layout.slots(0.0);
+    for slot in [lit, quiet] {
+        assert!((low..=high).contains(&(slot as i32)), "slot {slot} is outside {low}..={high}");
+    }
+    let scene_at = |ground: f32| {
+        let mut scene = octave_wheel_scene(layout, 0.0);
+        scene.lattice_ground = grey_of_lightness(ground);
+        let node = &mut scene.nodes[0];
+        node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
+        node.octaves[lit] = 1.0;
+        // The note fully down, so every silent slice on the ring is opaque and
+        // the wedge below reads the ground rather than a share of it.
+        node.activation = 1.0;
+        scene
+    };
+
+    let (lit_mid, lit_wedge) = wedge_of(layout, lit, 0.0);
+    let (quiet_mid, quiet_wedge) = wedge_of(layout, quiet, 0.0);
+    let mut pitch: Option<[f32; 3]> = None;
+    for ground in [20.0f32, 6.0, 45.0, 80.0] {
+        let px = gpu.shot(&scene_at(ground));
+        // Calibrated along the SOUNDING slice, which is the one ray that is
+        // bright at every ground: a band drawn in a near-black ground is the
+        // dark end of the bar, and the radii are the scene's either way.
+        let probe = BandProbe::new(&px, SIZE, lit_mid);
+        let got = probe.mean(&px, quiet_mid, quiet_wedge);
+        let want = grey_of_lightness(ground).truncate() * 255.0;
+        for j in 0..3 {
+            assert!(
+                (got[j] - want[j]).abs() < 1.5,
+                "at Ground {ground} the silent slice reads {got:?}, not {want:?}"
+            );
+        }
+        let sounding = probe.mean(&px, lit_mid, lit_wedge);
+        match pitch {
+            None => pitch = Some(sounding),
+            Some(first) => {
+                for j in 0..3 {
+                    assert!(
+                        (sounding[j] - first[j]).abs() < 1.5,
+                        "at Ground {ground} the lit slice reads {sounding:?}, and at the \
+                         first ground it read {first:?}"
+                    );
+                }
+            }
+        }
+    }
 }
 
 /// The seams between a chord's colors run at ONE width from the rim to the

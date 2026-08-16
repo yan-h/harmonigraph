@@ -3,13 +3,14 @@
 //!
 //! Three gradients are live in one frame — the lattice's, walked per node by
 //! the scene derive; the Spectral pane's, walked per slab by the spectrum
-//! curve; and the audio ring's, which is the analyzer's own re-anchored on the
-//! lattice's bed and so a key of its own — and a FOURTH while any of them is
-//! being dragged, a bar painting the value it has just written over the value
-//! every pane above it read. A cache shallower than that rebuilds tables it is
-//! still holding. What that costs is the whole reason
-//! the table exists: a rebuild is `PITCH_LUT_N` gamut bisections, each a Newton
-//! solve and an Oklab->sRGB conversion.
+//! curve; and the audio ring's, which is the analyzer's own with its silent end
+//! pinned onto the lattice's ground, in chroma as well as lightness, and so a
+//! key of its own — and a FOURTH while any of them is being dragged, a bar
+//! painting the value it has just written over the value every pane above it
+//! read. A cache shallower than that rebuilds tables it is still holding. What
+//! that costs is the whole reason the table exists: a rebuild is
+//! `PITCH_LUT_N` gamut bisections, each a Newton solve and an Oklab->sRGB
+//! conversion.
 //!
 //! The hue circle's memo is here too, for the half of that argument which
 //! applies to it. It holds ONE slot, every caller asking for the same pair, so
@@ -62,9 +63,10 @@ fn two_gradients_alternating_are_both_resident() {
 /// the display panes: everything above the bar in a frame reads the value the
 /// bar wrote LAST frame, and then the bar writes and paints a new one. Three
 /// pictures are live — the lattice's nodes, the Spectral pane's curve, and the
-/// audio ring, whose table is the analyzer's gradient re-anchored onto the
-/// lattice's bed (`SpectralPaint::new`) and so a KEY OF ITS OWN — so a drag
-/// frame walks four keys, of which three were already built.
+/// audio ring, whose table is the analyzer's gradient with its silent end
+/// pinned onto the lattice's ground, in chroma as well as lightness
+/// (`SpectralPaint::new`), and so a KEY OF ITS OWN — so a drag frame walks
+/// four keys, of which three were already built.
 ///
 /// The drag here is the LATTICE's, which is where a slot short of four shows
 /// up: the ring's key and the Spectral pane's hold still through the whole

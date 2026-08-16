@@ -12,8 +12,14 @@ Two places a skin reaches, and only one of them is an axis today:
   style enum to add a variant to — a second paint means a branch there and a
   setting to pick it, which is what the retired `NodeStyle` was.
 - **Chrome** — grid lines and chord beams live in `fs_edge` /
-  `derive_grid` / `derive_edges`; all colors (node idle, grid line, accent)
-  live in one `Skin` struct (`harmonigraph-scene::skin`).
+  `derive_grid` / `derive_edges`. The `Skin` struct
+  (`harmonigraph-scene::skin`) owns every color the CHROME draws — panel,
+  well, hairline, accent — but not what the LATTICE draws at rest. The grid
+  lines, the audio ring where it reads silence, the octave band's unsounding
+  slices and an unplayed node all stand on one view setting instead,
+  `ViewConfig::lattice_ground`: a neutral `L*` resolved per frame off the
+  Ground bar, so it is dialable while a picture is being read. The skin's
+  part in it is `surface_faint`, the rung a fresh view opens on.
 
 The disc is a camera-facing billboard with a signed-distance mask, so
 new node shapes are cheap: change the coverage math, keep the compositing.
@@ -59,13 +65,22 @@ new node shapes are cheap: change the coverage math, keep the compositing.
   (octave/fifth heavy, high-limb intervals thin).
 - **Flow pulse** — a bright pulse travelling along a chord edge from the
   root, looping while the chord is held.
-- **Accent-tinted grid** — grid in a desaturated skin accent instead of the
-  neutral grey, so the whole field has a hue.
+- **Accent-tinted grid** — a desaturated hue over the field instead of the
+  neutral grey. Still an idea, but no longer a skin swap: the grid's color
+  is `ViewConfig::lattice_ground`, an `L*` with no hue axis at all, so it
+  means giving that setting a chroma and a hue of its own. It also reaches
+  further than the grid — the audio ring's silent end and the band's
+  unsounding slices stand on that same number, and
+  `the_grid_the_ring_and_an_idle_node_are_one_grey` says they must — so what
+  is really on offer is "tint the lattice AT REST", all three surfaces
+  together, rather than the lines alone.
 
 ## Whole-look skins (coordinated palettes)
 
 These mostly need a second `Skin` value (the color struct already
-centralizes this) plus a matching node/line choice:
+centralizes the chrome) plus a `lattice_ground` to match it — the field is
+what the resting lattice is drawn in, and a light skin under a dark ground
+is two looks at once — plus a matching node/line choice:
 
 - **Blueprint** — deep blue field, cyan hairlines, hollow rings, mono
   labels.

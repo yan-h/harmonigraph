@@ -160,6 +160,165 @@ fn neither_end_of_the_curve_leaves_the_chroma_axis() {
     }
 }
 
+/// Every channel of a colour is a number a rasterizer can lay down: finite,
+/// and inside the 0..1 an sRGB channel holds.
+fn drawable(c: glam::Vec4) -> bool {
+    c.to_array().iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v))
+}
+
+/// The lattice's ground, as a scene draws it: the field itself, every grid
+/// segment's colour, and what an unplayed node falls back to — three copies of
+/// one resolve ([`Scene::lattice_ground`]), which is why a single poisoned
+/// number can be asked about all three at once.
+fn ground_of(view: &ViewConfig) -> (Vec4, Vec<Vec4>, Vec4) {
+    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), view, &plain_frame(), 0.0);
+    let lines: Vec<Vec4> = scene.grid.iter().map(|s| s.color).collect();
+    assert!(
+        scene.grid.iter().any(|s| s.strength > 0.0),
+        "the home sheet has to draw a resting grid, or the lines below test nothing",
+    );
+    let idle = scene
+        .nodes
+        .iter()
+        .find(|n| n.activation == 0.0)
+        .expect("nothing is playing, so every node is idle")
+        .color;
+    (scene.lattice_ground, lines, idle)
+}
+
+/// A ground that is not a number still draws the lattice a grey, all the way
+/// out to what the instance buffer carries.
+///
+/// The failure it guards is silent at every step. `f32::clamp` hands a NaN
+/// straight back — every comparison against one is false — so the number walks
+/// through the axis check into [`grey_of_lightness`](crate::grey_of_lightness),
+/// whose Newton solve answers with whatever its own guard parks on, and what
+/// reaches the shader is a colour with no channels: nothing panics, nothing is
+/// logged, and the whole resting picture is whatever the rasterizer makes of a
+/// NaN. [`ViewConfig::lattice_ground_lightness`] is the repair, and this is
+/// what keeps it from being deleted as redundant with the clamps downstream of
+/// it.
+///
+/// Through the DERIVE and not through the accessor alone, because the accessor
+/// exists precisely because the drawing code is reached by more routes than the
+/// persist door: the scene's ground, every grid line and an idle node's
+/// fallback are all resolved from it, and so is the audio ring's table one
+/// crate over. A repair missing from any of them is the same bug.
+#[test]
+fn a_non_finite_ground_still_draws_the_lattice_a_grey() {
+    let fresh = ViewConfig::default().lattice_ground;
+    for broken in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        let view = ViewConfig { lattice_ground: broken, ..plain_view() };
+        assert_eq!(
+            view.lattice_ground_lightness(),
+            fresh,
+            "a ground of {broken} resolves to an L* no colour can be solved for",
+        );
+        let want = crate::grey_of_lightness(fresh);
+        let (ground, lines, idle) = ground_of(&view);
+        assert!(drawable(ground), "a ground of {broken} put {ground:?} in the scene");
+        assert_eq!(ground, want, "a ground of {broken} is not repaired to the fresh grey");
+        for line in lines {
+            assert_eq!(line, ground, "a ground of {broken} drew a grid line {line:?}");
+        }
+        assert_eq!(idle, ground, "a ground of {broken} left an idle node at {idle:?}");
+        // And the ring's table, the accessor's other reader: the two rings sit
+        // a gap apart on one node, so a ground repaired for one of them and not
+        // the other is two grounds — which is the whole reason the repair is a
+        // function rather than a clamp at each site.
+        let silent = crate::SpectralPaint::new(&view, Gradient::default()).lut[0];
+        let step = (silent.truncate() - ground.truncate()).abs().max_element();
+        assert!(
+            step * 255.0 < 0.5,
+            "at a ground of {broken} the audio ring's silence is {silent:?} \
+             against the lattice's {ground:?}",
+        );
+    }
+}
+
+/// A ground past either end of the bar is held to the `L*` axis rather than
+/// carried off it.
+///
+/// The number leaves this struct as a BRIGHTNESS rather than as a colour — the
+/// `L*` a neutral grey is solved for and the one the audio ring's ramp is
+/// re-anchored to open on — and off the axis it names a luminance sRGB does not
+/// hold: 500 is brighter than white and -50 is a negative one.
+///
+/// Both of today's readers clamp again on their own account
+/// ([`grey_of_lightness`](crate::grey_of_lightness) and
+/// [`ring_gradient`](crate::ring_gradient)), so the greys below come out the
+/// same either way and the picture cannot report on this arm at all. The
+/// accessor is therefore asked directly as well: it is what a THIRD reader
+/// would get, and the reason it holds the axis itself rather than trusting
+/// whatever it is handed to.
+#[test]
+fn a_ground_past_either_end_of_the_bar_is_held_to_the_l_star_axis() {
+    for (asked, want) in [(-50.0f32, 0.0f32), (0.0, 0.0), (20.0, 20.0), (500.0, 100.0)] {
+        let view = ViewConfig { lattice_ground: asked, ..plain_view() };
+        assert_eq!(
+            view.lattice_ground_lightness(),
+            want,
+            "a ground of {asked} resolves to an L* off the axis",
+        );
+        let (ground, lines, idle) = ground_of(&view);
+        assert!(drawable(ground), "a ground of {asked} put {ground:?} in the scene");
+        assert_eq!(
+            ground,
+            crate::grey_of_lightness(want),
+            "a ground of {asked} draws a grey the axis does not name",
+        );
+        for line in lines {
+            assert_eq!(line, ground, "a ground of {asked} drew a grid line {line:?}");
+        }
+        assert_eq!(idle, ground, "a ground of {asked} left an idle node at {idle:?}");
+    }
+}
+
+/// A ground that is PRESENT and unusable is repaired at the blob's door, so
+/// the number the Ground bar reads back is the grey on screen.
+///
+/// The accessor above keeps the picture drawable whatever the field holds,
+/// which is exactly why this is a separate claim: with the repair only there,
+/// a hand-edited blob would draw the fresh grey while the bar sat on NaN and
+/// the file kept it — a value read out one way and drawn another, which is a
+/// bug at any compat policy. [`ViewConfig::sanitize`] is what makes the two the
+/// same number.
+#[test]
+fn a_broken_ground_reads_back_as_the_grey_it_draws() {
+    let fresh = ViewConfig::default().lattice_ground;
+    let broken_grounds = [
+        (f32::NAN, fresh),
+        (f32::INFINITY, fresh),
+        (f32::NEG_INFINITY, fresh),
+        (-50.0, 0.0),
+        (500.0, 100.0),
+    ];
+    for (broken, want) in broken_grounds {
+        let mut view = ViewConfig { lattice_ground: broken, ..plain_view() };
+        view.sanitize();
+        assert_eq!(
+            view.lattice_ground, want,
+            "the blob's door left a ground of {broken} as it was",
+        );
+        let (ground, ..) = ground_of(&view);
+        assert!(drawable(ground), "a repaired ground of {broken} still draws {ground:?}");
+        assert_eq!(
+            ground,
+            crate::grey_of_lightness(view.lattice_ground),
+            "the bar reads L* {} and the lattice draws {ground:?}",
+            view.lattice_ground,
+        );
+        // Nothing left for the drawing side to repair: a sanitized view is one
+        // the accessor passes straight through, so the bar's number and the
+        // picture's cannot come apart later.
+        assert_eq!(
+            view.lattice_ground_lightness(),
+            view.lattice_ground,
+            "a sanitized ground is still being moved on the way to the picture",
+        );
+    }
+}
+
 /// A chroma ramp spends COLOR on pitch, the way a brightness ramp spends
 /// brightness: the vivid end of it is the one its sign names, and at 0 every
 /// note asks for the same fraction as every other.

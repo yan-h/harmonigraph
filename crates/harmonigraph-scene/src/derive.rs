@@ -710,7 +710,7 @@ pub(crate) fn derive_grid(
                 // structural line as a resting one, merely arrived — it says
                 // WHERE a note hangs from, not what the note is, and the
                 // note's color is already on the node at each end. Taking the
-                // note's hue made the chain read as a third sounding thing
+                // note's hue makes the chain read as a third sounding thing
                 // strung between two others.
                 color: base,
                 // From this line's resting level up to the ground itself. A

@@ -158,8 +158,9 @@ fn a_resting_grid_line_is_the_lattices_own_ground() {
     // The OPACITY is half the claim and the easier half to lose: `strength`
     // premultiplies the colour, so a line carrying an alpha of its own lands
     // on a blend of the ground and whatever is behind it — a different grey
-    // per background, and none of them this one. That is what the chrome's
-    // hairline at 0.62 drew, and it is why the two never quite agreed.
+    // per background, and none of them this one. A hairline drawn at a
+    // chrome opacity is that alternative, and it is why such a line and the
+    // rings can only ever nearly agree.
     for ground in [0.0f32, 20.0, 64.0] {
         let view = ViewConfig { lattice_ground: ground, ..grid_view() };
         let unlit = grid_of(&view)
@@ -184,8 +185,8 @@ fn a_resting_grid_line_is_the_lattices_own_ground() {
 /// back to are one colour.
 ///
 /// The whole ask, and the one test that fails if any of the three is re-pinned
-/// to a grey of its own — which is the shape the bug took before, each surface
-/// aimed at the others by hand and landing a hair off.
+/// to a grey of its own — which is the shape the bug takes, each surface aimed
+/// at the others by hand and landing a hair off.
 #[test]
 fn the_grid_the_ring_and_an_idle_node_are_one_grey() {
     for ground in [8.0f32, 20.0, 45.0] {
@@ -338,7 +339,7 @@ fn a_chain_stops_at_the_first_sounding_note_under_it() {
 fn a_lit_chain_keeps_the_lattices_own_color() {
     // The chain is structure, not a note: it says WHERE a note hangs from,
     // and the note's own color is already on the node at each end. Taking
-    // the note's hue made it read as a third sounding thing strung between
+    // the note's hue makes it read as a third sounding thing strung between
     // two others.
     let view = ViewConfig {
         extent_threes: 0,

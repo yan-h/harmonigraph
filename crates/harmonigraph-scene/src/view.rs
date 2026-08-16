@@ -391,12 +391,12 @@ pub struct ViewConfig {
     /// and for the same reason: they are one picture read together — two annuli
     /// a gap apart with the lines of the lattice running into them — so a
     /// ground that differed between them says the three are different KINDS of
-    /// thing when the only thing they have in common is being empty. That is
-    /// what it looked like when each arrived at its ground by its own route:
-    /// the audio ring off the analyzer's gradient (whose dark end carries that
-    /// gradient's own hue), the MIDI ring off the note's colour whitened and
-    /// laid on at a fixed opacity, the grid off the CHROME's hairline at
-    /// another. Three near-greys a hair apart in tint, none of them dialable.
+    /// thing when the only thing they have in common is being empty. Each
+    /// deriving its own ground instead — the audio ring off the analyzer's
+    /// gradient (whose dark end carries that gradient's own hue), the MIDI ring
+    /// off the note's colour whitened and laid on at a fixed opacity, the grid
+    /// off the CHROME's hairline at another — lands three near-greys a hair
+    /// apart in tint, and no bar can dial three routes onto one value.
     ///
     /// **Neutral**, because the ground is what they have in common rather than
     /// a colour any of them owns: it carries no hue, and each surface's light

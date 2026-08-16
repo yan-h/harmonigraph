@@ -61,16 +61,21 @@ struct Uniforms {
     //    (0 off, then one index per pattern; see Pulse::shader_index), read
     //    by mark_pulse — NOT a free slot.
     misc6: vec4<f32>,
-    // The ground the lattice is painted onto (the pane fill this pass is
-    // composited over). Only the sevens knockout reads it: without it the
-    // gutter can knock out only to black, which is darker than the pane and
-    // reads as a plate sitting ON the picture rather than a hole THROUGH it.
+    // The pane fill this pass is composited OVER: the surface BEHIND the
+    // lattice, not the grey the lattice's own at-rest structure is drawn IN
+    // (that is lattice_ground below, and the two are independent numbers).
+    // Only the sevens knockout reads it: without it the gutter can knock out
+    // only to black, which is darker than the pane and reads as a plate
+    // sitting ON the picture rather than a hole THROUGH it.
     background: vec4<f32>,
     // The unlit ground a node's two rings stand on: one neutral grey, its
-    // brightness the view's own Ground bar. Read by the OCTAVE band alone —
-    // a silent slice IS this colour, and a sounding one's pitch is painted
-    // over it. The audio ring beside it stands on the same grey by carrying
-    // it as entry 0 of spectral_lut, baked on the CPU from the same L*.
+    // brightness the view's own Ground bar. A colour the lattice DRAWS,
+    // where background above is only what it lands on — this grey is free to
+    // sit either side of the pane's own fill, and at the bottom of the bar it
+    // is black. Read by the OCTAVE band alone — a silent slice IS this
+    // colour, and a sounding one's pitch is painted over it. The audio ring
+    // beside it stands on the same grey by carrying it as entry 0 of
+    // spectral_lut, baked on the CPU from the same L*.
     lattice_ground: vec4<f32>,
     // The wheel. x: octaves one turn is cut into; y: the MIDI pitch at the top
     // of every node.
@@ -978,13 +983,14 @@ fn slice_gap_half() -> f32 {
 // audio ring a gap inside it reads at silence.
 //
 // A color and not an opacity, which is the whole of what makes the two rings
-// agree. A ghost laid on at a fixed alpha lands on a blend of the ground it
-// happened to be over, so what it drew was a near-grey that moved with
-// whatever was behind it and with the note's own hue; two annuli arrived at
-// their empty state by different routes and could not be dialled onto one
-// value. The grey the two now share is one number in the view (Ground), and
-// the fade to it rides the ACTIVATION, so the whole ring still fades in and
-// out with the pitch class as it always did.
+// agree. A ghost laid on at a fixed alpha instead lands on a blend of the
+// ground it happens to be over, which is a near-grey that moves with whatever
+// is behind it and with the note's own hue — no definite colour to share with
+// the ring a gap inside it, so the two annuli reach their empty state by
+// different routes and no one value dials both. As a color the grey IS one
+// number in the view (Ground), and the fade to it rides the ACTIVATION, so the
+// whole ring still fades in and out with the pitch class.
+
 // The disc-edge radius the glow's falloff is written against: its one use
 // is scaling that falloff's domain by `CORE_R_CLASSIC / radius`, so a core
 // dialled smaller carries its glow in with it rather than keeping a halo
@@ -1078,10 +1084,11 @@ fn pitch_lut_color(pitch: f32) -> vec3<f32> {
 
 // Color at loudness `level` (0..1), read from the FREQUENCY scheme's ramp —
 // the analyzer's own gradient, the one the spectrogram's cells, the spectrum
-// curve and the Spiral pane's segments are all drawn off, bedded for the
-// LATTICE: the CPU rebuilds the table from that gradient with the bottom of its
-// lightness range raised to the skin's surface_faint grey, so a level is the
-// same light here as there and the two tables meet exactly at the top (see
+// curve and the Spiral pane's segments are all drawn off, re-anchored for the
+// LATTICE: the CPU rebuilds the table from that gradient with its silent end
+// pinned onto u.lattice_ground — that L*, and no chroma at all — and its loud
+// end left where it stands, so the two tables meet exactly at the top and a
+// loud level is the same light here as there (see
 // `harmonigraph_scene::ring_gradient`). The same walk pitch_lut_color does,
 // over the other table and against the other quantity.
 fn spectral_lut_color(level: f32) -> vec3<f32> {
@@ -1129,12 +1136,13 @@ fn folded() -> bool {
 // frequency.
 //
 // One cost is shared, and stated rather than hidden: with nothing sounding a
-// wedge is not empty, it is the ramp's floor color, and every node in the
-// window wears one. A range with nothing in it is a reading. That floor stands
-// at the lightness of the skin's surface_faint grey — the ramp reaches here
-// anchored on it, a step ABOVE the lattice's own ground — so a silent ring is a
-// faintly raised backdrop rather than a hole punched through the surface, and
-// still plainly not the ring switched off.
+// wedge is not empty, it is the ramp's silent end, and every node in the
+// window wears one. A range with nothing in it is a reading. That end is
+// PINNED to u.lattice_ground, the same grey the octave band's unlit slices are
+// drawn in, so the two rings read as empty in exactly one colour and one bar
+// moves both — and what that colour is against the pane is that bar's own
+// answer, from holes punched through the surface at the bottom of it to the
+// whole resting picture vanishing into the pane at the panel's own L*.
 //
 // The radius is its own (u.misc7.z/w, an annulus the fresh view puts in the
 // gap the core and the octave band leave); the slices are the band's, off the
@@ -1538,12 +1546,12 @@ fn node_paint(in: VsOut) -> vec4<f32> {
     //
     // The RING is the exception, and it is not a level a node carries: it is a
     // window onto one shared spectrum, so it draws on every node whatever the
-    // keys are doing — silence included, at the ramp's floor color, which stands
-    // a step above the lattice's ground and so reads as a raised backdrop rather
-    // than a hole. What is left to skip is therefore radial rather than per node,
-    // and it is most of the quad: the ring is a narrow annulus in a billboard
-    // reaching QUAD_MARGIN. `spectral_ring` skips the same band from the other
-    // side.
+    // keys are doing — silence included, at the ramp's silent end, which is
+    // PINNED to u.lattice_ground and so reads as the same empty grey the octave
+    // band's unlit slices carry. What is left to skip is therefore radial rather
+    // than per node, and it is most of the quad: the ring is a narrow annulus in
+    // a billboard reaching QUAD_MARGIN. `spectral_ring` skips the same band from
+    // the other side.
     let audio_annulus = spectral_radii();
     let in_audio_ring = audio_annulus.y > audio_annulus.x
         && d >= audio_annulus.x - aa

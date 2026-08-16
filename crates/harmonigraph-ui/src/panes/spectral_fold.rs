@@ -41,10 +41,12 @@
 //!   every smoothing that helps the fold spoils.
 //!
 //! Either goes into one [`SpectralPaint`], which also carries the FREQUENCY
-//! colour scheme — the analyzer's own ramp, anchored on the lattice's bed — so
-//! that what the ring paints is the light the spectrogram, the spectrum curve
-//! and the Spiral pane would paint it, and never the pitch ramp the MIDI
-//! picture wears.
+//! colour scheme — the analyzer's own ramp, its silent end pinned in chroma as
+//! well as lightness onto the lattice's own ground
+//! ([`ViewConfig::lattice_ground`](harmonigraph_scene::ViewConfig)) — so that
+//! what the ring paints is the light the spectrogram, the spectrum curve and
+//! the Spiral pane would paint it, and never the pitch ramp the MIDI picture
+//! wears.
 //!
 //! Nothing here relights a NODE. The keys keep everything they draw, so a node
 //! carries both pictures at once and neither has to be given up to see the
@@ -332,9 +334,12 @@ impl Fold {
 /// The reading goes into the scene as one [`SpectralPaint`], which is also
 /// what carries the FREQUENCY colour scheme: the analyzer's own gradient,
 /// handed in whole here and baked into the ring's table by
-/// [`SpectralPaint::new`] with its lightness range anchored on the lattice's
-/// bed, so that what the ring paints is the light the spectrogram, the spectrum
-/// curve and the Spiral pane would paint it.
+/// [`SpectralPaint::new`], whose silent end is pinned — in chroma as well as
+/// lightness — onto the lattice's own ground
+/// ([`ViewConfig::lattice_ground`](harmonigraph_scene::ViewConfig)), so that
+/// what the ring paints is the light the spectrogram, the spectrum curve and
+/// the Spiral pane would paint it, opening on the grey the rest of the lattice
+/// rests in rather than on the analyzer's black.
 ///
 /// Nothing here touches a NODE. The MIDI picture is `derive_scene`'s answer
 /// untouched — the bodies, the octave band, the marks, the trail, the camera —

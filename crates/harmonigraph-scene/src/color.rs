@@ -547,15 +547,18 @@ pub(crate) fn designed_pitch_ramp(t: f64, gradient: Gradient) -> Vec4 {
 /// Three of them are pictures: the lattice's pitch gradient, which the scene
 /// derive walks per node; the Spectral pane's level gradient, which the
 /// spectrum curve walks per slab — up to 4096 of them; and the lattice audio
-/// ring's, which is that same level gradient re-anchored onto the lattice's bed
-/// (`SpectralPaint::new`) and so a KEY OF ITS OWN, asked for beside the other
-/// two on every frame the ring draws. One slot served the lattice alone
-/// perfectly, hitting on essentially every call because the knobs hold still
-/// except while a control is being dragged. It cannot serve several: the
-/// gradients differ, so each picture's first ask evicts the last one's table,
-/// and a frame drawing them all pays a full rebuild apiece — [`PITCH_LUT_N`]
-/// gamut bisections each, 165us apiece measured — every frame rather than only
-/// while a knob moves.
+/// ring's, which is that same level gradient with its silent end pinned — in
+/// chroma as well as lightness — onto the lattice's own ground
+/// (`SpectralPaint::new`, through `ring_gradient`) and so a KEY OF ITS OWN at
+/// every opening the analyzer's ramp has — the pin moves both ends wherever
+/// they sit rather than only catching a ramp that opens too dark — asked for
+/// beside the other two on every frame the ring draws. One slot served the
+/// lattice alone perfectly, hitting on essentially every call because the
+/// knobs hold still except while a control is being dragged. It cannot serve
+/// several: the gradients differ, so each picture's first ask evicts the last
+/// one's table, and a frame drawing them all pays a full rebuild apiece —
+/// [`PITCH_LUT_N`] gamut bisections each, 165us apiece measured — every frame
+/// rather than only while a knob moves.
 ///
 /// **The fourth is the one a bar is part-way through writing.** A settings pane
 /// draws AFTER the display panes, so everything above the bar in a frame reads
