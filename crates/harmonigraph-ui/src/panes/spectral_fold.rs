@@ -69,6 +69,17 @@
 //! lights a region dimly, and that is the correct display: those frequencies
 //! are genuinely sounding.
 //!
+//! The audio ring's Gate is a threshold in the same pass and is not an
+//! exception to any of that. What everything above MEASURES is a weight to the
+//! last byte, and the gate reads those values without changing one of them;
+//! what it decides is whether a node's ring is on the screen at all
+//! ([`Scene::wear_audio_rings`](harmonigraph_scene::Scene), run at the end of
+//! [`apply`]). A wedge still dims rather than switching off — it is the whole
+//! RING that comes and goes, at a level the view names, because the ring costs
+//! its annulus at every node in the window whatever it reads. It comes and goes
+//! on the note Fade, and a node the keys are holding keeps its ring whatever
+//! the gate reads there, so the threshold never puts a step in the picture.
+//!
 //! ## The estimator, and what it costs
 //!
 //! The floor is a MEDIAN over ±150¢ of the grid (300¢ across), evaluated every
@@ -117,19 +128,26 @@
 //! is what admits a DETUNED partial, and a detuned partial is meant to read
 //! dim, that failure points the right way.
 //!
-//! ## No envelope of its own
+//! ## No envelope on the READING
 //!
 //! [`AudioSpectrum::display`](crate::AudioSpectrum::display) is already
 //! EMA-smoothed on the hop grid by the Analyzer's own Smoothing control, so the
 //! fold inherits an attack/decay that is on the sample grid — deterministic,
 //! and shared with every other pane, so a hop that shimmers here shimmers on
-//! the Spectral pane too and one control settles both. A second envelope here
-//! would need per-node state across frames, and the lattice is drawn TWICE in
-//! an editor frame (the docked pane and the Render preview's copy), so that
-//! state would tick at twice the rate in one shell and once in another — the
-//! offline renderer's determinism is exactly what that breaks. Stateless is
-//! therefore not merely simpler here, it is the only version that draws the
-//! same frame in all three places.
+//! the Spectral pane too and one control settles both. A second envelope over
+//! the levels would be a second answer to a question one bar already settles,
+//! and it would be the analyzer's picture drawn at two speeds depending on
+//! which pane you looked at.
+//!
+//! The GATE's answer does carry across frames
+//! ([`RingFade`](harmonigraph_scene::RingFade)), and it is a different thing
+//! being faded: not what a wedge reads but whether the node draws its ring at
+//! all, which is a decision the Fade softens exactly as it softens a note's
+//! own arrival and departure. That state lives in [`SharedState`], which is the
+//! whole of what the offline renderer carries between frames, and it is stepped
+//! against the CLOCK rather than per call — so the lattice being drawn TWICE in
+//! an editor frame (the docked pane and the Render preview's copy) steps it
+//! once, and a render at 60 fps and a pane at 144 walk the same transition.
 
 use harmonigraph_core::spectrum::{BINS_PER_SEMITONE, SPECTRUM_BINS};
 // The axis' own ends, read by `Fold::slot_power` — which is the shader's
@@ -346,13 +364,16 @@ impl Fold {
 /// and the measurement is a ring of its own inside the band, so one node
 /// carries both readings and neither can be mistaken for the other.
 ///
-/// With the ring's width at 0 — its off position, and the only one it has —
-/// nothing here runs at all, not even the read of
+/// With the ring's width at 0 — the LAYER's off position, and the only one it
+/// has — nothing here runs at all, not even the read of
 /// [`AudioSpectrum::display`](crate::AudioSpectrum::display), so the picture is
 /// exactly the picture with this pass absent. The GEOMETRY is what is tested
 /// rather than the reading beside it: a ring nobody can see is a measurement
-/// nobody asked for, whichever of the two it would have carried.
-pub(crate) fn apply(scene: &mut Scene, state: &SharedState, now: f64) {
+/// nobody asked for, whichever of the two it would have carried. (The Gate
+/// below is a different question and runs after the measuring rather than
+/// instead of it: it holds back the NODES whose wedges say nothing, and needs
+/// the reading to know which those are.)
+pub(crate) fn apply(scene: &mut Scene, state: &mut SharedState, now: f64) {
     if !state.view.spectral_ring_draws() {
         return;
     }
@@ -369,6 +390,20 @@ pub(crate) fn apply(scene: &mut Scene, state: &SharedState, now: f64) {
         fill_grid(&mut paint, &cfg, folded.as_ref().map_or(levels, Fold::grid));
     }
     scene.spectral = paint;
+    // Which nodes the ring is worth drawing on, now that there is something to
+    // ask it of. Last, and off the scene rather than off the paint above,
+    // because the answer is measured against the levels a wedge will actually
+    // paint — see `Scene::wear_audio_rings`. With no audio flowing the grid is
+    // zeros and every node is held back at any gate above its floor, which is
+    // the point: an analyzer with nothing to say draws no rings rather than a
+    // lattice of them at the ramp's floor.
+    //
+    // The note envelope, the same one every layer of a node runs on: the ring
+    // is one of those layers, so it arrives and leaves on the Fade rather than
+    // on a duration of its own. Assembled through `ViewConfig::envelope`, which
+    // is the one place the Fade param and the Fade curve are put back together.
+    let env = state.view.envelope(&state.frame_params);
+    scene.wear_audio_rings(&mut state.ring_fade, &env, now);
 }
 
 /// Read a grid of power into the ring's channel: every bucket through the
@@ -813,7 +848,19 @@ mod tests {
     /// A scene derived exactly as the Lattice pane derives it, then handed to
     /// this pass — which reads the view's own selector for what to fill the
     /// ring with, so a test says which reading it is asking for by setting it.
-    fn scene_of(state: &SharedState) -> Scene {
+    ///
+    /// At ONE clock, so a state handed here twice draws the second scene's
+    /// rings where the first settled them (`RingFade` steps against the clock).
+    /// Every claim below but one is about a single frame; the one that is not
+    /// asks for its own moments through [`scene_of_at`].
+    fn scene_of(state: &mut SharedState) -> Scene {
+        scene_of_at(state, 1.0)
+    }
+
+    /// [`scene_of`] at a stated clock, for the claims about how a ring comes
+    /// and goes rather than about what it reads. A state carried across two of
+    /// these has a fade running through it, exactly as a shell does.
+    fn scene_of_at(state: &mut SharedState, now: f64) -> Scene {
         let mut scene = derive_scene(
             &state.tracker,
             &state.tuning,
@@ -822,9 +869,9 @@ mod tests {
             &state.frame_params,
             state.camera,
             None,
-            1.0,
+            now,
         );
-        apply(&mut scene, state, 1.0);
+        apply(&mut scene, state, now);
         scene
     }
 
@@ -854,7 +901,7 @@ mod tests {
         // its one off switch, and the state every comparison below is against.
         let ring_width = state.view.spectral_ring_width;
         state.view.spectral_ring_width = 0.0;
-        let midi = scene_of(&state);
+        let midi = scene_of(&mut state);
         assert!(!midi.spectral.ring_draws(), "the ring drew with no width to draw in");
         state.view.spectral_ring_width = ring_width;
         assert!(
@@ -864,7 +911,7 @@ mod tests {
 
         for reading in [SpectralReading::Fold, SpectralReading::Spectrum] {
             state.view.spectral_reading = reading;
-            let both = scene_of(&state);
+            let both = scene_of(&mut state);
             for (was, now) in midi.nodes.iter().zip(&both.nodes) {
                 let at = was.lattice_pos;
                 assert_eq!(now.activation, was.activation, "{reading:?}: {at:?} changed how lit");
@@ -904,7 +951,7 @@ mod tests {
         let cfg = state.spectrum_config;
         state.spectrum.push_samples(&sawtooth(48.0), 1, SR, 1.0, &cfg);
 
-        let scene = scene_of(&state);
+        let scene = scene_of(&mut state);
         let grid = state.spectrum.display(1.0).expect("a second of audio is enough");
         let mut checked = 0;
         for (bucket, &power) in grid.iter().enumerate() {
@@ -943,9 +990,9 @@ mod tests {
         state.spectrum.push_samples(&sawtooth(48.0), 1, SR, 1.0, &cfg);
 
         state.view.spectral_reading = SpectralReading::Fold;
-        let folded = scene_of(&state);
+        let folded = scene_of(&mut state);
         state.view.spectral_reading = SpectralReading::Spectrum;
-        let raw = scene_of(&state);
+        let raw = scene_of(&mut state);
         assert!(folded.spectral.folded, "the fold is not read at its wedges' own pitches");
         assert!(!raw.spectral.folded, "the raw reading lost its window across the wedge");
 
@@ -1007,7 +1054,7 @@ mod tests {
         state.spectrum_config.smoothing = 0.0;
         let cfg = state.spectrum_config;
         state.spectrum.push_samples(&sawtooth(48.0), 1, SR, 1.0, &cfg);
-        let scene = scene_of(&state);
+        let scene = scene_of(&mut state);
 
         // The ring's ramp is the heatmap's gradient, entry for entry, with its
         // silent end standing on the node's own ground instead of on the
@@ -1071,11 +1118,17 @@ mod tests {
         }
     }
 
-    /// Choosing a reading before any audio has flowed is the design's most
-    /// contentious accepted consequence: every node wears the ring at the
-    /// ramp's floor, saying "nothing sounds here" rather than nothing. So the
-    /// no-audio path has to keep the annulus real and the grid at zero — a
-    /// vanishing ring would read as the selector not taking.
+    /// Before any audio has flowed the ring's ANNULUS is still real and its
+    /// grid is still zero: the reading is there and it says "nothing sounds
+    /// here", which is what a level of 0 means and not an absent layer.
+    ///
+    /// The geometry alone, deliberately, and the geometry is where the two
+    /// answers part company: whether the ring layer is on is the width bar's
+    /// question and is settled here, and whether a given NODE wears it with
+    /// nothing sounding is the Gate's — at any setting above its floor, none of
+    /// them do (`silence_rings_nothing_and_a_tone_rings_its_own_class`). A
+    /// version that emptied the annulus instead would look the same on a silent
+    /// lattice and would take the ring away for good.
     ///
     /// Both readings, since the fold has a whole measuring pass of its own that
     /// there is nothing to run.
@@ -1084,7 +1137,7 @@ mod tests {
         for reading in [SpectralReading::Fold, SpectralReading::Spectrum] {
             let mut state = fresh();
             state.view.spectral_reading = reading;
-            let scene = scene_of(&state);
+            let scene = scene_of(&mut state);
             assert!(
                 scene.spectral.ring_draws(),
                 "with no audio flowing {reading:?} vanished instead of wearing the floor",
@@ -1094,6 +1147,121 @@ mod tests {
                 "a grid nothing fed reads a level other than the floor under {reading:?}",
             );
         }
+    }
+
+    /// The gate reaches the picture from real audio: with nothing sounding no
+    /// node rings, and a lone tone rings its OWN pitch class and leaves the
+    /// lattice around it alone.
+    ///
+    /// The end-to-end claim, made where the analysis actually happens —
+    /// `harmonigraph_scene`'s own tests measure the gate against a grid handed
+    /// to it, and every one of them would go on passing if this pass forgot to
+    /// call it, or called it before the levels were measured in.
+    ///
+    /// The silence half is the one the fresh setting was chosen for. Ungated,
+    /// an analyzer with nothing to say draws a ring at the ramp's floor on
+    /// every node in view — an honest reading, and hundreds of them saying only
+    /// where the nodes are.
+    #[test]
+    fn silence_rings_nothing_and_a_tone_rings_its_own_class() {
+        let quiet = scene_of(&mut fresh());
+        assert!(quiet.spectral.ring_draws(), "the fresh ring is off, so nothing is being gated");
+        assert!(quiet.spectral.gate > 0.0, "the fresh gate is at its floor");
+        assert!(
+            quiet.nodes.iter().all(|n| n.audio_ring == 0.0),
+            "{} of {} nodes rang with no audio flowing",
+            quiet.nodes.iter().filter(|n| n.audio_ring > 0.0).count(),
+            quiet.nodes.len(),
+        );
+
+        let mut state = fresh();
+        state.spectrum_config.smoothing = 0.0;
+        let cfg = state.spectrum_config;
+        // A full-scale sine at middle C: one partial, so what should ring is
+        // the C nodes and nothing else. A saw would light its whole
+        // constellation, which is the right picture and a poor test.
+        state.spectrum.push_samples(&sine(60.0), 1, SR, 1.0, &cfg);
+        let scene = scene_of(&mut state);
+        let (mut rang, mut dark) = (0, 0);
+        for node in &scene.nodes {
+            let off = node.cents.min(1200.0 - node.cents);
+            if node.audio_ring > 0.0 {
+                rang += 1;
+                assert!(
+                    off < 30.0,
+                    "{:?} at {}¢ rang with nothing sounding within 30¢ of it",
+                    node.lattice_pos,
+                    node.cents,
+                );
+            } else {
+                dark += 1;
+            }
+        }
+        eprintln!("a full-scale C rang {rang} of {} nodes", scene.nodes.len());
+        assert!(rang > 0, "a full-scale tone rang no node at all");
+        assert!(dark > rang, "a lone tone rang {rang} nodes and left only {dark} dark");
+    }
+
+    /// A ring arrives on the FADE, end to end: a tone reaching a lattice that
+    /// has been quiet rings its class part way through the duration and fully
+    /// once it has run out.
+    ///
+    /// The wiring is what this is for, and it is wiring nothing else here
+    /// touches: the duration is a host param and the curve a view setting, put
+    /// back together by `ViewConfig::envelope` — so a pass that reached for one
+    /// of them alone, or built an envelope of its own, would draw a ring
+    /// arriving at a speed no bar on screen names. Every claim in
+    /// `harmonigraph_scene` about the fade would go on passing.
+    #[test]
+    fn a_ring_arrives_on_the_fade_the_notes_run_on() {
+        let mut state = fresh();
+        // A straight line of a stated length, so half way in is half way
+        // along; the fresh curve is not, and this is not the test for it.
+        state.frame_params.fade_time = 1.0;
+        state.view.fade_shape = 0.0;
+        state.spectrum_config.smoothing = 0.0;
+        let cfg = state.spectrum_config;
+
+        // A quiet frame first, so there is a picture to arrive FROM: the very
+        // first step of all settles rather than fading in.
+        let quiet = scene_of_at(&mut state, 1.0);
+        assert!(
+            quiet.nodes.iter().all(|n| n.audio_ring == 0.0),
+            "the lattice was already ringing before the tone arrived",
+        );
+
+        // The C nodes are the ones a full-scale middle C opens; their level is
+        // what the fade is read on.
+        let rung = |scene: &Scene| {
+            scene
+                .nodes
+                .iter()
+                .filter(|n| n.cents.min(1200.0 - n.cents) < 5.0)
+                .map(|n| n.audio_ring)
+                .fold(0.0f32, f32::max)
+        };
+        state.spectrum.push_samples(&sine(60.0), 1, SR, 1.5, &cfg);
+        let half = rung(&scene_of_at(&mut state, 1.5));
+        assert!((half - 0.5).abs() < 1e-4, "half a Fade after the tone a C rings {half}");
+        state.spectrum.push_samples(&sine(60.0), 1, SR, 2.5, &cfg);
+        let full = rung(&scene_of_at(&mut state, 2.5));
+        assert_eq!(full, 1.0, "a Fade after the tone a C rings {full}");
+    }
+
+    /// The gate's floor is the ungated picture end to end: every node rings,
+    /// silence included, which is the whole reading at once and what the bar's
+    /// off position has to give back through the real pass rather than only in
+    /// `harmonigraph_scene`'s own units.
+    #[test]
+    fn the_gates_floor_rings_every_node() {
+        let mut state = fresh();
+        state.view.spectral_ring_gate = 0.0;
+        let scene = scene_of(&mut state);
+        assert!(
+            scene.nodes.iter().all(|n| n.audio_ring == 1.0),
+            "a gate at its floor held back {} nodes",
+            scene.nodes.iter().filter(|n| n.audio_ring < 1.0).count(),
+        );
     }
 
     /// A probe at a bucket's own centre reads that bucket, not a blend of it

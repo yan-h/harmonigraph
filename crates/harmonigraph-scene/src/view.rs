@@ -503,7 +503,10 @@ pub struct ViewConfig {
     pub spectral_width: f32,
     /// How thick the audio ring is, in the same quad UV units as the octave
     /// band's own width ([`band_width`](Self::band_width)) — and **0 turns the
-    /// ring off**, which is the only switch it has.
+    /// ring off**, which is the only switch the LAYER has. Which nodes wear it
+    /// is the gate's ([`spectral_ring_gate`](Self::spectral_ring_gate)), and
+    /// the two are asked in that order: no width is no ring anywhere, and the
+    /// gate never runs.
     ///
     /// It sits between the core and the band in the stack
     /// ([`rings`](Self::rings)), so its inner edge is the core's radius plus a
@@ -542,6 +545,44 @@ pub struct ViewConfig {
     /// a seventh of the wedge apart rather than a fiftieth, which is the
     /// difference between reading a detuning and taking it on trust.
     pub spectral_ring_range: f32,
+    /// How loud the loudest thing a node's ring shows has to read before that
+    /// node draws a ring at all, as a level on the analyzer's own Level window
+    /// (0..=1, the axis the ring's colours are read off — see
+    /// [`SPECTRAL_GATE_MIN`](crate::SPECTRAL_GATE_MIN)).
+    ///
+    /// The ring is a window onto ONE grid the whole lattice shares, so without
+    /// this every node in view wears one whatever is sounding, and a stretch of
+    /// spectrum with nothing in it draws as a ring at the ramp's floor rather
+    /// than as no ring. That is an honest reading and a poor picture: the
+    /// lattice is hundreds of nodes, and a reading every one of them carries
+    /// says only where the nodes are. This is what buys back the other half —
+    /// a ring is then a node with something sounding at it, and where the rings
+    /// ARE is the picture.
+    ///
+    /// Per node and not per wedge, and the two readings answer it differently
+    /// only in what a wedge reaches: the fold's wedge is one level at that
+    /// octave's own pitch, and the spectrum's is the loudest bucket in the
+    /// window it spreads across its arc
+    /// ([`spectral_ring_range`](Self::spectral_ring_range)).
+    ///
+    /// Both ends are usable settings rather than guard rails. 0 is the gate off
+    /// — every node rings, which is the picture to go back to when what is
+    /// wanted is the analyzer's whole reading at once. The top asks for a
+    /// full-scale wedge, where a ring is a rare event on the loudest node in a
+    /// phrase.
+    ///
+    /// **It selects far more sharply under the fold than under the spectrum**,
+    /// and that is the two readings rather than anything here. A fold wedge is
+    /// energy concentrated AT its octave's pitch over a local noise floor, so
+    /// most nodes read near nothing and a gate picks out the constellation; a
+    /// spectrum wedge is a whole window of the raw grid, and in dense material
+    /// there is something loud within a hundred cents of nearly every pitch
+    /// class, so the nodes' levels sit close together and the bar tips from
+    /// most rings to none over a short stretch of its travel. Measured on a
+    /// sawtooth 24 dB down over the fresh window: the fold rings 601 nodes of
+    /// 1025 at 0.1 and 177 at 0.4, where the spectrum rings all 1025 at both
+    /// and none by 0.6.
+    pub spectral_ring_gate: f32,
     // ---- Note envelope ---------------------------------------------------
     // How a note ARRIVES and how it LEAVES, for every layer of the node at
     // once. The DURATION of both is the host-automatable Fade param and lives
@@ -1148,9 +1189,11 @@ impl ViewConfig {
     /// Whether the audio ring is drawn at all: a width to draw it with, and
     /// room left inside the quad to draw it in.
     ///
-    /// The ring's own switch, and the whole of it —
+    /// The LAYER's own switch, and the whole of it —
     /// [`spectral_reading`](Self::spectral_reading) says which of two readings
-    /// fills the annulus, never whether there is one.
+    /// fills the annulus, never whether there is one, and
+    /// [`spectral_ring_gate`](Self::spectral_ring_gate) says which nodes wear
+    /// what this turns on.
     pub fn spectral_ring_draws(&self) -> bool {
         let (inner, outer) = self.rings().audio;
         outer > inner
@@ -1599,6 +1642,14 @@ impl ViewConfig {
         // it sits and why.
         self.spectral_ring_range = finite_or(self.spectral_ring_range, fresh.spectral_ring_range)
             .clamp(crate::SPECTRAL_RANGE_MIN, crate::SPECTRAL_RANGE_MAX);
+        // The gate, repaired to its OFF position rather than to the fresh value
+        // the two above take: a level nobody can read is a reason to draw every
+        // ring, never to hide one, and a blob holding a NaN here would
+        // otherwise open on a lattice with no rings and no way to tell that
+        // from an analyzer with nothing to say. `SpectralPaint::new` repairs
+        // the same way for the shells that never come through this door.
+        self.spectral_ring_gate = finite_or(self.spectral_ring_gate, crate::SPECTRAL_GATE_MIN)
+            .clamp(crate::SPECTRAL_GATE_MIN, crate::SPECTRAL_GATE_MAX);
 
         // The ground both rings stand on, against that same hole. It is an
         // `L*`, so the clamp is the axis itself: off either end the Newton
@@ -1793,6 +1844,28 @@ impl Default for ViewConfig {
             // A whole tone across a wedge — see the field for why that width
             // and not the octave that makes the ring continuous.
             spectral_ring_range: 200.0,
+            // Two fifths of the way up the Level window — on the fresh window
+            // (−60 dB to 0) a ring for anything down to 36 dB under a
+            // full-scale sine, and on a window pulled in to −35 dB, down to 21.
+            // It is a share of the window rather than a dB deliberately, so
+            // what it says is "no ring dimmer than this much of the ramp" and
+            // moving the window moves the gate with the colours it is judging.
+            //
+            // Measured over the fresh window's 1025 nodes under the fold:
+            // silence rings nothing at all — the picture this arrived for,
+            // where ungated every one of them wears the ramp's floor — a lone
+            // full-scale sine rings 95 (its own pitch class, and the comma
+            // neighbours the analyzer cannot resolve from it), a sawtooth 24 dB
+            // down rings 177 and one 12 dB down rings 765. So loud dense
+            // material still rings most of the lattice, which is what it is
+            // actually doing; quiet material rings its constellation.
+            //
+            // Permissive at the top end on purpose: hiding a ring that had
+            // something to show is the failure a person cannot see, where too
+            // many rings is one they can, and the bar is right there. The
+            // spectrum reading discriminates far less at any setting, and that
+            // is the reading rather than the gate — see the field.
+            spectral_ring_gate: 0.4,
             // Near enough a square law (the exponent lands at 2.05): enough
             // that a release leaves promptly and settles instead of sliding
             // out at one rate, and not so much that the tail is over before

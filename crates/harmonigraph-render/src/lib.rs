@@ -419,6 +419,19 @@ struct GpuInstance {
     /// sheet), y = knockout gutter width in uv units (0 on the home sheet).
     /// See `NodeInstance::scale` / `::gutter`.
     sevens: [f32; 2],
+    /// How much of the audio ring this node wears, 0..=1: the gate's answer for
+    /// its wedges carried on the note Fade, floored by the node's own envelope
+    /// (`NodeInstance::audio_ring`).
+    ///
+    /// A DECISION already taken and not the node's own peak level with the gate
+    /// beside it in the uniforms, though there is a free slot there for one:
+    /// the rule is "the loudest wedge reaches the gate", the levels and the
+    /// wheel it is measured over both live on the CPU, and splitting the
+    /// comparison across the bus would leave two places able to disagree about
+    /// which nodes ring. What crosses is where that decision has GOT to, which
+    /// is a level because a ring arrives and leaves on the Fade like every
+    /// other layer of a node (see `harmonigraph_scene::RingFade`).
+    ring: f32,
 }
 
 impl GpuInstance {
@@ -427,9 +440,11 @@ impl GpuInstance {
         step_mode: wgpu::VertexStepMode::Instance,
         // Locations 5 and 9 are absent, not renumbered. Both are retired
         // slots — 5 the home-sheet flag, 9 the trail level, each read only by
-        // an idle marker the nodes do not draw; the audio ring needs no slot
-        // here at all, since it reads one shared spectrum in the uniforms
-        // rather than a per-node word. The macro
+        // an idle marker the nodes do not draw. The audio ring's own slot is
+        // 11, and it carries how far the layer is on at this node rather than
+        // a reading: WHAT the ring says is a window onto the shared spectrum
+        // in the uniforms, and how much of one this node wears is the
+        // per-node half of it (`GpuInstance::ring`). The macro
         // names each location and takes each OFFSET from the sequence, so a
         // dropped entry shrinks the stride to match the struct without moving
         // the rest off their numbers — which is what keeps this list and
@@ -437,7 +452,7 @@ impl GpuInstance {
         attributes: &wgpu::vertex_attr_array![
             0 => Float32x3, 1 => Float32x4, 2 => Float32x3, 3 => Uint32x3,
             4 => Float32, 6 => Uint32x2,
-            7 => Float32x4, 8 => Float32x4, 10 => Float32x2
+            7 => Float32x4, 8 => Float32x4, 10 => Float32x2, 11 => Float32
         ],
     };
 }
@@ -749,6 +764,7 @@ impl LatticeCallback {
                 melody_color: n.melody_color.to_array(),
                 bass_color: n.bass_color.to_array(),
                 sevens: [n.scale, gutter],
+                ring: n.audio_ring,
         };
 
         let split = order
@@ -773,13 +789,19 @@ impl LatticeCallback {
         //
         // The audio RING is why this is not a property of the node alone: the
         // ring is a window onto the spectrum rather than a level a node
-        // carries, so with it on every node in the window paints one, silence
-        // included — that is what "the ring reads raw" means as a cost. The
-        // shader's idle branch pays it back per fragment, keeping an otherwise
-        // idle node to the ring's own annulus.
+        // carries, so it takes BOTH the layer being on and this node wearing
+        // some of the ring (`Scene::wear_audio_rings`) for the node to owe an
+        // annulus. With the gate at its floor that is every node in the window,
+        // silence included — the ungated picture, and what "the ring reads raw"
+        // costs; dialled up, an idle node with nothing sounding at it goes back
+        // to shipping nothing at all, ONCE ITS FADE HAS RUN OUT — the level
+        // reaches exactly 0 rather than approaching it, so a ring on its way
+        // out is shipped for exactly as long as it is drawn. The shader's idle
+        // branch pays the rest per fragment, keeping an otherwise idle node to
+        // the ring's own annulus.
         let ringing = scene.spectral.ring_draws();
         let paints = |g: &GpuInstance| {
-            ringing
+            (ringing && g.ring > 0.0)
                 || g.params[0] > 0.0
                 || g.params[1] > 0.0
                 || g.params[2] > 0.0
