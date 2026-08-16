@@ -497,6 +497,35 @@ impl RowRead {
             }
         }
     }
+
+    /// PROBE (uncommitted): `of` reaching the table by name — the pre-PR shape.
+    #[cfg(test)]
+    fn of_global(self, db: &[BucketDb]) -> BucketDb {
+        match self {
+            RowRead::Mean { from, to } => {
+                let run = &db[from..to];
+                let top = run.iter().copied().max().unwrap_or(0);
+                if run.len() < 2 {
+                    return top;
+                }
+                let sum: f32 = run.iter().map(|&v| ROW_WEIGHT[usize::from(top - v)]).sum();
+                let steps = -(sum / run.len() as f32).log2() * ROW_MEAN_STEPS;
+                top.saturating_sub(steps.round() as u8)
+            }
+            RowRead::Max { from, to } => db[from..to].iter().copied().max().unwrap_or(0),
+            RowRead::Lerp { lo, f } => {
+                let (a, b) = (db[lo], db[(lo + 1).min(SPECTRUM_BINS - 1)]);
+                (f32::from(a) + (f32::from(b) - f32::from(a)) * f).round() as BucketDb
+            }
+        }
+    }
+
+    /// PROBE (uncommitted): the shipping shape, denied inlining.
+    #[cfg(test)]
+    #[inline(never)]
+    fn of_noinline(self, db: &[BucketDb], weight: &[f32; 256]) -> BucketDb {
+        self.of(db, weight)
+    }
 }
 
 /// Where the visible slabs sit in the uploaded texture, and what pitch range
@@ -4915,6 +4944,104 @@ mod tests {
         );
         // Scaled to the column count a full-width pane composes.
         println!("  over 752 slabs: shipping {:.1} ms", ship_ms * 752.0);
+    }
+
+    /// PROBE (uncommitted): does the global cost land on the arm that reads it?
+    ///
+    /// The claim under test is "the check lands once per READ, on whichever arm
+    /// is taken". A pure-`Lerp` workload settles it: no row indexes the table at
+    /// all, so if naming the global in the `Mean` arm still costs time here, the
+    /// cost cannot be the check executing.
+    #[test]
+    #[ignore]
+    fn probe_mechanism() {
+        use std::time::Instant;
+
+        let mut slab = [0u8; SPECTRUM_BINS];
+        for (i, v) in slab.iter_mut().enumerate() {
+            *v = (40 + (i * 7) % 180) as u8;
+        }
+        let mix = |bins: &[Bin]| {
+            let mean = bins.iter().filter(|b| matches!(b.read, RowRead::Mean { .. })).count();
+            let lerp = bins.iter().filter(|b| matches!(b.read, RowRead::Lerp { .. })).count();
+            (mean, lerp, bins.len())
+        };
+        // The two scales `timing_zoom_costs` uses, so the read mix behind the
+        // 2.5 ms claim is CHECKED rather than taken on trust.
+        let full = PitchScale { min_midi: 16.0, max_midi: 135.0, span: 119.0 };
+        let tight = PitchScale { min_midi: 57.0, max_midi: 69.0, span: 12.0 };
+        // And a hard zoom, where every row is narrower than a bucket.
+        let hard = PitchScale { min_midi: 60.0, max_midi: 63.0, span: 3.0 };
+        for (label, scale) in [("full 119st", &full), ("tight 12st", &tight), ("hard 3st", &hard)] {
+            let (mean, lerp, all) = mix(&bins_for(1408, scale, false));
+            println!("  {label}: {mean} Mean, {lerp} Lerp, of {all} rows");
+        }
+
+        // Two workloads. `hard` barely touches the table (98 of 1408 rows);
+        // `full` is every row. If the cost is the CHECK, the saving must scale
+        // with the Mean count and the ratio of the two deltas is ~0.07. If it
+        // is per CALL, both deltas are the same and the ratio is ~1.
+        let run = |bins: &[Bin]| {
+            let a = || {
+                let t0 = Instant::now();
+                let mut sink = 0u32;
+                for _ in 0..200 {
+                    for b in bins {
+                        sink += u32::from(b.read.of_global(&slab));
+                    }
+                }
+                (t0.elapsed().as_secs_f64() * 1000.0 / 200.0, sink)
+            };
+            let b_arm = || {
+                let w: &[f32; 256] = &ROW_WEIGHT;
+                let t0 = Instant::now();
+                let mut sink = 0u32;
+                for _ in 0..200 {
+                    for b in bins {
+                        sink += u32::from(b.read.of(&slab, w));
+                    }
+                }
+                (t0.elapsed().as_secs_f64() * 1000.0 / 200.0, sink)
+            };
+            // Denied inlining: tells "the global blocked inlining" apart from
+            // "the global degraded the loop it sits in".
+            let c = || {
+                let w: &[f32; 256] = &ROW_WEIGHT;
+                let t0 = Instant::now();
+                let mut sink = 0u32;
+                for _ in 0..200 {
+                    for b in bins {
+                        sink += u32::from(b.read.of_noinline(&slab, w));
+                    }
+                }
+                (t0.elapsed().as_secs_f64() * 1000.0 / 200.0, sink)
+            };
+            let (mut am, mut bm, mut cm) = (f64::MAX, f64::MAX, f64::MAX);
+            let mut sinks = (0, 0, 0);
+            for _ in 0..9 {
+                let (x, y, z) = (a(), b_arm(), c());
+                (am, bm, cm) = (am.min(x.0), bm.min(y.0), cm.min(z.0));
+                sinks = (x.1, y.1, z.1);
+            }
+            assert_eq!(sinks.0, sinks.1, "the arms must compute the same column");
+            assert_eq!(sinks.1, sinks.2);
+            (am, bm, cm)
+        };
+
+        for (label, scale) in [("hard 3st (98 Mean)", &hard), ("full 119st (1408 Mean)", &full)] {
+            let bins = bins_for(1408, scale, false);
+            let (mean, _, _) = mix(&bins);
+            let (am, bm, cm) = run(&bins);
+            println!(
+                "  {label}: A global {am:.4} | B param {bm:.4} | C param+noinline {cm:.4} ms/col",
+            );
+            println!(
+                "    A-B delta {:.4} ms/col over {mean} Mean rows | A/B {:.2}x | C/B {:.2}x",
+                am - bm,
+                am / bm,
+                cm / bm,
+            );
+        }
     }
 
     /// Scratch harness for the zoom-performance audit: prints where a zoom
