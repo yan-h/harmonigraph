@@ -539,11 +539,11 @@ fn pulse_marks_mode() -> u32 {
 // Every pulse mode but 0, and the same animation in each: a pattern of light
 // laid over the layer, travelling. What the mode picks is its SHAPE.
 //
-// WHICH pixels it covers is not quite the same question. The sheet is the mark
-// rings', and it takes the octave slices those rings point at (`mark_slice` in
-// `fs_main`) as well as the annuli themselves, because a mark is the ring
-// together with the octave it names rather than the annulus alone. The rest of
-// the octave layer draws steady.
+// WHICH pixels it covers is not quite the same question. The sheet is the
+// marks', and it takes the octave slices those marks extend (`mark_slice` in
+// `fs_main`) as well as the extensions themselves, because a mark is one slice
+// in two pieces rather than the outer piece alone. The rest of the octave layer
+// draws steady.
 //
 // The field is SHARED. Every node samples the same sheet at its own place on
 // `in.field` — the plane the billboards face, in world units — so the light

@@ -707,7 +707,7 @@ fn sector_color(node: &NodeInstance, slot: u32, frame: &FrameParams) -> Vec4 {
 }
 
 #[test]
-fn a_mark_is_the_color_of_the_sector_it_brackets() {
+fn a_mark_is_the_color_of_the_sector_it_extends() {
     // The reported bug: move the octave wheel off the register being played
     // and the melody/bass marks stop matching the note they mark. A note past
     // either end folds onto the outermost slot, so a mark carrying the VOICE's

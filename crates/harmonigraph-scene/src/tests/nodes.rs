@@ -886,7 +886,7 @@ fn a_degenerate_color_range_lands_where_the_shader_lands() {
     // The shader takes both without complaint — it clamps the RATIO
     // (`pitch_lut_color`, lattice.wgsl) — so the CPU has to land where it
     // lands, or a mark is painted one end of the ramp while the very glyph it
-    // brackets is painted the other.
+    // extends is painted the other.
     let shader_t = |pitch: f32, dark: f32, bright: f32| {
         ((pitch - dark) / (bright - dark).max(0.01)).clamp(0.0, 1.0)
     };
@@ -957,8 +957,8 @@ fn a_lit_octave_indicator_stands_for_the_pitch_it_is_drawn_at() {
         "a C4 lit the indicator for pitch {drawn}, an octave off the note that lit it",
     );
 
-    // And the ring takes the colour of the sector it brackets, so a slot an
-    // octave out is also a ring a seventh of the ramp away from the disc it
+    // And the mark takes the colour of the sector it extends, so a slot an
+    // octave out is also a mark a seventh of the ramp away from the disc it
     // sits on -- the mismatch the one colour table exists to have ruled out.
     let marked: Vec<usize> =
         (0..OCTAVE_SLOTS).filter(|&s| origin.melody_slots >> s & 1 == 1).collect();

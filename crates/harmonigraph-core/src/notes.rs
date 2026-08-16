@@ -349,11 +349,11 @@ impl Voice {
     /// have one layer disagree with the next about either.
     ///
     /// The melody/bass marks are the deliberate exception and take
-    /// [`release_level`](Self::release_level) instead: a ring runs its own
+    /// [`release_level`](Self::release_level) instead: a mark runs its own
     /// ease from the moment its note TOOK the end (plus whatever wait
     /// `mark_delay` asks), and multiplying the note's attack in on top would
     /// square the two wherever those moments coincide — the usual case —
-    /// leaving a ring visibly slower than the sector it brackets.
+    /// leaving a mark visibly slower than the sector it extends.
     pub fn activation(&self, now: Time, env: &Envelope) -> f32 {
         env.attack(now, self.on_time) * self.release_level(now, env)
     }

@@ -1389,7 +1389,7 @@ const PARTIAL_HALF_CENTS: f32 = 40.0;
 ///
 /// The fresh radii rather than the fixture's, because the claim below is about
 /// the shipped picture: that the ring lands in the space the core and the
-/// melody ring leave, on a node nobody has dialled. The core is the one thing
+/// octave band leave, on a node nobody has dialled. The core is the one thing
 /// turned off — its glow is light at every radius the measurements read, and
 /// what is being measured is where two annuli are.
 ///
