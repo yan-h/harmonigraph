@@ -12,12 +12,12 @@
 
 use super::{edge_bar, param_bar, section};
 use crate::params::{seconds, ParamBackend, ParamKey};
-use crate::widgets::{button_row, choice_row, OctaveStrip, RangeBar, ValueBar};
+use crate::widgets::{button_row, choice_row, OctaveStrip, ValueBar};
 use crate::SharedState;
 use harmonigraph_scene::{
-    Pulse, SpectralReading, ViewConfig, MARK_DELAY_MAX, MIN_EXTRA_SIZE, PITCH_CEIL, PITCH_FLOOR,
-    SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN, SPECTRAL_RING_MIN_SPAN, SPECTRAL_WIDTH_MAX,
-    SPECTRAL_WIDTH_MIN,
+    Pulse, SpectralReading, ViewConfig, CORE_RADIUS_MAX, GAP_MAX, MARK_DELAY_MAX,
+    MARK_THICKNESS_MAX, MIN_EXTRA_SIZE, PITCH_CEIL, PITCH_FLOOR, RING_WIDTH_MAX,
+    SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN, SPECTRAL_WIDTH_MAX, SPECTRAL_WIDTH_MIN,
 };
 
 /// The sounding-note controls: what the audio ring measures, then the whole
@@ -26,11 +26,13 @@ use harmonigraph_scene::{
 /// the outermost layer can be set to run.
 ///
 /// Whole-note before the layers, because those settings are the ones reached
-/// for most and because none of them belongs to a layer. Ordering them after
-/// Core, Octaves and the marks would read more consistently outward, and would
-/// put the section's most-used controls under the ones reached for least.
-/// Reading outward is what orders the rest. Audio comes above even those,
-/// being the one control that adds a layer rather than sizing one.
+/// for most and because none of them belongs to a layer — the Gap especially,
+/// which is one number spacing every layer of the node from the one inside it.
+/// Ordering them after Core, Octaves and the marks would read more consistently
+/// outward, and would put the section's most-used controls under the ones
+/// reached for least. Reading outward is what orders the rest. Audio comes
+/// above even those, being the one section that says what a layer MEASURES
+/// where the rest only size and colour what is already there.
 pub(super) fn nodes_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBackend) {
     audio_section(ui, &mut state.view);
     note_section(ui, &mut state.view, params);
@@ -47,11 +49,15 @@ pub(super) fn nodes_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dy
 /// choice. Independent of the Octaves layer.
 fn core_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     section(ui, "Core");
-    ValueBar::new(&mut view.core_radius, 0.0..=0.9, "Radius")
+    // The one size on the node measured from its CENTER, and the bottom of the
+    // stack: every ring below is a width laid on top of this one, so dragging
+    // it moves the whole node outward rather than eating the ring above it.
+    ValueBar::new(&mut view.core_radius, 0.0..=CORE_RADIUS_MAX, "Radius")
         .show(ui)
         .on_hover_text(
-            "Core size (disc and glow together); 0 turns it off, \
-             0.46 is the classic disc",
+            "Core size (disc and glow together), measured from the node's \
+             center; 0 turns it off, 0.46 is the classic disc. The rings \
+             outside it stack on top, so widening the core pushes them out",
         );
     ui.add_enabled_ui(view.core_radius > 0.0, |ui| {
         ValueBar::new(&mut view.core_solidity, 0.0..=1.0, "Solidity")
@@ -68,8 +74,10 @@ fn core_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
 /// pitch axis that runs once round the node. Independent of the Core.
 fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     section(ui, "Octaves");
-    // Octaves, Center and the fringe are the axis; Band and Gap below are
-    // where it is drawn.
+    // Octaves, Center and the fringe are the axis; Band below is how thick the
+    // ring it is drawn on is. The padding between one indicator and the next is
+    // the node-wide Gap, up in Note: it is the same number that spaces the
+    // rings apart and stands the melody/bass marks off the band.
     //
     // COUNTS and a CENTER rather than a pitch range: a slice is always exactly
     // one octave, so an indicator can never stand for less pitch than it
@@ -147,30 +155,23 @@ fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                  never moves",
             );
     });
-    // No on/off: the layer is what says which octaves are sounding, which
-    // is the node's whole outer half, and Band already reaches every size
-    // from a hairline to the quad edge.
+    // No on/off beside it: 0 IS the off position, as it is on every other
+    // layer of the node, and the bar reaches every size from a hairline to
+    // more than the quad from there.
     //
-    // Inner and outer radius are one control: the band is the ring between
-    // them. Drag either edge, or drag between to slide the ring at a fixed
-    // width; the min span keeps it from collapsing.
-    RangeBar::new(&mut view.outer_inner, &mut view.outer_outer, 0.0..=1.0, "Band")
-        .min_span(0.05)
+    // One number rather than the pair of radii the band could be given: where
+    // it SITS is the stack's answer (`ViewConfig::rings`) — a gap out from the
+    // audio ring, or from the core where that ring is off — so the only thing
+    // left to say about it is how thick it is. That is what makes the four size
+    // bars independent: none of them can be dragged behind its neighbour, and
+    // widening one slides the ones outside it rather than crushing them.
+    ValueBar::new(&mut view.band_width, 0.0..=RING_WIDTH_MAX, "Band")
         .show(ui)
         .on_hover_text(
-            "The octave band's inner and outer radius. Inner 0 reaches the \
-             node center (pie wedges); drag between the handles to move the \
-             whole ring in or out.",
-        );
-    // One padding for the whole layer: between sectors, and
-    // between the band and the melody/bass marks.
-    ValueBar::new(&mut view.outer_gap, 0.0..=0.4, "Gap")
-        .show(ui)
-        .on_hover_text(
-            "Padding inside the octave layer: between one octave \
-             and the next, and between the band and the \
-             melody/bass marks. 0 closes the octaves into a solid \
-             annulus and seats the marks against it",
+            "How thick the octave band is. It sits a Gap out from the audio \
+             ring — or from the core, with that ring off — and the melody/bass \
+             marks stack outside it. 0 turns the octave layer off entirely, and \
+             the marks close up over the space it leaves",
         );
     // No Solidity and no Backdrop bar: both are fixed at 1. The glyphs are
     // always the crisp classic shapes, and the silent octaves always ghost
@@ -210,13 +211,14 @@ fn melody_bass_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // it reads as that indicator's own piece rather than as a ring around
     // everything.
     ui.add_enabled_ui(view.mark_melody || view.mark_bass, |ui| {
-        ValueBar::new(&mut view.mark_thickness, 0.0..=0.3, "Mark depth")
+        ValueBar::new(&mut view.mark_thickness, 0.0..=MARK_THICKNESS_MAX, "Mark depth")
             .show(ui)
             .on_hover_text(
-                "How far a mark reaches past the octave band, in the same \
-                 units as the band radii and Gap. 0 turns the marks off; \
-                 a band dialled right out with a wide Gap leaves less room \
-                 than this asks for, and the mark stops at the node's edge",
+                "How deep the mark strip is — the last slot of the stack, a Gap \
+                 out from the octave band, or from whichever ring is outermost \
+                 with the band off. Same units as the ring widths and Gap. 0 \
+                 turns the marks off; a stack dialled right out leaves less \
+                 room than this asks for, and the mark stops at the node's edge",
             );
         // The Delay is about a mark that is DRAWN — when it arrives — so it is
         // gated on there being one. A depth of 0 is the documented off position,
@@ -383,95 +385,89 @@ fn shimmer_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
 /// place as the row is clicked along.
 fn audio_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     ui.heading("Audio");
-    // "Reading" and not "Ring", though the ring is what it fills: the bar two
-    // rows down is already called Ring, being the ring's RADIUS, and two
-    // settings a row apart under one name are told apart only by hovering
-    // both. What this row picks is which of two measurements the ring carries,
-    // which is the word the rest of the audio channel uses for it.
-    choice_row(
-        ui,
-        "Reading",
-        &mut view.spectral_reading,
-        &[
-            (
-                SpectralReading::Off,
-                "Off",
-                "No ring: the lattice is the MIDI picture, whole",
-            ),
-            (
-                SpectralReading::Fold,
-                "Fold",
-                "Each wedge one reading, taken at that octave's own pitch: how \
-                 much is sounding THERE, folded onto the node the way the \
-                 lattice already folds a note. A partial sits at an exact \
-                 ratio of its fundamental, so a timbre lights a constellation \
-                 around its own node — a fifth up for the 3rd harmonic, a \
-                 third up for the 5th, the sevenths axis for the 7th — and \
-                 each node's wedges say which octaves those partials are in. \
-                 The reading to look at a screenful of nodes with",
-            ),
-            (
-                SpectralReading::Spectrum,
-                "Spectrum",
-                "Each wedge a window of the raw spectrum, bent into its arc — \
-                 a segment of the spiral spectrogram. Angle across the wedge \
-                 is a pitch window around that octave, so a partial dead on \
-                 the node paints down the middle and one a comma sharp paints \
-                 to the clockwise side: this one reads a DETUNING, which a \
-                 number per octave cannot say. The reading to look at ONE node \
-                 with",
-            ),
-        ],
-    );
-    // Where the ring sits, as one control over its two radii — the same shape
-    // as the octave band's own Band bar, because it is the same question about
-    // a second annulus. Fresh it lands in the gap the core and the octave band
-    // leave; a dialled-up core or a band pulled inward closes that gap, and
-    // this is what moves the ring out of the way. Both readings, since both
-    // draw in this one annulus.
-    ui.add_enabled_ui(view.spectral_reading.draws(), |ui| {
-        RangeBar::new(
-            &mut view.spectral_ring_inner,
-            &mut view.spectral_ring_outer,
-            0.0..=1.0,
-            "Ring",
-        )
-        .min_span(SPECTRAL_RING_MIN_SPAN)
-        .show(ui)
-        .on_hover_text(
-            "The audio ring's inner and outer radius, in the same units as the \
-             octave Band. Drag between the handles to move the whole ring in \
-             or out; fresh it sits in the clear space between the core and the \
-             octave band, with a gap either side so the three read as separate \
-             layers",
+    // "Reading" and not "Ring", though the ring is what it fills: the bar
+    // below is already called Ring, being the ring's WIDTH, and two settings a
+    // row apart under one name are told apart only by hovering both. What this
+    // row picks is which of two measurements the ring carries, which is the
+    // word the rest of the audio channel uses for it.
+    //
+    // No Off among the readings, and the Ring bar under it is why: a width of 0
+    // turns the ring off, the way a radius of 0 turns the core off and a depth
+    // of 0 turns the marks off. An Off here would be a second switch for this
+    // one layer, in a place no other layer keeps one, and the two would then
+    // have to be read together to know whether there is a ring.
+    //
+    // Grayed with the ring off rather than hidden, so the section keeps its
+    // height and its rows keep their place as the bar is dragged to nothing.
+    ui.add_enabled_ui(view.spectral_ring_draws(), |ui| {
+        choice_row(
+            ui,
+            "Reading",
+            &mut view.spectral_reading,
+            &[
+                (
+                    SpectralReading::Fold,
+                    "Fold",
+                    "Each wedge one reading, taken at that octave's own pitch: how \
+                     much is sounding THERE, folded onto the node the way the \
+                     lattice already folds a note. A partial sits at an exact \
+                     ratio of its fundamental, so a timbre lights a constellation \
+                     around its own node — a fifth up for the 3rd harmonic, a \
+                     third up for the 5th, the sevenths axis for the 7th — and \
+                     each node's wedges say which octaves those partials are in. \
+                     The reading to look at a screenful of nodes with",
+                ),
+                (
+                    SpectralReading::Spectrum,
+                    "Spectrum",
+                    "Each wedge a window of the raw spectrum, bent into its arc — \
+                     a segment of the spiral spectrogram. Angle across the wedge \
+                     is a pitch window around that octave, so a partial dead on \
+                     the node paints down the middle and one a comma sharp paints \
+                     to the clockwise side: this one reads a DETUNING, which a \
+                     number per octave cannot say. The reading to look at ONE node \
+                     with",
+                ),
+            ],
         );
     });
+    // How thick the ring is, and so whether there is one — the same shape as
+    // the octave band's own Band bar, because it is the same question about a
+    // second annulus. Never grayed: it is this layer's off switch as well as
+    // its size, and a bar that grayed itself out at 0 could not be dragged back.
+    ValueBar::new(&mut view.spectral_ring_width, 0.0..=RING_WIDTH_MAX, "Ring")
+        .show(ui)
+        .on_hover_text(
+            "How thick the audio ring is, in the same units as the octave \
+             Band. 0 turns the ring off — the lattice is then the MIDI \
+             picture, whole, and the band closes in over the space the ring \
+             leaves. It sits a Gap out from the core, with the band a Gap \
+             outside it, so the three read as separate layers",
+        );
     // The FOLD's kernel, and so inert under Spectrum rather than merely
     // without audio: the spectrum reading shows a whole window of pitch per
     // wedge, and a kernel there would blur the one axis the window exists to
     // resolve. Its own setting is the Range bar below.
-    ui.add_enabled_ui(view.spectral_reading == SpectralReading::Fold, |ui| {
-        ValueBar::new(
-            &mut view.spectral_width,
-            SPECTRAL_WIDTH_MIN..=SPECTRAL_WIDTH_MAX,
-            "Width",
-        )
-        .display(|cents| format!("{cents:.0}¢"))
-        .show(ui)
-        .on_hover_text(
-            "How far off an octave's own pitch a partial may sit and still \
-             light its wedge, in cents. A weight and not a cutoff: distance \
-             reads as dimness, so a detuned partial fades rather than \
-             switching off and vibrato breathes instead of flickering. Narrow \
-             is right for just intonation, where partials land dead on the \
-             nodes; equal-tempered material wants it wider, a tempered third's \
-             5th harmonic sitting 13.7 ¢ off its node and a 7th harmonic 31 ¢. \
-             The Fold reading's alone — Spectrum does not fold",
-        );
+    let folding = view.spectral_ring_draws() && view.spectral_reading == SpectralReading::Fold;
+    ui.add_enabled_ui(folding, |ui| {
+        ValueBar::new(&mut view.spectral_width, SPECTRAL_WIDTH_MIN..=SPECTRAL_WIDTH_MAX, "Width")
+            .display(|cents| format!("{cents:.0}¢"))
+            .show(ui)
+            .on_hover_text(
+                "How far off an octave's own pitch a partial may sit and still \
+                 light its wedge, in cents. A weight and not a cutoff: distance \
+                 reads as dimness, so a detuned partial fades rather than \
+                 switching off and vibrato breathes instead of flickering. Narrow \
+                 is right for just intonation, where partials land dead on the \
+                 nodes; equal-tempered material wants it wider, a tempered third's \
+                 5th harmonic sitting 13.7 ¢ off its node and a 7th harmonic 31 ¢. \
+                 The Fold reading's alone — Spectrum does not fold",
+            );
     });
     // The SPECTRUM reading's zoom, under the Width it stands opposite: how much
     // pitch a wedge shows, where Width is how much of it counts as the node's.
-    ui.add_enabled_ui(view.spectral_reading == SpectralReading::Spectrum, |ui| {
+    let zoomed = view.spectral_ring_draws() && view.spectral_reading == SpectralReading::Spectrum;
+    ui.add_enabled_ui(zoomed, |ui| {
         ValueBar::new(
             &mut view.spectral_ring_range,
             SPECTRAL_RANGE_MIN..=SPECTRAL_RANGE_MAX,
@@ -555,6 +551,25 @@ fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBack
              arrives fast and settles slowly, the way a struck note decays; at \
              the top most of the travel is over in the first quarter of the \
              time. The trail keeps its own straight fade whatever this says",
+        );
+    // The one padding on a node, and so a whole-note setting rather than the
+    // octave layer's: it spaces the rings of the stack apart, it separates one
+    // octave sector from the next, and it is what a melody/bass mark stands off
+    // the band by. Under the octave heading it read as the sectors' own, which
+    // is one of the three things it does.
+    //
+    // One number for the radial gaps and the angular ones together, because a
+    // node reads as one rhythm of interruptions: two spacings for one idea and
+    // the eye takes the wider of them for the structure.
+    ValueBar::new(&mut view.ring_gap, 0.0..=GAP_MAX, "Gap")
+        .show(ui)
+        .on_hover_text(
+            "The one padding on a node: between each ring of the stack and the \
+             next, between one octave indicator and the next, and between the \
+             band and the melody/bass marks. 0 closes the whole node up — the \
+             octaves become a solid annulus, the marks seat against them, and \
+             every ring meets the one inside it. A ring turned off costs no \
+             gap either",
         );
     // Here rather than with the sevens-layer controls, where a "Sevenths" name
     // misreads what it does: the gutter is cleared by every sounding node on

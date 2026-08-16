@@ -975,37 +975,35 @@ fn a_lit_octave_indicator_stands_for_the_pitch_it_is_drawn_at() {
     );
 }
 
-/// The fresh audio ring sits in CLEAR SPACE: the annulus the core disc and the
-/// octave band leave between them, with a visible gap at each end.
+/// A fresh node's four layers are all THERE, each clear of the last, and the
+/// whole stack fits inside the quad.
 ///
-/// Arithmetic on the fresh values rather than a picture, because that is what
-/// the gaps are — the core ends at its radius, and the band begins at its
-/// inner one. Written out here so that retuning either moves this test, which
-/// is the point: the ring is placed against them and nothing in its own two
-/// fields knows they exist.
-///
-/// The band is the neighbour above rather than a melody mark, because both
-/// marks now sit OUTSIDE the band: the space this ring is dropped into runs
-/// clear from the core to the band's inner edge.
+/// The fresh view's own arithmetic rather than a picture, because that is what
+/// the stack is — and it is worth pinning because the sizes are widths: nothing
+/// in one bar's value says where its ring lands, so a retune of any of them
+/// moves every layer outside it, and a stack that has walked off the quad edge
+/// draws a node with its outer rings quietly clipped away.
 #[test]
-fn the_fresh_audio_ring_sits_clear_of_the_core_and_the_octave_band() {
+fn the_fresh_node_stacks_four_visible_layers_inside_the_quad() {
     let view = ViewConfig::default();
+    let rings = view.rings();
     // A gap a reader can see, not merely a positive number. A twentieth of the
-    // node's radius is about the padding inside the octave layer (0.052
-    // fresh), which is the rhythm the rest of the node is spaced on.
+    // node's radius is about the fresh padding (0.052), which is the rhythm the
+    // whole node is spaced on.
     const CLEAR: f32 = 0.05;
-    assert!(
-        view.spectral_ring_inner - view.core_radius > CLEAR,
-        "the ring starts at {} against a core ending at {}, which is not a gap",
-        view.spectral_ring_inner,
-        view.core_radius,
+    assert!(rings.gap >= CLEAR, "the layers are spaced by {}, which is not a gap", rings.gap);
+    assert!(rings.core_radius > CLEAR, "the fresh core is off");
+    assert_eq!(
+        rings.audio,
+        (rings.core_radius + rings.gap, rings.band.0 - rings.gap),
+        "the fresh audio ring does not fill the space between the core and the band",
     );
-    assert!(
-        view.outer_inner - view.spectral_ring_outer > CLEAR,
-        "the ring ends at {} against a band starting at {}",
-        view.spectral_ring_outer,
-        view.outer_inner,
-    );
+    assert!(rings.audio.1 - rings.audio.0 > CLEAR, "the fresh audio ring is a hairline");
+    assert!(rings.band.1 - rings.band.0 > CLEAR, "the fresh octave band is a hairline");
+    assert!(rings.mark_thickness > 0.0, "the fresh marks are off");
+    // The marks are the one layer allowed past the quad edge — they draw in the
+    // billboard's margin — so what has to fit here is the rings.
+    assert!(rings.outer < 1.0, "the fresh rings reach the quad edge at {}", rings.outer);
 }
 
 /// A scene derived here draws NO audio, whatever the view asks for.

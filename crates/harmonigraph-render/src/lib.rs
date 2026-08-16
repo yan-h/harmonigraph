@@ -826,10 +826,15 @@ impl LatticeCallback {
                     render_scale,
                     bloom_strength(scene.bloom_strength),
                 ],
-                misc3: [scene.core_radius, scene.outer_inner, scene.outer_outer, 0.0],
+                misc3: [
+                    scene.core_radius,
+                    scene.outer_inner,
+                    scene.outer_outer,
+                    scene.rings_outer,
+                ],
                 pitch_lut: std::array::from_fn(|k| scene.pitch_lut[k].to_array()),
                 misc4: [scene.core_solidity, 0.0, 0.0, 0.0],
-                misc5: [scene.grid_thickness, 0.0, scene.outer_gap, scene.mark_thickness],
+                misc5: [scene.grid_thickness, 0.0, scene.ring_gap, scene.mark_thickness],
                 misc6: [0.0, 0.0, scene.sevens_soft, scene.pulse_marks.shader_index() as f32],
                 background: scene.background.to_array(),
                 misc7: [

@@ -506,36 +506,33 @@ pub fn derive_scene(
 
     let grid = derive_grid(view, window, &nodes);
 
-    // Core/outer geometry policy: the core is a plain radius the shader
-    // reads (0 = off), with solidity riding alongside; the outer band is
-    // sanitized here so the shader can trust outer > inner whatever the two
-    // bars hold.
-    let core_radius = view.core_radius.clamp(0.0, 0.9);
+    // Every radius on a node, off the one stack the size bars describe
+    // (`ViewConfig::rings`, which is also where their clamps live): the core is
+    // a plain radius the shader reads, each ring is a width a gap out from
+    // whatever is inside it, and a layer dialled to 0 is off and hands its slot
+    // back. The shader can trust outer > inner on a band that draws at all,
+    // and an empty pair is the one thing that says a ring does not.
+    let rings = view.rings();
     let core_solidity = view.core_solidity.clamp(0.0, 1.0);
-    let outer_inner = view.outer_inner.clamp(0.0, 0.9);
-    let outer_outer = view.outer_outer.clamp(outer_inner + 0.05, 1.0);
-    // A gap wider than the band would erase the sectors entirely; cap it
-    // well short of that.
-    let outer_gap = view.outer_gap.clamp(0.0, 0.4);
-    let mark_thickness = view.mark_thickness.clamp(0.0, 0.4);
 
     Scene {
         nodes,
         camera,
         now,
         node_radius: view.spacing * NODE_RADIUS_FACTOR,
-        core_radius,
+        core_radius: rings.core_radius,
         core_solidity,
-        outer_inner,
-        outer_outer,
-        outer_gap,
+        outer_inner: rings.band.0,
+        outer_outer: rings.band.1,
+        rings_outer: rings.outer,
+        ring_gap: rings.gap,
         // The MIDI picture, whole: nothing here reads audio, so the audio
         // channel arrives empty and the Lattice pane's fold is what fills it.
         spectral: SpectralPaint::silent(),
         octave_layout,
         grid,
         grid_thickness: view.grid_thickness.clamp(0.0, 8.0),
-        mark_thickness,
+        mark_thickness: rings.mark_thickness,
         // A mark sheet reaches the extension AND the octave slice it extends,
         // so with the mark layer off — no end marked, or no depth to
         // draw one with, which is `marks_draw` and is exactly what the

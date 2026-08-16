@@ -110,15 +110,15 @@ fn the_mark_depth_reaches_the_scene_and_is_clamped() {
         &plain_frame(),
         0.0,
     );
-    assert!(scene.mark_thickness <= 0.4, "got {}", scene.mark_thickness);
+    assert!(scene.mark_thickness <= 0.3, "got {}", scene.mark_thickness);
 }
 
 #[test]
-fn the_octave_gap_reaches_the_scene_and_is_clamped() {
-    // One padding for the whole octave layer: the shader spaces the
-    // sectors AND the melody/bass marks by this single number, so it has
-    // to survive derive_scene rather than being a shader constant.
-    let view = ViewConfig { outer_gap: 0.2, ..ViewConfig::default() };
+fn the_gap_reaches_the_scene_and_is_clamped() {
+    // One padding for the whole node: the shader spaces the sectors AND the
+    // melody/bass marks by this single number, and derive_scene stacks the
+    // rings by it, so it has to survive rather than being a shader constant.
+    let view = ViewConfig { ring_gap: 0.2, ..ViewConfig::default() };
     let scene = scene_of(
         &NoteTracker::new(),
         &Tuning::default(),
@@ -126,11 +126,11 @@ fn the_octave_gap_reaches_the_scene_and_is_clamped() {
         &plain_frame(),
         0.0,
     );
-    assert_eq!(scene.outer_gap, 0.2);
+    assert_eq!(scene.ring_gap, 0.2);
 
     // A gap wider than the band would erase every sector; the scene caps
     // it rather than handing the shader something that draws nothing.
-    let wild = ViewConfig { outer_gap: 5.0, ..ViewConfig::default() };
+    let wild = ViewConfig { ring_gap: 5.0, ..ViewConfig::default() };
     let scene = scene_of(
         &NoteTracker::new(),
         &Tuning::default(),
@@ -138,18 +138,104 @@ fn the_octave_gap_reaches_the_scene_and_is_clamped() {
         &plain_frame(),
         0.0,
     );
-    assert!(scene.outer_gap <= 0.4, "got {}", scene.outer_gap);
+    assert!(scene.ring_gap <= 0.4, "got {}", scene.ring_gap);
+}
+
+#[test]
+fn the_rings_stack_outward_from_the_core() {
+    // The whole of what the width bars mean, at the scene: each ring starts a
+    // gap past the one inside it, so the band's radii are a SUM rather than a
+    // pair of settings, and nothing has to be dragged twice to keep the layers
+    // from overlapping.
+    let view = ViewConfig {
+        core_radius: 0.2,
+        spectral_ring_width: 0.1,
+        band_width: 0.15,
+        ring_gap: 0.05,
+        ..ViewConfig::default()
+    };
+    let scene = scene_of(
+        &NoteTracker::new(),
+        &Tuning::default(),
+        &view,
+        &plain_frame(),
+        0.0,
+    );
+    assert_eq!(scene.core_radius, 0.2);
+    // core 0.2 | gap | audio 0.25..0.35 | gap | band 0.40..0.55
+    assert_eq!((scene.outer_inner, scene.outer_outer), (0.4, 0.55));
+    assert_eq!(scene.rings_outer, 0.55, "the marks stand off the band");
+
+    // The audio ring off: its slot AND its gap go back to the band, which
+    // slides in to sit a single gap off the core.
+    let view = ViewConfig { spectral_ring_width: 0.0, ..view };
+    let scene = scene_of(
+        &NoteTracker::new(),
+        &Tuning::default(),
+        &view,
+        &plain_frame(),
+        0.0,
+    );
+    assert_eq!((scene.outer_inner, scene.outer_outer), (0.25, 0.4));
+
+    // The band off: an empty pair, which is what says the layer is not drawn,
+    // and the marks fall back to standing off the ring that IS the outermost.
+    let view = ViewConfig { spectral_ring_width: 0.1, band_width: 0.0, ..view };
+    let scene = scene_of(
+        &NoteTracker::new(),
+        &Tuning::default(),
+        &view,
+        &plain_frame(),
+        0.0,
+    );
+    assert_eq!((scene.outer_inner, scene.outer_outer), (0.0, 0.0));
+    assert_eq!(scene.rings_outer, 0.35, "the marks kept the band's slot");
+}
+
+/// A size a hand-edited blob holds but no bar can produce reaches the scene as
+/// the layer's own OFF position, and takes nothing else down with it.
+///
+/// A NaN is the case worth the test: it walks through a `clamp` untouched (it
+/// is its own answer to every comparison), and one that reached the shader as a
+/// radius would take the node's whole radial coverage to NaN — the layer, and
+/// every layer measured off it, silently gone while the bars read out numbers.
+#[test]
+fn a_hand_edited_size_reaches_the_scene_as_that_layers_off_position() {
+    for wild in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -5.0] {
+        let view = ViewConfig {
+            spectral_ring_width: wild,
+            core_radius: 0.3,
+            band_width: 0.2,
+            ring_gap: 0.05,
+            ..ViewConfig::default()
+        };
+        let scene = scene_of(
+            &NoteTracker::new(),
+            &Tuning::default(),
+            &view,
+            &plain_frame(),
+            0.0,
+        );
+        // The ring is off, and the band has closed over its slot rather than
+        // being carried off by it.
+        assert!(
+            (scene.outer_inner - 0.35).abs() < 1e-5 && (scene.outer_outer - 0.55).abs() < 1e-5,
+            "a ring width of {wild} moved the band to {}..{}",
+            scene.outer_inner,
+            scene.outer_outer,
+        );
+        assert!(scene.core_radius.is_finite(), "a ring width of {wild} reached the core");
+    }
 }
 
 #[test]
 fn core_and_outer_geometry_are_sanitized_into_the_scene() {
-    // Bars dragged into a crossed/degenerate combination: the scene
-    // must still hand the shader a visible band (outer ahead of inner).
-    // A radius of 0 turns the core off (passes through as 0).
+    // A stack dialled past the quad's own edge: every ring is held inside it
+    // rather than handed to the shader as a radius it would draw off the node.
     let view = ViewConfig {
         core_radius: 0.0,
-        outer_inner: 0.8,
-        outer_outer: 0.3,
+        spectral_ring_width: 0.8,
+        band_width: 0.9,
         ..ViewConfig::default()
     };
     let scene = scene_of(
@@ -160,16 +246,19 @@ fn core_and_outer_geometry_are_sanitized_into_the_scene() {
         0.0,
     );
     assert_eq!(scene.core_radius, 0.0, "radius 0 = core off");
-    assert_eq!(scene.outer_inner, 0.8);
+    // The core off, so the audio ring reaches the center; the band takes what
+    // is left of the quad.
     assert!(scene.outer_outer > scene.outer_inner);
+    assert!(scene.outer_outer <= 1.0, "the band reaches past the node at {}", scene.outer_outer);
 
     // Core on: the radius passes through and solidity rides alongside,
     // both clamped to range.
     let view = ViewConfig {
         core_radius: 0.3,
         core_solidity: 0.25,
-        outer_inner: 0.0,
-        outer_outer: 0.5,
+        spectral_ring_width: 0.0,
+        band_width: 0.5,
+        ring_gap: 0.0,
         ..view
     };
     let scene = scene_of(
@@ -181,7 +270,7 @@ fn core_and_outer_geometry_are_sanitized_into_the_scene() {
     );
     assert_eq!(scene.core_radius, 0.3);
     assert_eq!(scene.core_solidity, 0.25);
-    assert_eq!((scene.outer_inner, scene.outer_outer), (0.0, 0.5));
+    assert_eq!((scene.outer_inner, scene.outer_outer), (0.3, 0.8));
 
     // Core solidity is clamped into 0..1 before it reaches the shader.
     let view = ViewConfig { core_solidity: 4.0, ..view };
