@@ -371,7 +371,7 @@ fn a_layer_with_no_room_left_in_the_node_is_not_drawn() {
 /// every layer measured off it, silently gone while the bars read out numbers.
 ///
 /// All four sizes and BOTH paddings, because `size` guards each of them and
-/// `sanitize` repairs only the audio ring's: any of the other six is a door a
+/// `sanitize` repairs only the audio ring's: any of the other five is a door a
 /// non-finite reaches the picture through, and each has a different layer to
 /// take down with it.
 #[test]
