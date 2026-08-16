@@ -39,11 +39,16 @@ use egui_wgpu::{CallbackResources, CallbackTrait, ScreenDescriptor};
 use harmonigraph_scene::Scene;
 
 /// The piano roll's own callback — a different picture with the same
-/// problem, solved the same way. It shares this crate's wgpu version and
-/// buffer helpers and nothing else; the lattice's offscreen target, depth
-/// buffer and bloom chain are all beside the point for a flat ribbon.
+/// problem, solved the same way. It shares this crate's wgpu version, buffer
+/// helpers and [`BloomChain`]; the lattice's offscreen target and depth buffer
+/// are beside the point for a flat ribbon.
 mod roll;
 pub use roll::{roll_paint_callback, RollAxes, RollInstance};
+
+/// A halo alone, over marks a pane drew for itself — the third caller of
+/// [`BloomChain`], and the one that draws no picture of its own.
+mod glow;
+pub use glow::{glow_paint_callback, GlowDot};
 
 /// Label text, for the same reason the roll has its own callback: what a
 /// label costs is the rim, and the rim was the text drawn again once per
@@ -1240,9 +1245,10 @@ struct OffscreenShared<'a> {
 /// into half the picture's SCREEN size, a plain downsample to a quarter, then
 /// a separable blur ping-ponging between two quarter-res textures.
 ///
-/// One chain, both pictures. The lattice feeds it the scene without its
+/// One chain, every picture. The lattice feeds it the scene without its
 /// labels; the piano roll feeds it the notes rendered again offscreen
-/// (`crate::roll`). That they are the same four steps in the same order over
+/// (`crate::roll`); the spiral's dots feed it through `crate::glow`. That they
+/// are the same four steps in the same order over
 /// the same fractions is the whole of what makes one bloom strength mean one
 /// halo, and it is a claim a second copy cannot keep: the step that matters
 /// most is WHERE the threshold sits, and a chain that thresholds after the
@@ -1271,9 +1277,9 @@ struct BloomChain {
 
 /// The four pipelines [`BloomChain::run`] steps through, in that order.
 ///
-/// Passed in rather than held: they are built per target format, and the two
-/// callers have their own (the lattice writes an offscreen texture, the roll
-/// the surface egui handed it).
+/// Passed in rather than held: they are built per target format, and each
+/// caller has its own (the lattice writes an offscreen texture, the roll and
+/// the glow the surface egui handed them).
 struct BloomPipelines<'a> {
     bright: &'a wgpu::RenderPipeline,
     downsample: &'a wgpu::RenderPipeline,
@@ -1590,6 +1596,32 @@ fn create_pipelines(
         ),
     )
 }
+
+/// egui's own blend state, verbatim (see egui-wgpu's renderer): premultiplied
+/// color, and alpha accumulated so the pass composites the same way over a
+/// transparent framebuffer.
+///
+/// Everything a callback lays into the egui pass takes it, the pictures and
+/// their halos alike. On a halo that is what makes it pure LIGHT: it carries
+/// zero alpha, so the color term adds and the alpha term leaves the
+/// destination's own alone.
+///
+/// One definition rather than one per callback, and the reason is that the two
+/// agreeing is what makes them composite identically — the roll's notes over
+/// the spectrogram, the spiral's halo over its disc — where two copies agree
+/// only until one is edited.
+const EGUI_BLEND: wgpu::BlendState = wgpu::BlendState {
+    color: wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::One,
+        dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+        operation: wgpu::BlendOperation::Add,
+    },
+    alpha: wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::OneMinusDstAlpha,
+        dst_factor: wgpu::BlendFactor::One,
+        operation: wgpu::BlendOperation::Add,
+    },
+};
 
 /// One post-process pipeline over the blit.wgsl module: a fullscreen quad
 /// with the given fragment entry point. The composite (into the egui

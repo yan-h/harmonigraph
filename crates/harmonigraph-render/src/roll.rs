@@ -37,7 +37,7 @@ use std::collections::HashMap;
 
 use egui_wgpu::{CallbackResources, CallbackTrait, ScreenDescriptor};
 
-use crate::{create_vertex_buffer, wgpu};
+use crate::{create_vertex_buffer, wgpu, EGUI_BLEND};
 
 const ROLL_SRC: &str = include_str!("shaders/roll.wgsl");
 
@@ -579,26 +579,6 @@ impl RollBloom {
         }
     }
 }
-
-/// egui's own blend state, verbatim (see egui-wgpu's renderer): premultiplied
-/// color, and alpha accumulated so the pass composites the same way over a
-/// transparent framebuffer.
-///
-/// Everything the roll draws takes it, the notes and the bloom alike. On the
-/// bloom that is what makes a halo pure LIGHT: it carries zero alpha, so the
-/// color term adds and the alpha term leaves the destination's own alone.
-const EGUI_BLEND: wgpu::BlendState = wgpu::BlendState {
-    color: wgpu::BlendComponent {
-        src_factor: wgpu::BlendFactor::One,
-        dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-        operation: wgpu::BlendOperation::Add,
-    },
-    alpha: wgpu::BlendComponent {
-        src_factor: wgpu::BlendFactor::OneMinusDstAlpha,
-        dst_factor: wgpu::BlendFactor::One,
-        operation: wgpu::BlendOperation::Add,
-    },
-};
 
 /// The note pipeline: instanced quads, blended exactly the way egui blends
 /// its own shapes so a note composites over the spectrogram identically to

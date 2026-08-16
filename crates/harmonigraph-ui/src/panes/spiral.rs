@@ -549,9 +549,28 @@ pub(crate) fn spiral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) 
     seam(&painter, &spiral);
     rays(&painter, &spiral);
     let lit = sounding(&spiral, state, now);
-    dots(&painter, &spiral, state, &lit);
+    let marks = dots(&painter, &spiral, state, &lit);
+    // The LATTICE's bloom, on the dots. One setting for every picture rather
+    // than a bar of its own here: the lattice's nodes, the roll's ribbons and
+    // these dots are the same notes in the same colors, and a light one of them
+    // has that the others do not is a difference between them that says
+    // nothing. Through the renderer's own bound for the same reason.
+    //
+    // Skipped whole when there is nothing to light, which is what keeps a
+    // reader who never turns the bloom on from paying for its pipelines at all
+    // — the callback would decline the work, but not before building them.
+    let bloom = harmonigraph_render::bloom_strength(state.view.bloom_strength);
+    if bloom > 0.0 && !marks.is_empty() {
+        painter.add(harmonigraph_render::glow_paint_callback(
+            rect,
+            marks,
+            bloom,
+            state.target_format,
+        ));
+    }
     // The names last, and outside the disc, so nothing in the picture is over
-    // them and they are over nothing in it.
+    // them and they are over nothing in it — the halo above included, which is
+    // the lattice's rule for a label as well.
     let mut labels = crate::text::TextBatch::default();
     names(&painter, &spiral, state, &lit, &mut labels);
     labels.flush(
@@ -822,13 +841,37 @@ fn sounding(spiral: &Spiral, state: &SharedState, now: f64) -> Vec<Sounding> {
 /// Coloured off the lattice's own pitch ramp, through the roll's
 /// [`note_color`], so a note is the same colour here, on the piano roll, and at
 /// the node it lit up.
-fn dots(painter: &egui::Painter, spiral: &Spiral, state: &SharedState, sounding: &[Sounding]) {
+///
+/// Hands back the coloured discs it painted, for the halo the caller lays over
+/// them ([`harmonigraph_render::glow_paint_callback`]). Returned from HERE
+/// rather than derived a second time beside it, so the halo cannot grow from a
+/// dot the picture does not have: one loop decides where a mark is, how big,
+/// and what colour, and the light follows it by construction.
+///
+/// The BACKING is not in that list. It is black, and black is the one thing
+/// that cannot bloom — handed over it would only take light out of the halo the
+/// coloured disc does grow, which is the rule the roll's outline follows too.
+fn dots(
+    painter: &egui::Painter,
+    spiral: &Spiral,
+    state: &SharedState,
+    sounding: &[Sounding],
+) -> Vec<harmonigraph_render::GlowDot> {
     let (backed, fill) = spiral.dot();
-    for voice in sounding {
-        let at = spiral.at(voice.pitch, 0.0);
-        painter.circle_filled(at, backed, Color32::BLACK.gamma_multiply(0.75 * voice.strength));
-        painter.circle_filled(at, fill, note_color(state, voice.pitch, voice.strength));
-    }
+    sounding
+        .iter()
+        .map(|voice| {
+            let at = spiral.at(voice.pitch, 0.0);
+            let color = note_color(state, voice.pitch, voice.strength);
+            painter.circle_filled(at, backed, Color32::BLACK.gamma_multiply(0.75 * voice.strength));
+            painter.circle_filled(at, fill, color);
+            harmonigraph_render::GlowDot {
+                center: [at.x, at.y],
+                radius: fill,
+                color: color.to_array(),
+            }
+        })
+        .collect()
 }
 
 /// What each sounding note is CALLED, written on the rim beyond its own ray.
@@ -1366,6 +1409,91 @@ mod tests {
         assert_eq!(marks(60), 1, "a note inside the range is marked once");
         assert_eq!(marks(24), 0, "a note below the range is not marked");
         assert_eq!(marks(120), 0, "a note above the range is not marked");
+    }
+
+    /// The halo grows from the dots the picture HAS: every mark handed to the
+    /// renderer is one of the coloured discs on the painter, at its centre, its
+    /// radius and its colour, and the black backing is not among them.
+    ///
+    /// Asked of [`dots`] rather than of the callback, whose payload is the
+    /// render crate's own type and opaque from here. That is where the pair is
+    /// decided anyway, and this is the reason the marks are RETURNED from there
+    /// rather than derived a second time beside the call: a second derivation
+    /// is a second place for the picture and its light to disagree.
+    #[test]
+    fn the_halo_grows_from_the_dots_that_were_painted() {
+        let mut state = fresh();
+        for note in [55u8, 60, 67, 76] {
+            state.tracker.handle_event(NoteEvent::on(0.0, 0, note, 1.0));
+        }
+        let mut marks = Vec::new();
+        let shapes: Vec<egui::Shape> = painted_into(SCREEN, PANE, |ui| {
+            let spiral = Spiral::new(PANE, &state.spectrum_config);
+            let lit = sounding(&spiral, &state, 0.1);
+            marks = dots(ui.painter(), &spiral, &state, &lit);
+        })
+        .shapes
+        .into_iter()
+        .map(|s| s.shape)
+        .collect();
+
+        let fill = Spiral::new(PANE, &state.spectrum_config).dot().1;
+        let discs: Vec<&egui::epaint::CircleShape> = shapes
+            .iter()
+            .filter_map(|s| match s {
+                egui::Shape::Circle(c) if c.radius == fill => Some(c),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(discs.len(), 4, "the fixture's four notes are four coloured discs");
+        assert_eq!(marks.len(), discs.len(), "a mark per coloured disc");
+        for (mark, disc) in marks.iter().zip(&discs) {
+            assert_eq!(mark.center, [disc.center.x, disc.center.y], "a mark moved off its dot");
+            assert_eq!(mark.radius, disc.radius, "a mark is not its dot's size");
+            assert_eq!(mark.color, disc.fill.to_array(), "a mark is not its dot's colour");
+        }
+        // The pane paints TWO circles a note and hands over one of them: black
+        // is the one thing that cannot bloom, so a backing in this list would
+        // only take light out of the halo its own dot grows.
+        let circles = shapes.iter().filter(|s| matches!(s, egui::Shape::Circle(_))).count();
+        assert_eq!(
+            circles,
+            2 * marks.len(),
+            "each note is a backing and a fill, and only the fill is handed over",
+        );
+    }
+
+    /// Nothing to light asks for no halo: the pane adds the callback for a lit
+    /// dot at a strength above zero and for nothing else.
+    ///
+    /// Counted as a DIFFERENCE rather than by picking the glow's callback out
+    /// of the frame, because the names are a callback of their own and the two
+    /// are the same shape from here. What the count is worth is that the
+    /// callback carries GPU pipelines built on first sight of it, so a reader
+    /// with the bloom off pays for none of them.
+    #[test]
+    fn nothing_to_light_asks_for_no_halo() {
+        let callbacks = |bloom: f32, sounding: bool| {
+            let mut state = fresh();
+            state.view.bloom_strength = bloom;
+            if sounding {
+                state.tracker.handle_event(NoteEvent::on(0.0, 0, 60, 1.0));
+            }
+            painted(&mut state, 0.1)
+                .iter()
+                .filter(|s| matches!(s, egui::Shape::Callback(_)))
+                .count()
+        };
+        assert_eq!(
+            callbacks(1.2, true),
+            callbacks(0.0, true) + 1,
+            "a lit dot at a strength above zero asks for exactly one more callback",
+        );
+        assert_eq!(
+            callbacks(1.2, false),
+            callbacks(0.0, false),
+            "a strength above zero asked for a halo with nothing sounding",
+        );
     }
 
     /// The seam is drawn where one turn stops and the next starts — half a

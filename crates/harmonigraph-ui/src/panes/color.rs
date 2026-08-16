@@ -71,17 +71,18 @@ pub(super) fn color_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dy
 ///
 /// Here rather than with a node layer, which is what its name would suggest.
 /// It feeds on the brightness the bars above set, and it is a post-process on
-/// BOTH pictures off this one number — the lattice's chain and the piano
-/// roll's own (`spectral::roll`) — so it is dialled with the colors rather
-/// than with the core, the glyphs or the marks, none of which it belongs to.
+/// EVERY picture off this one number — the lattice's chain, the piano roll's
+/// own (`spectral::roll`) and the Spiral's dots (`spiral`) — so it is dialled
+/// with the colors rather than with the core, the glyphs or the marks, none of
+/// which it belongs to.
 fn bloom_bar(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // 0 = off (the renderer skips the whole post-process chain), so the bar
     // doubles as the toggle.
     ValueBar::new(&mut view.bloom_strength, 0.0..=1.5, "Bloom")
         .show(ui)
         .on_hover_text(
-            "Soft halo around bright notes, on the lattice and the Analyzer's \
-             ribbons alike. 0 turns it off.",
+            "Soft halo around bright notes — on the lattice, the Analyzer's \
+             ribbons and the Spiral's dots alike. 0 turns it off.",
         );
 }
 
