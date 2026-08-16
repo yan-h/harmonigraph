@@ -1065,10 +1065,10 @@ mod tests {
     /// included.
     ///
     /// The claim that keeps the bar's low end a setting rather than a corner —
-    /// a silent ring is a reading (nothing sounds here), and going back to a
+    /// a silent ring is a reading (nothing sounds here), and asking for a
     /// lattice of them has to be one drag away. `>=` is what makes it true, and
-    /// `>` is the version that passes every other test here while leaving no
-    /// way to ask for the old picture.
+    /// `>` is the version that passes every other test here while leaving the
+    /// ungated picture unreachable from the bar.
     #[test]
     fn the_gates_floor_rings_every_node() {
         let wheel = wheel();
@@ -1318,8 +1318,9 @@ mod tests {
     }
 
     /// A Fade of 0 is the gate switching outright, which is the setting a
-    /// player who wants the reading raw drags to — and the state every test
-    /// written before the fade existed assumed.
+    /// player who wants the reading raw drags to — and the one setting at which
+    /// a claim about the gate can be read straight off the picture, with no
+    /// transition standing between the two.
     #[test]
     fn a_fade_of_nothing_is_the_gate_itself() {
         let wheel = wheel();

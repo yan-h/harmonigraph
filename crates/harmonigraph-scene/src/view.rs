@@ -527,10 +527,10 @@ pub struct ViewConfig {
     /// ([`spectral_ring_range`](Self::spectral_ring_range)).
     ///
     /// Both ends are usable settings rather than guard rails. 0 is the gate off
-    /// — every node rings, which is the picture this arrived to change and the
-    /// one to go back to when what is wanted is the analyzer's whole reading at
-    /// once. The top asks for a full-scale wedge, where a ring is a rare event
-    /// on the loudest node in a phrase.
+    /// — every node rings, which is the picture to go back to when what is
+    /// wanted is the analyzer's whole reading at once. The top asks for a
+    /// full-scale wedge, where a ring is a rare event on the loudest node in a
+    /// phrase.
     ///
     /// **It selects far more sharply under the fold than under the spectrum**,
     /// and that is the two readings rather than anything here. A fold wedge is

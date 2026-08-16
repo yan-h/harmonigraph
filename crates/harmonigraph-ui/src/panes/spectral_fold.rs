@@ -1245,8 +1245,9 @@ mod tests {
     }
 
     /// The gate's floor is the ungated picture end to end: every node rings,
-    /// silence included, which is the state this whole path was in before the
-    /// bar existed.
+    /// silence included, which is the whole reading at once and what the bar's
+    /// off position has to give back through the real pass rather than only in
+    /// `harmonigraph_scene`'s own units.
     #[test]
     fn the_gates_floor_rings_every_node() {
         let mut state = fresh();
