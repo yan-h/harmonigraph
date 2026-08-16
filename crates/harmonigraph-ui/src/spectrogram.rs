@@ -4995,8 +4995,10 @@ mod tests {
         let target_cols = 1024usize;
         let keep = target_cols + RING_HEADROOM;
 
-        // Zoomed out (the full axis: every read a Mean) and zoomed in
-        // (12 semitones: every read a Lerp).
+        // Zoomed out (the full axis: every read a Mean) and zoomed in (12
+        // semitones: 1022 of 1408 rows a Lerp, the other 386 a Mean over a run
+        // of two — narrow enough that the two arms split the pane, not narrow
+        // enough that one of them is gone).
         let full = PitchScale { min_midi: 16.0, max_midi: 135.0, span: 119.0 };
         let tight = PitchScale { min_midi: 57.0, max_midi: 69.0, span: 12.0 };
 
