@@ -220,8 +220,7 @@ struct Uniforms {
     /// y: base node radius (world units); z unused;
     /// w unused — it carried the node style, the core orb's paint, from when
     /// the core had more than one. A retired slot rather than a repack, which
-    /// would renumber the ones around it for nothing (as with `misc3.w` and
-    /// `misc4.y`).
+    /// would renumber the ones around it for nothing (as with `misc4.y`).
     misc: [f32; 4],
     /// x: darkest_pitch, y: brightest_pitch (MIDI notes); z: render scale
     /// (the shader converts its screen-pixel AA softness to render
@@ -230,10 +229,14 @@ struct Uniforms {
     /// to index `pitch_lut`.
     misc2: [f32; 4],
     /// x: core radius in quad UV units (0 turns the core off); y/z: the
-    /// outer octave layer's inner/outer band radii (same units, pre-
-    /// sanitized by the scene so z > y); w unused (it carried the outer
-    /// backdrop opacity, now fixed on in the shader — a retired slot rather
-    /// than a repack, which would renumber the ones around it for nothing).
+    /// outer octave layer's inner/outer band radii (same units), which the
+    /// scene hands over either as z > y or as the empty pair (0, 0) that says
+    /// the layer is off — the shader gates the band on z > y rather than
+    /// assuming it (`glyph_band`'s two soft edges cross instead of cancelling
+    /// at z == y, painting a dot at the node's centre); w: the outer edge of
+    /// the outermost RING the node draws (`Scene::rings_outer`), which
+    /// `node_rim` and the mark strip stand off, so neither has to know which
+    /// layer was the last one on. None of the four is free.
     misc3: [f32; 4],
     /// Pitch->color lookup for the dots octave style (see harmonigraph_scene's
     /// `pitch_ramp_lut`), matching the node disc gradient.
@@ -242,11 +245,11 @@ struct Uniforms {
     /// core layer runs on; y/z/w unused — y carried the outer solidity, now
     /// fixed crisp in the shader, and z/w the idle marker's radius and
     /// style, from when an unlit node drew a placeholder. Retired in place,
-    /// like `misc3.w`. (The blit pipeline binds only the head of this
+    /// like `misc.x`. (The blit pipeline binds only the head of this
     /// buffer, so trailing fields are safe to add here.)
     misc4: [f32; 4],
     /// x: grid line thickness as a multiple of the shader's built-in grid
-    /// width; y unused (a retired slot rather than a repack, like `misc3.w`);
+    /// width; y unused (a retired slot rather than a repack, like `misc4.y`);
     /// z: padding inside the octave layer in quad UV units — the gap between
     /// neighbouring sectors AND between the band and the marks;
     /// w: how far a melody/bass mark reaches past the band, same units, where
@@ -826,10 +829,15 @@ impl LatticeCallback {
                     render_scale,
                     bloom_strength(scene.bloom_strength),
                 ],
-                misc3: [scene.core_radius, scene.outer_inner, scene.outer_outer, 0.0],
+                misc3: [
+                    scene.core_radius,
+                    scene.outer_inner,
+                    scene.outer_outer,
+                    scene.rings_outer,
+                ],
                 pitch_lut: std::array::from_fn(|k| scene.pitch_lut[k].to_array()),
                 misc4: [scene.core_solidity, 0.0, 0.0, 0.0],
-                misc5: [scene.grid_thickness, 0.0, scene.outer_gap, scene.mark_thickness],
+                misc5: [scene.grid_thickness, 0.0, scene.ring_gap, scene.mark_thickness],
                 misc6: [0.0, 0.0, scene.sevens_soft, scene.pulse_marks.shader_index() as f32],
                 background: scene.background.to_array(),
                 misc7: [

@@ -360,7 +360,10 @@ fn parity_scene() -> Scene {
         core_solidity: 1.0,
         outer_inner: 0.545,
         outer_outer: 0.795,
-        outer_gap: 0.12,
+        // The band is the outermost ring here, as it is on a fresh node, so it
+        // is what the marks stand off.
+        rings_outer: 0.795,
+        ring_gap: 0.12,
         // No analyzer: the ring off, under either reading. It is a whole layer
         // more light in the middle of every node, and the sweep and mark
         // measurements here are sized against the picture without it —
@@ -1384,15 +1387,25 @@ fn a_melody_bass_mark_extends_the_slice_it_names() {
 /// lit arc's centroid is the band's own centre pitch whatever the Range.
 const PARTIAL_HALF_CENTS: f32 = 40.0;
 
-/// One node with both rings at the radii a FRESH view puts them at: `held`
+/// The padding `ringing_node` stands its layers off each other by — see there.
+const PROBE_GAP: f32 = 0.12;
+
+/// One node with both rings at the widths a FRESH view gives them: `held`
 /// lighting an octave of the band, and a synthetic partial at absolute MIDI
 /// `sounding` in the analyzer's grid for the audio ring to find.
 ///
-/// The fresh radii rather than the fixture's, because the claim below is about
-/// the shipped picture: that the ring lands in the space the core and the
-/// octave band leave, on a node nobody has dialled. The core is the one thing
-/// turned off — its glow is light at every radius the measurements read, and
-/// what is being measured is where two annuli are.
+/// The fresh widths rather than the fixture's, because the claim below is about
+/// the shipped picture: that the ring is its own layer inside the octave band,
+/// on a node nobody has dialled. The core is the one thing turned off — its
+/// glow is light at every radius the measurements read, and what is being
+/// measured is where two annuli are.
+///
+/// The PADDING is the fixture's own, and it is the one number here that has to
+/// be: one Gap separates every layer of a node, and the fresh 0.052 of it is
+/// under three pixels on the 52-px node this renders, where the two annuli's
+/// anti-aliased edges meet inside it. A wider gap measures the geometry
+/// rather than the edge softness. It is the same picture a fresh node draws,
+/// read at a size a person looks at one from.
 ///
 /// The ramp is a plain black-to-white one rather than a gradient, so a pixel's
 /// brightness IS the level the shader read out of the grid and the differences
@@ -1408,18 +1421,23 @@ fn ringing_node(held: Option<usize>, sounding: Option<f32>, range: f32) -> Scene
     if let Some(slot) = held {
         node.octaves[slot] = 1.0;
     }
+    // The fresh stack at the probe's own padding, less its core: the two rings
+    // land where a fresh node draws them, spaced far enough apart to be
+    // measured in pixels.
+    let rings =
+        harmonigraph_scene::ViewConfig { ring_gap: PROBE_GAP, ..fresh.clone() }.rings();
     scene.core_radius = 0.0;
-    scene.outer_inner = fresh.outer_inner;
-    scene.outer_outer = fresh.outer_outer;
-    scene.outer_gap = fresh.outer_gap;
+    scene.outer_inner = rings.band.0;
+    scene.outer_outer = rings.band.1;
+    scene.rings_outer = rings.outer;
+    scene.ring_gap = rings.gap;
 
     let mut paint = harmonigraph_scene::SpectralPaint::silent();
     paint.lut = std::array::from_fn(|k| {
         let t = k as f32 / (harmonigraph_scene::PITCH_LUT_N - 1) as f32;
         glam::Vec4::new(t, t, t, 1.0)
     });
-    paint.inner = fresh.spectral_ring_inner;
-    paint.outer = fresh.spectral_ring_outer;
+    (paint.inner, paint.outer) = rings.audio;
     paint.range = range;
     if let Some(pitch) = sounding {
         for (bucket, level) in paint.levels.iter_mut().enumerate() {
@@ -1643,6 +1661,154 @@ fn the_audio_ring_reads_the_spectrum_around_each_octave() {
         0,
         "a sounding partial drew something with the ring switched off",
     );
+}
+
+/// A melody/bass mark stands off the OUTERMOST RING the node draws, which on a
+/// node with no octave band is the audio ring rather than the node's center.
+///
+/// The mark's inner edge is the one radius the shader is handed rather than
+/// deriving. Deriving it from the BAND's outer edge is the same answer whenever
+/// a band draws and the wrong one the moment that layer's width bar reaches 0:
+/// the strip jumps inward across the whole node and lands against the core,
+/// marking a slice of nothing.
+///
+/// Measured off the picture and not the uniform, because the two ways this
+/// fails — the wrong radius packed, or the shader reading a different slot —
+/// look identical from the Rust side.
+#[test]
+fn a_mark_stands_off_the_outermost_ring_the_node_draws() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut gpu) = Shooter::new(SIZE) else {
+        return;
+    };
+
+    // The fresh stack at the probe's padding, so the layers are pixels apart:
+    // core, audio ring, band, and the mark outside all three.
+    let fresh = harmonigraph_scene::ViewConfig::default();
+    let rings =
+        harmonigraph_scene::ViewConfig { ring_gap: PROBE_GAP, ..fresh.clone() }.rings();
+    let staged = |band: bool| -> Scene {
+        let mut scene = single_marked_node(MIDDLE_C, 0);
+        scene.core_radius = 0.0;
+        scene.ring_gap = rings.gap;
+        scene.mark_thickness = rings.mark_thickness;
+        // The audio ring is drawn from an all-zero grid, which paints the
+        // ramp's floor colour across the annulus — light at a known radius,
+        // which is all this needs of it.
+        let mut paint = harmonigraph_scene::SpectralPaint::silent();
+        paint.lut = std::array::from_fn(|_| glam::Vec4::new(1.0, 1.0, 1.0, 1.0));
+        (paint.inner, paint.outer) = rings.audio;
+        scene.spectral = paint;
+        (scene.outer_inner, scene.outer_outer) = if band { rings.band } else { (0.0, 0.0) };
+        scene.rings_outer = if band { rings.band.1 } else { rings.audio.1 };
+        scene
+    };
+
+    // The mark alone, over the same node with the marks off: what is left is
+    // the strip, wherever it landed.
+    let mark_light = |gpu: &mut Shooter, band: bool| -> Light {
+        let mut bare = staged(band);
+        bare.nodes[0].melody_slots = 0;
+        bare.nodes[0].melody_level = 0.0;
+        let bare = gpu.shot(&bare);
+        light_about_center(&light_over(&gpu.shot(&staged(band)), &bare), SIZE)
+    };
+
+    let with_band = mark_light(&mut gpu, true);
+    let without = mark_light(&mut gpu, false);
+    assert!(with_band.weight > 0.0 && without.weight > 0.0, "the mark drew nothing to measure");
+    eprintln!(
+        "mark {:.1}..{:.1} px with the band, {:.1}..{:.1} px without",
+        with_band.near, with_band.far, without.near, without.far,
+    );
+    // The band is the wider stack, so its mark is further out — and by about
+    // the band's own width, which is the slot the layer gave back.
+    let band_px = with_band.near - without.near;
+    let scale = with_band.far / (rings.band.1 + rings.gap + rings.mark_thickness) as f64;
+    let want = (rings.band.1 - rings.audio.1) as f64 * scale;
+    assert!(
+        (band_px - want).abs() < 4.0,
+        "dropping the band moved the mark in {band_px:.1} px, not the {want:.1} px \
+         of band and gap it gave back",
+    );
+    // And the mark did NOT fall back to the node's center, which is what
+    // anchoring it to a band that is not there would do.
+    assert!(
+        without.near > rings.audio.1 as f64 * scale - 4.0,
+        "with the band off the mark starts at {:.1} px, inside the audio ring's own edge",
+        without.near,
+    );
+}
+
+/// An octave band the stack switched off — the empty pair (0, 0) — paints
+/// NOTHING, rather than a dot at the node's centre.
+///
+/// `glyph_band` is two soft edges multiplied together, and at inner == outer
+/// they cross instead of cancelling: a pixel at the node's centre is half inside
+/// each, so the layer answers a quarter coverage where the whole point of the
+/// pair was that there is no layer. It is the one radius pair whose arithmetic
+/// draws a shape, which is why the shader gates the band on `band_out > band_in`
+/// rather than trusting the geometry to say off by drawing nothing.
+///
+/// Measured against a frame with NO node in it, because the artifact is what a
+/// node with every layer off still paints. Differencing two shots that both
+/// carry the band — how `a_mark_stands_off_the_outermost_ring_the_node_draws`
+/// reads the mark out — is exactly what cannot see this: the dot is in both and
+/// cancels.
+#[test]
+fn a_band_dialled_off_paints_no_dot_at_the_nodes_centre() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut gpu) = Shooter::new(SIZE) else {
+        return;
+    };
+
+    // Every layer of the node off: no core, no audio ring, no marks, and the
+    // octave band at the empty pair the stack hands over when it cannot fit the
+    // layer. What is left for the node to draw is nothing — and with `node`
+    // false, the same frame with no node in it at all, which is the ground.
+    //
+    // The padding is 0 because the sector gaps all CONVERGE on the node's
+    // centre, which is where the artifact is: at the fresh gap they eat most of
+    // it, and the dot this is looking for shows at its own size.
+    let collapsed = |node: bool| -> Scene {
+        let mut scene = single_marked_node(0, 0);
+        scene.core_radius = 0.0;
+        scene.mark_thickness = 0.0;
+        scene.rings_outer = 0.0;
+        scene.ring_gap = 0.0;
+        (scene.outer_inner, scene.outer_outer) = (0.0, 0.0);
+        scene.spectral = harmonigraph_scene::SpectralPaint::silent();
+        if !node {
+            scene.nodes.clear();
+        }
+        scene
+    };
+
+    // Any deviation at all, rather than a threshold: what the node is allowed
+    // to paint here is nothing, so the ground IS the answer, pixel for pixel.
+    // The dot is dim as well as small — six pixels at up to 5/255 over black,
+    // which is under a fifth of what `light_about_center` calls lit — so a
+    // brightness floor would read it as absent.
+    let ground = gpu.shot(&collapsed(false));
+    let painted = gpu.shot(&collapsed(true));
+    let px = differing_pixels(&painted, &ground);
+    let light = light_about_center(&light_over(&painted, &ground), SIZE);
+    eprintln!("a node with every layer off: {px} px, {:.0} of light", light.weight);
+    assert_eq!(
+        px, 0,
+        "a node with every layer off painted {px} px, {:.0} of light",
+        light.weight,
+    );
+
+    // Not a vacuous fixture: hand the same node a real annulus and the same
+    // measurement finds it. Without this, a node that drew nothing for some
+    // other reason — discarded, off screen, black on black — would read as the
+    // empty pair being honoured.
+    let mut drawn = collapsed(true);
+    (drawn.outer_inner, drawn.outer_outer) = (0.4, 0.7);
+    drawn.rings_outer = 0.7;
+    let band = light_about_center(&light_over(&gpu.shot(&drawn), &ground), SIZE);
+    assert!(band.weight > 0.0, "the fixture paints no band even when it is given one");
 }
 
 /// The FOLD reading fills the same wedges of the same annulus, and reads each
@@ -2462,7 +2628,8 @@ fn octave_wheel_scene(layout: harmonigraph_scene::OctaveLayout, cents: f32) -> S
     scene.core_radius = 0.0;
     scene.outer_inner = 0.30;
     scene.outer_outer = 0.95;
-    scene.outer_gap = 0.10;
+    scene.rings_outer = 0.95;
+    scene.ring_gap = 0.10;
     scene.mark_thickness = 0.0;
     // Every octave the wheel draws for THIS pitch class, and only those: a
     // level on a slot no sector draws is a state `derive_scene` cannot reach,
@@ -3596,8 +3763,7 @@ fn an_open_ring_ships_every_idle_node() {
     let fresh = harmonigraph_scene::ViewConfig::default();
     let mut scene = idle_scene();
     assert!(!scene.nodes.is_empty(), "the fixture has to carry idle nodes");
-    scene.spectral.inner = fresh.spectral_ring_inner;
-    scene.spectral.outer = fresh.spectral_ring_outer;
+    (scene.spectral.inner, scene.spectral.outer) = fresh.rings().audio;
     let cb = LatticeCallback::from_scene(
         &scene,
         LatticeLabels::default(),
@@ -3641,12 +3807,13 @@ fn a_ring_wedge_wears_its_own_levels_ramp_entry() {
         // The core off for the same reason ringing_node turns it off: its
         // glow is light at every radius, and the reading below is the ring's.
         scene.core_radius = 0.0;
-        scene.outer_inner = fresh.outer_inner;
-        scene.outer_outer = fresh.outer_outer;
-        scene.outer_gap = fresh.outer_gap;
+        let rings = fresh.rings();
+        scene.outer_inner = rings.band.0;
+        scene.outer_outer = rings.band.1;
+        scene.rings_outer = rings.outer;
+        scene.ring_gap = rings.gap;
         let mut paint = harmonigraph_scene::SpectralPaint::silent();
-        paint.inner = fresh.spectral_ring_inner;
-        paint.outer = fresh.spectral_ring_outer;
+        (paint.inner, paint.outer) = rings.audio;
         paint.folded = true;
         // The whole grid at one level, so every wedge whose octave the
         // analyzer's axis reaches reads the same entry. Off the axis

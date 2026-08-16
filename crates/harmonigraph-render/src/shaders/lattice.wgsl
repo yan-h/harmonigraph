@@ -29,9 +29,11 @@ struct Uniforms {
     // pitch through x/y to index pitch_lut.
     misc2: vec4<f32>,
     // x: core radius in quad UV units (0 turns the core off). y/z: the
-    // outer layer's inner/outer band radii (same units; the scene
-    // guarantees z > y). w: unused — it carried the backdrop opacity, which
-    // is fixed on below.
+    // outer layer's inner/outer band radii (same units; the scene guarantees
+    // z > y where the band draws at all, and hands both as 0 where it does
+    // not). w: the outer edge of the outermost RING the node draws — z, save
+    // where the band is off and a ring inside it is the last one on — which is
+    // what the marks stand off and what the gutter is measured from.
     misc3: vec4<f32>,
     // Pitch->color lookup for the octave glyphs. The disc is colored through
     // this same table on the CPU, so a glyph and the disc under it match
@@ -45,10 +47,12 @@ struct Uniforms {
     misc4: vec4<f32>,
     // x: grid line thickness, a multiple of the built-in grid width.
     // y: unused.
-    // z: padding inside the octave layer, in quad UV units — the gap
-    // between neighbouring sectors AND between the band and the
-    // melody/bass marks. w: how deep those marks reach past the band, same
-    // units; 0 = no marks.
+    // z: the one padding on a node, in quad UV units — the gap between
+    // neighbouring sectors AND between the outermost ring and the
+    // melody/bass marks. (The scene spends the same number between one
+    // stacked ring and the next, which is arithmetic done before the radii
+    // in misc3 arrive here.) w: how deep those marks reach past the ring
+    // they stand off, same units; 0 = no marks.
     misc5: vec4<f32>,
     // x/y: unused — they carried the trail's mark style and strength, from
     //    when a memory was a change to the idle marker rather than a kept
@@ -133,8 +137,11 @@ const GLOW_LIMIT: f32 = 0.95;
 @group(0) @binding(0) var<uniform> u: Uniforms;
 
 // The node's own outermost feature, in ITS uv. That is a MARK when this node
-// is wearing one — both marks ride the strip just past the octave band — and
-// the band's own outer edge when it is not.
+// is wearing one — both marks ride the strip just past the outermost ring —
+// and that ring's own outer edge (u.misc3.w) when it is not. The ring is
+// ordinarily the octave band; on a node whose band is dialled off it is
+// whichever layer inside it the stack ended on, which is why the edge is
+// handed in rather than read off the band's radii.
 //
 // Per node, not per view: assuming the mark is always there made every
 // clearing as wide as the widest node's, so a node with no mark sat in a
@@ -148,7 +155,7 @@ const GLOW_LIMIT: f32 = 0.95;
 // a released mark fades out with its note rather than snapping off at the key.
 fn node_rim(mark: f32) -> f32 {
     let strip = max(u.misc5.z, 0.0) + u.misc5.w;
-    return u.misc3.z + select(0.0, strip * mark, u.misc5.w > 0.0);
+    return u.misc3.w + select(0.0, strip * mark, u.misc5.w > 0.0);
 }
 
 // How much of the mark strip this node is wearing, 0..1: a mark needs both a
@@ -987,6 +994,12 @@ const CORE_FADE_IN: f32 = 0.06;
 // with by GLYPH_FADE_LIMIT, inside a billboard reaching QUAD_MARGIN or more,
 // so most of a lit node's fragments are outside the band, and running the
 // loop there is `span` sectors of work for an answer of zero.
+// A collapsed band is the caller's to skip, and every caller does (the mark
+// strip and the audio ring by a test of their own, the octave band by the
+// `select` below). It cannot be answered here: at inner == outer the two soft
+// edges do not cancel, they cross, and the product peaks at a quarter — a
+// screen-constant hairline ring of a quarter coverage, which is exactly what a
+// layer dialled to nothing must not draw.
 fn glyph_band(d: f32, inner: f32, outer: f32, aa: f32) -> f32 {
     return aa_inside(outer, d, aa) * (1.0 - aa_inside(inner, d, aa));
 }
@@ -1567,12 +1580,18 @@ fn node_paint(in: VsOut) -> vec4<f32> {
     let mark_thick = u.misc5.w;
     let mark_w = select(max(mark_thick, aa * MARK_RING_MIN_AA), 0.0, mark_thick <= 0.0);
     let mark_gap = slice_gap_half() * 2.0;
-    // Headroom: the band's outer radius can be dialed to 1.0, so the strip
-    // lives in the QUAD_MARGIN margin. Cap it inside the billboard (a circle
-    // of radius QUAD_MARGIN fits the square quad) and ease it off there,
-    // rather than letting the corner clip it flat.
+    // Off the outermost RING rather than off the band, which is the same edge
+    // on a node that draws one and the difference on a node that does not: a
+    // band dialled to nothing leaves its slice's extension standing off
+    // whatever layer the stack ended on, instead of collapsing back to the
+    // node's center.
+    //
+    // Headroom: that edge can be dialed out to 1.0, so the strip lives in the
+    // QUAD_MARGIN margin. Cap it inside the billboard (a circle of radius
+    // QUAD_MARGIN fits the square quad) and ease it off there, rather than
+    // letting the corner clip it flat.
     let lim = QUAD_MARGIN - 0.02;
-    let mark_in = min(band_out + mark_gap, lim);
+    let mark_in = min(u.misc3.w + mark_gap, lim);
     let mark_out = min(mark_in + mark_w, lim);
     // Sounding slots draw bright, tinted by their own pitch, each fading on
     // its own envelope; the silent ones draw as the backdrop's ghosts in the
@@ -1589,7 +1608,11 @@ fn node_paint(in: VsOut) -> vec4<f32> {
     // band is a narrow annulus in a billboard that reaches QUAD_MARGIN, so
     // outside it the loop below can be skipped entirely rather than run to
     // reach zero `span` times over.
-    let band = glyph_band(d, band_in, band_out, aa);
+    // An empty pair is the octave layer dialled off (its width bar at 0), and
+    // it takes the whole layer with it: the slot loop below only ever scales
+    // this coverage, the backdrop rides it, and the marks' shimmer reaches the
+    // slices through it.
+    let band = select(glyph_band(d, band_in, band_out, aa), 0.0, band_out <= band_in);
     // The backdrop's opacity, which every slot on the ring is drawn on and
     // none of them varies — so it is taken here beside the band rather than
     // rebuilt per slot inside the loop.
