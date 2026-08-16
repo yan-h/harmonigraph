@@ -1906,13 +1906,12 @@ impl Default for ViewConfig {
             // its outer edge at 0.851, which is where it has always sat: the
             // stack is core (0.256), gap, audio ring, gap, band, gap, marks.
             band_width: 0.190_065_75,
-            // The two gaps are one number here, and the fresh node is the
-            // picture that was dialled when they WERE one: the radial padding
-            // is what puts the band at 0.661, and the same width cut angularly
-            // is the slicing that reads as distinct marks. They are two bars
-            // because a node has two spacings to set, not because the fresh one
-            // wants them apart — a look that has never been dialled off it
-            // should meet the same node either way.
+            // The two gaps are one number here: the radial padding is what puts
+            // the band at 0.661, and the same width cut angularly is the slicing
+            // that reads as distinct marks. They are two bars because a node has
+            // two spacings to set, not because the fresh one wants them apart —
+            // the picture this describes is one a person can meet by dialling
+            // neither.
             ring_gap: 0.051_732_67,
             octave_gap: 0.051_732_67,
             // The rung of the chrome's own ladder the rings stand on: `L*` 20.0
