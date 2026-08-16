@@ -2141,6 +2141,96 @@ fn a_clearing_bulges_over_the_mark_and_hugs_the_rings_everywhere_else() {
     );
 }
 
+/// A mark's wedge can run past a HALF turn, and `sector_distance` has to stay
+/// exact when it does.
+///
+/// `MIN_SPAN` rules out a slice that is a whole turn and nothing narrower, so a
+/// wheel of one full-size octave between two extras at their minimum cuts a
+/// slice most of the way round — a shape the Octaves bar can be dialled into.
+/// Past a half-aperture of pi/2 the sector's two edge half-planes stop
+/// intersecting in front of the wedge and start intersecting behind it, which
+/// is the case a naive `max` of two half-planes gets wrong: it would take the
+/// clearing back to the rings across the far side of a wedge that covers it.
+///
+/// Measured off the wedge's own middle rather than a fixed angle, so it does
+/// not matter which slot the wheel made the wide one. Only the covering half of
+/// the claim is made here: the extras leave a gap narrower than twice the
+/// reach, so a hole this wide legitimately has no direction left in which it
+/// hugs the rings. That half is
+/// `a_clearing_bulges_over_the_mark_and_hugs_the_rings_everywhere_else`, on a
+/// wheel whose slices are 55 degrees.
+#[test]
+fn a_clearing_over_a_wedge_past_a_half_turn_covers_the_whole_wedge() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut gpu) = Shooter::new(SIZE) else {
+        return;
+    };
+    let rings = clearing_rings();
+    let mark_out = rings.mark_inner + rings.mark_thickness;
+
+    // One full-size octave and two extras at MIN_EXTRA_SIZE, so the full one
+    // takes 1/(1 + 2*0.1) of the turn.
+    let wheel =
+        harmonigraph_scene::octave_layout(1, 60.0, 1, harmonigraph_scene::MIN_EXTRA_SIZE, 1.0);
+    let widest = (1..=wheel.span)
+        .map(|j| wheel.bounds[j as usize] - wheel.bounds[j as usize - 1])
+        .fold(0.0f32, f32::max);
+    eprintln!(
+        "span {} of {} full + {} extras, widest slice {:.1} deg",
+        wheel.span,
+        wheel.count,
+        wheel.extras,
+        widest.to_degrees(),
+    );
+    assert!(
+        widest > std::f32::consts::PI,
+        "the fixture has to cut a slice past a half turn to be testing anything; \
+         the widest is {:.1} deg",
+        widest.to_degrees(),
+    );
+    let lopsided = |melody: u32, gutter: f32| -> Scene {
+        let mut scene = clearing_node(melody, 1.0, true, gutter);
+        scene.octave_layout = wheel;
+        scene
+    };
+
+    let bare_plain = gpu.shot(&lopsided(0, 0.0));
+    let holed_plain = gpu.shot(&lopsided(0, CLEAR_REACH));
+    let bare_marked = gpu.shot(&lopsided(MIDDLE_C, 0.0));
+    let holed_marked = gpu.shot(&lopsided(MIDDLE_C, CLEAR_REACH));
+
+    // Which way the wide wedge points, taken off the picture as the marked
+    // node's own extra ink.
+    let mark = light_about_center(&light_over(&bare_marked, &bare_plain), SIZE);
+    assert!(mark.weight > 0.0, "the mark drew nothing to aim at");
+
+    let plain = light_over(&holed_plain, &bare_plain);
+    let marked = light_over(&holed_marked, &bare_marked);
+    // Narrow, because the two extras between them hold only what the full
+    // slice leaves and the far reading has to stay inside that.
+    const CONE: f64 = 8.0;
+    let scale = far_toward(&plain, SIZE, mark.angle, CONE) / (rings.outer + CLEAR_REACH) as f64;
+    let strip = (mark_out - rings.outer) as f64 * scale;
+
+    // The wedge's middle, then a quarter turn off it, then most of the way out
+    // to its edge — the last two past the half-aperture where a wedge stops
+    // being an intersection of two half-planes in front of itself.
+    for turn in [0.0_f64, 90.0, 150.0] {
+        let toward = mark.angle + turn.to_radians();
+        let grew = far_toward(&marked, SIZE, toward, CONE) - far_toward(&plain, SIZE, toward, CONE);
+        eprintln!(
+            "{turn:.0} deg off the wedge's middle: the hole grew {grew:.1} px, want {strip:.1}",
+        );
+        assert!(
+            (grew - strip).abs() < 2.0,
+            "{turn:.0} degrees off the middle of a {:.0}-degree wedge the hole grew {grew:.1} px, \
+             not the {strip:.1} px its strip stands past the rings — the wedge does not \
+             reach its own edge",
+            widest.to_degrees(),
+        );
+    }
+}
+
 /// The clearing is one HOLE the node sits in — filled in to its centre, across
 /// the gaps between its rings and between one sector and the next — rather than
 /// a stencil of the node's ink.
