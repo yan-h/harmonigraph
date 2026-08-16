@@ -425,6 +425,15 @@ pub struct Scene {
     /// measured from, so a node whose band is dialled away still wears both
     /// where its picture actually ends.
     pub rings_outer: f32,
+    /// Where the melody/bass mark strip starts (see
+    /// [`RingStack::mark_inner`]) — a padding out from
+    /// [`rings_outer`](Self::rings_outer), or the node's center on a node with
+    /// no rings at all, where there is nothing for it to stand off.
+    ///
+    /// Handed over rather than re-derived from `rings_outer + ring_gap`,
+    /// because that sum is only right while some ring is there to owe the
+    /// padding to.
+    pub mark_inner: f32,
     /// The one padding on a node (see [`ViewConfig::ring_gap`]): between two
     /// stacked rings, between one octave sector and the next, and between the
     /// outermost ring and the mark strip alike. Already clamped.

@@ -154,7 +154,11 @@ const GLOW_LIMIT: f32 = 0.95;
 // of the mark's envelope, so the rim closes as gradually as the mark leaves —
 // a released mark fades out with its note rather than snapping off at the key.
 fn node_rim(mark: f32) -> f32 {
-    let strip = max(u.misc5.z, 0.0) + u.misc5.w;
+    // Off the strip's own slot (u.misc4.y), which is where the scene put it
+    // rather than a padding added here: on a node with no rings the strip
+    // starts AT the center and owes no padding, and reaching for one would
+    // clear a hole the mark does not fill.
+    let strip = (u.misc4.y + u.misc5.w) - u.misc3.w;
     return u.misc3.w + select(0.0, strip * mark, u.misc5.w > 0.0);
 }
 
@@ -1291,11 +1295,14 @@ fn octave_glow_color(
     return csum / wsum;
 }
 
-// An unlit node draws NOTHING -- no marker, no trail mark, no placeholder.
+// An unlit node draws no marker, no trail mark and no placeholder of its own.
 // What says a node position is there is the grid: the lines around it stop
 // short of it on every side, leaving a gap exactly where its disc would
-// light. So the resting lattice is drawn once, in one layer, and every disc
-// on screen is a note.
+// light. So every DISC on screen is a note.
+//
+// The audio ring is the one thing an idle node does paint, and it is not the
+// node speaking — it is the analyzer, drawn on the node's own ground (see
+// `node_paint`, which states the idle case in full).
 //
 // The trail rides no layer here at all. A node the music has been to is
 // captioned by the LABEL layer, on the CPU (see harmonigraph_scene::trail) --
@@ -1589,19 +1596,18 @@ fn node_paint(in: VsOut) -> vec4<f32> {
     let band_out = u.misc3.z;
     let mark_thick = u.misc5.w;
     let mark_w = select(max(mark_thick, aa * MARK_RING_MIN_AA), 0.0, mark_thick <= 0.0);
-    let mark_gap = slice_gap_half() * 2.0;
-    // Off the outermost RING rather than off the band, which is the same edge
-    // on a node that draws one and the difference on a node that does not: a
-    // band dialled to nothing leaves its slice's extension standing off
-    // whatever layer the stack ended on, instead of collapsing back to the
-    // node's center.
+    // The slot the STACK gave the strip (u.misc4.y): a padding out from
+    // whatever layer the stack ended on — which is the band on a node that
+    // draws one and whatever is inside it on a node that does not — and the
+    // node's center on a node with no rings at all, where a padding would
+    // stand off nothing and open a hole the size of itself.
     //
     // Headroom: that edge can be dialed out to 1.0, so the strip lives in the
     // QUAD_MARGIN margin. Cap it inside the billboard (a circle of radius
     // QUAD_MARGIN fits the square quad) and ease it off there, rather than
     // letting the corner clip it flat.
     let lim = QUAD_MARGIN - 0.02;
-    let mark_in = min(u.misc3.w + mark_gap, lim);
+    let mark_in = min(u.misc4.y, lim);
     let mark_out = min(mark_in + mark_w, lim);
     // Sounding slots draw bright, tinted by their own pitch, each fading on
     // its own envelope; the silent ones draw as the backdrop's ghosts in the

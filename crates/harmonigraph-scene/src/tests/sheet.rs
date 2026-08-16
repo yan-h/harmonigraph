@@ -248,7 +248,13 @@ fn a_layer_with_no_room_left_in_the_node_is_not_drawn() {
     // Every pair the stack hands out, at every core the bar reaches: the ring
     // is the width its own bar reads and sits inside the quad, or it is off.
     // There is no third answer, which is the whole of the rule.
+    //
+    // And the ORDER the answers come in, which the width alone cannot see: the
+    // stack empties from the outside in, so a layer that has gone stays gone as
+    // the core keeps widening, and no layer draws outside one the room refused.
+    // Both bars are open here, so the only way to a `(0, 0)` is a refusal.
     let fresh = ViewConfig::default();
+    let (mut audio_gone, mut band_gone) = (None::<f32>, None::<f32>);
     for step in 0..=90 {
         let core = step as f32 / 100.0;
         let rings = ViewConfig { core_radius: core, ..fresh.clone() }.rings();
@@ -262,7 +268,30 @@ fn a_layer_with_no_room_left_in_the_node_is_not_drawn() {
                 "a core of {core} drew the {name} ring at {inner}..{outer}, not {width} wide",
             );
         }
+        let (audio_on, band_on) = (rings.audio != (0.0, 0.0), rings.band != (0.0, 0.0));
+        assert!(
+            !band_on || audio_on,
+            "a core of {core} refused the audio ring and drew the band at {:?} outside it — \
+             the slot the room could not fit went to the layer further out",
+            rings.band,
+        );
+        for (name, on, gone) in
+            [("audio", audio_on, &mut audio_gone), ("band", band_on, &mut band_gone)]
+        {
+            match (on, *gone) {
+                (false, None) => *gone = Some(core),
+                (true, Some(at)) => panic!(
+                    "the {name} ring went at a core of {at} and is back at {core}; the stack \
+                     empties from the outside in, so a layer that has gone stays gone",
+                ),
+                _ => {}
+            }
+        }
     }
+    assert!(
+        audio_gone.is_some() && band_gone.is_some(),
+        "the sweep never ran either layer out of room, so it proved nothing",
+    );
 }
 
 /// A size a hand-edited blob holds but no bar can produce reaches the scene as

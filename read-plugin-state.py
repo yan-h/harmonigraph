@@ -11,8 +11,8 @@ bug against real state rather than a guess.
 
 THE ONE THING THAT WILL WASTE YOUR TIME
 ---------------------------------------
-The UI state (dock layout, camera, ViewConfig) is written into the plugin
-state ONLY when the editor window is CLOSED — see `impl Drop for
+The UI state (dock layout, camera, spiral framing, ViewConfig) is written
+into the plugin state ONLY when the editor window is CLOSED — see `impl Drop for
 LatticeEditorHandle` in crates/harmonigraph-plugin/src/editor.rs. Saving a
 project with the plugin window open stores whatever was there before.
 
@@ -187,7 +187,11 @@ def main() -> None:
         if not ui:
             print("\n(no ui-state field — editor never closed before the save)")
             continue
-        for name in ("camera", "view"):
+        # The spiral's framing is persisted beside the camera and for the same
+        # reason — a take renders from the blob, so a disc dialled in on its
+        # inner turns has to export the picture it was dialled to. Left out,
+        # a capture silently drops half the framing of one of the two pictures.
+        for name in ("camera", "spiral", "view"):
             body = block(ui, name)
             if body is None:
                 continue

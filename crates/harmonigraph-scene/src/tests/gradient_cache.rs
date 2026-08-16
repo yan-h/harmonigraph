@@ -1,11 +1,13 @@
 //! The color table's cache, which is invisible in what it returns and so is
 //! the one thing about it a value test cannot reach.
 //!
-//! Two gradients are live in one frame — the lattice's, walked per node by the
-//! scene derive, and the Spectral pane's, walked per slab by the spectrum curve
-//! — and a THIRD while either is being dragged, a bar painting the value it has
-//! just written over the value every pane above it read. A cache shallower than
-//! that rebuilds tables it is still holding. What that costs is the whole reason
+//! Three gradients are live in one frame — the lattice's, walked per node by
+//! the scene derive; the Spectral pane's, walked per slab by the spectrum
+//! curve; and the audio ring's, which is the analyzer's own re-anchored on the
+//! lattice's bed and so a key of its own — and a FOURTH while any of them is
+//! being dragged, a bar painting the value it has just written over the value
+//! every pane above it read. A cache shallower than that rebuilds tables it is
+//! still holding. What that costs is the whole reason
 //! the table exists: a rebuild is `PITCH_LUT_N` gamut bisections, each a Newton
 //! solve and an Oklab->sRGB conversion.
 //!

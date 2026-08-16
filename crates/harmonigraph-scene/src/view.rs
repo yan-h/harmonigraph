@@ -756,9 +756,11 @@ pub struct ViewConfig {
     /// wider than the disc's visual radius, so the gap fully contains a
     /// sounding note's circle.
     ///
-    /// The gap is what a node position looks like at rest, nothing being
-    /// drawn inside it: the lines say a node is there by stopping short of
-    /// it.
+    /// The gap is what the LINES leave around a node position: they say a node
+    /// is there by stopping short of it. What stands in the gap is whatever
+    /// the node draws at rest — nothing at all with the audio ring off, and
+    /// the ring's own annulus with it on, which is where a fresh view starts
+    /// (the inset sits well inside the ring, so the two do not fight).
     pub grid_inset: f32,
     // ---- Trail (where the music has already been) ------------------------
     // The one part of the view about the past rather than the present, and it
@@ -844,8 +846,8 @@ pub struct ViewConfig {
     /// renderer never draws it, keeping its frames deterministic.
     ///
     /// Off by default: the HUD is a development instrument, and it sits over
-    /// the picture the plugin exists to draw. The System pane's Performance
-    /// section is where it gets switched on.
+    /// the picture the plugin exists to draw. The Display tab's System page,
+    /// under Performance, is where it gets switched on.
     ///
     pub show_perf: bool,
     /// Expand the overlay from the headline numbers into the full per-stage
@@ -904,46 +906,78 @@ pub struct RingStack {
     /// measured from, so neither has to know which of the rings inside it
     /// happened to be the last one on.
     pub outer: f32,
-    /// How deep the melody/bass mark strip is (see
-    /// [`ViewConfig::mark_thickness`]); 0 = off. Its inner edge is
-    /// [`outer`](Self::outer) plus [`gap`](Self::gap), which the renderer
-    /// applies itself because the strip is allowed to run out into the
-    /// billboard's margin past the quad.
+    /// Where the melody/bass mark strip STARTS: a gap out from
+    /// [`outer`](Self::outer), or the node's center when the stack is empty
+    /// and there is nothing to stand off.
+    ///
+    /// Settled here rather than left to the renderer because that second
+    /// clause is [`Stack::take`]'s rule, and a layer deriving its own inner edge
+    /// downstream is a layer that does not get it: the marks are the one slot
+    /// `stacked` cannot hand out, since they alone may run past the quad edge
+    /// into the billboard's margin instead of being refused there.
+    pub mark_inner: f32,
+    /// How deep the mark strip is from [`mark_inner`](Self::mark_inner) (see
+    /// [`ViewConfig::mark_thickness`]); 0 = off. The OUTER edge is the one
+    /// thing about the marks still left to the renderer, which eases the strip
+    /// off its own billboard edge.
     pub mark_thickness: f32,
     /// The padding between two drawn layers, and between one octave sector and
     /// the next (see [`ViewConfig::ring_gap`]).
     pub gap: f32,
 }
 
-/// One ring's slot in the stack: `width` thick, a `gap` out from `cursor`,
-/// which it then advances to its own outer edge. `(0.0, 0.0)` — and a cursor
-/// left where it was — when it is off, or when the slot it asks for would reach
-/// past the quad edge.
+/// The stack a node's layers are handed out of, innermost first: a cursor at
+/// the outer edge of the last layer DRAWN, and whether the room has run out.
 ///
 /// A ring draws at exactly the width its bar reads or it is not drawn at all,
 /// which is why a slot that does not fit is REFUSED rather than clipped to the
 /// room left. Clipping keeps the layer alive at whatever width the stack
 /// happened to leave it — a bar reading 0.19 drawing 0.0008, a hairline at the
-/// node's rim that no setting asked for and nothing on screen explains. Refusing
-/// it drops the layers off the outside of the stack one at a time as the room
-/// runs out, so what the picture loses is a whole ring and what is left is the
-/// widths the bars read.
-///
-/// The gap is skipped at a cursor of 0, where there is nothing to stand off:
-/// with the core off the innermost ring reaches the node's center and its
-/// sectors close into pie wedges, rather than opening a hole the size of a
-/// padding around nothing.
-fn stacked(cursor: &mut f32, gap: f32, width: f32) -> (f32, f32) {
-    if width <= 0.0 {
-        return (0.0, 0.0);
+/// node's rim that no setting asked for and nothing on screen explains.
+struct Stack {
+    cursor: f32,
+    /// Set by a refusal, and the reason it is not just a cursor: the two ways
+    /// a layer comes back empty are different questions, and only one of them
+    /// is about the room.
+    ///
+    /// A layer at width 0 is switched off by its own BAR and gives its slot
+    /// up; the layer outside it closes over the space, which is what the bar's
+    /// hover promises. A layer REFUSED is the room itself running out, and
+    /// nothing outside it can fit either — so the stack drops from the outside
+    /// in, one layer at a time, and a layer that has gone stays gone while the
+    /// room keeps shrinking.
+    ///
+    /// Letting a refusal leave the cursor where it was makes the refused
+    /// layer's slot a gift to the one outside it, which reads on screen as the
+    /// stack coming apart in no order at all: widen the core past the audio
+    /// ring's slot and the BAND takes it, so a band that had been gone for a
+    /// quarter of the bar's travel reappears, and the ring's own width bar
+    /// picks up a second off position at the TOP of its travel, where dragging
+    /// it wider is what removes it.
+    full: bool,
+}
+
+impl Stack {
+    /// The next layer's slot: `width` thick, a `gap` out from the cursor,
+    /// which it then advances to its own outer edge.
+    ///
+    /// The gap is skipped at a cursor of 0, where there is nothing to stand
+    /// off: with the core off the innermost ring reaches the node's center and
+    /// its sectors close into pie wedges, rather than opening a hole the size
+    /// of a padding around nothing.
+    fn take(&mut self, gap: f32, width: f32) -> (f32, f32) {
+        if width <= 0.0 || self.full {
+            return (0.0, 0.0);
+        }
+        let inner = if self.cursor > 0.0 { self.cursor + gap } else { 0.0 };
+        let outer = inner + width;
+        if outer > 1.0 {
+            self.full = true;
+            return (0.0, 0.0);
+        }
+        self.cursor = outer;
+        (inner, outer)
     }
-    let inner = if *cursor > 0.0 { *cursor + gap } else { 0.0 };
-    let outer = inner + width;
-    if outer > 1.0 {
-        return (0.0, 0.0);
-    }
-    *cursor = outer;
-    (inner, outer)
 }
 
 /// A size bar's value as the picture may use it: inside `0..=high`, and 0 —
@@ -975,7 +1009,7 @@ impl ViewConfig {
     /// hand-edited blob can hold anything, and `sanitize` only repairs the
     /// non-finite (a finite 40 would be a curve no bar can undo).
     ///
-    /// The Nodes section's Fade curve bar builds one of its own, and it is the single
+    /// The Note section's Fade curve bar builds one of its own, and it is the single
     /// exception rather than a second assembly point: it is drawing a PICTURE
     /// of the curve, over a unit duration that is nothing a note ever fades
     /// on, so it has no note's seconds to pair with and could not reach for
@@ -1032,18 +1066,19 @@ impl ViewConfig {
         // The cursor is the outer edge of the last layer DRAWN, which is what
         // makes a ring dialled to 0 cost its gap as well as its slot: nothing
         // moved the cursor, so the next ring starts where it would have.
-        let mut cursor = core;
-        let audio = stacked(&mut cursor, gap, size(self.spectral_ring_width, RING_WIDTH_MAX));
-        let band = stacked(&mut cursor, gap, size(self.band_width, RING_WIDTH_MAX));
+        let mut stack = Stack { cursor: core, full: false };
+        let audio = stack.take(gap, size(self.spectral_ring_width, RING_WIDTH_MAX));
+        let band = stack.take(gap, size(self.band_width, RING_WIDTH_MAX));
         RingStack {
             core_radius: core,
             audio,
             band,
-            outer: cursor,
-            // The marks are the one layer whose outer edge is not settled here:
-            // they live in the billboard's margin past the quad, where the
-            // renderer eases them off its own edge, so what it is handed is
-            // where the strip STARTS and how deep it is.
+            outer: stack.cursor,
+            // The strip's own slot, on the stack's terms — a gap out from the
+            // last layer drawn, or the node's center when nothing was. Only
+            // the outer edge is left to the renderer, because that is the one
+            // the billboard's margin lets run past the quad.
+            mark_inner: if stack.cursor > 0.0 { stack.cursor + gap } else { 0.0 },
             mark_thickness: size(self.mark_thickness, MARK_THICKNESS_MAX),
             gap,
         }
@@ -1462,7 +1497,7 @@ impl ViewConfig {
         // has no door here to need.
         self.fade_shape = finite_or(self.fade_shape, 0.0);
 
-        // The gutter and its fade, which are ONE control (the Nodes section's
+        // The gutter and its fade, which are ONE control (the Note section's
         // Clearance bar) over two numbers: the fade is a distance measured back
         // from the reach, so a fade wider than the reach is a low end off the
         // bottom of the axis. It draws as a fade over the whole reach either
