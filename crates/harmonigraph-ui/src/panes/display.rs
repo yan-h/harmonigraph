@@ -125,8 +125,8 @@ fn page_picker(ui: &mut egui::Ui, page: &mut DisplayPage) {
 
 /// The Lattice page: the whole lattice picture, read from the camera in front
 /// of it inward. What is framed ([`view_pane`]), how a sounding note draws
-/// ([`nodes_pane`]), the text riding it ([`labels_pane`]), and the lines
-/// between the positions ([`grid_pane`]).
+/// ([`nodes_pane`]), the text riding it ([`labels_pane`]), and last what is
+/// there when nothing sounds at all ([`grid_pane`]).
 ///
 /// [`view_pane`] leads, so its own first heading is the page's and stays plain
 /// — see [`section`](super::section) for the rule that separates a section from

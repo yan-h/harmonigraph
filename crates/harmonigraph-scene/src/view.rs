@@ -352,7 +352,7 @@ pub struct ViewConfig {
     // in the rings' own ground behind the sounding sectors — is what makes
     // the annulus complete, so a lone octave still reads as a whole note; and
     // the glyphs are always the crisp classic shapes. How bright that backdrop
-    // is IS a field, and it is [`ring_ground`](Self::ring_ground) below, one
+    // is IS a field, and it is [`lattice_ground`](Self::lattice_ground) below, one
     // number under this layer and the audio ring together. Saved blobs may
     // still carry the keys the pair rode on (`outer_backdrop`, first a bool
     // and then an opacity under `outer_backdrop_alpha`, and `outer_solidity`);
@@ -376,37 +376,43 @@ pub struct ViewConfig {
     /// A gap is only ever spent between two DRAWN layers, so a ring dialled to
     /// 0 costs its own slot and the gap that would have stood it off together.
     pub ring_gap: f32,
-    /// The unlit GROUND both rings stand on, as an `L*` 0..100 — one neutral
-    /// grey, drawn wherever the audio ring reads silence and wherever the MIDI
-    /// ring's octave is not sounding.
+    /// The whole lattice AT REST, as an `L*` 0..100 — one neutral grey under
+    /// the three surfaces that draw where nothing is sounding:
     ///
-    /// One number under two layers, like [`ring_gap`](Self::ring_gap) above it,
-    /// and for the same reason: the two annuli sit a gap apart on the same node
-    /// and are read together, so a ground that differed between them would say
-    /// the rings were measuring in different units when the only difference is
-    /// which one is empty. That is what it looked like when each layer arrived
-    /// at its ground by its own route — the audio ring off the analyzer's
-    /// gradient (whose dark end carries that gradient's own hue), the MIDI ring
-    /// off the note's colour whitened and laid on at a fixed opacity — two
-    /// near-greys a hair apart in tint that never quite agreed and could not be
-    /// dialled at all.
+    /// - the **grid** between node positions, every segment of it, and the
+    ///   colour a sevens link fades in to as a note hangs from it
+    ///   ([`derive_grid`](crate::derive::derive_grid));
+    /// - the **audio ring** wherever it reads silence, which its ramp is
+    ///   re-anchored to open on ([`ring_gradient`](crate::ring_gradient));
+    /// - the **MIDI ring**'s octave slices that are not sounding, which ARE
+    ///   this colour, with a sounding octave's pitch painted over them.
     ///
-    /// **Neutral, and the same grey on both**: the ground is what the rings
-    /// have in common when nothing is lit, so it carries no hue of its own and
-    /// each layer's light is added over it —
-    /// [`ring_gradient`](crate::ring_gradient) re-anchors the analyzer's ramp
-    /// to open here, and the MIDI ring's silent slices ARE this colour, with a
-    /// sounding octave's pitch painted over them.
+    /// One number under all three, like [`ring_gap`](Self::ring_gap) above it,
+    /// and for the same reason: they are one picture read together — two annuli
+    /// a gap apart with the lines of the lattice running into them — so a
+    /// ground that differed between them says the three are different KINDS of
+    /// thing when the only thing they have in common is being empty. That is
+    /// what it looked like when each arrived at its ground by its own route:
+    /// the audio ring off the analyzer's gradient (whose dark end carries that
+    /// gradient's own hue), the MIDI ring off the note's colour whitened and
+    /// laid on at a fixed opacity, the grid off the CHROME's hairline at
+    /// another. Three near-greys a hair apart in tint, none of them dialable.
+    ///
+    /// **Neutral**, because the ground is what they have in common rather than
+    /// a colour any of them owns: it carries no hue, and each surface's light
+    /// is added over it.
     ///
     /// Stated in `L*` because that is the axis the ask is on: perceived
     /// brightness, the same units [`Gradient::lightness`](crate::Gradient) is
     /// authored in, so a ground and a gradient can be compared by their
-    /// numbers. There is no off position and it needs none — the widths are
-    /// each layer's own off switch. What the bottom of the bar reaches is
-    /// black, which against this skin's panel reads as a hole punched through
-    /// the lattice; the ground vanishes into the panel a little above it, at
-    /// the panel's own `L*` (8.8 on the fresh skin).
-    pub ring_ground: f32,
+    /// numbers. There is no off position and it needs none — each layer has its
+    /// own ([`grid_thickness`](Self::grid_thickness) for the lines, a width for
+    /// each ring). What the bottom of the bar reaches is black, which against
+    /// this skin's panel reads as holes punched through the lattice; a little
+    /// above it, at the panel's own `L*` (8.8 on the fresh skin), the whole
+    /// resting picture vanishes into the pane together and only sounding notes
+    /// draw.
+    pub lattice_ground: f32,
     /// How many octaves one turn of a node covers at FULL SIZE (see
     /// [`octaves`](crate::octaves)), 1..=11 — not how many it draws, which is
     /// this plus twice [`octave_extras`](Self::octave_extras). Each is exactly
@@ -773,12 +779,14 @@ pub struct ViewConfig {
     pub shimmer_softness: f32,
 
     // ---- Home grid -------------------------------------------------------
-    // The faint structural grid between node positions (see `derive_grid`),
-    // and with no idle marker under it, the whole of what an unplayed lattice
-    // draws. Line width and inset are its settings; its COLOR is not among
-    // them — it draws in the skin's hairline grey (`skin::grid_line`), the
-    // same one the panel rules itself with, and a lit segment takes its
-    // note's color.
+    // The structural grid between node positions (see `derive_grid`), and with
+    // no idle marker under it, the whole of what an unplayed lattice draws.
+    // Line width and inset are its settings HERE; its colour is
+    // [`lattice_ground`](Self::lattice_ground), up with the note's own layers,
+    // because that one grey is the whole at-rest picture — this grid and both
+    // of a node's rings where nothing is lit — and a bar that moved only the
+    // lines would take the lattice apart. A lit segment is the same ground,
+    // arrived rather than brighter.
     /// Grid line thickness as a multiple of the built-in width. 1 is the
     /// classic hairline; the shader scales its grid half-width by this, so 0
     /// takes the lines away and with them the lattice's resting picture.
@@ -1117,7 +1125,7 @@ impl ViewConfig {
         }
     }
 
-    /// [`ring_ground`](Self::ring_ground) as an `L*` the colour path can
+    /// [`lattice_ground`](Self::lattice_ground) as an `L*` the colour path can
     /// actually solve for: on the axis, and a real number.
     ///
     /// One function for the same reason [`rings`](Self::rings) is one: the two
@@ -1129,9 +1137,9 @@ impl ViewConfig {
     /// function's own reason: the drawing code is reached by more routes than
     /// the persist door, and a NaN walks through a `clamp` untouched into a
     /// Newton solve that answers with whatever its guard parks on.
-    pub fn ring_ground_lightness(&self) -> f32 {
-        if self.ring_ground.is_finite() {
-            self.ring_ground.clamp(0.0, 100.0)
+    pub fn lattice_ground_lightness(&self) -> f32 {
+        if self.lattice_ground.is_finite() {
+            self.lattice_ground.clamp(0.0, 100.0)
         } else {
             DEFAULT_RING_GROUND
         }
@@ -1600,7 +1608,8 @@ impl ViewConfig {
         // NaN gradient and the whole ring goes to whatever the clamp in
         // `oklab_srgb` lands on. Both rings read the repaired number, which is
         // what keeps the bar's readout and the grey on screen the same value.
-        self.ring_ground = finite_or(self.ring_ground, fresh.ring_ground).clamp(0.0, 100.0);
+        self.lattice_ground =
+            finite_or(self.lattice_ground, fresh.lattice_ground).clamp(0.0, 100.0);
 
         self.shimmer_speed = finite_or(self.shimmer_speed, fresh.shimmer_speed);
         self.shimmer_width = finite_or(self.shimmer_width, fresh.shimmer_width);
@@ -1623,8 +1632,8 @@ fn finite_or(value: f32, fallback: f32) -> f32 {
     }
 }
 
-/// The `L*` a fresh [`ViewConfig::ring_ground`] opens on, named because
-/// [`ViewConfig::ring_ground_lightness`] needs it without building a whole
+/// The `L*` a fresh [`ViewConfig::lattice_ground`] opens on, named because
+/// [`ViewConfig::lattice_ground_lightness`] needs it without building a whole
 /// fresh view to read one field off. Named, and not a second value: the
 /// `Default` below is written in terms of it, the way it is written in terms of
 /// `octaves::DEFAULT_COUNT`.
@@ -1748,7 +1757,7 @@ impl Default for ViewConfig {
             // a reading — `the_fresh_ground_is_the_skins_faint_surface` holds
             // the number to the skin, so retuning that rung and leaving this
             // behind is a test failure rather than a drift.
-            ring_ground: DEFAULT_RING_GROUND,
+            lattice_ground: DEFAULT_RING_GROUND,
             // Five octaves to the turn with middle C straight up — C1..C5 in
             // the DAW's numbering, the register a keyboard part lives in, at
             // 72 degrees an octave, with a two-octave fringe either end (see

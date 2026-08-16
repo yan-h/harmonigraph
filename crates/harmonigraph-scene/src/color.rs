@@ -748,7 +748,7 @@ pub fn hue_circle(lightness: f32, chroma: f32) -> [Vec4; HUE_CIRCLE_N] {
 /// (see the paragraph below), so a lone voice keeps its exact color rather
 /// than the one its indicator wears. The band's unsounding slices are off this
 /// ramp altogether: they wear the rings' ground
-/// ([`ViewConfig::ring_ground`](crate::ViewConfig)), which is a brightness
+/// ([`ViewConfig::lattice_ground`](crate::ViewConfig)), which is a brightness
 /// rather than a pitch. Do not simplify
 /// `octave_glow_color`'s `count < 2u` fallback away on the strength of this
 /// function's name.
@@ -819,7 +819,7 @@ pub fn gradient_color(t: f32, gradient: Gradient) -> Vec4 {
 /// lightness names.
 ///
 /// The one place a colour is asked for by brightness alone, which is what the
-/// rings' ground is (see [`ViewConfig::ring_ground`](crate::ViewConfig)). Off
+/// rings' ground is (see [`ViewConfig::lattice_ground`](crate::ViewConfig)). Off
 /// the same [`oklab_srgb`] the gradient's own colours come through, rather than
 /// a gamma encode written out a second time here: at chroma 0 that path is the
 /// neutral axis exactly — Oklab `L` IS the cube root of luminance there, so the
@@ -878,14 +878,3 @@ pub(crate) fn ramp_luminance(l_star: f64, h: f64, c: f64) -> (f64, f64) {
     (target_y, 0.2126 * r + 0.7152 * g + 0.0722 * b)
 }
 
-/// What a node with no voice on it is colored: the
-/// [grid line](crate::skin::grid_line)'s RGB, at full alpha because the
-/// line's own alpha is a LINE opacity and says nothing about a node.
-///
-/// No layer draws a node while it holds this — an idle node paints no pixel
-/// — so it is the neutral such a node falls back to rather than a look. It
-/// is the grid's grey rather than an arbitrary one so that a node arriving
-/// or leaving crosses no seam against the lines around it.
-pub(crate) fn idle_color() -> Vec4 {
-    crate::skin::grid_line().with_w(1.0)
-}

@@ -366,8 +366,8 @@ fn parity_scene() -> Scene {
         background: harmonigraph_scene::skin::panel_color(),
         // The grey the octave band's unsounding slices draw, at the fresh
         // view's own Ground — most of every node's band in this fixture.
-        ring_ground: harmonigraph_scene::grey_of_lightness(
-            harmonigraph_scene::ViewConfig::default().ring_ground,
+        lattice_ground: harmonigraph_scene::grey_of_lightness(
+            harmonigraph_scene::ViewConfig::default().lattice_ground,
         ),
         sevens_soft: 0.24,
         node_radius: 0.34,

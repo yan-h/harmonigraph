@@ -440,8 +440,9 @@ pub struct Scene {
     /// stacked rings, between one octave sector and the next, and between the
     /// outermost ring and the mark strip alike. Already clamped.
     pub ring_gap: f32,
-    /// The unlit ground a node's two rings stand on, already resolved from
-    /// [`ViewConfig::ring_ground`]'s `L*` to the neutral grey it names.
+    /// The lattice at rest — its grid, and both of a node's rings where
+    /// nothing is lit — already resolved from
+    /// [`ViewConfig::lattice_ground`]'s `L*` to the neutral grey it names.
     ///
     /// A COLOUR here and an `L*` in the view, because the two ends want
     /// different things: the bar is a brightness a person reads and drags, and
@@ -452,9 +453,14 @@ pub struct Scene {
     /// same number, so the two agree by construction rather than by both being
     /// aimed at the skin.
     ///
-    /// Read by the OCTAVE band alone: it is what a silent slice draws, and what
-    /// a sounding one's pitch is painted over as the note fades.
-    pub ring_ground: Vec4,
+    /// Read by the OCTAVE band, which is what a silent slice draws and what a
+    /// sounding one's pitch is painted over as the note fades. The lattice's
+    /// two other at-rest surfaces carry the same grey without reading this
+    /// field, because neither reaches the shader as a uniform: every
+    /// [`grid`](Self::grid) segment carries it as its own colour, and the audio
+    /// ring carries it as the `t` = 0 end of its table. Three copies of one
+    /// resolve, not three answers.
+    pub lattice_ground: Vec4,
     /// The lattice's AUDIO channel: what the analyzer measured, where the
     /// ring that draws it sits, and the ramp every audio-lit element on the
     /// node is painted from (see [`spectral`]).
@@ -476,10 +482,12 @@ pub struct Scene {
     /// its own octaves fall against the center pitch, which is what makes an
     /// indicator's ANGLE mean an absolute pitch.
     pub octave_layout: OctaveLayout,
-    /// The faint background grid (see [`derive_grid`](derive::derive_grid)): one segment per
-    /// adjacent pair of visible positions, inset so every node position
-    /// keeps a circular gap where its disc draws while sounding. Reuses
-    /// [`EdgeInstance`]; `strength` carries the line opacity.
+    /// The background grid (see [`derive_grid`](derive::derive_grid)): one
+    /// segment per adjacent pair of visible positions, inset so every node
+    /// position keeps a circular gap where its disc draws while sounding.
+    /// Reuses [`EdgeInstance`]; `strength` carries the line opacity, and every
+    /// segment's colour is [`lattice_ground`](Self::lattice_ground) — so a
+    /// resting line IS that grey and a sevens link fades in to it.
     pub grid: Vec<EdgeInstance>,
     /// Grid line thickness as a multiple of the shader's built-in grid
     /// width (see [`ViewConfig::grid_thickness`]), already clamped.

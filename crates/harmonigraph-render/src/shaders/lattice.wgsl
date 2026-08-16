@@ -71,7 +71,7 @@ struct Uniforms {
     // a silent slice IS this colour, and a sounding one's pitch is painted
     // over it. The audio ring beside it stands on the same grey by carrying
     // it as entry 0 of spectral_lut, baked on the CPU from the same L*.
-    ring_ground: vec4<f32>,
+    lattice_ground: vec4<f32>,
     // The wheel. x: octaves one turn is cut into; y: the MIDI pitch at the top
     // of every node.
     // Which SLOTS a node draws, and how far its ring is turned, are derived
@@ -952,7 +952,7 @@ fn shimmer_light(rgb: vec3<f32>, terms: vec2<f32>) -> vec3<f32> {
 //
 // The backdrop is always on: it is the cohesion device that makes a note
 // read as ONE whole shape even when a single octave sounds, so the SILENT
-// octaves draw in the rings' own ground (u.ring_ground), carrying the ring's
+// octaves draw in the rings' own ground (u.lattice_ground), carrying the ring's
 // shape around the bright one. It completes the circle, since the indicators
 // tile the whole turn: the only breaks in it are the gaps between them.
 //
@@ -974,7 +974,7 @@ fn slice_gap_half() -> f32 {
     return max(u.misc5.z, 0.0) * 0.5;
 }
 // The backdrop is OPAQUE where the note is fully present, and its color is
-// u.ring_ground — so a silent slice is that grey exactly, the same grey the
+// u.lattice_ground — so a silent slice is that grey exactly, the same grey the
 // audio ring a gap inside it reads at silence.
 //
 // A color and not an opacity, which is the whole of what makes the two rings
@@ -1595,7 +1595,7 @@ fn node_paint(in: VsOut) -> vec4<f32> {
     // octaves it shows is the per-node bitmask, and how much of the band it
     // covers is the band radii; there is nothing left for a switch to say.
     var glyph = 0.0;
-    var glyph_rgb = u.ring_ground.rgb;
+    var glyph_rgb = u.lattice_ground.rgb;
 
     // Melody/bass mark geometry: one strip outside the octave band, standing
     // off it by the same padding one indicator stands off the next, so an
@@ -1641,7 +1641,7 @@ fn node_paint(in: VsOut) -> vec4<f32> {
     // The backdrop's opacity, which every slot on the ring is drawn on and
     // none of them varies — so it is taken here beside the band rather than
     // rebuilt per slot inside the loop. The node's own activation and nothing
-    // else: the ground is a COLOR (u.ring_ground), so there is no second
+    // else: the ground is a COLOR (u.lattice_ground), so there is no second
     // constant here dimming it toward whatever is behind.
     let ghost_a = presence;
     // The slots a melody or bass mark is extending (in.marks, the same
@@ -1680,7 +1680,7 @@ fn node_paint(in: VsOut) -> vec4<f32> {
         // slot is that ghost with its pitch painted OVER it — never one in
         // place of the other.
         var opacity = ghost_a;
-        var slot_rgb = u.ring_ground.rgb;
+        var slot_rgb = u.lattice_ground.rgb;
         if level > 0.0 {
             // Straight off the octave's own envelope, so the glyph eases in
             // over the attack and ends on the ground at release: the same
@@ -1729,7 +1729,8 @@ fn node_paint(in: VsOut) -> vec4<f32> {
             // The divide un-premultiplies, and wants no floor under it: this
             // branch has `level > 0`, the packing's smallest step is 1/255,
             // and `ghost_rest` is never negative, so `opacity >= level`.
-            slot_rgb = (pitch_lut_color(pitch) * level + u.ring_ground.rgb * ghost_rest) / opacity;
+            let ground = u.lattice_ground.rgb;
+            slot_rgb = (pitch_lut_color(pitch) * level + ground * ghost_rest) / opacity;
         }
         // The wedge enters ONCE, after the two layers are resolved: they are
         // the same shape at different opacities, and compositing their COVERED

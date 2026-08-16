@@ -25,7 +25,7 @@
 //! silent end is anchored on the node's own ground ([`ring_gradient`]): a ramp
 //! opening at black punches a hole through a grey lattice at every node, which
 //! is a picture of a gap where the table means silence. That ground is the
-//! neutral grey of [`ViewConfig::ring_ground`] — one number the octave band
+//! neutral grey of [`ViewConfig::lattice_ground`] — one number the octave band
 //! beside it stands on too, so the node's two rings read as empty in exactly
 //! one colour, and one bar moves both.
 //!
@@ -259,7 +259,7 @@ impl SpectralPaint {
     pub fn new(view: &ViewConfig, gradient: Gradient) -> SpectralPaint {
         let (inner, outer) = view.rings().audio;
         SpectralPaint {
-            lut: pitch_ramp_lut(ring_gradient(gradient, view.ring_ground_lightness())),
+            lut: pitch_ramp_lut(ring_gradient(gradient, view.lattice_ground_lightness())),
             folded: view.spectral_reading == SpectralReading::Fold,
             inner,
             outer,
@@ -307,7 +307,7 @@ impl SpectralPaint {
 ///
 /// **Both ends of the CHROMA ramp move too, and that is what makes the ground a
 /// ground**: the silent end is pinned to chroma 0, so what a quiet wedge draws
-/// is the neutral grey of [`ViewConfig::ring_ground`] and not the analyzer
+/// is the neutral grey of [`ViewConfig::lattice_ground`] and not the analyzer
 /// gradient's own dark hue at that brightness. The MIDI ring beside it stands
 /// on that same grey, and two rings a gap apart whose empty state differed by a
 /// tint would read as two measurements in different units when the only
@@ -514,7 +514,7 @@ mod tests {
     }
 
     /// A silent wedge draws the GROUND: the neutral grey
-    /// [`ViewConfig::ring_ground`] names, to the byte.
+    /// [`ViewConfig::lattice_ground`] names, to the byte.
     ///
     /// The whole claim of the pin, and it is stated against the octave band's
     /// own ground rather than against a number written here — the two rings sit
@@ -528,9 +528,9 @@ mod tests {
     #[test]
     fn a_silent_wedge_is_the_grey_the_octave_band_stands_on() {
         for ground in [0.0, 8.8, 20.0, 55.0, 100.0] {
-            let view = ViewConfig { ring_ground: ground, ..ringed(0.3, 200.0) };
+            let view = ViewConfig { lattice_ground: ground, ..ringed(0.3, 200.0) };
             let silent = SpectralPaint::new(&view, analyzers()).lut[0];
-            let band = crate::grey_of_lightness(view.ring_ground_lightness());
+            let band = crate::grey_of_lightness(view.lattice_ground_lightness());
             let step = (silent.truncate() - band.truncate()).abs().max_element();
             assert!(
                 step * 255.0 < 0.5,
@@ -552,7 +552,7 @@ mod tests {
     #[test]
     fn the_fresh_ground_is_the_skins_faint_surface() {
         let rung = lightness(crate::skin::surface_faint_color());
-        let fresh = ViewConfig::default().ring_ground;
+        let fresh = ViewConfig::default().lattice_ground;
         assert!(
             (fresh - rung).abs() < 0.2,
             "the fresh Ground is L* {fresh}, the skin's faint surface L* {rung}",
@@ -570,7 +570,7 @@ mod tests {
     #[test]
     fn a_ramp_opening_above_the_ground_is_still_moved_onto_it() {
         let high = Gradient { lightness: 60.0, lightness_ramp: 20.0, ..analyzers() };
-        let ground = ViewConfig::default().ring_ground;
+        let ground = ViewConfig::default().lattice_ground;
         assert!(
             lightness(pitch_ramp_lut(high)[0]) > ground,
             "the test's own gradient does not open above the ground",

@@ -1011,7 +1011,7 @@ mod tests {
         // whole of the difference.
         let ring = harmonigraph_scene::pitch_ramp_lut(harmonigraph_scene::ring_gradient(
             cfg.spectrogram_gradient,
-            state.view.ring_ground_lightness(),
+            state.view.lattice_ground_lightness(),
         ));
         for (k, entry) in scene.spectral.lut.iter().enumerate() {
             let got = crate::panes::scene_color(*entry, 1.0);
@@ -1038,15 +1038,15 @@ mod tests {
         // is most of the ring most of the time, and unanchored it is a hole at
         // every node.
         //
-        // Against `scene.ring_ground` and not against a number: that field IS
+        // Against `scene.lattice_ground` and not against a number: that field IS
         // what the shader lays down for the band, so this is the two layers
         // measured against each other through the whole path a frame takes.
         let floor = scene.spectral.lut[0];
-        let step = (floor.truncate() - scene.ring_ground.truncate()).abs().max_element();
+        let step = (floor.truncate() - scene.lattice_ground.truncate()).abs().max_element();
         assert!(
             step * 255.0 < 0.5,
             "a silent wedge draws {floor:?} where the octave band draws {:?}",
-            scene.ring_ground,
+            scene.lattice_ground,
         );
 
         // ...and the MIDI half: a ribbon and the node it lit are one colour off

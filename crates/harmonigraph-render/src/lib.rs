@@ -272,7 +272,7 @@ struct Uniforms {
     /// on the picture rather than as a hole through it. See
     /// `Scene::background`.
     background: [f32; 4],
-    /// The unlit ground a node's two rings stand on (`Scene::ring_ground`): the
+    /// The unlit ground a node's two rings stand on (`Scene::lattice_ground`): the
     /// neutral grey the OCTAVE band's silent slices are, and the colour a
     /// sounding one's pitch is painted over as it fades.
     ///
@@ -281,7 +281,7 @@ struct Uniforms {
     /// split across the seam between two vec4s would be read by nothing that
     /// wanted the halves apart. The audio ring's own copy of it is `t` = 0 of
     /// `spectral_lut` below, baked on the CPU from the same `L*`.
-    ring_ground: [f32; 4],
+    lattice_ground: [f32; 4],
     /// The wheel's pitch axis. x: octaves one turn is cut into
     /// (`OctaveLayout::span`); y: the MIDI pitch at the top of every node
     /// (`OctaveLayout::center`).
@@ -853,7 +853,7 @@ impl LatticeCallback {
                 misc5: [scene.grid_thickness, 0.0, scene.ring_gap, scene.mark_thickness],
                 misc6: [0.0, 0.0, scene.sevens_soft, scene.pulse_marks.shader_index() as f32],
                 background: scene.background.to_array(),
-                ring_ground: scene.ring_ground.to_array(),
+                lattice_ground: scene.lattice_ground.to_array(),
                 misc7: [
                     scene.octave_layout.span as f32,
                     scene.octave_layout.center,

@@ -85,7 +85,7 @@ fn a_frame_of_a_drag_rebuilds_only_what_the_drag_changed() {
     // its silent end being pinned to the node's ground rather than floored at
     // it.
     let analyzer = Gradient { lightness: 50.0, lightness_ramp: 100.0, ..nth(3) };
-    let ring = crate::ring_gradient(analyzer, ViewConfig::default().ring_ground);
+    let ring = crate::ring_gradient(analyzer, ViewConfig::default().lattice_ground);
     assert_ne!(ring, analyzer.sanitized(), "the ring's table is the analyzer's own entry");
     // Ten frames of a drag, each writing a gradient one step further round the
     // circle — which is what a bar being dragged does.
