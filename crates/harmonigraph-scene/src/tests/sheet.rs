@@ -114,11 +114,13 @@ fn the_mark_depth_reaches_the_scene_and_is_clamped() {
 }
 
 #[test]
-fn the_gap_reaches_the_scene_and_is_clamped() {
-    // One padding for the whole node: the shader spaces the sectors AND the
-    // melody/bass marks by this single number, and derive_scene stacks the
-    // rings by it, so it has to survive rather than being a shader constant.
-    let view = ViewConfig { ring_gap: 0.2, ..ViewConfig::default() };
+fn the_octave_gap_reaches_the_scene_and_is_clamped() {
+    // The ANGULAR padding, which is the one the shader has to be handed: it
+    // cuts the sectors apart per fragment, so nothing upstream can spend it and
+    // it survives as its own number rather than as a shader constant. (The
+    // radial one reaches the picture as the radii themselves — that is
+    // `the_rings_stack_outward_from_the_core` below.)
+    let view = ViewConfig { octave_gap: 0.2, ..ViewConfig::default() };
     let scene = scene_of(
         &NoteTracker::new(),
         &Tuning::default(),
@@ -126,13 +128,63 @@ fn the_gap_reaches_the_scene_and_is_clamped() {
         &plain_frame(),
         0.0,
     );
-    assert_eq!(scene.ring_gap, 0.2);
+    assert_eq!(scene.octave_gap, 0.2);
 
-    // The cap is what a hand-edited blob is held to: the same number spaces
-    // the octave sectors ANGULARLY, where anything past a fraction of a turn
-    // erases every one of them. It is no guarantee that the stack still fits
-    // — at GAP_MAX the paddings alone are more than the quad, so the band's
-    // slot ends past the node's edge and the layer comes out off.
+    // The cap is what a hand-edited blob is held to: anything past a fraction
+    // of a turn erases every sector on the node.
+    let wild = ViewConfig { octave_gap: 5.0, ..ViewConfig::default() };
+    let scene = scene_of(
+        &NoteTracker::new(),
+        &Tuning::default(),
+        &wild,
+        &plain_frame(),
+        0.0,
+    );
+    assert!(scene.octave_gap <= 0.4, "got {}", scene.octave_gap);
+}
+
+/// The two paddings are two settings all the way to the scene: neither one
+/// moves the other's picture, which is the whole of what splitting them buys
+/// and the one thing a single number could not say.
+#[test]
+fn the_two_gaps_are_independent_at_the_scene() {
+    let stack = |view: &ViewConfig| {
+        let scene = scene_of(&NoteTracker::new(), &Tuning::default(), view, &plain_frame(), 0.0);
+        (scene.outer_inner, scene.outer_outer, scene.rings_outer, scene.mark_inner)
+    };
+    let sound = ViewConfig {
+        core_radius: 0.2,
+        spectral_ring_width: 0.1,
+        band_width: 0.15,
+        ring_gap: 0.05,
+        octave_gap: 0.05,
+        mark_thickness: 0.1,
+        ..ViewConfig::default()
+    };
+
+    // Widening the sectors' gap leaves every radius where it was: the slices
+    // are cut out of rings the stack has already placed.
+    let sliced = ViewConfig { octave_gap: 0.3, ..sound.clone() };
+    assert_eq!(stack(&sliced), stack(&sound), "the angular gap moved a radius");
+
+    // And widening the stack's leaves the sectors' cut where it was, at a
+    // picture that has visibly moved: core 0.2 | gap | audio | gap | band, so
+    // the band's inner edge walks out with the padding it is a sum of.
+    let spaced = ViewConfig { ring_gap: 0.12, ..sound.clone() };
+    assert!(
+        stack(&spaced).0 > stack(&sound).0,
+        "the radial gap did not restack the rings: the band's inner edge is still at {}",
+        stack(&sound).0,
+    );
+    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &spaced, &plain_frame(), 0.0);
+    assert_eq!(scene.octave_gap, 0.05, "the radial gap moved the sectors' own");
+}
+
+#[test]
+fn a_wild_radial_gap_is_clamped_and_the_stack_stops_at_the_ring_that_fits() {
+    // The cap on the radial padding is no guarantee that the stack still fits —
+    // at GAP_MAX the paddings alone are more than the quad, so the band's slot
+    // ends past the node's edge and the layer comes out off.
     let wild = ViewConfig { ring_gap: 5.0, ..ViewConfig::default() };
     let scene = scene_of(
         &NoteTracker::new(),
@@ -141,7 +193,6 @@ fn the_gap_reaches_the_scene_and_is_clamped() {
         &plain_frame(),
         0.0,
     );
-    assert!(scene.ring_gap <= 0.4, "got {}", scene.ring_gap);
     // What the refused slot comes out AS, which is the whole of how a layer
     // says it is not drawn: the empty pair. An inside-out pair (the slot's own
     // inner edge twice) or one clipped back to the quad edge are both things
@@ -152,6 +203,23 @@ fn the_gap_reaches_the_scene_and_is_clamped() {
         scene.rings_outer > 0.0 && scene.rings_outer < 1.0,
         "the outermost ring is at {}, which is off the node",
         scene.rings_outer,
+    );
+    // The CEILING itself, read where the scene still carries it. Every ring
+    // this padding stands off was refused, so the radii above say nothing about
+    // how wide it is; the mark strip is the one slot a full stack still spends
+    // it on, and the difference IS the gap the picture used.
+    //
+    // Worth its own assertion because the escape is silent and lands outside
+    // the node: `mark_inner` is what the shader sizes every node's BILLBOARD on
+    // (`node_rim`, then `quad_margin`), so an unclamped 5.0 here asks for a quad
+    // some five node radii across, on every node in the window, with the marks
+    // drawn nowhere a person can see them. Nothing in the two assertions above
+    // moves when the clamp goes — the refused pair is still empty and the stack
+    // still stops at the core.
+    assert!(
+        scene.mark_inner - scene.rings_outer <= GAP_MAX,
+        "the padding reached the picture as {}, past the {GAP_MAX} its bar can produce",
+        scene.mark_inner - scene.rings_outer,
     );
 }
 
@@ -302,24 +370,29 @@ fn a_layer_with_no_room_left_in_the_node_is_not_drawn() {
 /// radius would take the node's whole radial coverage to NaN — the layer, and
 /// every layer measured off it, silently gone while the bars read out numbers.
 ///
-/// All four sizes and the padding, because `size` guards each of them and
-/// `sanitize` repairs only the audio ring's: any of the other four is a door a
+/// All four sizes and BOTH paddings, because `size` guards each of them and
+/// `sanitize` repairs only the audio ring's: any of the other five is a door a
 /// non-finite reaches the picture through, and each has a different layer to
 /// take down with it.
 #[test]
 fn a_hand_edited_size_reaches_the_scene_as_that_layers_off_position() {
     // Every layer on, at sizes far enough apart to read the whole stack off the
     // scene: core 0.3 | gap | audio 0.35..0.45 | gap | band 0.5..0.7 | marks.
+    // The two paddings are one number here so a case that moves either is
+    // reading against the same stack.
     let sound = ViewConfig {
         core_radius: 0.3,
         spectral_ring_width: 0.1,
         band_width: 0.2,
         ring_gap: 0.05,
+        octave_gap: 0.05,
         mark_thickness: 0.1,
         ..ViewConfig::default()
     };
     // The node the scene reads out: core, the band's two radii, the outermost
-    // ring the marks stand off, the padding, and how deep the marks are.
+    // ring the marks stand off, how deep the marks are, and the two paddings.
+    // The radial one is read as the stand-off it BOUGHT, that being the only
+    // form it reaches the scene in — the scene carries no field for it.
     let stack = |view: &ViewConfig| {
         let scene = scene_of(&NoteTracker::new(), &Tuning::default(), view, &plain_frame(), 0.0);
         [
@@ -327,14 +400,20 @@ fn a_hand_edited_size_reaches_the_scene_as_that_layers_off_position() {
             scene.outer_inner,
             scene.outer_outer,
             scene.rings_outer,
-            scene.ring_gap,
+            scene.mark_inner - scene.rings_outer,
             scene.mark_thickness,
+            scene.octave_gap,
         ]
     };
-    assert_eq!(
+    // To a tolerance, as every case below is: the radial padding is read as a
+    // difference of two radii, so it carries whatever the sum that placed them
+    // left behind — 0.75 - 0.7 is not 0.05 in binary.
+    let close =
+        |got: [f32; 7], want: [f32; 7]| got.iter().zip(want).all(|(a, b)| (a - b).abs() < 1e-5);
+    assert!(
+        close(stack(&sound), [0.3, 0.5, 0.7, 0.7, 0.05, 0.1, 0.05]),
+        "the sound stack is {:?}, not the one every case below is a departure from",
         stack(&sound),
-        [0.3, 0.5, 0.7, 0.7, 0.05, 0.1],
-        "the sound stack is not the one every case below is a departure from",
     );
 
     for wild in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -5.0] {
@@ -344,39 +423,47 @@ fn a_hand_edited_size_reaches_the_scene_as_that_layers_off_position() {
                 ViewConfig { core_radius: wild, ..sound.clone() },
                 // The core off, and every ring closes in on the node's center:
                 // no layer to stand off, so no gap spent standing off one.
-                [0.0, 0.15, 0.35, 0.35, 0.05, 0.1],
+                [0.0, 0.15, 0.35, 0.35, 0.05, 0.1, 0.05],
             ),
             (
                 "audio ring width",
                 ViewConfig { spectral_ring_width: wild, ..sound.clone() },
                 // The ring off, and the band closes over its slot AND its gap
                 // rather than being carried off by it.
-                [0.3, 0.35, 0.55, 0.55, 0.05, 0.1],
+                [0.3, 0.35, 0.55, 0.55, 0.05, 0.1, 0.05],
             ),
             (
                 "band width",
                 ViewConfig { band_width: wild, ..sound.clone() },
                 // The octave layer off — the empty pair — and the marks fall
                 // back to standing off the audio ring.
-                [0.3, 0.0, 0.0, 0.45, 0.05, 0.1],
+                [0.3, 0.0, 0.0, 0.45, 0.05, 0.1, 0.05],
             ),
             (
-                "gap",
+                "ring gap",
                 ViewConfig { ring_gap: wild, ..sound.clone() },
-                // No padding anywhere: every layer meets the one inside it, and
-                // the sectors close into a solid annulus.
-                [0.3, 0.4, 0.6, 0.6, 0.0, 0.1],
+                // The stack closes up: every layer meets the one inside it and
+                // the marks seat against the band. The sectors are still cut,
+                // that being the other bar's to say.
+                [0.3, 0.4, 0.6, 0.6, 0.0, 0.1, 0.05],
+            ),
+            (
+                "octave gap",
+                ViewConfig { octave_gap: wild, ..sound.clone() },
+                // The sectors close into a solid annulus, and not one radius
+                // moves — the layer is still exactly where the stack put it.
+                [0.3, 0.5, 0.7, 0.7, 0.05, 0.1, 0.0],
             ),
             (
                 "mark depth",
                 ViewConfig { mark_thickness: wild, ..sound.clone() },
                 // The marks off, and the rings they stand off untouched.
-                [0.3, 0.5, 0.7, 0.7, 0.05, 0.0],
+                [0.3, 0.5, 0.7, 0.7, 0.05, 0.0, 0.05],
             ),
         ] {
             let got = stack(&view);
             assert!(
-                got.iter().zip(want).all(|(a, b)| (a - b).abs() < 1e-5),
+                close(got, want),
                 "a {field} of {wild} reached the scene as {got:?}, not {want:?}",
             );
         }
