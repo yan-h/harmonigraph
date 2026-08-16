@@ -478,6 +478,28 @@ impl RowRead {
             }
         }
     }
+
+    /// PROBE (uncommitted): `of` with the weight table handed in.
+    #[cfg(test)]
+    fn of_with(self, db: &[BucketDb], w: &[f32; 256]) -> BucketDb {
+        match self {
+            RowRead::Mean { from, to } => {
+                let run = &db[from..to];
+                let top = run.iter().copied().max().unwrap_or(0);
+                if run.len() < 2 {
+                    return top;
+                }
+                let sum: f32 = run.iter().map(|&v| w[usize::from(top - v)]).sum();
+                let steps = -(sum / run.len() as f32).log2() * ROW_MEAN_STEPS;
+                top.saturating_sub(steps.round() as u8)
+            }
+            RowRead::Max { from, to } => db[from..to].iter().copied().max().unwrap_or(0),
+            RowRead::Lerp { lo, f } => {
+                let (a, b) = (db[lo], db[(lo + 1).min(SPECTRUM_BINS - 1)]);
+                (f32::from(a) + (f32::from(b) - f32::from(a)) * f).round() as BucketDb
+            }
+        }
+    }
 }
 
 /// Where the visible slabs sit in the uploaded texture, and what pitch range
@@ -4829,6 +4851,155 @@ mod tests {
         );
         // Scaled to the column count a full-width pane composes.
         println!("  over 752 slabs: shipping {:.1} ms", ship_ms * 752.0);
+    }
+
+    /// PROBE (uncommitted): four arms, to say WHERE the 1.36x lives.
+    #[test]
+    #[ignore]
+    fn probe_of_vs_copy() {
+        use std::time::Instant;
+        let full = PitchScale { min_midi: 16.0, max_midi: 135.0, span: 119.0 };
+        let bins = bins_for(1408, &full, false);
+        let mut slab = [0u8; SPECTRUM_BINS];
+        for (i, v) in slab.iter_mut().enumerate() {
+            *v = (40 + (i * 7) % 180) as u8;
+        }
+        // A: the bench's shipping arm — outer `matches!` then `of`.
+        let a = || {
+            let t0 = Instant::now();
+            let mut sink = 0u32;
+            for _ in 0..200 {
+                for b in &bins {
+                    if matches!(b.read, RowRead::Mean { .. }) {
+                        sink += u32::from(b.read.of(&slab));
+                    }
+                }
+            }
+            (t0.elapsed().as_secs_f64() * 1000.0 / 200.0, sink)
+        };
+        // B: `of` called unconditionally — one dispatch, which is what
+        // `fill_column_into` actually does.
+        let b_arm = || {
+            let t0 = Instant::now();
+            let mut sink = 0u32;
+            for _ in 0..200 {
+                for b in &bins {
+                    sink += u32::from(b.read.of(&slab));
+                }
+            }
+            (t0.elapsed().as_secs_f64() * 1000.0 / 200.0, sink)
+        };
+        // C: hand copy, `.log2()` as a method — no fn pointer anywhere.
+        let c = || {
+            let t0 = Instant::now();
+            let mut sink = 0u32;
+            for _ in 0..200 {
+                for b in &bins {
+                    let (from, to) = match b.read {
+                        RowRead::Mean { from, to } => (from, to),
+                        _ => continue,
+                    };
+                    let r = &slab[from..to];
+                    let top = r.iter().copied().max().unwrap_or(0);
+                    if r.len() < 2 {
+                        sink += u32::from(top);
+                        continue;
+                    }
+                    let sum: f32 = r.iter().map(|&v| ROW_WEIGHT[usize::from(top - v)]).sum();
+                    let steps = -(sum / r.len() as f32).log2() * ROW_MEAN_STEPS;
+                    sink += u32::from(top.saturating_sub(steps.round() as u8));
+                }
+            }
+            (t0.elapsed().as_secs_f64() * 1000.0 / 200.0, sink)
+        };
+        // D: hand copy reached through a fn-pointer parameter, as the bench does.
+        let d = |log: fn(f32) -> f32| {
+            let t0 = Instant::now();
+            let mut sink = 0u32;
+            for _ in 0..200 {
+                for b in &bins {
+                    let (from, to) = match b.read {
+                        RowRead::Mean { from, to } => (from, to),
+                        _ => continue,
+                    };
+                    let r = &slab[from..to];
+                    let top = r.iter().copied().max().unwrap_or(0);
+                    if r.len() < 2 {
+                        sink += u32::from(top);
+                        continue;
+                    }
+                    let sum: f32 = r.iter().map(|&v| ROW_WEIGHT[usize::from(top - v)]).sum();
+                    let steps = -log(sum / r.len() as f32) * ROW_MEAN_STEPS;
+                    sink += u32::from(top.saturating_sub(steps.round() as u8));
+                }
+            }
+            (t0.elapsed().as_secs_f64() * 1000.0 / 200.0, sink)
+        };
+        // E: the same copy as C, with the `LazyLock` weight table dereferenced
+        // ONCE outside both loops instead of per bucket.
+        let e = || {
+            let w: &[f32; 256] = &ROW_WEIGHT;
+            let t0 = Instant::now();
+            let mut sink = 0u32;
+            for _ in 0..200 {
+                for b in &bins {
+                    let (from, to) = match b.read {
+                        RowRead::Mean { from, to } => (from, to),
+                        _ => continue,
+                    };
+                    let r = &slab[from..to];
+                    let top = r.iter().copied().max().unwrap_or(0);
+                    if r.len() < 2 {
+                        sink += u32::from(top);
+                        continue;
+                    }
+                    let sum: f32 = r.iter().map(|&v| w[usize::from(top - v)]).sum();
+                    let steps = -(sum / r.len() as f32).log2() * ROW_MEAN_STEPS;
+                    sink += u32::from(top.saturating_sub(steps.round() as u8));
+                }
+            }
+            (t0.elapsed().as_secs_f64() * 1000.0 / 200.0, sink)
+        };
+        // F: through `of`, with the table hoisted once per COLUMN and handed in
+        // — the shape a shipping fix would take.
+        let f = || {
+            let w: &[f32; 256] = &ROW_WEIGHT;
+            let t0 = Instant::now();
+            let mut sink = 0u32;
+            for _ in 0..200 {
+                for b in &bins {
+                    sink += u32::from(b.read.of_with(&slab, w));
+                }
+            }
+            (t0.elapsed().as_secs_f64() * 1000.0 / 200.0, sink)
+        };
+        let (mut am, mut bm, mut cm, mut dm) = (f64::MAX, f64::MAX, f64::MAX, f64::MAX);
+        let (mut em, mut fm) = (f64::MAX, f64::MAX);
+        let mut sinks = (0, 0, 0, 0, 0, 0);
+        for _ in 0..9 {
+            let (x, y, z, w) = (a(), b_arm(), c(), d(f32::log2));
+            let (p, q) = (e(), f());
+            (am, bm, cm, dm) = (am.min(x.0), bm.min(y.0), cm.min(z.0), dm.min(w.0));
+            (em, fm) = (em.min(p.0), fm.min(q.0));
+            sinks = (x.1, y.1, z.1, w.1, p.1, q.1);
+        }
+        assert_eq!(sinks.0, sinks.1);
+        assert_eq!(sinks.1, sinks.2);
+        assert_eq!(sinks.2, sinks.3);
+        assert_eq!(sinks.3, sinks.4);
+        assert_eq!(sinks.4, sinks.5);
+        println!(
+            "A of+matches {am:.4} | B of alone {bm:.4} | C copy+method {cm:.4} | \
+             D copy+fnptr {dm:.4} | E copy+hoisted {em:.4} | F of+hoisted {fm:.4} ms/column",
+        );
+        println!(
+            "  A/C {:.2}x | B/C {:.2}x | C/E {:.2}x | B/F {:.2}x | B/E {:.2}x",
+            am / cm,
+            bm / cm,
+            cm / em,
+            bm / fm,
+            bm / em,
+        );
     }
 
     /// Scratch harness for the zoom-performance audit: prints where a zoom
