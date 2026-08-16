@@ -4340,7 +4340,7 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         scene.nodes.push(silent);
         scene
     };
-    // A clearing around a MARKED node, which is `node_clear_distance`'s own
+    // A clearing around a MARKED node, which is `node_clearing`'s own
     // skip: the clearing's shape is the rings' disc unioned with one wedge per
     // mark, and inside that disc the walk over the wedges is skipped as an
     // answer already arrived at. `parity_scene` hands its gutters and its marks

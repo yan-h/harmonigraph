@@ -293,7 +293,7 @@ struct VsOut {
     // because the billboard is sized on the first and the second, like the
     // reach beside it, is a width on SCREEN and so depends on the node's size.
     // What the clearing is actually shaped like is settled per fragment
-    // (`node_clear_distance`); this bounds it.
+    // (`node_clearing`); this bounds it.
     @location(11) @interpolate(flat) rim: f32,
     @location(12) @interpolate(flat) soft: f32,
     // Where this fragment sits on the plane the billboards face, in world
