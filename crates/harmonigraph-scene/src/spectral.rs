@@ -105,8 +105,8 @@ pub const SPECTRAL_RANGE_MAX: f32 = 1200.0;
 /// reading of the spectrum.
 ///
 /// The floor is the gate's OFF position, and it is off rather than nearly off:
-/// the test is `peak >= gate`, so 0 admits every node including one whose ring
-/// is silent through and through. That is the picture with no gate at all, and
+/// the test is a `>=` ([`RingGate::opens`]), so 0 admits every node including
+/// one whose ring is silent through and through. That is the picture with no gate at all, and
 /// it has to be reachable — a ring at the ramp's floor is a reading (nothing
 /// sounds here), and whether it is worth the screen it takes is exactly what
 /// this bar is for.
@@ -422,14 +422,22 @@ impl RingGate {
             .fold(0.0, f32::max)
     }
 
-    /// Whether the ring on a node of pitch class `cents` draws: at least one of
-    /// its wedges reaching the gate.
+    /// Whether the ring on a node of pitch class `cents` draws at all: at
+    /// least one of its wedges reaching the gate.
     ///
-    /// `>=`, so that a gate at [`SPECTRAL_GATE_MIN`] admits every node — the
-    /// floor is the bar's off position and has to give back the ungated
-    /// picture, silent rings and all.
+    /// Asked through a SETTLED [`RingFade`] rather than of [`peak`](Self::peak)
+    /// directly, because that is the path the picture takes and one rule stated
+    /// twice is two rules: the gate is answered per BUCKET
+    /// ([`opens`](Self::opens)) since a bucket is what the fade is carried on,
+    /// and a node then reads that grid at each of its wedges. A node-level
+    /// `peak >= gate` is the same answer wherever a wedge falls between two
+    /// buckets that disagree, and the picture's is not — see [`RingFade`].
+    ///
+    /// `>=` inside `opens`, so that a gate at [`SPECTRAL_GATE_MIN`] admits
+    /// every node — the floor is the bar's off position and has to give back
+    /// the ungated picture, silent rings and all.
     pub fn draws(&self, layout: &OctaveLayout, cents: f32) -> bool {
-        self.peak(layout, cents) >= self.gate
+        RingFade::settled(self).level(layout, cents) > 0.0
     }
 
     /// Whether a wedge reading bucket `bucket` reaches the gate — the same
@@ -465,11 +473,22 @@ impl RingGate {
 /// looked at from. A node's own level is then a read of this grid at each of
 /// its wedges, exactly as [`RingGate::peak`] is.
 ///
-/// The one cost of that is stated rather than hidden: a wedge landing BETWEEN
-/// an open bucket and a closed one wears a fraction of its ring, where the
-/// gate's own answer is a yes or a no. Those buckets are 3.125¢ apart, so the
-/// band it can happen in is under two cents wide, and what it draws there is a
-/// ring on its way in — which is what this type is for.
+/// What that costs is stated rather than hidden: a wedge landing BETWEEN an
+/// open bucket and a closed one wears a FRACTION of its ring, where the gate's
+/// own answer is a yes or a no. It is a steady fraction and not a transition —
+/// both buckets are at their targets, so [`advance`](Self::advance) skips them
+/// and the level stands for as long as the spectrum does — and the band it
+/// happens in is the whole 3.125¢ between the two centres, every pitch strictly
+/// between them included.
+///
+/// So the gate's edge is soft across one bucket, and that is the picture worth
+/// having: the alternative is [`open_at`] snapping to the nearer centre, which
+/// buys a hard yes-or-no per node at the price of moving the edge by up to half
+/// a bucket and putting the whole of a node's annulus on which side of a centre
+/// its wedge fell. The ring's own reading is interpolated between buckets
+/// ([`level_at`], the shader's `spectrum_at`), so a gate that stepped where the
+/// reading ramps would take the ring off a node whose wedge is visibly still
+/// showing the partial that opened it.
 pub struct RingFade {
     /// How much of its ring a wedge reading each bucket wears, 0..=1 — the
     /// gate's own answer once it has settled, and part way between while a
@@ -491,6 +510,18 @@ impl Default for RingFade {
 }
 
 impl RingFade {
+    /// `gate`'s answer with no transition anywhere in it — the first step of
+    /// all, which settles rather than fading in.
+    ///
+    /// The envelope cannot reach it, which is what makes this the gate's own
+    /// picture and not a fade of one: with no clock behind it every bucket
+    /// takes its target outright.
+    fn settled(gate: &RingGate) -> RingFade {
+        let mut fade = RingFade::default();
+        fade.advance(gate, &Envelope { attack_time: 0.0, fade_time: 0.0, shape: 0.0 }, 0.0);
+        fade
+    }
+
     /// Carry every bucket toward what `gate` says of it now, on `env`.
     ///
     /// The FIRST step of all settles rather than fading in, and so does one
@@ -1115,6 +1146,58 @@ mod tests {
         // The fold's window is no window at all — a wedge is one reading at one
         // pitch — so the grid comes through bucket for bucket.
         assert_eq!(*window_max(&levels, 0), *levels, "the fold's grid was widened");
+    }
+
+    /// The gate's edge is soft across one bucket, and it STAYS where the
+    /// spectrum does: a wedge between an open bucket and a closed one wears a
+    /// fraction of its ring, and that fraction is a steady state rather than a
+    /// transition part way through.
+    ///
+    /// Worth pinning because it is the one place the picture and a node-level
+    /// `peak >= gate` part company, and reading the code cannot tell them
+    /// apart: both buckets sit at their targets, so the fade skips them, and
+    /// what looks like a ring on its way in never moves again. A future
+    /// `open_at` that snapped to the nearer centre would pass every other test
+    /// here.
+    #[test]
+    fn the_gates_edge_is_a_steady_ramp_one_bucket_wide() {
+        // A fold peak's shoulder: two neighbours straddling the gate.
+        let (lo, hi) = (1000usize, 1001usize);
+        let mut levels = empty();
+        levels[lo] = 128;
+        levels[hi] = 100;
+        let view = gated(0.4, SpectralReading::Fold);
+        let gate = gate_of(&view, levels);
+        assert!(gate.opens(lo) && !gate.opens(hi), "the fixture's buckets do not straddle 0.4");
+
+        // Ten seconds on a half-second Fade: twenty durations, nothing moving.
+        let env = fade_of(0.5);
+        let mut fade = RingFade::default();
+        for step in 0..=10 {
+            fade.advance(&gate, &env, f64::from(step));
+        }
+        let mid = (bucket_pitch(lo) + bucket_pitch(hi)) * 0.5;
+        let held = open_at(&fade.open, mid);
+        assert!(
+            (held - 0.5).abs() < 1e-3,
+            "a wedge half way between the two wears {held} once everything has settled",
+        );
+        // The band is the whole gap between the centres, not a sliver of it.
+        let (mut low, mut high) = (f32::MAX, f32::MIN);
+        for i in 0..=2000 {
+            let pitch = bucket_pitch(lo)
+                + (bucket_pitch(hi) - bucket_pitch(lo)) * (i as f32 / 2000.0);
+            let open = open_at(&fade.open, pitch);
+            if open > 0.001 && open < 0.999 {
+                low = low.min(pitch);
+                high = high.max(pitch);
+            }
+        }
+        let band = (high - low) * 100.0;
+        assert!(
+            (band - CENTS_PER_BUCKET).abs() < 0.05,
+            "the ramp spans {band}¢, where the buckets are {CENTS_PER_BUCKET}¢ apart",
+        );
     }
 
     /// A gate no bar can produce — a hand-edited NaN, an infinity, a level off
