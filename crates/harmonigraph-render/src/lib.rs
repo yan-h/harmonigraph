@@ -426,9 +426,10 @@ impl GpuInstance {
         // Locations 5 and 9 are absent, not renumbered. Both are retired
         // slots — 5 the home-sheet flag, 9 the trail level, each read only by
         // an idle marker the nodes do not draw. The audio ring's own slot is
-        // 11, and it carries one bit rather than a reading: WHAT the ring says
-        // is a window onto the shared spectrum in the uniforms, and only
-        // whether this node draws one at all is a per-node answer. The macro
+        // 11, and it carries how far the layer is on at this node rather than
+        // a reading: WHAT the ring says is a window onto the shared spectrum
+        // in the uniforms, and how much of one this node wears is the
+        // per-node half of it (`GpuInstance::ring`). The macro
         // names each location and takes each OFFSET from the sequence, so a
         // dropped entry shrinks the stride to match the struct without moving
         // the rest off their numbers — which is what keeps this list and
