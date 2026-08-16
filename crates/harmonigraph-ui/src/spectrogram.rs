@@ -468,13 +468,14 @@ impl RowRead {
     /// how many rows index the table: zoomed IN, where 1022 of 1408 rows are
     /// `Lerp` and provably never reach it, the compose drops 1.9 ms against the
     /// 2.2 ms it drops zoomed out with every row a `Mean`. A `Lerp` executes no
-    /// check at all, so the gap cannot be the check running — and the same
-    /// comparison in a microbench does scale with the `Mean` count, five times
-    /// smaller over 98 rows than over 1408 (`timing_mean_log`'s `global` arm
-    /// puts the index itself at 1.12x). What is left is an effect on the
-    /// compose loop as a whole rather than on the arm that reads the table, and
-    /// its exact shape is unpinned. Reason about this as "keep the global out
-    /// of the loop", never as a per-read cost you can count.
+    /// check at all, so the gap cannot be the check running. What is left is an
+    /// effect on the compose loop as a whole rather than on the arm that reads
+    /// the table, and its exact shape is unpinned. `timing_mean_log`'s `global`
+    /// arm does put a number on the index in isolation, and it is deliberately
+    /// not quoted here: it is a copy-vs-copy ratio below the 1.25x that bench's
+    /// own doc calls code layout, so it cannot carry an argument the compose is
+    /// already making. Reason about this as "keep the global out of the loop",
+    /// never as a per-read cost you can count.
     fn of(self, db: &[BucketDb], weight: &[f32; 256]) -> BucketDb {
         match self {
             RowRead::Mean { from, to } => {
