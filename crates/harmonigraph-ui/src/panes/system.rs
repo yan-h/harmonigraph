@@ -1,13 +1,13 @@
-//! The System pane: the plugin's own knobs rather than the lattice's — how
-//! sharply and how hard it renders, and how the panes are arranged. None of
-//! this is part of the picture; it's what surrounds it. Kept out of the
-//! [`super::view`] pane, where it would sit at the bottom looking like a view
-//! setting.
+//! The Display tab's System page: the plugin's own knobs rather than the
+//! lattice's — how sharply and how hard it renders, and how the panes are
+//! arranged. None of this is part of a picture; it's what surrounds them, which
+//! is why it is a page of its own rather than the foot of [`super::view`],
+//! where it would sit under the camera looking like a view setting.
 //!
-//! Called System because the tab bar is where a name has to do its work.
-//! "Panel" names the thing being looked AT rather than what the tab changes,
-//! and sits one letter from "pane", which is what every other tab in the dock
-//! is.
+//! Called System because the picker is where a name has to do its work.
+//! "Panel" names the thing being looked AT rather than anything the page
+//! changes, and sits one letter from "pane", which is what every tab in the
+//! dock is.
 
 use super::section;
 use crate::widgets::{button_row, choice_row, ValueBar};
@@ -29,12 +29,9 @@ pub(super) fn system_pane(ui: &mut egui::Ui, state: &mut SharedState) {
     ValueBar::new(&mut state.view.render_scale, 0.5..=2.0, "Render scale")
         .show(ui)
         .on_hover_text(
-            "How many pixels the lattice is drawn at: 1.0 = native, 0.5 = a \
-             quarter as many. A cost dial, not a look dial — edge softness and \
-             the glow are pinned to screen size, so turning it down buys back \
-             GPU for very little picture, and turning it up costs a lot for \
-             slightly finer detail. Turn it down if the plugin is working the \
-             machine hard.",
+            "How many pixels the lattice renders at: 1.0 native, 0.5 a quarter \
+             as many. A cost dial, not a look dial — turn it down if the plugin \
+             works the machine hard.",
         );
     // The other half of the cost dial: render scale sets what each frame
     // costs, this sets how many of them there are. Presented as a ceiling
@@ -53,18 +50,13 @@ pub(super) fn system_pane(ui: &mut egui::Ui, state: &mut SharedState) {
         ],
     );
     ui.checkbox(&mut state.view.show_perf, "Performance overlay").on_hover_text(
-        "A HUD with frame rate, the worst recent frame, process memory, and \
-         the voice/node workload — to see if the plugin is working the \
-         machine hard. Opens in the bottom-right corner; drag it anywhere. What \
-         a frame COSTS is under Frame breakdown.",
+        "A draggable HUD: frame rate, worst recent frame, memory, and the \
+         voice/node workload.",
     );
     if state.view.show_perf {
         ui.checkbox(&mut state.view.show_perf_detail, "Frame breakdown").on_hover_text(
-            "Expand the overlay into every stage of the frame — the UI pass, \
-             tessellation, uploads, the GPU passes, the wait for the display — \
-             nested under the totals they add up to. For working out WHICH \
-             stage is costing you; the headline numbers are enough to notice \
-             that something is.",
+            "Expands the overlay into every stage of the frame, to see which \
+             one is costing you.",
         );
     }
 
@@ -81,18 +73,12 @@ pub(super) fn system_pane(ui: &mut egui::Ui, state: &mut SharedState) {
         .display(|v| format!("{:.0}%", v * 100.0))
         .show(ui)
         .on_hover_text(
-            "How big the panel's own type and controls draw — text, bars, \
-             checkboxes, tab bars. Turn it down to give a small screen back \
-             to the lattice; the lattice, roll and spectrogram are drawn from \
-             the space their panes have and do not change with it, and \
-             neither does a video render.",
+            "Size of the panel's own text and controls. The pictures are drawn \
+             from their panes' space and don't change — neither does a render.",
         );
     ui.checkbox(&mut state.view.frameless, "Frameless (Tab)").on_hover_text(
-        "Hide the tab bars so adjacent panes (lattice over spectrum) \
-         record as one seamless surface. Tab toggles it from anywhere, \
-         which is the way in and out once this checkbox is behind a \
-         hidden tab bar — except while typing in a text field, where Tab \
-         is the field's.",
+        "Hide the tab bars, so adjacent panes record as one seamless surface. \
+         Tab toggles it from anywhere except a text field.",
     );
     button_row(ui, |ui| {
         // Escape hatch for the persisted dock arrangement (it survives

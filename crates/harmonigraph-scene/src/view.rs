@@ -276,7 +276,7 @@ pub struct ViewConfig {
     /// with no way to ask for a wide crisp one or a narrow soft one.
     ///
     /// One CONTROL is a different question from one number, and the Nodes
-    /// section's Gutter bar is one: both are distances from the node's rim, so
+    /// section's Clearance bar is one: both are distances from the node's rim, so
     /// they are two points on one axis and the bar carries a handle at each.
     ///
     /// The clearing is solid out to `reach - fade` past the node's rim and
@@ -1463,7 +1463,7 @@ impl ViewConfig {
         self.fade_shape = finite_or(self.fade_shape, 0.0);
 
         // The gutter and its fade, which are ONE control (the Nodes section's
-        // Gutter bar) over two numbers: the fade is a distance measured back
+        // Clearance bar) over two numbers: the fade is a distance measured back
         // from the reach, so a fade wider than the reach is a low end off the
         // bottom of the axis. It draws as a fade over the whole reach either
         // way — the shader floors it at the node's rim, which is the one part

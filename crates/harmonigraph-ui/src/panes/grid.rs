@@ -1,22 +1,23 @@
-//! The Display tab's Grid section: the faint lines between node positions, and
-//! the gap each one leaves around the position it runs to. Idle positions draw
-//! nothing at all -- no disc, no marker -- so these two settings are the whole
-//! of what carries the lattice's shape when nothing is playing.
+//! The Grid section of the Display tab's Lattice page: the faint lines between
+//! node positions, and the gap each one leaves around the position it runs to.
+//! Idle positions draw nothing at all -- no disc, no marker -- so these two
+//! settings are the whole of what carries the lattice's shape when nothing is
+//! playing.
 //!
 //! Two settings, and the grid's COLOR is deliberately not one of them: the
 //! lines draw in the skin's hairline grey, the same one this pane's own rules
 //! are drawn in. The structural layer is chrome that happens to be in the
-//! picture, and every color control in the panel is for the music — the notes'
-//! own in [`super::color`], the heatmap's with the analyzer that reads it.
+//! picture, and every color control in the panel is for the music — both of
+//! those tables are on the Colors page ([`super::color`]).
 
+use super::section;
 use crate::widgets::ValueBar;
 use crate::SharedState;
 
-/// The two lines settings.
-///
-/// No leading heading, unlike the Nodes and View bodies: this section is one
-/// group, and the only name it could take is the fold-out header's own.
+/// The two lines settings, last on the page: the lattice's own structure, under
+/// everything drawn on top of it.
 pub(super) fn grid_pane(ui: &mut egui::Ui, state: &mut SharedState) {
+    section(ui, "Grid");
     ValueBar::new(&mut state.view.grid_thickness, 0.0..=4.0, "Line width")
         .show(ui)
         .on_hover_text(

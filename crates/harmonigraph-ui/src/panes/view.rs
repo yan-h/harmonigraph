@@ -1,27 +1,26 @@
-//! The Display tab's View section: how you look at the lattice (projection,
-//! camera angle, saved angles) and how much of it shows (per-axis extents and
-//! window center). Purely what's framed — a note's own layers live in
-//! [`super::nodes`], the colors everything is painted with in
-//! [`super::color`], the render/workspace knobs in [`super::system`].
+//! The head of the Display tab's Lattice page: how you look at the lattice
+//! (projection, camera angle, saved angles) and how much of it shows (the
+//! depth axis and its center). Purely what's framed — a note's own layers are
+//! [`super::nodes`], the colors everything is painted with [`super::color`],
+//! the render/workspace knobs [`super::system`].
 //!
-//! A section of [`super::display`] rather than of [`super::tuning`], though
-//! view and tuning answer halves of one question — where the nodes sit in
-//! pitch, and which of them you are looking at. That kinship is real about
-//! the CONTENT and no help on a label, which shows one word: these are
-//! thirteen control rows to Tuning's five, so a tab merging the two is named
-//! for its smaller half, and the camera is reachable only by opening
-//! something called Tuning and scrolling.
+//! Part of [`super::display`] rather than of [`super::tuning`], though view
+//! and tuning answer halves of one question — where the nodes sit in pitch,
+//! and which of them you are looking at. That kinship is real about the
+//! CONTENT and no help on a label, which shows one word: these are thirteen
+//! control rows to Tuning's five, so a tab merging the two is named for its
+//! smaller half, and the camera is reachable only by opening something called
+//! Tuning and scrolling.
 //!
 //! Called View and not Frame because the Video tab's Frame is the video's —
 //! aspect, letterbox, crop ticks — and one word naming two unrelated things is
 //! the thing the names are audited against (#286).
 //!
-//! Three sections: the Camera (where you stand and what the lens does), the
-//! Extents (how much lattice there is to stand in front of), and the Sevenths
-//! layer (how the sheets behind the home one draw). The angle presets live
-//! inside Camera rather than under a heading of their own, because Cabinet
-//! hides that whole block — a section of its own would leave a heading standing
-//! over nothing.
+//! Two sections: the Camera (where you stand and what the lens does) and the
+//! Sevenths (how many sheets there are, which is home, and how the ones behind
+//! it draw). The angle presets live inside Camera rather than under a heading
+//! of their own, because Cabinet hides that whole block — a section of its own
+//! would leave a heading standing over nothing.
 
 use super::section;
 use crate::widgets::{button_row, choice_row, ValueBar};
@@ -37,13 +36,12 @@ use harmonigraph_scene::SevensLabel;
 /// well under this.
 const PRESET_NAME_WIDTH: f32 = 110.0;
 
-/// Camera framing and the lattice window: projection, angle, and per-axis
-/// extents/center.
+/// Camera framing and the lattice window: projection, angle, and the depth
+/// axis's extent and center.
 pub(super) fn view_pane(ui: &mut egui::Ui, state: &mut SharedState) {
-    // A plain heading rather than `section`: this is the top of the section
-    // body, and the leading rule `section` draws would sit directly under the
-    // Display pane's own View header. Matches the Nodes and Analyzer section
-    // bodies, and the Tuning and System panes.
+    // A plain heading rather than `section`: this leads the Lattice page, so
+    // the rule `section` draws would sit directly under the page picker. The
+    // Colors page and the Tuning pane open the same way.
     ui.heading("Camera");
     // Projection: perspective converges with depth; orthographic keeps
     // equal intervals at equal screen offsets everywhere (isometric-style
@@ -75,11 +73,20 @@ pub(super) fn view_pane(ui: &mut egui::Ui, state: &mut SharedState) {
         let mut degrees = state.camera.cabinet_angle.to_degrees();
         if ValueBar::new(&mut degrees, 0.0..=90.0, "Sevenths angle")
             .show(ui)
+            .on_hover_text(
+                "Which way the sevenths axis points on screen, in degrees from \
+                 horizontal.",
+            )
             .changed()
         {
             state.camera.cabinet_angle = degrees.to_radians();
         }
-        ValueBar::new(&mut state.camera.cabinet_scale, 0.1..=1.0, "Sevenths length").show(ui);
+        ValueBar::new(&mut state.camera.cabinet_scale, 0.1..=1.0, "Sevenths length")
+            .show(ui)
+            .on_hover_text(
+                "How long a sevenths step draws, as a share of a front-plane \
+                 step. 0.5 is classic cabinet, 1 cavalier.",
+            );
     }
     // Camera angles are meaningless under cabinet (fixed viewpoint), so
     // this whole block hides there (the cabinet knobs show instead).
@@ -90,6 +97,10 @@ pub(super) fn view_pane(ui: &mut egui::Ui, state: &mut SharedState) {
         let mut yaw_deg = normalize_deg(state.camera.yaw.to_degrees());
         if ValueBar::new(&mut yaw_deg, -180.0..=180.0, "Camera yaw")
             .show(ui)
+            .on_hover_text(
+                "Turn around the lattice, in degrees. 0 faces the fifths/thirds \
+                 sheet head-on.",
+            )
             .changed()
         {
             state.camera.yaw = yaw_deg.to_radians();
@@ -98,6 +109,7 @@ pub(super) fn view_pane(ui: &mut egui::Ui, state: &mut SharedState) {
         let mut pitch_deg = state.camera.pitch.to_degrees();
         if ValueBar::new(&mut pitch_deg, -pitch_limit_deg..=pitch_limit_deg, "Camera pitch")
             .show(ui)
+            .on_hover_text("Look down on the lattice or up at it, in degrees.")
             .changed()
         {
             state.camera.pitch = pitch_deg.to_radians();
@@ -159,7 +171,14 @@ pub(super) fn view_pane(ui: &mut egui::Ui, state: &mut SharedState) {
                 .hint_text("preset name")
                 .desired_width(PRESET_NAME_WIDTH * crate::theme::ui_scale(ui.ctx()));
             ui.add(field);
-            if ui.button("Save angle").clicked() {
+            if ui
+                .button("Save angle")
+                .on_hover_text(
+                    "Save the current yaw and pitch as a preset button on the \
+                     Angle row.",
+                )
+                .clicked()
+            {
                 let trimmed = state.preset_name.trim();
                 let name = if trimmed.is_empty() {
                     // Nameless saves still get a self-describing label.
@@ -181,62 +200,76 @@ pub(super) fn view_pane(ui: &mut egui::Ui, state: &mut SharedState) {
         });
     }
 
-    // How deep the lattice runs, which is the only one of the three axes asked
-    // here. The fifths and thirds sheet has no extent to set: it is unbounded,
-    // and what is drawn of it is whatever the pane is looking at
-    // (`ViewConfig::scrolled`) — pan and the window walks with you. The camera
-    // above is how you get to a part of the lattice, so a bar saying how much
-    // of it exists would be a bar saying nothing.
-    //
-    // The sevens axis is different in kind rather than merely spared: its
-    // extent is how many sheets there ARE, which the pane cannot answer,
-    // because a sheet is not drawn somewhere on screen for the camera to find
-    // — it is drawn over the home one at an offset.
-    section(ui, "Extents");
-    for (extent, range, label) in [
+    sevens_section(ui, state);
+}
+
+/// The depth axis, whole: how many sheets there are, which one is home, and how
+/// the ones behind the home sheet draw. Sheet size and Sheet labels are inert
+/// with Sheets at 0 (a flat lattice has only the home sheet), so they disable
+/// themselves rather than pretending otherwise; Sheets and Home sheet are what
+/// turn depth on, and are live whatever it is set to.
+///
+/// One section rather than an Extents heading over the first two: an extent
+/// here is how many SHEETS there are, so it is the same subject as how those
+/// sheets draw, and a heading over the pair spent a name on the distinction
+/// between a count and a size.
+///
+/// The other two axes have no extent to set, which is why this one is not a
+/// heading promising three. The fifths and thirds sheet is unbounded, and what
+/// is drawn of it is whatever the pane is looking at (`ViewConfig::scrolled`) —
+/// pan and the window walks with you, so a bar saying how much of it exists
+/// would be a bar saying nothing. The sevens axis is different in kind rather
+/// than merely spared: a sheet is not drawn somewhere on screen for the camera
+/// to find, it is drawn over the home one at an offset, so how many there are
+/// is a thing only a control can answer.
+///
+/// What the size and the labels are for: the 5-limit sheet wants its pitch
+/// classes as large as they will go, and turning depth on asks the same
+/// rectangle to hold three or five times the nodes. The way out is not to
+/// shrink the home sheet — that is the picture — but to let the sevens layer sit
+/// ON it, smaller and clearing its own space.
+///
+/// The Clearance bar itself is with the node settings, not here. It is cut by
+/// every sounding node on every sheet, so it is a property of the node rather
+/// than of this layer, whatever its field names say.
+fn sevens_section(ui: &mut egui::Ui, state: &mut SharedState) {
+    section(ui, "Sevenths");
+    for (extent, range, label, hover) in [
         // Ranges must contain the ViewConfig defaults or the bar could never
         // drag back to them.
-        (&mut state.view.extent_sevens, 0.0..=4.0, "Sevenths extent"),
+        (
+            &mut state.view.extent_sevens,
+            0.0..=4.0,
+            "Sheets",
+            "How many sheets draw beyond the home one, each a sevenths step \
+             away. 0 keeps the lattice flat.",
+        ),
         // Which sheet is home, in lattice steps from C (v1's Grid Z).
-        (&mut state.view.center_sevens, -20.0..=20.0, "Sevenths center"),
+        (
+            &mut state.view.center_sevens,
+            -20.0..=20.0,
+            "Home sheet",
+            "Which sheet is home — in sevenths steps from C's.",
+        ),
     ] {
         let mut value = *extent as f32;
-        if ValueBar::new(&mut value, range, label).integer().show(ui).changed() {
+        if ValueBar::new(&mut value, range, label).integer().show(ui).on_hover_text(hover).changed()
+        {
             *extent = value as i32;
         }
     }
-
-    sevens_layer_controls(ui, state);
-}
-
-/// How the sheets other than the home one draw. Size and label are inert with
-/// the sevenths extent at 0 (a flat lattice has only the home sheet), so they
-/// disable themselves rather than pretending otherwise.
-///
-/// What they are for: the 5-limit sheet wants its pitch classes as large as
-/// they will go, and turning depth on asks the same rectangle to hold three or
-/// five times the nodes. The way out is not to shrink the home sheet — that is
-/// the picture — but to let the sevens layer sit ON it, smaller and clearing
-/// its own gutter.
-///
-/// The gutter itself is in the Nodes section, not here. It is cleared by every
-/// sounding node on every sheet, so it is a property of the node rather than
-/// of this layer, whatever its field names say.
-fn sevens_layer_controls(ui: &mut egui::Ui, state: &mut SharedState) {
-    section(ui, "Sevenths");
     let has_depth = state.view.extent_sevens != 0;
     ui.add_enabled_ui(has_depth, |ui| {
-        ValueBar::new(&mut state.view.sevens_size, 0.15..=1.0, "Sevenths size")
+        ValueBar::new(&mut state.view.sevens_size, 0.15..=1.0, "Sheet size")
             .show(ui)
             .on_hover_text(
-                "How much smaller a node draws for each step off the home \
-                 sheet. Smaller BOTH ways -- this is distance from the home \
-                 sheet, not depth toward you -- so the home sheet stays the \
-                 largest thing on screen. 1 draws every sheet alike",
+                "How much smaller a node draws for each sheet away from home — \
+                 both directions, so the home sheet stays largest. 1 draws \
+                 every sheet alike.",
             );
         choice_row(
             ui,
-            "Sevenths label",
+            "Sheet labels",
             &mut state.view.sevens_label,
             &[
                 (

@@ -1,5 +1,7 @@
-//! The Display tab's Analyzer section: every setting the Spectral display
-//! carries, and the readouts its bars are dragged against.
+//! The Display tab's Analyzer page: every setting the Spectral display
+//! carries, and the readouts its bars are dragged against. The heatmap's
+//! colors are the one thing dialled elsewhere — they are a color table, and
+//! both of those are on the Colors page ([`super::super::color`]).
 
 use crate::widgets::{button_row, choice_row, option_label, RangeBar, ValueBar};
 use crate::SharedState;
@@ -46,121 +48,29 @@ pub(super) fn span_readout(seconds: f32) -> String {
     }
 }
 
-/// The heatmap's level->color gradient on the same preview and three bars the
-/// Color & light section dials the lattice's pitch gradient with, over a row of
-/// presets.
-///
-/// Three bars and not six: the group is the gradient itself across the top, and
-/// under it the arc on the spectrum bar, the brightness pair on one of its own
-/// and the chroma pair on another, each a picture of what its numbers COMPOSE —
-/// see `panes::color::spectrum_group`, which is the same set over the same type
-/// and says why a six-number gradient costs three rows and a preview rather
-/// than six rows.
-///
-/// **What differs is the axis, and only the readouts show it.** There the
-/// range is pitch, so a bar's two ends are the lowest and highest notes; here
-/// it is the analyzer's Level, so they are silence and a full bucket. The bars
-/// themselves cannot tell — they are handed a [`harmonigraph_scene::Gradient`]
-/// and a home to reset to, and nothing in either names an axis — so what says
-/// which is the tooltip, and the tooltips below are written for level rather
-/// than shared with Color & light's.
-///
-/// That difference is also why the group stays HERE rather than joining the
-/// pitch gradient in Color & light: this one is level->color and read by
-/// nothing but the heatmap, where that one is the table every pitch-colored
-/// shape in either picture reads.
-///
-/// **The presets come first**, ahead of the preview Color & light opens its
-/// group with, and deliberate: a heatmap palette is a thing people pick by name
-/// before they dial it, and the four names are what this pane offered before it
-/// offered any knobs at all. They write the bars below and are not a mode — see
-/// [`crate::SpectrogramPreset`]. The preview then sits between the names and
-/// the bars, which is where both of them are read against it.
-fn spectrogram_gradient_group(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig) {
-    use crate::widgets::{GradientPreview, SpectrumBar, SpreadBar};
-    use crate::SpectrogramPreset;
-
-    // The gradient a double-click on any of the three goes home to. The fresh
-    // heatmap's, NOT the lattice's, which is what the bars assume when a caller
-    // names none: a Spectral pane resetting onto Color & light's arc would land
-    // on a picture this pane has never opened on, and the bars carry no text
-    // entry to dial it back with.
-    let home = crate::SpectrumConfig::default().spectrogram_gradient;
-    button_row(ui, |ui| {
-        ui.label("Palette").on_hover_text(
-            "Four looks the heatmap opens on, each written straight into the \
-             bars below — press one and then dial it. Nothing remembers which \
-             was pressed, a look being six numbers rather than a mode: once a \
-             bar has moved, the picture is the picture.",
-        );
-        for preset in SpectrogramPreset::ALL {
-            if ui
-                .button(preset.label())
-                .on_hover_text(preset.hint())
-                .clicked()
-            {
-                cfg.spectrogram_gradient = preset.gradient();
-            }
-        }
-    });
-    // The row first, the colors last — see [`GradientPreview`].
-    let preview = GradientPreview::reserve(ui);
-    SpectrumBar::new(&mut cfg.spectrogram_gradient).home(home).show(ui).on_hover_text(
-        "The level->color spectrum: how far round the color circle the level \
-         range walks, out of the whole turn the bar stands for. The hues it \
-         takes fill from the left, silence first; the ones it does not are \
-         dimmed. The track is hue alone — the Brightness and Saturation bars \
-         below move the picture above, not the circle, which is what leaves the hues \
-         showing at Mono, where the arc itself has no width. Drag the handle \
-         to widen or narrow it, drag the track to turn the circle under it, \
-         double-click to reset. The button past the right end runs the whole \
-         thing the other way round the circle.",
-    );
-    SpreadBar::brightness(&mut cfg.spectrogram_gradient).home(home).show(ui).on_hover_text(
-        "The stretch of brightness the level range spends, in CIELab L*: the \
-         two numbers are silence and a full bucket, in that order. Silence \
-         wants 0 — the heatmap is laid on a black bed, so a lifted floor draws \
-         the plane's own edge where the history runs out, which is occasionally \
-         what you want to see. Drag either end to move it, drag between them to \
-         slide the whole stretch, drag one end past the other to draw loud dark \
-         on a pale field, double-click to reset.",
-    );
-    SpreadBar::chroma(&mut cfg.spectrogram_gradient).home(home).show(ui).on_hover_text(
-        "The stretch of color the level range spends, each end one \
-         colorfulness whatever hue that cell lands on — 100% is as \
-         vivid as the screen goes without distorting the color, 0 is grey. The \
-         two numbers are silence and a full bucket, in that order. Closing them \
-         together gives every level the same share of the color available to \
-         it, which is what the three colored presets do; taking both to 0 is \
-         Mono. Near the top the ramp rides the gamut's own boundary, whose \
-         corners between the screen's primaries show up as steps in an \
-         otherwise smooth sweep.",
-    );
-    preview.show(ui, &cfg.spectrogram_gradient).on_hover_text(
-        "The gradient itself, silence on the left and a full bucket on the \
-         right: every one of the six numbers the bars below carry, composed \
-         into the colors the heatmap draws with. A picture rather than a \
-         control — the three bars under it are what move it.",
-    );
-}
-
 /// Settings for the Spectral pane's display and analyzer (persisted with
-/// the UI state). The Display tab's Analyzer section.
+/// the UI state). The Display tab's Analyzer page.
 pub(crate) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState) {
     use crate::{SpectralOrientation, SpectrumWindow};
+
+    // What the page reaches, said once at the top rather than repeated on the
+    // sections: every setting here is the analyzer's, and the Spiral is the
+    // same analyzed frame wound onto a disc rather than a second one.
+    ui.weak("Drives the Analyzer pane — and the Spiral, which reads the same analyzer.");
 
     // ---- Plot -----------------------------------------------------------
     // Which way the plot runs, and how much of the pitch axis it shows. Time's
     // own extent is the roll's Span, and lives with the roll — it is the one
-    // axis setting that means nothing without the layer it measures; the
-    // Level's lives with the Spectrum, which is not the only layer reading it.
+    // axis setting that means nothing without the layer it measures; the Level
+    // range lives with the Spectrum, which is not the only layer reading it.
     //
     // "Plot" rather than "Axes" for exactly that reason: two of the three axis
     // extents are deliberately elsewhere, and a heading promising all three is
     // one a reader learns not to trust.
     //
-    // A plain heading rather than `section`: this is the top of the section
-    // body, and a leading rule there is a line under nothing.
+    // A plain heading rather than `section`: what stands above it is the page's
+    // own scope line rather than a section, so a rule between the two would cut
+    // the page off from its first heading instead of separating two groups.
     ui.heading("Plot");
     let cfg = &mut state.spectrum_config;
     // Named for the side the now-line is on, which is where the spectrum sits
@@ -203,15 +113,10 @@ pub(crate) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
     .display(hz_readout)
     .show(ui)
     .on_hover_text(
-        "The slice of the spectrum on show. Drag either end to move it, drag \
-         between them to slide the whole range (it squishes when it meets an \
-         end), double-click for the full axis. The scale is logarithmic — \
-         equal distances are equal musical intervals — so an octave is the \
-         same width wherever it sits.\n\nOr set it on the display itself: drag \
-         the Analyzer pane across the pitch axis to pan the range, scroll to \
-         zoom it around the pointer. (Dragging the other way zooms what that \
-         part of the pane measures instead: the roll's Span over the roll, the \
-         Level over the spectrum.)",
+        "The slice of the spectrum on show — and the Spiral's window. The scale \
+         is logarithmic: an octave is the same width everywhere. Drag either \
+         end, between them to slide, double-click for the full axis — or drag \
+         and scroll on the picture itself.",
     );
     // No choice of what the markings say. They are the analyzer-standard
     // 1-2-5 frequency series, and were switchable to one at every C with
@@ -221,10 +126,8 @@ pub(crate) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
     ValueBar::new(&mut cfg.marking_scale, crate::SCALE_BAR_RANGE, "Marking size")
         .show(ui)
         .on_hover_text(
-            "Size of the pane's own markings: the label at each frequency, and \
-             the pitch readout that follows the pointer. Fixed against the \
-             zoom, unlike the note names on the ribbons -- a marking says what \
-             the axis is, and the axis does not change size when you zoom it",
+            "Size of the axis labels and the pointer readout. Fixed against \
+             zoom — the axis doesn't change size when you zoom it.",
         );
 
     // ---- Audio spectrum -------------------------------------------------
@@ -257,20 +160,16 @@ pub(crate) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
         &mut cfg.floor_db,
         &mut cfg.ceiling_db,
         crate::LEVEL_MIN_DB..=crate::LEVEL_MAX_DB,
-        "Level",
+        "Level range",
     )
     .min_span(crate::LEVEL_RANGE_MIN_SPAN)
     .display(db_readout)
     .show(ui)
     .on_hover_text(
-        "The slice of the level scale on show. The low end is what reads \
-         as silence; the high end is what reads as full height — and as \
-         the brightest spectrogram cell — so pulling it down from 0 dB (a \
-         full-scale sine) lifts quiet material into the whole picture \
-         instead of the bottom of it. Drag either end to move it, drag \
-         between them to slide the window, double-click for the full \
-         scale.\n\nOr set the high end on the display itself: drag the \
-         spectrum along the depth axis, away from its baseline to zoom in.",
+        "The slice of the level scale on show: the low end reads as silence, \
+         the high end as full height and the brightest heatmap cell. Pull the \
+         top down to lift quiet material into the picture. Double-click for the \
+         full scale.",
     );
     ValueBar::new(&mut cfg.smoothing, 0.0..=0.9, "Smoothing")
         .show(ui)
@@ -297,23 +196,18 @@ pub(crate) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
         }
     });
 
-    ValueBar::new(&mut cfg.keyline, 0.0..=1.0, "Edge").show(ui).on_hover_text(
-        "A light rim along the spectrum's profile. It sits over the \
-         spectrogram, whose colors run from black to near-white, so where the \
-         curve is the same brightness as the cell behind it the shape is lost \
-         without one. 0 draws none.\n\nA note ribbon has its own edge — see \
-         Outline, under Piano roll.",
+    ValueBar::new(&mut cfg.keyline, 0.0..=1.0, "Outline").show(ui).on_hover_text(
+        "A light rim along the spectrum's profile, so its shape holds over the \
+         heatmap. 0 draws none. Each note ribbon has its own — see Outline under \
+         Piano roll.",
     );
 
     // ---- Piano roll -----------------------------------------------------
     section(ui, "Piano roll");
     ui.checkbox(&mut cfg.show_roll, "Note history").on_hover_text(
         "Draw incoming MIDI as a scrolling roll over the same pitch axis. \
-         Time runs away from the spectrum, so a note leaving the roll meets \
-         the peak it is making.\n\nA ribbon takes its color from the pitch \
-         gradient, which is the Color & light section's — the same colors the \
-         lattice draws a sounding note in, so a note is the same color in both \
-         pictures. The heatmap's own gradient is below, and is a different one.",
+         Ribbons wear the note colors from the Colors page, so a note matches \
+         the lattice.",
     );
     ValueBar::new(&mut cfg.roll_seconds, crate::ROLL_SECONDS_MIN..=crate::ROLL_SECONDS_MAX, "Span")
         .eased(true)
@@ -321,21 +215,15 @@ pub(crate) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
         .display(span_readout)
         .show(ui)
         .on_hover_text(
-            "Seconds of history the roll spans end to end, up to 10 minutes. \
-             The scale is logarithmic, so the short spans get most of the \
-             travel. The spectrogram fills the whole of it, as far back as it \
-             has been listening -- what a long span costs is grain, not reach: \
-             its detail is merged into wider time slabs, and zooming in is what \
-             asks for it back.\n\nOr set it on the \
-             display itself: drag the roll along the time axis, away from the \
-             now-line to zoom in.",
+            "Seconds of history the roll shows end to end, up to 10 minutes; \
+             short spans get most of the drag. Or drag the roll along its time \
+             axis — away from the now-line zooms in.",
         );
     ValueBar::new(&mut cfg.roll_thickness, 0.2..=2.0, "Note width")
         .show(ui)
         .on_hover_text(
-            "Ribbon width in semitones of the pitch axis — so it holds its \
-             musical meaning as the pitch range is zoomed, and a note is as \
-             wide as the interval it would cover",
+            "Ribbon width, in semitones of the pitch axis — a note is as wide \
+             as the interval it would cover, at any zoom.",
         );
     edge_bar(
         ui,
@@ -349,20 +237,9 @@ pub(crate) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
         |v| format!("{v:.1}"),
     )
     .on_hover_text(
-        "How far a dark surround stands off a note, in points, and how much of \
-         that it spends fading out. It wraps every side, so a note is a bounded \
-         object over the spectrogram rather than a ribbon dissolving into it — \
-         and dark, because every heatmap PRESET starts at black and climbs, so \
-         black is what its cells are furthest from. (Take the Brightness bar's \
-         low end up and that stops being true; the ribbon still carries its own \
-         color.) 0 draws none.\n\nIn points rather than semitones, so it is the \
-         same edge at every zoom; at a wide zoom the ribbons are thinner than \
-         this and neighbours' outlines reach over each other.\n\nThe bar is the \
-         outline itself, read outward from the note: solid to the first handle, \
-         then fading, and gone by the second. Drag between them to stand the \
-         note further off without blurring its edge, the inner handle to soften \
-         it (together they close for a hard edge), the outer one to reach \
-         further out from where it already starts to soften.",
+        "A dark surround that stands each ribbon off the heatmap — in points, \
+         so it is the same edge at every zoom. Solid to the inner handle, gone \
+         by the outer. 0 draws none.",
     );
     edge_bar(
         ui,
@@ -376,117 +253,53 @@ pub(crate) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
         |v| format!("{:.1}%", v * 100.0),
     )
     .on_hover_text(
-        "How far a SOUNDING note carries past the now-line and into the \
-         spectrum, and how much of that it spends fading out. A sounding note's \
-         ribbon ends on the line and the peak it is making stands on the other \
-         side of it, so this is the ribbon reaching across the join — which \
-         notes are down reads off the picture instead of off the ends of the \
-         ribbons. 0 stops every note square on the line.\n\n\
-         As a share of the ANALYZER, not a length: 10% reaches a tenth of the \
-         way across the spectrum, so the same setting draws the same picture on \
-         a window of any size, and dragging the divider over the curve shortens \
-         the tongues with it rather than letting them cover what is left. (The \
-         Outline bar above is in points instead, and deliberately — an edge \
-         wants to be the same weight everywhere, where a reach into another \
-         picture wants to be the same share of it.)\n\n\
-         The bar is the lead itself, read outward from the now-line: solid to \
-         the first handle, then fading, and gone by the second. Close them for \
-         a tongue that ends square, open the inner one to the outer for one \
-         that fades the whole way across.\n\n\
-         The divider still draws over it, unbroken — the ribbon passes under \
-         the line rather than eating it, which is what keeps the boundary \
-         followable while a chord is reaching over it.",
+        "How far a sounding note reaches past the now-line into the spectrum, \
+         as a share of it — so which notes are down reads off the picture. \
+         Solid to the inner handle, gone by the outer. 0 stops notes square on \
+         the line.",
     );
     ValueBar::new(&mut cfg.roll_lead_release, 0.0..=crate::ROLL_LEAD_RELEASE_MAX, "Lead release")
         .decimals(2)
         .display(|v| format!("{v:.2} s"))
         .show(ui)
         .on_hover_text(
-            "How long a note's lead takes to fade away once you let go of the \
-             key. 0 takes it the instant the note stops.\n\nThe lead is a claim \
-             about the present — this is sounding — so it has to go when the \
-             note does, and going in one frame is a tongue of ink vanishing \
-             rather than ending. Given a fifth of a second it dims instead, \
-             riding the ribbon's own end as that scrolls away from the line: \
-             the release becomes something the picture does rather than \
-             something that happens to it.\n\nIn seconds, so it is the same \
-             gesture at every Span. At a long one the ribbon barely moves \
-             while it happens and the tongue simply dissolves on the spot.",
+            "Seconds the lead takes to fade once the key is released. 0 cuts it \
+             the instant the note stops.",
         );
     ui.checkbox(&mut cfg.note_names, "Note names").on_hover_text(
-        "Write each note's name on its own ribbon, at the end of it you read \
-         first — the left of the note where time runs across the pane, its \
-         top where time runs down — with the note running away under the rest \
-         of the name. For reading the heatmap: a band of energy sits at some \
-         height on an axis marked only in decades of hertz, and the ribbon \
-         over that band is the same note, so naming the ribbon names the \
-         band.\n\n\
-         Names are the lattice's own, in its own hand: the node's spelling \
-         with its accidental and comma mark, so a just third reads E- rather \
-         than as an E and a cents offset.\n\nWhere repeats of a note come too \
-         fast to name each one, the first keeps its name and the next waits \
-         for clear room. A note you are HOLDING is named whatever the crowd, \
-         but only where its name is the one waiting at the now-line — with \
-         the spectrum on the right or along the bottom a held note takes its \
-         turn like any other, its name being pinned to the take instead. \
-         Needs Note history on: a name labels a ribbon.",
+        "Name each ribbon, in the lattice's own spelling — a just third reads \
+         E- rather than E plus cents. Where repeats crowd, the first keeps its \
+         name and the next waits for room. Needs Note history.",
     );
     ui.add_enabled_ui(cfg.note_names && cfg.show_roll, |ui| {
         ui.checkbox(&mut cfg.note_names_travel, "Name the far end").on_hover_text(
-            "Write the name on the other end of the ribbon — the end you read \
-             SECOND — instead.\n\nThese are the ribbon's two ends, so this \
-             moves every name on the roll and not only the ones you are \
-             holding: a played note's name sits at the head of its ribbon or \
-             at its tail.\n\nWhich musical end reads first is the \
-             orientation's, so this flips with it. With the spectrum on the \
-             LEFT or on TOP the name is on the note's leading edge: a held \
-             note's name stays where you can read it while you play, and then \
-             starts moving at the release — a movement nothing in the music \
-             made, and a drone held longer than the Span never scrolls at all. \
-             With the spectrum on the RIGHT or along the BOTTOM it is on the \
-             onset, pinned to a moment of the take: it travels with the picture \
-             from the first frame of the note and the release changes nothing \
-             about it, at the price that a note held longer than the Span \
-             carries its name off the far edge with its onset and scrolls the \
-             rest of its ribbon unnamed, and that a note younger than its own \
-             name wears it over the spectrum until its ribbon is long enough to \
-             hold it.\n\nEither way a name keeps the same small gap from the \
-             end it is written on: it leaves the picture when that end does, \
-             rather than waiting on the edge while its own note scrolls out \
-             from under it. The one thing that holds a name off that gap is \
-             the pane's outer edge, and only with the Roll/Analyzer split \
-             dragged so far that a young note's name has no analyzer left to \
-             lie over.\n\nSo this is \
-             the switch between those \
-             two, whichever way round the pane has them.\n\nThe offline \
-             render's whole-song layout is anchored at the onset either way: \
-             it lays the take out as a still, and the onset is the one end of \
-             a note that stands in one place there.",
+            "Write names on the ribbon's other end — anchored to the note's \
+             onset rather than its newest edge. Held notes then travel with the \
+             picture instead of waiting at the now-line. Flips with the Now-line \
+             setting.",
         );
         ValueBar::new(&mut cfg.note_name_scale, crate::SCALE_BAR_RANGE, "Name size")
             .show(ui)
             .on_hover_text(
-                "Overall size of those names.\n\nThey already follow the pitch \
-                 zoom, in proportion: a ribbon's width is set in semitones, so \
-                 narrowing the range fattens every ribbon, and a name keeps the \
-                 same relation to the ribbon it is written on -- five times its \
-                 size here at the tightest two-octave range. This sets what \
-                 that size is",
+                "Size of the ribbon names. They already grow as the pitch range \
+                 narrows; this sets their size relative to the ribbon.",
             );
     });
 
     // ---- Spectrogram ----------------------------------------------------
     section(ui, "Spectrogram");
     ui.checkbox(&mut cfg.show_spectrogram, "Heatmap").on_hover_text(
-        "A frequency-vs-time heatmap of the audio, drawn in the roll's \
-         region on the same time axis — so each column of energy lines up \
-         with the notes that made it. Reads the Spectrum's Level and Tilt \
-         for intensity. Turn Note history off to see the heatmap alone.",
+        "A frequency-vs-time heatmap of the audio, behind the roll on the same \
+         time axis. Reads the Spectrum's Level range and Tilt. Turn Note history \
+         off to see it alone.",
     );
-    spectrogram_gradient_group(ui, cfg);
-    // The gradient is the whole of it. An opacity, a contrast curve and a
-    // private level range would each go here and each is deliberately absent —
-    // see
+    // Where its colors are, rather than a second copy of the bars: the heatmap
+    // gradient is one of the two color tables, and both are dialled on the
+    // Colors page (see [`crate::panes::color`]).
+    ui.weak("Its colors are set on the Colors page.");
+    // The checkbox and that pointer are the whole of the section. An opacity, a
+    // contrast curve and a private level range would each go here and each is
+    // deliberately absent — see
     // [`spectrogram_gradient`](crate::SpectrumConfig::spectrogram_gradient) for
     // why the neutral setting is the only one worth having.
 

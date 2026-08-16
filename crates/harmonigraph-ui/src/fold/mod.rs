@@ -547,7 +547,7 @@ impl Folds {
     }
 
     /// Forget every fold, for a dock that is being replaced wholesale (the
-    /// System pane's "Reset layout").
+    /// System page's "Reset layout").
     ///
     /// Returns the points the window is owed for them. The layout that replaces
     /// this one has every pane open, so it wants the whole width the folds were

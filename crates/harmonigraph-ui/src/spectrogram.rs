@@ -2278,7 +2278,7 @@ mod tests {
     /// move the level by more than the step between them.
     ///
     /// The sweep runs past [`LEVEL_MIN_DB`](crate::LEVEL_MIN_DB) on purpose: the
-    /// Level bar stops at -100, and a hand-edited blob does not.
+    /// Level range bar stops at -100, and a hand-edited blob does not.
     #[test]
     fn the_quiet_end_of_the_ramp_fades_instead_of_cutting_off() {
         let mut cfg = SpectrumConfig { ceiling_db: 0.0, ..SpectrumConfig::default() };

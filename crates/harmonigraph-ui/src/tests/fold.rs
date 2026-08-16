@@ -80,7 +80,7 @@ fn every_separator_a_fold_has_pinned_resizes_the_open_panes_across_it() {
         panes::Tab::Spectral,
         panes::Tab::Tuning,
         panes::Tab::Notes,
-        panes::Tab::System,
+        panes::Tab::Video,
     ];
     // Two collapsed panes and then three, since each rail nests the next fold one
     // split deeper and the drag has to reach out past all of them.
@@ -621,9 +621,10 @@ fn the_reset_layout_button_resets_the_layout_when_it_is_clicked() {
     let mut state = fresh();
     let style = theme::dock_style(&egui::Style::default(), 1.0);
     let mut h = DockHarness::new();
-    // The button lives on the System pane, which shares its leaf with the other
-    // settings tabs and is not the one that opens selected.
-    let path = state.workspace.dock.find_tab(&panes::Tab::System).expect("System is docked");
+    // The button lives on the Display tab's System page, which shares its leaf
+    // with the other settings tabs and is not the one that opens selected.
+    state.display_page = panes::display::DisplayPage::System;
+    let path = state.workspace.dock.find_tab(&panes::Tab::Display).expect("Display is docked");
     state.workspace.dock.set_active_tab(path).expect("selecting the tab");
     h.settle_folds(&mut state);
     let fresh: Vec<f32> = LAID_OUT_TABS.iter().map(|tab| pane_width(&state, *tab)).collect();
@@ -639,7 +640,7 @@ fn the_reset_layout_button_resets_the_layout_when_it_is_clicked() {
     );
 
     let at =
-        label_center(&out, "Reset layout").expect("the System pane draws its Reset layout button");
+        label_center(&out, "Reset layout").expect("the System page draws its Reset layout button");
     h.frame(&mut state, vec![egui::Event::PointerMoved(at)]);
     h.frame(&mut state, vec![egui::Event::PointerMoved(at), press(at, true)]);
     h.frame(&mut state, vec![press(at, false)]);

@@ -181,7 +181,7 @@ pub struct SharedState {
     /// reopening one is exactly when the detects should look afresh.
     pub(crate) temper_judged: [Option<(i32, i32, i32)>; Comma::COUNT],
     /// User-saved camera angles, applied like the built-in Flat/Isometric
-    /// presets (persisted; see the View section).
+    /// presets (persisted; see the Lattice page's Camera section).
     pub camera_presets: Vec<CameraPreset>,
     /// Entry buffer for naming a new preset. Runtime-only.
     pub preset_name: String,
@@ -190,7 +190,7 @@ pub struct SharedState {
     pub take: TakeState,
     /// Audio-derived spectrum for the Spectral pane. Runtime-only.
     pub spectrum: AudioSpectrum,
-    /// The Spectral pane's settings (the Display tab's Analyzer section;
+    /// The Spectral pane's settings (the Display tab's Analyzer page;
     /// persisted).
     pub spectrum_config: SpectrumConfig,
     /// Where the analyzer's divider stands on the DOCKED pane as that pane is
@@ -223,10 +223,15 @@ pub struct SharedState {
     /// [`Workspace`], which is also where the reason these are not six more
     /// flat fields lives.
     pub workspace: Workspace,
-    /// Which of the Display tab's sections stand open (persisted — see
-    /// [`panes::display::DisplaySections`] for why egui `Context` memory
-    /// cannot hold this).
-    pub display_sections: panes::display::DisplaySections,
+    /// Which of the Display tab's pages is showing (persisted).
+    ///
+    /// Here rather than in egui `Context` memory, and the home is load-bearing:
+    /// the plugin builds a brand new `Context` every time the editor window
+    /// opens (the trap [`SharedState::release_context_resources`] sets out), so
+    /// a choice kept in memory springs back to Colors with every reopen. The
+    /// picker writes clicks straight here and reads the body to draw off the
+    /// same field, so there is one source of truth for it.
+    pub display_page: panes::display::DisplayPage,
     /// What the frame measures and publishes about itself — see
     /// [`Instruments`], which is also where the reason these are not five more
     /// flat fields lives.
@@ -296,7 +301,7 @@ pub struct SharedState {
 /// in is the pass walking the tree it would be writing.
 ///
 /// One pane does touch it, and the shape of that is the reason the grouping is
-/// worth naming rather than an exception to it. The System pane's "Reset
+/// worth naming rather than an exception to it. The System page's "Reset
 /// layout" button sets [`reset_layout`](Self::reset_layout) — one bool, write
 /// only, consumed after the pass that pane drew in — and reads nothing at all.
 /// A pane wanting more than a flag from here is a pane rearranging the dock it
@@ -355,7 +360,7 @@ pub struct Workspace {
     /// Set by the shell. Zero — the default, and what a shell that never
     /// resizes leaves it at — means no floor.
     pub min_window_width: f32,
-    /// Set by the System pane's "Reset layout" button; consumed by root_ui
+    /// Set by the System page's "Reset layout" button; consumed by root_ui
     /// AFTER the frame's DockArea writes the dock back (panes run inside
     /// that pass, so a direct write from one would be overwritten).
     pub(crate) reset_layout: bool,
@@ -553,11 +558,11 @@ impl CameraPreset {
 /// It is a named constant because the layout is not the only thing that
 /// depends on it. What the column has to clear is the widest thing in it,
 /// which is its own TAB BAR — this fraction and the window width together
-/// decide whether egui_dock scrolls the tab bar over the settings. Four tabs
+/// decide whether egui_dock scrolls the tab bar over the settings. Three tabs
 /// is what makes the bar fit at the editor's own `DEFAULT_SIZE` (#287): a tab
 /// per settings pane wants a window of about 1428pt at this fraction,
-/// measured, which is why those panes are sections of the Display tab rather
-/// than tabs of their own.
+/// measured, which is why those panes are pages of the Display tab rather than
+/// tabs of their own.
 ///
 /// Widening the column is what scrolling the TAB BAR would cost, and the price
 /// is charged to the picture: a smaller fraction buys the bar a narrower window
@@ -578,7 +583,7 @@ pub(crate) const SETTINGS_SPLIT: f32 = 0.72;
 /// beside it on the right (sharing the pitch intuition: what sounds is
 /// what lights up), the tuning column further right, console and notes
 /// folded to a tab bar below that. Users can re-dock at runtime; the result
-/// persists via UiPersist, and the System pane's "Reset layout" button
+/// persists via UiPersist, and the System page's "Reset layout" button
 /// returns here.
 pub(crate) fn default_dock() -> DockState<panes::Tab> {
     let mut dock = DockState::new(vec![panes::Tab::Lattice]);
@@ -588,13 +593,12 @@ pub(crate) fn default_dock() -> DockState<panes::Tab> {
         SETTINGS_SPLIT,
         vec![
             // Reading outward from the picture: what the lattice is, then how
-            // everything is drawn (the Display sections carry the same order
-            // one level down), video export, and the plugin's own
-            // render/layout knobs last.
+            // everything is drawn (the Display pages run the same way one level
+            // down, out to the machine around the pictures), and video export
+            // last.
             panes::Tab::Tuning,
             panes::Tab::Display,
             panes::Tab::Video,
-            panes::Tab::System,
         ],
     );
     // Notes first so it sits left of Console and is the selected tab by
@@ -665,7 +669,7 @@ impl SharedState {
             spiral_view: panes::spiral::SpiralView::default(),
             whole_song: None,
             workspace: Workspace::default(),
-            display_sections: panes::display::DisplaySections::default(),
+            display_page: panes::display::DisplayPage::default(),
             instruments: Instruments::default(),
             fps_cap: None,
             ui_scale: default_ui_scale(),
@@ -697,7 +701,7 @@ impl SharedState {
             version: UI_PERSIST_VERSION,
             dock: self.workspace.dock.clone(),
             folds: self.workspace.folds.clone(),
-            display_sections: self.display_sections,
+            display_page: self.display_page,
             camera: self.camera,
             view: self.view.clone(),
             camera_presets: self.camera_presets.clone(),
@@ -824,7 +828,7 @@ impl SharedState {
         self.workspace.dial.forget();
         self.workspace.folds = persist.folds;
         self.workspace.dock = persist.dock;
-        self.display_sections = persist.display_sections;
+        self.display_page = persist.display_page;
         self.camera = persist.camera;
         self.view = persist.view;
         // The incoming project's comma modes are its own, so the verdicts
@@ -929,7 +933,18 @@ fn default_ui_scale() -> f32 {
 /// Spiral tab anywhere in it, and no way to add one but "Reset layout". A tab
 /// that exists in the binary and in no project is the same silent break from
 /// the other direction, so it is the same floor that answers it.
-pub(crate) const UI_PERSIST_VERSION: u32 = 5;
+///
+/// 6: the System tab retired into the Display tab's System page. The same
+/// two-break shape as 3 and 4, and the loud half takes nearly every real blob:
+/// a saved dock holding `System` names a variant no build has any more, so it
+/// dies in `load_persist`'s `Err` arm before the version is read. The floor is
+/// for the dock that had already dragged the tab away — it parses and draws,
+/// and what it then carries is a tab list the binary and the project disagree
+/// about, with the Display tab possibly dropped too and the four pages behind
+/// it reachable only by "Reset layout". That is the same silent break 5's
+/// addition is, from the subtraction side, and it is the same floor that
+/// answers it.
+pub(crate) const UI_PERSIST_VERSION: u32 = 6;
 
 /// On-disk format of [`SharedState::save_persist`]. Bump thoughtfully; a
 /// failed deserialize silently falls back to defaults.
@@ -955,7 +970,7 @@ pub(crate) struct UiPersist {
     #[serde(default)]
     pub(crate) folds: fold::Folds,
     #[serde(default)]
-    pub(crate) display_sections: panes::display::DisplaySections,
+    pub(crate) display_page: panes::display::DisplayPage,
     #[serde(default)]
     pub(crate) camera: Camera,
     #[serde(default)]

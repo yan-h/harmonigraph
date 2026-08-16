@@ -204,7 +204,7 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     // meet with no chrome between them — clean for captures). The pane
     // separators keep their regular width, so the spacing between windows
     // matches framed mode. No tab bar also means no way to click back to
-    // the System pane (which holds the checkbox) if it's hidden, so Tab
+    // the System page (which holds the checkbox) if it's hidden, so Tab
     // works from anywhere. It toggles rather than only restoring, so the
     // chrome comes and goes on one key while a take is set up — the
     // checkbox is then just where the feature is documented.
@@ -237,7 +237,7 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     //
     // Moving the whole `Workspace` out in its place is the tidier-looking
     // version and is wrong, because the pass writes back into the group. The
-    // System pane's "Reset layout" sets `reset_layout` on the state, which
+    // System page's "Reset layout" sets `reset_layout` on the state, which
     // would be the emptied default left standing here, and restoring the
     // lifted copy afterwards would drop that write — the button going quiet
     // with everything still compiling and every other test green. See
@@ -298,7 +298,7 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     // resize the panes a user sees them dividing (see `fold::shove_target`).
     fold::paint(ui, &mut dock, &dock_style, &state.workspace.dial);
     state.workspace.dock = dock;
-    // Deferred from the System pane's button: replacing the dock BEFORE the
+    // Deferred from the System page's button: replacing the dock BEFORE the
     // write-back above would be silently undone.
     if std::mem::take(&mut state.workspace.reset_layout) {
         // The default layout has every pane open, so the window gets back

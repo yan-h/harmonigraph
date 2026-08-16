@@ -49,8 +49,8 @@ fn tallest_text(shapes: &[egui::epaint::ClippedShape]) -> f32 {
 fn the_ui_scale_shrinks_the_panel_chrome() {
     for pane in [
         SettingsPane::Tab(panes::Tab::Tuning),
-        SettingsPane::Tab(panes::Tab::System),
-        SettingsPane::Section(Section::Nodes),
+        SettingsPane::Page(DisplayPage::System),
+        SettingsPane::Page(DisplayPage::Lattice),
     ] {
         let (full, small) =
             (settings_pane_at_scale(pane, 1.0), settings_pane_at_scale(pane, 0.7));
@@ -360,18 +360,17 @@ fn every_settings_row_is_one_row_high() {
 ///
 /// The `SpectrumBar` is a row like the rest, and its width is the one thing
 /// that differs — the flip button takes the right end of the row. It is what
-/// Color & light is in the sweep for, the pitch gradient's group being the one
-/// place the lattice's settings draw one. The gradient preview above it is
+/// the Colors page is in the sweep for, being the one page that draws any —
+/// both gradient groups live there. The gradient preview above it is
 /// deliberately SHORTER than a row and is not swept: it paints no well, being
 /// a picture rather than a track, so the sniffing below never reaches it.
 #[test]
 fn every_bar_is_one_row_high() {
     for pane in [
         SettingsPane::Tab(panes::Tab::Tuning),
-        SettingsPane::Section(Section::Color),
-        SettingsPane::Section(Section::View),
-        SettingsPane::Section(Section::Nodes),
-        SettingsPane::Section(Section::Analyzer),
+        SettingsPane::Page(DisplayPage::Colors),
+        SettingsPane::Page(DisplayPage::Lattice),
+        SettingsPane::Page(DisplayPage::Analyzer),
         SettingsPane::Tab(panes::Tab::Video),
     ] {
         for step in 0..=16u8 {

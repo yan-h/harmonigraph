@@ -55,7 +55,7 @@ pub(crate) fn themed_at(ppp: f32) -> egui::Context {
 /// The same at a chosen CHROME scale, which is the third of the three and not
 /// to be confused with the second: [`themed_at`] changes how many device
 /// pixels a point is worth and nothing about the layout, while this resizes
-/// every font, margin and bar in the app — the setting the System pane's
+/// every font, margin and bar in the app — the setting the System page's
 /// slider drives.
 pub(crate) fn themed_scaled(scale: f32) -> egui::Context {
     let ctx = themed();

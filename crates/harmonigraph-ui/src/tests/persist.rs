@@ -156,7 +156,7 @@ fn a_blob_naming_more_wheel_than_fits_opens_on_what_fits() {
 /// inside the host, as a project opens. `loudness_raw`'s own guard answers an
 /// inverted or collapsed pair and cannot answer this one.
 ///
-/// Two controls write the pair now — the Level bar and the drag across the
+/// Two controls write the pair now — the Level range bar and the drag across the
 /// spectrum — and neither can produce either shape, which is what makes the
 /// blob the only way in.
 #[test]
@@ -249,7 +249,7 @@ fn a_double_click_on_a_soft_edge_restores_the_fresh_pair() {
                     ui,
                     (reach, fade),
                     0.5,
-                    "Gutter",
+                    "Clearance",
                     (fresh.sevens_gutter, fresh.sevens_gutter_soft),
                     |v| format!("{v:.2}"),
                 );
@@ -831,7 +831,7 @@ fn the_persist_blob_carries_exactly_these_top_level_keys() {
         "version",
         "dock",
         "folds",
-        "display_sections",
+        "display_page",
         "camera",
         "view",
         "camera_presets",
@@ -1428,24 +1428,24 @@ fn a_view_missing_any_one_key_reloads_at_the_fresh_value() {
     }
 }
 
-/// A Display section left open survives the editor window closing and
+/// The Display page picked in the editor survives the window closing and
 /// reopening.
 ///
-/// The plugin builds a brand-new egui `Context` for every window it opens, so
-/// collapse state kept in egui memory springs shut with the window — the same
-/// class of trap as the stale `TextureHandle`
-/// (`SharedState::release_context_resources`). The section flags live in
-/// `UiPersist` instead, and this holds the whole path: a REAL header click in
-/// the dock, `save_persist`, then a fresh `Context` and `load_persist`. Both
-/// halves are load-bearing — toggling the flag by hand would pass with the
-/// click never wired to it, and asserting inside one `Context` would pass
-/// with the state memory-backed, which is the live bug this exists to catch.
+/// The plugin builds a brand-new egui `Context` for every window it opens, so a
+/// choice kept in egui memory springs back to the default with the window — the
+/// same class of trap as the stale `TextureHandle`
+/// (`SharedState::release_context_resources`). The page lives in `UiPersist`
+/// instead, and this holds the whole path: a REAL click on the picker in the
+/// dock, `save_persist`, then a fresh `Context` and `load_persist`. Both halves
+/// are load-bearing — writing the field by hand would pass with the click never
+/// wired to it, and asserting inside one `Context` would pass with the state
+/// memory-backed, which is the live bug this exists to catch.
 #[test]
-fn a_display_section_left_open_survives_an_editor_reopen() {
+fn the_display_page_in_the_picker_survives_an_editor_reopen() {
     use super::harness::{press, DockHarness};
 
-    // A text only an OPEN section body draws — View's projection row, Labels'
-    // leading checkbox — scoped to the settings leaf.
+    // A text only one page's body draws — the Lattice page's projection row,
+    // the Colors page's Bloom bar — scoped to the settings leaf.
     let drawn = |out: &egui::FullOutput, leaf: egui::Rect, needle: &str| {
         out.shapes.iter().any(|cs| match &cs.shape {
             egui::Shape::Text(t) => t.galley.text() == needle && leaf.contains(t.pos),
@@ -1460,29 +1460,30 @@ fn a_display_section_left_open_survives_an_editor_reopen() {
     window.settle(&mut state);
     let leaf = state.workspace.dock[path.surface][path.node].rect().expect("the leaf is laid out");
     let out = window.frame(&mut state, vec![]);
-    assert!(!drawn(&out, leaf, "Projection"), "the View section must open collapsed");
+    assert!(!drawn(&out, leaf, "Projection"), "the tab must open on the Colors page");
 
-    // The View header, found where it was painted and clicked for real.
-    let header = out
+    // The Lattice button on the picker, found where it was painted and clicked
+    // for real.
+    let button = out
         .shapes
         .iter()
         .find_map(|cs| match &cs.shape {
-            egui::Shape::Text(t) if t.galley.text() == "View" && leaf.contains(t.pos) => {
+            egui::Shape::Text(t) if t.galley.text() == "Lattice" && leaf.contains(t.pos) => {
                 Some(egui::Rect::from_min_size(t.pos, t.galley.size()).center())
             }
             _ => None,
         })
-        .expect("the Display pane drew no View header");
-    window.frame(&mut state, vec![egui::Event::PointerMoved(header)]);
-    window.frame(&mut state, vec![egui::Event::PointerMoved(header), press(header, true)]);
-    window.frame(&mut state, vec![press(header, false)]);
-    // The fold-out animates over a few frames.
-    let mut out = window.frame(&mut state, vec![]);
-    for _ in 0..12 {
-        out = window.frame(&mut state, vec![]);
-    }
-    assert!(state.display_sections.view, "the click did not reach the persisted flag");
-    assert!(drawn(&out, leaf, "Projection"), "the click did not open the View section");
+        .expect("the Display pane drew no Lattice button");
+    window.frame(&mut state, vec![egui::Event::PointerMoved(button)]);
+    window.frame(&mut state, vec![egui::Event::PointerMoved(button), press(button, true)]);
+    window.frame(&mut state, vec![press(button, false)]);
+    let out = window.frame(&mut state, vec![]);
+    assert_eq!(
+        state.display_page,
+        panes::display::DisplayPage::Lattice,
+        "the click did not reach the persisted field",
+    );
+    assert!(drawn(&out, leaf, "Projection"), "the click did not switch to the Lattice page");
     let saved = state.save_persist();
 
     // The window closes and reopens: a FRESH `Context`, and the state the
@@ -1498,12 +1499,13 @@ fn a_display_section_left_open_survives_an_editor_reopen() {
         reopened.workspace.dock[path.surface][path.node].rect().expect("the leaf is laid out");
     assert!(
         drawn(&out, leaf, "Projection"),
-        "the View section sprang shut across the reopen — is its state in egui memory?",
+        "the page reverted across the reopen — is its state in egui memory?",
     );
-    // And one open section is ONE open section: Labels stays collapsed.
+    // And one page is ONE page: the Colors body it was switched away from is
+    // gone rather than still stacked above.
     assert!(
-        !drawn(&out, leaf, "Note names"),
-        "the Labels section opened without ever being clicked",
+        !drawn(&out, leaf, "Bloom"),
+        "the Colors page is still drawn under the Lattice page",
     );
 }
 

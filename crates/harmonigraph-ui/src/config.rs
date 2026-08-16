@@ -650,7 +650,7 @@ impl SpectrumConfig {
 /// ([`SpectrumConfig::sanitize`]), takes included — so a video rendered
 /// from an old take renders at the wider range too.
 ///
-/// The analyzer's alone, and read by nothing else. Color & light's Color range
+/// The analyzer's alone, and read by nothing else. The Colors page's Color range
 /// is the span the color gradient is spread over, and it
 /// is bounded by [`COLOR_RANGE_MIN_SPAN`] rather than by this: the reasoning
 /// above is about the size of TYPE and says nothing whatever about how tightly
@@ -676,7 +676,7 @@ pub(crate) fn sane_scale(scale: f32) -> f32 {
 /// whether they mean the same thing by 2.
 pub const SCALE_BAR_RANGE: std::ops::RangeInclusive<f32> = 0.3..=3.0;
 
-/// Closest the two ends of Color & light's Color range may come — the span the
+/// Closest the two ends of the Colors page's Color range may come — the span the
 /// color gradient covers, which is a different bar from the analyzer's window
 /// on the same axis. An octave: a gradient aimed tighter than one has notes a
 /// semitone apart at opposite ends of the spectrum, and nothing about the
@@ -740,7 +740,7 @@ pub(crate) const LEVEL_MAX_DB: f32 = 0.0;
 /// this is all edge and no picture — and, unclamped, a collapsed one divides
 /// by zero in `loudness` and paints the NaN geometry egui panics on.
 ///
-/// Two controls hold to it, as with the Span: the Analyzer section's Level bar and
+/// Two controls hold to it, as with the Span: the Analyzer section's Level range bar and
 /// the drag across the spectrum. A gesture clamping to its own idea of how
 /// close the pair may come would push the bar past its own end.
 pub(crate) const LEVEL_RANGE_MIN_SPAN: f32 = 12.0;
