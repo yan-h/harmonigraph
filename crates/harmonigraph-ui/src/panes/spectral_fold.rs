@@ -1,5 +1,9 @@
-//! Folding the analyzer's spectrum onto the lattice: per node, per octave
-//! slot, how much power is sounding at exactly that pitch.
+//! Measuring the analyzer's spectrum for the lattice's audio ring: how much
+//! power is sounding at exactly the pitch each wedge of it names.
+//!
+//! ONE grid for the whole lattice, not a reading per node. A wedge names an
+//! octave of its node's pitch class, so what it needs is a lookup at a pitch —
+//! and the shader does that lookup itself, off a table this pass fills once.
 //!
 //! The lattice's own coordinate system is the harmonic series. A partial sits
 //! at an EXACT rational multiple of its fundamental, so on a 7-limit lattice

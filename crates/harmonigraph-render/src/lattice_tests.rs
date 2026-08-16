@@ -3648,8 +3648,10 @@ fn a_ring_wedge_wears_its_own_levels_ramp_entry() {
         paint.inner = fresh.spectral_ring_inner;
         paint.outer = fresh.spectral_ring_outer;
         paint.folded = true;
-        // The whole grid at one level, so every wedge reads the same entry
-        // wherever its octave falls on the axis.
+        // The whole grid at one level, so every wedge whose octave the
+        // analyzer's axis reaches reads the same entry. Off the axis
+        // `spectrum_at` answers 0 whatever the grid holds, which this wheel
+        // stays clear of.
         paint.levels = Box::new([level; harmonigraph_scene::SPECTRAL_BUCKETS]);
         paint.lut = std::array::from_fn(|k| {
             let t = k as f32 / (harmonigraph_scene::PITCH_LUT_N - 1) as f32;

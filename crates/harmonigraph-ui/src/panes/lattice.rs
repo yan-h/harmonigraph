@@ -117,14 +117,15 @@ pub(crate) fn draw_lattice(
         response.and(state.hovered),
         now,
     );
-    // What the AUDIO says, over a scene derived exactly as above: the keys'
-    // lighting replaced by the analyzer's, a second ring of measured octaves
-    // added beside it, or neither — the two toggles are the fold's own to
-    // read, and with both off it does not so much as look at the spectrum. A
-    // post-pass and not a branch inside the derivation, because everything
-    // else about the picture — the geometry, the wheel, the grid, the camera —
-    // is the same answer either way, and a source that reached into
-    // `derive_scene` would be a second path through all of it.
+    // What the AUDIO says, over a scene derived exactly as above: a ring of
+    // measured octaves inside the octave band, carrying whichever of two
+    // readings the selector asks for, or none — which is the pass's own to
+    // read, and with it Off it does not so much as look at the spectrum. A
+    // post-pass and not a branch inside the derivation, because the picture
+    // around the ring — the geometry, the wheel, the grid, the camera, and the
+    // whole of what the keys light — is the same answer either way, and a
+    // reading that reached into `derive_scene` would be a second path through
+    // all of it.
     super::spectral_fold::apply(&mut scene, state, now);
     // The ground the sevens knockout clears to. Only the shell knows what
     // this pass is composited over -- the dock's tab body here, the render

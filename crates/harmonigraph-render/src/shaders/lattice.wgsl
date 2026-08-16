@@ -217,10 +217,11 @@ struct Instance {
     // ring eases in over the scene layer's attack when its note takes that
     // end, and drops to 0 the frame the key comes up.
     @location(2) params: vec3<f32>,
-    // Per-octave activation, 8 bits per slot, little-endian packed. What it
-    // MEANS is the source: how much of that octave is held with the keys
-    // lighting the lattice, and how loud it measured with the audio lighting
-    // it (u.misc9.y), which is also what decides the ramp it is painted from.
+    // Per-octave activation, 8 bits per slot, little-endian packed: how much
+    // of that octave is HELD, and nothing else. The analyzer never writes here
+    // — its reading is the audio ring's own channel (u.spectrum), a window
+    // onto one grid the whole lattice shares rather than a level per node — so
+    // this is the MIDI picture whole and is painted off pitch_lut throughout.
     @location(3) octaves: vec3<u32>,
     // The node's pitch class in cents (0..1200). It both PLACES the octave
     // indicators and COLORS them, off the one quantity: each indicator's

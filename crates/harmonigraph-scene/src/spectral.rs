@@ -200,7 +200,8 @@ pub struct SpectralPaint {
 }
 
 impl SpectralPaint {
-    /// No analyzer: nothing audio-lit, no ring, and a ramp nothing indexes.
+    /// No analyzer: no ring, nothing measured into the grid it reads, and a
+    /// ramp nothing indexes.
     ///
     /// What [`derive_scene`](crate::derive_scene) answers, and the right
     /// answer for every shell that draws a lattice without opening an
