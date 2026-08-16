@@ -240,8 +240,8 @@ struct Uniforms {
     /// assuming it (`glyph_band`'s two soft edges cross instead of cancelling
     /// at z == y, painting a dot at the node's centre); w: the outer edge of
     /// the outermost RING the node draws (`Scene::rings_outer`), which
-    /// `node_rim` and the mark strip stand off, so neither has to know which
-    /// layer was the last one on. None of the four is free.
+    /// `node_rings_rim` and the mark strip stand off, so neither has to know
+    /// which layer was the last one on. None of the four is free.
     misc3: [f32; 4],
     /// Pitch->color lookup for the dots octave style (see harmonigraph_scene's
     /// `pitch_ramp_lut`), matching the node disc gradient.
