@@ -2210,14 +2210,34 @@ fn a_clearing_is_one_hole_covering_the_centre_and_every_ring() {
     }
 }
 
-/// The audio ring is worn node by node, so the clearing is too: where the ring
-/// is the outermost layer the stack handed out, a node the Gate has closed
-/// clears only as far as the core it is left with, and one part way through its
-/// fade clears part way between the two.
+/// Mean added light over the pixels between `lo` and `hi` from the centre of the
+/// frame — how STRONGLY a ring of the clearing is cleared, where
+/// [`far_toward`] and [`Light::far`] answer how far it reaches.
+fn light_in_band(weights: &[f64], size: [u32; 2], lo: f64, hi: f64) -> f64 {
+    let (cx, cy) = ((size[0] - 1) as f64 / 2.0, (size[1] - 1) as f64 / 2.0);
+    let (mut sum, mut n) = (0.0, 0usize);
+    for (i, &w) in weights.iter().enumerate() {
+        let x = (i % size[0] as usize) as f64 - cx;
+        let y = (i / size[0] as usize) as f64 - cy;
+        let r = x.hypot(y);
+        if r >= lo && r <= hi {
+            sum += w;
+            n += 1;
+        }
+    }
+    if n == 0 { 0.0 } else { sum / n as f64 }
+}
+
+/// The audio ring is worn node by node, so its part of the clearing is too: a
+/// node the Gate has closed clears only the core it is left with, and one part
+/// way through its fade clears the ring's WHOLE hole at part of its strength.
 ///
-/// The travelling rim is the point rather than a nicety. A clearing that stepped
-/// out the moment the gate opened would pop a hole in the lattice a whole layer
-/// wide while the ring it belongs to is still fading up.
+/// Width from the layer, level from the layer's own fade — the same division the
+/// note's clearing has always run on, now per layer. The two halves are separate
+/// claims and they fail differently. A hole sized by the fade would sweep
+/// outward across the lattice as a ring arrives, which is the "node retreating"
+/// look the reach is deliberately held against; a hole at full strength from the
+/// first frame would pop.
 #[test]
 fn a_clearing_follows_the_audio_ring_its_node_wears() {
     const SIZE: [u32; 2] = [256, 256];
@@ -2227,35 +2247,120 @@ fn a_clearing_follows_the_audio_ring_its_node_wears() {
     let rings = clearing_rings();
 
     // The band off, so the audio ring is the layer the stack's cursor landed on
-    // and the node's own gate is what moves it.
-    let hole = |gpu: &mut Shooter, ring: f32| -> f64 {
+    // and this node's own gate is what its hole answers to.
+    let hole = |gpu: &mut Shooter, ring: f32| -> (Vec<f64>, f64) {
         let bare = gpu.shot(&clearing_node(0, ring, false, 0.0));
         let holed = gpu.shot(&clearing_node(0, ring, false, CLEAR_REACH));
-        light_about_center(&light_over(&holed, &bare), SIZE).far
+        let cleared = light_over(&holed, &bare);
+        let far = light_about_center(&cleared, SIZE).far;
+        (cleared, far)
     };
-    let worn = hole(&mut gpu, 1.0);
-    let closed = hole(&mut gpu, 0.0);
-    let half = hole(&mut gpu, 0.5);
+    let (worn, worn_far) = hole(&mut gpu, 1.0);
+    let (closed, closed_far) = hole(&mut gpu, 0.0);
+    let (half, half_far) = hole(&mut gpu, 0.5);
 
-    let scale = worn / (rings.audio.1 + CLEAR_REACH) as f64;
+    let scale = worn_far / (rings.audio.1 + CLEAR_REACH) as f64;
     let want = |rim: f32| (rim + CLEAR_REACH) as f64 * scale;
     eprintln!(
-        "ring worn {worn:.1} px, closed {closed:.1} (want {:.1}), half {half:.1} \
-         (want {:.1}), at {scale:.1} px/uv",
-        want(rings.core_radius),
-        want(0.5 * (rings.core_radius + rings.audio.1)),
-    );
-    assert!(
-        (closed - want(rings.core_radius)).abs() < 2.0,
-        "a node the gate closed still clears {closed:.1} px, not the {:.1} px its core \
-         is left reaching",
+        "ring worn {worn_far:.1} px, closed {closed_far:.1} (want {:.1}), half \
+         {half_far:.1}, at {scale:.1} px/uv",
         want(rings.core_radius),
     );
     assert!(
-        (half - want(0.5 * (rings.core_radius + rings.audio.1))).abs() < 2.0,
-        "a ring half way in clears {half:.1} px, not the {:.1} px half way between the \
-         two rims",
-        want(0.5 * (rings.core_radius + rings.audio.1)),
+        (closed_far - want(rings.core_radius)).abs() < 2.0,
+        "a node the gate closed still clears {closed_far:.1} px, not the {:.1} px its \
+         core is left reaching",
+        want(rings.core_radius),
+    );
+    assert!(
+        (half_far - worn_far).abs() < 2.0,
+        "a ring half way in clears {half_far:.1} px where a whole one clears \
+         {worn_far:.1} — the hole is sized by the fade instead of by the layer",
+    );
+
+    // Read where only the ring's own clearing lands: outside the ring's ink, so
+    // the node paints nothing there and the added light IS the hole, and inside
+    // the reach, so a hard-edged clearing covers all of it.
+    let (lo, hi) = (rings.audio.1 as f64 * scale + 3.0, worn_far - 3.0);
+    let (lit, dim, none) = (
+        light_in_band(&worn, SIZE, lo, hi),
+        light_in_band(&half, SIZE, lo, hi),
+        light_in_band(&closed, SIZE, lo, hi),
+    );
+    eprintln!("past the ring, {lo:.1}..{hi:.1} px: worn {lit:.0}, half {dim:.0}, closed {none:.0}");
+    assert!(
+        lit > 0.0 && (dim / lit - 0.5).abs() < 0.05,
+        "half a ring cleared {dim:.0} of the {lit:.0} a whole one does",
+    );
+    assert!(none < lit * 0.02, "a closed gate cleared {none:.0} past a ring it is not wearing");
+}
+
+/// A node wearing NOTHING BUT an audio ring clears around it — the case the
+/// whole per-layer split is for.
+///
+/// The ring is a window onto the spectrum rather than a level a node carries, so
+/// a node nobody played wears one wherever the view's Gate lets it. That is ink,
+/// and ink with no hole under it reads as painted ON the lattice rather than in
+/// front of it: the grid runs straight through the ring and the sheets behind
+/// show through its gaps.
+///
+/// The other half is what such a node must NOT clear. Its band and its core are
+/// drawn at the note's level, which is nothing, so a hole sized to the layers
+/// the VIEW has on would clear a band-sized gap around ring-sized ink — the
+/// same "wider than the node" failure the marks had, arrived at from the other
+/// direction.
+#[test]
+fn a_node_wearing_only_an_audio_ring_clears_around_it() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut gpu) = Shooter::new(SIZE) else {
+        return;
+    };
+    let rings = clearing_rings();
+
+    // Silent: no note, no octaves, no marks. What is left is the ring the gate
+    // hands it, at `ring`, and the band is ON so the "clears what the view draws
+    // rather than what this node draws" failure has room to show.
+    let silent = |ring: f32, gutter: f32| -> Scene {
+        let mut scene = clearing_node(0, ring, true, gutter);
+        let node = &mut scene.nodes[0];
+        node.activation = 0.0;
+        node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
+        scene
+    };
+    let bare = gpu.shot(&silent(1.0, 0.0));
+    let holed = gpu.shot(&silent(1.0, CLEAR_REACH));
+    let cleared = light_over(&holed, &bare);
+    let hole = light_about_center(&cleared, SIZE);
+    assert!(hole.weight > 0.0, "a node wearing an audio ring cleared nothing at all");
+
+    // Calibrated on a node that IS played, where the hole is the band's and the
+    // band's outer edge is a uv the stack states.
+    let played_bare = gpu.shot(&clearing_node(0, 1.0, true, 0.0));
+    let played = gpu.shot(&clearing_node(0, 1.0, true, CLEAR_REACH));
+    let played_far = light_about_center(&light_over(&played, &played_bare), SIZE).far;
+    let scale = played_far / (rings.band.1 + CLEAR_REACH) as f64;
+    let want = (rings.audio.1 + CLEAR_REACH) as f64 * scale;
+    eprintln!(
+        "ring alone clears {:.1} px (want {want:.1}), a played node {played_far:.1} \
+         (band {:.1}), at {scale:.1} px/uv",
+        hole.far,
+        (rings.band.1 + CLEAR_REACH) as f64 * scale,
+    );
+    assert!(
+        (hole.far - want).abs() < 2.0,
+        "a node wearing only its ring cleared {:.1} px, not the {want:.1} px that ring \
+         reaches — a band nobody is drawing is in the hole",
+        hole.far,
+    );
+
+    // ...and with the gate closed there is no ink and no hole. (The scene ships
+    // no such node at all, which is the CPU's own half of the same answer.)
+    let quiet_bare = gpu.shot(&silent(0.0, 0.0));
+    let quiet = gpu.shot(&silent(0.0, CLEAR_REACH));
+    assert_eq!(
+        differing_pixels(&quiet, &quiet_bare),
+        0,
+        "a node with no note and no ring cleared a hole in empty lattice",
     );
 }
 

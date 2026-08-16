@@ -554,7 +554,7 @@ fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBack
              sectors, and before the marks. 0 closes the node up solid.",
         );
     // Here rather than with the sevens-layer controls, where a "Sevenths" name
-    // misreads what it does: the clearance is cut by every sounding node on
+    // misreads what it does: the clearance is cut by every DRAWING node on
     // every sheet, the home one included and at any sheet count, so it belongs
     // to the node and not to the depth axis. Named Clearance for that; the
     // `sevens_` field names stay — they are what saved projects spell.
@@ -570,8 +570,9 @@ fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBack
         |v| format!("{v:.2}"),
     )
     .on_hover_text(
-        "The dark gap a sounding note clears around itself, over grid lines and \
-         back sheets. Solid to the inner handle, faded out by the outer. 0 draws \
-         none.",
+        "The dark gap a node clears around its own shape, over grid lines and \
+         back sheets — around each layer it is drawing, including an audio ring \
+         with no note under it. Solid to the inner handle, faded out by the \
+         outer. 0 draws none.",
     );
 }

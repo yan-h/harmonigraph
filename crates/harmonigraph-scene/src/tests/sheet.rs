@@ -498,19 +498,27 @@ fn every_sounding_node_clears_what_is_behind_it_the_home_sheet_included() {
     let scene = scene_of(&held(60), &Tuning::default(), &view, &plain_frame(), 0.0);
 
     // C sounds, so every node whose pitch class is C lights — on the home
-    // sheet and off it. All of them clear; the silent ones do not.
+    // sheet and off it — and all of them clear.
+    //
+    // The WIDTH is what this field is, and it is the view's for every node: the
+    // strength is per LAYER and belongs to the shader, which scales each
+    // layer's hole by the level that paints that layer (`node_clearing`). So a
+    // silent node carrying a width here punches nothing THERE unless some layer
+    // of it is drawing — and one is, when the audio ring's Gate has let it wear
+    // a ring with no note under it, which is exactly the node this cannot gate
+    // on `activation` for. `a_node_wearing_only_an_audio_ring_clears_around_it`
+    // is that case in pixels, and it is a render test because the whole answer
+    // is in the shader.
     let mut lit_home = 0;
     let mut lit_off = 0;
     for node in &scene.nodes {
+        assert_eq!(node.gutter, 0.2, "the reach is the view's, on every node it ships");
         if node.activation > 0.0 {
-            assert_eq!(node.gutter, 0.2, "a sounding node clears, wherever it is");
             if node.on_home {
                 lit_home += 1;
             } else {
                 lit_off += 1;
             }
-        } else {
-            assert_eq!(node.gutter, 0.0, "a silent node punches nothing");
         }
     }
     assert!(lit_home > 0 && lit_off > 0, "the case needs both kinds lit");
@@ -529,12 +537,11 @@ fn a_flat_lattice_still_clears_its_grid() {
     let scene = scene_of(&held(60), &Tuning::default(), &view, &plain_frame(), 0.0);
     let mut lit = 0;
     for node in &scene.nodes {
-        if node.activation > 0.0 {
-            assert_eq!(node.gutter, 0.2, "a sounding home node clears with no depth at all");
-            lit += 1;
-        } else {
-            assert_eq!(node.gutter, 0.0, "a silent node punches nothing");
-        }
+        // The view's reach, on every node — see
+        // `every_sounding_node_clears_what_is_behind_it_the_home_sheet_included`
+        // for why this is not gated on the note here.
+        assert_eq!(node.gutter, 0.2, "a home node carries the reach with no depth at all");
+        lit += usize::from(node.activation > 0.0);
     }
     assert!(lit > 0, "something is lit");
 }

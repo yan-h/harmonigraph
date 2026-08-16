@@ -253,13 +253,20 @@ pub struct ViewConfig {
     ///
     /// FOOTPRINT means the node's own shape, this far out from it, and not a
     /// circle sized to hold it: a node reaching a melody mark on one octave
-    /// bulges over that wedge and hugs its rings everywhere else, and one the
-    /// audio ring's Gate has closed clears only what it still draws. A circle
+    /// bulges over that wedge and hugs its rings everywhere else. A circle
     /// answers with the widest thing the node reaches in ANY direction, which
     /// on a marked node is a gap wider than itself all the way round — so the
     /// hole stops reading as the node's and starts reading as empty space
-    /// somebody cut out. The shape is the shader's (`node_clear_distance`),
-    /// off the same radii that draw the layers.
+    /// somebody cut out.
+    ///
+    /// The shape is the shader's (`node_clearing`), off the same radii that
+    /// draw the layers, and it is built one LAYER at a time: each clears its
+    /// own footprint at the level it is drawn at, and the hole is whichever of
+    /// them claims a pixel most. Which is what lets a node wearing an audio
+    /// ring and no note clear at all — its ring's level is the gate's, where
+    /// the note's is nothing — and equally what stops that node clearing the
+    /// band-sized hole a node-wide level would give it. A layer nobody is
+    /// drawing clears nothing.
     ///
     /// It clears to the GROUND the pass is composited over, which the shell
     /// hands in (see [`Scene::background`](crate::Scene::background)). With
@@ -270,11 +277,10 @@ pub struct ViewConfig {
     ///
     /// It fades rather than ending at a rim, over a band of its own
     /// ([`sevens_gutter_soft`](Self::sevens_gutter_soft)) — a hard edge
-    /// cutting across a lit ring reads as a bite taken out of
-    /// it. And its STRENGTH is the note's own envelope (applied in the
-    /// shader, against the same activation that paints the node), so a
-    /// clearing fades out exactly as its note does while holding its width;
-    /// a node that sounds nothing clears nothing at all.
+    /// cutting across a lit ring reads as a bite taken out of it. And its
+    /// STRENGTH is each layer's own envelope, so a clearing fades out exactly
+    /// as the ink in it does while holding its width; a node drawing nothing
+    /// clears nothing at all.
     ///
     /// Named for the sevens layer it was built for, but not confined to it:
     /// the home sheet clears too, and at any sevenths extent — with the

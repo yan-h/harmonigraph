@@ -147,69 +147,38 @@ const GLOW_LIMIT: f32 = 0.95;
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
 
-// How far this node's RINGS reach, in its uv: the outer edge of the outermost
-// one it draws, which the stack hands over as its own cursor (u.misc3.w). The
-// ring is ordinarily the octave band; on a node whose band is dialled off it is
-// whichever layer inside it the stack ended on, which is why the edge is
-// handed in rather than read off the band's radii.
-//
-// One case makes that a per-NODE question, and it is the audio ring: which
-// nodes wear one is the view's Gate answered node by node (see
-// `Instance::ring`), so where the ring is the layer the cursor landed on, a
-// node the gate has closed reaches only as far as the core inside it. Its rim
-// travels out with the ring rather than stepping there the moment the gate
-// opens, so the hole in the lattice opens as gradually as the ring arrives.
-fn node_rings_rim(ring: f32) -> f32 {
-    // With the octave band drawn there is nothing to ask: it is outside the
-    // audio ring on every node that has one, so the cursor is the band's own
-    // outer edge whatever this node's gate says.
+// How far the MIDI layers reach, in the node's uv: the octave band's outer edge,
+// or the core's radius on a node whose band is dialled off, and 0 where the view
+// has neither. One answer for the two because they ride ONE envelope — the
+// node's own activation — and both are discs about its center, so the wider of
+// them says everything about where the pair reaches.
+fn midi_rim() -> f32 {
+    var rim = max(u.misc3.x, 0.0);
     if u.misc3.z > u.misc3.y {
-        return u.misc3.w;
+        rim = max(rim, u.misc3.z);
     }
-    return mix(max(u.misc3.x, 0.0), u.misc3.w, clamp(ring, 0.0, 1.0));
-}
-
-// How far a melody/bass mark at `level` reaches past rings ending at `rings` —
-// the strip's own outer edge, where the mark is drawn in full.
-//
-// Off the strip's own slot (u.misc4.y), which is where the scene put it rather
-// than a padding added here: on a node with no rings the strip starts AT the
-// center and owes no padding, and reaching for one would clear a hole the mark
-// does not fill.
-//
-// Scaled by the mark's own LEVEL rather than switched on the moment the slot is
-// claimed: this shapes the clearing, and a reach that jumped to the strip ahead
-// of the mark leaves the hole in the lattice popping open around a mark still
-// fading up. The level is both ends of the mark's envelope, so the reach closes
-// as gradually as the mark leaves — a released mark fades out with its note
-// rather than snapping off at the key.
-fn node_mark_rim(rings: f32, level: f32) -> f32 {
-    let strip_out = max(u.misc4.y + u.misc5.w, rings);
-    return select(rings, mix(rings, strip_out, clamp(level, 0.0, 1.0)), u.misc5.w > 0.0);
+    return rim;
 }
 
 // The node's own outermost feature in ANY direction: a MARK where this node is
 // wearing one — both marks ride the strip just past the outermost ring — and
-// that ring's edge where it is not.
+// the outermost ring's own edge (u.misc3.w, the stack's cursor) where it is not.
+// The ring is ordinarily the octave band; on a node whose band is dialled off it
+// is whichever layer inside it the stack ended on, which is why the edge is
+// handed in rather than read off the band's radii.
 //
 // A circle the whole node fits inside, which is what a billboard and an early-
-// out want. What SHAPE it fills that circle with is `node_clear_distance`, and
-// the two answer differently on exactly one thing: a mark is one wedge, so a
-// marked node reaches its strip in that wedge's direction and its rings'
-// edge everywhere else.
-fn node_rim(ring: f32, mark: f32) -> f32 {
-    return node_mark_rim(node_rings_rim(ring), mark);
-}
-
-// How much of the mark strip this node is wearing, 0..1: a mark needs both a
-// slot to extend and a level to draw at. The two ends share one strip, so the
-// rim is the further along of them — a node wearing either reaches exactly as
-// far as a node wearing both.
-fn mark_strip_level(marks: vec2<u32>, params: vec3<f32>) -> f32 {
-    return max(
-        select(0.0, clamp(params.y, 0.0, 1.0), marks.x != 0u),
-        select(0.0, clamp(params.z, 0.0, 1.0), marks.y != 0u),
-    );
+// out want. What SHAPE it fills that circle with is `node_clearing`, and the two
+// answer differently on two things: a mark is one wedge, so a marked node
+// reaches its strip in that wedge's direction alone; and a layer this node draws
+// nothing of clears nothing, where the circle holds room for it either way. Both
+// are a bound being loose, which costs a little fill and no correctness.
+fn node_rim(marked: bool) -> f32 {
+    var rim = max(u.misc3.w, 0.0);
+    if marked && u.misc5.w > 0.0 {
+        rim = max(rim, u.misc4.y + u.misc5.w);
+    }
+    return rim;
 }
 
 // How far the billboard has to reach, in uv, for a clearing of reach `g` around
@@ -368,7 +337,7 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
     // by the scale converts the setting from "of this node" back to "of a
     // full-size node", i.e. one fixed distance everywhere.
     let gutter_uv = max(inst.sevens.y, 0.0) / scale;
-    let rim = node_rim(inst.ring, mark_strip_level(inst.marks, inst.params));
+    let rim = node_rim((inst.marks.x | inst.marks.y) != 0u);
     // ...which can want more room than the standard billboard has, on the
     // smallest sheets. Only then does the quad grow: uv 1.0 still maps to
     // the same world distance either way, so nothing about the node's own
@@ -1497,40 +1466,101 @@ fn sector_distance(uv: vec2<f32>, edges: vec2<f32>, r: f32) -> f32 {
     return max(arc, edge * sign(e.y * q.x - e.x * q.y));
 }
 
-// How far this fragment is from the node's own body, in the node's uv: zero or
-// less anywhere on it, and outside it the distance to the nearest part of it.
+// Where a clearing of reach `reach` ends, as a distance from the footprint it
+// is measured around — the reach itself, with a floor under it so that a
+// smoothstep across it is a band rather than a step answering a half everywhere.
 //
-// The body is the union of what the node's layers COVER, filled in to the
-// center — the rings as a disc out to whichever of them reaches furthest (each
-// closes a full turn, so each is a disc), and one wedge per marked slot
-// reaching out past them. The gaps between one ring and the next, and between
-// one sector and the next, are inside it: the clearing is one hole the node
-// sits in, and a hole with the lattice showing through its middle reads as
-// neither a hole nor a node.
+// One function because two places have to agree on it exactly: the coverage
+// below, and the idle branch in `node_paint`, which discards the fragments past
+// this. A second spelling of the floor there is a hairline of clearing dropped
+// on one pipeline and kept on the other.
+fn clearing_edge(reach: f32) -> f32 {
+    return max(reach, 0.001);
+}
+
+// How much of the destination one layer's knockout clears, `sd` out from that
+// layer's own footprint.
 //
-// One term per layer, so a layer that changes shape changes the clearing's:
-// the two are the same set of radii read twice, rather than a circle sized to
-// approximate them. Outside a shape the distance to a union IS the smallest of
-// the distances to its parts, and outside is the only place this is read, so
-// `min` here is exact rather than a bound.
-fn node_clear_distance(in: VsOut, oct: OctRing, d: f32) -> f32 {
-    let rings = node_rings_rim(in.ring);
-    var sd = d - rings;
-    // Every slot either mark names. A mark reaches for octaves the packing may
-    // not show and the ring may not draw, and `oct_sector` has no angle to put
-    // one of those at — the same slots `mark_extension` skips.
+// `reach` is where the clearing ENDS, measured past that footprint, and `soft`
+// is how gradual that ending is — two numbers rather than one, because tying
+// the fade to the reach means a wider gap is always a blurrier one. Solid
+// across the footprint and out to `reach - soft`, gone by `reach`. A fade wider
+// than the reach eats outward rather than inward: the footprint itself is the
+// one part that always has to be cleared.
+fn gutter_coverage(sd: f32, reach: f32, soft: f32) -> f32 {
+    // The inner end is floored AT the footprint, and 0 rather than something
+    // smaller for a reason worth stating: a layer's own ink is cleared in full
+    // at every distance under one, which is what lets `node_clearing` stop
+    // walking the moment a pixel is answered.
+    let edge = clearing_edge(reach);
+    let inner = clamp(edge - soft, 0.0, edge - 0.001);
+    return 1.0 - smoothstep(inner, edge, sd);
+}
+
+// How much of the destination a node's knockout clears at this fragment.
+//
+// ONE TERM PER LAYER, and each carries its own level: a layer clears its own
+// footprint at the strength it is drawn at, and the hole is whichever of them
+// claims the pixel most. That is the whole design, and three things fall out of
+// it that a single shape times a single level cannot give.
+//
+// The clearing FOLLOWS THE NODE. A node's layers are dialled independently and
+// worn independently — the audio ring is on where the view's Gate says, the
+// marks on the octaves a chord's outer voices took, the band and core wherever
+// a key is down — so what a node draws is a different shape node to node and
+// moment to moment, and a circle sized to hold all of it clears a gap wider
+// than the node nearly everywhere. Here every layer is read off the same radii
+// that draw it.
+//
+// A layer NOBODY IS DRAWING clears nothing. That is what lets a node wearing an
+// audio ring and no note clear at all — its own level is the ring's, where the
+// note's is zero — and equally what stops it clearing the band-sized hole a
+// node-wide level would give it.
+//
+// And the hole is CONTINUOUS in time, because every level here is an envelope
+// rather than a switch. A layer arriving brings its own hole up from nothing at
+// full size; a layer leaving takes it back down. Nothing steps, and no layer's
+// fade drags another's hole with it.
+//
+// Each layer's shape is FILLED to the node's center, so the gaps between one
+// ring and the next, and between one sector and the next, are inside the hole:
+// this is one hole the node sits in, and a hole with the lattice showing
+// through its middle reads as neither a hole nor a node.
+fn node_clearing(in: VsOut, oct: OctRing, d: f32) -> f32 {
+    let reach = in.gutter;
+    let soft = in.soft;
+    var cov = 0.0;
+    // The MIDI layers, on the node's own envelope. A disc, so its distance is
+    // the plain radius; 0 where the view draws neither, which is a node whose
+    // whole picture is its ring and its marks.
+    let midi = midi_rim();
+    if midi > 0.0 {
+        cov = gutter_coverage(d - midi, reach, soft) * clamp(in.params.x, 0.0, 1.0);
+    }
+    // The audio ring, on ITS own: the layer's width bar says whether there is a
+    // ring at all, and `Instance::ring` how much of one this node wears — which
+    // is the view's Gate answered per node, carried on the note Fade. A node
+    // nobody played wears one whenever the spectrum reaches that gate, and this
+    // is the term that gives it a hole.
+    if u.misc7.w > u.misc7.z {
+        cov = max(cov, gutter_coverage(d - u.misc7.w, reach, soft) * clamp(in.ring, 0.0, 1.0));
+    }
+    // Every slot either mark names, each on the level of the voice that took
+    // it. A mark reaches for octaves the packing may not show and the ring may
+    // not draw, and `oct_sector` has no angle to put one of those at — the same
+    // slots `mark_extension` skips.
     let slots = in.marks.x | in.marks.y;
     if slots == 0u || u.misc5.w <= 0.0 {
-        return sd;
+        return cov;
     }
-    // Inside the rings the answer is already made: a mark can only bring this
-    // further BELOW zero, and the clearing is solid at every distance under one
-    // (`gutter_coverage`). That is the node's whole interior — the widest part
-    // of the hole — skipping the walk below, and it is exact rather than an
-    // approximation, which is what lets the parity test hold it to the letter.
-    if EARLY_OUT && sd <= 0.0 {
-        return sd;
+    // Nothing below can raise a pixel already cleared in full, and that is the
+    // node's whole interior on anything the keys have lit — the widest part of
+    // the hole, skipping the walk. Exact rather than an approximation, since
+    // coverage is capped at one, which is what lets the parity test hold it.
+    if EARLY_OUT && cov >= 1.0 {
+        return cov;
     }
+    let strip_out = u.misc4.y + u.misc5.w;
     let top = oct.base + i32(oct_span()) - 1;
     for (var i = 0u; i < OCTAVE_SLOTS; i = i + 1u) {
         let bit = 1u << i;
@@ -1539,38 +1569,18 @@ fn node_clear_distance(in: VsOut, oct: OctRing, d: f32) -> f32 {
             continue;
         }
         // This slot's own level, not the strip's: where the two ends are on
-        // different slices, a melody still fading out pulls its own wedge back
-        // in while a bass arriving pushes its own out.
+        // different slices, a melody still fading out takes its own wedge's
+        // hole with it while a bass arriving brings its own up.
         let level = max(
             select(0.0, in.params.y, (in.marks.x & bit) != 0u),
             select(0.0, in.params.z, (in.marks.y & bit) != 0u),
         );
-        let mark = node_mark_rim(rings, level);
-        if mark > rings {
-            sd = min(sd, sector_distance(in.uv, oct_sector(s, oct), mark));
+        if level > 0.0 {
+            let wedge = sector_distance(in.uv, oct_sector(s, oct), strip_out);
+            cov = max(cov, gutter_coverage(wedge, reach, soft) * clamp(level, 0.0, 1.0));
         }
     }
-    return sd;
-}
-
-// How much of the destination a node's knockout clears, `sd` out from its body
-// (see `node_clear_distance`).
-//
-// `reach` is where the clearing ENDS, measured past that body, and `soft` is
-// how gradual that ending is — two numbers rather than one, because tying the
-// fade to the reach means a wider gap is always a blurrier one. Solid across
-// the body and out to `reach - soft`, gone by `reach`. A fade wider than the
-// reach eats outward rather than inward: the body itself is the one part that
-// always has to be cleared.
-fn gutter_coverage(sd: f32, reach: f32, soft: f32) -> f32 {
-    // Both ends are floored, and the two floors are different rules. The outer
-    // one keeps the band a band: at zero width a smoothstep answers a half
-    // across the whole plane. The inner one keeps it off the body, which is why
-    // it is 0 and not something smaller — everything from there in is solid, so
-    // `node_clear_distance` can stop as soon as it knows the answer is inside.
-    let edge = max(reach, 0.001);
-    let inner = clamp(edge - soft, 0.0, edge - 0.001);
-    return 1.0 - smoothstep(inner, edge, sd);
+    return cov;
 }
 
 // The core layer -- the note's disc and the glow skirt around it --
@@ -1692,16 +1702,15 @@ fn node_paint(in: VsOut) -> vec4<f32> {
         discard;
     }
 
-    // An idle node paints NOTHING but its audio ring — no disc (presence
-    // gates it), no glow, no glyphs (a ghost needs presence too), no mark
-    // rings (their own levels gate them), no knockout (it fades with the
-    // note), and no marker of its own: the grid's gap around the position is
-    // what says a node is there. Everything below still computes all of that
-    // and multiplies it away, which on a lattice where most nodes are idle
-    // most of the time is most of the fragment work in the frame. The three
-    // levels and the octave word are exactly the terms those gates read, so
-    // this branch discards what the full path would have discarded, not an
-    // approximation of it.
+    // An idle node paints NOTHING but its audio ring and the hole that ring
+    // clears — no disc (presence gates it), no glow, no glyphs (a ghost needs
+    // presence too), no mark rings (their own levels gate them), and no marker
+    // of its own: the grid's gap around the position is what says a node is
+    // there. Everything below still computes all of that and multiplies it away,
+    // which on a lattice where most nodes are idle most of the time is most of
+    // the fragment work in the frame. The three levels and the octave word are
+    // exactly the terms those gates read, so this branch discards what the full
+    // path would have discarded, not an approximation of it.
     //
     // The RING is the exception, and what it reads is not a level a node
     // carries: it is a window onto one shared spectrum, so it draws wherever
@@ -1713,12 +1722,24 @@ fn node_paint(in: VsOut) -> vec4<f32> {
     // `spectral_ring` skips the same band from the other side, and it is also
     // where a node wearing NONE of its ring leaves — an idle node the gate has
     // closed is culled on the CPU and never reaches this shader at all.
+    //
+    // Its CLEARING is the exception's own exception, and it is a wider band than
+    // the ring: the hole a layer punches is filled to the node's center and
+    // reaches one gutter past the layer (`node_clearing`), so an idle node's
+    // fragments are worth keeping out to there. Skipping them is what left a
+    // ringing node with no note drawing its ring over an uncut grid.
     let audio_annulus = spectral_radii();
-    let in_audio_ring = audio_annulus.y > audio_annulus.x
+    let ring_draws = audio_annulus.y > audio_annulus.x;
+    let in_audio_ring = ring_draws
         && d >= audio_annulus.x - aa
         && d <= audio_annulus.y + aa;
+    let in_ring_clearing = ring_draws
+        && in.gutter > 0.0
+        && in.ring > 0.0
+        && d <= audio_annulus.y + clearing_edge(in.gutter);
     if EARLY_OUT
         && !in_audio_ring
+        && !in_ring_clearing
         && in.params.x <= 0.0
         && in.params.y <= 0.0
         && in.params.z <= 0.0
@@ -2030,26 +2051,26 @@ fn node_paint(in: VsOut) -> vec4<f32> {
     //    a lit ring reads as a bite taken out of it; a gradient reads as the
     //    small node sitting in front. The clearing is solid across the
     //    node's own footprint and eases off over the reach the setting buys.
-    //  - It is the node's own SHAPE, one reach out (`node_clear_distance`).
-    //    A circle big enough to hold the node holds a good deal else besides:
-    //    a node wearing one mark reaches its strip in one wedge, so the circle
-    //    that fits it clears a gap wider than the node all the way round, and
-    //    what a hole says about which sheet is in front it then says about
+    //  - It is the node's own SHAPE, one reach out, layer by layer
+    //    (`node_clearing`). A circle big enough to hold the node holds a good
+    //    deal else besides: a node wearing one mark reaches its strip in one
+    //    wedge, and a node wearing nothing but an audio ring reaches only that
+    //    ring, so a circle that fits either clears a gap wider than the node,
+    //    and what a hole says about which sheet is in front it then says about
     //    empty space.
     //
     // Compositing it UNDER the node's own paint is what the `(1 - active_alpha)`
     // terms say: the node keeps its color exactly, and the ground only fills
     // the part of its quad the node itself leaves empty.
-    // Scaled by the note's OWN envelope, the same one `presence` paints the
-    // node with, so the clearing fades out with the note instead of
-    // outliving it. The width stays put while it does: a hole that shrinks
-    // as it fades reads as the node retreating, and a hole that holds full
-    // strength to the last frame (which is what scaling the width alone
-    // did) vanishes with an audible pop.
+    // Each layer's own ENVELOPE is what scales its part of the hole — the same
+    // level that paints that layer — so a clearing fades out exactly as the ink
+    // in it does instead of outliving it. The width stays put while it does: a
+    // hole that shrinks as it fades reads as the node retreating, and a hole
+    // that holds full strength to the last frame (which is what scaling the
+    // width alone did) vanishes with an audible pop.
     var gutter_cov = 0.0;
     if in.gutter > 0.0 {
-        let body = node_clear_distance(in, oct, d);
-        gutter_cov = gutter_coverage(body, in.gutter, in.soft) * activation;
+        gutter_cov = node_clearing(in, oct, d);
     }
     let final_alpha = active_alpha + gutter_cov * (1.0 - active_alpha);
     if final_alpha < 0.01 {
