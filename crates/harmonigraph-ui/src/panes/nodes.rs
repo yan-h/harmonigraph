@@ -79,7 +79,11 @@ fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     section(ui, "Octaves");
     // Octaves, Center and the fringe are the axis; how thick the ring they are
     // drawn on is, and where it sits, is the Layers bar up in Note — the third
-    // of its four handles. The padding between one indicator and the next is the
+    // of its four handles, named MIDI there. The bar names layers by where each
+    // one's reading comes FROM, which is what tells the two middle rings apart:
+    // the analyzer's spectrum on the inner one, the played notes on this one.
+    // This heading names the pitch axis drawn on it instead, that being what
+    // the rows below set. The padding between one indicator and the next is the
     // node-wide Gap, beside it: it is the same number that spaces the rings
     // apart and stands the melody/bass marks off the band.
     //

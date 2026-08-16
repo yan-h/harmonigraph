@@ -4,7 +4,7 @@
 
 use egui::{CornerRadius, Response, Sense, TextStyle, Ui, Vec2};
 use harmonigraph_scene::{
-    RingStack, ViewConfig, CORE_RADIUS_MAX, MARK_THICKNESS_MAX, QUAD_MARGIN, RING_WIDTH_MAX,
+    RingStack, ViewConfig, CORE_RADIUS_MAX, MARK_THICKNESS_MAX, RING_WIDTH_MAX,
 };
 
 use super::bar::{
@@ -12,6 +12,26 @@ use super::bar::{
     BAR_TEXT_PAD, HANDLE_INSET, HANDLE_W,
 };
 use crate::theme;
+
+/// The top of the bar's axis, in the quad units the four sizes are in: the quad
+/// edge, plus the deepest the melody/bass strip can be laid off it.
+///
+/// **Not the billboard's whole reach**, which is what a bar drawing "everywhere
+/// a node draws" would run to and which spends two fifths of itself on room
+/// nothing goes. A ring past the quad edge is refused, so 1.0 is where three of
+/// the four layers stop for good, and the only thing out past it is a strip
+/// that can be [`MARK_THICKNESS_MAX`] deep. Every point of the bar past that
+/// was travel no handle could use and length the layers' names could have had:
+/// a fresh node ends at 0.98, which is three quarters of this axis and under
+/// two thirds of the billboard's.
+///
+/// What it costs is the corner where the rings are pushed hard against the quad
+/// edge, which leaves the strip starting a gap PAST 1.0 with the last of its
+/// depth off the end of the axis. The billboard's reach caps that same corner —
+/// a gap at its own maximum puts the strip's outer edge at 1.7, past the 1.6
+/// the shader has eased it away by — so this is the trade that was already
+/// being made, at a number that pays for it.
+const AXIS_TOP: f32 = 1.0 + MARK_THICKNESS_MAX;
 
 /// Closest two of the four thumbs are ever DRAWN, and so the least bar any one
 /// of them can be pressed on.
@@ -153,7 +173,7 @@ fn resized(k: usize, to: f32, edges: [f32; 4], gap: f32) -> f32 {
     //
     // The marks are the one layer with no wall to stop at. They are drawn into
     // the billboard's margin past the quad, which is what the axis's last
-    // stretch is (see [`QUAD_MARGIN`]).
+    // stretch is (see [`AXIS_TOP`]).
     //
     // `min`/`max` rather than a clamp against a computed floor: a stack whose
     // rings are already past the quad hands in a `start` above 1, and
@@ -285,13 +305,15 @@ fn thumb_axis(rings: &RingStack) -> [f32; 4] {
 /// is not drawn at all — so every word here is chosen to be the longest one
 /// that still lands.
 ///
-/// **Band rather than the "Octaves" heading it sits under**, which is the one
-/// place this parts company with the pane. The heading names the pitch axis
-/// drawn on that layer, where what this bar sizes is the layer — the octave
-/// band — and the band's stretch is the narrowest on the bar: at "Octaves" it
-/// goes unnamed at every width a settings column is actually dragged to, which
-/// costs more than the word does.
-const NAMES: [&str; 4] = ["Core", "Audio", "Band", "Marks"];
+/// **MIDI rather than the "Octaves" heading it sits under**, which is the one
+/// place this parts company with the pane, and it says the thing the bar is
+/// asked: the two rings in the middle of a node are the same annulus drawn
+/// twice, and what tells them apart is where each one's reading comes FROM —
+/// the analyzer's spectrum on the inner one, the played notes on the outer. So
+/// Audio and MIDI are one pair, read together. "Octaves" names the pitch axis
+/// drawn on that layer rather than the layer, and is a word too long for the
+/// narrowest stretch on the bar besides.
+const NAMES: [&str; 4] = ["Core", "Audio", "MIDI", "Marks"];
 
 /// The four sizes of a node's layer stack in one bar, drawn as the node's own
 /// cross-section: the core out from the center, the audio ring, the octave
@@ -313,13 +335,13 @@ const NAMES: [&str; 4] = ["Core", "Audio", "Band", "Marks"];
 /// outside it along, which is exactly what the stack does on screen
 /// ([`ViewConfig::rings`]).
 ///
-/// **The axis is the node's whole reach, not the quad**: it runs to
-/// [`QUAD_MARGIN`], where the mark strip has been eased to nothing and past
-/// which a node draws nothing at all. The quad edge sits inside it, marked by a
-/// hairline, and it is a real wall rather than a scale mark — a RING that no
-/// longer fits inside it is refused rather than clipped, so the layers drop off
-/// the outside of the stack one at a time as the room runs out. The room past
-/// it is the billboard's margin, which the marks alone are allowed into.
+/// **The axis runs a little past the quad edge and no further** ([`AXIS_TOP`]).
+/// That edge sits inside it, marked by a hairline, and it is a real wall rather
+/// than a scale mark — a RING that no longer fits inside it is refused rather
+/// than clipped, so the layers drop off the outside of the stack one at a time
+/// as the room runs out. The stretch past it is the billboard's margin, which
+/// the marks alone are allowed into, and the axis carries exactly as much of it
+/// as the strip can be deep.
 ///
 /// **0 is every layer's off position**, reached by dragging its handle back
 /// onto the one inside it, and the gaps go with it: a layer at 0 gives up its
@@ -362,9 +384,9 @@ impl<'a> StackBar<'a> {
         // outermost at 0.98 of the quad.
         let inset = HANDLE_INSET * scale;
         let track = rect.shrink2(Vec2::new(inset, 0.0));
-        let x_of = |v: f32| track.left() + track.width() * (v / QUAD_MARGIN).clamp(0.0, 1.0);
+        let x_of = |v: f32| track.left() + track.width() * (v / AXIS_TOP).clamp(0.0, 1.0);
         let value_at = |x: f32| {
-            ((x - track.left()) / track.width().max(1.0)).clamp(0.0, 1.0) * QUAD_MARGIN
+            ((x - track.left()) / track.width().max(1.0)).clamp(0.0, 1.0) * AXIS_TOP
         };
         let sep = THUMB_SEP * scale;
         let half_thumb = HANDLE_W * 0.5 * scale;
@@ -615,7 +637,7 @@ mod tests {
     fn a_ring_dragged_past_the_quad_edge_stops_at_it() {
         let view = fresh();
         for k in [1, 2] {
-            let out = dragged(&view, k, QUAD_MARGIN);
+            let out = dragged(&view, k, AXIS_TOP);
             let (lo, hi) = if k == 1 { out.rings().audio } else { out.rings().band };
             assert!(hi > lo, "layer {k} dragged to the end of the axis came off the node");
             assert!(hi <= 1.0 + 1e-6, "layer {k} was left reaching {hi}, past the quad edge");
@@ -639,18 +661,23 @@ mod tests {
     }
 
     /// The marks are the one layer with no such wall — the axis's last stretch
-    /// is the billboard margin they are drawn into.
+    /// is the billboard margin they are drawn into — and the axis carries
+    /// enough of that margin to reach the deepest strip a node can wear, which
+    /// is the whole of what its length is for.
     #[test]
-    fn the_marks_are_allowed_past_the_quad_edge() {
+    fn the_marks_reach_their_full_depth_past_the_quad_edge() {
         let view = fresh();
-        let out = dragged(&view, 3, QUAD_MARGIN);
+        let out = dragged(&view, 3, AXIS_TOP);
         let rings = out.rings();
         assert!(
             rings.mark_inner + rings.mark_thickness > 1.0,
             "the strip was held inside the quad at {}",
             rings.mark_inner + rings.mark_thickness,
         );
-        assert!(out.mark_thickness <= MARK_THICKNESS_MAX);
+        assert_eq!(
+            out.mark_thickness, MARK_THICKNESS_MAX,
+            "the end of the axis left the strip short of its own maximum",
+        );
     }
 
     /// Every one of the four thumbs can be pressed, on a node dialled down to
@@ -722,7 +749,7 @@ mod tests {
     fn axis_on(shapes: &[egui::Shape]) -> (egui::Rect, impl Fn(f32) -> f32) {
         let bar = filled_rects(shapes).first().expect("the bar drew no track").0;
         let inner = bar.shrink2(egui::vec2(HANDLE_INSET, 0.0));
-        (bar, move |v: f32| inner.left() + inner.width() * v / QUAD_MARGIN)
+        (bar, move |v: f32| inner.left() + inner.width() * v / AXIS_TOP)
     }
 
     /// The bar paints one cell per layer that is on the node, at the radii the
@@ -850,7 +877,7 @@ mod tests {
         let (bar, x_of) = axis_on(&shapes);
         let thumbs = spread(
             thumb_axis(&fresh().rings()).map(&x_of),
-            (x_of(0.0), x_of(QUAD_MARGIN)),
+            (x_of(0.0), x_of(AXIS_TOP)),
             THUMB_SEP,
         );
         for (run, name) in text_boxes(&shapes) {
@@ -868,14 +895,17 @@ mod tests {
         }
     }
 
-    /// Every layer on the node is named, at the width a settings column is
-    /// actually dragged to. The outermost is why the names run along a layer's
-    /// whole stretch rather than its cell: the strip is a few points across at
-    /// a fresh view, and its room is the empty bar past the stack.
+    /// Every layer on the node is named, well below the width a settings column
+    /// is dragged to. Two things buy that: the names run along a layer's whole
+    /// STRETCH rather than its cell, which is what gives the strip — a few
+    /// points across at a fresh view — the empty bar past the stack to be named
+    /// in; and the axis stops a strip's depth past the quad edge rather than at
+    /// the billboard's reach, which is worth a fifth of the bar to the three
+    /// layers inside it.
     #[test]
     fn every_layer_on_the_node_is_named() {
         let mut view = fresh();
-        let shapes = shapes(300.0, |ui| {
+        let shapes = shapes(200.0, |ui| {
             StackBar::new(&mut view).show(ui);
         });
         let drawn: Vec<String> = text_boxes(&shapes).into_iter().map(|(_, s)| s).collect();
@@ -901,7 +931,7 @@ mod tests {
     /// Where a value on the axis falls, as a fraction of the bar's own width —
     /// what the gesture harness below takes its two ends in.
     fn axis(v: f32) -> f32 {
-        (HANDLE_INSET + (W - 2.0 * HANDLE_INSET) * v / QUAD_MARGIN) / W
+        (HANDLE_INSET + (W - 2.0 * HANDLE_INSET) * v / AXIS_TOP) / W
     }
 
     /// Run `events` through a fresh context showing the bar, and answer where
