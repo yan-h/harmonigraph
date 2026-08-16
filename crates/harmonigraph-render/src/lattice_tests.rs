@@ -4337,6 +4337,14 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         silent.bass_slots = 0;
         silent.melody_level = 0.0;
         silent.bass_level = 0.0;
+        // ...and a reach, which is the whole point of it: the idle branch keeps
+        // an idle node's fragments out to the edge of the hole its ring clears,
+        // and `parity_scene` hands its gutters to the off-sheet half — node 0,
+        // which this is a copy of, carries none. Without this the branch is
+        // compiled on both pipelines and never once decides anything, so the
+        // one spelling of `clearing_edge` it shares with the coverage is
+        // untested where a second spelling would show.
+        silent.gutter = 0.12;
         silent.world_pos.x += 0.9;
         scene.nodes.push(silent);
         scene
