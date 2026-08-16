@@ -251,6 +251,23 @@ pub struct ViewConfig {
     /// the whole point — the alternative is shrinking the 5-limit sheet to
     /// open up clearance, and the 5-limit sheet is what you came to look at.
     ///
+    /// FOOTPRINT means the node's own shape, this far out from it, and not a
+    /// circle sized to hold it: a node reaching a melody mark on one octave
+    /// bulges over that wedge and hugs its rings everywhere else. A circle
+    /// answers with the widest thing the node reaches in ANY direction, which
+    /// on a marked node is a gap wider than itself all the way round — so the
+    /// hole stops reading as the node's and starts reading as empty space
+    /// somebody cut out.
+    ///
+    /// The shape is the shader's (`node_clearing`), off the same radii that
+    /// draw the layers, and it is built one LAYER at a time: each clears its
+    /// own footprint at the level it is drawn at, and the hole is whichever of
+    /// them claims a pixel most. Which is what lets a node wearing an audio
+    /// ring and no note clear at all — its ring's level is the gate's, where
+    /// the note's is nothing — and equally what stops that node clearing the
+    /// band-sized hole a node-wide level would give it. A layer nobody is
+    /// drawing clears nothing.
+    ///
     /// It clears to the GROUND the pass is composited over, which the shell
     /// hands in (see [`Scene::background`](crate::Scene::background)). With
     /// no color of its own a premultiplied layer knocks out to black, and
@@ -258,12 +275,12 @@ pub struct ViewConfig {
     /// clearing announced itself as a plate sitting on the picture rather
     /// than disappearing into the ground.
     ///
-    /// It fades rather than ending at a rim, over a band twice this wide —
-    /// a hard circle cutting across a lit ring reads as a bite taken out of
-    /// it. And its STRENGTH is the note's own envelope (applied in the
-    /// shader, against the same activation that paints the node), so a
-    /// clearing fades out exactly as its note does while holding its width;
-    /// a node that sounds nothing clears nothing at all.
+    /// It fades rather than ending at a rim, over a band of its own
+    /// ([`sevens_gutter_soft`](Self::sevens_gutter_soft)) — a hard edge
+    /// cutting across a lit ring reads as a bite taken out of it. And its
+    /// STRENGTH is each layer's own envelope, so a clearing fades out exactly
+    /// as the ink in it does while holding its width; a node drawing nothing
+    /// clears nothing at all.
     ///
     /// Named for the sevens layer it was built for, but not confined to it:
     /// the home sheet clears too, and at any sevenths extent — with the
@@ -279,11 +296,12 @@ pub struct ViewConfig {
     /// section's Clearance bar is one: both are distances from the node's rim, so
     /// they are two points on one axis and the bar carries a handle at each.
     ///
-    /// The clearing is solid out to `reach - fade` past the node's rim and
-    /// gone by `reach`, so the reach is exactly where it ends whatever the
-    /// fade does. Floored at the node's own rim: a fade wider than the
-    /// reach would otherwise start eating into the node's own footprint,
-    /// which is the one part that must always be cleared.
+    /// The clearing is solid out to `reach - fade` past the node's own body
+    /// and gone by `reach`, so the reach is exactly where it ends whatever the
+    /// fade does — both measured from that body rather than from a rim, so
+    /// they follow its shape (see [`sevens_gutter`](Self::sevens_gutter)).
+    /// A fade wider than the reach eats outward rather than inward: the body
+    /// itself is the one part that must always be cleared.
     pub sevens_gutter_soft: f32,
     /// What text an off-sheet node's label carries (see [`SevensLabel`]).
     /// Only meaningful while `show_labels` is on.
@@ -984,9 +1002,10 @@ pub struct RingStack {
     /// The outer edge of the outermost ring DRAWN — the core's radius where
     /// nothing outside it is on, and 0 on a node with no layers at all.
     ///
-    /// What the melody/bass marks stand off, and what a node's gutter is
-    /// measured from, so neither has to know which of the rings inside it
-    /// happened to be the last one on.
+    /// What the melody/bass marks stand off, and what a node's billboard is
+    /// sized on, so neither has to know which of the rings inside it
+    /// happened to be the last one on. It BOUNDS the node's clearing without
+    /// shaping it: each layer's hole is measured from that layer's own radii.
     pub outer: f32,
     /// Where the melody/bass mark strip STARTS: a gap out from
     /// [`outer`](Self::outer), or the node's center when the stack is empty

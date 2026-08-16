@@ -229,7 +229,7 @@ pub fn derive_scene(
     let sevens_size = view.sevens_size.clamp(0.15, 1.0);
     // Bounded well inside the billboard: the quad reaches QUAD_MARGIN (1.6)
     // in uv, and the gutter has to finish inside it or it would be clipped
-    // square instead of ending as a circle.
+    // square instead of ending on the node's own outline.
     let sevens_gutter = view.sevens_gutter.clamp(0.0, 0.5);
     // The octave wheel is a pitch axis, so it is a property of the VIEW and is
     // built once: every node draws the same slice WIDTHS. Which octaves those
@@ -452,7 +452,7 @@ pub fn derive_scene(
                 wrapped_cents(node_pc, tuning.pitch_class(namesake)),
             )
         };
-        // EVERY sounding node clears what is behind it, the home sheet
+        // EVERY node that DRAWS clears what is behind it, the home sheet
         // included. Leaving the home sheet out is what let the sheets
         // behind it show straight through the gaps in a home node's body —
         // the core is small and soft and the octave band is a thin annulus,
@@ -469,14 +469,24 @@ pub fn derive_scene(
         // device; a flat lattice then had to turn the gutter on by growing
         // depth it didn't want.)
         //
-        // The WIDTH is a constant of the view; the STRENGTH is the note's
-        // envelope, applied in the shader against the same `activation` it
-        // paints the node with, so a clearing fades out exactly as its note
-        // does. Scaling the width by the envelope instead leaves the
-        // clearing fully opaque for the whole release and only narrows its
+        // The WIDTH is a constant of the view; the STRENGTH is per LAYER, and
+        // the shader is where it is applied — each layer's hole scaled by the
+        // same level that paints that layer, so a clearing fades out exactly as
+        // the ink in it does. Scaling the width by an envelope instead leaves
+        // the clearing fully opaque for the whole release and only narrows its
         // soft edge, so the hole hangs around at full strength and then
         // vanishes the instant the voice is pruned.
-        let gutter = if activation > 0.0 { sevens_gutter } else { 0.0 };
+        //
+        // Which is why this is not gated on `activation` here, though it reads
+        // like it should be: a node the keys never touched still draws its audio
+        // ring wherever the view's Gate lets it, and a node that draws ink owes
+        // that ink a hole. The gate for THIS field would have to be "does any
+        // layer draw", and the ring's half of that answer is not known yet —
+        // `Scene::wear_audio_rings` fills it in after the fold. So the width is
+        // handed over whole and the shader, which has every level, decides what
+        // clears. A node with no layer drawing at all clears nothing there, and
+        // is culled before it reaches the shader anyway.
+        let gutter = sevens_gutter;
 
         nodes.push(NodeInstance {
             lattice_pos: pos,

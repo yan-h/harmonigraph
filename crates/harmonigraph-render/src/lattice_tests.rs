@@ -1996,6 +1996,476 @@ fn a_mark_with_no_ring_under_it_reaches_the_nodes_centre() {
     );
 }
 
+/// How far past its own body the clearing in the tests below reaches, in the uv
+/// of a full-size node, and — through `sevens_soft` at 0 — how gradually it
+/// gets there: not at all. A hard rim lands on a pixel or two, where the fade
+/// the app ships spreads it over the dozen a reading would then have to pick a
+/// level out of.
+const CLEAR_REACH: f32 = 0.30;
+
+/// The stack the clearing tests are measured against: the fresh view's four
+/// layers at the probe's wider padding, so a pixel reading can tell one layer's
+/// edge from the next.
+fn clearing_rings() -> harmonigraph_scene::RingStack {
+    let fresh = harmonigraph_scene::ViewConfig::default();
+    harmonigraph_scene::ViewConfig { ring_gap: PROBE_GAP, ..fresh }.rings()
+}
+
+/// One node sitting in its own clearing at [`clearing_rings`]'s radii: `melody`
+/// names the slot its mark extends (0 for no mark), `ring` how much of its audio
+/// ring the view's Gate leaves it, `band` whether the octave band is on, and
+/// `gutter` the clearing's reach (0 for none).
+///
+/// The ground is WHITE where the app clears to the pane's own panel: every
+/// reading below is "what changed when the gutter was turned on", and a bright
+/// ground makes that the whole range of a channel at a cleared pixel instead of
+/// a few levels over black.
+///
+/// The node is drawn small enough for its clearing to fit in the frame — the
+/// hole reaches a third of a node past a mark that already stands outside every
+/// ring.
+fn clearing_node(melody: u32, ring: f32, band: bool, gutter: f32) -> Scene {
+    let rings = clearing_rings();
+    let mut scene = single_marked_node(melody, 0);
+    scene.background = glam::Vec4::ONE;
+    scene.node_radius = 1.4;
+    scene.core_radius = rings.core_radius;
+    scene.ring_gap = rings.gap;
+    scene.mark_thickness = rings.mark_thickness;
+    // The audio ring drawn off an all-zero grid: the ramp's floor across the
+    // whole annulus, which is ink at a known radius and all this asks of it.
+    let mut paint = harmonigraph_scene::SpectralPaint::silent();
+    paint.lut = std::array::from_fn(|_| glam::Vec4::new(1.0, 1.0, 1.0, 1.0));
+    (paint.inner, paint.outer) = rings.audio;
+    scene.spectral = paint;
+    (scene.outer_inner, scene.outer_outer) = if band { rings.band } else { (0.0, 0.0) };
+    // The view's own cursor either way: which layer it landed on is the band
+    // with one and the audio ring without, and `ring` is a per-NODE answer that
+    // leaves it where it is.
+    scene.rings_outer = if band { rings.band.1 } else { rings.audio.1 };
+    scene.mark_inner = scene.rings_outer + rings.gap;
+    scene.sevens_soft = 0.0;
+    let node = &mut scene.nodes[0];
+    node.gutter = gutter;
+    node.audio_ring = ring;
+    scene
+}
+
+/// How far the light in `weights` reaches from the centre of the frame within
+/// `cone` degrees of `toward`, in pixels.
+///
+/// One direction's radius, where [`Light::far`] is the largest over every
+/// direction at once — which is the whole question about a shape that is no
+/// longer a circle.
+fn far_toward(weights: &[f64], size: [u32; 2], toward: f64, cone: f64) -> f64 {
+    let (cx, cy) = ((size[0] - 1) as f64 / 2.0, (size[1] - 1) as f64 / 2.0);
+    let mut far = 0.0f64;
+    for (i, &w) in weights.iter().enumerate() {
+        if w < RING_LIT {
+            continue;
+        }
+        let x = (i % size[0] as usize) as f64 - cx;
+        let y = (i / size[0] as usize) as f64 - cy;
+        if angle_apart(y.atan2(x), toward) <= cone {
+            far = far.max(x.hypot(y));
+        }
+    }
+    far
+}
+
+/// A node's clearing is the node's own SHAPE one reach out, so a melody mark
+/// pushes the hole out over the wedge it extends and nowhere else.
+///
+/// The circle this replaces is sized to hold the node whichever direction it
+/// reaches furthest in, and a mark reaches a whole strip further than the rings
+/// do: a marked node cleared a gap wider than itself all the way round, so a
+/// hole that says "this node is in front of that one" said it about a ring of
+/// empty lattice too. That is visible exactly where the clearing is for — over
+/// the grid lines and the sheets behind — and invisible in the node's own
+/// picture, which is why every reading here is off the difference the gutter
+/// makes rather than off the node.
+#[test]
+fn a_clearing_bulges_over_the_mark_and_hugs_the_rings_everywhere_else() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut gpu) = Shooter::new(SIZE) else {
+        return;
+    };
+    let rings = clearing_rings();
+    let mark_out = rings.mark_inner + rings.mark_thickness;
+
+    let bare_plain = gpu.shot(&clearing_node(0, 1.0, true, 0.0));
+    let holed_plain = gpu.shot(&clearing_node(0, 1.0, true, CLEAR_REACH));
+    let bare_marked = gpu.shot(&clearing_node(MIDDLE_C, 1.0, true, 0.0));
+    let holed_marked = gpu.shot(&clearing_node(MIDDLE_C, 1.0, true, CLEAR_REACH));
+
+    // Which way the mark points, taken off the picture: the marked node over the
+    // same node with its mark off.
+    let mark = light_about_center(&light_over(&bare_marked, &bare_plain), SIZE);
+    assert!(mark.weight > 0.0, "the mark drew nothing to aim at");
+    let away = mark.angle + std::f64::consts::PI;
+
+    let plain = light_over(&holed_plain, &bare_plain);
+    let marked = light_over(&holed_marked, &bare_marked);
+    // A cone inside the wedge the mark extends — a full-size slice of the fresh
+    // wheel is 55 degrees, so ±27 — and wide enough to hold the rounding the
+    // dilation puts on its corners.
+    const CONE: f64 = 15.0;
+    let plain_far = far_toward(&plain, SIZE, mark.angle, CONE);
+    let marked_far = far_toward(&marked, SIZE, mark.angle, CONE);
+    let plain_back = far_toward(&plain, SIZE, away, CONE);
+    let marked_back = far_toward(&marked, SIZE, away, CONE);
+    assert!(plain_far > 0.0 && marked_far > 0.0, "no clearing to measure");
+
+    // Every length below is in pixels, so the picture calibrates itself: the
+    // unmarked hole IS the rings' edge one reach out, and that is a uv the
+    // stack states.
+    let scale = plain_far / (rings.outer + CLEAR_REACH) as f64;
+    let want = (mark_out - rings.outer) as f64 * scale;
+    eprintln!(
+        "toward the mark {plain_far:.1} -> {marked_far:.1} px, away {plain_back:.1} -> \
+         {marked_back:.1} px; the strip is {want:.1} px at {scale:.1} px/uv",
+    );
+    assert!(
+        (marked_far - plain_far - want).abs() < 2.0,
+        "the mark pushed the hole out {:.1} px over its own wedge, not the {want:.1} px \
+         its strip stands past the rings",
+        marked_far - plain_far,
+    );
+    // The other half of the claim, and the one the circle fails: a mark on one
+    // octave is not a wider node.
+    assert!(
+        (marked_back - plain_back).abs() < 1.5,
+        "the hole is {:.1} px wider away from the mark than the unmarked node's, \
+         so the mark widened the clearing all the way round",
+        marked_back - plain_back,
+    );
+}
+
+/// A mark's wedge can run past a HALF turn, and `sector_distance` has to stay
+/// exact when it does.
+///
+/// `MIN_SPAN` rules out a slice that is a whole turn and nothing narrower, so a
+/// wheel of one full-size octave between two extras at their minimum cuts a
+/// slice most of the way round — a shape the Octaves bar can be dialled into.
+/// Past a half-aperture of pi/2 the sector's two edge half-planes stop
+/// intersecting in front of the wedge and start intersecting behind it, which
+/// is the case a naive `max` of two half-planes gets wrong: it would take the
+/// clearing back to the rings across the far side of a wedge that covers it.
+///
+/// Measured off the wedge's own middle rather than a fixed angle, so it does
+/// not matter which slot the wheel made the wide one. Only the covering half of
+/// the claim is made here: the extras leave a gap narrower than twice the
+/// reach, so a hole this wide legitimately has no direction left in which it
+/// hugs the rings. That half is
+/// `a_clearing_bulges_over_the_mark_and_hugs_the_rings_everywhere_else`, on a
+/// wheel whose slices are 55 degrees.
+#[test]
+fn a_clearing_over_a_wedge_past_a_half_turn_covers_the_whole_wedge() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut gpu) = Shooter::new(SIZE) else {
+        return;
+    };
+    let rings = clearing_rings();
+    let mark_out = rings.mark_inner + rings.mark_thickness;
+
+    // One full-size octave and two extras at MIN_EXTRA_SIZE, so the full one
+    // takes 1/(1 + 2*0.1) of the turn.
+    let wheel =
+        harmonigraph_scene::octave_layout(1, 60.0, 1, harmonigraph_scene::MIN_EXTRA_SIZE, 1.0);
+    let widest = (1..=wheel.span)
+        .map(|j| wheel.bounds[j as usize] - wheel.bounds[j as usize - 1])
+        .fold(0.0f32, f32::max);
+    eprintln!(
+        "span {} of {} full + {} extras, widest slice {:.1} deg",
+        wheel.span,
+        wheel.count,
+        wheel.extras,
+        widest.to_degrees(),
+    );
+    assert!(
+        widest > std::f32::consts::PI,
+        "the fixture has to cut a slice past a half turn to be testing anything; \
+         the widest is {:.1} deg",
+        widest.to_degrees(),
+    );
+    let lopsided = |melody: u32, gutter: f32| -> Scene {
+        let mut scene = clearing_node(melody, 1.0, true, gutter);
+        scene.octave_layout = wheel;
+        scene
+    };
+
+    let bare_plain = gpu.shot(&lopsided(0, 0.0));
+    let holed_plain = gpu.shot(&lopsided(0, CLEAR_REACH));
+    let bare_marked = gpu.shot(&lopsided(MIDDLE_C, 0.0));
+    let holed_marked = gpu.shot(&lopsided(MIDDLE_C, CLEAR_REACH));
+
+    // Which way the wide wedge points, taken off the picture as the marked
+    // node's own extra ink.
+    let mark = light_about_center(&light_over(&bare_marked, &bare_plain), SIZE);
+    assert!(mark.weight > 0.0, "the mark drew nothing to aim at");
+
+    let plain = light_over(&holed_plain, &bare_plain);
+    let marked = light_over(&holed_marked, &bare_marked);
+    // Narrow, because the two extras between them hold only what the full
+    // slice leaves and the far reading has to stay inside that.
+    const CONE: f64 = 8.0;
+    let scale = far_toward(&plain, SIZE, mark.angle, CONE) / (rings.outer + CLEAR_REACH) as f64;
+    let strip = (mark_out - rings.outer) as f64 * scale;
+
+    // The wedge's middle, then a quarter turn off it, then most of the way out
+    // to its edge — the last two past the half-aperture where a wedge stops
+    // being an intersection of two half-planes in front of itself.
+    for turn in [0.0_f64, 90.0, 150.0] {
+        let toward = mark.angle + turn.to_radians();
+        let grew = far_toward(&marked, SIZE, toward, CONE) - far_toward(&plain, SIZE, toward, CONE);
+        eprintln!(
+            "{turn:.0} deg off the wedge's middle: the hole grew {grew:.1} px, want {strip:.1}",
+        );
+        assert!(
+            (grew - strip).abs() < 2.0,
+            "{turn:.0} degrees off the middle of a {:.0}-degree wedge the hole grew {grew:.1} px, \
+             not the {strip:.1} px its strip stands past the rings — the wedge does not \
+             reach its own edge",
+            widest.to_degrees(),
+        );
+    }
+}
+
+/// The clearing is one HOLE the node sits in — filled in to its centre, across
+/// the gaps between its rings and between one sector and the next — rather than
+/// a stencil of the node's ink.
+///
+/// Both halves matter and they fail differently. A clearing that followed the
+/// ink would leave the lattice showing through every gap on the node, which
+/// reads as neither a hole nor a node; and the node whose rings leave the widest
+/// hole in the middle is the one with no core at all, where the ink is an
+/// annulus and its middle is the grid.
+///
+/// Read along rays out of the node's centre, which is the one sweep that does
+/// not need to know where the rim is in each direction — and the marked node's
+/// rim is a different radius over its mark than beside it. Everything from the
+/// centre out to whatever the ray last found is the node or the ground; a dark
+/// sample with light beyond it is a hole in the hole. (The shape is a union of
+/// parts that all reach the centre, and dilating one of those leaves it reaching
+/// the centre, so "no gap along any ray" is exactly the claim.)
+#[test]
+fn a_clearing_is_one_hole_covering_the_centre_and_every_ring() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut gpu) = Shooter::new(SIZE) else {
+        return;
+    };
+
+    let staged = |melody: u32, band: bool, core: f32, gutter: f32| -> Scene {
+        let mut scene = clearing_node(melody, 1.0, band, gutter);
+        scene.core_radius = core;
+        scene
+    };
+    // Everything a node can wear, and then the same node with its core dialled
+    // off — which leaves the audio ring an annulus with the lattice showing
+    // through the middle of it.
+    for (name, melody, band, core) in [
+        ("every layer", MIDDLE_C, true, clearing_rings().core_radius),
+        ("the audio ring alone", 0, false, 0.0),
+    ] {
+        let bare = gpu.shot(&staged(melody, band, core, 0.0));
+        let holed = gpu.shot(&staged(melody, band, core, CLEAR_REACH));
+        let reach = light_about_center(&light_over(&holed, &bare), SIZE).far;
+        assert!(reach > 8.0, "{name}: no clearing to read, {reach:.1} px");
+
+        let (cx, cy) = ((SIZE[0] - 1) as f64 / 2.0, (SIZE[1] - 1) as f64 / 2.0);
+        // Half-pixel steps: a step of a whole one can straddle the rim and read
+        // a gap the picture does not have.
+        let steps = (reach * 2.0).ceil() as usize;
+        let lit = |r: f64, a: f64| -> bool {
+            let x = (cx + r * a.cos()).round();
+            let y = (cy + r * a.sin()).round();
+            let i = (y as usize * SIZE[0] as usize + x as usize) * 4;
+            brightness(&holed[i..i + 4]) >= 24
+        };
+        for turn in 0..360 {
+            let a = (turn as f64).to_radians();
+            let Some(rim) = (0..=steps).rev().map(|s| s as f64 / 2.0).find(|&r| lit(r, a)) else {
+                continue;
+            };
+            let gap = (0..=(rim * 2.0) as usize)
+                .map(|s| s as f64 / 2.0)
+                .find(|&r| !lit(r, a));
+            assert!(
+                gap.is_none(),
+                "{name}: at {turn} degrees the picture is dark {:.1} px out and lit \
+                 again at {rim:.1} px — the clearing has a hole in it",
+                gap.unwrap_or_default(),
+            );
+        }
+    }
+}
+
+/// Mean added light over the pixels between `lo` and `hi` from the centre of the
+/// frame — how STRONGLY a ring of the clearing is cleared, where
+/// [`far_toward`] and [`Light::far`] answer how far it reaches.
+fn light_in_band(weights: &[f64], size: [u32; 2], lo: f64, hi: f64) -> f64 {
+    let (cx, cy) = ((size[0] - 1) as f64 / 2.0, (size[1] - 1) as f64 / 2.0);
+    let (mut sum, mut n) = (0.0, 0usize);
+    for (i, &w) in weights.iter().enumerate() {
+        let x = (i % size[0] as usize) as f64 - cx;
+        let y = (i / size[0] as usize) as f64 - cy;
+        let r = x.hypot(y);
+        if r >= lo && r <= hi {
+            sum += w;
+            n += 1;
+        }
+    }
+    if n == 0 { 0.0 } else { sum / n as f64 }
+}
+
+/// The audio ring is worn node by node, so its part of the clearing is too: a
+/// node the Gate has closed clears only the core it is left with, and one part
+/// way through its fade clears the ring's WHOLE hole at part of its strength.
+///
+/// Width from the layer, level from the layer's own fade — the same division the
+/// note's clearing has always run on, now per layer. The two halves are separate
+/// claims and they fail differently. A hole sized by the fade would sweep
+/// outward across the lattice as a ring arrives, which is the "node retreating"
+/// look the reach is deliberately held against; a hole at full strength from the
+/// first frame would pop.
+#[test]
+fn a_clearing_follows_the_audio_ring_its_node_wears() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut gpu) = Shooter::new(SIZE) else {
+        return;
+    };
+    let rings = clearing_rings();
+
+    // The band off, so the audio ring is the layer the stack's cursor landed on
+    // and this node's own gate is what its hole answers to.
+    let hole = |gpu: &mut Shooter, ring: f32| -> (Vec<f64>, f64) {
+        let bare = gpu.shot(&clearing_node(0, ring, false, 0.0));
+        let holed = gpu.shot(&clearing_node(0, ring, false, CLEAR_REACH));
+        let cleared = light_over(&holed, &bare);
+        let far = light_about_center(&cleared, SIZE).far;
+        (cleared, far)
+    };
+    let (worn, worn_far) = hole(&mut gpu, 1.0);
+    let (closed, closed_far) = hole(&mut gpu, 0.0);
+    let (half, half_far) = hole(&mut gpu, 0.5);
+
+    let scale = worn_far / (rings.audio.1 + CLEAR_REACH) as f64;
+    let want = |rim: f32| (rim + CLEAR_REACH) as f64 * scale;
+    eprintln!(
+        "ring worn {worn_far:.1} px, closed {closed_far:.1} (want {:.1}), half \
+         {half_far:.1}, at {scale:.1} px/uv",
+        want(rings.core_radius),
+    );
+    assert!(
+        (closed_far - want(rings.core_radius)).abs() < 2.0,
+        "a node the gate closed still clears {closed_far:.1} px, not the {:.1} px its \
+         core is left reaching",
+        want(rings.core_radius),
+    );
+    assert!(
+        (half_far - worn_far).abs() < 2.0,
+        "a ring half way in clears {half_far:.1} px where a whole one clears \
+         {worn_far:.1} — the hole is sized by the fade instead of by the layer",
+    );
+
+    // Read where only the ring's own clearing lands: outside the ring's ink, so
+    // the node paints nothing there and the added light IS the hole, and inside
+    // the reach, so a hard-edged clearing covers all of it.
+    let (lo, hi) = (rings.audio.1 as f64 * scale + 3.0, worn_far - 3.0);
+    let (lit, dim, none) = (
+        light_in_band(&worn, SIZE, lo, hi),
+        light_in_band(&half, SIZE, lo, hi),
+        light_in_band(&closed, SIZE, lo, hi),
+    );
+    eprintln!("past the ring, {lo:.1}..{hi:.1} px: worn {lit:.0}, half {dim:.0}, closed {none:.0}");
+    assert!(
+        lit > 0.0 && (dim / lit - 0.5).abs() < 0.05,
+        "half a ring cleared {dim:.0} of the {lit:.0} a whole one does",
+    );
+    assert!(none < lit * 0.02, "a closed gate cleared {none:.0} past a ring it is not wearing");
+}
+
+/// A node wearing NOTHING BUT an audio ring clears around it — the case the
+/// whole per-layer split is for.
+///
+/// The ring is a window onto the spectrum rather than a level a node carries, so
+/// a node nobody played wears one wherever the view's Gate lets it. That is ink,
+/// and ink with no hole under it reads as painted ON the lattice rather than in
+/// front of it: the grid runs straight through the ring and the sheets behind
+/// show through its gaps.
+///
+/// The other half is what such a node must NOT clear. Its band and its core are
+/// drawn at the note's level, which is nothing, so a hole sized to the layers
+/// the VIEW has on would clear a band-sized gap around ring-sized ink — the
+/// same "wider than the node" failure the marks had, arrived at from the other
+/// direction.
+#[test]
+fn a_node_wearing_only_an_audio_ring_clears_around_it() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut gpu) = Shooter::new(SIZE) else {
+        return;
+    };
+    let rings = clearing_rings();
+
+    // Silent: no note, no octaves, no marks. What is left is the ring the gate
+    // hands it, at `ring`, and the band is ON so the "clears what the view draws
+    // rather than what this node draws" failure has room to show.
+    let silent = |ring: f32, gutter: f32| -> Scene {
+        let mut scene = clearing_node(0, ring, true, gutter);
+        let node = &mut scene.nodes[0];
+        node.activation = 0.0;
+        node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
+        scene
+    };
+    let bare = gpu.shot(&silent(1.0, 0.0));
+    let holed = gpu.shot(&silent(1.0, CLEAR_REACH));
+    let cleared = light_over(&holed, &bare);
+    let hole = light_about_center(&cleared, SIZE);
+    assert!(hole.weight > 0.0, "a node wearing an audio ring cleared nothing at all");
+
+    // Calibrated on a node that IS played, where the hole is the band's and the
+    // band's outer edge is a uv the stack states.
+    let played_bare = gpu.shot(&clearing_node(0, 1.0, true, 0.0));
+    let played = gpu.shot(&clearing_node(0, 1.0, true, CLEAR_REACH));
+    let played_far = light_about_center(&light_over(&played, &played_bare), SIZE).far;
+    let scale = played_far / (rings.band.1 + CLEAR_REACH) as f64;
+    let want = (rings.audio.1 + CLEAR_REACH) as f64 * scale;
+    eprintln!(
+        "ring alone clears {:.1} px (want {want:.1}), a played node {played_far:.1} \
+         (band {:.1}), at {scale:.1} px/uv",
+        hole.far,
+        (rings.band.1 + CLEAR_REACH) as f64 * scale,
+    );
+    assert!(
+        (hole.far - want).abs() < 2.0,
+        "a node wearing only its ring cleared {:.1} px, not the {want:.1} px that ring \
+         reaches — a band nobody is drawing is in the hole",
+        hole.far,
+    );
+
+    // ...and with the gate closed there is no ink and nothing to clear around.
+    // That half is the CULL's, and it is asked of the cull directly: a node
+    // with no note, no marks and no ring ships no instance, so its reach never
+    // reaches the shader. Two shots would prove nothing here — the node is gone
+    // from both, and comparing two empty images passes whatever the shader
+    // does. The shader's own half of the answer, a closed gate falling back to
+    // the layers that ARE drawn, is measured in
+    // `a_clearing_follows_the_audio_ring_its_node_wears`.
+    let quiet = LatticeCallback::from_scene(
+        &silent(0.0, CLEAR_REACH),
+        LatticeLabels::default(),
+        egui::vec2(SIZE[0] as f32, SIZE[1] as f32),
+        wgpu::TextureFormat::Rgba8Unorm,
+        31,
+        None,
+    );
+    assert!(
+        quiet.instances.is_empty(),
+        "a node with no note and no ring still shipped, carrying a reach that would \
+         clear a hole around ink nobody draws",
+    );
+}
+
 /// An octave band the stack switched off — the empty pair (0, 0) — paints
 /// NOTHING, rather than a dot at the node's centre.
 ///
@@ -3938,7 +4408,8 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
     };
     // The audio ring on, which has two early-outs of its own: the annulus
     // skip inside `spectral_ring`, and the idle branch's radial exception,
-    // which keeps an otherwise idle node's fragments only where the ring is.
+    // which keeps an otherwise idle node's fragments where the ring is and out
+    // to the edge of the hole that ring clears.
     // Both are answers about a layer NO other fixture here draws — the ring is
     // off in `parity_scene` — so without this the two switches would be
     // compiled and never compared.
@@ -3968,8 +4439,30 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         silent.bass_slots = 0;
         silent.melody_level = 0.0;
         silent.bass_level = 0.0;
+        // ...and a reach, which is the whole point of it: the idle branch keeps
+        // an idle node's fragments out to the edge of the hole its ring clears,
+        // and `parity_scene` hands its gutters to the off-sheet half — node 0,
+        // which this is a copy of, carries none. Without this the branch is
+        // compiled on both pipelines and never once decides anything, so the
+        // one spelling of `clearing_edge` it shares with the coverage is
+        // untested where a second spelling would show.
+        silent.gutter = 0.12;
         silent.world_pos.x += 0.9;
         scene.nodes.push(silent);
+        scene
+    };
+    // A clearing around a MARKED node, which is `node_clearing`'s own
+    // skip: the clearing's shape is the rings' disc unioned with one wedge per
+    // mark, and inside that disc the walk over the wedges is skipped as an
+    // answer already arrived at. `parity_scene` hands its gutters and its marks
+    // to different halves of its nodes — the off-sheet ones clear, the marked
+    // ones are on the home sheet — so without this the two never meet on one
+    // node and the skip is never taken.
+    let clearing = || {
+        let mut scene = parity_scene();
+        for node in &mut scene.nodes {
+            node.gutter = 0.16;
+        }
         scene
     };
     // The ring's OTHER reading, which is the shader's second branch inside
@@ -3992,6 +4485,7 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         ("shimmering", shimmering()),
         ("ringing", ringing()),
         ("folded", folded()),
+        ("clearing", clearing()),
     ] {
         let cb = LatticeCallback::from_scene(
             &scene,
