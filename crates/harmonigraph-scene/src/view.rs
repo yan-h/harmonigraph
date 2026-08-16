@@ -541,8 +541,8 @@ pub struct ViewConfig {
     /// class, so the nodes' levels sit close together and the bar tips from
     /// most rings to none over a short stretch of its travel. Measured on a
     /// sawtooth 24 dB down over the fresh window: the fold rings 601 nodes of
-    /// 1025 at this setting and 177 at 0.4, where the spectrum rings all 1025
-    /// at both and none by 0.6.
+    /// 1025 at 0.1 and 177 at 0.4, where the spectrum rings all 1025 at both
+    /// and none by 0.6.
     pub spectral_ring_gate: f32,
     // ---- Note envelope ---------------------------------------------------
     // How a note ARRIVES and how it LEAVES, for every layer of the node at
