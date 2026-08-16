@@ -924,35 +924,58 @@ pub struct RingStack {
     pub gap: f32,
 }
 
-/// One ring's slot in the stack: `width` thick, a `gap` out from `cursor`,
-/// which it then advances to its own outer edge. `(0.0, 0.0)` — and a cursor
-/// left where it was — when it is off, or when the slot it asks for would reach
-/// past the quad edge.
+/// The stack a node's layers are handed out of, innermost first: a cursor at
+/// the outer edge of the last layer DRAWN, and whether the room has run out.
 ///
 /// A ring draws at exactly the width its bar reads or it is not drawn at all,
 /// which is why a slot that does not fit is REFUSED rather than clipped to the
 /// room left. Clipping keeps the layer alive at whatever width the stack
 /// happened to leave it — a bar reading 0.19 drawing 0.0008, a hairline at the
-/// node's rim that no setting asked for and nothing on screen explains. Refusing
-/// it drops the layers off the outside of the stack one at a time as the room
-/// runs out, so what the picture loses is a whole ring and what is left is the
-/// widths the bars read.
-///
-/// The gap is skipped at a cursor of 0, where there is nothing to stand off:
-/// with the core off the innermost ring reaches the node's center and its
-/// sectors close into pie wedges, rather than opening a hole the size of a
-/// padding around nothing.
-fn stacked(cursor: &mut f32, gap: f32, width: f32) -> (f32, f32) {
-    if width <= 0.0 {
-        return (0.0, 0.0);
+/// node's rim that no setting asked for and nothing on screen explains.
+struct Stack {
+    cursor: f32,
+    /// Set by a refusal, and the reason it is not just a cursor: the two ways
+    /// a layer comes back empty are different questions, and only one of them
+    /// is about the room.
+    ///
+    /// A layer at width 0 is switched off by its own BAR and gives its slot
+    /// up; the layer outside it closes over the space, which is what the bar's
+    /// hover promises. A layer REFUSED is the room itself running out, and
+    /// nothing outside it can fit either — so the stack drops from the outside
+    /// in, one layer at a time, and a layer that has gone stays gone while the
+    /// room keeps shrinking.
+    ///
+    /// Letting a refusal leave the cursor where it was makes the refused
+    /// layer's slot a gift to the one outside it, which reads on screen as the
+    /// stack coming apart in no order at all: widen the core past the audio
+    /// ring's slot and the BAND takes it, so a band that had been gone for a
+    /// quarter of the bar's travel reappears, and the ring's own width bar
+    /// picks up a second off position at the TOP of its travel, where dragging
+    /// it wider is what removes it.
+    full: bool,
+}
+
+impl Stack {
+    /// The next layer's slot: `width` thick, a `gap` out from the cursor,
+    /// which it then advances to its own outer edge.
+    ///
+    /// The gap is skipped at a cursor of 0, where there is nothing to stand
+    /// off: with the core off the innermost ring reaches the node's center and
+    /// its sectors close into pie wedges, rather than opening a hole the size
+    /// of a padding around nothing.
+    fn take(&mut self, gap: f32, width: f32) -> (f32, f32) {
+        if width <= 0.0 || self.full {
+            return (0.0, 0.0);
+        }
+        let inner = if self.cursor > 0.0 { self.cursor + gap } else { 0.0 };
+        let outer = inner + width;
+        if outer > 1.0 {
+            self.full = true;
+            return (0.0, 0.0);
+        }
+        self.cursor = outer;
+        (inner, outer)
     }
-    let inner = if *cursor > 0.0 { *cursor + gap } else { 0.0 };
-    let outer = inner + width;
-    if outer > 1.0 {
-        return (0.0, 0.0);
-    }
-    *cursor = outer;
-    (inner, outer)
 }
 
 /// A size bar's value as the picture may use it: inside `0..=high`, and 0 —
@@ -1041,19 +1064,19 @@ impl ViewConfig {
         // The cursor is the outer edge of the last layer DRAWN, which is what
         // makes a ring dialled to 0 cost its gap as well as its slot: nothing
         // moved the cursor, so the next ring starts where it would have.
-        let mut cursor = core;
-        let audio = stacked(&mut cursor, gap, size(self.spectral_ring_width, RING_WIDTH_MAX));
-        let band = stacked(&mut cursor, gap, size(self.band_width, RING_WIDTH_MAX));
+        let mut stack = Stack { cursor: core, full: false };
+        let audio = stack.take(gap, size(self.spectral_ring_width, RING_WIDTH_MAX));
+        let band = stack.take(gap, size(self.band_width, RING_WIDTH_MAX));
         RingStack {
             core_radius: core,
             audio,
             band,
-            outer: cursor,
-            // The strip's own slot, on `stacked`'s terms — a gap out from the
+            outer: stack.cursor,
+            // The strip's own slot, on the stack's terms — a gap out from the
             // last layer drawn, or the node's center when nothing was. Only
             // the outer edge is left to the renderer, because that is the one
             // the billboard's margin lets run past the quad.
-            mark_inner: if cursor > 0.0 { cursor + gap } else { 0.0 },
+            mark_inner: if stack.cursor > 0.0 { stack.cursor + gap } else { 0.0 },
             mark_thickness: size(self.mark_thickness, MARK_THICKNESS_MAX),
             gap,
         }
