@@ -3,7 +3,7 @@
 //! *policy* lives here.
 
 use crate::camera::Camera;
-use crate::color::{idle_color, pitch_lut_color, pitch_ramp_lut};
+use crate::color::{pitch_lut_color, pitch_ramp_lut};
 use crate::octaves::octave_layout;
 use crate::trail::TrailField;
 use crate::view::{DrawnWindow, FrameParams, ViewConfig};
@@ -179,10 +179,16 @@ pub fn derive_scene(
     // recompute each node's pitch class to do it.
     let mut node_pcs = Vec::with_capacity(window.count());
     let center = view.center();
-    // What a node with no voice on it is colored: read by nothing that draws
-    // while it stays that way -- an idle node paints no pixel -- so this is
-    // the neutral a node falls back to rather than a look.
-    let node_idle = idle_color();
+    // The lattice AT REST, resolved once for the frame: what the grid lines
+    // draw in, what both of a node's rings stand on where nothing is lit, and
+    // the neutral an unplayed node falls back to. One resolve rather than
+    // three, so the three cannot answer differently.
+    let ground = crate::grey_of_lightness(view.lattice_ground_lightness());
+    // Read by nothing that draws while a node stays unplayed -- an idle node
+    // paints no pixel -- so this is a fallback rather than a look. The ground
+    // rather than an arbitrary grey so that a node arriving or leaving crosses
+    // no seam against the grid lines running into it.
+    let node_idle = ground;
     let live_extremes = held_extremes(tracker, view.mark_melody, view.mark_bass);
     let mark_delay = view.mark_delay.clamp(0.0, MARK_DELAY_MAX) as f64;
     let env = view.envelope(frame);
@@ -390,9 +396,9 @@ pub fn derive_scene(
                     // is the whole of the difference: the shader tints a lit
                     // glyph by the pitch it is DRAWN at and asks nothing about
                     // the voice, and a mark is part of that glyph's layer.
-                    // Only the lit glyph — the band's ghosts wear the whitened
-                    // node color and a solo voice's glow keeps the voice's
-                    // own, both of them on purpose. No extra lift on top of
+                    // Only the lit glyph — the band's unsounding slices wear
+                    // the rings' own ground and a solo voice's glow keeps the
+                    // voice's color, both of them on purpose. No extra lift on top of
                     // the ramp here: the sector's glyph wears it as it comes,
                     // and a lightened mark would read a shade off the slice
                     // it continues.
@@ -508,7 +514,7 @@ pub fn derive_scene(
         field.apply(&mut nodes, &node_pcs, tuning);
     }
 
-    let grid = derive_grid(view, window, &nodes);
+    let grid = derive_grid(view, window, &nodes, ground);
 
     // Every radius on a node, off the one stack the size bars describe
     // (`ViewConfig::rings`, which is also where their clamps live): the core is
@@ -531,6 +537,7 @@ pub fn derive_scene(
         rings_outer: rings.outer,
         mark_inner: rings.mark_inner,
         ring_gap: rings.gap,
+        lattice_ground: ground,
         // The MIDI picture, whole: nothing here reads audio, so the audio
         // channel arrives empty and the Lattice pane's fold is what fills it.
         spectral: SpectralPaint::silent(),
@@ -585,9 +592,6 @@ fn wrapped_cents(from: harmonigraph_core::PitchClass, to: harmonigraph_core::Pit
     }
 }
 
-/// Line opacity of a lit sevens-axis chain link.
-const GRID_LIT_OPACITY: f32 = 0.85;
-
 /// The faint background grid: idle positions draw no disc, so these
 /// segments carry the lattice's structure instead, inset at both ends so
 /// each node position keeps a clear circular gap. Only the home (center)
@@ -608,9 +612,22 @@ pub(crate) fn derive_grid(
     view: &ViewConfig,
     window: &DrawnWindow,
     nodes: &[NodeInstance],
+    ground: Vec4,
 ) -> Vec<EdgeInstance> {
     let inset = view.spacing * NODE_RADIUS_FACTOR * view.grid_inset.max(0.0);
-    let base = crate::skin::grid_line();
+    // The lattice at rest, handed in already resolved — the same colour, to
+    // the byte, that a node's rings stand on where nothing is lit. OPAQUE, and
+    // that is what makes the claim true rather than nearly true: `strength` is
+    // the line's own opacity and the shader premultiplies by it, so a line
+    // carrying an alpha of its own would land on a blend of the ground and
+    // whatever happened to be behind it, which is a different grey per
+    // background and none of them this one.
+    //
+    // How FAINT the structure is, which an alpha of its own is the other way
+    // to say, is the Ground bar's to say instead — and it says it for the
+    // rings in the same breath, which a per-line alpha cannot. Dialled to the
+    // panel's own `L*` the whole at-rest picture disappears together.
+    let base = ground;
     // `nodes` is exactly `window.positions()` in order, so a neighbor's index
     // is plain offset arithmetic — no per-frame HashMap build and no hashing
     // per lookup. `index_of` is that arithmetic and owns the bounds check with
@@ -693,14 +710,21 @@ pub(crate) fn derive_grid(
             grid.push(EdgeInstance {
                 a: node.world_pos + dir * inset * node.scale,
                 b: neighbor.world_pos - dir * inset * neighbor.scale,
-                // The lattice's own color, always. A lit link is the same
-                // structural line as an unlit one, merely brighter — it
-                // says WHERE a note hangs from, not what the note is, and
-                // the note's color is already on the node at each end.
-                // Taking the note's hue made the chain read as a third
-                // sounding thing strung between two others.
+                // The lattice's own ground, always. A lit link is the same
+                // structural line as a resting one, merely arrived — it says
+                // WHERE a note hangs from, not what the note is, and the
+                // note's color is already on the node at each end. Taking the
+                // note's hue makes the chain read as a third sounding thing
+                // strung between two others.
                 color: base,
-                strength: idle + (GRID_LIT_OPACITY - idle) * lit,
+                // From this line's resting level up to the ground itself. A
+                // home-sheet line rests there already (`idle` is the ground's
+                // own alpha, 1) and never lights, so it is simply the ground;
+                // a sevens link rests at nothing and this is its fade IN, as
+                // the note it hangs arrives. Both ends of the lerp are the one
+                // colour, so what a link fades between is invisible and the
+                // ground, not two brightnesses of it.
+                strength: idle + (1.0 - idle) * lit,
                 dashed,
             });
         }

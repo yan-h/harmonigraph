@@ -547,15 +547,18 @@ pub(crate) fn designed_pitch_ramp(t: f64, gradient: Gradient) -> Vec4 {
 /// Three of them are pictures: the lattice's pitch gradient, which the scene
 /// derive walks per node; the Spectral pane's level gradient, which the
 /// spectrum curve walks per slab — up to 4096 of them; and the lattice audio
-/// ring's, which is that same level gradient re-anchored onto the lattice's bed
-/// (`SpectralPaint::new`) and so a KEY OF ITS OWN, asked for beside the other
-/// two on every frame the ring draws. One slot served the lattice alone
-/// perfectly, hitting on essentially every call because the knobs hold still
-/// except while a control is being dragged. It cannot serve several: the
-/// gradients differ, so each picture's first ask evicts the last one's table,
-/// and a frame drawing them all pays a full rebuild apiece — [`PITCH_LUT_N`]
-/// gamut bisections each, 165us apiece measured — every frame rather than only
-/// while a knob moves.
+/// ring's, which is that same level gradient with its silent end pinned — in
+/// chroma as well as lightness — onto the lattice's own ground
+/// (`SpectralPaint::new`, through `ring_gradient`) and so a KEY OF ITS OWN at
+/// every opening the analyzer's ramp has — the pin moves both ends wherever
+/// they sit rather than only catching a ramp that opens too dark — asked for
+/// beside the other two on every frame the ring draws. One slot served the
+/// lattice alone perfectly, hitting on essentially every call because the
+/// knobs hold still except while a control is being dragged. It cannot serve
+/// several: the gradients differ, so each picture's first ask evicts the last
+/// one's table, and a frame drawing them all pays a full rebuild apiece —
+/// [`PITCH_LUT_N`] gamut bisections each, 165us apiece measured — every frame
+/// rather than only while a knob moves.
 ///
 /// **The fourth is the one a bar is part-way through writing.** A settings pane
 /// draws AFTER the display panes, so everything above the bar in a frame reads
@@ -742,11 +745,14 @@ pub fn hue_circle(lightness: f32, chroma: f32) -> [Vec4; HUE_CIRCLE_N] {
 ///
 /// It is a LIT pitch that this draws: a sounding glyph stands for a position
 /// on the pitch axis rather than for the voice that lit it, and so do the
-/// glow's lobes once two octaves sound. The band's ghosts and a solo voice's
-/// glow keep the node's own color instead, deliberately — that color is the
-/// ramp at the VOICE's pitch, which is not the lit slot's whenever the two
-/// name different pitches (see the paragraph below), so a lone voice keeps
-/// its exact color rather than the one its indicator wears. Do not simplify
+/// glow's lobes once two octaves sound. A solo voice's glow keeps the node's
+/// own color instead, deliberately — that color is the ramp at the VOICE's
+/// pitch, which is not the lit slot's whenever the two name different pitches
+/// (see the paragraph below), so a lone voice keeps its exact color rather
+/// than the one its indicator wears. The band's unsounding slices are off this
+/// ramp altogether: they wear the rings' ground
+/// ([`ViewConfig::lattice_ground`](crate::ViewConfig)), which is a brightness
+/// rather than a pitch. Do not simplify
 /// `octave_glow_color`'s `count < 2u` fallback away on the strength of this
 /// function's name.
 ///
@@ -812,6 +818,25 @@ pub fn gradient_color(t: f32, gradient: Gradient) -> Vec4 {
     })
 }
 
+/// The NEUTRAL grey of a given `L*`: no hue, no chroma, and the luminance that
+/// lightness names.
+///
+/// The one place a colour is asked for by brightness alone, which is what the
+/// rings' ground is (see [`ViewConfig::lattice_ground`](crate::ViewConfig)). Off
+/// the same [`oklab_srgb`] the gradient's own colours come through, rather than
+/// a gamma encode written out a second time here: at chroma 0 that path is the
+/// neutral axis exactly — Oklab `L` IS the cube root of luminance there, so the
+/// Newton solve starts on its own answer and the three channels come back
+/// equal — and sharing it means a grey and a ramp colour of one `L*` cannot
+/// disagree about how bright that is.
+///
+/// The hue handed in is arbitrary and unread: it enters only multiplied by the
+/// chroma. 0 rather than a caller's, so nothing suggests the answer depends on
+/// one.
+pub fn grey_of_lightness(l_star: f32) -> Vec4 {
+    oklab_srgb(f64::from(l_star.clamp(0.0, 100.0)), 0.0, 0.0)
+}
+
 /// [`max_chroma`], for the test that keeps [`Gradient`]'s quoted figures
 /// honest. Nothing outside a test may reach the gamut search direct.
 #[cfg(test)]
@@ -856,14 +881,3 @@ pub(crate) fn ramp_luminance(l_star: f64, h: f64, c: f64) -> (f64, f64) {
     (target_y, 0.2126 * r + 0.7152 * g + 0.0722 * b)
 }
 
-/// What a node with no voice on it is colored: the
-/// [grid line](crate::skin::grid_line)'s RGB, at full alpha because the
-/// line's own alpha is a LINE opacity and says nothing about a node.
-///
-/// No layer draws a node while it holds this — an idle node paints no pixel
-/// — so it is the neutral such a node falls back to rather than a look. It
-/// is the grid's grey rather than an arbitrary one so that a node arriving
-/// or leaving crosses no seam against the lines around it.
-pub(crate) fn idle_color() -> Vec4 {
-    crate::skin::grid_line().with_w(1.0)
-}

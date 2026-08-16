@@ -18,17 +18,16 @@
 //!   the surface under it has.
 //!
 //! One light rather than one colour, because the two surfaces have different
-//! beds. The analyzer's panes are bedded on BLACK — a spectrogram cell at
+//! grounds. The analyzer's panes are bedded on BLACK — a spectrogram cell at
 //! silence has to be black or the plane's edge shows — so there the light and
 //! the colour are the same thing and the picture is the gradient itself. The
 //! ring is bedded on the LATTICE, so it reads a copy of that gradient whose
-//! lightness range is anchored on the lattice's own bed ([`ring_gradient`]): a
-//! ramp opening at black punches a hole through a grey lattice at every node,
-//! which is a picture of a gap where the table means silence. The bed is the
-//! skin's `surface_faint` grey — a step ABOVE the lattice's panel ground and
-//! level with the octave band's unlit ghost, so a quiet ring is a faintly
-//! raised backdrop that is plainly still a reading, where the panel itself
-//! would make it vanish and the well grey would read as black.
+//! silent end is anchored on the node's own ground ([`ring_gradient`]): a ramp
+//! opening at black punches a hole through a grey lattice at every node, which
+//! is a picture of a gap where the table means silence. That ground is the
+//! neutral grey of [`ViewConfig::lattice_ground`] — one number the octave band
+//! beside it stands on too, so the node's two rings read as empty in exactly
+//! one colour, and one bar moves both.
 //!
 //! The scheme is chosen by what the element MEASURES, never by which pane it
 //! is on: the lattice carries both at once (a node's body held by the keys,
@@ -184,11 +183,10 @@ pub enum SpectralReading {
     /// everywhere else on the wheel.
     ///
     /// What it costs is stated rather than hidden: with nothing sounding a
-    /// wedge is not empty, it is the ramp's floor — the bed the ring's ramp is
-    /// anchored on, a step above the lattice's own ground (see
-    /// [`ring_gradient`]). A stretch of spectrum with nothing in it is a
-    /// reading, not a gap. Whether a node with nothing but that to show is
-    /// worth its annulus is the gate's question
+    /// wedge is not empty, it is the ramp's silent end — the node's own ground,
+    /// which the ring's ramp is anchored on (see [`ring_gradient`]). A stretch
+    /// of spectrum with nothing in it is a reading, not a gap. Whether a node
+    /// with nothing but that to show is worth its annulus is the gate's question
     /// ([`ViewConfig::spectral_ring_gate`]), and it is asked of both readings —
     /// though it selects far less sharply here, a window of raw spectrum
     /// finding something loud near almost every pitch class in dense material.
@@ -284,9 +282,10 @@ pub struct SpectralPaint {
     /// arithmetic off the node's own pitch class.
     ///
     /// All zeros where nothing has been measured, which the ring draws as the
-    /// ramp's floor — the bed it is anchored on — everywhere rather than as an
-    /// empty annulus: the ring is a MEASUREMENT of a range, and a range with
-    /// nothing in it is a reading, not a gap.
+    /// ramp's silent end — the neutral grey of [`ViewConfig::lattice_ground`],
+    /// which that end is pinned onto — everywhere rather than as an empty
+    /// annulus: the ring is a MEASUREMENT of a range, and a range with nothing
+    /// in it is a reading, not a gap.
     pub levels: Box<SpectralLevels>,
 }
 
@@ -319,14 +318,15 @@ impl SpectralPaint {
     }
 
     /// The paint `view` asks for, its table baked from the analyzer's
-    /// `gradient` anchored on the lattice's own bed, with no levels measured
+    /// `gradient` anchored on the node's own ground, with no levels measured
     /// into it yet.
     ///
     /// The GRADIENT and not the analyzer's baked table, because the anchoring
-    /// is a move of the ramp's lightness range ([`ring_gradient`]) rather than
-    /// a blend over the entries it produced: the knobs are what carries it, so
-    /// this is the one place they are read for the ring and the one place its
-    /// table is built.
+    /// is a move of the ramp's two ENDS ([`ring_gradient`]) rather than a blend
+    /// over the entries it produced: the knobs are what carries it, so this is
+    /// the one place they are read for the ring and the one place its table is
+    /// built. The ground the ends are moved onto comes off `view`, the same
+    /// field the octave band's own ground does.
     ///
     /// Where the ring sits is [`ViewConfig::rings`]'s answer rather than a
     /// second reading of the same bars, because the ring's inner edge is a sum
@@ -340,7 +340,7 @@ impl SpectralPaint {
     pub fn new(view: &ViewConfig, gradient: Gradient) -> SpectralPaint {
         let (inner, outer) = view.rings().audio;
         SpectralPaint {
-            lut: pitch_ramp_lut(ring_gradient(gradient)),
+            lut: pitch_ramp_lut(ring_gradient(gradient, view.lattice_ground_lightness())),
             folded: view.spectral_reading == SpectralReading::Fold,
             inner,
             outer,
@@ -665,8 +665,9 @@ fn grid_at(pitch: f32) -> Option<(usize, usize, f32)> {
     Some((bucket, (bucket + 1).min(SPECTRUM_BINS - 1), x - bucket as f32))
 }
 
-/// The analyzer's gradient as the RING reads it: the same arc, with the bottom
-/// of its lightness range raised to the `L*` of the bed the ring is drawn on.
+/// The analyzer's gradient as the RING reads it: the same arc, with its silent
+/// end moved onto the ground the ring is drawn on — `ground` as an `L*`, and no
+/// chroma at all.
 ///
 /// The FREQUENCY scheme's invariant is that a loudness is one LIGHT wherever it
 /// is drawn, over whatever ground that surface has — not one colour, which is
@@ -678,53 +679,68 @@ fn grid_at(pitch: f32) -> Option<(usize, usize, f32)> {
 /// punches a hole through a grey lattice at every node in the window, which is
 /// a picture of a gap where the table means silence.
 ///
-/// A move of the LIGHTNESS and not a blend over the baked table, because the
-/// lightness is the one axis the bed is a statement about. Screening the
-/// analyzer's colours over the bed instead lifts every channel by
-/// `bed * (1 - c)`, which washes the middle of the ramp toward the bed's own
-/// grey and never quite lets go at the top. At any bed the re-anchor is the
-/// closer of the two to the analyzer's mid colours, and it is EXACT at the loud
-/// end where a screen is not: measured over the well grey — the darkest bed on
-/// the ladder, and so the one a screen flatters most — the two miss the
-/// analyzer's own colours by 10/7/0 and 13/11/10 per channel at `t`
-/// 0.25/0.5/1.0. The hue and chroma knobs are untouched at every level, so a
-/// loud wedge and a loud spectrogram cell are one colour rather than two that
-/// nearly agree.
+/// A move of the ramp's LIGHTNESS ends and not a blend over the baked table,
+/// because the ground says where the ramp STARTS rather than anything about the
+/// colours along it. Screening the analyzer's colours over the ground instead
+/// lifts every channel by `ground * (1 - c)`, which washes the middle of the
+/// ramp toward the ground's own grey and never lets go at the top: that lift
+/// falls to nothing only at white, so a loud wedge and a loud spectrogram cell
+/// would be two colours that nearly agree rather than one. Moving the end is
+/// EXACT there instead — the `t` = 1 entry is the analyzer's own to the byte,
+/// which `a_loud_reading_is_the_analyzers_own_colour_exactly` holds — and the
+/// hue knob is untouched at every level.
 ///
-/// A FLOOR and not a pin: a gradient whose bottom already sits above the bed
-/// comes back exactly as it stands. The bed is what the ring must not sink
-/// under, not where it has to start.
+/// **Both ends of the CHROMA ramp move too, and that is what makes the ground a
+/// ground**: the silent end is pinned to chroma 0, so what a quiet wedge draws
+/// is the neutral grey of [`ViewConfig::lattice_ground`] and not the analyzer
+/// gradient's own dark hue at that brightness. The MIDI ring beside it stands
+/// on that same grey, and two rings a gap apart whose empty state differed by a
+/// tint would read as two measurements in different units when the only
+/// difference is which one is empty. The cost is real and is stated rather than
+/// hidden: the ramp opens neutral, so a wedge in the low mids carries less
+/// colour than the spectrogram cell of the same loudness — most at chroma ramp
+/// 0, where the analyzer's own table is flat in colour and the ring's is not.
+/// The loud end is untouched at every setting, which is where the two pictures
+/// are actually compared.
 ///
-/// The pair is stored as a middle plus a SIGNED ramp, so the ends are
-/// recomposed rather than set, and `t` = 0 is the bright end wherever the ramp
-/// runs downward — the floor is applied to whichever lightness the `t` = 0 end
-/// carries, since that is the end a silent wedge draws.
+/// A PIN and not a floor, on both axes. The ground is where the ring starts
+/// rather than merely what it must not sink under: a gradient whose own dark
+/// end sits above it would otherwise draw a silent wedge in a colour that is
+/// not the ground, and the two rings would agree only for some settings of a
+/// gradient that knows nothing about either of them.
 ///
-/// The bed is [`skin::surface_faint_color`](crate::skin::surface_faint_color);
-/// see there for why that rung of the chrome's ladder and not the lattice's own
-/// ground.
-pub fn ring_gradient(gradient: Gradient) -> Gradient {
-    // Sanitized first, so the two ends are read off the gradient that will
-    // actually be drawn — and so an untouched one comes back as the very key
-    // `pitch_ramp_lut` would memoize it under.
+/// Each pair is stored as a middle plus a SIGNED ramp, so the ends are
+/// recomposed rather than set, and `t` = 0 is the bright end wherever a ramp
+/// runs downward — the pin lands on whichever end `t` = 0 carries, since that
+/// is the end a silent wedge draws. Both signs are held:
+/// `a_ramp_running_downward_is_pinned_at_its_bright_end` on the lightness pair,
+/// and `a_chroma_ramp_that_runs_out_leaves_the_ring_grey` on the chroma pair,
+/// where a fall steep enough to reach 0 at the loud end leaves the ring with no
+/// colour anywhere — every drop of it was at the silent end the ground claims.
+pub fn ring_gradient(gradient: Gradient, ground: f32) -> Gradient {
+    // Sanitized first, so the ends are read off the gradient that will actually
+    // be drawn — and so a gradient already standing on this ground comes back
+    // as the very key `pitch_ramp_lut` would memoize it under.
     let gradient = gradient.sanitized();
-    let bed = crate::skin::surface_faint_color();
-    let bed_l = crate::color::lightness_of_encoded(
-        f64::from(bed.x),
-        f64::from(bed.y),
-        f64::from(bed.z),
-    ) as f32;
-    let bottom = gradient.lightness - gradient.lightness_ramp * 0.5;
+    let ground = ground.clamp(0.0, 100.0);
+    // Recomposed off the LOUD end: it is the end that must not move, and for a
+    // top at or above the ground the subtraction is exact in f32 (Sterbenz), so
+    // `lightness ± ramp/2` lands the `t` = 1 end back on exactly the lightness
+    // it had and spends the rounding at the end being moved anyway.
     let top = gradient.lightness + gradient.lightness_ramp * 0.5;
-    if bottom >= bed_l {
-        return gradient;
+    let lightness = (ground + top) * 0.5;
+    let top_chroma = gradient.chroma + gradient.chroma_ramp * 0.5;
+    let chroma = top_chroma * 0.5;
+    Gradient {
+        lightness,
+        lightness_ramp: (top - lightness) * 2.0,
+        chroma,
+        // The full ramp its own middle leaves room for, which is exactly what a
+        // silent end of 0 asks for — so this reaches `sanitized` at its bound
+        // rather than past it, and comes back unflattened.
+        chroma_ramp: top_chroma,
+        ..gradient
     }
-    // Recomposed off the TOP end: for a top at or above the bed the subtraction
-    // below is exact in f32 (Sterbenz), so `lightness ± ramp/2` lands the
-    // `t` = 1 end back on exactly the lightness it had and spends the rounding
-    // at the end being moved anyway.
-    let lightness = (bed_l + top) * 0.5;
-    Gradient { lightness, lightness_ramp: (top - lightness) * 2.0, ..gradient }
 }
 
 /// `value` held inside `low..=high`, or `fallback` where it is not a number at
@@ -866,8 +882,8 @@ mod tests {
 
     /// The shape every analyzer preset has: a ramp whose bottom is BLACK,
     /// because the spectrogram's plane is black and silence there has to be
-    /// black. Carries chroma at both ends, which is what makes the floor's
-    /// colour a question rather than a shade of grey.
+    /// black. Carries chroma at both ends, which is what makes the ring's
+    /// silent end a question rather than a shade of grey by default.
     fn analyzers() -> Gradient {
         Gradient {
             hue_start: 302.0,
@@ -880,66 +896,79 @@ mod tests {
     }
 
     /// The `L*` a drawn entry carries, off the crate's own curve — the units
-    /// the ramp is authored in, and the only ones a claim about the bed means
-    /// anything in.
+    /// the ramp is authored in, and the only ones a claim about the ground
+    /// means anything in.
     fn lightness(c: Vec4) -> f32 {
         crate::color::lightness_of_encoded(f64::from(c.x), f64::from(c.y), f64::from(c.z)) as f32
     }
 
-    /// A ramp opening at black comes out of [`SpectralPaint::new`] opening at
-    /// the BED's lightness — and in the gradient's own bottom colour there,
-    /// not in the bed's grey.
+    /// A silent wedge draws the GROUND: the neutral grey
+    /// [`ViewConfig::lattice_ground`] names, to the byte.
     ///
-    /// A silent wedge draws the floor deliberately — a reading, not a gap — so
-    /// most of the ring is this entry most of the time, and unanchored it is a
-    /// black hole punched through the lattice at every node in the window.
+    /// The whole claim of the pin, and it is stated against the octave band's
+    /// own ground rather than against a number written here — the two rings sit
+    /// a gap apart on one node and the ask is that their empty state is one
+    /// colour, so what this holds is the two ends of that, not a shade.
     ///
-    /// The two halves are the whole design. The lightness is the bed's, which
-    /// is what puts the quiet ring level with the surface it sits on; the
-    /// colour is the ANALYZER's, which is what keeps it part of one ramp
-    /// rather than a grey cap stuck on the bottom of one. A version that
-    /// simply painted the bed at level 0 would pass the first assertion and
-    /// fail the second.
+    /// A silent wedge draws it deliberately — a reading, not a gap — so most of
+    /// the ring is this entry most of the time. Unanchored (the analyzer's own
+    /// table, whose bottom is black for the spectrogram's black plane) it is a
+    /// hole punched through the lattice at every node in the window.
     #[test]
-    fn the_rings_silence_sits_on_the_lattice_rather_than_under_it() {
-        let paint = SpectralPaint::new(&ringed(0.3, 200.0), analyzers());
-        let floor = paint.lut[0];
-        let bed = lightness(crate::skin::surface_faint_color());
-        let got = lightness(floor);
-        // A fifth of an `L*`, which is about half a byte of the picture's own
-        // quantization at this end of the axis: the recomposition rounds the
-        // bottom end by an ulp of the middle, and nothing finer than a byte
-        // reaches a pixel anyway.
-        assert!(
-            (got - bed).abs() < 0.2,
-            "a silent wedge draws {floor:?} at L* {got}, not the bed's own L* {bed}",
-        );
-        let (hi, lo) = (floor.truncate().max_element(), floor.truncate().min_element());
-        assert!(
-            hi - lo > 4.0 / 255.0,
-            "the floor entry {floor:?} is a grey, so the ramp's own bottom hue is gone",
-        );
-        assert_eq!(floor.w, 1.0, "the ring's ramp lost its alpha");
+    fn a_silent_wedge_is_the_grey_the_octave_band_stands_on() {
+        for ground in [0.0, 8.8, 20.0, 55.0, 100.0] {
+            let view = ViewConfig { lattice_ground: ground, ..ringed(0.3, 200.0) };
+            let silent = SpectralPaint::new(&view, analyzers()).lut[0];
+            let band = crate::grey_of_lightness(view.lattice_ground_lightness());
+            let step = (silent.truncate() - band.truncate()).abs().max_element();
+            assert!(
+                step * 255.0 < 0.5,
+                "at Ground {ground} the audio ring's silence is {silent:?} \
+                 and the octave band's is {band:?} — over half a byte apart",
+            );
+            assert_eq!(silent.w, 1.0, "the ring's ramp lost its alpha");
+        }
     }
 
-    /// A gradient whose bottom ALREADY sits above the bed comes through
-    /// untouched, entry for entry.
+    /// The fresh Ground is the skin's own `surface_faint` rung, to under a fifth
+    /// of an `L*`.
     ///
-    /// The anchor is a floor and not a pin, and this is the difference: the bed
-    /// is what a quiet ring must not sink under, never where the ramp has to
-    /// start. A version that set the bottom instead of raising it would darken
-    /// every gradient a person had deliberately opened bright, and would look
-    /// perfectly correct at the analyzer's own presets.
+    /// The one thing tying the default to the chrome now that the ring reads a
+    /// number instead of the skin: with the tie in code the two moved together
+    /// and could not be dialled apart, and with no tie at all retuning the
+    /// chrome's ladder would leave the lattice standing on the rung the ladder
+    /// used to have. This is the tie a bar can still be dragged off.
     #[test]
-    fn a_ramp_that_already_clears_the_bed_is_left_where_it_is() {
-        let high = Gradient { lightness: 60.0, lightness_ramp: 20.0, ..analyzers() };
+    fn the_fresh_ground_is_the_skins_faint_surface() {
+        let rung = lightness(crate::skin::surface_faint_color());
+        let fresh = ViewConfig::default().lattice_ground;
         assert!(
-            lightness(pitch_ramp_lut(high)[0]) > lightness(crate::skin::surface_faint_color()),
-            "the test's own gradient does not open above the bed",
+            (fresh - rung).abs() < 0.2,
+            "the fresh Ground is L* {fresh}, the skin's faint surface L* {rung}",
         );
-        assert_eq!(ring_gradient(high), high.sanitized(), "the floor moved a ramp above it");
-        let paint = SpectralPaint::new(&ringed(0.3, 200.0), high);
-        assert_eq!(paint.lut, pitch_ramp_lut(high), "the ring's table is not the analyzer's");
+    }
+
+    /// A gradient whose own dark end ALREADY sits above the ground is still
+    /// moved onto it.
+    ///
+    /// A pin and not a floor, and this is the difference. The ground is where
+    /// the ring starts rather than what it must not sink under: left to open
+    /// bright, a silent wedge would draw a colour that is not the ground, and
+    /// the two rings would agree only for some settings of a gradient that
+    /// knows about neither of them. A floor would pass every other test here.
+    #[test]
+    fn a_ramp_opening_above_the_ground_is_still_moved_onto_it() {
+        let high = Gradient { lightness: 60.0, lightness_ramp: 20.0, ..analyzers() };
+        let ground = ViewConfig::default().lattice_ground;
+        assert!(
+            lightness(pitch_ramp_lut(high)[0]) > ground,
+            "the test's own gradient does not open above the ground",
+        );
+        let opened = lightness(pitch_ramp_lut(ring_gradient(high, ground))[0]);
+        assert!(
+            (opened - ground).abs() < 0.2,
+            "a ramp opening bright was left at L* {opened} rather than the ground's {ground}",
+        );
     }
 
     /// The top of the ring's ramp is the analyzer's own colour EXACTLY, so the
@@ -1366,6 +1395,84 @@ mod tests {
             fade.level(&wheel, 0.0)
         };
         assert_eq!(twice, once, "a pane drawn twice ran the fade twice");
+    }
+
+    /// A ramp running DOWNWARD is pinned at `t` = 0 like any other, and there
+    /// `t` = 0 is the ramp's BRIGHT end.
+    ///
+    /// The pin is on the ends the analyzer's `t` axis names and not on the
+    /// darker and lighter of the two: `t` = 0 is silence at either sign, so that
+    /// is the end the ground claims, and `t` = 1 keeps the analyzer's own colour
+    /// exactly whichever way the ramp runs. A signed ramp is a setting somebody
+    /// can reach rather than a hand-edited blob's — the Spread bar writes one
+    /// deliberately — so the sign the fixtures happen to carry is not the sign
+    /// the function has to hold for.
+    #[test]
+    fn a_ramp_running_downward_is_pinned_at_its_bright_end() {
+        let ground = ViewConfig::default().lattice_ground;
+        for lightness_ramp in [-100.0, -44.0, -20.0] {
+            let down = Gradient { lightness: 50.0, lightness_ramp, ..analyzers() };
+            let analyzer = pitch_ramp_lut(down);
+            assert!(
+                lightness(analyzer[0]) > lightness(analyzer[PITCH_LUT_N - 1]),
+                "the test's own ramp of {lightness_ramp} does not run downward",
+            );
+            let ring = pitch_ramp_lut(ring_gradient(down, ground));
+            let silent = lightness(ring[0]);
+            assert!(
+                (silent - ground).abs() < 0.2,
+                "a ramp of {lightness_ramp} opens at L* {silent}, not the ground's {ground}",
+            );
+            assert_eq!(
+                ring[PITCH_LUT_N - 1],
+                analyzer[PITCH_LUT_N - 1],
+                "a ramp of {lightness_ramp} lost the analyzer's own colour at the loud end",
+            );
+        }
+    }
+
+    /// A chroma ramp that has run OUT by the loud end leaves the ring greyscale
+    /// end to end, and that is the pin working rather than failing.
+    ///
+    /// The pin sets `t` = 0 to chroma 0 and holds `t` = 1 at whatever the
+    /// analyzer carries there, so the ring's own ramp IS the analyzer's top
+    /// chroma — never negative, whatever the sign it was written with. A
+    /// gradient falling to nothing at the top therefore has all of its colour at
+    /// its SILENT end, which is exactly the end the ground claims, and there is
+    /// none left in between to spread. The analyzer's own panes keep drawing it:
+    /// the ring reads a copy, and only the ring is bedded on the lattice.
+    #[test]
+    fn a_chroma_ramp_that_runs_out_leaves_the_ring_grey() {
+        let ground = ViewConfig::default().lattice_ground;
+        // Legal rather than hand-edited: `sanitized` allows a ramp of
+        // `2 * min(chroma, 1 - chroma)`, which at a middle of 0.5 is the whole
+        // axis, so the Spread bar reaches this at its own end stop.
+        let drained = Gradient { chroma: 0.5, chroma_ramp: -1.0, ..analyzers() };
+        assert_eq!(
+            drained.sanitized().chroma_ramp,
+            -1.0,
+            "the test's own Spread was flattened before it ever reached the pin",
+        );
+        let ring = ring_gradient(drained, ground);
+        assert_eq!((ring.chroma, ring.chroma_ramp), (0.0, 0.0));
+        for (k, entry) in pitch_ramp_lut(ring).iter().enumerate() {
+            assert!(
+                entry.x == entry.y && entry.y == entry.z,
+                "the ring's entry {k} is {entry:?}, which carries a tint",
+            );
+        }
+        // The gradient itself is not grey — the mids of the analyzer's own table
+        // are coloured, and it is the PIN that drains them, for the ring alone.
+        let analyzer = pitch_ramp_lut(drained)[PITCH_LUT_N / 4];
+        assert!(
+            analyzer.x != analyzer.y || analyzer.y != analyzer.z,
+            "the test's own gradient is already grey, so the pin drained nothing",
+        );
+        // A shallower fall keeps the loud end its colour: the collapse above is
+        // this rule at its end stop rather than a case of its own.
+        let shallow = Gradient { chroma_ramp: -0.5, ..drained };
+        let shallow = ring_gradient(shallow, ground);
+        assert_eq!((shallow.chroma, shallow.chroma_ramp), (0.125, 0.25));
     }
 
     /// A bucket stands for its own centre, and the grid covers the axis the

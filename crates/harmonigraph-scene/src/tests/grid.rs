@@ -120,12 +120,14 @@ fn an_unlit_node_carries_the_idle_grey_and_draws_nothing() {
     // falls back to, and nothing draws while it holds that -- so this pins
     // the neutral rather than a look, and pins that the trail never
     // overwrites it (see the trail tests).
-    let line = skin::grid_line();
-    assert!(line.w < 1.0, "the lines are the faint half of the pair");
+    //
+    // The GROUND, which is the grid's own colour: a node arriving or leaving
+    // has to cross no seam against the lines running into it.
+    let view = grid_view();
     let scene = scene_of(
         &NoteTracker::new(),
         &Tuning::default(),
-        &grid_view(),
+        &view,
         &plain_frame(),
         0.0,
     );
@@ -134,7 +136,12 @@ fn an_unlit_node_carries_the_idle_grey_and_draws_nothing() {
         .iter()
         .find(|n| n.activation == 0.0)
         .expect("nothing is playing");
-    assert_eq!(idle.color, line.with_w(1.0));
+    assert_eq!(idle.color, scene.lattice_ground);
+    assert_eq!(
+        idle.color,
+        crate::grey_of_lightness(view.lattice_ground_lightness()),
+        "the fallback is not the grey the Ground bar names",
+    );
     assert!(
         scene.nodes.iter().all(|n| n.activation == 0.0),
         "nothing sounds, so every node is idle",
@@ -142,22 +149,77 @@ fn an_unlit_node_carries_the_idle_grey_and_draws_nothing() {
 }
 
 #[test]
-fn the_grid_draws_in_the_chromes_hairline_grey() {
-    // The idle structure has no color of its own and no setting: it draws in
-    // the grey the panel rules ITSELF with, so the picture and the chrome
-    // around it cannot drift apart. Compared against the skin's bytes rather
-    // than against `grid_line`'s own output, which is what makes a re-added
-    // near-copy of the hairline fail here instead of passing against itself.
-    let [r, g, b] = skin::active_skin().hairline;
-    let unlit = grid_of(&grid_view())
-        .into_iter()
-        .find(|s| s.strength > 0.0)
-        .expect("the home sheet draws an idle grid");
-    assert_eq!(
-        unlit.color.truncate(),
-        Vec3::new(f32::from(r), f32::from(g), f32::from(b)) / 255.0,
-    );
-    assert_eq!(unlit.strength, unlit.color.w, "alpha is the idle line opacity");
+fn a_resting_grid_line_is_the_lattices_own_ground() {
+    // The lines and the rings are one resting picture, so a line at rest IS
+    // the ground the rings stand on — not a grey near it. Held at three
+    // settings of the bar, because one would pass against a line that had
+    // simply been re-pinned to some fixed grey.
+    //
+    // The OPACITY is half the claim and the easier half to lose: `strength`
+    // premultiplies the colour, so a line carrying an alpha of its own lands
+    // on a blend of the ground and whatever is behind it — a different grey
+    // per background, and none of them this one. A hairline drawn at a
+    // chrome opacity is that alternative, and it is why such a line and the
+    // rings can only ever nearly agree.
+    for ground in [0.0f32, 20.0, 64.0] {
+        let view = ViewConfig { lattice_ground: ground, ..grid_view() };
+        let unlit = grid_of(&view)
+            .into_iter()
+            .find(|s| s.strength > 0.0)
+            .expect("the home sheet draws a resting grid");
+        assert_eq!(
+            unlit.color,
+            crate::grey_of_lightness(ground),
+            "at Ground {ground} a resting line is not the grey the bar names",
+        );
+        assert_eq!(
+            unlit.strength, 1.0,
+            "at Ground {ground} a resting line carries an alpha, so what it \
+             draws is a blend rather than the ground",
+        );
+    }
+}
+
+/// The three at-rest surfaces measured against EACH OTHER, through one derive:
+/// a grid line, the audio ring's silent end, and what an unplayed node falls
+/// back to are one colour.
+///
+/// The whole ask, and the one test that fails if any of the three is re-pinned
+/// to a grey of its own — which is the shape the bug takes, each surface aimed
+/// at the others by hand and landing a hair off.
+#[test]
+fn the_grid_the_ring_and_an_idle_node_are_one_grey() {
+    for ground in [8.0f32, 20.0, 45.0] {
+        let view = ViewConfig { lattice_ground: ground, ..grid_view() };
+        let scene = scene_of(
+            &NoteTracker::new(),
+            &Tuning::default(),
+            &view,
+            &plain_frame(),
+            0.0,
+        );
+        let line = scene
+            .grid
+            .iter()
+            .find(|s| s.strength > 0.0)
+            .expect("the home sheet draws a resting grid");
+        let idle = scene
+            .nodes
+            .iter()
+            .find(|n| n.activation == 0.0)
+            .expect("nothing is playing");
+        let ring = crate::SpectralPaint::new(&view, crate::Gradient::default()).lut[0];
+        for (what, got) in
+            [("a grid line", line.color), ("an idle node", idle.color), ("the audio ring", ring)]
+        {
+            let step = (got.truncate() - scene.lattice_ground.truncate()).abs().max_element();
+            assert!(
+                step * 255.0 < 0.5,
+                "at Ground {ground} {what} draws {got:?} against the ground's {:?}",
+                scene.lattice_ground,
+            );
+        }
+    }
 }
 
 #[test]
@@ -198,7 +260,7 @@ fn grid_lines_never_light_between_played_neighbors() {
     }
     let view = ViewConfig { extent_threes: 3, extent_fives: 3, ..ViewConfig::default() };
     let scene = scene_of(&tracker, &tuning, &view, &plain_frame(), 0.0);
-    let base = skin::grid_line();
+    let base = scene.lattice_ground;
     let segment_at = |mid: Vec3| {
         scene
             .grid
@@ -208,14 +270,14 @@ fn grid_lines_never_light_between_played_neighbors() {
     };
 
     // C sits at the origin, G one step up the threes (world y) axis: both
-    // sound, and the line between them stays exactly as faint as any other.
+    // sound, and the line between them stays exactly the ground like any other.
     let between = segment_at(Vec3::new(0.0, 0.5, 0.0));
-    assert_eq!(between.strength, base.w, "two sounding ends must not light it");
+    assert_eq!(between.strength, 1.0, "two sounding ends must not light it");
     assert_eq!(between.color, base, "nor tint it");
 
     // Every in-plane segment is identical, played over or not.
     for s in &scene.grid {
-        assert_eq!(s.strength, base.w, "{s:?}");
+        assert_eq!(s.strength, 1.0, "{s:?}");
         assert_eq!(s.color, base, "{s:?}");
     }
 }
@@ -277,7 +339,7 @@ fn a_chain_stops_at_the_first_sounding_note_under_it() {
 fn a_lit_chain_keeps_the_lattices_own_color() {
     // The chain is structure, not a note: it says WHERE a note hangs from,
     // and the note's own color is already on the node at each end. Taking
-    // the note's hue made it read as a third sounding thing strung between
+    // the note's hue makes it read as a third sounding thing strung between
     // two others.
     let view = ViewConfig {
         extent_threes: 0,
@@ -295,8 +357,10 @@ fn a_lit_chain_keeps_the_lattices_own_color() {
         .filter(|e| (e.b.z - e.a.z).abs() > 0.25 && e.strength > 0.5)
         .collect();
     assert!(!lit.is_empty(), "the chain has to be lit for this to mean anything");
-    let base = skin::grid_line();
     for link in lit {
-        assert_eq!(link.color, base, "a lit link keeps the grid color");
+        assert_eq!(
+            link.color, scene.lattice_ground,
+            "a lit link keeps the lattice's ground",
+        );
     }
 }
