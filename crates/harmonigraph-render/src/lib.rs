@@ -255,8 +255,11 @@ struct Uniforms {
     misc4: [f32; 4],
     /// x: grid line thickness as a multiple of the shader's built-in grid
     /// width; y unused (a retired slot rather than a repack, like `misc4.y`);
-    /// z: padding inside the octave layer in quad UV units — the gap between
-    /// neighbouring sectors AND between the band and the marks;
+    /// z: the node's ANGULAR padding in quad UV units — the gap between two
+    /// neighbouring sectors, wherever sectors are drawn. Its RADIAL counterpart
+    /// never arrives: every stand-off that one buys is already spent in the
+    /// radii in `misc3` and `misc4.y`, so what stands the marks off the band is
+    /// `mark_inner`, not a sum taken over this;
     /// w: how far a melody/bass mark reaches past the band, same units, where
     /// 0 means no marks (so this slot is NOT free — `mark_extension` reads it,
     /// and the octave layer gates the marks on it). Every earlier misc slot is
