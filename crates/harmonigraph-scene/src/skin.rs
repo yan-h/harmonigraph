@@ -145,16 +145,22 @@ pub fn panel_color() -> Vec4 {
     ground_color((r, g, b))
 }
 
-/// The active skin's `well`: the grey a recessed area of the chrome sits at,
-/// and the bed the lattice's audio ring is bedded on
-/// ([`SpectralPaint::new`](crate::SpectralPaint::new)).
+/// The active skin's `surface_faint`: the grey a subtly raised surface of the
+/// chrome sits at, and the BED the lattice's audio ring's ramp is anchored to
+/// ([`ring_gradient`](crate::ring_gradient)).
 ///
-/// A step BELOW [`panel_color`] rather than equal to it, which is the whole
-/// reason the ring reads as anything at rest: a reading bedded on the panel
-/// would be invisible against the panel, and an invisible ring is what the
-/// ring being OFF looks like. Recessed, a silent ring is a groove — present,
-/// quiet, and unmistakably not off.
-pub fn well_color() -> Vec4 {
-    let [r, g, b] = active_skin().well;
+/// Which rung of the ladder is the whole of what this choice is, and the ladder
+/// is short: the well at `L*` 4.7, [`panel_color`] — the lattice's own ground —
+/// at 8.8, and this at 20.0. The bed has to sit ABOVE the ground, so that a
+/// quiet ring reads as a faintly raised backdrop rather than as a mark on the
+/// surface: at 20.0 it lands flush with the octave band's own unlit ghost
+/// (`L*` 21.8), which is the picture beside it and the one it should agree
+/// with. The well is BELOW the ground and reads as black against both, which is
+/// a hole punched through the lattice; the panel is the ground exactly, and a
+/// silent ring bedded there vanishes into it — which is what a ring dialled to
+/// no width looks like, the off switch
+/// ([`ViewConfig::spectral_ring_width`](crate::ViewConfig)).
+pub fn surface_faint_color() -> Vec4 {
+    let [r, g, b] = active_skin().surface_faint;
     ground_color((r, g, b))
 }

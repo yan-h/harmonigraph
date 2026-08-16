@@ -1065,10 +1065,11 @@ fn pitch_lut_color(pitch: f32) -> vec3<f32> {
 // Color at loudness `level` (0..1), read from the FREQUENCY scheme's ramp —
 // the analyzer's own gradient, the one the spectrogram's cells, the spectrum
 // curve and the Spiral pane's segments are all drawn off, bedded for the
-// LATTICE: the CPU screens each entry over the skin's well grey, so a level is
-// the same light here as there and only the ground under it differs (see
-// `SpectralPaint::new`). The same walk pitch_lut_color does, over the other
-// table and against the other quantity.
+// LATTICE: the CPU rebuilds the table from that gradient with the bottom of its
+// lightness range raised to the skin's surface_faint grey, so a level is the
+// same light here as there and the two tables meet exactly at the top (see
+// `harmonigraph_scene::ring_gradient`). The same walk pitch_lut_color does,
+// over the other table and against the other quantity.
 fn spectral_lut_color(level: f32) -> vec3<f32> {
     let f = clamp(level, 0.0, 1.0) * f32(PITCH_LUT_N - 1u);
     let i0 = u32(floor(f));
@@ -1115,10 +1116,11 @@ fn folded() -> bool {
 //
 // One cost is shared, and stated rather than hidden: with nothing sounding a
 // wedge is not empty, it is the ramp's floor color, and every node in the
-// window wears one. A range with nothing in it is a reading. That floor is
-// the lattice's own well grey — the ramp reaches here bedded on it — so a
-// silent ring is a groove in the surface rather than a hole punched through
-// it, and still plainly not the ring switched off.
+// window wears one. A range with nothing in it is a reading. That floor stands
+// at the lightness of the skin's surface_faint grey — the ramp reaches here
+// anchored on it, a step ABOVE the lattice's own ground — so a silent ring is a
+// faintly raised backdrop rather than a hole punched through the surface, and
+// still plainly not the ring switched off.
 //
 // The radius is its own (u.misc7.z/w, an annulus the fresh view puts in the
 // gap the core and the octave band leave); the slices are the band's, off the
@@ -1519,11 +1521,12 @@ fn node_paint(in: VsOut) -> vec4<f32> {
     //
     // The RING is the exception, and it is not a level a node carries: it is a
     // window onto one shared spectrum, so it draws on every node whatever the
-    // keys are doing — silence included, at the ramp's floor color, which is
-    // the lattice's own well grey and so a groove rather than a hole. What is
-    // left to skip is therefore radial rather than per node, and it is most of
-    // the quad: the ring is a narrow annulus in a billboard reaching
-    // QUAD_MARGIN. `spectral_ring` skips the same band from the other side.
+    // keys are doing — silence included, at the ramp's floor color, which stands
+    // a step above the lattice's ground and so reads as a raised backdrop rather
+    // than a hole. What is left to skip is therefore radial rather than per node,
+    // and it is most of the quad: the ring is a narrow annulus in a billboard
+    // reaching QUAD_MARGIN. `spectral_ring` skips the same band from the other
+    // side.
     let audio_annulus = spectral_radii();
     let in_audio_ring = audio_annulus.y > audio_annulus.x
         && d >= audio_annulus.x - aa

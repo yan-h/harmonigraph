@@ -544,33 +544,41 @@ pub(crate) fn designed_pitch_ramp(t: f64, gradient: Gradient) -> Vec4 {
 /// Tables the memo below holds at once, and it is a count of the gradients LIVE
 /// IN A FRAME rather than a cache size dialled by measurement.
 ///
-/// Two of them are pictures: the lattice's pitch gradient, which the scene
-/// derive walks per node, and the Spectral pane's level gradient, which the
-/// spectrum curve walks per slab — up to 4096 of them. One slot served the
-/// lattice alone perfectly, hitting on essentially every call because the knobs
-/// hold still except while a control is being dragged. It cannot serve two: the
-/// two gradients differ, so each pane's first ask evicts the other's table, and
-/// a frame drawing both pays two full rebuilds — [`PITCH_LUT_N`] gamut
-/// bisections each, 165us apiece measured — every frame rather than only while
-/// a knob moves.
+/// Three of them are pictures: the lattice's pitch gradient, which the scene
+/// derive walks per node; the Spectral pane's level gradient, which the
+/// spectrum curve walks per slab — up to 4096 of them; and the lattice audio
+/// ring's, which is that same level gradient re-anchored onto the lattice's bed
+/// (`SpectralPaint::new`) and so a KEY OF ITS OWN, asked for beside the other
+/// two on every frame the ring draws. One slot served the lattice alone
+/// perfectly, hitting on essentially every call because the knobs hold still
+/// except while a control is being dragged. It cannot serve several: the
+/// gradients differ, so each picture's first ask evicts the last one's table,
+/// and a frame drawing them all pays a full rebuild apiece — [`PITCH_LUT_N`]
+/// gamut bisections each, 165us apiece measured — every frame rather than only
+/// while a knob moves.
 ///
-/// **The third is the one a bar is part-way through writing**, and it is why
-/// this is 3 and not 2. A settings pane draws AFTER the display panes, so
-/// everything above the bar in a frame reads the value the bar wrote LAST
-/// frame, and then the bar writes a new one and paints THAT — it re-reads
-/// deliberately, so the handle does not trail the pointer by a frame. A drag
-/// therefore walks three keys per frame where only the newest is a fair
-/// rebuild. At two slots the newest evicts the lattice's, the next frame's
-/// lattice ask evicts it back, and a held drag settles at very nearly two
-/// rebuilds a frame instead of one:
-/// `a_frame_of_a_drag_rebuilds_only_what_the_drag_changed` measures 19 over ten
-/// frames at two slots against the 10 that are the floor.
+/// **The fourth is the one a bar is part-way through writing.** A settings pane
+/// draws AFTER the display panes, so everything above the bar in a frame reads
+/// the value the bar wrote LAST frame, and then the bar writes a new one and
+/// paints THAT — it re-reads deliberately, so the handle does not trail the
+/// pointer by a frame. A drag therefore walks one more key per frame than there
+/// are pictures, and only the newest is a fair rebuild. At one slot short of
+/// that the newest evicts a picture's, the next frame's asks evict it back, and
+/// a held drag settles at nearly three rebuilds a frame instead of one:
+/// `a_frame_of_a_drag_rebuilds_only_what_the_drag_changed` measures 28 over ten
+/// frames at three slots against the 10 that are the floor.
 ///
-/// So the count is (pictures + 1), and a third gradient in the picture would
-/// make it 4 — which is why it is a length rather than a pair of fields. It is
-/// NOT a general cache: the scan below is linear and the eviction is
-/// most-recently-used, both of which stop paying somewhere above a handful.
-pub(crate) const LUT_SLOTS: usize = 3;
+/// Dragging the ANALYZER's gradient moves two pictures at once — the pane's and
+/// the ring's copy of it — and the count still holds, because the ring reads
+/// last frame's value like every other display: the frame walks the lattice's,
+/// the ring's copy of the OLD value, the old value, and the new one. Two of the
+/// four are fair rebuilds there, since two pictures genuinely changed.
+///
+/// So the count is (pictures + 1), which is why it is a length rather than a
+/// set of fields. It is NOT a general cache: the scan below is linear and the
+/// eviction is most-recently-used, both of which stop paying somewhere above a
+/// handful.
+pub(crate) const LUT_SLOTS: usize = 4;
 
 // Tables [`with_lut`] has built on this thread — the one thing a caller cannot
 // otherwise see, the cache being invisible in what it returns.
