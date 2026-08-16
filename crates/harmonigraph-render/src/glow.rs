@@ -651,9 +651,29 @@ mod tests {
         // The glow's rect is the whole test surface, so a point is a pixel.
         let rect =
             egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(SIZE[0] as f32, SIZE[1] as f32));
+        draw_into(device, queue, rect, 1.0, dots, strength)
+    }
+
+    /// As [`draw`], over a `rect` in points that need not be the whole surface,
+    /// at a display density that need not be one pixel per point.
+    ///
+    /// Those two are the whole of what the offscreen mapping depends on, and
+    /// [`draw`] pins both at their identity — a rect at the origin, one pixel
+    /// per point — where an origin never subtracted and a ramp never scaled
+    /// both come out right. Production is neither: the editor is Retina and
+    /// the Spiral is a docked tab at an offset, and the offline renderer
+    /// scales by 1.5 at 1080p and 3.0 at 4K.
+    fn draw_into(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        rect: egui::Rect,
+        ppp: f32,
+        dots: Vec<GlowDot>,
+        strength: f32,
+    ) -> (Vec<u8>, CallbackResources) {
         let cb = GlowCallback { rect, dots, strength, target_format: FORMAT };
         let mut resources = CallbackResources::default();
-        let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
+        let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: ppp };
         let mut encoder = device.create_command_encoder(&Default::default());
         let bufs = cb.prepare(device, queue, &screen, &mut encoder, &mut resources);
         queue.submit(bufs.into_iter().chain([encoder.finish()]));
@@ -664,7 +684,7 @@ mod tests {
                     egui::PaintCallbackInfo {
                         viewport: rect,
                         clip_rect: rect,
-                        pixels_per_point: 1.0,
+                        pixels_per_point: ppp,
                         screen_size_px: SIZE,
                     },
                     pass,
@@ -823,4 +843,148 @@ mod tests {
         );
     }
 
+    /// The halo lands on the mark's own place on a pane that is neither at the
+    /// origin nor drawn at one pixel per point — which is every pane the
+    /// product actually draws.
+    ///
+    /// Both terms of the offscreen mapping are exercised only here. The
+    /// instances are in SURFACE points and the copy covers the RECT alone, so
+    /// `prepare` subtracts the viewport's own top-left before handing the
+    /// geometry to the shader; and the copy is half the rect's device size, so
+    /// the antialiasing ramp is two display pixels rather than one. Every other
+    /// test in this module runs at the identity of both.
+    ///
+    /// The second assertion is what makes the first mean something. Drop the
+    /// origin subtraction and a mark does not vanish — it lands at the fraction
+    /// of the rect its SURFACE coordinate happens to name, which for this
+    /// fixture is a different place in the same pane, and a test that only
+    /// looked for light somewhere would still pass.
+    #[test]
+    fn the_halo_lands_on_the_marks_own_place_at_an_offset_rect_and_a_retina_scale() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        // A 128x128-POINT surface at Retina density, and a pane occupying part
+        // of it: points (32,16)..(128,80), which is device pixels
+        // (64,32)..(256,160).
+        let ppp = 2.0;
+        let rect = egui::Rect::from_min_max(egui::pos2(32.0, 16.0), egui::pos2(128.0, 80.0));
+        // The middle of that pane, in surface points, as the Spiral hands its
+        // dots over.
+        let mark = GlowDot { center: [80.0, 48.0], radius: 8.0, color: [200, 120, 60, 255] };
+        let (lit, _) = draw_into(&device, &queue, rect, ppp, vec![mark], 1.5);
+
+        // Where the mark stands on screen: its surface point in device pixels.
+        let red = |x: u32, y: u32| f32::from(pixel(&lit, x, y)[0]);
+        assert!(red(160, 96) > 8.0, "no light on the mark's own place: {}", red(160, 96));
+
+        // ...and where it would land with the origin never subtracted: the
+        // mark's surface coordinate read as a fraction of the rect, which is
+        // (80/96, 48/64) of a pane starting at (64, 32) device pixels.
+        let stray = (224, 128);
+        assert_eq!(
+            red(stray.0, stray.1),
+            0.0,
+            "light at {stray:?}, where a mark mapped without the rect's own origin lands",
+        );
+        // Non-vacuous: the two places are far enough apart that the halo of one
+        // cannot reach the other, so the pair of assertions above can disagree.
+        assert!(
+            (stray.0 as f32 - 160.0).hypot(stray.1 as f32 - 96.0) > 64.0,
+            "the fixture put the two readings within one halo of each other",
+        );
+    }
+
+    /// The chain covers exactly the pixels the halo is stretched across.
+    ///
+    /// `paint` lays quarter A over `viewport_in_pixels()`, which rounds each
+    /// EDGE of the rect and subtracts, then clamps to the screen — not the
+    /// width, rounded. On a rect whose two edges round in opposite directions
+    /// those differ by a pixel, and a texture sized one way and stretched the
+    /// other puts the halo at a slightly different scale from the marks it grew
+    /// out of. [`crate::roll`] holds the same property for the same reason.
+    #[test]
+    fn the_chain_covers_the_pixels_the_halo_is_stretched_across() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let ppp = 2.0;
+        // 5.25 -> 10.5 -> 11 (up) and 15.2 -> 30.4 -> 30 (down), so the
+        // viewport is 19 px across where the rounded width is 20.
+        let rect = egui::Rect::from_min_max(egui::pos2(5.25, 4.0), egui::pos2(15.2, 60.0));
+        let mark = GlowDot { center: [10.0, 30.0], radius: 3.0, color: [200, 120, 60, 255] };
+        let (_, resources) = draw_into(&device, &queue, rect, ppp, vec![mark], 1.5);
+
+        let vp = egui::epaint::ViewportInPixels::from_points(&rect, ppp, SIZE);
+        let glow: &GlowResources = resources.get().expect("prepare inserts its resources");
+        let pane = glow.pane.as_ref().expect("a strength of 1.5 asks for a chain");
+        assert_eq!(
+            pane.size,
+            [vp.width_px as u32, vp.height_px as u32],
+            "the chain covers {:?} where paint stretches it across {}x{}",
+            pane.size,
+            vp.width_px,
+            vp.height_px,
+        );
+        // Non-vacuous: the rounded width is not the viewport's width, so a
+        // chain sized the tempting way would fail the assertion above.
+        assert_ne!(
+            vp.width_px as u32,
+            (rect.width() * ppp).round() as u32,
+            "the fixture's rect no longer rounds its two edges apart",
+        );
+    }
+
+    /// A pane resized mid-run rebuilds its chain at the new size, and a frame
+    /// with more marks than the buffer holds grows it.
+    ///
+    /// Both are paths a single frame cannot reach — the first needs two
+    /// prepares at different rects, the second more marks than
+    /// [`INITIAL_DOT_CAPACITY`], which is more voices than the fixture chords
+    /// elsewhere in this module carry.
+    #[test]
+    fn a_resized_pane_rebuilds_and_a_crowded_frame_grows_its_buffer() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
+        let mut resources = CallbackResources::default();
+        let prepare = |dots: Vec<GlowDot>, rect: egui::Rect, resources: &mut CallbackResources| {
+            let cb = GlowCallback { rect, dots, strength: 1.5, target_format: FORMAT };
+            let mut encoder = device.create_command_encoder(&Default::default());
+            let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, resources);
+            queue.submit(bufs.into_iter().chain([encoder.finish()]));
+        };
+        let pane_of = |resources: &CallbackResources| {
+            let glow: &GlowResources = resources.get().expect("prepare inserts its resources");
+            let pane = glow.pane.as_ref().expect("a strength of 1.5 asks for a chain");
+            (pane.size, pane.capacity, pane.count)
+        };
+
+        let small = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(64.0, 64.0));
+        let large = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(200.0, 120.0));
+        prepare(vec![GlowDot { center: [32.0, 32.0], ..centered_dot() }], small, &mut resources);
+        assert_eq!(pane_of(&resources), ([64, 64], INITIAL_DOT_CAPACITY, 1));
+
+        // The pane grows — the dock divider dragged, or a render at another
+        // aspect — and the chain has to follow, quarter A being what `paint`
+        // stretches across the new rect.
+        prepare(vec![GlowDot { center: [100.0, 60.0], ..centered_dot() }], large, &mut resources);
+        assert_eq!(pane_of(&resources), ([200, 120], INITIAL_DOT_CAPACITY, 1));
+
+        // One more mark than the buffer holds, at the same size, so the regrow
+        // is the only thing that moved.
+        let crowd: Vec<GlowDot> = (0..INITIAL_DOT_CAPACITY + 1)
+            .map(|i| GlowDot { center: [20.0 + i as f32, 60.0], ..centered_dot() })
+            .collect();
+        let wanted = crowd.len();
+        prepare(crowd, large, &mut resources);
+        let (size, capacity, count) = pane_of(&resources);
+        assert_eq!(size, [200, 120], "a regrow rebuilt the chain");
+        assert_eq!(count, wanted as u32, "the frame drew {count} of {wanted} marks");
+        assert!(
+            capacity >= wanted,
+            "the buffer holds {capacity} where the frame handed over {wanted}",
+        );
+    }
 }
