@@ -382,9 +382,17 @@ mod tests {
                     format!("audio-ring-{range:.0}c")
                 }
             };
+            // The ring's WIDTH is what turns it off, so the MIDI shot dials it
+            // to nothing rather than picking a reading that says "none" — and
+            // the octave band closes in over the space it leaves, which is the
+            // MIDI picture the stack draws.
+            let fresh_width = harmonigraph_scene::ViewConfig::default().spectral_ring_width;
+            state.view.spectral_ring_width = match shot {
+                Shot::Midi => 0.0,
+                _ => fresh_width,
+            };
             state.view.spectral_reading = match shot {
-                Shot::Midi => harmonigraph_scene::SpectralReading::Off,
-                Shot::Fold => harmonigraph_scene::SpectralReading::Fold,
+                Shot::Fold | Shot::Midi => harmonigraph_scene::SpectralReading::Fold,
                 Shot::Spectrum(_) => harmonigraph_scene::SpectralReading::Spectrum,
             };
             // From the fresh camera each time: the pane pans the view's center

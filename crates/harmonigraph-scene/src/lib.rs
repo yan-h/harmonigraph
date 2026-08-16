@@ -48,7 +48,7 @@ pub use spectral::{
     SPECTRAL_BUCKETS_PER_SEMITONE, SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN,
 };
 pub use style::{Gradient, Pulse, SevensLabel};
-pub use view::{DrawnWindow, FrameParams, ViewConfig};
+pub use view::{DrawnWindow, FrameParams, RingStack, ViewConfig};
 
 use glam::{Vec3, Vec4};
 use harmonigraph_core::LatticePos;
@@ -145,16 +145,32 @@ pub const SPECTRAL_WIDTH_MIN: f32 = 1.0;
 /// See [`SPECTRAL_WIDTH_MIN`].
 pub const SPECTRAL_WIDTH_MAX: f32 = 50.0;
 
-/// The thinnest the audio ring may be dialled, in quad UV units
-/// ([`ViewConfig::spectral_ring_inner`]/[`ViewConfig::spectral_ring_outer`]):
-/// the Ring bar's own floor, and the span [`SpectralPaint::new`] opens a
-/// hand-edited or inverted pair back out to.
+/// The ends of the four bars that size a node's layers, in quad UV units — the
+/// stack [`ViewConfig::rings`] reads outward from the center, and what it holds
+/// a hand-edited view to.
 ///
-/// The same floor the octave band's bar keeps, because the two are read the
-/// same way — a wedge whose radial extent is a hairline says nothing about how
-/// loud it is, whichever ring it is on. A ring dialled to nothing is not a way
-/// of turning it off either; the checkbox is.
-pub const SPECTRAL_RING_MIN_SPAN: f32 = 0.05;
+/// Every one of them has 0 for its low end, and 0 is that layer's off position
+/// rather than a hairline of it: one way to turn a layer off, in the same place
+/// on every layer. What the high ends buy is a bar whose useful settings are
+/// spread over its whole travel — the quad is 1 across, so a ring bar reaching
+/// 1 would spend most of itself on stacks that are already off the node's edge.
+///
+/// [`RING_WIDTH_MAX`] is the same for the audio ring and the octave band,
+/// because they are read the same way: a wedge whose radial extent is a
+/// hairline says nothing about how loud it is, whichever ring it is on, and
+/// neither is worth more of the quad than the other. The core keeps the widest
+/// bar of the four, being the one layer that starts at the center and so the
+/// only one that can fill the node by itself.
+pub const CORE_RADIUS_MAX: f32 = 0.9;
+/// See [`CORE_RADIUS_MAX`].
+pub const RING_WIDTH_MAX: f32 = 0.6;
+/// See [`CORE_RADIUS_MAX`].
+pub const MARK_THICKNESS_MAX: f32 = 0.3;
+/// See [`CORE_RADIUS_MAX`]. The one of the four that is a padding rather than a
+/// layer, and it is spent up to three times over on one node (between the core
+/// and the audio ring, that ring and the band, and the band and the marks), so
+/// its bar is short: at the top of it the gaps alone are more than the quad.
+pub const GAP_MAX: f32 = 0.4;
 
 /// Samples in the pitch->color lookup EVERYTHING pitch-colored reads: the
 /// disc, the trail and the piano roll on the CPU, the octave glyphs and their
@@ -397,12 +413,22 @@ pub struct Scene {
     /// soft glow, 1 the solid orb. Ignored when the core is off.
     pub core_solidity: f32,
     /// The outer octave layer's radial band (quad UV units), already
-    /// sanitized: outer is always ahead of inner.
+    /// sanitized: outer is always ahead of inner on a band that draws, and
+    /// both are 0 when the layer is off (see [`ViewConfig::band_width`]).
     pub outer_inner: f32,
     pub outer_outer: f32,
-    /// Padding inside the octave layer (see [`ViewConfig::outer_gap`]):
-    /// sector-to-sector and band-to-mark-ring alike. Already clamped.
-    pub outer_gap: f32,
+    /// The outer edge of the outermost RING the node draws — the band's, save
+    /// where the band is off and something inside it is the last layer on (see
+    /// [`RingStack::outer`]).
+    ///
+    /// What the melody/bass marks stand off and what the node's gutter is
+    /// measured from, so a node whose band is dialled away still wears both
+    /// where its picture actually ends.
+    pub rings_outer: f32,
+    /// The one padding on a node (see [`ViewConfig::ring_gap`]): between two
+    /// stacked rings, between one octave sector and the next, and between the
+    /// outermost ring and the mark strip alike. Already clamped.
+    pub ring_gap: f32,
     /// The lattice's AUDIO channel: what the analyzer measured, where the
     /// ring that draws it sits, and the ramp every audio-lit element on the
     /// node is painted from (see [`spectral`]).
@@ -450,8 +476,9 @@ pub struct Scene {
     /// is invisible over empty lattice and only shows as a clearing where it
     /// actually crosses something.
     pub background: Vec4,
-    /// How far a melody/bass mark reaches past the octave band, in quad UV
-    /// units; 0 = off (see [`ViewConfig::mark_thickness`]). Already clamped.
+    /// How deep the melody/bass mark strip is, in quad UV units; 0 = off (see
+    /// [`ViewConfig::mark_thickness`]). It starts one [`ring_gap`](Self::ring_gap)
+    /// past [`rings_outer`](Self::rings_outer). Already clamped.
     pub mark_thickness: f32,
     /// Which shimmer sweeps the melody/bass marks (see [`Pulse`] and
     /// [`ViewConfig::pulse_marks`]).
