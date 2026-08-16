@@ -310,9 +310,12 @@ struct Uniforms {
     misc9: [f32; 4],
     /// The FREQUENCY colour scheme's ramp — the analyzer's own gradient
     /// (`SpectrumConfig::spectrogram_gradient`) through `pitch_ramp_lut`, the
-    /// same table the spectrogram's cells and the Spiral pane's segments are
-    /// read off. Indexed by a LEVEL where `pitch_lut` beside it is indexed by
-    /// a pitch, which is the whole difference between the two schemes.
+    /// same gradient the spectrogram's cells and the Spiral pane's segments
+    /// are read off, screened onto the lattice's own bed by
+    /// `SpectralPaint::new` so a level reads as the same light over a grey
+    /// ground as it does over their black one. Indexed by a LEVEL where
+    /// `pitch_lut` beside it is indexed by a pitch, which is the whole
+    /// difference between the two schemes.
     spectral_lut: [[f32; 4]; harmonigraph_scene::PITCH_LUT_N],
     /// The analyzer's loudness at every bucket of its pitch grid, a byte
     /// apiece, sixteen to a row (see `SPECTRUM_WORDS`).

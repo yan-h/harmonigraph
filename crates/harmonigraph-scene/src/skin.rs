@@ -144,3 +144,17 @@ pub fn panel_color() -> Vec4 {
     let [r, g, b] = active_skin().panel;
     ground_color((r, g, b))
 }
+
+/// The active skin's `well`: the grey a recessed area of the chrome sits at,
+/// and the bed the lattice's audio ring is bedded on
+/// ([`SpectralPaint::new`](crate::SpectralPaint::new)).
+///
+/// A step BELOW [`panel_color`] rather than equal to it, which is the whole
+/// reason the ring reads as anything at rest: a reading bedded on the panel
+/// would be invisible against the panel, and an invisible ring is what the
+/// ring being OFF looks like. Recessed, a silent ring is a groove — present,
+/// quiet, and unmistakably not off.
+pub fn well_color() -> Vec4 {
+    let [r, g, b] = active_skin().well;
+    ground_color((r, g, b))
+}

@@ -41,9 +41,10 @@
 //!   every smoothing that helps the fold spoils.
 //!
 //! Either goes into one [`SpectralPaint`], which also carries the FREQUENCY
-//! colour scheme — the analyzer's own ramp — so that what the ring paints is
-//! the colour the spectrogram, the spectrum curve and the Spiral pane would
-//! paint it, and never the pitch ramp the MIDI picture wears.
+//! colour scheme — the analyzer's own ramp, bedded on the lattice — so that
+//! what the ring paints is the light the spectrogram, the spectrum curve and
+//! the Spiral pane would paint it, and never the pitch ramp the MIDI picture
+//! wears.
 //!
 //! Nothing here relights a NODE. The keys keep everything they draw, so a node
 //! carries both pictures at once and neither has to be given up to see the
@@ -330,8 +331,9 @@ impl Fold {
 ///   smoothing that helps the other.
 ///
 /// The reading goes into the scene as one [`SpectralPaint`], which is also
-/// what carries the FREQUENCY colour scheme: the analyzer's own ramp, so that
-/// what the ring paints is the colour the spectrogram, the spectrum curve and
+/// what carries the FREQUENCY colour scheme: the analyzer's own ramp, handed
+/// in raw here and bedded on the lattice by [`SpectralPaint::new`], so that
+/// what the ring paints is the light the spectrogram, the spectrum curve and
 /// the Spiral pane would paint it.
 ///
 /// Nothing here touches a NODE. The MIDI picture is `derive_scene`'s answer
@@ -969,7 +971,9 @@ mod tests {
     ///   lattice's nodes, wedges and marks, and the roll's ribbons.
     /// - **FREQUENCY**: `SpectrumConfig::spectrogram_gradient` indexed by a
     ///   LEVEL. The spectrum curve, the spectrogram's cells, the Spiral pane's
-    ///   segments, and everything the lattice lights from audio.
+    ///   segments, and everything the lattice lights from audio. One LIGHT per
+    ///   level, added over whatever ground the surface it lands on has: the
+    ///   heatmap's is black, the ring's is the lattice.
     ///
     /// Worth pinning because both halves have already drifted once and neither
     /// drift is visible as a bug: an audio reading painted off the pitch ramp
@@ -979,7 +983,6 @@ mod tests {
     #[test]
     fn the_plugin_has_two_colour_schemes_and_audio_wears_the_analyzers() {
         use crate::panes::spectral::roll::note_color;
-        use crate::panes::spectral::spectrogram::cell_color;
 
         let mut state = fresh();
         state.view.spectral_reading = SpectralReading::Spectrum;
@@ -988,15 +991,36 @@ mod tests {
         state.spectrum.push_samples(&sawtooth(48.0), 1, SR, 1.0, &cfg);
         let scene = scene_of(&state);
 
-        // The ring's ramp IS the heatmap's, entry for entry — the same table
-        // `cell_color` walks, so a wedge at a level and a cell at that level
-        // are one colour rather than two close ones.
+        // The ring's ramp is the heatmap's gradient, entry for entry, on the
+        // lattice's own bed — the same light `cell_color` walks, screened over
+        // the ground the ring is drawn on rather than over the heatmap's black
+        // plane. So a wedge at a level and a cell at that level are one
+        // reading rather than two, and the bed is the whole of the difference.
+        let bed = harmonigraph_scene::skin::well_color();
+        let bedded = |c: glam::Vec4| {
+            glam::Vec4::new(
+                bed.x + c.x * (1.0 - bed.x),
+                bed.y + c.y * (1.0 - bed.y),
+                bed.z + c.z * (1.0 - bed.z),
+                c.w,
+            )
+        };
         for (k, entry) in scene.spectral.lut.iter().enumerate() {
             let level = k as f32 / (harmonigraph_scene::PITCH_LUT_N - 1) as f32;
-            let want = cell_color(cfg.spectrogram_gradient, level);
+            let cell = harmonigraph_scene::gradient_color(level, cfg.spectrogram_gradient);
             let got = crate::panes::scene_color(*entry, 1.0);
-            assert_eq!(got, want, "entry {k} of the ring's ramp is not the heatmap's colour");
+            let want = crate::panes::scene_color(bedded(cell), 1.0);
+            assert_eq!(got, want, "entry {k} of the ring's ramp is not the heatmap's light");
         }
+        // Every analyzer preset opens at black, because the heatmap's plane is
+        // black; on the lattice that floor is the bed itself. A silent wedge
+        // is drawn deliberately — a reading, not a gap — so this is most of
+        // the ring most of the time, and unbedded it is a hole at every node.
+        assert_eq!(
+            crate::panes::scene_color(scene.spectral.lut[0], 1.0),
+            crate::panes::scene_color(bed, 1.0),
+            "a silent wedge is not the lattice's own bed",
+        );
 
         // ...and the MIDI half: a ribbon and the node it lit are one colour off
         // one gradient, which is the claim `note_color` exists to keep.

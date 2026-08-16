@@ -14,7 +14,20 @@
 //!   read through [`gradient_color`](crate::gradient_color). A bucket of the
 //!   spectrum curve, a cell of the spectrogram, a segment of the Spiral pane
 //!   and every audio-lit element of the lattice come off THAT one table, so a
-//!   loudness is one colour wherever it is drawn.
+//!   loudness is one LIGHT wherever it is drawn — added over whatever ground
+//!   the surface under it has.
+//!
+//! One light rather than one colour, because the two surfaces have different
+//! beds. The analyzer's panes are bedded on BLACK — a spectrogram cell at
+//! silence has to be black or the plane's edge shows — so there the light and
+//! the colour are the same thing and the picture is the gradient itself. The
+//! ring is bedded on the LATTICE, so it reads the same gradient screened onto
+//! the lattice's ground ([`SpectralPaint::new`]): a black floor would punch a
+//! hole through a grey lattice at every node, which is a picture of a gap
+//! where the table means silence. The bed is the skin's WELL grey and not its
+//! panel grey, because a ring bedded on the panel would vanish into it and an
+//! invisible ring is what the ring being [`Off`](SpectralReading::Off) looks
+//! like; recessed, a silent ring is a groove that is plainly still a reading.
 //!
 //! The scheme is chosen by what the element MEASURES, never by which pane it
 //! is on: the lattice carries both at once (a node's body held by the keys,
@@ -123,9 +136,10 @@ pub enum SpectralReading {
     /// everywhere else on the wheel.
     ///
     /// What it costs is stated rather than hidden: with nothing sounding a
-    /// wedge is not empty, it is the ramp's floor colour, and every node in
-    /// the window wears one. A stretch of spectrum with nothing in it is a
-    /// reading, not a gap.
+    /// wedge is not empty, it is the ramp's floor — the lattice's own well
+    /// grey, the ramp bedded there (see [`SpectralPaint::new`]) — and every
+    /// node in the window wears one. A stretch of spectrum with nothing in it
+    /// is a reading, not a gap.
     Spectrum,
 }
 
@@ -156,11 +170,13 @@ pub type SpectralLevels = [u8; SPECTRUM_BINS];
 /// prevent. [`silent`](Self::silent) is the one state where none of it is
 /// read.
 pub struct SpectralPaint {
-    /// The FREQUENCY scheme's ramp: `SpectrumConfig::spectrogram_gradient`
-    /// through [`pitch_ramp_lut`](crate::pitch_ramp_lut), which is the table
+    /// The FREQUENCY scheme's ramp — `SpectrumConfig::spectrogram_gradient`
+    /// through [`pitch_ramp_lut`](crate::pitch_ramp_lut), the same gradient
     /// the spectrogram's cells, the spectrum curve and the Spiral pane's
-    /// segments are already read off. Every audio-lit element on the lattice
-    /// indexes it by its own LEVEL, exactly as those do.
+    /// segments are read off — bedded on the LATTICE rather than on their
+    /// black plane. Every audio-lit element on the lattice indexes it by its
+    /// own LEVEL, exactly as those do; what differs is the ground each entry
+    /// is added over, which [`new`](Self::new) screens in.
     pub lut: [Vec4; PITCH_LUT_N],
     /// Each wedge of the ring is ONE reading taken at its own octave's pitch
     /// ([`SpectralReading::Fold`]) rather than a window of pitch spread across
@@ -193,15 +209,20 @@ pub struct SpectralPaint {
     /// arithmetic off the node's own pitch class.
     ///
     /// All zeros where nothing has been measured, which the ring draws as the
-    /// ramp's floor colour everywhere rather than as an empty annulus: the
-    /// ring is a MEASUREMENT of a range, and a range with nothing in it is a
-    /// reading, not a gap.
+    /// ramp's floor — the lattice's own bed — everywhere rather than as an
+    /// empty annulus: the ring is a MEASUREMENT of a range, and a range with
+    /// nothing in it is a reading, not a gap.
     pub levels: Box<SpectralLevels>,
 }
 
 impl SpectralPaint {
     /// No analyzer: no ring, nothing measured into the grid it reads, and a
     /// ramp nothing indexes.
+    ///
+    /// Zeros and not a bed, unlike [`new`](Self::new)'s table, because the
+    /// annulus here is empty and the shader never reaches the ramp — bedding
+    /// a table nothing samples would only make a scene with no analyzer look
+    /// like one whose ring is at silence.
     ///
     /// What [`derive_scene`](crate::derive_scene) answers, and the right
     /// answer for every shell that draws a lattice without opening an
@@ -217,8 +238,12 @@ impl SpectralPaint {
         }
     }
 
-    /// The paint `view` asks for, against the analyzer's `lut`, with no
-    /// levels measured into it yet.
+    /// The paint `view` asks for, against the analyzer's `lut` re-bedded onto
+    /// the lattice's own ground, with no levels measured into it yet.
+    ///
+    /// The re-bed is [`rebed`], and this is the one place it happens: `lut`
+    /// arrives as the analyzer's gradient, which opens at black because the
+    /// spectrogram's bed IS black, and the ring's bed is the lattice.
     ///
     /// The clamps live here and not in `ViewConfig::sanitize`, for the reason
     /// every other geometry clamp does: the drawing code is reached by more
@@ -237,7 +262,7 @@ impl SpectralPaint {
             (0.0, 0.0)
         };
         SpectralPaint {
-            lut,
+            lut: rebed(lut, crate::skin::well_color()),
             folded: view.spectral_reading == SpectralReading::Fold,
             inner,
             outer,
@@ -255,6 +280,38 @@ impl SpectralPaint {
     pub fn ring_draws(&self) -> bool {
         self.outer > self.inner
     }
+}
+
+/// The analyzer's ramp screened over `bed`: `c' = bed + c * (1 - bed)` per
+/// channel, alpha untouched.
+///
+/// The FREQUENCY scheme's invariant is that a loudness is one LIGHT wherever
+/// it is drawn, ADDED over whatever ground that surface has — not one colour,
+/// which is only the same thing where the ground is black. The analyzer's own
+/// panes are that case: the spectrogram's plane is black (silence has to BE
+/// black or the plane's edge shows), so this is the identity there and their
+/// picture is the gradient itself. The ring's ground is the lattice, so its
+/// copy of the table is the same light over the lattice's own bed.
+///
+/// A screen and not a lerp, because the two ends have to hold. At level 0 the
+/// entry lands exactly on `bed` — the ring's silence sits ON the surface
+/// instead of a black hole punched through it — and at the bright end the
+/// deviation from the analyzer's colour is `bed * (1 - c)`, which for the well
+/// grey is under 6% at any level and nothing at white. So the ring and the
+/// spectrogram still read as one measurement wherever both are on screen.
+///
+/// sRGB-ENCODED throughout, straight off `skin::ground_color`, because that is
+/// the space the shader composites in (see [`crate::skin`]) — a blend in
+/// linear light would agree with nothing else in the picture.
+fn rebed(lut: [Vec4; PITCH_LUT_N], bed: Vec4) -> [Vec4; PITCH_LUT_N] {
+    lut.map(|c| {
+        Vec4::new(
+            bed.x + c.x * (1.0 - bed.x),
+            bed.y + c.y * (1.0 - bed.y),
+            bed.z + c.z * (1.0 - bed.z),
+            c.w,
+        )
+    })
 }
 
 /// `value` held inside `low..=high`, or `fallback` where it is not a number at
@@ -363,6 +420,66 @@ mod tests {
         );
         assert!(fold.folded, "the fold is not read at its wedges' own pitches");
         assert!(!raw.folded, "the raw spectrum lost its window across the wedge");
+    }
+
+    /// A ramp opening at black comes out of [`SpectralPaint::new`] opening at
+    /// the lattice's well grey, exactly.
+    ///
+    /// Every analyzer preset opens at black, because the spectrogram's plane
+    /// is black and silence there has to BE black. The ring's plane is the
+    /// lattice, and a silent wedge draws the floor deliberately — a reading,
+    /// not a gap — so most of the ring is this entry most of the time. Handed
+    /// through unbedded it is a black hole punched through the lattice at
+    /// every node in the window.
+    #[test]
+    fn the_rings_silence_sits_on_the_lattice_rather_than_under_it() {
+        let mut lut = [Vec4::new(0.4, 0.5, 0.6, 1.0); PITCH_LUT_N];
+        lut[0] = Vec4::new(0.0, 0.0, 0.0, 1.0);
+        let paint = SpectralPaint::new(&ringed(0.3, 0.5, 200.0), lut);
+        let bed = crate::skin::well_color();
+        let floor = paint.lut[0];
+        assert!(
+            (floor.truncate() - bed.truncate()).length() < 1e-6,
+            "a silent wedge draws {floor:?}, not the lattice's own bed {bed:?}",
+        );
+        assert_eq!(floor.w, 1.0, "the re-bed took the entry's alpha with it");
+    }
+
+    /// A bright reading is the analyzer's own colour to within the bed, so the
+    /// ring and the spectrogram still read as ONE measurement wherever both
+    /// are on screen.
+    ///
+    /// The bound is what makes the re-bed a re-bedding rather than a second
+    /// colour scheme: a screen moves an entry by `bed * (1 - c)` per channel,
+    /// which is the whole bed at black and nothing at white. A lerp toward the
+    /// bed, or a bed anywhere near the ramp's bright end, would fail here
+    /// while still looking plausible at silence.
+    #[test]
+    fn a_bright_reading_still_matches_the_analyzers_own_colour() {
+        let dark = Vec4::new(0.05, 0.02, 0.08, 1.0);
+        let mid = Vec4::new(0.5, 0.35, 0.2, 1.0);
+        let mut lut = [mid; PITCH_LUT_N];
+        lut[0] = dark;
+        lut[PITCH_LUT_N - 1] = Vec4::ONE;
+        let paint = SpectralPaint::new(&ringed(0.3, 0.5, 200.0), lut);
+        let bed = crate::skin::well_color();
+        // White is the one entry the bed cannot move at all, which is what
+        // makes the bound tightest exactly where the ring is brightest.
+        assert_eq!(
+            paint.lut[PITCH_LUT_N - 1],
+            Vec4::ONE,
+            "the ramp's top is no longer the analyzer's white",
+        );
+        for (name, bedded, raw) in [("dark", paint.lut[0], dark), ("mid", paint.lut[7], mid)] {
+            for ch in 0..3 {
+                let delta = (bedded[ch] - raw[ch]).abs();
+                let allowed = bed[ch] * (1.0 - raw[ch]);
+                assert!(
+                    delta <= allowed + 1e-6,
+                    "the {name} entry's channel {ch} moved by {delta}, past the bed's {allowed}",
+                );
+            }
+        }
     }
 
     /// A bucket stands for its own centre, and the grid covers the axis the
