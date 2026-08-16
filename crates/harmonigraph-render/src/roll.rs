@@ -506,7 +506,8 @@ impl RollBloom {
     /// Build the chain for a roll `size` device pixels across. Half and
     /// quarter of THAT, so the halo is a constant share of the roll's own
     /// screen size — the same rule the lattice's chain follows, which is what
-    /// makes one bloom strength mean the same thing in both pictures.
+    /// makes one bloom strength mean the same thing in every picture that
+    /// grows one.
     fn new(device: &wgpu::Device, shared: &RollBloomShared<'_>, size: [u32; 2]) -> Self {
         let (hw, hh) = (size[0].div_ceil(2).max(1), size[1].div_ceil(2).max(1));
         let notes_view = device

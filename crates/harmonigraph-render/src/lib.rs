@@ -123,10 +123,10 @@ const BLIT_SRC: &str = include_str!("shaders/blit.wgsl");
 /// the ceiling.
 ///
 /// One function rather than a bound at each place a strength is read, because
-/// the lattice and the piano roll take the SAME number and the whole claim
-/// [`BloomChain`] rests on is that it means one halo in both pictures. A bound
-/// applied to one of them alone is a light a node has that its ribbon does
-/// not, which is a difference between the two that says nothing.
+/// the lattice, the piano roll and the spiral's dots take the SAME number and
+/// the whole claim [`BloomChain`] rests on is that it means one halo in every
+/// picture. A bound applied to one of them alone is a light a node has that its
+/// ribbon does not, which is a difference between them that says nothing.
 pub fn bloom_strength(raw: f32) -> f32 {
     raw.clamp(0.0, 4.0)
 }
@@ -1248,9 +1248,9 @@ struct OffscreenShared<'a> {
 /// One chain, every picture. The lattice feeds it the scene without its
 /// labels; the piano roll feeds it the notes rendered again offscreen
 /// (`crate::roll`); the spiral's dots feed it through `crate::glow`. That they
-/// are the same four steps in the same order over
-/// the same fractions is the whole of what makes one bloom strength mean one
-/// halo, and it is a claim a second copy cannot keep: the step that matters
+/// are the same four steps in the same order over the same fractions is the
+/// whole of what makes one bloom strength mean one halo, and it is a claim a
+/// second copy cannot keep: the step that matters
 /// most is WHERE the threshold sits, and a chain that thresholds after the
 /// downsample instead of before it measures a thin shape that has already been
 /// averaged twice, so a ribbon gets a fraction of the halo the node it lit up
