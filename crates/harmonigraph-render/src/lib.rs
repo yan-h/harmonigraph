@@ -1615,8 +1615,9 @@ fn create_pipelines(
 /// and deliberately: it spells the same operator as
 /// `PREMULTIPLIED_ALPHA_BLENDING`, which is `a(1-b)+b` where this is
 /// `a+b(1-a)` — the same arithmetic written from the other side, as
-/// [`create_text_pipeline`]'s own doc sets out. Pointing it here would rename
-/// a difference that is real in the source and absent in every pixel.
+/// [`crate::text::create_text_pipeline`]'s own doc sets out. Pointing it here
+/// would rename a difference that is real in the source and absent in every
+/// pixel.
 const EGUI_BLEND: wgpu::BlendState = wgpu::BlendState {
     color: wgpu::BlendComponent {
         src_factor: wgpu::BlendFactor::One,
