@@ -1146,6 +1146,39 @@ mod tests {
         }
     }
 
+    /// ...and the door a saved blob actually comes through repairs it the same
+    /// way. [`ViewConfig::sanitize`] runs before anything reads the view, so
+    /// [`SpectralPaint::new`]'s repair above only ever sees a value already
+    /// mended — which is what makes this its own test rather than a second
+    /// reading of that one.
+    ///
+    /// Pointed at the OFF position and not at the fresh value the two settings
+    /// either side of it take, which is the whole claim: a level nobody can
+    /// read is a reason to draw every ring, never to hide one. Repairing to
+    /// the fresh 0.4 instead passes every other test in the tree.
+    #[test]
+    fn the_blobs_own_door_repairs_a_gate_toward_drawing() {
+        for gate in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -2.0, 7.0] {
+            let mut view = gated(gate, SpectralReading::Fold);
+            view.sanitize();
+            assert!(
+                (SPECTRAL_GATE_MIN..=SPECTRAL_GATE_MAX).contains(&view.spectral_ring_gate),
+                "a saved gate of {gate} loaded as {}",
+                view.spectral_ring_gate,
+            );
+            if !gate.is_finite() {
+                assert_eq!(
+                    view.spectral_ring_gate, SPECTRAL_GATE_MIN,
+                    "a saved gate of {gate} loaded holding rings back",
+                );
+            }
+        }
+        // A value the bar can produce is not a value to repair.
+        let mut view = gated(0.4, SpectralReading::Fold);
+        view.sanitize();
+        assert_eq!(view.spectral_ring_gate, 0.4, "a settable gate was mended anyway");
+    }
+
     /// A straight-line envelope of a stated length, so half a duration in
     /// reads half way along and a claim can be made in fractions.
     fn fade_of(seconds: f32) -> Envelope {
