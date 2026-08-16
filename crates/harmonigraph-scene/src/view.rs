@@ -1008,6 +1008,40 @@ pub struct RingStack {
     pub gap: f32,
 }
 
+impl RingStack {
+    /// The four boundaries the stack is laid out on, read outward: where the
+    /// audio ring's slot begins, where the octave band's begins, where the
+    /// melody/bass strip's begins, and where that strip ENDS.
+    ///
+    /// Each is the outer limit of the layer INSIDE it — the first three a
+    /// [`gap`](Self::gap) past where that layer stopped, the last one flush,
+    /// there being no layer after the marks to stand off. So the four run
+    /// core, audio ring, band, marks: one boundary per layer, and moving one
+    /// is that layer's own width changing.
+    ///
+    /// **A slot a layer WOULD take, where the layer is not drawn**, which is
+    /// what makes this different from reading the radii above and the reason
+    /// it exists: an off layer has no inner edge of its own, so a control that
+    /// sized it by its radii would lose the handle the moment it was switched
+    /// off and could never switch it back on. Two boundaries landing on one
+    /// point is exactly what an off layer looks like here, and the Layers bar
+    /// draws them piled up.
+    ///
+    /// A REFUSED layer comes out the same way, since the cursor did not move
+    /// for it either — see [`Stack::take`]. The picture and the bar then agree:
+    /// the layer is not on the node and its handle is not out on the axis.
+    pub fn edges(&self) -> [f32; 4] {
+        let after_audio =
+            if self.audio.1 > self.audio.0 { self.audio.1 } else { self.core_radius };
+        [
+            slot_start(self.core_radius, self.gap),
+            slot_start(after_audio, self.gap),
+            self.mark_inner,
+            self.mark_inner + self.mark_thickness,
+        ]
+    }
+}
+
 /// The stack a node's layers are handed out of, innermost first: a cursor at
 /// the outer edge of the last layer DRAWN, and whether the room has run out.
 ///
@@ -1051,7 +1085,7 @@ impl Stack {
         if width <= 0.0 || self.full {
             return (0.0, 0.0);
         }
-        let inner = if self.cursor > 0.0 { self.cursor + gap } else { 0.0 };
+        let inner = slot_start(self.cursor, gap);
         let outer = inner + width;
         if outer > 1.0 {
             self.full = true;
@@ -1059,6 +1093,26 @@ impl Stack {
         }
         self.cursor = outer;
         (inner, outer)
+    }
+}
+
+/// Where the next layer out begins, given the outer edge of the last one
+/// DRAWN: a `gap` past it, or the node's own center when nothing has been
+/// drawn yet.
+///
+/// The second clause is the whole of why this is a function rather than a sum.
+/// With the core off the innermost ring reaches the center and its sectors
+/// close into pie wedges, rather than opening a hole the size of a padding
+/// around nothing — and three places have to agree about that: [`Stack::take`]
+/// handing out a slot, [`ViewConfig::rings`] placing the mark strip, and
+/// [`RingStack::edges`] saying where a layer that is switched OFF would have
+/// started. A second copy of the rule is how a handle comes to sit a gap off a
+/// ring that is not there.
+fn slot_start(cursor: f32, gap: f32) -> f32 {
+    if cursor > 0.0 {
+        cursor + gap
+    } else {
+        0.0
     }
 }
 
@@ -1160,7 +1214,7 @@ impl ViewConfig {
             // last layer drawn, or the node's center when nothing was. Only
             // the outer edge is left to the renderer, because that is the one
             // the billboard's margin lets run past the quad.
-            mark_inner: if stack.cursor > 0.0 { stack.cursor + gap } else { 0.0 },
+            mark_inner: slot_start(stack.cursor, gap),
             mark_thickness: size(self.mark_thickness, MARK_THICKNESS_MAX),
             gap,
         }

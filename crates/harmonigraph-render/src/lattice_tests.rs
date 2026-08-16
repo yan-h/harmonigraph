@@ -1912,9 +1912,10 @@ fn a_mark_stands_off_the_outermost_ring_the_node_draws() {
 /// `rings_outer`, which is handed the cursor and not the rule — so the two
 /// answers part company at exactly the one cursor the rule is about.
 ///
-/// The state is a reduction the Lattice page's own bars reach: Core radius,
-/// Ring width and Band width all have 0 as their off position, and reading the
-/// lattice as melody/bass marks alone is what taking all three there is for.
+/// The state is a reduction the Lattice page's own Layers bar reaches: the
+/// core, the audio ring and the octave band all have 0 as their off position,
+/// which is their handle dragged home, and reading the lattice as melody/bass
+/// marks alone is what taking all three there is for.
 /// Every other fixture in this file leaves a ring under the mark, where the
 /// gap is owed and both answers agree.
 #[test]
