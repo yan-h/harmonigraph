@@ -49,11 +49,11 @@ struct Uniforms {
     misc4: vec4<f32>,
     // x: grid line thickness, a multiple of the built-in grid width.
     // y: unused.
-    // z: the one padding on a node, in quad UV units — the gap between
-    // neighbouring sectors AND between the outermost ring and the
-    // melody/bass marks. (The scene spends the same number between one
-    // stacked ring and the next, which is arithmetic done before the radii
-    // in misc3 arrive here.) w: how deep those marks reach past the ring
+    // z: the node's ANGULAR padding, in quad UV units — the gap between two
+    // neighbouring sectors, wherever sectors are drawn. The RADIAL padding is
+    // a second setting and never arrives: every stand-off it buys is already
+    // spent in the radii in misc3 and misc4.y, which is arithmetic done before
+    // they get here. w: how deep the melody/bass marks reach past the ring
     // they stand off, same units; 0 = no marks.
     misc5: vec4<f32>,
     // x/y: unused — they carried the trail's mark style and strength, from
@@ -1008,9 +1008,10 @@ fn shimmer_light(rgb: vec3<f32>, terms: vec2<f32>) -> vec3<f32> {
 // near the center every wedge falls inside the gap band, leaving a small
 // clear hub instead of an N-way mush point.
 //
-// The gap's full width is u.misc5.z (the view's Gap bar), in quad UV units.
-// The SAME value separates the marks from the band, so one number is
-// the padding everywhere in the octave layer.
+// The gap's full width is u.misc5.z (the view's Octave gap bar), in quad UV
+// units. The same value cuts the sides of a melody/bass mark, so one number is
+// every angular interruption on the node; how far the marks stand OFF the band
+// is the radial gap instead, and it reaches here only as a radius.
 fn slice_gap_half() -> f32 {
     return max(u.misc5.z, 0.0) * 0.5;
 }
@@ -1083,8 +1084,8 @@ fn outer_glyph(
     let c2 = uv.x * b2.y - uv.y * b2.x;
     // Ownership softened over `aa`: a hard step would show as a straight
     // cut down the slice's sides wherever the gap doesn't reach zero at the
-    // wedge boundary — a Gap of 0, which closes the sectors into a solid
-    // annulus, is exactly that case. Soft ownership lets adjacent slices
+    // wedge boundary — an Octave gap of 0, which closes the sectors into a
+    // solid annulus, is exactly that case. Soft ownership lets adjacent slices
     // cross-fade (the loop keeps the max), so the sector edges stay clean.
     //
     // A wedge under a half turn is the INTERSECTION of its two half-planes;

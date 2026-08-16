@@ -26,8 +26,9 @@ use harmonigraph_scene::{
 ///
 /// **Whole-note before the layers, because none of those settings belongs to a
 /// layer** — the SIZES especially, which are one stack read outward from the
-/// node's center, and the Gap, which is the one number standing every layer of
-/// it off the one inside — and because they are the ones reached for most.
+/// node's center, and the Ring gap, which is the one number standing every
+/// layer of it off the one inside — and because they are the ones reached for
+/// most.
 /// Filing them after Core, Octaves and the marks would put the most-used
 /// controls under the ones reached for least, on the strength of an outward
 /// reading they are not part of.
@@ -42,7 +43,7 @@ use harmonigraph_scene::{
 /// reading it carries, the colours it wears and the switches that are its own.
 ///
 /// The layers then run in stack order, from the center out: Core, the audio
-/// ring a Gap outside it, the octave band a Gap outside that, and the
+/// ring a Ring gap outside it, the octave band a Ring gap outside that, and the
 /// melody/bass marks past the band — the same order [`ViewConfig::rings`] lays
 /// them down in, so the column reads down as the node reads outward. Shimmer is
 /// last because it is the sweep the outermost layer carries rather than a layer
@@ -84,9 +85,9 @@ fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // one's reading comes FROM, which is what tells the two middle rings apart:
     // the analyzer's spectrum on the inner one, the played notes on this one.
     // This heading names the pitch axis drawn on it instead, that being what
-    // the rows below set. The padding between one indicator and the next is the
-    // node-wide Gap, beside it: it is the same number that spaces the rings
-    // apart and stands the melody/bass marks off the band.
+    // the rows below set — the Octave gap at the foot of them included, which
+    // is how wide the cut between two indicators is and is the one padding on
+    // the node this heading does own.
     //
     // COUNTS and a CENTER rather than a pitch range: a slice is always exactly
     // one octave, so an indicator can never stand for less pitch than it
@@ -153,6 +154,26 @@ fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                  outermost extra inward. The outermost never moves.",
             );
     });
+    // After the axis rather than in it: the rows above say how the turn is
+    // SHARED OUT, and this says how wide the cut between two shares is. It is
+    // the node's angular padding whole — the same width down the audio ring's
+    // wedges and a mark's sides, every one of those a boundary between two
+    // octaves — so the octave heading names it rather than merely housing it.
+    //
+    // In the same units as the Ring gap up in Note, and to the same three
+    // decimals, so the two spacings can be read against each other by their
+    // numbers. They are free to differ, and dialling them apart is the whole
+    // reason there are two: what the node cannot say with one number is a ring
+    // standing well off its neighbour while the slices stay tight, or the
+    // reverse.
+    ValueBar::new(&mut view.octave_gap, 0.0..=GAP_MAX, "Octave gap")
+        .decimals(3)
+        .show(ui)
+        .on_hover_text(
+            "The padding between one octave sector and the next — on the band, \
+             on the audio ring's wedges and down a mark's sides. 0 closes the \
+             ring into a solid annulus.",
+        );
     // No size bar under these, and no on/off either: both are the Layers bar's,
     // where 0 is this layer's off position as it is on every other. The band is
     // one WIDTH there rather than a pair of radii, because where it sits is the
@@ -195,10 +216,11 @@ fn melody_bass_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
         ui.checkbox(&mut view.mark_bass, "Bass")
             .on_hover_text("Extend the lowest held note's octave slice past the band");
     });
-    // A mark is the marked octave's own slice continued outward, standing off
-    // the band by Gap -- the same padding one sector stands off the next, so
-    // it reads as that indicator's own piece rather than as a ring around
-    // everything.
+    // A mark is the marked octave's own slice continued outward: it stands off
+    // the band by the Ring gap, as every layer of the stack stands off the one
+    // inside it, and its SIDES are cut by the Octave gap -- the same padding
+    // one sector stands off the next, so it reads as that indicator's own piece
+    // rather than as a ring around everything.
     ui.add_enabled_ui(view.mark_melody || view.mark_bass, |ui| {
         // The Delay is about a mark that is DRAWN — when it arrives — so it is
         // gated on there being one. The strip's depth is the Layers bar's
@@ -328,8 +350,8 @@ fn shimmer_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
 /// Audio ring: what the ring between the core and the octave band measures —
 /// one reading of the analyzer's spectrum, or none.
 ///
-/// Second of the layers, which is where it sits in the stack: a Gap out from
-/// the Core above it, a Gap in from the octave Band below. It is the one
+/// Second of the layers, which is where it sits in the stack: a Ring gap out
+/// from the Core above it, a Ring gap in from the octave Band below. It is the one
 /// section here that says what a layer MEASURES where the rest only size and
 /// colour what is already there, and the name carries the "ring" so the heading
 /// says which layer that is.
@@ -525,9 +547,11 @@ fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBack
     // read without the other three, since a layer's inner edge is a sum over
     // everything inside it.
     //
-    // Directly above the Gap, because the two are one idea: the sizes are the
-    // layers and the Gap is the padding standing between them, the bar draws
-    // both, and dragging the Gap is visibly the stack opening up.
+    // Directly above the Ring gap, because the two are one idea: the sizes are
+    // the layers and that gap is the padding standing between them, the bar
+    // draws both, and dragging it is visibly the stack opening up. The Octave
+    // gap is not on this bar's axis at all and is filed with the slices it
+    // cuts.
     StackBar::new(view)
         .show(ui)
         .on_hover_text(
@@ -538,20 +562,27 @@ fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBack
              line is the node's edge, which only the marks may cross. \
              Double-click to restore.",
         );
-    // The one padding on a node, and so a whole-note setting rather than the
-    // octave layer's: it spaces the rings of the stack apart, it separates one
-    // octave sector from the next, and it is what a melody/bass mark stands off
-    // the band by. Under the octave heading it reads as the sectors' own, which
-    // is one of the three things it does.
+    // The stack's own padding, and so a whole-note setting rather than any one
+    // layer's: it spaces the rings apart and it is what a melody/bass mark
+    // stands off the band by. Directly under the bar that draws it, because it
+    // is measured on that bar's axis — every unit it takes is a unit the four
+    // widths cannot have.
     //
-    // One number for the radial gaps and the angular ones together, because a
-    // node reads as one rhythm of interruptions: two spacings for one idea and
-    // the eye takes the wider of them for the structure.
-    ValueBar::new(&mut view.ring_gap, 0.0..=GAP_MAX, "Gap")
+    // The node's ANGULAR padding is a second bar, under Octaves, where the
+    // slices it cuts are set. Two bars because they are answers to different
+    // questions: this one trades against the sizes above it, and the sectors'
+    // costs the node nothing.
+    //
+    // Three decimals on both, because a gap is the smallest thing on the node
+    // and two of them cannot say it: the fresh 0.052 and the 0.048 beside it
+    // read out as one number, so the bar goes quiet exactly where it is being
+    // dialled in.
+    ValueBar::new(&mut view.ring_gap, 0.0..=GAP_MAX, "Ring gap")
+        .decimals(3)
         .show(ui)
         .on_hover_text(
-            "The one padding on a node: between its rings, between octave \
-             sectors, and before the marks. 0 closes the node up solid.",
+            "The padding between one ring of a node and the next, and before \
+             the melody/bass marks. 0 closes the stack up solid.",
         );
     // Here rather than with the sevens-layer controls, where a "Sevenths" name
     // misreads what it does: the clearance is cut by every DRAWING node on

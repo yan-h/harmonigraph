@@ -353,7 +353,7 @@ const NAMES: [&str; 4] = ["Core", "Audio", "MIDI", "Marks"];
 /// The four sizes of a node's layer stack in one bar, drawn as the node's own
 /// cross-section: the core out from the center, the audio ring, the octave
 /// band and the melody/bass strip, each a cell as long as it is thick and
-/// carrying its own name, with the Gap standing between them as bare track.
+/// carrying its own name, with the Ring gap standing between them as bare track.
 ///
 /// **One control rather than four, because the four are not independent
 /// numbers.** Each layer's inner edge is a sum over every layer inside it, so a
@@ -496,8 +496,8 @@ impl<'a> StackBar<'a> {
         // The gaps between the cells are the track itself, which is what the
         // empty run past the outermost layer is too. One ground for both, since
         // both are the same thing — node the picture does not draw on — and a
-        // shade laid over the padding would make the Gap a fifth thing on the
-        // bar rather than the spacing between four.
+        // shade laid over the padding would make the Ring gap a fifth thing on
+        // the bar rather than the spacing between four.
         let marked = self.view.mark_melody || self.view.mark_bass;
         for (i, cell) in cells.into_iter().enumerate() {
             let (lo, hi) = spans[i];
@@ -720,7 +720,7 @@ mod tests {
     /// and taking the editor down with it from the paint path.
     ///
     /// Reachable from the bars alone, which is what makes it worth a fixture:
-    /// the core at its own maximum and the Gap at its puts the audio ring's
+    /// the core at its own maximum and the Ring gap at its puts the audio ring's
     /// slot at 1.3. The ring is OFF there rather than refused, so the guard
     /// above does not stand in front of this one.
     #[test]

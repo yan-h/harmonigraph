@@ -396,7 +396,9 @@ fn parity_scene() -> Scene {
         // is what the marks stand off — a gap out from its edge.
         rings_outer: 0.795,
         mark_inner: 0.795 + 0.12,
-        ring_gap: 0.12,
+        // The same 0.12 the radii above are spaced by, the fixture standing its
+        // layers off each other and cutting its sectors by one padding.
+        octave_gap: 0.12,
         // No analyzer: the ring off, under either reading. It is a whole layer
         // more light in the middle of every node, and the sweep and mark
         // measurements here are sized against the picture without it —
@@ -1424,6 +1426,10 @@ fn a_melody_bass_mark_extends_the_slice_it_names() {
 const PARTIAL_HALF_CENTS: f32 = 40.0;
 
 /// The padding `ringing_node` stands its layers off each other by — see there.
+/// Spent on BOTH of the node's axes in these fixtures, radially between the
+/// layers and angularly between the sectors, which is what the view's two gap
+/// bars are free to dial apart: a probe reading a radius wants the layers
+/// pixels apart, and one reading a sector wants the seams pixels wide.
 const PROBE_GAP: f32 = 0.12;
 
 /// One node with both rings at the widths a FRESH view gives them: `held`
@@ -1467,7 +1473,7 @@ fn ringing_node(held: Option<usize>, sounding: Option<f32>, range: f32) -> Scene
     scene.outer_outer = rings.band.1;
     scene.rings_outer = rings.outer;
     scene.mark_inner = rings.mark_inner;
-    scene.ring_gap = rings.gap;
+    scene.octave_gap = PROBE_GAP;
 
     let mut paint = harmonigraph_scene::SpectralPaint::silent();
     paint.lut = std::array::from_fn(|k| {
@@ -1845,7 +1851,7 @@ fn a_mark_stands_off_the_outermost_ring_the_node_draws() {
     let staged = |band: bool| -> Scene {
         let mut scene = single_marked_node(MIDDLE_C, 0);
         scene.core_radius = 0.0;
-        scene.ring_gap = rings.gap;
+        scene.octave_gap = PROBE_GAP;
         scene.mark_thickness = rings.mark_thickness;
         // The audio ring is drawn from an all-zero grid, which paints the
         // ramp's floor colour across the annulus — light at a known radius,
@@ -1948,7 +1954,7 @@ fn a_mark_with_no_ring_under_it_reaches_the_nodes_centre() {
     let staged = |rings: &harmonigraph_scene::RingStack, mark: bool| -> Scene {
         let mut scene = single_marked_node(MIDDLE_C, 0);
         scene.core_radius = rings.core_radius;
-        scene.ring_gap = rings.gap;
+        scene.octave_gap = PROBE_GAP;
         scene.mark_thickness = rings.mark_thickness;
         // Silent paint carries the empty pair, so the audio ring is off the
         // way the bar leaves it rather than merely unlit.
@@ -2030,7 +2036,7 @@ fn clearing_node(melody: u32, ring: f32, band: bool, gutter: f32) -> Scene {
     scene.background = glam::Vec4::ONE;
     scene.node_radius = 1.4;
     scene.core_radius = rings.core_radius;
-    scene.ring_gap = rings.gap;
+    scene.octave_gap = PROBE_GAP;
     scene.mark_thickness = rings.mark_thickness;
     // The audio ring drawn off an all-zero grid: the ramp's floor across the
     // whole annulus, which is ink at a known radius and all this asks of it.
@@ -2501,7 +2507,7 @@ fn a_band_dialled_off_paints_no_dot_at_the_nodes_centre() {
         scene.core_radius = 0.0;
         scene.mark_thickness = 0.0;
         scene.rings_outer = 0.0;
-        scene.ring_gap = 0.0;
+        scene.octave_gap = 0.0;
         (scene.outer_inner, scene.outer_outer) = (0.0, 0.0);
         scene.spectral = harmonigraph_scene::SpectralPaint::silent();
         if !node {
@@ -3355,7 +3361,7 @@ fn octave_wheel_scene(layout: harmonigraph_scene::OctaveLayout, cents: f32) -> S
     scene.outer_inner = 0.30;
     scene.outer_outer = 0.95;
     scene.rings_outer = 0.95;
-    scene.ring_gap = 0.10;
+    scene.octave_gap = 0.10;
     scene.mark_thickness = 0.0;
     // Every octave the wheel draws for THIS pitch class, and only those: a
     // level on a slot no sector draws is a state `derive_scene` cannot reach,
@@ -4704,7 +4710,7 @@ fn a_ring_wedge_wears_its_own_levels_ramp_entry() {
         scene.outer_inner = rings.band.0;
         scene.outer_outer = rings.band.1;
         scene.rings_outer = rings.outer;
-        scene.ring_gap = rings.gap;
+        scene.octave_gap = fresh.octave_gap_width();
         let mut paint = harmonigraph_scene::SpectralPaint::silent();
         (paint.inner, paint.outer) = rings.audio;
         paint.folded = true;

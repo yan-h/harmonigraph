@@ -877,7 +877,7 @@ impl LatticeCallback {
                 ],
                 pitch_lut: std::array::from_fn(|k| scene.pitch_lut[k].to_array()),
                 misc4: [scene.core_solidity, scene.mark_inner, 0.0, 0.0],
-                misc5: [scene.grid_thickness, 0.0, scene.ring_gap, scene.mark_thickness],
+                misc5: [scene.grid_thickness, 0.0, scene.octave_gap, scene.mark_thickness],
                 misc6: [0.0, 0.0, scene.sevens_soft, scene.pulse_marks.shader_index() as f32],
                 background: scene.background.to_array(),
                 lattice_ground: scene.lattice_ground.to_array(),
