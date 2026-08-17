@@ -71,6 +71,57 @@ fn the_picture_panes_do_not_scroll() {
     }
 }
 
+/// A separator reads against BOTH grounds a pane can paint, because the two
+/// sides of one boundary are not one surface. A picture pane fills its body with
+/// the well edge to edge — `Viewer::tab_style_override` takes its margin to zero,
+/// which is the arrangement the test above is the other half of — while a
+/// settings pane shows the tab body's panel through. So a divider borrowed from
+/// either grey vanishes along whichever boundaries happen to be drawn in it, and
+/// the lattice against the analyzer, two picture panes in one grey, has no edge
+/// between them at all.
+///
+/// A ratio and a modest one, because this palette is deep and its span is
+/// narrow: the lightest grey the chrome owns is 1.93 against the well, so WCAG's
+/// 3:1 for non-text is out of reach for any colour that still looks like this
+/// instrument. 1.25 is the line between a divider and a coincidence — the panel
+/// against the well is 1.08 and fails it, which is the case worth catching, a
+/// separator dialled to a grey borrowed from the chrome around it.
+#[test]
+fn a_separator_reads_against_both_grounds_a_pane_can_paint() {
+    /// The WCAG relative-luminance ratio between two opaque colours.
+    fn contrast(a: egui::Color32, b: egui::Color32) -> f32 {
+        fn luminance(c: egui::Color32) -> f32 {
+            let channel = |v: u8| {
+                let v = f32::from(v) / 255.0;
+                if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+            };
+            0.2126 * channel(c.r()) + 0.7152 * channel(c.g()) + 0.0722 * channel(c.b())
+        }
+        let (a, b) = (luminance(a), luminance(b));
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+
+    const FLOOR: f32 = 1.25;
+    let style = theme::dock_style(&egui::Style::default(), 1.0);
+    // Every state a separator is drawn in, not the idle one alone: a hover or a
+    // drag that stopped reading would be the same bug on the frame it matters.
+    for (state, color) in [
+        ("idle", style.separator.color_idle),
+        ("hovered", style.separator.color_hovered),
+        ("dragged", style.separator.color_dragged),
+    ] {
+        for (ground, fill) in [("the picture panes' well", theme::well()),
+                               ("a settings pane's panel", theme::panel())] {
+            let ratio = contrast(color, fill);
+            assert!(
+                ratio >= FLOOR,
+                "a {state} separator is {ratio:.2} against {ground}, under {FLOOR} — \
+                 that boundary is invisible",
+            );
+        }
+    }
+}
+
 /// Every tab in the settings column fits on its tab bar, unclipped, at the
 /// editor's default window as well as the window this UI is dialled against.
 ///

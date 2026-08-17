@@ -651,10 +651,11 @@ fn scale_i8(value: i8, scale: f32) -> i8 {
 
 /// The dock chrome, derived from the egui style plus our own tweaks.
 ///
-/// The goal is ONE surface: panes share the panel color, separated by thin
-/// dark lines, with no outlined boxes around bodies or tabs. Buttons that
-/// add noise (per-tab close, collapse arrows) are disabled on the DockArea
-/// itself in `root_ui`.
+/// The goal is ONE surface, with no outlined boxes around bodies or tabs: the
+/// only thing standing between two panes is the ruled line of a separator, and
+/// a pane is otherwise its own contents to its own edge. Buttons that add noise
+/// (per-tab close, collapse arrows) are disabled on the DockArea itself in
+/// `root_ui`.
 ///
 /// `scale` is the [chrome scale](ui_scale) the caller is drawing at. It has to
 /// be passed rather than read off `egui_style`, which carries sizes already
@@ -666,7 +667,7 @@ pub fn dock_style(egui_style: &egui::Style, scale: f32) -> egui_dock::Style {
     style.dock_area_padding = None;
     style.main_surface_border_stroke = Stroke::NONE;
 
-    // Separators: slim bands in the well color, accent when grabbed.
+    // Separators: slim bands in the hairline grey, accent when grabbed.
     style.separator.width = 4.0 * scale;
     // Not scaled: how near a separator the pointer has to come to take hold of
     // it is a reach, not a drawn thing, and a narrower band is if anything the
@@ -688,7 +689,21 @@ pub fn dock_style(egui_style: &egui::Style, scale: f32) -> egui_dock::Style {
     // being one tab bar wide: those are clamped every frame, which is the
     // condition `fold::drags` reads a gesture against rather than a fraction.
     style.separator.extra = min_pane(scale);
-    style.separator.color_idle = well();
+    // A rung ABOVE everything it divides, rather than the recess below it that a
+    // divider in the well or the panel would be. The two sides of a boundary are
+    // not one surface and never both the same one: a picture pane paints the well
+    // edge to edge (`tab_style_override` takes its body margin to zero), a
+    // settings pane shows the panel through, and the well is what a tab bar is
+    // filled with — so any grey borrowed from a pane is a band that vanishes at
+    // whichever boundaries happen to be drawn in it, and two picture panes side by
+    // side have no edge between them at all. The hairline is the chrome's own
+    // divider grey, `L*` 28.5 against the well's 4.7 and the panel's 8.8, so one
+    // colour reads at every boundary the dock can make.
+    //
+    // It is the line's whole width because egui_dock fills the band and has no
+    // stroke of its own; 4pt of it is the widest this grey is drawn anywhere, and
+    // the reason the band is slim.
+    style.separator.color_idle = hairline();
     style.separator.color_hovered = accent_edge();
     style.separator.color_dragged = accent();
 
