@@ -193,9 +193,9 @@ impl SpectrumAnalyzer {
     /// Seconds of audio one spectrum is measured over.
     ///
     /// A spectrum is not an instant: it is everything that happened across
-    /// this much time, Hann-weighted toward the middle. Anything placing a
-    /// spectrum on a time axis has to know how wide it is — see
-    /// [`window_center_offset`](Self::window_center_offset).
+    /// this much time, weighted toward the middle by whatever tapers are in
+    /// use. Anything placing a spectrum on a time axis has to know how wide it
+    /// is — see [`window_center_offset`](Self::window_center_offset).
     pub fn window_seconds(&self) -> f64 {
         f64::from(self.fft_size as u32) / f64::from(self.sample_rate)
     }
@@ -205,10 +205,15 @@ impl SpectrumAnalyzer {
     ///
     /// The analyzer always looks BACKWARD — `pitch_spectrum` reads the most
     /// recent `fft_size` samples — so a spectrum taken at time `t` describes
-    /// `[t - window, t]`, and the Hann window weights the middle of that most.
+    /// `[t - window, t]`, and the tapers weight the middle of that most.
     /// Stamping it `t` would draw every sound half a window later than it
     /// happened, which is the whole of its energy placed at the moment the
     /// LAST of it arrived.
+    ///
+    /// HALF the window at every taper count, because what decides the centroid
+    /// is that the set is SYMMETRIC and not what shape it has: one Hann window
+    /// and a sum of sine tapers are different weightings, and both are their
+    /// own mirror about the middle.
     pub fn window_center_offset(&self) -> f64 {
         0.5 * self.window_seconds()
     }
@@ -653,7 +658,7 @@ fn build_tapers(n: usize, count: usize) -> Vec<f32> {
 /// full-scale sine at every pitch, which is what makes the Level window's ends
 /// absolute dB, what the tilt pivots against, and what makes the audio ring's
 /// Gate a fixed position rather than a drifting one. What it does NOT hold is
-/// the NOISE FLOOR, which reads higher as tapers are added (~3.5 dB by three):
+/// the NOISE FLOOR, which reads higher as tapers are added (4.72 dB by three):
 /// a line spread across a wider main lobe has to be scaled back up to reach 1.0,
 /// and flat noise comes up with it. That is a real cost in contrast, it is the
 /// estimator's and not this function's, and

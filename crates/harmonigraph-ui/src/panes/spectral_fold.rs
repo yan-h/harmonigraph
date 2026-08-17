@@ -420,22 +420,6 @@ pub(crate) fn apply(scene: &mut Scene, state: &mut SharedState, now: f64) {
     scene.wear_audio_rings(&mut state.ring_fade, &env, now);
 }
 
-/// Read a grid of power into the ring's channel: every bucket through the
-/// shared [`loudness`] curve, quantized to the byte the shader unpacks.
-///
-/// The one place either reading becomes a LEVEL, which is what keeps them in
-/// the same colour scheme: the byte in the table is what `loudness` answers,
-/// so a wedge and the Spectral pane's own curve at the same power are the same
-/// level and therefore the same colour off the same ramp. What differs between
-/// the two readings is the grid handed in — the fold's smoothed excess, or the
-/// analyzer's raw buckets — and nothing after this point knows which it was.
-///
-/// Per BUCKET rather than per node, which is what makes the ring cost the same
-/// whatever the extents are: the grid is one reading the whole lattice shares,
-/// and each node's wedges are a window onto it (the shader's `spectrum_at`).
-/// That holds for the fold as much as for the raw spectrum — the kernel is the
-/// same shape wherever it is centred, so folding it over the grid once answers
-/// every node and every octave at a stroke.
 /// What the ring's wedges READ, carried across frames on the ring's own attack
 /// and release — where [`RingFade`](harmonigraph_scene::RingFade) is whether the
 /// annulus is drawn at all.
