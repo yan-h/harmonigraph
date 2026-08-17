@@ -81,6 +81,103 @@ fn a_chord_fills_most_of_the_analyzers_height() {
     assert!(peak < 0.99, "the curve is clipped flat against the ceiling at {peak:.2}");
 }
 
+/// The Attack is the coefficient a RISING bucket takes and the Release the one
+/// a falling bucket takes, and swapping the pair swaps the picture.
+///
+/// One tone and one silence, run twice with the two times exchanged, because
+/// each setting on its own is answerable by the other: a curve that climbed
+/// fast proves nothing about which bar did it until the same audio through the
+/// swapped pair climbs slowly. What it holds is the branch itself — with one
+/// coefficient for both directions, or with the comparison inverted, this is
+/// the picture that comes out wrong.
+///
+/// Every other test here leaves the two equal or pushes seconds of steady tone,
+/// where both coefficients converge to the same answer and the branch is
+/// invisible.
+#[test]
+fn a_bucket_rises_on_the_attack_and_falls_on_the_release() {
+    let sr = 48_000.0;
+    // The window fills before a single column comes out, so each phase is that
+    // much audio plus ten hops — enough for a 10 ms time to land and for a 1 s
+    // one to have moved a few percent.
+    let window = SpectrumConfig::default().window.samples();
+    let phase = window + 10 * (AudioSpectrum::FFT_INTERVAL * f64::from(sr)) as usize;
+    let tone: Vec<f32> = (0..phase)
+        .map(|i| 0.5 * (std::f32::consts::TAU * 440.0 * i as f32 / sr).sin())
+        .collect();
+    let silence = vec![0.0; phase];
+    let a4 = ((69.0 - harmonigraph_core::spectrum::SPECTRUM_MIN_MIDI)
+        * harmonigraph_core::spectrum::BINS_PER_SEMITONE as f32) as usize;
+
+    // What A4 reads after the tone, and what is left of it after the silence.
+    let run = |attack: f32, release: f32| {
+        let cfg = SpectrumConfig { attack, release, ..SpectrumConfig::default() };
+        let mut spectrum = AudioSpectrum::default();
+        spectrum.push_samples(&tone, 1, sr, 1.0, &cfg);
+        let lit = spectrum.display(1.0).expect("audio is flowing")[a4];
+        spectrum.push_samples(&silence, 1, sr, 2.0, &cfg);
+        let left = spectrum.display(2.0).expect("audio is still flowing")[a4];
+        (lit, left)
+    };
+    let (quick_lit, slow_left) = run(0.010, 1.0);
+    let (slow_lit, quick_left) = run(1.0, 0.010);
+
+    assert!(
+        quick_lit > slow_lit * 5.0,
+        "a 10 ms Attack reached {quick_lit:e} where a 1 s Attack reached {slow_lit:e}; \
+         the rising bucket is not on the Attack",
+    );
+    assert!(
+        slow_left > quick_left * 5.0,
+        "a 1 s Release left {slow_left:e} where a 10 ms Release left {quick_left:e}; \
+         the falling bucket is not on the Release",
+    );
+}
+
+/// The Tapers setting reaches the analyzer: the same audio measured at one
+/// taper and at three does not come out as the same curve.
+///
+/// Nothing else in the workspace constructs `Three` or `Five` — the button row
+/// names them and `count()` maps them, and every taper claim in
+/// `harmonigraph-core` is made against a bare `SpectrumAnalyzer`. So without
+/// this, deleting the `set_tapers` line in `push_samples` leaves the control
+/// inert with the whole suite green.
+///
+/// WHAT the difference is stays in core, where it is measured
+/// (`more_tapers_steady_a_bucket_against_noise` and
+/// `the_noise_floor_reads_higher_as_tapers_are_added`). This holds only that
+/// the setting is connected to something.
+#[test]
+fn the_tapers_setting_reaches_the_analyzer() {
+    let sr = 48_000.0;
+    // Deterministic white noise: something in every bucket, which is what makes
+    // a change of estimator show up across the axis rather than in the skirts
+    // of one partial.
+    let mut seed = 0x1234_5678u32;
+    let noise: Vec<f32> = (0..24_000)
+        .map(|_| {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            (seed as f32 / u32::MAX as f32) * 2.0 - 1.0
+        })
+        .collect();
+
+    let curve = |tapers| {
+        let cfg = SpectrumConfig { tapers, ..SpectrumConfig::default() };
+        let mut spectrum = AudioSpectrum::default();
+        spectrum.push_samples(&noise, 1, sr, 1.0, &cfg);
+        spectrum.display(1.0).expect("audio is flowing").to_vec()
+    };
+    let one = curve(SpectrumTapers::One);
+    for more in [SpectrumTapers::Three, SpectrumTapers::Five] {
+        // Counted rather than compared whole: the grid is 3828 buckets, and an
+        // `assert_ne!` on the pair prints both of them.
+        let moved = one.iter().zip(curve(more)).filter(|(a, b)| **a != *b).count();
+        assert!(moved > 0, "{more:?} tapers measured what one taper did, in every bucket");
+    }
+}
+
 #[test]
 fn spectrogram_history_stays_bounded() {
     let bins = [0.0f32; harmonigraph_core::spectrum::SPECTRUM_BINS];

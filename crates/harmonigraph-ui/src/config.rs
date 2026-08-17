@@ -31,6 +31,52 @@ impl SpectrumWindow {
     }
 }
 
+/// How many tapers the analyzer averages, picked in the Analyzer settings
+/// section beside the window length.
+///
+/// The window length above trades TIME against PITCH and leaves the estimate's
+/// noise exactly where it is; this trades COST and CONTRAST against that noise,
+/// which is a different axis and the reason it is a second control rather than
+/// more entries on the first. `harmonigraph_core::spectrum::build_tapers`
+/// carries the mechanism; what a reader of this needs is the shape of the
+/// trade, measured at a mid-axis bucket under white noise:
+///
+/// | tapers | noise sd | floor | per column |
+/// |---|---|---|---|
+/// | 1 | 4.55 dB | — | 0.17 ms |
+/// | 3 | 2.67 dB | +4.7 dB | 0.40 ms |
+/// | 5 | 2.01 dB | +7.1 dB | 0.66 ms |
+///
+/// The floor column is the catch, and it is not a defect: holding a full-scale
+/// sine at 0 dB means a line spread over a wider main lobe is scaled back up to
+/// reach it, and flat noise rises with it. So more tapers draw a steadier
+/// picture with LESS room between a partial and the haze. At three tapers the
+/// audio ring's Gate wants about `+0.08` to select the same nodes it does at
+/// one, since the Gate is a fraction of a 60 dB Level window.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum SpectrumTapers {
+    /// One Hann window: the estimator with no averaging in it, and the picture
+    /// this analyzer draws with the control untouched.
+    #[default]
+    One,
+    /// Three sine tapers — the count where the noise roughly halves and the
+    /// main lobe is still about a Hann window wide.
+    Three,
+    /// Five sine tapers: steadier again, and wide enough that the bottom of the
+    /// axis loses pitch it does not have to spare.
+    Five,
+}
+
+impl SpectrumTapers {
+    pub fn count(self) -> usize {
+        match self {
+            SpectrumTapers::One => 1,
+            SpectrumTapers::Three => 3,
+            SpectrumTapers::Five => 5,
+        }
+    }
+}
+
 /// Which way the Spectral pane runs, named for the side the NOW-line is on —
 /// which is the spectrum's own edge, the one the roll's notes arrive at and
 /// the heatmap's newest column sits against. Time runs away from it into the
@@ -234,6 +280,19 @@ impl SpectrogramPreset {
 }
 
 
+/// The longest attack or release the analyzer's own curve offers, in seconds —
+/// the bars' top end, and what a deserialized time is fit to.
+///
+/// Half a second is already well past a meter's ballistics and is a guard rail
+/// rather than a setting; the ring, which wants a genuinely slow release, has
+/// its own pair with its own ceiling
+/// ([`SPECTRAL_BALLISTICS_MAX`](harmonigraph_scene::SPECTRAL_BALLISTICS_MAX)).
+///
+/// Stated beside the fields it bounds rather than beside the bars that offer
+/// it, because [`SpectrumConfig::sanitize`] is the other reader: a range with
+/// one home cannot have the two disagree.
+pub(crate) const BALLISTICS_MAX: f32 = 0.5;
+
 /// Everything the Spectral pane's display is configured by, edited in the
 /// Display tab's Analyzer section and persisted with the UI state.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -245,6 +304,10 @@ pub struct SpectrumConfig {
     /// flip.
     pub orientation: SpectralOrientation,
     pub window: SpectrumWindow,
+    /// How many tapers the estimate averages; see [`SpectrumTapers`]. The
+    /// window above says how much AUDIO one column is measured over, this says
+    /// how many independent looks are taken at it.
+    pub tapers: SpectrumTapers,
     /// Bottom of the dB height scale: what reads as silence. A full-scale
     /// sine sits at 0 dB.
     pub floor_db: f32,
@@ -262,8 +325,28 @@ pub struct SpectrumConfig {
     /// there being one depth axis to drag along and the floor being the end
     /// pinned to the baseline.
     pub ceiling_db: f32,
-    /// Display inertia: 0 = every refresh lands instantly, 0.9 = slow.
-    pub smoothing: f32,
+    /// How long the drawn curve takes to RISE toward a louder reading, in
+    /// seconds. 0 lands every refresh instantly.
+    ///
+    /// A TIME and not a per-column coefficient, because a coefficient names
+    /// nothing a reader can act on: the same number is a different filter at a
+    /// different hop, and there is no way to tell from the bar whether it is
+    /// smoothing over a fiftieth of a second or a fifth of one. A time is
+    /// converted to its coefficient against the hop actually in use
+    /// (`AudioSpectrum::push_samples`), so what the bar says is what the
+    /// analyzer does.
+    pub attack: f32,
+    /// How long it takes to FALL toward a quieter one, in seconds.
+    ///
+    /// Split from [`attack`](Self::attack) because a spectrum's two directions
+    /// are not one gesture: a partial arriving is an event worth seeing at the
+    /// moment it happens, and the same partial's noise wobbling downward is
+    /// nothing worth drawing at all. One symmetric time has to be short enough
+    /// for the first, which leaves it far too short for the second — every
+    /// analyzer with meter ballistics splits them for this reason.
+    ///
+    /// Both are bounded by [`BALLISTICS_MAX`].
+    pub release: f32,
     /// Spectral tilt, in the convention analyzers use: the reference
     /// slope in dB/octave that displays as FLAT, one of [`TILT_STEPS`]
     /// (0, -1.5 .. -6). 0 draws raw power; -3 makes pink noise read
@@ -606,6 +689,22 @@ impl SpectrumConfig {
             fresh.roll_lead_release
         }
         .clamp(0.0, ROLL_LEAD_RELEASE_MAX);
+        // The curve's own two times, which are durations of the same kind and
+        // fit the same way — and to the same bound their bars offer, since a
+        // time past it is a filter no gesture can produce.
+        //
+        // A huge one is the case worth naming: it is finite, so a finiteness
+        // check alone passes it, and `hop_alpha` answers a coefficient that
+        // rounds to 0 in f32 — a curve frozen at whatever it last held, while
+        // the spectrogram beside it (which reads the raw columns) keeps
+        // drawing. The ring's own pair is fit at the same point for the same
+        // reason ([`ViewConfig::sanitize`](harmonigraph_scene::ViewConfig::sanitize)).
+        self.attack =
+            if self.attack.is_finite() { self.attack } else { fresh.attack }
+                .clamp(0.0, BALLISTICS_MAX);
+        self.release =
+            if self.release.is_finite() { self.release } else { fresh.release }
+                .clamp(0.0, BALLISTICS_MAX);
         // The level pair, against the same threat and for the same reason.
         // `loudness_raw` already refuses a collapsed or inverted window, which
         // is what a `max` can answer; a NaN end it cannot, because NaN loses
@@ -770,9 +869,20 @@ impl Default for SpectrumConfig {
         SpectrumConfig {
             orientation: SpectralOrientation::Left,
             window: SpectrumWindow::Balanced,
+            // One taper — the picture with no averaging in it. The steadier
+            // counts cost contrast as well as CPU (see `SpectrumTapers`), so
+            // which of them is worth it is a judgement about material, and the
+            // fresh look is the one that presumes nothing.
+            tapers: SpectrumTapers::One,
             floor_db: -60.0,
             ceiling_db: DEFAULT_CEILING_DB,
-            smoothing: 0.55,
+            // Meter ballistics: quick enough up that a note's arrival is not
+            // behind the ear, slow enough down that the estimator's own noise
+            // wobbling between columns does not draw. 10 ms is inside one hop,
+            // so an arrival is essentially instant; 150 ms is most of a second
+            // of visible decay without holding a chord that has left.
+            attack: 0.010,
+            release: 0.150,
             // The slope that flattens typical musical material — what the
             // analyzer is looked at through nearly all the time, so it is
             // where it starts. Raw power (0) buries everything above a

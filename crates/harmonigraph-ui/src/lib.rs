@@ -43,7 +43,8 @@ pub use layout::{Layout, Placement, PRESETS};
 // which only the tests wanted, and `sane_scale` and `SpectrogramSurface`,
 // which nothing outside their own module wanted at all.
 pub use config::{
-    SpectralOrientation, SpectrogramPreset, SpectrumConfig, SpectrumWindow, SCALE_BAR_RANGE,
+    SpectralOrientation, SpectrogramPreset, SpectrumConfig, SpectrumTapers, SpectrumWindow,
+    SCALE_BAR_RANGE,
     TILT_STEPS,
 };
 // The Spiral pane's framing, which is `SharedState::spiral_view`'s type. `panes`

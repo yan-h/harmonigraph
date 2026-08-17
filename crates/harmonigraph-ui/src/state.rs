@@ -205,6 +205,13 @@ pub struct SharedState {
     /// Stepped against the clock (`panes::spectral_fold::apply`), so the two
     /// lattices an editor frame draws step it once between them.
     pub ring_fade: harmonigraph_scene::RingFade,
+    /// What the ring's wedges currently READ, carried across frames on the
+    /// ring's own attack and release — the level inside the annulus, where
+    /// [`ring_fade`](Self::ring_fade) above is whether the annulus is there at
+    /// all. Both live here for the same reason: the offline renderer carries
+    /// this struct between frames and nothing else, so state kept anywhere else
+    /// would draw one picture live and another in an export.
+    pub ring_levels: crate::panes::spectral_fold::RingLevels,
     /// Where the analyzer's divider stands on the DOCKED pane as that pane is
     /// resized — the spectrum keeps its size and the spectrogram takes the
     /// difference. See [`panes::spectral::SpectrumHold`].
@@ -678,6 +685,7 @@ impl SharedState {
             spectrum: AudioSpectrum::default(),
             spectrum_config: SpectrumConfig::default(),
             ring_fade: harmonigraph_scene::RingFade::default(),
+            ring_levels: crate::panes::spectral_fold::RingLevels::default(),
             spectrum_hold: panes::spectral::SpectrumHold::default(),
             spiral_view: panes::spiral::SpiralView::default(),
             whole_song: None,

@@ -448,7 +448,7 @@ fn the_picker_draws_the_page_it_holds_and_only_that_page() {
     const CASES: [(DisplayPage, &str); 4] = [
         (DisplayPage::Colors, "Bloom"),
         (DisplayPage::Lattice, "Solidity"),
-        (DisplayPage::Analyzer, "Smoothing"),
+        (DisplayPage::Analyzer, "Release"),
         (DisplayPage::System, "Render scale"),
     ];
     for (page, needle) in CASES {
@@ -876,19 +876,18 @@ fn a_bar_dragged_past_the_window_edge_keeps_tracking_the_pointer() {
     let ctx = h.ctx.clone();
     let mut frame =
         |state: &mut SharedState, events: Vec<egui::Event>| h.frame(state, events);
-    // Smoothing: a plain 0..=0.9 bar, so where the pointer is says what the
-    // value should be, and the far end of the range is what an off-window drag
-    // to the right must arrive at.
+    // Release: a plain 0..=0.5 bar (`settings::BALLISTICS_MAX`), so where the
+    // pointer is says what the value should be, and the far end of the range is
+    // what an off-window drag to the right must arrive at.
     let out = frame(&mut state, vec![]);
-    let name =
-        bar_named(&out, "Smoothing").expect("the Smoothing bar is drawn on the Analyzer page");
+    let name = bar_named(&out, "Release").expect("the Release bar is drawn on the Analyzer page");
     let on_the_bar = name + egui::vec2(2.0, 4.0);
-    let before = state.spectrum_config.smoothing;
+    let before = state.spectrum_config.release;
     frame(&mut state, vec![egui::Event::PointerMoved(on_the_bar)]);
     frame(&mut state, vec![press(on_the_bar, true)]);
     frame(&mut state, vec![egui::Event::PointerMoved(on_the_bar + egui::vec2(60.0, 0.0))]);
-    assert!(ctx.dragged_id().is_some(), "the press on the Smoothing bar started no drag");
-    let inside = state.spectrum_config.smoothing;
+    assert!(ctx.dragged_id().is_some(), "the press on the Release bar started no drag");
+    let inside = state.spectrum_config.release;
     assert!(inside != before, "the bar did not follow the pointer inside the window");
 
     // Out past the right edge of the window, with the button still down: the
@@ -899,7 +898,7 @@ fn a_bar_dragged_past_the_window_edge_keeps_tracking_the_pointer() {
         "the bar let go of the drag when the pointer left the window",
     );
     assert_eq!(
-        state.spectrum_config.smoothing, 0.9,
+        state.spectrum_config.release, 0.5,
         "the bar stopped following the pointer at the window edge (it reads {inside} still)",
     );
 

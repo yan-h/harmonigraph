@@ -3,6 +3,7 @@
 //! colors are the one thing dialled elsewhere — they are a color table, and
 //! both of those are on the Colors page ([`super::super::color`]).
 
+use crate::config::BALLISTICS_MAX;
 use crate::widgets::{button_row, choice_row, option_label, RangeBar, ValueBar};
 use crate::SharedState;
 use crate::panes::{edge_bar, section};
@@ -28,6 +29,14 @@ fn db_readout(db: f32) -> String {
     format!("{db:.0} dB")
 }
 
+/// A short duration in milliseconds, which is the unit these times are read and
+/// argued about in — a hop is 8 ms and a release worth having is a couple of
+/// hundred, so seconds under a bar would be three leading zeros and a decision
+/// nobody can eyeball.
+pub(in crate::panes) fn ms_readout(seconds: f32) -> String {
+    format!("{:.0} ms", seconds.max(0.0) * 1000.0)
+}
+
 /// A duration as the roll's Span bar reads it out, carrying its own unit
 /// rather than naming one in the label: the bar runs from a second to ten
 /// minutes, and "300" under a fixed "(s)" is a number you have to divide
@@ -51,7 +60,7 @@ pub(super) fn span_readout(seconds: f32) -> String {
 /// Settings for the Spectral pane's display and analyzer (persisted with
 /// the UI state). The Display tab's Analyzer page.
 pub(crate) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState) {
-    use crate::{SpectralOrientation, SpectrumWindow};
+    use crate::{SpectralOrientation, SpectrumTapers, SpectrumWindow};
 
     // What the page reaches, said once at the top rather than repeated on the
     // sections: every setting here is the analyzer's, and the Spiral is the
@@ -153,6 +162,25 @@ pub(crate) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
             ));
         }
     });
+    // Beside the window rather than folded into it: the window trades time
+    // against pitch, this trades cost and contrast against the estimate's own
+    // noise, and no single row of buttons can name both.
+    button_row(ui, |ui| {
+        ui.label("Tapers");
+        for (tapers, label) in [
+            (SpectrumTapers::One, "1"),
+            (SpectrumTapers::Three, "3"),
+            (SpectrumTapers::Five, "5"),
+        ] {
+            ui.selectable_value(&mut cfg.tapers, tapers, label).on_hover_text(match tapers {
+                SpectrumTapers::One => "one window: the sharpest picture, and the speckliest",
+                SpectrumTapers::Three => "three looks at the same audio: about half the \
+                     speckle, ~4.7 dB less room between a partial and the haze",
+                SpectrumTapers::Five => "five looks: steadier again, and coarser at the \
+                     bottom of the axis",
+            });
+        }
+    });
 
     // Both ends of the height scale on one control, like the pitch range: the
     // window on the spectrum's dynamics rather than just where it bottoms out.
@@ -171,9 +199,20 @@ pub(crate) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
          top down to lift quiet material into the picture. Double-click for the \
          full scale.",
     );
-    ValueBar::new(&mut cfg.smoothing, 0.0..=0.9, "Smoothing")
+    // Two bars and not one, because a spectrum's two directions are different
+    // events: a partial arriving is worth seeing when it happens, and the same
+    // partial's noise wobbling down is not worth drawing at all.
+    ValueBar::new(&mut cfg.attack, 0.0..=BALLISTICS_MAX, "Attack")
+        .display(ms_readout)
         .show(ui)
-        .on_hover_text("Display inertia: 0 reacts instantly, 0.9 glides");
+        .on_hover_text("How long the curve takes to rise to a louder reading. 0 lands instantly.");
+    ValueBar::new(&mut cfg.release, 0.0..=BALLISTICS_MAX, "Release")
+        .display(ms_readout)
+        .show(ui)
+        .on_hover_text(
+            "How long it takes to fall to a quieter one. The long one: most of \
+             what reads as speckle is the estimate wobbling downward.",
+        );
     // Tilt: conventional stepped reference slopes. Snap stray persisted
     // values (e.g. from the short-lived continuous bar) onto a step.
     if !crate::TILT_STEPS.contains(&cfg.tilt) {

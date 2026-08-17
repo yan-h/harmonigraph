@@ -616,6 +616,43 @@ pub struct ViewConfig {
     /// 1025 at 0.1 and 177 at 0.4, where the spectrum rings all 1025 at both
     /// and none by 0.6.
     pub spectral_ring_gate: f32,
+    /// How far the gate DROPS for a bucket already open, as a share of the
+    /// Level window — a Schmitt trigger's lower threshold.
+    ///
+    /// A gate is a threshold on a live measurement, so a level sitting near it
+    /// crosses repeatedly and the node's whole annulus answers each crossing.
+    /// [`RingFade`](crate::RingFade) makes each of those a slow transition, and
+    /// this makes them rare: what a fade fixes is the SPEED of a crossing, and
+    /// what a second threshold fixes is how often there is one. Two different
+    /// halves of one complaint, which is why both are here rather than one
+    /// being tuned until it covers for the other.
+    ///
+    /// 0 is one threshold, exactly the picture with no hysteresis in it. The
+    /// useful settings are small: the whole point is a band narrower than the
+    /// gap between a partial and the haze, so it swallows the wobble without
+    /// swallowing a real change.
+    pub spectral_ring_hysteresis: f32,
+    /// How long the ring's READING takes to rise toward a louder measurement,
+    /// in seconds, and [`spectral_ring_release`](Self::spectral_ring_release)
+    /// how long to fall.
+    ///
+    /// Its own times rather than the analyzer's, because the ring is asked a
+    /// different question from the Spectral pane: the pane is a measurement
+    /// instrument and wants to show what is there, and the ring is a legibility
+    /// device on a lattice of hundreds of nodes and wants to show whether a
+    /// harmonic is PRESENT. A filter long enough to settle the second is longer
+    /// than the first should ever be.
+    ///
+    /// Its own times rather than the note Fade, too, for a reason the Fade's own
+    /// default states: 0.15 s is where a note's arrival and its release agree,
+    /// and that is a judgement about MIDI transients. Riding the ring's
+    /// steadiness on it means one cannot be tuned without detuning the other.
+    /// The Fade still carries the ring's ARRIVAL and DEPARTURE
+    /// ([`RingFade`](crate::RingFade)) — a layer of a node comes and goes with
+    /// the node. What is here is how fast the reading INSIDE it moves.
+    pub spectral_ring_attack: f32,
+    /// See [`spectral_ring_attack`](Self::spectral_ring_attack).
+    pub spectral_ring_release: f32,
     // ---- Note envelope ---------------------------------------------------
     // How a note ARRIVES and how it LEAVES, for every layer of the node at
     // once. The DURATION of both is the host-automatable Fade param and lives
@@ -1757,6 +1794,20 @@ impl ViewConfig {
         // the same way for the shells that never come through this door.
         self.spectral_ring_gate = finite_or(self.spectral_ring_gate, crate::SPECTRAL_GATE_MIN)
             .clamp(crate::SPECTRAL_GATE_MIN, crate::SPECTRAL_GATE_MAX);
+        // The hysteresis repairs to 0 — one threshold — on the same argument
+        // the gate repairs to its floor: a band nobody can read is a reason to
+        // fall back to the simpler rule, never to hold rings open on a number
+        // that came out of a corrupt blob.
+        self.spectral_ring_hysteresis = finite_or(self.spectral_ring_hysteresis, 0.0)
+            .clamp(0.0, crate::SPECTRAL_HYSTERESIS_MAX);
+        // Times repair to the fresh pair rather than to zero: zero is a legal
+        // setting (no smoothing) but it is not the safe reading of a broken
+        // one, since it puts the flicker back with nothing on screen saying so.
+        self.spectral_ring_attack = finite_or(self.spectral_ring_attack, fresh.spectral_ring_attack)
+            .clamp(0.0, crate::SPECTRAL_BALLISTICS_MAX);
+        self.spectral_ring_release =
+            finite_or(self.spectral_ring_release, fresh.spectral_ring_release)
+                .clamp(0.0, crate::SPECTRAL_BALLISTICS_MAX);
 
         // The ground both rings stand on, against that same hole. It is an
         // `L*`, so the clamp is the axis itself: off either end the Newton
@@ -1980,6 +2031,18 @@ impl Default for ViewConfig {
             // spectrum reading discriminates far less at any setting, and that
             // is the reading rather than the gate — see the field.
             spectral_ring_gate: 0.4,
+            // 0.03 of the Level window is 1.8 dB at the fresh -60 dB range —
+            // under the noise a single-taper estimate carries (4.55 dB) and
+            // well under the gap a real partial opens, so it swallows the
+            // wobble at the threshold without holding a ring that has stopped
+            // being earned.
+            spectral_ring_hysteresis: 0.03,
+            // Fast up, slow down. A quarter second of release is long against
+            // the 8 ms the analyzer measures on and short against a phrase, so
+            // a partial reads as present for as long as it is sounding and the
+            // haze between partials stops twinkling.
+            spectral_ring_attack: 0.030,
+            spectral_ring_release: 0.250,
             // Near enough a square law (the exponent lands at 2.05): enough
             // that a release leaves promptly and settles instead of sliding
             // out at one rate, and not so much that the tail is over before

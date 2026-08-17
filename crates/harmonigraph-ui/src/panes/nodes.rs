@@ -9,13 +9,15 @@
 //! table. The text a node carries is [`super::labels`], kept out because a
 //! label rides a hovered and a remembered node as readily as a sounding one.
 
+use super::spectral::settings::ms_readout;
 use super::{edge_bar, param_bar, section};
 use crate::params::{seconds, ParamBackend, ParamKey};
 use crate::widgets::{button_row, choice_row, OctaveStrip, StackBar, ValueBar};
 use crate::SharedState;
 use harmonigraph_scene::{
     Pulse, SpectralReading, ViewConfig, GAP_MAX, MARK_DELAY_MAX, MIN_EXTRA_SIZE, PITCH_CEIL,
-    PITCH_FLOOR, SPECTRAL_GATE_MAX, SPECTRAL_GATE_MIN, SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN,
+    PITCH_FLOOR, SPECTRAL_BALLISTICS_MAX, SPECTRAL_GATE_MAX, SPECTRAL_GATE_MIN,
+    SPECTRAL_HYSTERESIS_MAX, SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN,
     SPECTRAL_WIDTH_MAX, SPECTRAL_WIDTH_MIN,
 };
 
@@ -427,6 +429,45 @@ fn audio_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                  rings whatever this says, and rings arrive and leave on the \
                  Fade.",
             );
+        // Under the Gate because it is a property OF the gate rather than a
+        // second decision beside it: what it moves is where the same threshold
+        // sits for a bucket that is already lit.
+        ValueBar::new(
+            &mut view.spectral_ring_hysteresis,
+            0.0..=SPECTRAL_HYSTERESIS_MAX,
+            "Gate hold",
+        )
+        .display(|level| format!("{:.0}%", level * 100.0))
+        .show(ui)
+        .on_hover_text(
+            "How far the Gate drops once a node is lit, so a level sitting on \
+             the threshold stops switching. 0 is one threshold. The Fade sets \
+             how SLOWLY a ring comes and goes; this sets how RARELY.",
+        );
+        ValueBar::new(
+            &mut view.spectral_ring_attack,
+            0.0..=SPECTRAL_BALLISTICS_MAX,
+            "Ring attack",
+        )
+        .display(ms_readout)
+        .show(ui)
+        .on_hover_text(
+            "How long a wedge takes to brighten toward a louder reading. Its \
+             own time, not the analyzer's: the Spectral pane wants what is \
+             there, and the ring wants whether a harmonic is present.",
+        );
+        ValueBar::new(
+            &mut view.spectral_ring_release,
+            0.0..=SPECTRAL_BALLISTICS_MAX,
+            "Ring release",
+        )
+        .display(ms_readout)
+        .show(ui)
+        .on_hover_text(
+            "How long it takes to dim toward a quieter one. The knob for \
+             twinkle: most of what shimmers between partials is the estimate \
+             wobbling downward.",
+        );
     });
     // The FOLD's kernel, and so inert under Spectrum rather than merely
     // without audio: the spectrum reading shows a whole window of pitch per

@@ -262,6 +262,7 @@ impl WholeSong {
     ) -> WholeSong {
         let mut analyzer = harmonigraph_core::spectrum::ChannelBank::new(sample_rate, channels);
         analyzer.set_fft_size(config.window.samples());
+        analyzer.set_tapers(config.tapers.count());
         let channels = analyzer.channels();
         let sr = (sample_rate as f64).max(1.0);
         let hop = (span / crate::spectrogram::WHOLE_SONG_SLAB_CAP as f64
@@ -311,6 +312,43 @@ impl Default for AudioSpectrum {
             spectrogram: [SpectrogramSurface::default(), SpectrogramSurface::default()],
         }
     }
+}
+
+/// The one-step coefficient of an exponential approach with time constant
+/// `seconds`, taken `dt` seconds at a time.
+///
+/// `1 - exp(-dt/tau)`, which is what makes a TIME the thing set and the
+/// coefficient the thing derived: the same `seconds` is the same filter at any
+/// step size, where a raw coefficient silently means a different filter as soon
+/// as the step changes.
+///
+/// The two degenerate cases mean opposite things and are worth keeping apart:
+///
+/// - **No time PASSED** holds, returning 0. This is what a pane drawn twice in
+///   one frame hits — the docked lattice and the Video tab's preview, off one
+///   clock — and landing on the target there would run the filter at twice its
+///   speed whenever both are on screen.
+/// - **No time ASKED FOR** lands, returning 1. That is the bar's own off
+///   position, and a non-finite time takes it too rather than answering NaN
+///   into every bucket.
+///
+/// A time long enough to freeze the display is not caught here and is not
+/// meant to be: the coefficient it asks for rounds to 0 in f32, which is a
+/// filter that never arrives. What keeps it off this function is
+/// [`SpectrumConfig::sanitize`](crate::SpectrumConfig), which fits a
+/// deserialized time to the bar's own range.
+pub(crate) fn hop_alpha(seconds: f32, dt: f64) -> f32 {
+    // A NaN clock holds rather than lands, on the same argument the zero step
+    // does: a step nobody can measure is not evidence that time passed. An
+    // INFINITE one falls through and lands, which the arithmetic below reaches
+    // on its own.
+    if dt.is_nan() || dt <= 0.0 {
+        return 0.0;
+    }
+    if !seconds.is_finite() || seconds <= 0.0 {
+        return 1.0;
+    }
+    1.0 - (-dt / f64::from(seconds)).exp() as f32
 }
 
 impl AudioSpectrum {
@@ -391,11 +429,12 @@ impl AudioSpectrum {
         if samples.is_empty() {
             return;
         }
-        // Any of the three empties the analyzers' rings, so nothing comes out
+        // Any of the four empties the analyzers' rings, so nothing comes out
         // until they have refilled. The hop grid keeps its phase across that gap
         // rather than restarting on it.
         self.analyzer.set_channels(channels);
         self.analyzer.set_fft_size(config.window.samples());
+        self.analyzer.set_tapers(config.tapers.count());
         self.analyzer.set_sample_rate(sample_rate);
         self.last_samples = Some(now);
 
@@ -450,8 +489,16 @@ impl AudioSpectrum {
             self.next_hop = self.frames_seen + hop;
             let Some(fresh) = self.analyzer.power_sum() else { continue };
 
-            let alpha = 1.0 - config.smoothing.clamp(0.0, 0.95);
+            // Two coefficients, chosen per bucket by which way it is moving.
+            // Derived from the hop actually in use rather than set on the bar,
+            // so the times mean seconds at any hop this loop runs at.
+            let step = hop as f64 / sr;
+            let attack = hop_alpha(config.attack, step);
+            let release = hop_alpha(config.release, step);
             for (shown, new) in self.display.iter_mut().zip(&fresh) {
+                // POWER, so "louder" is the same comparison in dB — the levels
+                // are mapped through `loudness` well downstream of here.
+                let alpha = if *new > *shown { attack } else { release };
                 *shown += (new - *shown) * alpha;
             }
             // Keep the RAW spectrum for the spectrogram (the smoothed
