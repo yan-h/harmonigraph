@@ -60,7 +60,20 @@ pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64)
     // gesture forgets. The interactive copy only — it writes shared state.
     state.view.follow_camera(&mut state.camera);
 
+    // The ground the picture stands on, painted here rather than left to
+    // whatever is behind the pane. A picture pane is recessed below the chrome
+    // around it — `spectral_pane`, `spiral_pane` and the render preview all
+    // open by filling their rect with the well — and the lattice showing the
+    // dock's own tab body through instead put it a rung up, reading as a
+    // lighter card beside the analyzer.
+    //
+    // Painted from the SAME value handed to the knockout, which is the whole
+    // reason to take it off `state` rather than off the theme: offline the
+    // ground is the render layout's, not the skin's, and a fill that went to
+    // the theme for it would stand the picture on one color while its cleared
+    // discs cleared to another.
     let background = state.background;
+    ui.painter().rect_filled(rect, 0.0, state.background_ink());
     let stats = Some(state.instruments.lattice_stats.clone());
     draw_lattice(ui, rect, state, now, 0, background, Some(&response), stats);
 }
@@ -129,9 +142,9 @@ pub(crate) fn draw_lattice(
     // all of it.
     super::spectral_fold::apply(&mut scene, state, now);
     // The ground the sevens knockout clears to. Only the shell knows what
-    // this pass is composited over -- the dock's tab body here, the render
-    // layout's own background offline -- so it is carried in by the caller
-    // rather than assumed by the scene.
+    // this pass is composited over -- the fill the docked pane just painted
+    // here, the render layout's own background offline -- so it is carried in
+    // by the caller rather than assumed by the scene.
     scene.background = background;
 
     // Picking updates the *shared* hover state, one frame behind the scene

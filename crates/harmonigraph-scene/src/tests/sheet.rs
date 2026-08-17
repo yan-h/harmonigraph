@@ -751,11 +751,11 @@ fn the_comma_takes_the_short_way_round_the_octave() {
 #[test]
 fn the_knockout_clears_to_the_ground_not_to_black() {
     // The gutter has no color of its own, so a premultiplied layer would
-    // knock out to BLACK — and this skin's panel is several shades lighter
-    // than black, which is exactly what made the cleared disc read as a
-    // dark plate sitting on the picture instead of a hole through it. The
-    // scene therefore carries the ground, and it must be the panel the
-    // dock paints under every pane, not zero.
+    // knock out to BLACK — and the well the lattice pane stands on is lighter
+    // than black, which is what makes a cleared disc read as a dark plate
+    // sitting on the picture instead of a hole through it. The scene
+    // therefore carries the ground, and it must be the well the pane paints,
+    // not zero.
     let scene = scene_of(
         &NoteTracker::new(),
         &Tuning::default(),
@@ -763,8 +763,8 @@ fn the_knockout_clears_to_the_ground_not_to_black() {
         &plain_frame(),
         0.0,
     );
-    let panel = crate::skin::active_skin().panel;
-    assert_eq!(scene.background, crate::skin::ground_color((panel[0], panel[1], panel[2])));
+    let well = crate::skin::active_skin().well;
+    assert_eq!(scene.background, crate::skin::ground_color((well[0], well[1], well[2])));
     assert!(scene.background.truncate().length() > 0.0, "not black");
     assert_eq!(scene.background.w, 1.0, "opaque, or it would not cover");
 }

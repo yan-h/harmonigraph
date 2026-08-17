@@ -270,10 +270,10 @@ pub struct ViewConfig {
     ///
     /// It clears to the GROUND the pass is composited over, which the shell
     /// hands in (see [`Scene::background`](crate::Scene::background)). With
-    /// no color of its own a premultiplied layer knocks out to black, and
-    /// black is several shades darker than this skin's panel, so the
-    /// clearing announced itself as a plate sitting on the picture rather
-    /// than disappearing into the ground.
+    /// no color of its own a premultiplied layer knocks out to black, which is
+    /// darker still than the well the pane stands on, so the clearing
+    /// announces itself as a plate sitting on the picture rather than
+    /// disappearing into the ground.
     ///
     /// It fades rather than ending at a rim, over a band of its own
     /// ([`sevens_gutter_soft`](Self::sevens_gutter_soft)) — a hard edge
@@ -1959,13 +1959,14 @@ impl Default for ViewConfig {
             ring_gap: 0.05,
             octave_gap: 0.05,
             // The rung of the chrome's own ladder the rings stand on: `L*` 20.0
-            // is the skin's `surface_faint`, a step ABOVE the lattice's panel
-            // ground (8.8) and well clear of the well grey (4.7), which beside
-            // the panel reads as black rather than as a raised surface. A quiet
-            // ring is therefore a faintly raised backdrop that is plainly still
-            // a reading — `the_fresh_ground_is_the_skins_faint_surface` holds
-            // the number to the skin, so retuning that rung and leaving this
-            // behind is a test failure rather than a drift.
+            // is the skin's `surface_faint`, two rungs ABOVE the well grey
+            // (4.7) the lattice pane stands on, and clear of the panel between
+            // them (8.8), which is near enough the ground to read as a smudge
+            // on it rather than as a raised surface. A quiet ring is therefore
+            // a faintly raised backdrop that is plainly still a reading —
+            // `the_fresh_ground_is_the_skins_faint_surface` holds the number to
+            // the skin, so retuning that rung and leaving this behind is a test
+            // failure rather than a drift.
             lattice_ground: DEFAULT_RING_GROUND,
             // Five octaves to the turn with middle C straight up — C1..C5 in
             // the DAW's numbering, the register a keyboard part lives in, at

@@ -145,17 +145,24 @@ pub struct SharedState {
     /// Surface format of the shell's swapchain; the lattice render pipeline
     /// must match it.
     pub target_format: TextureFormat,
-    /// The color the lattice pane is painted ONTO, which only the sevens
-    /// knockout reads (see [`harmonigraph_scene::Scene::background`]). Defaults
-    /// to the skin's panel, which is what `egui_dock` fills a tab body with
-    /// — right for the plugin and the standalone harness.
+    /// The ground the lattice pane paints its rect with, and so the color the
+    /// sevens knockout clears to (see
+    /// [`harmonigraph_scene::Scene::background`]). Defaults to the skin's well,
+    /// the recessed grey every picture pane paints — right for the plugin and
+    /// the standalone harness.
     ///
-    /// A shell that composes its panes differently MUST set this: the
-    /// offline renderer clears to its layout's own background and draws the
-    /// panes over that, several shades darker than the panel, and a
-    /// knockout clearing to the wrong ground shows up as a disc that is
-    /// visibly too light. Exported video is the one place this is hardest
-    /// to notice and most expensive to get wrong.
+    /// ONE field doing both jobs deliberately: the pane paints exactly what it
+    /// hands the knockout, so the fill and the cleared disc cannot drift into
+    /// two different grounds. Anything setting this is choosing the pane's
+    /// color, not just describing it.
+    ///
+    /// A shell that composes its panes differently MUST set this: the offline
+    /// renderer clears the whole frame to its layout's own background and
+    /// draws the panes over that, so the pane's fill lands on a ground already
+    /// that color and this is what keeps the knockout with it. A knockout
+    /// clearing to the wrong ground shows up as a disc visibly lighter or
+    /// darker than the picture around it, and exported video is the one place
+    /// that is hardest to notice and most expensive to get wrong.
     pub background: glam::Vec4,
     /// While true, tuning params continuously re-learn from the held notes
     /// (v1's learn mode). Runtime-only; never persisted.
@@ -675,7 +682,7 @@ impl SharedState {
             drawn_this_frame: None,
             console: Console::default(),
             target_format,
-            background: harmonigraph_scene::skin::panel_color(),
+            background: harmonigraph_scene::skin::well_color(),
             learn_active: false,
             last_learned_classes: None,
             temper_judged: [None; Comma::COUNT],
@@ -1084,11 +1091,21 @@ impl SharedState {
         self.drawn.unwrap_or_else(|| self.view.reach())
     }
 
-    /// Tell the state what ground the lattice is being composited over (see
-    /// the `background` field). Takes sRGB bytes, the form every shell
-    /// already has its background color in, so no shell needs glam to say it.
+    /// Tell the state what ground the lattice pane stands on — what it paints
+    /// and what its knockout clears to (see the `background` field). Takes
+    /// sRGB bytes, the form every shell already has its background color in,
+    /// so no shell needs glam to say it.
     pub fn set_background(&mut self, rgb: (u8, u8, u8)) {
         self.background = harmonigraph_scene::skin::ground_color(rgb);
+    }
+
+    /// The same ground as an egui color, for the pane that paints it.
+    ///
+    /// Opaque, and it has to be: this fill is what the picture stands on, and
+    /// a translucent one would let the dock's own tab body through and put the
+    /// lattice back on the panel it was moved off.
+    pub(crate) fn background_ink(&self) -> egui::Color32 {
+        crate::panes::scene_color(self.background, 1.0)
     }
 
     /// Forget everything that accumulates as the plugin runs: the lattice

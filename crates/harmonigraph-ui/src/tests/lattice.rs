@@ -691,3 +691,77 @@ fn the_window_the_lattice_drew_reaches_the_panes_that_describe_it() {
         state.view.reach().count(),
     );
 }
+
+/// The lattice pane stands on a ground it paints itself, and paints the same
+/// one the sevens knockout is handed.
+///
+/// Both claims in one test on purpose. A fill and a knockout ground that
+/// disagree do not show up as a bug: a cleared disc a shade off what surrounds
+/// it reads as a dimmer node, so the picture looks plausible and stays wrong.
+/// What holds the two together is that neither can move without failing here.
+#[test]
+fn the_lattice_pane_paints_the_ground_its_knockout_is_handed() {
+    let mut state = fresh();
+    let screen = egui::vec2(600.0, 500.0);
+    let shapes = super::probe::painted_full(screen, |ui| {
+        crate::draw_pane(ui, Pane::Lattice, &mut state, 0.0);
+    })
+    .shapes;
+
+    let ground = state.background_ink();
+    assert_eq!(
+        ground,
+        crate::theme::well(),
+        "a fresh state stands the lattice somewhere other than the recessed \
+         grey every other picture pane paints",
+    );
+    // Shrunk by a point before asking who covers it: the claim is "the whole
+    // pane", and a rect that matches the pane exactly is a float comparison
+    // away from failing on a pane whose size is not a round number.
+    let pane = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), screen).shrink(1.0);
+    let painted = shapes.iter().any(|cs| match &cs.shape {
+        egui::Shape::Rect(r) => r.fill == ground && r.rect.contains_rect(pane),
+        _ => false,
+    });
+    assert!(
+        painted,
+        "the lattice pane drew no ground of its own, so it is showing whatever \
+         is behind it — the dock's tab body in the plugin",
+    );
+}
+
+/// And it paints the SHELL's ground, not the skin's.
+///
+/// The offline renderer clears its frame to the render layout's background and
+/// hands the same color to the state, which is a different grey from the
+/// skin's well — so a fill that reached for the theme instead of the field
+/// would paint a plate of chrome grey over every exported frame, in the one
+/// place it is hardest to notice. This is the test that fails for that.
+#[test]
+fn the_pane_paints_the_shells_ground_rather_than_the_skins() {
+    let mut state = fresh();
+    // Nothing in the skin, so a fill that went to the theme cannot match it
+    // by coincidence.
+    state.set_background((7, 9, 11));
+    let screen = egui::vec2(600.0, 500.0);
+    let shapes = super::probe::painted_full(screen, |ui| {
+        crate::draw_pane(ui, Pane::Lattice, &mut state, 0.0);
+    })
+    .shapes;
+
+    let pane = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), screen).shrink(1.0);
+    let covering = |fill: egui::Color32| {
+        shapes.iter().any(|cs| match &cs.shape {
+            egui::Shape::Rect(r) => r.fill == fill && r.rect.contains_rect(pane),
+            _ => false,
+        })
+    };
+    assert!(
+        covering(egui::Color32::from_rgb(7, 9, 11)),
+        "the pane did not paint the ground the shell set",
+    );
+    assert!(
+        !covering(crate::theme::well()),
+        "the pane painted the skin's well over the shell's own ground",
+    );
+}

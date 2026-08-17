@@ -366,7 +366,7 @@ fn parity_scene() -> Scene {
         now: 1.25,
         // The ground the sevens knockout clears to; the half of this
         // scene's nodes that carry a gutter exercise it.
-        background: harmonigraph_scene::skin::panel_color(),
+        background: harmonigraph_scene::skin::well_color(),
         // The grey the octave band's unsounding slices draw, at the fresh
         // view's own Ground — most of every node's band in this fixture.
         lattice_ground: harmonigraph_scene::grey_of_lightness(
