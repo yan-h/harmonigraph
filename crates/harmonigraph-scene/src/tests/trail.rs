@@ -40,13 +40,15 @@ fn nothing_is_remembered_while_the_trail_is_off() {
 fn a_visited_node_is_marked_and_an_unvisited_one_is_not() {
     let mut tracker = NoteTracker::new();
     play_and_forget(&mut tracker, 60, 0.0, 1.0);
-    let view = trail_view(true);
+    // Explicit rather than `trail_view`'s own `ViewConfig::default()`: the
+    // fresh view forgets after a span, and this test is about the memoryless
+    // case, not about what the fresh view happens to dial.
+    let view = ViewConfig { trail_memory: 0.0, ..trail_view(true) };
     let frame = plain_frame();
     let tuning = Tuning::default();
 
     // With no memory span the mark holds indefinitely: the point is a whole
     // piece's territory, not a rolling window.
-    assert_eq!(view.trail_memory, 0.0, "never forgets by default");
     for now in [5.0, 600.0, 100_000.0] {
         let scene = scene_of(&tracker, &tuning, &view, &frame, now);
         assert_eq!(origin_node(&scene).trail, 1.0, "at t={now}");

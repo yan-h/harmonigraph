@@ -1895,22 +1895,17 @@ impl Default for ViewConfig {
             // septimal mark spells apart from the node two fifths down (see
             // SevensLabel) rather than repeating it.
             sevens_size: 1.0,
-            // Off, so the grid runs unbroken under a sounding node. A fresh
-            // view is flat (extent_sevens 0), and there the clearing has no
-            // sheet behind it to hide — it only cuts the grid, which is a look
-            // to reach for rather than one to open on. Opening depth is the
-            // cue to turn it on, the same move that brings sevens_size down.
-            sevens_gutter: 0.0,
-            sevens_gutter_soft: 0.0,
+            // On, even though the view opens flat (extent_sevens 0): the cut
+            // sits ready for when depth opens rather than waiting to be
+            // turned on with it, the way sevens_size still does.
+            sevens_gutter: 0.122_413_49,
+            sevens_gutter_soft: 0.122_413_49,
             sevens_label: SevensLabel::Name,
             show_labels: true,
-            // A third over the built-in size, which is what the lattice is
-            // actually read at: a name has to carry its accidental and its
-            // comma mark, and at 1 those are strokes rather than marks. The
-            // built-in size stays where it is — it is what the marks and the
-            // cents line are proportioned against, and this bar sizes the
+            // Effectively the built-in size (1) — where the marks and the
+            // cents line are proportioned against, so this bar sizes the
             // whole label together.
-            label_scale: 1.3,
+            label_scale: 1.002_336,
             show_cents: true,
             // Written out rather than taken from `Gradient::default()`,
             // which is the gradient TYPE's own default — the CIELAB arc
@@ -1941,30 +1936,28 @@ impl Default for ViewConfig {
                 // for the same reason.
                 chroma_ramp: 0.0,
             },
-            // A small, soft core inside the octave band, with the band's
-            // silent slots ghosted in: the pitch class reads as a compact
-            // center and the octaves carry the node's outline. (The band's
-            // own width is set below.)
-            core_solidity: 0.4,
-            core_radius: 0.256_256_76,
+            // Hollow rather than solid: the band's silent slots ghosted in
+            // are what carries the pitch class now, not a filled center.
+            // (The band's own width is set below.)
+            core_solidity: 0.0,
+            core_radius: 0.501_335_3,
             // A narrow octave band, stopping short of the quad edge, with a
             // tight gap everywhere: the octaves read as a ring of distinct
             // marks rather than a solid annulus, and every layer keeps clear
             // space around it. (The backdrop that holds the whole ring's shape
-            // behind them is fixed on.)
-            //
-            // The four sizes below the gap are what put the band at 0.661 and
-            // its outer edge at 0.851, which is where it has always sat: the
-            // stack is core (0.256), gap, audio ring, gap, band, gap, marks.
-            band_width: 0.190_065_75,
+            // behind them is fixed on.) The stack is core, gap, audio ring,
+            // gap, band, gap, marks; the core above is wide enough now that
+            // the audio ring is dialled thin to still fit ahead of it (see
+            // spectral_ring_width).
+            band_width: 0.163_084_63,
             // The two gaps are one number here: the radial padding is what puts
-            // the band at 0.661, and the same width cut angularly is the slicing
-            // that reads as distinct marks. They are two bars because a node has
-            // two spacings to set, not because the fresh one wants them apart —
-            // the picture this describes is one a person can meet by dialling
-            // neither.
-            ring_gap: 0.051_732_67,
-            octave_gap: 0.051_732_67,
+            // the band at its outer edge, and the same width cut angularly is
+            // the slicing that reads as distinct marks. They are two bars
+            // because a node has two spacings to set, not because the fresh
+            // one wants them apart — the picture this describes is one a
+            // person can meet by dialling neither.
+            ring_gap: 0.05,
+            octave_gap: 0.05,
             // The rung of the chrome's own ladder the rings stand on: `L*` 20.0
             // is the skin's `surface_faint`, a step ABOVE the lattice's panel
             // ground (8.8) and well clear of the well grey (4.7), which beside
@@ -1992,51 +1985,28 @@ impl Default for ViewConfig {
             spectral_reading: SpectralReading::Fold,
             // Narrow, for the just-tuned material this is aimed at — see the
             // field.
-            spectral_width: 10.0,
-            // The whole annulus between the fresh core and the fresh octave
-            // band, less a gap at each end: 0.308 to 0.609, the widest of the
-            // three rings. It carries the most reading of any of them — one
-            // wedge per octave, each a level or a window of spectrum — and it
-            // is the layer that most rewards the room, where the band's glyphs
-            // say one bit apiece.
-            //
-            // The gaps are what make it a ring rather than a thick edge on the
-            // core: the eye reads the three bands (core, audio, octaves) as
-            // separate the moment none of them touches. Both marks are outside
-            // the band, so the room above the band is the marks' rather than
-            // this ring's.
-            spectral_ring_width: 0.301_695_2,
-            // A whole tone across a wedge — see the field for why that width
-            // and not the octave that makes the ring continuous.
-            spectral_ring_range: 200.0,
-            // Two fifths of the way up the Level window — on the fresh window
-            // (−60 dB to 0) a ring for anything down to 36 dB under a
-            // full-scale sine, and on a window pulled in to −35 dB, down to 21.
-            // It is a share of the window rather than a dB deliberately, so
+            spectral_width: 2.088_490_2,
+            // A thin ring now that the core ahead of it (see core_radius) has
+            // grown to take most of the room the annulus used to hold. It
+            // still carries one wedge per octave, each a level or a window of
+            // spectrum, and the gaps either side still make it a ring rather
+            // than a thick edge on the core.
+            spectral_ring_width: 0.061_113_536,
+            // A narrow wedge — see the field for why a window this size and
+            // not the octave that makes the ring continuous. Dialled rather
+            // than taken from the live session, which had it parked at the
+            // disabled bar's floor while reading Fold: it only zooms the
+            // Spectrum reading's wedge.
+            spectral_ring_range: 10.0,
+            // A share of the Level window rather than a dB deliberately, so
             // what it says is "no ring dimmer than this much of the ramp" and
-            // moving the window moves the gate with the colours it is judging.
-            //
-            // Measured over the fresh window's 1025 nodes under the fold:
-            // silence rings nothing at all — the picture this arrived for,
-            // where ungated every one of them wears the ramp's floor — a lone
-            // full-scale sine rings 95 (its own pitch class, and the comma
-            // neighbours the analyzer cannot resolve from it), a sawtooth 24 dB
-            // down rings 177 and one 12 dB down rings 765. So loud dense
-            // material still rings most of the lattice, which is what it is
-            // actually doing; quiet material rings its constellation.
-            //
-            // Permissive at the top end on purpose: hiding a ring that had
-            // something to show is the failure a person cannot see, where too
-            // many rings is one they can, and the bar is right there. The
-            // spectrum reading discriminates far less at any setting, and that
-            // is the reading rather than the gate — see the field.
-            spectral_ring_gate: 0.4,
-            // 0.03 of the Level window is 1.8 dB at the fresh -60 dB range —
-            // under the noise a single-taper estimate carries (4.55 dB) and
-            // well under the gap a real partial opens, so it swallows the
-            // wobble at the threshold without holding a ring that has stopped
-            // being earned.
-            spectral_ring_hysteresis: 0.03,
+            // moving the window moves the gate with the colours it is
+            // judging. Permissive at the top end on purpose: hiding a ring
+            // that had something to show is the failure a person cannot see,
+            // where too many rings is one they can, and the bar is right
+            // there.
+            spectral_ring_gate: 0.299_119_53,
+            spectral_ring_hysteresis: 0.096_396_71,
             // Fast up, slow down. A quarter second of release is long against
             // the 8 ms the analyzer measures on and short against a phrase, so
             // a partial reads as present for as long as it is sounding and the
@@ -2057,16 +2027,13 @@ impl Default for ViewConfig {
             // A shallow step past the band — about a third of the band's own
             // width, so a mark reads as its slice carrying on rather than as a
             // second ring around everything.
-            mark_thickness: 0.078_269_88,
-            // Just past a passing sixteenth — 125ms at 120bpm — which is
-            // where the wait stops rejecting notes anyone is listening to and
-            // starts rejecting the ones nobody is. Not the 0 the bar's low
-            // end offers, because a mark outlives its key (see `mark_delay`):
-            // at 0 every momentary crowning fades its way OUT over the whole
-            // Fade, so lifting a chord one key at a time leaves a fading mark
-            // on nearly every note of it, and opening there would ship the
-            // mechanism switched off.
-            mark_delay: 0.15,
+            mark_thickness: 0.062_530_935,
+            // Short of a passing sixteenth (125ms at 120bpm), but still well
+            // off the bar's 0 floor: a mark outlives its key (see
+            // `mark_delay`), and at 0 every momentary crowning fades its way
+            // OUT over the whole Fade, so lifting a chord one key at a time
+            // leaves a fading mark on nearly every note of it.
+            mark_delay: 0.102_448_754,
             pulse_marks: Pulse::Bands,
             // The sheet the marks above wear. A period well under one node's
             // spacing puts several of them across every mark, so this reads as
@@ -2079,13 +2046,13 @@ impl Default for ViewConfig {
             shimmer_width: 0.639_271_56,
             shimmer_intensity: 0.517_033_16,
             shimmer_softness: 1.0,
-            grid_thickness: 1.103_806_3,
+            grid_thickness: 1.020_152_6,
             grid_inset: 0.3,
-            // The trail on, and never forgetting: where the music has been is
-            // most of what the lattice is for, and the names are quiet enough
-            // to accumulate over a whole piece without ever competing with
-            // what is sounding.
-            trail_memory: 0.0,
+            // The trail on, forgetting after about a minute and a half: where
+            // the music has been is most of what the lattice is for, but a
+            // window this long still keeps the names from outrunning a piece
+            // in progress the way never-forgetting does.
+            trail_memory: 98.267_45,
             trail_labels: true,
             meantone: false,
             meantone_auto: true,
@@ -2095,8 +2062,8 @@ impl Default for ViewConfig {
             show_perf: false,
             show_perf_detail: false,
             render_scale: 1.0,
-            // A halo at about four fifths strength: the small soft core and
-            // the thin octave marks are quiet shapes, and the bloom is what
+            // A halo at about four fifths strength: the hollow core and the
+            // thin octave marks are quiet shapes, and the bloom is what
             // gives them presence.
             bloom_strength: 0.806_154_85,
         }
