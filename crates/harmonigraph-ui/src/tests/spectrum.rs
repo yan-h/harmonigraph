@@ -134,6 +134,50 @@ fn a_bucket_rises_on_the_attack_and_falls_on_the_release() {
     );
 }
 
+/// The Tapers setting reaches the analyzer: the same audio measured at one
+/// taper and at three does not come out as the same curve.
+///
+/// Nothing else in the workspace constructs `Three` or `Five` — the button row
+/// names them and `count()` maps them, and every taper claim in
+/// `harmonigraph-core` is made against a bare `SpectrumAnalyzer`. So without
+/// this, deleting the `set_tapers` line in `push_samples` leaves the control
+/// inert with the whole suite green.
+///
+/// WHAT the difference is stays in core, where it is measured
+/// (`more_tapers_steady_a_bucket_against_noise` and
+/// `the_noise_floor_reads_higher_as_tapers_are_added`). This holds only that
+/// the setting is connected to something.
+#[test]
+fn the_tapers_setting_reaches_the_analyzer() {
+    let sr = 48_000.0;
+    // Deterministic white noise: something in every bucket, which is what makes
+    // a change of estimator show up across the axis rather than in the skirts
+    // of one partial.
+    let mut seed = 0x1234_5678u32;
+    let noise: Vec<f32> = (0..24_000)
+        .map(|_| {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            (seed as f32 / u32::MAX as f32) * 2.0 - 1.0
+        })
+        .collect();
+
+    let curve = |tapers| {
+        let cfg = SpectrumConfig { tapers, ..SpectrumConfig::default() };
+        let mut spectrum = AudioSpectrum::default();
+        spectrum.push_samples(&noise, 1, sr, 1.0, &cfg);
+        spectrum.display(1.0).expect("audio is flowing").to_vec()
+    };
+    let one = curve(SpectrumTapers::One);
+    for more in [SpectrumTapers::Three, SpectrumTapers::Five] {
+        // Counted rather than compared whole: the grid is 3828 buckets, and an
+        // `assert_ne!` on the pair prints both of them.
+        let moved = one.iter().zip(curve(more)).filter(|(a, b)| **a != *b).count();
+        assert!(moved > 0, "{more:?} tapers measured what one taper did, in every bucket");
+    }
+}
+
 #[test]
 fn spectrogram_history_stays_bounded() {
     let bins = [0.0f32; harmonigraph_core::spectrum::SPECTRUM_BINS];

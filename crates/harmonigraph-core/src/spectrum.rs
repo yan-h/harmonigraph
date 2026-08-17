@@ -1466,4 +1466,27 @@ mod tests {
         analyzer.set_tapers(usize::MAX);
         assert_eq!(analyzer.tapers(), MAX_TAPERS);
     }
+
+    /// Every channel of a bank measures through the same estimator, which is
+    /// what makes [`power_sum`](ChannelBank::power_sum) an addition of
+    /// comparable things: two channels on different taper counts have
+    /// different noise floors and different effective kernels, and a sum of
+    /// those is a reading of nothing.
+    ///
+    /// The second channel is the one worth asserting — a fan-out that set only
+    /// the first would leave a stereo bank half-converted and a mono one
+    /// perfectly correct, which is the shape a mono test cannot see.
+    #[test]
+    fn every_channel_of_a_bank_measures_through_the_same_tapers() {
+        let mut bank = ChannelBank::new(48_000.0, 2);
+        bank.set_tapers(3);
+        for (channel, analyzer) in bank.per_channel.iter().enumerate() {
+            assert_eq!(analyzer.tapers(), 3, "channel {channel} kept its own taper count");
+        }
+
+        // A rebuild is the other door in: it drops the bank for a fresh one, so
+        // the count goes back to the default and the caller has to re-set it.
+        bank.set_channels(1);
+        assert_eq!(bank.per_channel[0].tapers(), 1, "a rebuilt bank kept a stale count");
+    }
 }
