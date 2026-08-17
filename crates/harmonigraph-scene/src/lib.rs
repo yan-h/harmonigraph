@@ -557,17 +557,17 @@ pub struct Scene {
     /// shader takes per layer from that layer's own level. Already clamped.
     pub sevens_soft: f32,
     /// The ground the lattice is drawn onto: the pane fill this pass gets
-    /// composited over, which is the skin's `panel` (what `egui_dock`'s
-    /// `tab_body.bg_fill` paints under every pane).
+    /// composited over, which is the skin's `well` — the recessed grey the
+    /// lattice pane paints its own rect with, as every other picture pane
+    /// does (see [`skin::well_color`]).
     ///
     /// Only the sevens knockout reads it, and it is the difference between
     /// a hole and a blob. The pass blends premultiplied, so a gutter with no
-    /// color of its own knocks out to BLACK — and black is several shades
-    /// darker than this skin's panel, so the cleared disc sat on the picture
-    /// as an obviously darker plate instead of disappearing into the ground
-    /// wherever it crossed nothing. Handing the ground in means the gutter
-    /// is invisible over empty lattice and only shows as a clearing where it
-    /// actually crosses something.
+    /// color of its own knocks out to BLACK — still darker than the well, so
+    /// a cleared disc sits on the picture as a darker plate instead of
+    /// disappearing into the ground wherever it crosses nothing. Handing the
+    /// ground in means the gutter is invisible over empty lattice and only
+    /// shows as a clearing where it actually crosses something.
     pub background: Vec4,
     /// How deep the melody/bass mark strip is, in quad UV units; 0 = off (see
     /// [`ViewConfig::mark_thickness`]). It starts one

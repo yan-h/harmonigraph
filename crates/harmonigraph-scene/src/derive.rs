@@ -579,7 +579,7 @@ pub fn derive_scene(
         // crest narrows away to a spike too fine for any pixel to catch.
         shimmer_softness: view.shimmer_softness.clamp(0.0, 1.0),
         sevens_soft: view.sevens_gutter_soft.clamp(0.0, 0.5),
-        background: crate::skin::panel_color(),
+        background: crate::skin::well_color(),
         pitch_lut: pitch_ramp_lut(view.pitch_gradient),
         darkest_pitch: frame.darkest_pitch,
         brightest_pitch: frame.brightest_pitch,

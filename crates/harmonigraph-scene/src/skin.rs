@@ -1,7 +1,7 @@
 //! The skin: one struct owning every color the CHROME draws, so a look is
 //! defined in exactly one place. `harmonigraph-ui::theme` converts the bytes
 //! into egui colors for the panel chrome; the scene reaches them through
-//! [`panel_color`], the ground it is composited over, and through
+//! [`well_color`], the ground it is composited over, and through
 //! [`surface_faint_color`], the rung a fresh
 //! [`ViewConfig::lattice_ground`](crate::ViewConfig) opens on.
 //!
@@ -116,10 +116,18 @@ pub fn ground_color(rgb: (u8, u8, u8)) -> Vec4 {
     )
 }
 
-/// The active skin's `panel`: the ground `egui_dock` paints under every tab
-/// body, and so the default ground for a pane drawn inside the dock.
-pub fn panel_color() -> Vec4 {
-    let [r, g, b] = active_skin().panel;
+/// The active skin's `well`: the recessed ground every PICTURE pane paints
+/// its own rect with — the spectral pane, the spiral, the render preview, and
+/// the lattice — and so the default ground a lattice pass is composited over.
+///
+/// Not the `panel` the dock fills a tab body with, which is what a lattice
+/// pane that paints no ground of its own shows through: a picture is recessed
+/// below the chrome around it rather than flush with it, and the lattice being
+/// the one picture at panel level made it read as a lighter card beside the
+/// analyzer. The renderer's own default frame background is this grey too, so
+/// an export and the editor stand the lattice on one ground.
+pub fn well_color() -> Vec4 {
+    let [r, g, b] = active_skin().well;
     ground_color((r, g, b))
 }
 
@@ -129,14 +137,16 @@ pub fn panel_color() -> Vec4 {
 /// a node's rings where nothing is lit.
 ///
 /// Which rung of the ladder is the whole of what that default is, and the
-/// ladder is short: the well at `L*` 4.7, [`panel_color`] — the ground the
-/// lattice is composited OVER — at 8.8, and this at 20.0. The lattice's ground
-/// has to sit ABOVE the panel, so that a quiet ring and an idle grid line read
-/// as faintly raised structure rather than as marks on the surface. The well is
-/// BELOW it and reads as black against both, which is a hole punched through
-/// the lattice; the panel is the pane exactly, and structure standing there
-/// vanishes into it — which is what a ring dialled to no width looks like, the
-/// off switch ([`ViewConfig::spectral_ring_width`](crate::ViewConfig)).
+/// ladder is short: [`well_color`] — the ground the lattice is composited
+/// OVER — at `L*` 4.7, the chrome's panel at 8.8, and this at 20.0. The
+/// lattice's ground has to sit well ABOVE the ground it stands on, so that a
+/// quiet ring and an idle grid line read as faintly raised structure rather
+/// than as marks on the surface. The well IS the pane exactly, and structure
+/// standing there vanishes into it — which is what a ring dialled to no width
+/// looks like, the off switch
+/// ([`ViewConfig::spectral_ring_width`](crate::ViewConfig)). The panel a single
+/// rung up is barely clear of it, near enough that the structure reads as a
+/// smudge on the ground rather than as a surface above it.
 ///
 /// A step DOWN from the chrome's own [`hairline`](Skin::hairline), which is
 /// the other grey the grid could rule itself with — the argument for that one
