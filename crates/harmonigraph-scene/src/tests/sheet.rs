@@ -293,7 +293,22 @@ fn the_rings_stack_outward_from_the_core() {
 fn a_layer_with_no_room_left_in_the_node_is_not_drawn() {
     // A core wide enough to leave the band no room at all: the audio ring
     // still fits whole, and the band's slot ends past the quad edge.
-    let view = ViewConfig { core_radius: 0.8, ..ViewConfig::default() };
+    //
+    // The whole stack is stated, the way the sound/silent fixtures above state
+    // theirs. The core is a THRESHOLD — the one radius at which the band is
+    // refused and the ring is not — and where that threshold falls is a
+    // function of every other width, so a core inherited alongside a retuned
+    // ring names a different state than the one under test. The alternative is
+    // a number that has to be re-found by hand each time a dialled-in look is
+    // captured, which is what 0.594 was before it became 0.8.
+    let view = ViewConfig {
+        core_radius: 0.8,
+        spectral_ring_width: 0.061_113_536,
+        band_width: 0.163_084_63,
+        ring_gap: 0.05,
+        octave_gap: 0.05,
+        ..ViewConfig::default()
+    };
     let rings = view.rings();
     assert!(rings.audio.1 > rings.audio.0, "the audio ring lost a slot that fits");
     assert_eq!(rings.band, (0.0, 0.0), "the band was squeezed into {:?}", rings.band);

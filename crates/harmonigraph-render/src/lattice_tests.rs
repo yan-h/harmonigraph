@@ -1432,6 +1432,21 @@ const PARTIAL_HALF_CENTS: f32 = 40.0;
 /// pixels apart, and one reading a sector wants the seams pixels wide.
 const PROBE_GAP: f32 = 0.12;
 
+/// The octave band's width for the probes below, standing in for the fresh
+/// view's own (see [`ViewConfig::band_width`](harmonigraph_scene::ViewConfig))
+/// the same way [`PROBE_GAP`] stands in for the gap: the band is the outermost
+/// ring the stack has to fit, so it is the layer a retune of anything INSIDE
+/// it pushes off the quad edge, and a band the stack has refused draws nothing
+/// for a pixel reading to find.
+const PROBE_BAND_WIDTH: f32 = 0.163_084_63;
+
+/// The angular padding the clearing probe slices its wedges at, standing in
+/// for the fresh view's own (see
+/// [`ViewConfig::octave_gap`](harmonigraph_scene::ViewConfig)): the clearing
+/// is read across a wedge's own arc, and a slicing dialled wide enough eats
+/// the arc the reading is taken over.
+const PROBE_OCTAVE_GAP: f32 = 0.05;
+
 /// The Range these fixtures read their partials against, standing in for the
 /// fresh view's own (see
 /// [`ViewConfig::spectral_ring_range`](harmonigraph_scene::ViewConfig)) the
@@ -1440,22 +1455,30 @@ const PROBE_GAP: f32 = 0.12;
 /// property of the shot's resolution rather than of the Range being tested.
 const PROBE_RANGE: f32 = 200.0;
 
-/// One node with both rings at the widths a FRESH view gives them: `held`
-/// lighting an octave of the band, and a synthetic partial at absolute MIDI
-/// `sounding` in the analyzer's grid for the audio ring to find.
+/// One node wearing both rings at the probe's own widths: `held` lighting an
+/// octave of the band, and a synthetic partial at absolute MIDI `sounding` in
+/// the analyzer's grid for the audio ring to find.
 ///
-/// The fresh widths rather than the fixture's, because the claim below is about
-/// the shipped picture: that the ring is its own layer inside the octave band,
-/// on a node nobody has dialled. The core is the one thing turned off — its
-/// glow is light at every radius the measurements read, and what is being
-/// measured is where two annuli are.
+/// The probe's stack rather than the fresh view's, because what the claims
+/// below need is two annuli far enough apart for a 256 px shot to tell one
+/// from the other — a proportion, not the shipped one. Inheriting the fresh
+/// widths would tie every reading here to an aesthetic that moves whenever a
+/// dialled-in look is captured, and it moves the readings the wrong way:
+/// [`PROBE_BAND_WIDTH`] is the outermost layer, so a retune of the core or the
+/// audio ring INSIDE it can push the band off the quad edge, and a refused
+/// band leaves these measurements nothing to find. That the shipped stack
+/// draws four visible layers inside the quad is held where it belongs, on the
+/// fresh view itself, by `harmonigraph_scene`'s
+/// `the_fresh_node_stacks_four_visible_layers_inside_the_quad`.
 ///
-/// The PADDING is the fixture's own, and it is the one number here that has to
-/// be: the Ring gap is what separates every layer of a node, and the fresh
-/// 0.052 of it is under three pixels on the 52-px node this renders, where the
-/// two annuli's anti-aliased edges meet inside it. A wider gap measures the geometry
-/// rather than the edge softness. It is the same picture a fresh node draws,
-/// read at a size a person looks at one from.
+/// The core is the one layer turned off — its glow is light at every radius
+/// the measurements read, and what is being measured is where two annuli are.
+///
+/// The PADDING is the probe's for a second reason: the Ring gap is what
+/// separates every layer of a node, and a gap of the order the fresh view
+/// carries is under three pixels on the 52-px node this renders, where the two
+/// annuli's anti-aliased edges meet inside it. A wider gap measures the
+/// geometry rather than the edge softness.
 ///
 /// The ramp is a plain black-to-white one rather than a gradient, so a pixel's
 /// brightness IS the level the shader read out of the grid and the differences
@@ -1471,11 +1494,16 @@ fn ringing_node(held: Option<usize>, sounding: Option<f32>, range: f32) -> Scene
     if let Some(slot) = held {
         node.octaves[slot] = 1.0;
     }
-    // The fresh stack at the probe's own padding, less its core: the two rings
-    // land where a fresh node draws them, spaced far enough apart to be
-    // measured in pixels.
-    let rings =
-        harmonigraph_scene::ViewConfig { ring_gap: PROBE_GAP, ..fresh.clone() }.rings();
+    // The probe's stack, less its core: the two rings land far enough apart to
+    // be measured in pixels, at radii no capture of a dialled-in look moves.
+    let rings = harmonigraph_scene::ViewConfig {
+        ring_gap: PROBE_GAP,
+        core_radius: PROBE_CORE_RADIUS,
+        spectral_ring_width: PROBE_RING_WIDTH,
+        band_width: PROBE_BAND_WIDTH,
+        ..fresh.clone()
+    }
+    .rings();
     scene.core_radius = 0.0;
     scene.outer_inner = rings.band.0;
     scene.outer_outer = rings.band.1;
@@ -1851,11 +1879,19 @@ fn a_mark_stands_off_the_outermost_ring_the_node_draws() {
         return;
     };
 
-    // The fresh stack at the probe's padding, so the layers are pixels apart:
-    // core, audio ring, band, and the mark outside all three.
+    // The probe's stack, so the layers are pixels apart: core, audio ring,
+    // band, and the mark outside all three. The claim is that the mark finds
+    // whichever ring is outermost, which wants a stack that draws all of them
+    // rather than the one the fresh view happens to be dialled to.
     let fresh = harmonigraph_scene::ViewConfig::default();
-    let rings =
-        harmonigraph_scene::ViewConfig { ring_gap: PROBE_GAP, ..fresh.clone() }.rings();
+    let rings = harmonigraph_scene::ViewConfig {
+        ring_gap: PROBE_GAP,
+        core_radius: PROBE_CORE_RADIUS,
+        spectral_ring_width: PROBE_RING_WIDTH,
+        band_width: PROBE_BAND_WIDTH,
+        ..fresh.clone()
+    }
+    .rings();
     let staged = |band: bool| -> Scene {
         let mut scene = single_marked_node(MIDDLE_C, 0);
         scene.core_radius = 0.0;
@@ -2034,15 +2070,23 @@ const PROBE_RING_WIDTH: f32 = 0.3;
 /// currently dialled to.
 const PROBE_CORE_RADIUS: f32 = 0.256_256_76;
 
-/// The stack the clearing tests are measured against: the fresh view's four
-/// layers at the probe's wider padding, so a pixel reading can tell one layer's
-/// edge from the next.
+/// The stack the clearing tests are measured against: four layers at the
+/// probe's own widths and wider padding, so a pixel reading can tell one
+/// layer's edge from the next.
+///
+/// Every width the stack is built from is stated rather than inherited. What
+/// the clearing tests need is a node wearing all four layers with room between
+/// them; a capture of a dialled-in look is free to dial any of them to a
+/// hairline, and each one left inheriting is a way for these readings to fail
+/// on a change that has nothing to do with clearing.
 fn clearing_rings() -> harmonigraph_scene::RingStack {
     let fresh = harmonigraph_scene::ViewConfig::default();
     harmonigraph_scene::ViewConfig {
         ring_gap: PROBE_GAP,
         core_radius: PROBE_CORE_RADIUS,
         spectral_ring_width: PROBE_RING_WIDTH,
+        band_width: PROBE_BAND_WIDTH,
+        octave_gap: PROBE_OCTAVE_GAP,
         ..fresh
     }
     .rings()
