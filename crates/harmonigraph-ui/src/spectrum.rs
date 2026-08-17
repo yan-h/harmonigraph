@@ -329,8 +329,14 @@ impl Default for AudioSpectrum {
 ///   clock — and landing on the target there would run the filter at twice its
 ///   speed whenever both are on screen.
 /// - **No time ASKED FOR** lands, returning 1. That is the bar's own off
-///   position, and a non-finite time takes it too, so a hand-edited blob
-///   cannot freeze the display at whatever it last held.
+///   position, and a non-finite time takes it too rather than answering NaN
+///   into every bucket.
+///
+/// A time long enough to freeze the display is not caught here and is not
+/// meant to be: the coefficient it asks for rounds to 0 in f32, which is a
+/// filter that never arrives. What keeps it off this function is
+/// [`SpectrumConfig::sanitize`](crate::SpectrumConfig), which fits a
+/// deserialized time to the bar's own range.
 pub(crate) fn hop_alpha(seconds: f32, dt: f64) -> f32 {
     // A NaN clock holds rather than lands, on the same argument the zero step
     // does: a step nobody can measure is not evidence that time passed. An

@@ -280,6 +280,19 @@ impl SpectrogramPreset {
 }
 
 
+/// The longest attack or release the analyzer's own curve offers, in seconds —
+/// the bars' top end, and what a deserialized time is fit to.
+///
+/// Half a second is already well past a meter's ballistics and is a guard rail
+/// rather than a setting; the ring, which wants a genuinely slow release, has
+/// its own pair with its own ceiling
+/// ([`SPECTRAL_BALLISTICS_MAX`](harmonigraph_scene::SPECTRAL_BALLISTICS_MAX)).
+///
+/// Stated beside the fields it bounds rather than beside the bars that offer
+/// it, because [`SpectrumConfig::sanitize`] is the other reader: a range with
+/// one home cannot have the two disagree.
+pub(crate) const BALLISTICS_MAX: f32 = 0.5;
+
 /// Everything the Spectral pane's display is configured by, edited in the
 /// Display tab's Analyzer section and persisted with the UI state.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -331,6 +344,8 @@ pub struct SpectrumConfig {
     /// nothing worth drawing at all. One symmetric time has to be short enough
     /// for the first, which leaves it far too short for the second — every
     /// analyzer with meter ballistics splits them for this reason.
+    ///
+    /// Both are bounded by [`BALLISTICS_MAX`].
     pub release: f32,
     /// Spectral tilt, in the convention analyzers use: the reference
     /// slope in dB/octave that displays as FLAT, one of [`TILT_STEPS`]
@@ -674,6 +689,22 @@ impl SpectrumConfig {
             fresh.roll_lead_release
         }
         .clamp(0.0, ROLL_LEAD_RELEASE_MAX);
+        // The curve's own two times, which are durations of the same kind and
+        // fit the same way — and to the same bound their bars offer, since a
+        // time past it is a filter no gesture can produce.
+        //
+        // A huge one is the case worth naming: it is finite, so a finiteness
+        // check alone passes it, and `hop_alpha` answers a coefficient that
+        // rounds to 0 in f32 — a curve frozen at whatever it last held, while
+        // the spectrogram beside it (which reads the raw columns) keeps
+        // drawing. The ring's own pair is fit at the same point for the same
+        // reason ([`ViewConfig::sanitize`](harmonigraph_scene::ViewConfig::sanitize)).
+        self.attack =
+            if self.attack.is_finite() { self.attack } else { fresh.attack }
+                .clamp(0.0, BALLISTICS_MAX);
+        self.release =
+            if self.release.is_finite() { self.release } else { fresh.release }
+                .clamp(0.0, BALLISTICS_MAX);
         // The level pair, against the same threat and for the same reason.
         // `loudness_raw` already refuses a collapsed or inverted window, which
         // is what a `max` can answer; a NaN end it cannot, because NaN loses

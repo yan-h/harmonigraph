@@ -3,6 +3,7 @@
 //! colors are the one thing dialled elsewhere — they are a color table, and
 //! both of those are on the Colors page ([`super::super::color`]).
 
+use crate::config::BALLISTICS_MAX;
 use crate::widgets::{button_row, choice_row, option_label, RangeBar, ValueBar};
 use crate::SharedState;
 use crate::panes::{edge_bar, section};
@@ -27,14 +28,6 @@ pub(super) fn hz_readout(midi: f32) -> String {
 fn db_readout(db: f32) -> String {
     format!("{db:.0} dB")
 }
-
-/// The longest attack or release the analyzer's own curve offers, in seconds.
-///
-/// Half a second is already well past a meter's ballistics and is a guard rail
-/// rather than a setting; the ring, which wants a genuinely slow release, has
-/// its own pair with its own ceiling
-/// (`harmonigraph_scene::SPECTRAL_BALLISTICS_MAX`).
-const BALLISTICS_MAX: f32 = 0.5;
 
 /// A short duration in milliseconds, which is the unit these times are read and
 /// argued about in — a hop is 8 ms and a release worth having is a couple of

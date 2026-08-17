@@ -441,6 +441,46 @@ fn a_blob_naming_a_lead_release_off_its_own_bar_opens_on_one_that_fits() {
     }
 }
 
+/// The curve's Attack and Release open somewhere their own bars can reach.
+///
+/// The case a finiteness check alone lets through is the one worth pinning: a
+/// huge time is a perfectly good `f32`, and the coefficient it asks for
+/// (`hop_alpha`) rounds to 0, so the curve holds whatever it last had for as
+/// long as the plugin is open — while the spectrogram beside it, which reads
+/// the raw columns rather than the smoothed ones, carries on drawing. The pane
+/// would then be at a value the file does not hold until someone drags that
+/// bar.
+#[test]
+fn a_blob_naming_a_curve_time_off_its_own_bar_opens_on_one_that_fits() {
+    for (key, fresh_value) in [
+        ("attack", SpectrumConfig::default().attack),
+        ("release", SpectrumConfig::default().release),
+    ] {
+        for (value, want, hint) in [
+            ("1e10", crate::config::BALLISTICS_MAX, "a time that freezes the curve"),
+            ("-1.0", 0.0, "a negative time"),
+            ("NaN", fresh_value, "a time that is not a number"),
+        ] {
+            let mut state = fresh();
+            state.camera.yaw = 1.23;
+            let saved = state.save_persist();
+            let edited =
+                saved.replace(&format!("{key}:{fresh_value:?},"), &format!("{key}:{value},"));
+            assert_ne!(edited, saved, "{hint}: `{key}` is not in the blob to edit");
+
+            let mut restored = fresh();
+            restored.load_persist(&edited);
+            let got = if key == "attack" {
+                restored.spectrum_config.attack
+            } else {
+                restored.spectrum_config.release
+            };
+            assert_eq!(got, want, "{hint}: `{key}` opened at {got}");
+            assert_eq!(restored.camera.yaw, 1.23, "{hint}: the rest of the blob still restores");
+        }
+    }
+}
+
 /// The wheel's two-bar TAPER is gone, and a blob carrying the pair of keys
 /// nothing reads now keeps everything else it says. An unknown field being
 /// ignored rather than refused is the whole of why that works, and it is a
@@ -771,14 +811,13 @@ fn a_persist_blob_naming_a_retired_node_style_still_loads() {
 /// either, and must come back as what a fresh install has rather than as a bare
 /// `0`/`false`.
 ///
-/// `smoothing`, `window` and `floor_db` are the three that make this worth
-/// pinning. Every other field of [`SpectrumConfig`](crate::SpectrumConfig)
-/// named a fallback of its own; these three named none, so a blob without one
-/// failed to parse — and a blob that fails to parse loses the WHOLE UI state,
-/// not the one key. Dropping `smoothing` cost the camera, the dock and the view
-/// along with it. The struct's container-level `default` is what closes that:
-/// every field falls back to `impl Default`'s value, so a missing key costs
-/// only itself.
+/// What makes it worth pinning is what the alternative COSTS. No field of
+/// [`SpectrumConfig`](crate::SpectrumConfig) carries a fallback of its own, so
+/// without the struct's container-level `#[serde(default)]` a blob missing any
+/// one key fails to parse — and a parse that fails loses the WHOLE UI state
+/// rather than that key: the camera, the dock and the view go with it. The
+/// container-level attribute is what closes that, every field falling back to
+/// `impl Default`'s value, so a missing key costs only itself.
 ///
 /// Pinned per field rather than once, because the hazard is per field: nothing
 /// at a declaration says whether it has a fallback, so the next field added is
