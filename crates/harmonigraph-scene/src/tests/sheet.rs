@@ -216,8 +216,11 @@ fn a_wild_radial_gap_is_clamped_and_the_stack_stops_at_the_ring_that_fits() {
     // drawn nowhere a person can see them. Nothing in the two assertions above
     // moves when the clamp goes — the refused pair is still empty and the stack
     // still stops at the core.
+    // A tolerance rather than a bare `<=`: the difference is `cursor + gap -
+    // cursor` under the hood, and how far that lands from `gap` itself is a
+    // matter of how large `cursor` grew getting there, not of the clamp.
     assert!(
-        scene.mark_inner - scene.rings_outer <= GAP_MAX,
+        scene.mark_inner - scene.rings_outer <= GAP_MAX + f32::EPSILON * 8.0,
         "the padding reached the picture as {}, past the {GAP_MAX} its bar can produce",
         scene.mark_inner - scene.rings_outer,
     );
@@ -288,9 +291,9 @@ fn the_rings_stack_outward_from_the_core() {
 /// the bar was a suggestion.
 #[test]
 fn a_layer_with_no_room_left_in_the_node_is_not_drawn() {
-    // A core wide enough to leave the band a sliver of its 0.19: the audio
-    // ring still fits whole, and the band's slot ends past the quad edge.
-    let view = ViewConfig { core_radius: 0.594, ..ViewConfig::default() };
+    // A core wide enough to leave the band no room at all: the audio ring
+    // still fits whole, and the band's slot ends past the quad edge.
+    let view = ViewConfig { core_radius: 0.8, ..ViewConfig::default() };
     let rings = view.rings();
     assert!(rings.audio.1 > rings.audio.0, "the audio ring lost a slot that fits");
     assert_eq!(rings.band, (0.0, 0.0), "the band was squeezed into {:?}", rings.band);

@@ -1421,7 +1421,7 @@ fn a_melody_bass_mark_extends_the_slice_it_names() {
 /// bucket spans, because the measurement below is made in pixels: the ring is
 /// an annulus about 20 px from the node's centre in a 256 px shot, so a wedge
 /// of the fresh five-octave wheel is some 25 px of arc, and one bucket at the
-/// fresh 200¢ Range would be an eighth of a pixel of it. Symmetric, so the
+/// probe's 200¢ Range would be an eighth of a pixel of it. Symmetric, so the
 /// lit arc's centroid is the band's own centre pitch whatever the Range.
 const PARTIAL_HALF_CENTS: f32 = 40.0;
 
@@ -1431,6 +1431,14 @@ const PARTIAL_HALF_CENTS: f32 = 40.0;
 /// bars are free to dial apart: a probe reading a radius wants the layers
 /// pixels apart, and one reading a sector wants the seams pixels wide.
 const PROBE_GAP: f32 = 0.12;
+
+/// The Range these fixtures read their partials against, standing in for the
+/// fresh view's own (see
+/// [`ViewConfig::spectral_ring_range`](harmonigraph_scene::ViewConfig)) the
+/// same way [`PROBE_GAP`] stands in for the gap: a window dialled narrow
+/// enough leaves a detune too small for a 256 px shot to resolve, which is a
+/// property of the shot's resolution rather than of the Range being tested.
+const PROBE_RANGE: f32 = 200.0;
 
 /// One node with both rings at the widths a FRESH view gives them: `held`
 /// lighting an octave of the band, and a synthetic partial at absolute MIDI
@@ -1594,9 +1602,9 @@ fn the_audio_ring_reads_the_spectrum_around_each_octave() {
     const DOWN: usize = harmonigraph_scene::MIDDLE_C_SLOT - 2;
     // The fixture's node is a C (`cents` 0), so slot s names MIDI 12 * s.
     let slot_pitch = |slot: usize| slot as f32 * 12.0;
-    // The fresh Range, which every angle below is measured at unless it says
+    // The probe Range, which every angle below is measured at unless it says
     // otherwise.
-    let fresh_range = harmonigraph_scene::ViewConfig::default().spectral_ring_range;
+    let fresh_range = PROBE_RANGE;
 
     let base = gpu.shot(&ringing_node(None, None, fresh_range));
     let mut wedge = |held, sounding, range| {
@@ -1723,7 +1731,7 @@ fn a_gated_node_loses_its_ring_and_nothing_else() {
     let Some(mut gpu) = Shooter::new(SIZE) else {
         return;
     };
-    let fresh_range = harmonigraph_scene::ViewConfig::default().spectral_ring_range;
+    let fresh_range = PROBE_RANGE;
     // A node with an octave held and a partial sounding at that same octave, so
     // both rings have something to draw and the two can be told apart in the
     // shot.
@@ -1785,7 +1793,7 @@ fn a_ring_part_way_through_its_fade_sits_between_the_two() {
     let Some(mut gpu) = Shooter::new(SIZE) else {
         return;
     };
-    let fresh_range = harmonigraph_scene::ViewConfig::default().spectral_ring_range;
+    let fresh_range = PROBE_RANGE;
     let slot = harmonigraph_scene::MIDDLE_C_SLOT;
     let sounding = slot as f32 * 12.0;
     let full = gpu.shot(&ringing_node(Some(slot), Some(sounding), fresh_range));
@@ -2009,12 +2017,35 @@ fn a_mark_with_no_ring_under_it_reaches_the_nodes_centre() {
 /// level out of.
 const CLEAR_REACH: f32 = 0.30;
 
+/// The audio ring's width for the clearing probe, standing in for the fresh
+/// view's own (see [`ViewConfig::spectral_ring_width`](harmonigraph_scene::ViewConfig))
+/// the same way [`PROBE_GAP`] stands in for its gap: CLEAR_REACH is a fixed
+/// reach in uv, and a ring dialled thinner than that leaves too few pixels
+/// past it for the clearing-fraction reading below to hold its tolerance.
+const PROBE_RING_WIDTH: f32 = 0.3;
+
+/// The core radius the clearing probe stacks its rings on, standing in for
+/// the fresh view's own (see
+/// [`ViewConfig::core_radius`](harmonigraph_scene::ViewConfig)) the same way
+/// [`PROBE_GAP`] and [`PROBE_RING_WIDTH`] stand in for theirs: the probe's
+/// wider gap and ring leave no room under the fresh view's own core before
+/// the stack runs past the node's own edge, so this pins the radius the rest
+/// of the stack is measured from instead of inheriting whatever the core is
+/// currently dialled to.
+const PROBE_CORE_RADIUS: f32 = 0.256_256_76;
+
 /// The stack the clearing tests are measured against: the fresh view's four
 /// layers at the probe's wider padding, so a pixel reading can tell one layer's
 /// edge from the next.
 fn clearing_rings() -> harmonigraph_scene::RingStack {
     let fresh = harmonigraph_scene::ViewConfig::default();
-    harmonigraph_scene::ViewConfig { ring_gap: PROBE_GAP, ..fresh }.rings()
+    harmonigraph_scene::ViewConfig {
+        ring_gap: PROBE_GAP,
+        core_radius: PROBE_CORE_RADIUS,
+        spectral_ring_width: PROBE_RING_WIDTH,
+        ..fresh
+    }
+    .rings()
 }
 
 /// One node sitting in its own clearing at [`clearing_rings`]'s radii: `melody`
@@ -2560,7 +2591,7 @@ fn the_folded_ring_reads_each_wedge_at_its_own_octave() {
     };
     const UP: usize = harmonigraph_scene::MIDDLE_C_SLOT;
     let slot_pitch = |slot: usize| slot as f32 * 12.0;
-    let fresh_range = harmonigraph_scene::ViewConfig::default().spectral_ring_range;
+    let fresh_range = PROBE_RANGE;
     // The same fixture as the raw reading's, with the wedges read at their own
     // pitch instead of across a window.
     let folded = |sounding: Option<f32>, range: f32| {

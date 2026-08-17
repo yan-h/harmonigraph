@@ -885,7 +885,11 @@ mod tests {
             (f32::NAN, 200.0),
             (-3.0, 200.0),
         ] {
-            let paint = SpectralPaint::new(&ringed(width, range), Gradient::default());
+            // Core off: the claim under test is the ring's own clamp, and a
+            // width run all the way to RING_WIDTH_MAX must not be crowded out
+            // by however wide the fresh view's own core happens to be dialled.
+            let view = ViewConfig { core_radius: 0.0, ..ringed(width, range) };
+            let paint = SpectralPaint::new(&view, Gradient::default());
             assert_eq!(
                 paint.ring_draws(),
                 width.is_finite() && width > 0.0,
@@ -1310,7 +1314,7 @@ mod tests {
     /// octave's own pitch, and a spectrum wedge is the loudest thing in the
     /// window it spreads across its arc.
     ///
-    /// So a partial 60¢ off a node — well inside the fresh 200¢ window and well
+    /// So a partial 60¢ off a node — well inside a 200¢ window and well
     /// outside anything the node's own pitch reads — opens that node under
     /// Spectrum and leaves it dark under Fold. Both are correct, because both
     /// are what is on the screen: the spectrum wedge is showing that partial,
@@ -1324,7 +1328,12 @@ mod tests {
         let wheel = wheel();
         let off = partial(60.6, 10.0);
         let fold = gate_of(&gated(0.5, SpectralReading::Fold), off.clone());
-        let spectrum = gate_of(&gated(0.5, SpectralReading::Spectrum), off);
+        // A window stated rather than the fresh view's own: the claim is
+        // about a partial well inside SOME window, not about how wide the
+        // fresh Zoom happens to be dialled.
+        let wide =
+            ViewConfig { spectral_ring_range: 200.0, ..gated(0.5, SpectralReading::Spectrum) };
+        let spectrum = gate_of(&wide, off);
         assert!(
             !fold.draws(&wheel, 0.0),
             "the fold rang a node whose own pitch reads {}",
