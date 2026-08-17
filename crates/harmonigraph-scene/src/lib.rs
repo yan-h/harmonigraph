@@ -170,10 +170,17 @@ pub const CORE_RADIUS_MAX: f32 = 0.9;
 pub const RING_WIDTH_MAX: f32 = 0.6;
 /// See [`CORE_RADIUS_MAX`].
 pub const MARK_THICKNESS_MAX: f32 = 0.3;
-/// See [`CORE_RADIUS_MAX`]. The one of the four that is a padding rather than a
-/// layer, and it is spent up to three times over on one node (between the core
-/// and the audio ring, that ring and the band, and the band and the marks), so
-/// its bar is short: at the top of it the gaps alone are more than the quad.
+/// See [`CORE_RADIUS_MAX`]. The ceiling on BOTH of a node's paddings, which are
+/// a padding rather than a layer and so share one.
+///
+/// It is the RADIAL one ([`ViewConfig::ring_gap`]) the number is sized for,
+/// that being the one spent out of the quad, and spent up to three times over
+/// on one node (between the core and the audio ring, that ring and the band,
+/// and the band and the marks): at the top of the bar the gaps alone are more
+/// than the quad. The ANGULAR one ([`ViewConfig::octave_gap`]) costs the stack
+/// nothing and wants a ceiling for a different reason — a gap of a whole
+/// sector's arc is every indicator erased — and lands near enough the same
+/// place that a second constant would be two numbers saying one thing.
 pub const GAP_MAX: f32 = 0.4;
 
 /// Samples in the pitch->color lookup EVERYTHING pitch-colored reads: the
@@ -480,10 +487,18 @@ pub struct Scene {
     /// because that sum is only right while some ring is there to owe the
     /// padding to.
     pub mark_inner: f32,
-    /// The one padding on a node (see [`ViewConfig::ring_gap`]): between two
-    /// stacked rings, between one octave sector and the next, and between the
-    /// outermost ring and the mark strip alike. Already clamped.
-    pub ring_gap: f32,
+    /// The ANGULAR padding on a node (see [`ViewConfig::octave_gap`]): between
+    /// one octave sector and the next, on the band, on the audio ring's wedges
+    /// and down a mark's own sides. Already clamped.
+    ///
+    /// The node's other padding, the RADIAL one, reaches the picture as the
+    /// radii themselves — every stand-off it buys is already spent in
+    /// [`rings_outer`](Self::rings_outer), [`mark_inner`](Self::mark_inner) and
+    /// the band's two edges — so it needs no field of its own here. This one
+    /// has one because nothing upstream can spend it: a gap cut across an
+    /// annulus is a per-fragment test, and the shader is where the fragments
+    /// are.
+    pub octave_gap: f32,
     /// The lattice at rest — its grid, and both of a node's rings where
     /// nothing is lit — already resolved from
     /// [`ViewConfig::lattice_ground`]'s `L*` to the neutral grey it names.
@@ -555,8 +570,10 @@ pub struct Scene {
     /// actually crosses something.
     pub background: Vec4,
     /// How deep the melody/bass mark strip is, in quad UV units; 0 = off (see
-    /// [`ViewConfig::mark_thickness`]). It starts one [`ring_gap`](Self::ring_gap)
-    /// past [`rings_outer`](Self::rings_outer). Already clamped.
+    /// [`ViewConfig::mark_thickness`]). It starts one
+    /// [`ViewConfig::ring_gap`] past [`rings_outer`](Self::rings_outer) — a
+    /// sum already spent, this struct carrying [`mark_inner`](Self::mark_inner)
+    /// itself. Already clamped.
     pub mark_thickness: f32,
     /// Which shimmer sweeps the melody/bass marks (see [`Pulse`] and
     /// [`ViewConfig::pulse_marks`]).

@@ -396,7 +396,9 @@ fn parity_scene() -> Scene {
         // is what the marks stand off — a gap out from its edge.
         rings_outer: 0.795,
         mark_inner: 0.795 + 0.12,
-        ring_gap: 0.12,
+        // The same 0.12 the radii above are spaced by, the fixture standing its
+        // layers off each other and cutting its sectors by one padding.
+        octave_gap: 0.12,
         // No analyzer: the ring off, under either reading. It is a whole layer
         // more light in the middle of every node, and the sweep and mark
         // measurements here are sized against the picture without it —
@@ -1424,6 +1426,10 @@ fn a_melody_bass_mark_extends_the_slice_it_names() {
 const PARTIAL_HALF_CENTS: f32 = 40.0;
 
 /// The padding `ringing_node` stands its layers off each other by — see there.
+/// Spent on BOTH of the node's axes in these fixtures, radially between the
+/// layers and angularly between the sectors, which is what the view's two gap
+/// bars are free to dial apart: a probe reading a radius wants the layers
+/// pixels apart, and one reading a sector wants the seams pixels wide.
 const PROBE_GAP: f32 = 0.12;
 
 /// One node with both rings at the widths a FRESH view gives them: `held`
@@ -1437,9 +1443,9 @@ const PROBE_GAP: f32 = 0.12;
 /// measured is where two annuli are.
 ///
 /// The PADDING is the fixture's own, and it is the one number here that has to
-/// be: one Gap separates every layer of a node, and the fresh 0.052 of it is
-/// under three pixels on the 52-px node this renders, where the two annuli's
-/// anti-aliased edges meet inside it. A wider gap measures the geometry
+/// be: the Ring gap is what separates every layer of a node, and the fresh
+/// 0.052 of it is under three pixels on the 52-px node this renders, where the
+/// two annuli's anti-aliased edges meet inside it. A wider gap measures the geometry
 /// rather than the edge softness. It is the same picture a fresh node draws,
 /// read at a size a person looks at one from.
 ///
@@ -1467,7 +1473,7 @@ fn ringing_node(held: Option<usize>, sounding: Option<f32>, range: f32) -> Scene
     scene.outer_outer = rings.band.1;
     scene.rings_outer = rings.outer;
     scene.mark_inner = rings.mark_inner;
-    scene.ring_gap = rings.gap;
+    scene.octave_gap = PROBE_GAP;
 
     let mut paint = harmonigraph_scene::SpectralPaint::silent();
     paint.lut = std::array::from_fn(|k| {
@@ -1845,7 +1851,7 @@ fn a_mark_stands_off_the_outermost_ring_the_node_draws() {
     let staged = |band: bool| -> Scene {
         let mut scene = single_marked_node(MIDDLE_C, 0);
         scene.core_radius = 0.0;
-        scene.ring_gap = rings.gap;
+        scene.octave_gap = PROBE_GAP;
         scene.mark_thickness = rings.mark_thickness;
         // The audio ring is drawn from an all-zero grid, which paints the
         // ramp's floor colour across the annulus — light at a known radius,
@@ -1948,7 +1954,7 @@ fn a_mark_with_no_ring_under_it_reaches_the_nodes_centre() {
     let staged = |rings: &harmonigraph_scene::RingStack, mark: bool| -> Scene {
         let mut scene = single_marked_node(MIDDLE_C, 0);
         scene.core_radius = rings.core_radius;
-        scene.ring_gap = rings.gap;
+        scene.octave_gap = PROBE_GAP;
         scene.mark_thickness = rings.mark_thickness;
         // Silent paint carries the empty pair, so the audio ring is off the
         // way the bar leaves it rather than merely unlit.
@@ -2030,7 +2036,7 @@ fn clearing_node(melody: u32, ring: f32, band: bool, gutter: f32) -> Scene {
     scene.background = glam::Vec4::ONE;
     scene.node_radius = 1.4;
     scene.core_radius = rings.core_radius;
-    scene.ring_gap = rings.gap;
+    scene.octave_gap = PROBE_GAP;
     scene.mark_thickness = rings.mark_thickness;
     // The audio ring drawn off an all-zero grid: the ramp's floor across the
     // whole annulus, which is ink at a known radius and all this asks of it.
@@ -2501,7 +2507,7 @@ fn a_band_dialled_off_paints_no_dot_at_the_nodes_centre() {
         scene.core_radius = 0.0;
         scene.mark_thickness = 0.0;
         scene.rings_outer = 0.0;
-        scene.ring_gap = 0.0;
+        scene.octave_gap = 0.0;
         (scene.outer_inner, scene.outer_outer) = (0.0, 0.0);
         scene.spectral = harmonigraph_scene::SpectralPaint::silent();
         if !node {
@@ -3355,7 +3361,7 @@ fn octave_wheel_scene(layout: harmonigraph_scene::OctaveLayout, cents: f32) -> S
     scene.outer_inner = 0.30;
     scene.outer_outer = 0.95;
     scene.rings_outer = 0.95;
-    scene.ring_gap = 0.10;
+    scene.octave_gap = 0.10;
     scene.mark_thickness = 0.0;
     // Every octave the wheel draws for THIS pitch class, and only those: a
     // level on a slot no sector draws is a state `derive_scene` cannot reach,
@@ -3509,7 +3515,7 @@ fn gap_at(profile: &[bool], at_degrees: f32) -> f32 {
 }
 
 /// Every unlit run around the profile, in degrees. On a closed ring of
-/// indicators the only unlit stretches are the Gap setting's slits, one per
+/// indicators the only unlit stretches are the Octave gap's slits, one per
 /// boundary between neighbours — so counting these counts the indicators,
 /// and a missing one shows as two slits merged into a wider hole.
 fn unlit_runs(profile: &[bool]) -> Vec<f32> {
@@ -3539,7 +3545,7 @@ fn unlit_runs(profile: &[bool]) -> Vec<f32> {
 /// than on the layout that feeds it: every octave of the span gets an
 /// indicator and together they close the ring — whatever the counts, the
 /// center, the fringe or the node's pitch class. So the only unlit stretches
-/// are the Gap setting's slits, one per boundary, and the seam is one of them
+/// are the Octave gap's slits, one per boundary, and the seam is one of them
 /// on every node, wherever that node's turn has carried it.
 ///
 /// Reading it off rendered pixels is the point. The layout's own tests pin
@@ -3567,7 +3573,7 @@ fn every_octave_in_the_range_is_drawn_and_they_close_the_ring() {
     // not, one of them the tritone that turns furthest.
     //
     // An even wheel, a flat fringe, a graded one, and then a fringe thin
-    // enough to be eaten by the Gap.
+    // enough to be eaten by the Octave gap.
     const FRINGES: [(f32, f32); 4] = [(1.0, 0.0), (0.6, 0.0), (0.6, 1.0), (0.15, 0.0)];
     for (count, extras, center) in [
         (11u32, 0u32, 60.0f32),
@@ -3600,7 +3606,7 @@ fn every_octave_in_the_range_is_drawn_and_they_close_the_ring() {
                 let want = layout.span as usize;
                 let runs = unlit_runs(&profile);
                 // Except under a thin fringe, and that is the settings talking
-                // rather than a missing indicator: the Gap is cut out of every
+                // rather than a missing indicator: the Octave gap is cut out of every
                 // sector from both sides at full width, so an extra thinner
                 // than twice that padding has its two slits meet and reads as
                 // no indicator at all. At 0.6 of an even slice they still
@@ -3614,7 +3620,7 @@ fn every_octave_in_the_range_is_drawn_and_they_close_the_ring() {
                     assert!(
                         runs.len() + lost >= want && runs.len() <= want,
                         "{case}: unlit runs {runs:?} for {want} sectors — at most the \
-                         {lost} extras can be lost to the Gap"
+                         {lost} extras can be lost to the Octave gap"
                     );
                 }
 
@@ -3668,7 +3674,7 @@ fn an_indicator_is_drawn_at_its_own_pitchs_angle() {
         // wheel, where a wrong anchor or a wrong direction shows.
         //
         // Both held INSIDE the ring rather than at its edges: a thin fringe
-        // leaves the extras narrower than the Gap's slits, and a centroid
+        // leaves the extras narrower than the Octave gap's slits, and a centroid
         // needs an arc to measure. That the edges reach the seam at all is
         // `every_octave_in_the_range_is_drawn_and_they_close_the_ring`.
         for (cents, offset) in [(0.0f32, 0i32), (700.0, 0), (0.0, 2), (700.0, 2)] {
@@ -4704,7 +4710,7 @@ fn a_ring_wedge_wears_its_own_levels_ramp_entry() {
         scene.outer_inner = rings.band.0;
         scene.outer_outer = rings.band.1;
         scene.rings_outer = rings.outer;
-        scene.ring_gap = rings.gap;
+        scene.octave_gap = fresh.octave_gap_width();
         let mut paint = harmonigraph_scene::SpectralPaint::silent();
         (paint.inner, paint.outer) = rings.audio;
         paint.folded = true;

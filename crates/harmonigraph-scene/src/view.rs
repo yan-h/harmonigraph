@@ -376,24 +376,39 @@ pub struct ViewConfig {
     // and then an opacity under `outer_backdrop_alpha`, and `outer_solidity`);
     // serde ignores unknown keys, so such a blob loads intact and simply
     // drops them on the next save.
-    /// The one padding on a node, in quad UV units: the RADIAL gap between one
-    /// ring of the stack and the next (see [`rings`](Self::rings)), and the
-    /// ANGULAR gap between one octave sector and the next, which is also what
-    /// separates a melody/bass mark from the band it continues.
+    /// The node's RADIAL padding, in quad UV units: the gap between one ring of
+    /// the stack and the next (see [`rings`](Self::rings)), which is also what
+    /// stands a melody/bass mark off the band it continues.
     ///
-    /// One number for both axes, because a node reads as one rhythm of
-    /// interruptions: a ring standing off its neighbour by more than a sector
-    /// stands off the sector beside it makes two spacings out of one idea, and
-    /// the eye reads the wider of them as the structure. A mark IS its sector
-    /// continued outward, which is the case in miniature — a stand-off
-    /// narrower than the gap to the next sector would read as a join rather
-    /// than as the same interruption seen twice.
+    /// The other axis is [`octave_gap`](Self::octave_gap), and the two are
+    /// separate because they are answers to different questions. This one is
+    /// about the STACK: how far apart the annuli read, which is the same
+    /// question the four widths above are asked and is settled against them —
+    /// every unit spent here is a unit of quad the layers do not get, so the
+    /// gap and the sizes are dialled together on one bar's worth of room. The
+    /// angular gap spends nothing: it cuts the slices out of a ring already
+    /// placed.
     ///
-    /// 0 closes the whole node up: the sectors become a solid annulus, the
-    /// marks seat against the band, and every ring meets the one inside it.
-    /// A gap is only ever spent between two DRAWN layers, so a ring dialled to
-    /// 0 costs its own slot and the gap that would have stood it off together.
+    /// 0 closes the stack up: every ring meets the one inside it and a mark
+    /// seats against the band. A gap is only ever spent between two DRAWN
+    /// layers, so a ring dialled to 0 costs its own slot and the gap that would
+    /// have stood it off together.
     pub ring_gap: f32,
+    /// The node's ANGULAR padding, in quad UV units: the gap between one octave
+    /// sector and the next, cut as a constant-thickness band at every radius so
+    /// it is the same width where a slice starts and where it ends.
+    ///
+    /// One number over every angular slice on the node, and that IS the whole
+    /// of the layer-crossing claim here: the octave band's sectors, the audio
+    /// ring's wedges and a melody/bass mark's own edges all run on it, so one
+    /// rhythm of interruptions runs radially through the node and the rings
+    /// read as one picture rather than three that happen to be concentric. What
+    /// it does NOT set is how far apart those rings sit — see
+    /// [`ring_gap`](Self::ring_gap).
+    ///
+    /// 0 closes the ring round: the sectors become a solid annulus, and a
+    /// backdrop is what still says an octave is silent.
+    pub octave_gap: f32,
     /// The whole lattice AT REST, as an `L*` 0..100 — one neutral grey under
     /// the three surfaces that draw where nothing is sounding:
     ///
@@ -405,8 +420,8 @@ pub struct ViewConfig {
     /// - the **MIDI ring**'s octave slices that are not sounding, which ARE
     ///   this colour, with a sounding octave's pitch painted over them.
     ///
-    /// One number under all three, like [`ring_gap`](Self::ring_gap) above it,
-    /// and for the same reason: they are one picture read together — two annuli
+    /// One number under all three, like [`octave_gap`](Self::octave_gap) above
+    /// it, and for the same reason: they are one picture read together — two annuli
     /// a gap apart with the lines of the lattice running into them — so a
     /// ground that differed between them says the three are different KINDS of
     /// thing when the only thing they have in common is being empty. Each
@@ -711,11 +726,13 @@ pub struct ViewConfig {
     ///
     /// A mark is an annular sector on exactly the angles of the octave
     /// responsible for it, and it takes the LAST slot of the stack
-    /// ([`rings`](Self::rings)): a gap out from whatever ring the node ends
-    /// with, ordinarily the octave band whose slice it is continuing. That is
-    /// the same padding that separates one indicator from the next, so the mark
-    /// reads as that indicator continued; a [`ring_gap`](Self::ring_gap) of 0
-    /// closes the stand-off, and the mark meets its slice.
+    /// ([`rings`](Self::rings)): one [`ring_gap`](Self::ring_gap) out from
+    /// whatever ring the node ends with, ordinarily the octave band whose slice
+    /// it is continuing. Its SIDES are cut by
+    /// [`octave_gap`](Self::octave_gap), the same padding that separates one
+    /// indicator from the next, so the mark reads as that indicator continued
+    /// however far out the stack stands it; a `ring_gap` of 0 closes the
+    /// stand-off, and the mark meets its slice.
     ///
     /// 0 turns the marks off, as a radius of 0 turns the core off. Absolute
     /// rather than a fraction of the band's width, which would move the marks
@@ -1059,8 +1076,10 @@ pub struct RingStack {
     /// thing about the marks still left to the renderer, which eases the strip
     /// off its own billboard edge.
     pub mark_thickness: f32,
-    /// The padding between two drawn layers, and between one octave sector and
-    /// the next (see [`ViewConfig::ring_gap`]).
+    /// The padding between two drawn layers (see [`ViewConfig::ring_gap`]) —
+    /// the RADIAL one alone, this being the stack. What separates one octave
+    /// sector from the next is [`ViewConfig::octave_gap`], which no radius on
+    /// this struct depends on.
     pub gap: f32,
 }
 
@@ -1274,6 +1293,21 @@ impl ViewConfig {
             mark_thickness: size(self.mark_thickness, MARK_THICKNESS_MAX),
             gap,
         }
+    }
+
+    /// [`octave_gap`](Self::octave_gap) as a width the shader can cut with: on
+    /// the axis, and a real number.
+    ///
+    /// The angular gap's [`rings`](Self::rings) — it reaches the picture as a
+    /// bare uniform rather than through a radius, so this is the one place its
+    /// clamp can live, and it is here rather than in
+    /// [`sanitize`](Self::sanitize) for the reason every other geometry clamp
+    /// is: the drawing code is reached by more routes than the persist door. A
+    /// non-finite width would threshold every fragment of every sector to
+    /// false, taking the whole octave layer off the node with nothing on screen
+    /// to say why.
+    pub fn octave_gap_width(&self) -> f32 {
+        size(self.octave_gap, GAP_MAX)
     }
 
     /// [`lattice_ground`](Self::lattice_ground) as an `L*` the colour path can
@@ -1923,7 +1957,14 @@ impl Default for ViewConfig {
             // its outer edge at 0.851, which is where it has always sat: the
             // stack is core (0.256), gap, audio ring, gap, band, gap, marks.
             band_width: 0.190_065_75,
+            // The two gaps are one number here: the radial padding is what puts
+            // the band at 0.661, and the same width cut angularly is the slicing
+            // that reads as distinct marks. They are two bars because a node has
+            // two spacings to set, not because the fresh one wants them apart —
+            // the picture this describes is one a person can meet by dialling
+            // neither.
             ring_gap: 0.051_732_67,
+            octave_gap: 0.051_732_67,
             // The rung of the chrome's own ladder the rings stand on: `L*` 20.0
             // is the skin's `surface_faint`, a step ABOVE the lattice's panel
             // ground (8.8) and well clear of the well grey (4.7), which beside
