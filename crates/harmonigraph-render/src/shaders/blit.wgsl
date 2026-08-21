@@ -9,7 +9,6 @@
 //   fs_blur_h/v   separable 9-tap Gaussian over the quarter-res texture
 //   fs_composite  scene + bloom * strength, premultiplied over the pane
 //   fs_bloom_add  bloom * strength alone, over a picture already in the pass
-//   fs_glow_add   blurred node ink * its per-node window * strength, likewise
 //
 // The bloom chain runs at fractions of the pane's SCREEN size, not the
 // (possibly supersampled) scene size, so the halo's screen width does not
@@ -47,11 +46,6 @@ struct AddUniforms {
     strength: vec4<f32>,
 };
 @group(0) @binding(4) var<uniform> add: AddUniforms;
-// The node glow's window: one channel, R8, holding how much of its own halo
-// each node shows where (lattice.wgsl's `glow_mask`). Read by `fs_glow_add`
-// alone, which is also the only pass that reads `scene_tex` as blurred NODE INK
-// rather than as a picture.
-@group(0) @binding(5) var mask_tex: texture_2d<f32>;
 
 struct BlitOut {
     @builtin(position) pos: vec4<f32>,
@@ -138,21 +132,4 @@ fn fs_composite(in: BlitOut) -> @location(0) vec4<f32> {
 fn fs_bloom_add(in: BlitOut) -> @location(0) vec4<f32> {
     let bloom = textureSample(scene_tex, scene_samp, in.uv);
     return vec4<f32>(bloom.rgb * add.strength.x, 0.0);
-}
-
-// The node glow, over the finished lattice: the blurred node ink, shown through
-// each node's own window, as pure light with zero alpha — `fs_bloom_add`'s
-// composite with one more term.
-//
-// The window is what makes the two different lights rather than two strengths
-// of one. The bloom's chain thresholds, so what it spreads is the bright end of
-// the picture and it may spread it anywhere; this chain does not threshold at
-// all, so a dim audio ring glows exactly as it is drawn — and the mask is then
-// what keeps that ink on the node it came off instead of hazing the lattice
-// between them.
-@fragment
-fn fs_glow_add(in: BlitOut) -> @location(0) vec4<f32> {
-    let ink = textureSample(scene_tex, scene_samp, in.uv);
-    let window = textureSample(mask_tex, scene_samp, in.uv).r;
-    return vec4<f32>(ink.rgb * window * add.strength.x, 0.0);
 }

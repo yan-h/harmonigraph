@@ -662,18 +662,17 @@ fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBack
          inner handle, faded out by the outer. 0 draws none.",
     );
     // The glow, last, and in Note rather than beside the Core or with Bloom on
-    // the Colors page. It is the whole node's, not a layer's: what glows is the
-    // ink every drawn layer put down, blurred and shown back through a window
-    // reaching this far past the node's own edge — so a node with nothing but
-    // an audio ring glows its ring, and one wearing every layer glows all of
-    // them, without either being asked for anywhere.
+    // the Colors page. It is the whole node's, not a layer's: it is the core's
+    // own skirt taken off the disc and grown over the node entire, so a node's
+    // light is laid in the same octave colours its band and its disc are and
+    // reaches this far past its outermost drawn edge.
     //
     // Not with Bloom, which it otherwise reads like, because the two are
     // different settings of different things. Bloom is one number over every
     // picture the plugin draws and it thresholds, so it is the bright end of
     // the gradient blowing out — colour, which is why it sits with the table
-    // that makes it. This is the lattice's nodes alone, and it takes their ink
-    // whole.
+    // that makes it. This is a layer of a node, dialled where a node's other
+    // layers are.
     //
     // A share of the node's radius, the unit the two gaps and the Clearance
     // above it read in, and measured from the same place: the reach is a
@@ -684,16 +683,30 @@ fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBack
         .show(ui)
         .on_hover_text(
             "How far past its own edge a node's light spreads, as a share of \
-             its radius — the halo is grown from whatever that node is \
-             actually drawing, so it follows every layer's fade. 0 turns it \
-             off.",
+             its radius. Neighbouring nodes' light melds where it overlaps. 0 \
+             turns it off, and gives the core its own skirt back.",
         );
-    // Grayed rather than hidden while the reach is 0, so the row keeps its
-    // place and the number it is dialled to stays readable — the same
+    // Grayed rather than hidden while the reach is 0, so the rows keep their
+    // place and the numbers they are dialled to stay readable — the same
     // arrangement the audio ring's own settings use.
     ui.add_enabled_ui(view.glow_reach > 0.0, |ui| {
         ValueBar::new(&mut view.glow_strength, 0.0..=GLOW_STRENGTH_MAX, "Glow strength")
             .show(ui)
-            .on_hover_text("How bright that light is added back over the picture.");
+            .on_hover_text("How much light it lays down.");
+        // The moat, beneath the light it stands off, and read out like the
+        // Clearance it is made of: this bar widens that same knockout, layer by
+        // layer, so the two are one hole dialled from two places and a person
+        // comparing them is comparing shares of the node's radius.
+        ValueBar::new(&mut view.glow_gap, 0.0..=GAP_MAX, "Glow gap")
+            .decimals(3)
+            .display(|v| format!("{:.1}%", v * 100.0))
+            .show(ui)
+            .on_hover_text(
+                "The dark gap held between a node's crisp layers — its rings, \
+                 its band, its marks and its disc — and the light around them, \
+                 as a share of the node's radius. It is cut through the \
+                 neighbours' light as well as the node's own. 0 lets the glow \
+                 up to the edge of every layer.",
+            );
     });
 }

@@ -1020,28 +1020,55 @@ pub struct ViewConfig {
     /// composite is then exactly the plain scene, so there is deliberately
     /// no separate on/off toggle.
     pub bloom_strength: f32,
-    /// The node glow: how far past a node's outermost drawn edge its own halo
-    /// is shown, in the quad UV units the layer sizes are in. 0 turns the
-    /// whole pass off — no ink target, no blur, no composite — so the pair
-    /// needs no toggle of its own.
+    /// The node glow: how far past a node's outermost drawn edge its own light
+    /// spreads, in the quad UV units the layer sizes are in. 0 turns it off —
+    /// nothing is drawn at all — so the three fields need no toggle of their
+    /// own.
     ///
-    /// A window on the light rather than the light itself. What glows is the
-    /// node's own INK, re-rendered and blurred (see the glow pass in
-    /// `harmonigraph-render`), so the halo can never disagree with which
-    /// layers are on, refused, attacking or releasing — and this says how far
-    /// out of the node that ink is allowed to spread before the window closes.
-    /// Without it a wide blur is a haze over the whole lattice; with it a node
-    /// wears its own light and nothing of its neighbours'.
+    /// The glow REPLACES the core's skirt rather than joining it. What it
+    /// draws is exactly that skirt — every sounding octave's hue laid round
+    /// the node by angle, over an exponential falloff — at the soft end of the
+    /// solidity axis and sized to the whole node instead of to the core disc:
+    /// the node's outermost drawn edge plus this reach is both the falloff's
+    /// domain and where its window shuts, so this bar is exactly where the
+    /// light stops. So
+    /// the core's skirt is suppressed wherever this is on (see `core_layer` in
+    /// lattice.wgsl), and only its solid disc is left, as one more crisp shape
+    /// the [`glow_gap`](Self::glow_gap) stands off.
+    ///
+    /// Every node's glow is drawn before any node is, in one pass and with
+    /// SCREEN blending, so two neighbours' halos meld like light rather than
+    /// summing to white and neither one's draw order is readable in the
+    /// overlap.
     ///
     /// Distinct from [`bloom_strength`](Self::bloom_strength) in what it
-    /// measures: the bloom thresholds, so only the bright end of the gradient
-    /// blooms, and it is one number over every picture the plugin draws. This
-    /// one takes the ink whole — a dim audio ring glows exactly as much as it
-    /// is drawn — and belongs to the lattice's nodes alone.
+    /// measures: the bloom thresholds a finished PICTURE, so only the bright
+    /// end of the gradient blooms and it is one number over every picture the
+    /// plugin draws. This is a layer of the lattice's nodes, drawn from the
+    /// same octave colours their discs are.
     pub glow_reach: f32,
-    /// How much of the node glow is added back as light. Inert while
+    /// How much light the node glow lays down. Inert while
     /// [`glow_reach`](Self::glow_reach) is 0.
     pub glow_strength: f32,
+    /// The moat: how far past every drawn layer's own footprint the node
+    /// clears its glow away, in the same quad UV units
+    /// [`ring_gap`](Self::ring_gap) reads in.
+    ///
+    /// Without it a wide halo washes over the rings, band, marks and disc it
+    /// comes off, and the crisp geometry that carries the reading goes soft.
+    /// It is not a shape of its own: it widens the knockout each layer already
+    /// cuts ([`sevens_gutter`](Self::sevens_gutter)), so a layer that is off,
+    /// refused by the stack, attacking or releasing opens and closes its own
+    /// moat in step with its own level, and the moat fades exactly as the hole
+    /// does.
+    ///
+    /// That knockout is composited in screen space, under the node and over
+    /// everything drawn before it — which is what makes the moat cut through
+    /// the NEIGHBOURS' glow too, and not only through the node's own.
+    ///
+    /// Inert while [`glow_reach`](Self::glow_reach) is 0: with no light to
+    /// stand off, a moat is a gap in the picture for nothing.
+    pub glow_gap: f32,
 }
 
 /// Where each layer of a node lands, in quad UV units, read outward from its
@@ -1850,12 +1877,14 @@ impl ViewConfig {
         //
         // The reach is what the billboard is SIZED on (`quad_margin` in
         // lattice.wgsl), so a non-finite one is not merely a wrong halo: it is
-        // a NaN quad, and every node's glow ink vanishes with nothing on screen
-        // to say why.
+        // a NaN quad, and every node's glow vanishes with nothing on screen to
+        // say why. The gap sizes that same quad, the clearing having grown by
+        // it, so it repairs on the same argument.
         self.glow_reach =
             finite_or(self.glow_reach, fresh.glow_reach).clamp(0.0, GLOW_REACH_MAX);
         self.glow_strength =
             finite_or(self.glow_strength, fresh.glow_strength).clamp(0.0, GLOW_STRENGTH_MAX);
+        self.glow_gap = finite_or(self.glow_gap, fresh.glow_gap).clamp(0.0, GAP_MAX);
 
         self.shimmer_speed = finite_or(self.shimmer_speed, fresh.shimmer_speed);
         self.shimmer_width = finite_or(self.shimmer_width, fresh.shimmer_width);
@@ -2105,11 +2134,13 @@ impl Default for ViewConfig {
             // gives them presence.
             bloom_strength: 0.806_154_85,
             // The node glow off, so a fresh view — and every blob written
-            // before the pass existed — draws exactly the picture it did
-            // without it. The strength is dialled ready underneath, so the
-            // reach alone brings the halo in.
+            // before it existed — draws exactly the picture it did without it.
+            // The strength and the moat are dialled ready underneath, so the
+            // reach alone brings the halo in, already standing off the rings
+            // it is laid around.
             glow_reach: 0.0,
             glow_strength: 1.0,
+            glow_gap: 0.08,
         }
     }
 }

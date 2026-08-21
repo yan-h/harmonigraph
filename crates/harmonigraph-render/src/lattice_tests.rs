@@ -427,10 +427,13 @@ fn parity_scene() -> Scene {
         render_scale: 1.0,
         // Parity with the direct-to-egui-pass reference requires bloom off.
         bloom_strength: 0.0,
-        // And the node glow with it: it is a second light laid over the
-        // composite, which the reference path has no composite to lay it over.
+        // And the node glow with it: it is a draw of its own ahead of the
+        // nodes, and it widens their knockout, neither of which the
+        // single-attachment reference path carries.
         glow_reach: 0.0,
         glow_strength: 1.0,
+        // The fresh moat, inert at reach 0 and here to say so.
+        glow_gap: 0.08,
     }
 }
 
@@ -5527,10 +5530,10 @@ fn a_label_adds_no_light_through_the_bloom() {
 /// comes from, and the Reach bar is what says how far out.
 ///
 /// Measured as the farthest pixel the glow changes, rather than as an amount at
-/// a chosen radius, because the second number is the one a reader dials: the
-/// halo is a blur of fixed screen width shown through a per-node WINDOW, so
-/// what the reach moves is where that window closes and not how bright the
-/// light inside it is.
+/// a chosen radius, because the reach is where the light STOPS and not how
+/// bright it is on the way: the same number is the falloff's domain and the
+/// point its window shuts (`glow_layer`), so what moves when the bar moves is
+/// the edge.
 ///
 /// One centered node on a cleared grid — [`single_marked_node`]'s fixture,
 /// which is the one scene here with a node whose surroundings are empty enough
@@ -5545,6 +5548,9 @@ fn the_glow_reach_says_how_far_a_node_lights_past_its_own_edge() {
         let mut scene = single_marked_node(0, 0);
         scene.glow_reach = reach;
         scene.glow_strength = 1.5;
+        // No moat, so what the measurement below sees is the light's own edge
+        // and not the hole held under it.
+        scene.glow_gap = 0.0;
         scene
     };
     let off = shooter.shot(&at(0.0));
@@ -5568,12 +5574,17 @@ fn the_glow_reach_says_how_far_a_node_lights_past_its_own_edge() {
     };
     let (near_edge, far_edge) = (farthest(&near, &off), farthest(&far, &off));
 
-    // Non-vacuous first: there has to BE light to measure.
+    // Non-vacuous first: there has to BE light to measure. Against the reach
+    // beside it rather than against the glow OFF, because the glow replaces the
+    // core's own skirt rather than joining it — a narrow reach spreads that
+    // same light thinner and can leave the frame dimmer overall, where one
+    // reach against another is the monotone claim: the lit area grows with the
+    // square of the span.
     assert!(
-        total_light(&near) > total_light(&off),
-        "the glow must add light: {} against {}",
+        total_light(&far) > total_light(&near),
+        "a wider reach must spread more light: {} against {}",
+        total_light(&far),
         total_light(&near),
-        total_light(&off),
     );
     assert!(near_edge > 0.0, "a glow at reach 0.2 changed no pixel at all");
     assert!(
@@ -5583,15 +5594,14 @@ fn the_glow_reach_says_how_far_a_node_lights_past_its_own_edge() {
     );
 }
 
-/// What the glow is grown from is node INK, and a lattice drawing no node has
-/// none — grid lines and chord beams included, which are drawn in the same pass
-/// as the nodes and would glow like them if the halo were taken off the scene's
-/// own picture instead of off a draw of its own.
+/// What the glow is a layer OF is a node, and a lattice drawing none has no
+/// light — grid lines and chord beams included, which are drawn in the same
+/// pass and would glow like nodes if the light were a post-process over the
+/// picture rather than a draw off the node instance buffer.
 ///
-/// Byte-identical rather than nearly so: the ink target is cleared and nothing
-/// writes to it, so the blur is zero everywhere and the composite adds exactly
-/// nothing. Anything else here is the glow reading a picture it should not be
-/// able to see.
+/// Byte-identical rather than nearly so: the glow's draw is over the instance
+/// buffer, which is empty, so it puts down nothing at all — and its moat, which
+/// widens a knockout no node is there to cut, is nothing too.
 #[test]
 fn a_lattice_with_no_node_grows_no_glow() {
     const SIZE: [u32; 2] = [256, 256];
@@ -5614,4 +5624,150 @@ fn a_lattice_with_no_node_grows_no_glow() {
         0,
         "the glow lit something no node drew",
     );
+}
+
+/// The moat: past a node's outermost drawn edge there is a band of GROUND
+/// between its crisp layers and the light around them, and the Glow gap bar is
+/// what opens it.
+///
+/// The check is the ground COLOUR rather than "darker than the glow", because
+/// the moat is the node's own knockout widened — the same hole, cleared to the
+/// same `Scene::background` — and a moat that merely dimmed the light would be
+/// a shadow painted on it instead. Against the same shot at gap 0, so what is
+/// measured is the bar and not the fixture: those pixels have to be lit without
+/// it, or the band being ground with it says nothing.
+#[test]
+fn a_moat_of_ground_stands_between_a_node_and_its_light() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    let at = |gap: f32| -> Scene {
+        let mut scene = single_marked_node(0, 0);
+        scene.glow_reach = 0.8;
+        scene.glow_strength = 1.5;
+        scene.glow_gap = gap;
+        scene
+    };
+    let flush = shooter.shot(&at(0.0));
+    let moated = shooter.shot(&at(0.3));
+
+    // The ground the knockout clears to, as the pass writes it: the shot is
+    // composited over black and the hole is opaque, so a cleared pixel is this
+    // colour and nothing else's.
+    let ground = harmonigraph_scene::skin::well_color().to_array();
+    let ground_px: [u8; 3] =
+        std::array::from_fn(|c| (ground[c].clamp(0.0, 1.0) * 255.0).round() as u8);
+    let is_ground = |px: &[u8]| -> bool {
+        (0..3).all(|c| px[c].abs_diff(ground_px[c]) <= 2)
+    };
+
+    // Along the row through the node's center, outward from it: the first
+    // stretch of ground past where the node stops painting is the moat.
+    let row = (SIZE[1] / 2) as usize;
+    let mid = (SIZE[0] / 2) as usize;
+    let px = |shot: &[u8], x: usize| -> [u8; 4] {
+        let i = (row * SIZE[0] as usize + x) * 4;
+        [shot[i], shot[i + 1], shot[i + 2], shot[i + 3]]
+    };
+    let moat: Vec<usize> = (mid..SIZE[0] as usize)
+        .filter(|&x| is_ground(&px(&moated, x)) && !is_ground(&px(&flush, x)))
+        .collect();
+    assert!(
+        moat.len() >= 4,
+        "a 30% gap opened no moat: {} ground pixels on the row out from the node",
+        moat.len(),
+    );
+    // ...and what it replaced was the glow, not empty frame. The fixture's
+    // background is black, so a lit pixel is light the node put there.
+    for x in moat {
+        let lit = px(&flush, x);
+        assert!(
+            brightness(&lit) > 0,
+            "the moat at x={x} covered nothing: the glow-flush shot is black there",
+        );
+    }
+}
+
+/// Two nodes' halos MELD where they overlap: brighter than either alone, and
+/// bounded — screen (`src + dst * (1 - src)`), not a sum.
+///
+/// The two claims have to be made together, and the second is the one that
+/// says which blend is in the pipeline: any blend that adds light at all
+/// passes the first, and `a + b` passes it too while blowing a chord's middle
+/// out to white. Screen is strictly under the sum wherever both sides are lit,
+/// which is the discriminator this measures.
+///
+/// The moat is off here on purpose: it is a hole cut through the light, and a
+/// pixel it claims is testing the knockout rather than the blend.
+#[test]
+fn two_nodes_light_melds_rather_than_summing() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    // The fixture's node, moved off center, and its mirror image — so the pair
+    // straddles the origin the camera is pointed at and their halos cross in
+    // between. Far enough apart that neither node's own layers reach the other
+    // (the rim is well under one uv unit, which is 1.8 world units here).
+    let scene_of = |xs: &[f32]| -> Scene {
+        let mut scene = single_marked_node(0, 0);
+        let node = scene.nodes[0];
+        scene.nodes = xs
+            .iter()
+            .enumerate()
+            .map(|(i, x)| {
+                let mut n = node;
+                n.world_pos = glam::Vec3::new(*x, 0.0, 0.0);
+                n.lattice_pos = harmonigraph_core::LatticePos::new(i as i32, 0, 0);
+                n
+            })
+            .collect();
+        scene.glow_reach = 0.8;
+        // High on its bar, so the overlap is a reading with room in it rather
+        // than three quantization steps: the claim is about the SHAPE of the
+        // blend, and at four levels of grey any blend passes.
+        scene.glow_strength = 2.0;
+        scene.glow_gap = 0.0;
+        scene
+    };
+    const APART: f32 = 1.8;
+    let left = shooter.shot(&scene_of(&[-APART]));
+    let right = shooter.shot(&scene_of(&[APART]));
+    let both = shooter.shot(&scene_of(&[-APART, APART]));
+
+    // Where the two overlap most: the pixel whose dimmer half is brightest.
+    // Found rather than named, so the probe follows the camera instead of a
+    // pixel coordinate that a change of fixture would quietly move off the
+    // overlap.
+    let at = |shot: &[u8], i: usize| -> [u8; 3] {
+        std::array::from_fn(|c| shot[i * 4 + c])
+    };
+    let probe = (0..(SIZE[0] * SIZE[1]) as usize)
+        .max_by_key(|&i| {
+            let (l, r) = (at(&left, i), at(&right, i));
+            brightness(&l).min(brightness(&r))
+        })
+        .expect("a non-empty frame");
+    let (l, r, b) = (at(&left, probe), at(&right, probe), at(&both, probe));
+    assert!(
+        brightness(&l) > 24 && brightness(&r) > 24,
+        "the two halos never overlapped: {l:?} and {r:?} at pixel {probe}",
+    );
+    assert!(
+        brightness(&b) > brightness(&l).max(brightness(&r)),
+        "the overlap {b:?} is no brighter than the brighter half ({l:?}, {r:?})",
+    );
+    for c in 0..3 {
+        let (l, r, b) = (i32::from(l[c]), i32::from(r[c]), i32::from(b[c]));
+        assert!(b <= 255, "a channel left the range: {b}");
+        // Screen is strictly under the sum wherever both sides carry light;
+        // the slack is 8-bit rounding on three composited values.
+        if l > 25 && r > 25 {
+            assert!(
+                b < l + r - 1,
+                "channel {c} summed rather than melded: {b} against {l} + {r}",
+            );
+        }
+    }
 }

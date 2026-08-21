@@ -187,11 +187,11 @@ pub const GAP_MAX: f32 = 0.4;
 /// (see [`ViewConfig::glow_reach`]), in the same quad UV units the layer sizes
 /// above are in.
 ///
-/// A ceiling on the BILLBOARD rather than on the look: the glow pass sizes its
-/// quad to hold the whole window (`quad_margin` in lattice.wgsl), so every step
-/// out here is fill rate spent on one more ring of fragments around every node.
-/// One node radius past the rim already reaches well past anything the layers
-/// draw, which is what a halo is for.
+/// A ceiling on the BILLBOARD rather than on the look: the glow's draw sizes
+/// its quad to hold the whole halo (`quad_margin` in lattice.wgsl), so every
+/// step out here is fill rate spent on one more ring of fragments around every
+/// node. One node radius past the rim already reaches well past anything the
+/// layers draw, which is what a halo is for.
 pub const GLOW_REACH_MAX: f32 = 1.0;
 
 /// What the node glow multiplies its blurred, masked ink by
@@ -199,8 +199,8 @@ pub const GLOW_REACH_MAX: f32 = 1.0;
 ///
 /// Its own ceiling rather than [`ViewConfig::bloom_strength`]'s, because it is
 /// a different light: the bloom's chain thresholds, so its strength acts on the
-/// bright end alone, where this one adds back ink of every brightness and needs
-/// less travel to reach the same haze.
+/// bright end alone, where this one scales one node's own skirt from nothing to
+/// twice what the core's carried and needs no more travel than that.
 pub const GLOW_STRENGTH_MAX: f32 = 2.0;
 
 /// Samples in the pitch->color lookup EVERYTHING pitch-colored reads: the
@@ -633,6 +633,10 @@ pub struct Scene {
     /// [`GLOW_STRENGTH_MAX`]. Inert while [`glow_reach`](Self::glow_reach) is
     /// 0, which is the pair's one off switch.
     pub glow_strength: f32,
+    /// The moat between the node's crisp layers and its own light, in the same
+    /// quad UV units (see [`ViewConfig::glow_gap`]); already clamped to
+    /// [`GAP_MAX`]. Inert while [`glow_reach`](Self::glow_reach) is 0.
+    pub glow_gap: f32,
 }
 
 /// How far the shimmer's sheet has travelled, in world units, reduced onto
