@@ -668,7 +668,7 @@ pub fn dock_style(egui_style: &egui::Style, scale: f32) -> egui_dock::Style {
     style.main_surface_border_stroke = Stroke::NONE;
 
     // Separators: slim bands in the hairline grey, accent when grabbed.
-    style.separator.width = 4.0 * scale;
+    style.separator.width = 3.0 * scale;
     // Not scaled: how near a separator the pointer has to come to take hold of
     // it is a reach, not a drawn thing, and a narrower band is if anything the
     // case for keeping the reach where it was.
@@ -701,7 +701,7 @@ pub fn dock_style(egui_style: &egui::Style, scale: f32) -> egui_dock::Style {
     // colour reads at every boundary the dock can make.
     //
     // It is the line's whole width because egui_dock fills the band and has no
-    // stroke of its own; 4pt of it is the widest this grey is drawn anywhere, and
+    // stroke of its own; 3pt of it is the widest this grey is drawn anywhere, and
     // the reason the band is slim.
     style.separator.color_idle = hairline();
     style.separator.color_hovered = accent_edge();
