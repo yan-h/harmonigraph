@@ -1122,6 +1122,94 @@ mod tests {
         );
     }
 
+    /// A led note's cap follows the note's own center LINE, so a sheared box
+    /// gets its cap where the ribbon actually ends rather than where the box's
+    /// center happens to sit.
+    ///
+    /// This is the one path `box_distance_trimmed` exists for that nothing else
+    /// runs: the pane can never reach it, because `RollNote::segments` closes a
+    /// note at the pitch of its final bend, so the only segment that can carry
+    /// a lead is flat. The shear terms cancel identically — trimming slides the
+    /// box's center to `(slope * trim / 2, trim / 2)`, and both halves of that
+    /// drop out of `across` — and an implementation that simply forgot to shear
+    /// the trimmed box would pass every other test in this file.
+    ///
+    /// Read across the note's own end, twelve points either side of the box's
+    /// center: at a shear of 0.6 the end has drifted that far, so the cap is on
+    /// one side and nothing is on the other.
+    #[test]
+    fn a_sheared_notes_cap_follows_its_center_line() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        // The band's CENTER rather than two samples of it. The cap is four
+        // points wide and the note twenty-four, so a cap displaced by a wrong
+        // shear still covers most of the pixels a correct one does — picking
+        // two and asserting ink at one and none at the other passes for a
+        // mis-shear as readily as for this one. Where the run is centered is
+        // the claim itself.
+        let center = |shear: f32| {
+            let note = RollInstance { shear, ..led_note(40.0, 0.0, 0.0) };
+            let frame = draw(&device, &queue, vec![note], bg_color());
+            // Row 106 is two points past the note's own end (y = 108), so the
+            // cap is the only thing painting in it: the lead is spent, and the
+            // wrap that would wrap the box goes with it.
+            // Read on BLUE. The background is `[64, 96, 128]`, so its own red
+            // channel is already darker than a threshold picked for black —
+            // the one channel the two are far apart on is the one to ask.
+            let dark: Vec<u32> =
+                (0..SIZE[0]).filter(|&x| pixel(&frame, x, 106)[2] < 60).collect();
+            assert!(!dark.is_empty(), "the cap painted nothing at all at a shear of {shear}");
+            f32::from(*dark.first().unwrap() as u16 + *dark.last().unwrap() as u16) * 0.5
+        };
+        // Pixel centres sit at y = 106.5, which is 21.5 points along depth from
+        // the box's own centre, so the note's line has drifted `shear * 21.5`
+        // along pitch by the time it gets there.
+        for shear in [0.0f32, 0.6, -0.6] {
+            let want = 128.0 - shear * 21.5;
+            let got = center(shear);
+            assert!(
+                (got - want).abs() < 1.5,
+                "at a shear of {shear} the cap is centred on {got}, not {want} — it is \
+                 standing where the BOX's centre is rather than where the note's line ends",
+            );
+        }
+    }
+
+    /// The cap is UNIONED with the wrap, not added to it.
+    ///
+    /// The two shapes share three of their sides, and beside the note's leading
+    /// corners both are looking at the same ink — the wrap dimmed by the lead
+    /// it is standing in, the cap not. Added, that overlap comes out darker
+    /// than the outline's own color is.
+    ///
+    /// A GREY outline is what makes this readable, and the reason is worth the
+    /// line: black is the degenerate case here. Premultiplied black is
+    /// `(0, 0, 0, 1)`, so doubling it doubles an alpha that the target clamps
+    /// and leaves a color that was already zero — the sum and the union land on
+    /// the same byte, and every other cap test in this file would pass over a
+    /// `+`. At half grey the two separate.
+    #[test]
+    fn the_cap_is_unioned_with_the_wrap_and_not_added_to_it() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        // A lead at half opacity, read just outside the note's leading corner:
+        // inside the cap's reach of the trimmed box, and inside the wrap's
+        // reach of the full one, which the lead has taken to half.
+        let note = RollInstance {
+            outline: [128, 128, 128, 255],
+            ..led_note(40.0, 0.0, 0.5)
+        };
+        let frame = draw(&device, &queue, vec![note], bg_color());
+        let corner = pixel(&frame, 141, 106);
+        assert!(
+            near(corner, [128, 128, 128, 255]),
+            "the corner is not the outline's own color ({corner:?}) — the wrap and the \
+             cap are being summed rather than unioned",
+        );
+    }
+
     #[test]
     fn baked_roll_shader_validates() {
         let module = naga::front::wgsl::parse_str(ROLL_SRC)
