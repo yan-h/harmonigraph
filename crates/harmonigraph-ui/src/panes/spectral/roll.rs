@@ -596,8 +596,11 @@ pub(super) fn note_instances(
             // The shader stands the cap against the note's own end UNDER the
             // lead, so the RELEASE needs no ramp here: the lead's own ink
             // covers the cap while the lead is opaque and uncovers it as it
-            // goes, and what used to arrive whole the frame the lead was
-            // dropped now comes up through the tongue over the whole release.
+            // goes, so the edge comes up through the tongue over the whole
+            // release. The alternative is an edge that arrives whole the frame
+            // the lead is dropped, which lands on a ribbon that has spent that
+            // release dissolving — nothing else in the picture moves then, and
+            // it is the one moment an edge appearing reads as a fault.
             //
             // What is left to decide is ROOM, which is the paragraph above: the
             // cap stands OUTSIDE the note's end, in the stretch the lead opened

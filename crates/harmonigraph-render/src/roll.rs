@@ -1492,8 +1492,8 @@ mod tests {
         let at = |y: u32| pixel(&frame, 128, y);
         assert!(near(at(107), [0, 0, 0, 255]), "the shortened cap is not solid: {:?}", at(107));
         assert!(near(at(105), BG), "the cap reached past the 2 points it was given: {:?}", at(105));
-        // None at all is none drawn — the note's end is bare, exactly as it was
-        // before there was a cap to draw there.
+        // None at all is none drawn: a cap of no reach leaves the note's end
+        // bare, which is what a caller with no room to give it is asking for.
         let none = RollInstance { cap_reach: 0.0, ..led_note(40.0, 0.0, 0.0) };
         let bare = draw(&device, &queue, vec![none], bg_color());
         assert!(
