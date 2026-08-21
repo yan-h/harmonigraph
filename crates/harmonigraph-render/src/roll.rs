@@ -161,8 +161,10 @@ pub struct RollInstance {
     ///
     /// [`outline_reach`](Self::outline_reach) is the ordinary answer and the
     /// one a caller with nowhere to protect should give — more than that draws
-    /// no more. Read only where there IS a lead: without one the box ends at
-    /// the note and its cap is the box's own outline.
+    /// no more, the cap being bounded by the outline it is part of, and an
+    /// outline of no reach wears no cap at all. Read only where there IS a
+    /// lead: without one the box ends at the note and its cap is the box's own
+    /// outline.
     pub cap_reach: f32,
     /// Premultiplied sRGB bytes, straight out of [`egui::Color32`].
     pub core: [u8; 4],
@@ -1066,6 +1068,58 @@ mod tests {
     /// tells this crate where the note inside it ends.
     fn led_note(lead: f32, fade: f32, alpha: f32) -> RollInstance {
         RollInstance { lead, lead_fade: fade, lead_alpha: alpha, ..centered_note() }
+    }
+
+    /// The cap belongs to the outline, so it is never wider than one and never
+    /// draws where there is no outline at all.
+    ///
+    /// Both are the same bound read twice. `cap_reach` is the caller's answer
+    /// to how much ROOM the cap has, and room is the only thing it decides —
+    /// asked for more than the outline itself stands off, the cap would band
+    /// the note wider than every other edge of it, and `vs_note` sizes the quad
+    /// from `outline_reach` alone, so the surplus is CLIPPED across pitch
+    /// rather than merely drawn: a hard vertical edge where a rounded corner
+    /// belongs. With the outline off there is no band to be part of, and the
+    /// same clamp is what stops a note whose outline is turned off from wearing
+    /// one at its own end.
+    ///
+    /// This is a bound the crate holds rather than a precondition it states,
+    /// because the fixtures make the mistake easy: [`centered_note`] carries a
+    /// `cap_reach`, so any `..centered_note()` that turns the outline off
+    /// inherits one.
+    #[test]
+    fn a_cap_is_never_wider_than_the_outline_it_belongs_to() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let at = |note: RollInstance, y: u32| {
+            let frame = draw(&device, &queue, vec![note], bg_color());
+            pixel(&frame, 128, y)
+        };
+        // Seven and a half points inside the note's own end (y = 108) — outside
+        // a 4-point outline's reach, and well inside the 12 this asks for. The
+        // lead is spent, so nothing else paints here: the body is gone and the
+        // wrap is masked out of the box's interior.
+        let greedy = RollInstance { cap_reach: 12.0, ..led_note(40.0, 0.0, 0.0) };
+        assert!(
+            near(at(greedy, 100), BG),
+            "a cap asked for 12 points painted past the 4 its outline stands off: {:?}",
+            at(greedy, 100),
+        );
+        // And it still draws the reach it does have.
+        assert!(
+            near(at(greedy, 106), [0, 0, 0, 255]),
+            "clamping the cap to the outline took the cap with it: {:?}",
+            at(greedy, 106),
+        );
+        // No outline, no cap — a point and a half inside the note's own end,
+        // where a 4-point cap would be solid.
+        let bare = RollInstance { outline_reach: 0.0, ..led_note(40.0, 0.0, 0.0) };
+        assert!(
+            near(at(bare, 106), BG),
+            "a note with its outline off still wore a cap: {:?}",
+            at(bare, 106),
+        );
     }
 
     #[test]

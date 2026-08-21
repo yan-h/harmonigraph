@@ -338,11 +338,18 @@ fn box_distance_trimmed(in: VertexOut, trim: f32) -> f32 {
 /// leading corners both are looking at the same ink. Added, that overlap comes
 /// out darker than black is.
 fn cap_coverage(in: VertexOut) -> f32 {
-    if (in.lead <= 0.0 || in.cap_reach <= 0.0) {
+    // Bounded by the outline the cap is part of, in both directions at once.
+    // Wider, the cap would band the note further than every other edge of it
+    // — and `vs_note` sizes the quad from `outline_reach` alone, so the
+    // surplus is CLIPPED across pitch rather than merely drawn, which is a
+    // hard vertical edge standing where a rounded corner belongs. With no
+    // outline at all there is no band for the cap to be part of.
+    let reach = min(in.cap_reach, in.outline_reach);
+    if (in.lead <= 0.0 || reach <= 0.0) {
         return 0.0;
     }
     let d = box_distance_trimmed(in, in.lead);
-    return outline_coverage(in, d, in.cap_reach) * (1.0 - inside(d, 0.0));
+    return outline_coverage(in, d, reach) * (1.0 - inside(d, 0.0));
 }
 
 /// Premultiplied gamma-space color of the OUTLINE layer: the dark surround
