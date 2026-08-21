@@ -1635,16 +1635,25 @@ mod tests {
     /// end inside a lead, or at the box's end without one — everything it
     /// paints is on the roll's side of the line.
     ///
-    /// The fixtures below are the two ways in. A release of 0 puts the note's
-    /// end ON the line at the moment the lead goes; a long Span puts it a
-    /// fraction of a point off the line for seconds after even a slow one,
-    /// because how far a note scrolls in the release is the Span's business and
-    /// the cap's size is not.
+    /// The fixtures below are the three ways in, and the first two are the ways
+    /// the cap gets NO room. A release of 0 puts the note's end ON the line at
+    /// the moment the lead goes; a long Span puts it a fraction of a point off
+    /// the line for seconds after even a slow one, because how far a note
+    /// scrolls in the release is the Span's business and the cap's size is not.
+    ///
+    /// The third is the one that binds, and the test is worth little without
+    /// it: a note far enough past the line to be given SOME cap and not the
+    /// whole of it. There `cap_px` is `behind_px` less the antialiasing margin
+    /// rather than the outline's own reach, so the ink lands exactly on the
+    /// line and the assertion is tight against it — drop the margin from
+    /// `cap_px` and this is the fixture that fails, where the other two go on
+    /// passing because a cap of no reach paints nothing either way.
     #[test]
     fn a_note_that_is_not_leading_keeps_its_ink_behind_the_line() {
         for (release, span, when, hint) in [
             (0.0f32, 12.0f32, 4.0f64, "a release of 0, at the note-off"),
             (0.25, 600.0, 4.3, "a slow Span, just past a quarter-second release"),
+            (0.0, 12.0, 4.2, "a release of 0, a fifth of a second on"),
         ] {
             let mut state = fresh();
             state.spectrum_config.orientation = SpectralOrientation::Left;
