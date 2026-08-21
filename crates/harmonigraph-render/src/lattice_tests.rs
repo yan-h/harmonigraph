@@ -432,8 +432,12 @@ fn parity_scene() -> Scene {
         // single-attachment reference path has no pass to composite into.
         glow_reach: 0.0,
         glow_strength: 1.0,
-        // The fresh moat, inert at reach 0 and here to say so.
+        // The fresh moat and the three shares that shape the light inside it,
+        // inert at reach 0 and here to say so.
         glow_gap: 0.08,
+        glow_gap_soft: 0.6,
+        glow_centre: 0.5,
+        glow_spread: 0.5,
     }
 }
 
@@ -5653,6 +5657,12 @@ fn a_moat_beside_a_lit_node_is_the_frame_with_no_glow_at_all() {
         scene.glow_reach = reach;
         scene.glow_strength = 1.5;
         scene.glow_gap = gap;
+        // The gap's own edge, and no fade of its own standing past it: what is
+        // measured here is that a moated pixel is the UNLIT frame, and a
+        // feather half a gap wide at the top of the gap bar takes the halo off
+        // the whole node — which leaves the check below nothing to find and
+        // says nothing about whether the gap paints.
+        scene.glow_gap_soft = 0.0;
         scene
     };
     let off = shooter.shot(&at(0.0, 0.0));
@@ -5666,7 +5676,7 @@ fn a_moat_beside_a_lit_node_is_the_frame_with_no_glow_at_all() {
     let px = |shot: &[u8], i: usize| -> [u8; 4] {
         std::array::from_fn(|c| shot[i * 4 + c])
     };
-    let mut moat = 0usize;
+    let (mut moat, mut still_lit) = (0usize, 0usize);
     for i in 0..(SIZE[0] * SIZE[1]) as usize {
         let (unlit, lit, held) = (px(&off, i), px(&flush, i), px(&moated, i));
         if lit == unlit {
@@ -5680,6 +5690,8 @@ fn a_moat_beside_a_lit_node_is_the_frame_with_no_glow_at_all() {
         let slip = (0..4).map(|c| held[c].abs_diff(unlit[c])).max().unwrap_or(0);
         if slip <= 1 {
             moat += 1;
+        } else {
+            still_lit += 1;
         }
     }
     assert!(
@@ -5688,11 +5700,16 @@ fn a_moat_beside_a_lit_node_is_the_frame_with_no_glow_at_all() {
     );
     // ...and the light is still there to be moated, or the count above is the
     // glow being off rather than a gap being held in it.
+    //
+    // Counted as pixels the gap did NOT claim and the light still reaches,
+    // rather than as the frame's total brightness. The glow REPLACES the core's
+    // own skirt, so at the top of the gap bar — where the hole is wider than
+    // everything the node draws — a frame can carry light in every direction
+    // and still sum UNDER the unlit one it took that skirt from, and a sum
+    // would read that as the glow being off.
     assert!(
-        total_light(&moated) > total_light(&off),
-        "the moated shot carries no more light than the unlit one: {} against {}",
-        total_light(&moated),
-        total_light(&off),
+        still_lit >= 64,
+        "the moat left {still_lit} lit pixels standing outside it",
     );
 }
 
@@ -5885,4 +5902,307 @@ fn two_nodes_light_melds_rather_than_summing() {
             );
         }
     }
+}
+
+/// One node lit in TWO colours no mixing of the other's table can reach: the
+/// pitch ramp flat RED, so every slice of the octave band is red however its
+/// octave is voiced, and the analyzer's ramp flat GREEN, so every wedge of the
+/// audio ring is green whatever the grid holds.
+///
+/// The suite's usual ramps — a blue-to-red pitch sweep and a grey spectral one —
+/// overlap in every channel, so a halo drawn out of both would answer "somewhere
+/// between" and say nothing about which layer coloured it. With one channel
+/// apiece the halo's red against its green IS the two layers' share of it, which
+/// is what every claim below reads.
+///
+/// The core and the marks are off: two layers under test and nothing else
+/// putting ink on the node. Every octave sounds, so the band is one red ring
+/// rather than a lit slice among ghosts, and the node wears its ring in full.
+fn two_colour_node(band_width: f32, ring_width: f32) -> Scene {
+    let fresh = harmonigraph_scene::ViewConfig::default();
+    let mut scene = single_marked_node(0, 0);
+    // The stack laid out AROUND a core the node then does not draw, exactly as
+    // [`ringing_node`] does it: the angular gap is a constant chord, so a ring
+    // packed against the node's centre has its wedges eaten by that gap and
+    // paints almost nothing — which would make the ring's share of the light a
+    // reading of the padding rather than of its width.
+    let rings = harmonigraph_scene::ViewConfig {
+        ring_gap: PROBE_GAP,
+        core_radius: PROBE_CORE_RADIUS,
+        spectral_ring_width: ring_width,
+        band_width,
+        mark_thickness: 0.0,
+        ..fresh.clone()
+    }
+    .rings();
+    scene.core_radius = 0.0;
+    scene.mark_thickness = 0.0;
+    scene.outer_inner = rings.band.0;
+    scene.outer_outer = rings.band.1;
+    scene.rings_outer = rings.outer;
+    scene.mark_inner = rings.mark_inner;
+    scene.octave_gap = PROBE_GAP;
+    scene.pitch_lut = [glam::Vec4::new(1.0, 0.0, 0.0, 1.0); harmonigraph_scene::PITCH_LUT_N];
+
+    let mut paint = harmonigraph_scene::SpectralPaint::silent();
+    // FLAT rather than a ramp, so the ring's colour is the ring's colour at
+    // whatever the analyzer reads: what is being measured here is which layer
+    // the light took its hue from, not what the grid held.
+    paint.lut = [glam::Vec4::new(0.0, 1.0, 0.0, 1.0); harmonigraph_scene::PITCH_LUT_N];
+    (paint.inner, paint.outer) = rings.audio;
+    paint.range = PROBE_RANGE;
+    scene.spectral = paint;
+
+    let node = &mut scene.nodes[0];
+    node.octaves = [1.0; harmonigraph_scene::OCTAVE_SLOTS];
+    node.activation = 1.0;
+    node.audio_ring = 1.0;
+    (node.melody_slots, node.bass_slots) = (0, 0);
+    (node.melody_level, node.bass_level) = (0.0, 0.0);
+
+    scene.glow_reach = 0.8;
+    scene.glow_strength = 1.5;
+    scene.glow_gap = 0.08;
+    scene
+}
+
+/// The light one shot ADDED over the same frame with the glow off, summed per
+/// channel over the whole frame.
+///
+/// Everything the node itself draws stands in both shots and cancels, so what
+/// is left is the halo's own colour — which is what a claim about where the
+/// light took its hue from has to read. Clamped at 0 per channel because the
+/// glow also takes the core's skirt away, and a channel that went DOWN is that
+/// subtraction rather than any hue.
+fn added_light(on: &[u8], off: &[u8]) -> [i64; 3] {
+    let mut sum = [0i64; 3];
+    for (a, b) in on.chunks(4).zip(off.chunks(4)) {
+        for (c, s) in sum.iter_mut().enumerate() {
+            *s += (i64::from(a[c]) - i64::from(b[c])).max(0);
+        }
+    }
+    sum
+}
+
+/// The Centre bar dips the MIDDLE of a node's light and leaves the skirt
+/// outside it exactly where it was.
+///
+/// Both halves matter and they are one profile: the dip eases back to the whole
+/// of the exponential by the innermost ring's inner edge, so a node's light can
+/// be taken off its own centre without the halo around it moving — which is the
+/// difference between this bar and the Strength bar beside it.
+///
+/// The core's solidity is 0, as
+/// [`the_middle_of_a_node_is_where_its_light_is_fullest`] has it and for the
+/// same reason: at any solidity above it the disc is drawn over the light,
+/// crisp, and the centre pixel would read the disc.
+#[test]
+fn the_centre_bar_dips_a_nodes_middle_and_leaves_its_skirt() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    let at = |reach: f32, centre: f32| -> Scene {
+        let mut scene = single_marked_node(0, 0);
+        scene.glow_reach = reach;
+        scene.glow_strength = 1.5;
+        scene.glow_gap = 0.08;
+        scene.glow_centre = centre;
+        scene.core_solidity = 0.0;
+        scene
+    };
+    let off = shooter.shot(&at(0.0, 1.0));
+    let full = shooter.shot(&at(0.8, 1.0));
+    let dipped = shooter.shot(&at(0.8, 0.2));
+
+    // Out from the node's centre along one row — the fixture's one node sits at
+    // the world origin, which the camera is pointed at, so that is the frame's
+    // centre too.
+    let row = (SIZE[1] / 2) as usize;
+    let mid = SIZE[0] as usize / 2;
+    let px = |shot: &[u8], x: usize| -> i64 {
+        let i = (row * SIZE[0] as usize + x) * 4;
+        brightness(&shot[i..i + 3])
+    };
+    assert!(
+        px(&dipped, mid) < px(&full, mid),
+        "a Centre of 0.2 left the node's middle at {} against {} at 1.0",
+        px(&dipped, mid),
+        px(&full, mid),
+    );
+    // How far out the two profiles differ at all, and how far the light itself
+    // reaches. The first has to finish well inside the second, or the bar is
+    // dimming the whole halo rather than dipping its middle.
+    let last = |f: &dyn Fn(usize) -> bool| -> usize {
+        (mid..SIZE[0] as usize).filter(|&x| f(x)).max().unwrap_or(0)
+    };
+    let dips_to = last(&|x| px(&full, x) != px(&dipped, x));
+    let lights_to = last(&|x| px(&full, x) != px(&off, x));
+    assert!(dips_to > mid, "a Centre of 0.2 changed no pixel on the row at all");
+    assert!(
+        dips_to + 8 < lights_to,
+        "the dip ran to {dips_to} px where the light reaches {lights_to} px — it is \
+         taking the skirt down with the middle",
+    );
+}
+
+/// The Gap fade bar widens the moat's EDGE — the band of pixels over which the
+/// light comes off a ring — without moving the gap itself.
+///
+/// Measured as how many pixels are PARTLY moated: lit above the unmoated frame
+/// and under the flush one. Only the fade's own band qualifies — outside the
+/// moat a pixel is the flush frame exactly, inside it the unlit one — so the
+/// count is the edge's width in pixels, over every ring on the node at once and
+/// without naming a coordinate.
+///
+/// The view's own Clearance fade is dialled out of the way, so what is left
+/// under the bar is its floor and the bar is the whole of the answer.
+#[test]
+fn the_gap_fade_bar_widens_the_edge_the_light_comes_off_a_ring() {
+    const SIZE: [u32; 2] = [256, 256];
+    const GAP: f32 = 0.2;
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    let at = |gap: f32, soft: f32| -> Scene {
+        let mut scene = single_marked_node(0, 0);
+        scene.sevens_soft = 0.0;
+        scene.glow_reach = 0.8;
+        scene.glow_strength = 1.5;
+        scene.glow_gap = gap;
+        scene.glow_gap_soft = soft;
+        scene
+    };
+    let off = {
+        let mut scene = at(GAP, 0.0);
+        scene.glow_reach = 0.0;
+        shooter.shot(&scene)
+    };
+    let flush = shooter.shot(&at(0.0, 0.0));
+    let hard = shooter.shot(&at(GAP, 0.0));
+    let soft = shooter.shot(&at(GAP, 0.8));
+
+    // Two steps of slack at each end, which is the composite's own resampling
+    // of the glow target through a linear sampler plus 8-bit rounding on both
+    // sides of the comparison.
+    let edge_pixels = |held: &[u8]| -> usize {
+        (0..(SIZE[0] * SIZE[1]) as usize)
+            .filter(|&i| {
+                let (u, l, h) = (
+                    brightness(&off[i * 4..i * 4 + 3]),
+                    brightness(&flush[i * 4..i * 4 + 3]),
+                    brightness(&held[i * 4..i * 4 + 3]),
+                );
+                h > u + 2 && h + 2 < l
+            })
+            .count()
+    };
+    let (thin, wide) = (edge_pixels(&hard), edge_pixels(&soft));
+    assert!(thin > 0, "the moat at a fade of 0 has no edge at all to measure");
+    assert!(
+        wide > thin * 2,
+        "a fade of 0.8 spread the moat's edge over {wide} px against {thin} px at 0",
+    );
+}
+
+/// The glow's colour is the node's own INK, whatever layer laid it down.
+///
+/// Three nodes, one code path: a node wearing nothing but its audio ring lights
+/// in the ring's colour, a node wearing nothing but its octave band lights in
+/// the band's, and a node wearing both lights in a mixture that is greener than
+/// the one and redder than the other. Nothing here names a layer — the light is
+/// `ink_at` read round the node — so the ring's hue reaching the halo and the
+/// band's reaching it are the same mechanism, and a layer added to a node is
+/// lit without a line of its own.
+///
+/// See [`two_colour_node`] for why the two ramps are one channel apiece.
+#[test]
+fn a_nodes_light_takes_the_colour_of_whichever_layer_is_drawing() {
+    const SIZE: [u32; 2] = [256, 256];
+    const BAND: f32 = 0.16;
+    const RING: f32 = 0.16;
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    let dark = |mut scene: Scene| -> Scene {
+        scene.glow_reach = 0.0;
+        scene
+    };
+    // The ring alone: no key down and no octave sounding, so the band draws
+    // nothing at all and the node's whole picture is the analyzer's.
+    let ring_only = || -> Scene {
+        let mut scene = two_colour_node(BAND, RING);
+        let node = &mut scene.nodes[0];
+        node.activation = 0.0;
+        node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
+        scene
+    };
+    // The band alone: the ring's width dialled to nothing, which is the layer's
+    // own off switch.
+    let band_only = || two_colour_node(BAND, 0.0);
+
+    let ring = added_light(&shooter.shot(&ring_only()), &shooter.shot(&dark(ring_only())));
+    let band = added_light(&shooter.shot(&band_only()), &shooter.shot(&dark(band_only())));
+    let both = added_light(
+        &shooter.shot(&two_colour_node(BAND, RING)),
+        &shooter.shot(&dark(two_colour_node(BAND, RING))),
+    );
+
+    assert!(ring[1] > 0 && band[0] > 0, "neither fixture lit anything: {ring:?}, {band:?}");
+    assert!(
+        ring[1] > ring[0] * 4,
+        "a node wearing only its audio ring lit {ring:?} — its light is not the ring's green",
+    );
+    assert!(
+        band[0] > band[1] * 4,
+        "a node wearing only its octave band lit {band:?} — its light is not the band's red",
+    );
+    // And the two together are a mixture rather than either one winning: the
+    // SHARE is what moves, the three halos not being the same size.
+    let share = |c: [i64; 3]| c[0] as f64 / (c[0] + c[1]).max(1) as f64;
+    assert!(
+        share(ring) < share(both) && share(both) < share(band),
+        "a node wearing both lit {both:?}, which is not between {ring:?} and {band:?}",
+    );
+}
+
+/// How much of the light a layer's colour owns is how much of the NODE that
+/// layer occupies: the same node with its octave band twice as wide glows
+/// redder — the band's colour — than it does at the narrower width.
+///
+/// No knob of its own. The weight in `ink_at` is the radial width the ring
+/// stack handed the layer, so this follows the Layers bar directly: widen a
+/// ring and its colour takes more of the halo, dial it to nothing and it takes
+/// none.
+///
+/// The audio ring is held at one width and sits INSIDE the band, so widening
+/// the band leaves the ring's own radii exactly where they were — what changes
+/// is the share, not the other layer.
+#[test]
+fn widening_a_layer_gives_its_colour_more_of_the_light() {
+    const SIZE: [u32; 2] = [256, 256];
+    const RING: f32 = 0.16;
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    let at = |band: f32| -> Scene { two_colour_node(band, RING) };
+    let dark = |band: f32| -> Scene {
+        let mut scene = at(band);
+        scene.glow_reach = 0.0;
+        scene
+    };
+    let narrow = added_light(&shooter.shot(&at(0.11)), &shooter.shot(&dark(0.11)));
+    let wide = added_light(&shooter.shot(&at(0.22)), &shooter.shot(&dark(0.22)));
+    // Both layers are drawing in both shots, or "the share moved" is one of
+    // them arriving rather than the widths being read.
+    for (what, c) in [("narrow", narrow), ("wide", wide)] {
+        assert!(c[0] > 0 && c[1] > 0, "the {what} shot lit {c:?} — one layer is missing");
+    }
+    let share = |c: [i64; 3]| c[0] as f64 / (c[0] + c[1]).max(1) as f64;
+    assert!(
+        share(wide) > share(narrow) + 0.05,
+        "doubling the band's width moved the light's red share from {:.3} to {:.3}",
+        share(narrow),
+        share(wide),
+    );
 }

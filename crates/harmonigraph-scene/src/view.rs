@@ -1077,6 +1077,48 @@ pub struct ViewConfig {
     /// Inert while [`glow_reach`](Self::glow_reach) is 0: with no light to
     /// stand off, a moat is a gap in the picture for nothing.
     pub glow_gap: f32,
+    /// How far the moat's edge is feathered, as a share of the
+    /// [`glow_gap`](Self::glow_gap) it stands in — so a wider gap is not
+    /// automatically a blurrier one, the way a fade named in absolute units
+    /// would be at one end of the bar and a hard cut at the other.
+    ///
+    /// The feather is CENTRED on where the gap ends, so it softens the halo
+    /// outside a ring and the lit middle of the node inside it together — one
+    /// blur across the whole moat rather than a soft outer edge on a hard
+    /// inner one. At 0 all that is left under it is the
+    /// [`sevens_gutter_soft`](Self::sevens_gutter_soft) fade, which is an edge
+    /// a couple of screen pixels wide.
+    ///
+    /// A share rather than a distance for the same reason
+    /// [`sevens_gutter_soft`](Self::sevens_gutter_soft) is clamped to its own
+    /// reach: a fade wider than
+    /// the thing it fades is not a setting, it is the two numbers crossing.
+    /// Inert while [`glow_reach`](Self::glow_reach) is 0.
+    pub glow_gap_soft: f32,
+    /// How bright a node's light is at its own MIDDLE, as a share of the peak
+    /// it reaches out at the innermost ring's inner edge. 1 is the plain
+    /// exponential, hottest at the exact centre; below it the middle dips and
+    /// the light reads as a lit ring rather than as a lamp.
+    ///
+    /// One continuous profile: the dip eases back to the whole of the skirt by
+    /// that inner edge and the falloff outside it is untouched, so this moves
+    /// the middle of a node and nothing about how far its light reaches.
+    /// Inert while [`glow_reach`](Self::glow_reach) is 0.
+    pub glow_centre: f32,
+    /// How widely a node's own ink is averaged into the colour of its light.
+    ///
+    /// The glow's colour is not a formula naming its sources — it is what the
+    /// node is DRAWING, blurred round the node (`ink_at` in lattice.wgsl):
+    /// every layer's colour at each angle, weighted by that layer's level there
+    /// and by the radial width the stack handed it. So a lit band sector, an
+    /// audio wedge and a mark each light the halo in their own colour and in
+    /// the proportion they occupy the node, and widening a layer on the Layers
+    /// bar moves the light toward its colour with no knob of its own.
+    ///
+    /// This is how far round that average is taken: at 0 each layer's sectors
+    /// stay distinct arcs of colour, and at 1 the whole node's ink averages
+    /// into one tint. Inert while [`glow_reach`](Self::glow_reach) is 0.
+    pub glow_spread: f32,
 }
 
 /// Where each layer of a node lands, in quad UV units, read outward from its
@@ -1893,6 +1935,14 @@ impl ViewConfig {
         self.glow_strength =
             finite_or(self.glow_strength, fresh.glow_strength).clamp(0.0, GLOW_STRENGTH_MAX);
         self.glow_gap = finite_or(self.glow_gap, fresh.glow_gap).clamp(0.0, GAP_MAX);
+        // The three that are SHARES — of the gap, of the light's own peak, of
+        // a whole turn — so their range is the unit interval and a clamp to it
+        // is what `sevens_gutter_soft`'s clamp to its own gutter is: the fade
+        // is held inside the thing it fades rather than crossing it.
+        self.glow_gap_soft =
+            finite_or(self.glow_gap_soft, fresh.glow_gap_soft).clamp(0.0, 1.0);
+        self.glow_centre = finite_or(self.glow_centre, fresh.glow_centre).clamp(0.0, 1.0);
+        self.glow_spread = finite_or(self.glow_spread, fresh.glow_spread).clamp(0.0, 1.0);
 
         self.shimmer_speed = finite_or(self.shimmer_speed, fresh.shimmer_speed);
         self.shimmer_width = finite_or(self.shimmer_width, fresh.shimmer_width);
@@ -2149,6 +2199,15 @@ impl Default for ViewConfig {
             glow_reach: 0.0,
             glow_strength: 1.0,
             glow_gap: 0.08,
+            // The moat feathered over most of its own width, so the gap and
+            // the light either side of it read as one blur rather than as a cut
+            // through it; the middle of a node at half its peak, so the light
+            // reads as the node's rings lit rather than as a lamp behind them;
+            // and the colour averaged half way round, which keeps a chord's
+            // hues as arcs while a lone wedge still tints the whole halo.
+            glow_gap_soft: 0.6,
+            glow_centre: 0.5,
+            glow_spread: 0.5,
         }
     }
 }

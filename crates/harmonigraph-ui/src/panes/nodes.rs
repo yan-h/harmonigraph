@@ -693,6 +693,32 @@ fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBack
         ValueBar::new(&mut view.glow_strength, 0.0..=GLOW_STRENGTH_MAX, "Glow strength")
             .show(ui)
             .on_hover_text("How much light it lays down.");
+        // The two that shape the light itself, between the amount of it and the
+        // moat that holds it off: one says where in the node it is brightest,
+        // the other what colour it comes out. Both read as percentages because
+        // both are SHARES — of the light's own peak, and of a whole turn — and
+        // neither is a distance, which is what keeps them from being read
+        // against the three bars above that are.
+        ValueBar::new(&mut view.glow_centre, 0.0..=1.0, "Glow centre")
+            .display(|v| format!("{:.0}%", v * 100.0))
+            .show(ui)
+            .on_hover_text(
+                "How bright a node's light is at its own middle, against the \
+                 peak it reaches at the inner edge of its innermost ring. 100% \
+                 is hottest dead centre; lower dips the middle, so the node \
+                 reads as a lit ring rather than as a lamp.",
+            );
+        ValueBar::new(&mut view.glow_spread, 0.0..=1.0, "Glow spread")
+            .display(|v| format!("{:.0}%", v * 100.0))
+            .show(ui)
+            .on_hover_text(
+                "How widely a node's own ink is averaged into the colour of \
+                 its light. The glow is what the node is DRAWING, blurred \
+                 round it — every layer's colour weighted by how lit it is and \
+                 how wide the Layers bar made it — so 0% keeps each sector's \
+                 colour a distinct arc and 100% averages the node into one \
+                 tint.",
+            );
         // The moat, beneath the light it holds off, and read out like the two
         // gaps and the Clearance above it: every one of them is a share of the
         // node's radius, so a person comparing them is comparing one unit.
@@ -706,6 +732,19 @@ fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBack
                  node's radius. A gap is an absence of light, so the grid and \
                  the sheets behind show through it untouched; the neighbours' \
                  light is held off too. 0 lets the glow up to every edge.",
+            );
+        // Under the gap it fades, and a share of it rather than a distance —
+        // the one bar in this group that is not a share of the node's radius,
+        // because what it measures is the gap and not the node.
+        ValueBar::new(&mut view.glow_gap_soft, 0.0..=1.0, "Glow gap fade")
+            .display(|v| format!("{:.0}%", v * 100.0))
+            .show(ui)
+            .on_hover_text(
+                "How far the gap's edge is feathered, as a share of the gap \
+                 itself. The fade sits astride the gap's end, so the halo \
+                 outside a ring and the lit middle inside it soften together \
+                 and the gap reads as part of the same blur the light is. 0 \
+                 cuts it in one screen band.",
             );
     });
 }

@@ -592,6 +592,9 @@ pub fn derive_scene(
         glow_reach: view.glow_reach.clamp(0.0, crate::GLOW_REACH_MAX),
         glow_strength: view.glow_strength.clamp(0.0, crate::GLOW_STRENGTH_MAX),
         glow_gap: view.glow_gap.clamp(0.0, crate::GAP_MAX),
+        glow_gap_soft: view.glow_gap_soft.clamp(0.0, 1.0),
+        glow_centre: view.glow_centre.clamp(0.0, 1.0),
+        glow_spread: view.glow_spread.clamp(0.0, 1.0),
     }
 }
 

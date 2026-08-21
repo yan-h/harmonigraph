@@ -340,10 +340,12 @@ struct Uniforms {
     /// octave's pitch (`SpectralReading::Fold`) rather than a window spread
     /// across it (`::Spectrum`); z/w unused.
     misc9: [f32; 4],
-    /// The node glow's three. x: how far past a node's outermost drawn edge its
-    /// light spreads, in quad UV units (`Scene::glow_reach`); y: how much light
-    /// (`Scene::glow_strength`); z: the moat the light is held out of around
-    /// every ring a node draws, same units (`Scene::glow_gap`). w unused.
+    /// The node glow's lengths. x: how far past a node's outermost drawn edge
+    /// its light spreads, in quad UV units (`Scene::glow_reach`); y: how much
+    /// light (`Scene::glow_strength`); z: the moat the light is held out of
+    /// around every ring a node draws, same units (`Scene::glow_gap`); w: how
+    /// bright that light is at the node's middle against its peak out at the
+    /// innermost ring (`Scene::glow_centre`).
     ///
     /// ZEROED WHOLE where the glow does not draw, so `x > 0.0` is the single
     /// test on either side of the boundary — [`LatticeCallback::glow_draws`]
@@ -351,6 +353,15 @@ struct Uniforms {
     /// nothing, and a moat held open for it would be a gap in the light around
     /// every node with no light to be a gap in.
     misc10: [f32; 4],
+    /// The node glow's two SHARES of something else. x: how far the moat's edge
+    /// is feathered, as a fraction of the gap in `misc10.z`
+    /// (`Scene::glow_gap_soft`); y: how widely a node's own ink is averaged
+    /// into the colour of its light (`Scene::glow_spread`). z/w unused.
+    ///
+    /// A second row rather than a repack: `misc10` holds the glow's distances
+    /// and this holds its fractions, and the two are read by different parts of
+    /// the shader. Zeroed whole with it, on the same rule.
+    misc11: [f32; 4],
     /// The FREQUENCY colour scheme's ramp — the analyzer's own gradient
     /// (`SpectrumConfig::spectrogram_gradient`) through `pitch_ramp_lut`, the
     /// same gradient the spectrogram's cells and the Spiral pane's segments
@@ -931,7 +942,17 @@ impl LatticeCallback {
                 // it belongs to the glow: it is the moat that light stands
                 // behind, and with no light there is nothing to stand off.
                 misc10: if scene.glow_reach > 0.0 && scene.glow_strength > 0.0 {
-                    [scene.glow_reach, scene.glow_strength, scene.glow_gap, 0.0]
+                    [
+                        scene.glow_reach,
+                        scene.glow_strength,
+                        scene.glow_gap,
+                        scene.glow_centre,
+                    ]
+                } else {
+                    [0.0; 4]
+                },
+                misc11: if scene.glow_reach > 0.0 && scene.glow_strength > 0.0 {
+                    [scene.glow_gap_soft, scene.glow_spread, 0.0, 0.0]
                 } else {
                     [0.0; 4]
                 },
