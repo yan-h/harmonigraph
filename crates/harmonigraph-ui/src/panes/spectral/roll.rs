@@ -577,26 +577,41 @@ pub(super) fn note_instances(
             // as the note's own end is close enough to the now-line for its
             // OUTLINE to cross it. That is not a nicety: the clip opens by the
             // lead, and what the lead opens belongs to the lead. Drop the lead
-            // the instant its opacity runs out and the box snaps back to the
-            // note's own end, which puts a square end — and so the outline's
-            // opaque cap — inside a budget meant for a tongue that fades. The
-            // cap is the exact ink the clip has stopped since before there was
-            // a lead, and it lands in the middle of the analyzer.
+            // and the box ends at the note, so that end's cap is the box's own
+            // outline — drawn at its full reach, with nothing left here able to
+            // say otherwise, and landing on the analyzer. It is the exact ink
+            // the clip has stopped since before there was a lead.
             //
-            // Held at no opacity the end stays INTERIOR to the box, where a box
-            // has no edge and an outline has nothing to wrap, so nothing is
-            // drawn there at all. It costs four vertices of invisible quad for
-            // the couple of points of scrolling it takes the note to clear the
-            // line — and the cap comes back as soon as it is wholly inside it,
-            // which is the earliest it can without spending what is not its.
+            // Kept, the note's end stays INSIDE the box, where the cap is
+            // `cap_px`'s to meter and can be given only the room it has.
             //
             // How far the note's own end sits inside the roll, in points, and
             // how far the outline stands off it: the same reach `vs_note` grows
             // the quad by, since it is the same ink.
             let behind_px = (d1 - split) * axes.depth_len();
-            let leads = lead_px > 0.0
-                && last
-                && (standing > 0.0 || behind_px < outline_px + 0.5 * feather_px);
+            let outline_reach_px = outline_px + 0.5 * feather_px;
+            let leads = lead_px > 0.0 && last && (standing > 0.0 || behind_px < outline_reach_px);
+            // How far that cap may reach while the lead is still on the box.
+            //
+            // The shader stands the cap against the note's own end UNDER the
+            // lead, so the RELEASE needs no ramp here: the lead's own ink
+            // covers the cap while the lead is opaque and uncovers it as it
+            // goes, and what used to arrive whole the frame the lead was
+            // dropped now comes up through the tongue over the whole release.
+            //
+            // What is left to decide is ROOM, which is the paragraph above: the
+            // cap stands OUTSIDE the note's end, in the stretch the lead opened
+            // past the line, and that stretch is not the cap's to take. So the
+            // cap is allowed only as far as the note's own end has scrolled
+            // clear, and it grows out of that end rather than fading in over
+            // it — wholly behind the line at every width, instead of faintly
+            // across it. The half-feather is the shader's antialiasing ramp,
+            // which reaches that far past whatever the reach says.
+            //
+            // At its full reach this is the same picture the box's own outline
+            // draws, and that is the point `leads` above gives up the lead at —
+            // so the two meet at one number and nothing moves at the handover.
+            let cap_px = outline_px.min((behind_px - 0.5 * feather_px).max(0.0));
 
             // Notes always draw fully opaque — how much of the heatmap comes
             // through a note is the Fill setting's business, not an opacity
@@ -710,7 +725,6 @@ pub(super) fn note_instances(
             // `skew` times what it is across the note's long edges. Measured
             // from the segment's own center, which is where the shader
             // measures it from.
-            let outline_reach_px = outline_px + 0.5 * feather_px;
             let skew = (1.0 + slope * slope).sqrt();
             let ink_pitch_px = half_pitch
                 + slope.abs() * (half_depth + outline_reach_px + 0.5 * feather_px)
@@ -769,6 +783,7 @@ pub(super) fn note_instances(
                 lead: lead_px,
                 lead_fade: lead_fade_px,
                 lead_alpha: standing,
+                cap_reach: cap_px,
                 core: core.to_array(),
                 outline: outline_color.to_array(),
             });
@@ -1604,22 +1619,27 @@ mod tests {
         assert_eq!((lead, alpha), (0.0, 0.0), "a spent lead was still handed to the shader");
     }
 
-    /// What the lead opens in the clip belongs to the LEAD. A segment that is
-    /// not leading may not put ink there.
+    /// What the lead opens in the clip belongs to the LEAD. A cap standing at
+    /// the note's own end may not spend it.
     ///
-    /// The ink it would put there is its outline CAP, and that is the exact
-    /// thing the clip has always existed to stop — see
+    /// That cap is the exact thing the clip has always existed to stop — see
     /// [`the_rolls_ink_stops_at_the_now_line`](super::super::tests). Before the
     /// lead the clip sat on the now-line and cut every cap that reached it; the
     /// lead opens a budget past the line, and a released note whose own end is
     /// still near the line will spend that budget on a slab of opaque black in
     /// the middle of the analyzer unless something stops it.
     ///
-    /// The reach is the whole of the outline's, and the fixtures below are the
-    /// two ways in. A release of 0 puts the note's end ON the line at the
-    /// moment the lead goes; a long Span puts it a fraction of a point off the
-    /// line for seconds after even a slow one, because how far a note scrolls
-    /// in the release is the Span's business and the cap's size is not.
+    /// What stops it is the cap's REACH, which is metered to the room the
+    /// note's end has actually scrolled clear. So the assertion is on the ink
+    /// and not on the arrangement: wherever the cap stands — at the note's own
+    /// end inside a lead, or at the box's end without one — everything it
+    /// paints is on the roll's side of the line.
+    ///
+    /// The fixtures below are the two ways in. A release of 0 puts the note's
+    /// end ON the line at the moment the lead goes; a long Span puts it a
+    /// fraction of a point off the line for seconds after even a slow one,
+    /// because how far a note scrolls in the release is the Span's business and
+    /// the cap's size is not.
     #[test]
     fn a_note_that_is_not_leading_keeps_its_ink_behind_the_line() {
         for (release, span, when, hint) in [
@@ -1646,16 +1666,26 @@ mod tests {
                 "{hint}: the lead is still standing at {}, so this says nothing",
                 note.lead_alpha,
             );
-            // Two legal ways for the cap not to be there, and the assertion is
-            // that one of them holds. Either the box still carries the (spent)
-            // lead, in which case the note's own end is INTERIOR to it and a box
-            // has no edge in its middle for an outline to wrap; or the lead is
-            // gone and the box ends at the note, in which case the cap is drawn
-            // and has to be behind the line under its own steam.
-            let capped = note.lead <= 0.0;
-            let over = past_the_line(&note, &axes, split) + note.outline_reach + 0.5 / PPP;
+            // Where the cap stands and how far it reaches, which is one of two
+            // pairs. Either the box still carries the (spent) lead, and the cap
+            // is at the note's own end a lead inside the tip, reaching by
+            // whatever room it was given; or the lead is gone, the box ends at
+            // the note, and the cap is the box's own outline at its full reach.
+            // Plus the shader's antialiasing ramp, which reaches half a pixel
+            // past either.
+            //
+            // A reach of 0 is the third answer and needs no place: the shader
+            // leaves at its first line, so the cap paints nothing anywhere.
+            // That is the picture at the note-off itself, when the note's end
+            // is ON the line and has no room to be given.
+            let tip = past_the_line(&note, &axes, split);
+            let (drawn, over) = if note.lead > 0.0 {
+                (note.cap_reach > 0.0, tip - note.lead + note.cap_reach + 0.5 / PPP)
+            } else {
+                (true, tip + note.outline_reach + 0.5 / PPP)
+            };
             assert!(
-                !capped || over <= 0.0,
+                !drawn || over <= 0.0,
                 "{hint}: a note that is not leading reaches {over} points onto \
                  the analyzer",
             );
@@ -1721,6 +1751,75 @@ mod tests {
         let (lead, alpha) = at(&state, 4.0);
         assert_eq!(alpha, 0.0, "a release of 0 kept the lead standing past the note-off");
         assert!(lead > 0.0, "the note is still on the line; its box must not snap back yet");
+    }
+
+    /// The cap at the note's own end is standing WHILE the lead fades, so the
+    /// tongue dissolves off a dark edge that was already there.
+    ///
+    /// It is the other half of
+    /// [`a_released_notes_lead_fades_out_over_its_release_time`], and the half
+    /// a released note is actually watched through. The shader draws that cap
+    /// under the lead (`harmonigraph_render::RollInstance`'s `cap_reach`), so
+    /// what the release does is UNCOVER ink rather than deliver it — but only
+    /// as far as this hands the cap room, and a cap with no room is no cap.
+    /// Hand it none for the whole release and the edge still arrives in one
+    /// frame at the end of it; the pop simply moves.
+    ///
+    /// So: none at the note-off, when the note's end is on the line and the
+    /// space past it is the lead's; growing as the note scrolls its own end
+    /// clear; and the outline's full reach well before the lead is spent, which
+    /// is what makes the rest of the release a crossfade.
+    #[test]
+    fn a_released_notes_cap_stands_while_its_lead_is_still_fading() {
+        let mut state = fresh();
+        state.spectrum_config.orientation = SpectralOrientation::Left;
+        state.spectrum_config.roll_seconds = 10.0;
+        state.spectrum_config.low_midi = 48.0;
+        state.spectrum_config.high_midi = 84.0;
+        state.spectrum_config.roll_lead = 0.05;
+        state.spectrum_config.roll_lead_fade = 0.04;
+        state.spectrum_config.roll_lead_release = 0.4;
+        state.tracker.handle_event(NoteEvent::on(2.0, 0, 60, 1.0));
+        state.tracker.handle_event(NoteEvent::off(4.0, 0, 60));
+
+        let at = |now: f64| *one(&instances(&state, now));
+        // On the line, where the space past it is the lead's alone.
+        let off = at(4.0);
+        assert_eq!(off.cap_reach, 0.0, "a note's end on the line was given cap to spend there");
+
+        // Growing with the room, and never shrinking — the cap comes out of the
+        // note's own end rather than being faded in over it.
+        let mut previous = 0.0f32;
+        let mut full_at = None;
+        let mut elapsed = 0.0f64;
+        while elapsed <= 0.4 {
+            let note = at(4.0 + elapsed);
+            assert!(
+                note.cap_reach >= previous - 1e-4,
+                "the cap pulled back to {} from {previous} at {elapsed}s",
+                note.cap_reach,
+            );
+            assert!(
+                note.cap_reach <= note.outline_reach + 1e-4,
+                "the cap reached {} past an outline of {}",
+                note.cap_reach,
+                note.outline_reach,
+            );
+            if full_at.is_none() && note.cap_reach >= note.outline_reach - 1e-4 {
+                full_at = Some(elapsed);
+            }
+            previous = note.cap_reach;
+            elapsed += 0.01;
+        }
+
+        // And it got there with most of the tongue left to dissolve off it.
+        let full_at = full_at.expect("the cap never reached the outline's own reach");
+        let standing = at(4.0 + full_at).lead_alpha;
+        assert!(
+            standing > 0.5,
+            "the cap was only whole with {standing} of the lead left ({full_at}s in) — the \
+             release is not a crossfade at that point, it is the pop moved",
+        );
     }
 
     /// Only the note's LAST segment leads. The rest end on the next bend, in

@@ -135,6 +135,35 @@ pub struct RollInstance {
     /// is; the two meet at the note's own end, and at full opacity that join is
     /// seamless.
     pub lead_alpha: f32,
+    /// How far the outline's cap at the NOTE's own leading end reaches, in
+    /// points — the cap standing where the note stops and the
+    /// [`lead`](Self::lead) carries on.
+    ///
+    /// The note's own end is INTERIOR to a box that carries a lead, and a box
+    /// has no edge in its middle for an outline to wrap, so without this the
+    /// note wears no cap there until the lead is dropped and the box shrinks
+    /// back to it — at which point the cap arrives whole, in one frame, on a
+    /// ribbon that has spent the whole release dissolving.
+    ///
+    /// Drawn under the lead instead it needs no ramp of its own. The outline
+    /// layer goes down before ANY body, so a lead at full opacity covers the
+    /// cap and a lead on its way out uncovers it at exactly the rate it goes:
+    /// the crossfade is the compositing.
+    ///
+    /// A REACH rather than an opacity, and that is the whole of what this field
+    /// decides. The cap stands OUTSIDE the note's end, in the stretch the lead
+    /// was drawn over, and a caller may have somewhere the ribbon's ink may not
+    /// go — the spectral pane's now-line is that somewhere, the clip a lead
+    /// opens past it belonging to the lead and not to a cap. Shortening the
+    /// reach keeps the cap wholly on the near side of such a place; dimming it
+    /// instead would still put ink across it, just faintly, which is a weaker
+    /// promise for the same arithmetic.
+    ///
+    /// [`outline_reach`](Self::outline_reach) is the ordinary answer and the
+    /// one a caller with nowhere to protect should give — more than that draws
+    /// no more. Read only where there IS a lead: without one the box ends at
+    /// the note and its cap is the box's own outline.
+    pub cap_reach: f32,
     /// Premultiplied sRGB bytes, straight out of [`egui::Color32`].
     pub core: [u8; 4],
     /// The outline's color where it is solid; the fade takes it out from there.
@@ -157,8 +186,9 @@ impl RollInstance {
             5 => Float32,   // lead
             6 => Float32,   // lead_fade
             7 => Float32,   // lead_alpha
-            8 => Unorm8x4,  // core
-            9 => Unorm8x4,  // outline
+            8 => Float32,   // cap_reach
+            9 => Unorm8x4,  // core
+            10 => Unorm8x4, // outline
         ],
     };
 }
@@ -1018,6 +1048,11 @@ mod tests {
             lead: 0.0,
             lead_fade: 0.0,
             lead_alpha: 0.0,
+            // The ordinary answer, and what a caller with nowhere to protect
+            // gives: the cap at the note's own end reaches as far as every
+            // other edge's outline, and it is the LEAD over it that decides
+            // how much of it shows.
+            cap_reach: 4.0,
             core: [255, 0, 0, 255],
             outline: [0, 0, 0, 255],
         }
@@ -1329,6 +1364,89 @@ mod tests {
         // Gone entirely, and the note is still every bit of itself.
         assert!(cov(0.0, 88) < 0.03, "a lead at no opacity still painted");
         assert!(cov(0.0, 148) > 0.97, "a lead at no opacity took its note with it");
+    }
+
+    /// The cap at a led note's OWN end is drawn UNDER the lead, so a lead on
+    /// its way out uncovers it — it does not arrive once the lead is gone.
+    ///
+    /// The end of a note carrying a lead is in the middle of its box, where the
+    /// outline that wraps the box has nothing to stand against; without a cap
+    /// of its own the note wears no dark edge there until the caller drops the
+    /// spent lead and the box shrinks back, and then wears the whole of one in
+    /// a single frame. On a ribbon that has spent a quarter second dissolving
+    /// that reads as the edge popping in at the exact moment the tongue
+    /// finishes, which is the one moment nothing should happen.
+    ///
+    /// Under the lead it needs no ramp: the outline layer is drawn before ANY
+    /// body, so what shows through is what the lead has stopped covering, and
+    /// the crossfade is the compositing. Read two points inside the note's own
+    /// end, where the cap is solid and the lead is over it: the red is the
+    /// lead's, the black underneath is the cap's, and the lead's opacity is the
+    /// only thing dividing them.
+    #[test]
+    fn a_fading_lead_uncovers_the_cap_at_the_notes_own_end() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        // A square-ended 40-point lead, so nothing between the tip (y = 68) and
+        // the note's own end (y = 108) but the opacity. The cap stands OUTSIDE
+        // that end, reaching back toward the tip: y = 104 to 108, and y = 106
+        // is well inside it at every pixel centre.
+        let at = |alpha: f32| {
+            let frame = draw(&device, &queue, vec![led_note(40.0, 0.0, alpha)], bg_color());
+            pixel(&frame, 128, 106)
+        };
+        // The lead standing: its own red, and no sign of what is under it.
+        let full = at(1.0);
+        assert!(near(full, [255, 0, 0, 255]), "the lead is not opaque over its cap: {full:?}");
+        // Gone: the cap in full, black against a background that is not.
+        assert!(
+            near(at(0.0), [0, 0, 0, 255]),
+            "the note's own end has no cap under a spent lead: {:?}",
+            at(0.0),
+        );
+        // And in between the two are mixed in the lead's own proportion — the
+        // red at half opacity over black, rather than over the background.
+        let half = at(0.5);
+        assert!(
+            near(half, [128, 0, 0, 255]),
+            "a half-gone lead does not sit half over its cap: {half:?}",
+        );
+    }
+
+    /// The cap reaches exactly as far as `cap_reach`, which is the caller's
+    /// answer and not the outline's.
+    ///
+    /// The two are the same number wherever the cap has the room for it. Where
+    /// it does not — the spectral pane's now-line being the case that exists,
+    /// with the clip a lead opens past it belonging to the lead — the cap is
+    /// SHORTENED rather than dimmed, so it grows out of the note's end and is
+    /// wholly on the near side of whatever the caller is protecting at every
+    /// width it passes through. Dimmed, it would put ink across that line at
+    /// every width but the last.
+    #[test]
+    fn a_caps_reach_is_the_callers_and_not_the_outlines() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        // The lead spent, so the cap is uncovered and the frame reads it
+        // directly. A 4-point outline told to cap over 2: solid a point inside
+        // the note's own end (y = 107), and nothing 3 points inside it
+        // (y = 105), where the outline's own reach would still be painting.
+        let short = RollInstance { cap_reach: 2.0, ..led_note(40.0, 0.0, 0.0) };
+        let frame = draw(&device, &queue, vec![short], bg_color());
+        let at = |y: u32| pixel(&frame, 128, y);
+        assert!(near(at(107), [0, 0, 0, 255]), "the shortened cap is not solid: {:?}", at(107));
+        assert!(near(at(105), BG), "the cap reached past the 2 points it was given: {:?}", at(105));
+        // None at all is none drawn — the note's end is bare, exactly as it was
+        // before there was a cap to draw there.
+        let none = RollInstance { cap_reach: 0.0, ..led_note(40.0, 0.0, 0.0) };
+        let bare = draw(&device, &queue, vec![none], bg_color());
+        assert!(
+            near(pixel(&bare, 128, 107), BG),
+            "a cap of no reach still painted: {:?}",
+            pixel(&bare, 128, 107),
+        );
     }
 
     /// A fade set past the outline's own reach eats OUTWARD — it fades the
