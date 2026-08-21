@@ -427,9 +427,9 @@ fn parity_scene() -> Scene {
         render_scale: 1.0,
         // Parity with the direct-to-egui-pass reference requires bloom off.
         bloom_strength: 0.0,
-        // And the node glow with it: it is a draw of its own ahead of the
-        // nodes, and it widens their knockout, neither of which the
-        // single-attachment reference path carries.
+        // And the node glow with it: it is a pass of its own into a target of
+        // its own, composited into the scene pass, which the
+        // single-attachment reference path has no pass to composite into.
         glow_reach: 0.0,
         glow_strength: 1.0,
         // The fresh moat, inert at reach 0 and here to say so.
@@ -5599,9 +5599,10 @@ fn the_glow_reach_says_how_far_a_node_lights_past_its_own_edge() {
 /// pass and would glow like nodes if the light were a post-process over the
 /// picture rather than a draw off the node instance buffer.
 ///
-/// Byte-identical rather than nearly so: the glow's draw is over the instance
-/// buffer, which is empty, so it puts down nothing at all — and its moat, which
-/// widens a knockout no node is there to cut, is nothing too.
+/// Byte-identical rather than nearly so: both of the glow's draws are over the
+/// instance buffer, which is empty, so the target is cleared to transparent and
+/// nothing writes to it, and the composite lays exactly nothing over the
+/// picture.
 #[test]
 fn a_lattice_with_no_node_grows_no_glow() {
     const SIZE: [u32; 2] = [256, 256];
@@ -5626,67 +5627,181 @@ fn a_lattice_with_no_node_grows_no_glow() {
     );
 }
 
-/// The moat: past a node's outermost drawn edge there is a band of GROUND
-/// between its crisp layers and the light around them, and the Glow gap bar is
-/// what opens it.
+/// The moat is an ABSENCE of light, not a shape painted in the dark: a pixel
+/// the Glow gap clears beside a lit node is the pixel the frame has with no
+/// glow at all, to the byte.
 ///
-/// The check is the ground COLOUR rather than "darker than the glow", because
-/// the moat is the node's own knockout widened — the same hole, cleared to the
-/// same `Scene::background` — and a moat that merely dimmed the light would be
-/// a shadow painted on it instead. Against the same shot at gap 0, so what is
-/// measured is the bar and not the fixture: those pixels have to be lit without
-/// it, or the band being ground with it says nothing.
+/// That equality is the whole claim, and it is the one a painted moat cannot
+/// make. A gap knocked out in the pane's ground would blot out the grid, the
+/// sheets behind and whatever else the lattice put there, and it would read as
+/// a feathered dark halo round every node — the artifact this design exists to
+/// not have. Erasing the LIGHT instead leaves what is underneath untouched, so
+/// the test is against the no-glow frame rather than against "darker than the
+/// glow".
+///
+/// Located rather than named: the pixels that qualify are the ones a flush glow
+/// LIT and the moat took back to exactly the unlit frame, which is a set the
+/// shot finds for itself and a coordinate would lose to any change of fixture.
 #[test]
-fn a_moat_of_ground_stands_between_a_node_and_its_light() {
+fn a_moat_beside_a_lit_node_is_the_frame_with_no_glow_at_all() {
     const SIZE: [u32; 2] = [256, 256];
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
     };
-    let at = |gap: f32| -> Scene {
+    let at = |reach: f32, gap: f32| -> Scene {
         let mut scene = single_marked_node(0, 0);
-        scene.glow_reach = 0.8;
+        scene.glow_reach = reach;
         scene.glow_strength = 1.5;
         scene.glow_gap = gap;
         scene
     };
-    let flush = shooter.shot(&at(0.0));
-    let moated = shooter.shot(&at(0.3));
+    let off = shooter.shot(&at(0.0, 0.0));
+    let flush = shooter.shot(&at(0.8, 0.0));
+    // The bar's top, so the band is wide enough to hold pixels that are outside
+    // everything the node draws — inside it the glow REPLACES the core's skirt,
+    // so a moated pixel there is dark by a second mechanism and says nothing
+    // about this one.
+    let moated = shooter.shot(&at(0.8, harmonigraph_scene::GAP_MAX));
 
-    // The ground the knockout clears to, as the pass writes it: the shot is
-    // composited over black and the hole is opaque, so a cleared pixel is this
-    // colour and nothing else's.
-    let ground = harmonigraph_scene::skin::well_color().to_array();
-    let ground_px: [u8; 3] =
-        std::array::from_fn(|c| (ground[c].clamp(0.0, 1.0) * 255.0).round() as u8);
-    let is_ground = |px: &[u8]| -> bool {
-        (0..3).all(|c| px[c].abs_diff(ground_px[c]) <= 2)
+    let px = |shot: &[u8], i: usize| -> [u8; 4] {
+        std::array::from_fn(|c| shot[i * 4 + c])
     };
-
-    // Along the row through the node's center, outward from it: the first
-    // stretch of ground past where the node stops painting is the moat.
-    let row = (SIZE[1] / 2) as usize;
-    let mid = (SIZE[0] / 2) as usize;
-    let px = |shot: &[u8], x: usize| -> [u8; 4] {
-        let i = (row * SIZE[0] as usize + x) * 4;
-        [shot[i], shot[i + 1], shot[i + 2], shot[i + 3]]
-    };
-    let moat: Vec<usize> = (mid..SIZE[0] as usize)
-        .filter(|&x| is_ground(&px(&moated, x)) && !is_ground(&px(&flush, x)))
-        .collect();
-    assert!(
-        moat.len() >= 4,
-        "a 30% gap opened no moat: {} ground pixels on the row out from the node",
-        moat.len(),
-    );
-    // ...and what it replaced was the glow, not empty frame. The fixture's
-    // background is black, so a lit pixel is light the node put there.
-    for x in moat {
-        let lit = px(&flush, x);
-        assert!(
-            brightness(&lit) > 0,
-            "the moat at x={x} covered nothing: the glow-flush shot is black there",
-        );
+    let mut moat = 0usize;
+    for i in 0..(SIZE[0] * SIZE[1]) as usize {
+        let (unlit, lit, held) = (px(&off, i), px(&flush, i), px(&moated, i));
+        if lit == unlit {
+            continue;
+        }
+        // A pixel the moat did NOT claim is one the light still reaches, which
+        // is most of the frame; only the ones it took back are being counted.
+        // One step of slack rather than none: the composite resamples the
+        // glow's target through a linear sampler, which is texel-aligned here
+        // and still rounds an 8-bit channel.
+        let slip = (0..4).map(|c| held[c].abs_diff(unlit[c])).max().unwrap_or(0);
+        if slip <= 1 {
+            moat += 1;
+        }
     }
+    assert!(
+        moat >= 64,
+        "a moat at the top of the bar cleared {moat} pixels back to the unlit frame",
+    );
+    // ...and the light is still there to be moated, or the count above is the
+    // glow being off rather than a gap being held in it.
+    assert!(
+        total_light(&moated) > total_light(&off),
+        "the moated shot carries no more light than the unlit one: {} against {}",
+        total_light(&moated),
+        total_light(&off),
+    );
+}
+
+/// The MIDDLE of a node glows. Inside the innermost ring there is nothing to
+/// stand the light off, so it runs all the way in — which is what makes the
+/// glow the note's own light rather than a rim around it.
+///
+/// The node's exact centre, with the core's solidity dialled to 0 — the fresh
+/// view's own value, and [`parity_scene`] is the departure from it. At 0 no
+/// disc is drawn, so what the pixel carries is the light and only the light. At
+/// a solidity above 0 the disc is drawn over that light, crisp: the moat stands
+/// the glow off exactly the disc's own edge and no wider, so the two shots
+/// would agree there whatever the glow did.
+///
+/// Against the glow OFF rather than against a neighbouring pixel, because the
+/// thing that must not happen is the middle going DARK: the glow replaces the
+/// core's skirt (see `core_layer`), and a moat that reached the centre would
+/// take the skirt away and put nothing in its place.
+#[test]
+fn the_middle_of_a_node_is_where_its_light_is_fullest() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    let at = |reach: f32| -> Scene {
+        let mut scene = single_marked_node(0, 0);
+        scene.glow_reach = reach;
+        scene.glow_strength = 1.5;
+        // The moat as the fresh view holds it: a centre lit only with the gap
+        // dialled to nothing would be a test of the gap, not of the light.
+        scene.glow_gap = 0.08;
+        scene.core_solidity = 0.0;
+        scene
+    };
+    let off = shooter.shot(&at(0.0));
+    let on = shooter.shot(&at(0.8));
+
+    // The fixture's one node sits at the origin, which the camera is pointed
+    // at, so the frame's centre is the node's.
+    let mid = ((SIZE[1] / 2) * SIZE[0] + SIZE[0] / 2) as usize;
+    let (dark, lit) = (&off[mid * 4..mid * 4 + 3], &on[mid * 4..mid * 4 + 3]);
+    assert!(
+        brightness(lit) > brightness(dark),
+        "the node's middle is no brighter with the glow on: {lit:?} against {dark:?}",
+    );
+}
+
+/// A node wearing NOTHING BUT AN AUDIO RING glows.
+///
+/// Two halves, and each is a thing the first cut of this got wrong. The LEVEL
+/// is the largest of everything that draws ink, not the note's activation — a
+/// ring is the analyzer's reading rather than a voice's, so a node with no key
+/// down carries an activation of 0 and a ring at full. And the COLOUR falls
+/// back to the node's own pitch, because the octave word a chord's light is
+/// blended out of is empty here: there is no voice to take a hue from.
+///
+/// The ring is the one layer an idle node paints, so this is also the case that
+/// says the glow follows what is DRAWN rather than what is played.
+#[test]
+fn a_node_wearing_only_an_audio_ring_glows() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    let at = |reach: f32| -> Scene {
+        // [`ringing_node`]'s fixture: a live analyzer, a partial sounding into
+        // one wedge, and no core at all — so the only thing on screen is the
+        // ring, and the only light around it is the glow's.
+        let mut scene =
+            ringing_node(None, Some(harmonigraph_scene::MIDDLE_C_SLOT as f32 * 12.0), PROBE_RANGE);
+        let node = &mut scene.nodes[0];
+        // Silence at the node, and the analyzer still reading: no key down, no
+        // octave sounding, no mark at either end — and the ring at full, which
+        // is the view's Gate answered for this node.
+        node.activation = 0.0;
+        node.melody_level = 0.0;
+        node.bass_level = 0.0;
+        node.melody_slots = 0;
+        node.bass_slots = 0;
+        node.audio_ring = 1.0;
+        scene.glow_reach = reach;
+        scene.glow_strength = 1.5;
+        scene.glow_gap = 0.08;
+        scene
+    };
+    let off = shooter.shot(&at(0.0));
+    let on = shooter.shot(&at(0.8));
+    // The fixture draws its ring with no note at all, or "the ring alone glows"
+    // is being asked of a frame with no ring in it.
+    assert!(total_light(&off) > 0, "the fixture must draw its audio ring");
+    assert!(
+        total_light(&on) > total_light(&off),
+        "a ringing node with no note gave off no light: {} against {}",
+        total_light(&on),
+        total_light(&off),
+    );
+    // And OUTSIDE the ring, which is where a halo is: the ring's own annulus is
+    // moated, so light there would be the ring redrawn rather than a glow.
+    let row = (SIZE[1] / 2) as usize;
+    let outside = (SIZE[0] as usize / 2..SIZE[0] as usize)
+        .filter(|&x| {
+            let i = row * SIZE[0] as usize + x;
+            brightness(&on[i * 4..i * 4 + 3]) > brightness(&off[i * 4..i * 4 + 3])
+        })
+        .count();
+    assert!(
+        outside >= 8,
+        "the ring's light reached {outside} pixels along the row out from the node",
+    );
 }
 
 /// Two nodes' halos MELD where they overlap: brighter than either alone, and

@@ -458,8 +458,12 @@ impl TextResources {
         target_format: wgpu::TextureFormat,
     ) -> Self {
         let layout = glyph_bind_group_layout(device);
-        let rim_pipeline = create_text_pipeline(device, target_format, &layout, "fs_rim", None);
-        let fill_pipeline = create_text_pipeline(device, target_format, &layout, "fs_fill", None);
+        let rim_pipeline = create_text_pipeline(
+            device, target_format, &layout, "fs_rim", None, crate::EGUI_BLEND,
+        );
+        let fill_pipeline = create_text_pipeline(
+            device, target_format, &layout, "fs_fill", None, crate::EGUI_BLEND,
+        );
         TextResources {
             rim_pipeline,
             fill_pipeline,
@@ -657,16 +661,20 @@ pub(crate) fn blank_atlas(device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu::T
 ///     bright pass reads, so leaving it unwritten here is the whole of how a
 ///     name stays out of the bloom.
 ///
-/// The blend is [`crate::EGUI_BLEND`]. Its alpha term is egui's own —
-/// `src * (1 - dst.a) + dst`, which is the same arithmetic as premultiplied
-/// `over` written from the other side, so a glyph composites into the
-/// lattice's offscreen exactly as a node does.
+/// `blend` is [`crate::EGUI_BLEND`] wherever a label is being DRAWN. Its alpha
+/// term is egui's own — `src * (1 - dst.a) + dst`, which is the same arithmetic
+/// as premultiplied `over` written from the other side, so a glyph composites
+/// into the lattice's offscreen exactly as a node does. It is a parameter
+/// because the lattice builds one more of these that draws nothing: the node
+/// glow stands its light off every name, by running this same fragment against
+/// a blend that only ever takes light away (see `create_glow_pipelines`).
 pub(crate) fn create_text_pipeline(
     device: &wgpu::Device,
     target_format: wgpu::TextureFormat,
     layout: &wgpu::BindGroupLayout,
     fragment: &str,
     scene_depth: Option<wgpu::TextureFormat>,
+    blend: wgpu::BlendState,
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("text_shader"),
@@ -679,7 +687,7 @@ pub(crate) fn create_text_pipeline(
     });
     let mut targets = vec![Some(wgpu::ColorTargetState {
         format: target_format,
-        blend: Some(crate::EGUI_BLEND),
+        blend: Some(blend),
         write_mask: wgpu::ColorWrites::ALL,
     })];
     // The pass's nodes-only attachment, declared and never written — an empty

@@ -586,8 +586,8 @@ pub fn derive_scene(
         render_scale: view.render_scale,
         bloom_strength: view.bloom_strength,
         // Clamped here as well as in `sanitize`, for the shells that never come
-        // through that door: the reach and the gap both size every node's
-        // billboard, so a number from outside either bar is a quad the draw
+        // through that door: the reach and the gap both size the billboard the
+        // glow's draws use, so a number from outside either bar is a quad they
         // cannot fill.
         glow_reach: view.glow_reach.clamp(0.0, crate::GLOW_REACH_MAX),
         glow_strength: view.glow_strength.clamp(0.0, crate::GLOW_STRENGTH_MAX),

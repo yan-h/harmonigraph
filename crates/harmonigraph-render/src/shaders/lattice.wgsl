@@ -112,20 +112,20 @@ struct Uniforms {
     // (the FOLD) rather than a window of pitch spread across it; z/w unused.
     misc9: vec4<f32>,
     // The node glow. x: how far past a node's outermost drawn edge its light
-    // spreads, in the node's own uv; y: how much light that is; z: the moat
-    // held between the node's crisp layers and it, same units.
+    // spreads, in the node's own uv; y: how much light that is; z: the moat the
+    // light is held out of around every crisp shape a node draws, same units.
     //
     // ZEROED WHOLE where the glow is off, by the CPU, so `u.misc10.x > 0.0` is
     // the one test anything here makes and no half-on state exists — a moat
-    // cut for a light nobody is drawing is a gap in the picture for nothing.
+    // held open for a light nobody draws is a gap in the picture for nothing.
     //
-    // x and y are read by the glow draw alone (`vs_glow` sizes its billboard
-    // on x, `glow_layer` shapes and scales the light). z is read by every node
-    // draw, the glow's included: it widens the knockout each layer already
-    // cuts, which is what puts the moat under the NEIGHBOURS' light as well as
-    // this node's, and it is folded into `VsOut::gutter` in the vertex stage so
-    // nothing downstream has to know the glow exists. x reaches `core_layer`
-    // too, as the one switch that suppresses the core's own skirt.
+    // Read by the GLOW's own two draws (`vs_glow` sizes their billboard,
+    // `glow_layer` shapes the light, `glow_moat` shapes the gap) and, in the
+    // node draw, by `core_layer`'s skirt switch and nothing else. The light and
+    // its moat are both written into a target of the glow's own, so a node's
+    // own picture — its knockout included — is exactly what it is with the glow
+    // off, and the moat is an ABSENCE of light rather than a shape painted in
+    // the ground.
     // w unused.
     misc10: vec4<f32>,
     // The FREQUENCY color scheme's ramp: the analyzer's own gradient, the
@@ -164,25 +164,32 @@ const GLYPH_FADE_LIMIT: f32 = 1.3;
 // clips a big soft core, which is why the bound is a max rather than this.
 const GLOW_LIMIT: f32 = 0.95;
 
-// The node glow's own base amplitude, which is `core_layer`'s glow_base at
-// solidity 0: the glow IS that skirt, taken off the disc and grown over the
-// whole node, so the two read the same number rather than two spellings of one.
-const GLOW_SKIRT_BASE: f32 = 0.35;
-// Least fraction of the moat that its outer edge is feathered over. The moat
-// rides the clearing's own fade (`sevens_gutter_soft`), which a view is free to
-// dial to nothing — and nothing is a step cut across a wide soft light, which
-// crawls as the camera moves where a band does not.
+// The node glow's base amplitude at a node's centre, before the Strength bar
+// scales it — what a strength of 1 lays down where the light is fullest.
+//
+// The glow IS `core_layer`'s skirt regrown over the whole node, but NOT that
+// skirt's number, and the difference is the domain. The skirt spends its
+// amplitude over a falloff scaled to a disc at most two thirds of a node wide;
+// this one's runs over the node's outermost edge plus the whole Reach, several
+// times that, and by the rim there is a fraction of it left. Tuned so the
+// Strength bar reads: at 1 a node's middle is unmistakably lit and its halo
+// plainly visible, at 2 — the bar's top — the middle saturates and the halo
+// doubles.
+const GLOW_BASE: f32 = 0.8;
+// Least fraction of the moat that its edge is feathered over. The moat rides
+// the clearing's own fade (`sevens_gutter_soft`), which a view is free to dial
+// to nothing — and nothing is a step cut across a wide soft light, which crawls
+// as the camera moves where a band does not.
 const GLOW_MOAT_SOFT: f32 = 0.35;
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
 
-// The moat between a node's crisp layers and its own light, in the node's uv —
-// 0 wherever the glow is off, `u.misc10` being zeroed whole there.
+// The moat: how far a node holds its light off every ring it draws, in the
+// node's uv — 0 wherever the glow is off, `u.misc10` being zeroed whole there.
 //
 // A share of the node's radius, like the two gaps it sits with in the view, so
-// it shrinks with a node off the home sheet where the clearing it widens is a
-// fixed width on screen. That is the right unit for it: what it stands off is
-// the node's own layers, which shrink with the node too.
+// it shrinks with a node off the home sheet. That is the right unit for it:
+// what it stands off is the node's own layers, which shrink with the node too.
 fn glow_gap() -> f32 {
     return max(u.misc10.z, 0.0);
 }
@@ -345,11 +352,7 @@ struct VsOut {
     @location(6) @interpolate(flat) marks: vec2<u32>,
     @location(7) @interpolate(flat) melody_color: vec4<f32>,
     @location(8) @interpolate(flat) bass_color: vec4<f32>,
-    // How far past each layer's own footprint this node clears, in THIS node's
-    // uv: the view's Clearance plus the glow's moat, summed in `node_vertex`
-    // and converted there. One number rather than two because every reader
-    // wants the sum — the billboard is sized on it, `paint_reach` bounds on it,
-    // and `node_clearing` measures every layer out to it.
+    // Already converted to THIS node's uv (see vs_main).
     @location(10) @interpolate(flat) gutter: f32,
     // The circle the node fits inside (`node_rim`) and the clearing's fade
     // width, both in this node's uv — computed once in the vertex shader
@@ -377,8 +380,10 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
     return node_vertex(vertex_index, inst, 0.0);
 }
 
-/// The GLOW draw's billboard: the same node, on a quad grown to hold its light
-/// — `glow_layer` shuts the window at the node's rim plus `u.misc10.x`, and the
+/// The GLOW's billboard, shared by both of its draws: the same node, on a quad
+/// grown to hold its light — `glow_layer` shuts the window at the node's rim
+/// plus the Reach, and `glow_moat` stands the light off that same rim by the
+/// Gap, so the wider of the two is what has to finish inside the quad. The
 /// margin below is that with room to spare.
 ///
 /// A second entry point rather than a wider `vs_main`, because the margin is
@@ -388,7 +393,7 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
 /// world distance either way and nothing inside the node moves.
 @vertex
 fn vs_glow(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
-    return node_vertex(vertex_index, inst, max(u.misc10.x, 0.0));
+    return node_vertex(vertex_index, inst, max(max(u.misc10.x, 0.0), glow_gap()));
 }
 
 /// One node's billboard, with `extra` uv of headroom past what the node itself
@@ -420,21 +425,12 @@ fn node_vertex(vertex_index: u32, inst: Instance, extra: f32) -> VsOut {
     // by the scale converts the setting from "of this node" back to "of a
     // full-size node", i.e. one fixed distance everywhere.
     let gutter_uv = max(inst.sevens.y, 0.0) / scale;
-    // The glow's moat, widening that same clearing rather than being a second
-    // hole beside it. Dilating each layer's FOOTPRINT by the gap and extending
-    // the clearing's REACH by it describe one shape — the solid part ends a gap
-    // further out either way, and the fade lands in the same band, `soft` never
-    // exceeding the reach below — and the reach is one number here instead of a
-    // term in every layer of `node_clearing`. Everything downstream reads the
-    // sum: the billboard is sized on it, `paint_reach` bounds on it, and the
-    // idle branch keeps its fragments out to it.
-    let clearing_uv = gutter_uv + glow_gap();
     let rim = node_rim((inst.marks.x | inst.marks.y) != 0u);
     // ...which can want more room than the standard billboard has, on the
     // smallest sheets. Only then does the quad grow: uv 1.0 still maps to
     // the same world distance either way, so nothing about the node's own
     // content moves.
-    let margin = quad_margin(rim, max(clearing_uv, extra));
+    let margin = quad_margin(rim, max(gutter_uv, extra));
     let radius = u.misc.y * 0.90 * 2.0 * margin * scale;
 
     let world = inst.world_pos
@@ -450,7 +446,7 @@ fn node_vertex(vertex_index: u32, inst: Instance, extra: f32) -> VsOut {
     out.marks = inst.marks;
     out.melody_color = inst.melody_color;
     out.bass_color = inst.bass_color;
-    out.gutter = clearing_uv;
+    out.gutter = gutter_uv;
     out.rim = rim;
     out.ring = inst.ring;
     // The shimmer's shared coordinate — see VsOut::field. Taken off the
@@ -459,10 +455,8 @@ fn node_vertex(vertex_index: u32, inst: Instance, extra: f32) -> VsOut {
     // the real plane position of every pixel.
     out.field = vec2<f32>(dot(world, u.cam_right.xyz), dot(world, u.cam_up.xyz));
     // The fade is a constant width on screen too, so it converts the
-    // same way the reach does — floored, where a moat is being held, at a share
-    // of it (GLOW_MOAT_SOFT), so the moat ends in a band even on a view whose
-    // Clearance softness is dialled to nothing.
-    out.soft = max(u.misc6.z / scale, glow_gap() * GLOW_MOAT_SOFT);
+    // same way the reach does.
+    out.soft = u.misc6.z / scale;
     return out;
 }
 
@@ -1612,9 +1606,6 @@ fn gutter_coverage(sd: f32, reach: f32, soft: f32) -> f32 {
 // this is one hole the node sits in, and a hole with the lattice showing
 // through its middle reads as neither a hole nor a node.
 fn node_clearing(in: VsOut, oct: OctRing, d: f32) -> f32 {
-    // The Clearance and the glow's moat, already summed (`VsOut::gutter`): one
-    // hole, dialled from two bars, and nothing below has to know which of them
-    // asked for the width it is cutting.
     let reach = in.gutter;
     let soft = in.soft;
     var cov = 0.0;
@@ -1671,6 +1662,21 @@ fn node_clearing(in: VsOut, oct: OctRing, d: f32) -> f32 {
     return cov;
 }
 
+// How much of the core's solid disc covers this fragment, before the node's own
+// envelope: a disc of radius `radius` whose edge softens (CORE_EDGE_SOFT) and
+// whose opacity fades as the solidity drops, so a full orb (solidity 1: crisp
+// screen-constant edge, fully opaque) dissolves smoothly into nothing
+// (solidity 0: the skirt, or the node glow, then carries the note alone). At
+// solidity 1 this is exactly the classic aa_inside(R) disc.
+//
+// Its own function because the glow's moat has to stand the light off exactly
+// this shape and no wider (`glow_moat`). A second spelling of that edge is a
+// hairline of light left round every core, or a hairline of disc left dark.
+fn core_disc_fill(radius: f32, solidity: f32, d: f32, aa: f32) -> f32 {
+    let edge = aa + (1.0 - solidity) * CORE_EDGE_SOFT;
+    return (1.0 - smoothstep(radius - edge, radius + edge, d)) * solidity;
+}
+
 // The core layer -- the note's disc and the glow skirt around it --
 // premultiplied, as `rgb * alpha` in `xyz` and the coverage in `w`.
 //
@@ -1696,14 +1702,8 @@ fn core_layer(in: VsOut, d: f32, aa: f32, oct: OctRing) -> vec4<f32> {
         return vec4<f32>(0.0);
     }
 
-    // The opaque disc: a core of radius R whose edge softens (CORE_EDGE_SOFT)
-    // and whose opacity fades as solidity drops, so a full orb (solidity 1:
-    // crisp screen-constant edge, fully opaque) dissolves smoothly into
-    // nothing (solidity 0: the glow skirt below then carries the note
-    // alone). At solidity 1 this is exactly the classic aa_inside(R) disc.
-    let edge = aa + (1.0 - solidity) * CORE_EDGE_SOFT;
-    let core_cov = 1.0 - smoothstep(radius - edge, radius + edge, d);
-    let filled = core_cov * solidity;
+    // The opaque disc.
+    let filled = core_disc_fill(radius, solidity, d, aa);
     let disc = filled * activation * core_on;
 
     // Soft additive-looking glow for active nodes. The exponential alone
@@ -1717,7 +1717,7 @@ fn core_layer(in: VsOut, d: f32, aa: f32, oct: OctRing) -> vec4<f32> {
     // toward the soft end of the solidity axis (an under-glow) and brightens
     // toward the orb.
     let fs = CORE_R_CLASSIC / max(radius, 0.1);
-    let glow_base = mix(GLOW_SKIRT_BASE, 0.6, solidity);
+    let glow_base = mix(0.35, 0.6, solidity);
     // ...and gone entirely where the node glow is on, because that glow IS this
     // skirt: same hues by the same angular blend over the same exponential,
     // written against the whole node instead of against the disc (`glow_layer`).
@@ -1725,9 +1725,9 @@ fn core_layer(in: VsOut, d: f32, aa: f32, oct: OctRing) -> vec4<f32> {
     // and the two would fight over how far a note's light reaches.
     //
     // The SKIRT alone, not the layer. The disc solidity paints is a crisp shape
-    // — an edge the moat stands off exactly as it stands off a ring — so it
-    // goes on being drawn, and a view wanting nothing but light dials the
-    // solidity down as it always did.
+    // the light is laid UNDER rather than one it stands off, so it goes on being
+    // drawn, and a view wanting nothing but light dials the solidity down as it
+    // always did.
     let skirt = select(glow_base * exp(-3.0 * d * fs) * window, 0.0, u.misc10.x > 0.0);
     let glow = skirt * activation * core_on;
 
@@ -2187,16 +2187,11 @@ fn node_paint(in: VsOut) -> vec4<f32> {
     let oct = g.oct;
 
     // The knockout gutter, which every node the scene ships carries — the
-    // reach is the view's constant plus the glow's moat, and what decides
-    // whether a hole appears is the per-layer level `node_clearing` scales each
-    // term by. This is what lets the sevens layer overlap the home sheet
-    // instead of needing clearance of its own: the node clears its own
-    // footprint out of whatever was drawn before it and sits in the hole.
-    //
-    // "Whatever was drawn before it" is also every GLOW in the frame, those
-    // being one call ahead of every node — which is what makes the moat a gap
-    // between a node's crisp layers and all the light around them rather than
-    // between its layers and its own light alone.
+    // reach is the view's constant, and what decides whether a hole appears is
+    // the per-layer level `node_clearing` scales each term by. This is what
+    // lets the sevens layer overlap the home sheet instead of needing clearance
+    // of its own: the node clears its own footprint out of whatever was drawn
+    // before it and sits in the hole.
     //
     // THREE things make it read as a hole rather than a dark blob stuck on the
     // picture, and it needs all of them:
@@ -2331,36 +2326,75 @@ fn fs_main_scene(in: VsOut) -> SceneOut {
 }
 
 // ---- Node glow -------------------------------------------------------------
-// A node's own light, and the one layer of it that is not drawn in the node's
-// own draw.
+// A node's own light, drawn into a target of its own and laid over the finished
+// lattice.
 //
 // It REPLACES the core's skirt rather than joining it. `core_layer`'s glow half
 // is every sounding octave's hue laid round the node by angle over an
 // exponential falloff, windowed to nothing before the quad's edge; this is that
 // same expression with its scale taken off the core disc and put on the whole
 // node — the falloff spans the node's outermost drawn edge plus the Reach, and
-// the window shuts at the end of that same span. The core suppresses
-// its own skirt wherever this draws (see there), so the note's light is one
-// thing at one size and not two.
+// the window shuts at the end of that same span. The core suppresses its own
+// skirt wherever this draws (see there), so the note's light is one thing at one
+// size and not two.
 //
-// It is drawn BEFORE any node, all of them in one call, straight into the
-// picture. Two things follow from that and neither survives the alternatives:
+// TWO DRAWS over one instance buffer, into one transparent target, and the
+// second is what makes the whole thing work:
 //
-//  - The knockout can cut it. A node's clearing composites the ground over
-//    whatever is already in the target, so the moat every layer opens goes
-//    through every glow in the frame, not only the one that node emits. Drawn
-//    per node inside the node draw instead, a node would light the moat its
-//    neighbour cut a moment later, and the order of two nodes would be readable
-//    in the dark between them.
-//  - Two halos MELD. The blend is SCREEN — src + dst*(1 - src), premultiplied —
-//    so an overlap is brighter than either alone and still bounded by white
-//    rather than blowing past it, and it is commutative, so nothing about the
-//    order inside the call reaches the picture.
+//  - `fs_glow` lays every node's light down, SCREEN-blended — src + dst*(1-src),
+//    premultiplied. Two halos meld: an overlap is brighter than either alone and
+//    still bounded by white however many nodes reach the pixel, and the blend is
+//    commutative, so nothing about the order inside the call reaches the picture.
+//    Adding instead makes the COUNT of overlapping nodes, rather than any note,
+//    the brightest thing on screen.
+//  - `fs_glow_moat` takes light back OFF around every ring those nodes draw. It
+//    paints nothing at all: the blend multiplies whatever is in the target by
+//    1 - coverage, so the gap is an ABSENCE of light and whatever lies under it
+//    — the pane, the grid, a sheet behind — comes through exactly as it does
+//    with the glow off. A moat painted in the ground is a feathered dark halo
+//    that blocks the picture instead, which is the one thing a gap must not do.
+//    It runs over every node's coverage against every node's light, so a node
+//    stands its neighbours' light off as well as its own.
+//
+// The target is then composited over the finished lattice; where that lands, and
+// why it is not under the nodes, is in `LatticeCallback::prepare`.
+
+/// How lit this node is, for the purpose of the light it gives off: the largest
+/// of every level that puts ink on it.
+///
+/// The note's own envelope is only one of them. A mark rides the marked VOICE's
+/// level rather than the node's, and the audio ring rides the analyzer through
+/// the view's Gate — so a node with no key down and a ring showing is a node
+/// with something on screen, and a light that asked the activation alone would
+/// leave it dark while its own ring glowed at nothing.
+fn glow_level(in: VsOut) -> f32 {
+    return clamp(max(max(in.params.x, in.params.y), max(in.params.z, in.ring)), 0.0, 1.0);
+}
+
+/// The colour a node's light takes where no voice is blending one for it.
+///
+/// NOT `in.color`, which is the sounding voice's colour and the lattice's own
+/// GROUND wherever nothing sounds. That is the right fallback for a note — the
+/// ramp at that note's exact pitch, which the lit slot's is not once a note
+/// folds onto an outer indicator — and no colour at all for a node whose whole
+/// picture is its audio ring: a ring-only node would light in the grey its
+/// silent slices are drawn in, which on this skin is no light at all.
+///
+/// So the two are kept apart. A node with any note in it lights in its note's
+/// colour; a node with none lights in its OWN pitch's, off the same ramp its
+/// band's slices are painted from, taken at the octave its wheel is turned
+/// around.
+fn glow_hue(in: VsOut, oct: OctRing) -> vec3<f32> {
+    let sounding = max(in.params.x, max(in.params.y, in.params.z)) > 0.0;
+    let slot = oct.base + i32(oct_span() / 2u);
+    let own = pitch_lut_color(f32(slot) * 12.0 + in.cents / 100.0);
+    return select(own, in.color.rgb, sounding);
+}
 
 /// The node's light at this fragment, premultiplied, exactly as every other
 /// layer here returns its ink.
 fn glow_layer(in: VsOut, d: f32, oct: OctRing) -> vec4<f32> {
-    let activation = in.params.x;
+    let level = glow_level(in);
     let reach = max(u.misc10.x, 0.0);
     let strength = max(u.misc10.y, 0.0);
     // ONE length under the whole layer: the node's outermost drawn edge plus
@@ -2381,7 +2415,7 @@ fn glow_layer(in: VsOut, d: f32, oct: OctRing) -> vec4<f32> {
         discard;
     }
     let window = 1.0 - smoothstep(span * 0.5, span, d);
-    let skirt = GLOW_SKIRT_BASE * exp(-3.0 * d / span) * window;
+    let skirt = GLOW_BASE * exp(-3.0 * d / span) * window;
 
     // The seams between two octaves' hues, held to one width from the centre
     // out, on the argument `core_layer` makes at length: the lobes are fixed in
@@ -2390,31 +2424,153 @@ fn glow_layer(in: VsOut, d: f32, oct: OctRing) -> vec4<f32> {
     // the disc's radius being nothing this layer draws at.
     let seam = span * inverseSqrt(GLOW_LOBE_KAPPA);
     let kappa = min(GLOW_LOBE_KAPPA, (d * d) / max(seam * seam, 1e-8));
-    let octave_mix = octave_glow_color(
-        in.octaves, in.cents, oct, atan2(in.uv.y, in.uv.x), kappa, in.color.rgb,
-    ) * activation;
+    // Every sounding octave's hue laid round the node by angle, and one colour
+    // (`glow_hue`) where fewer than two sound — which is every node wearing
+    // nothing but an audio ring, its octave word being the analyzer's reading
+    // rather than a voice's.
+    let hue = octave_glow_color(
+        in.octaves, in.cents, oct, atan2(in.uv.y, in.uv.x), kappa, glow_hue(in, oct),
+    );
 
-    let alpha = clamp(skirt * activation * strength, 0.0, 1.0);
-    return vec4<f32>(octave_mix * alpha, alpha);
+    // The level scales the COVERAGE, once. `core_layer` spends it twice — on
+    // its blend and again on the disc's alpha — which is right for a disc
+    // dissolving into the ground it stands on and wrong for a light: a note
+    // halfway through its attack should lay down half as much of its colour,
+    // not a quarter of a darker one.
+    let alpha = clamp(skirt * level * strength, 0.0, 1.0);
+    return vec4<f32>(hue * alpha, alpha);
 }
 
-/// The glow draw. Two attachments, like every other draw the scene pass makes:
-/// the picture, and the labelless copy the bloom reads — the light is part of
-/// both, being part of what the nodes put on screen.
+/// The light draw. One attachment and no depth: this is a pass of its own ahead
+/// of the scene's, which is what lets the moat below erase light its NEIGHBOURS
+/// laid down and not only its own.
 ///
 /// Its own early-out rather than `node_geom`'s, and this is the reason it does
 /// not share that function: `paint_reach` bounds what a node PAINTS, which the
-/// glow reaches past by the whole Reach, and the idle branch keeps an audio
-/// ring's fragments that this layer has no colour for. What the glow needs is
-/// narrower on both counts — a node with no key down emits no light, and
-/// neither does anything past where its own window has shut.
+/// glow reaches past by the whole Reach, and the idle branch keeps fragments
+/// this layer has no colour for. What the glow needs is narrower on both counts
+/// — a node doing nothing at all emits no light, and neither does anything past
+/// where its own window has shut.
 @fragment
-fn fs_glow_scene(in: VsOut) -> SceneOut {
-    if EARLY_OUT && in.params.x <= 0.0 {
+fn fs_glow(in: VsOut) -> @location(0) vec4<f32> {
+    if EARLY_OUT && glow_level(in) <= 0.0 {
         discard;
     }
-    let paint = glow_layer(in, length(in.uv), oct_ring(in.cents));
-    return SceneOut(paint, paint);
+    return glow_layer(in, length(in.uv), oct_ring(in.cents));
+}
+
+/// Distance to the annulus between `inner` and `outer`, signed: negative inside
+/// the band, and the radial distance to the nearer edge outside it.
+fn annulus_distance(d: f32, inner: f32, outer: f32) -> f32 {
+    return abs(d - 0.5 * (inner + outer)) - 0.5 * (outer - inner);
+}
+
+/// How much of the light standing here this node holds off: every RING it draws
+/// dilated by the Gap, and its solid disc at exactly the disc's own edge.
+///
+/// The rings and the core answer differently, on purpose.
+///
+/// A RING — the octave band, the audio ring, a mark's sector — is measured from
+/// its own ANNULUS rather than filled to the node's centre the way
+/// `node_clearing` fills every footprint it walks. That is the whole of what
+/// makes the middle of a node glow: with nothing inside the innermost ring
+/// claiming the pixel, the light runs in to the centre and stops one Gap short
+/// of that ring's inner edge. A knockout wants the opposite — a hole with the
+/// lattice showing through its middle reads as neither a hole nor a node —
+/// which is why this cannot be `node_clearing` asked for another reach.
+///
+/// The CORE's disc is a crisp shape the light is laid UNDER rather than one it
+/// stands off, so it takes no gap at all: the light comes up to the disc's edge
+/// and the disc is drawn over it a pass later. A gap there would be a dark ring
+/// between a note's disc and its own halo.
+///
+/// Each term carries its own level, exactly as `node_clearing`'s do: a layer
+/// that is off, refused by the stack, attacking or releasing opens and closes
+/// its own moat in step with the ink it stands off, and a layer nobody is
+/// drawing holds nothing off.
+fn glow_moat(in: VsOut, d: f32, aa: f32, oct: OctRing) -> f32 {
+    let gap = glow_gap();
+    // The fade, floored at a share of the gap so the moat ends in a BAND even
+    // on a view whose Clearance softness is dialled to nothing: a step cut
+    // across a wide soft light crawls as the camera moves, where a band does
+    // not.
+    let soft = max(in.soft, gap * GLOW_MOAT_SOFT);
+    var cov = 0.0;
+    // The octave band, on the node's own envelope, as the annulus it is drawn
+    // in: its slices, the gaps between them and the glyphs inside them all live
+    // between these two radii, so this is the whole layer's footprint.
+    if u.misc3.z > u.misc3.y {
+        let ring = annulus_distance(d, u.misc3.y, u.misc3.z);
+        cov = gutter_coverage(ring, gap, soft) * clamp(in.params.x, 0.0, 1.0);
+    }
+    // The audio ring, on ITS own: the view's Gate answered per node and carried
+    // on the note Fade. A node nobody played wears one whenever the spectrum
+    // reaches that gate, and this is the term that stands the light off it.
+    if u.misc7.w > u.misc7.z {
+        let ring = annulus_distance(d, u.misc7.z, u.misc7.w);
+        cov = max(cov, gutter_coverage(ring, gap, soft) * clamp(in.ring, 0.0, 1.0));
+    }
+    // The disc, at its own coverage — no dilation, and no `gutter_coverage`
+    // either: what stands here is the shape itself.
+    let radius = max(u.misc3.x, 0.0);
+    let disc = core_disc_fill(radius, u.misc4.x, d, aa)
+        * clamp(in.params.x, 0.0, 1.0)
+        * smoothstep(0.0, CORE_FADE_IN, radius);
+    cov = max(cov, disc);
+    let slots = in.marks.x | in.marks.y;
+    if slots == 0u || u.misc5.w <= 0.0 {
+        return cov;
+    }
+    // Nothing below can raise a pixel already held off in full — the same skip
+    // `node_clearing` takes, and exact for the same reason: coverage is capped
+    // at one.
+    if EARLY_OUT && cov >= 1.0 {
+        return cov;
+    }
+    let strip_in = u.misc4.y;
+    let strip_out = u.misc4.y + u.misc5.w;
+    let top = oct.base + i32(oct_span()) - 1;
+    for (var i = 0u; i < OCTAVE_SLOTS; i = i + 1u) {
+        let bit = 1u << i;
+        let s = i32(i);
+        if (slots & bit) == 0u || s < oct.base || s > top {
+            continue;
+        }
+        // This slot's own level, not the strip's: where the two ends are on
+        // different slices, a melody still fading out keeps its own wedge's
+        // moat while a bass arriving opens one.
+        let level = max(
+            select(0.0, in.params.y, (in.marks.x & bit) != 0u),
+            select(0.0, in.params.z, (in.marks.y & bit) != 0u),
+        );
+        if level > 0.0 {
+            // The mark is an annular SECTOR, which is the pie `sector_distance`
+            // measures intersected with everything past the strip's inner edge
+            // — a max of the two distances, the way an intersection of fields
+            // always is. Filled to the centre instead, one mark would put the
+            // node's whole middle in shadow.
+            let pie = sector_distance(in.uv, oct_sector(s, oct), strip_out);
+            let sd = max(pie, strip_in - d);
+            cov = max(cov, gutter_coverage(sd, gap, soft) * clamp(level, 0.0, 1.0));
+        }
+    }
+    return cov;
+}
+
+/// The moat draw. NOTHING is painted: the pipeline's blend multiplies the light
+/// already in the target by `1 - a`, so what this returns is a coverage and the
+/// colour beside it is never read.
+@fragment
+fn fs_glow_moat(in: VsOut) -> @location(0) vec4<f32> {
+    let d = length(in.uv);
+    // The derivative first and in uniform control flow, as everywhere here.
+    let aa = aa_width(fwidth(in.uv.x));
+    // Past the node's own circle plus one gap there is nothing to stand off,
+    // and a discarded fragment leaves the light exactly as it found it.
+    if EARLY_OUT && d >= in.rim + clearing_edge(glow_gap()) {
+        discard;
+    }
+    return vec4<f32>(0.0, 0.0, 0.0, glow_moat(in, d, aa, oct_ring(in.cents)));
 }
 
 /// What a grid line or chord beam paints; see [`node_paint`] for why the

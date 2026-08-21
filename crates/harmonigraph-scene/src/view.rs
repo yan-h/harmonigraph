@@ -1036,10 +1036,10 @@ pub struct ViewConfig {
     /// lattice.wgsl), and only its solid disc is left, as one more crisp shape
     /// the [`glow_gap`](Self::glow_gap) stands off.
     ///
-    /// Every node's glow is drawn before any node is, in one pass and with
-    /// SCREEN blending, so two neighbours' halos meld like light rather than
-    /// summing to white and neither one's draw order is readable in the
-    /// overlap.
+    /// Every node's glow is drawn into a target of its own, with SCREEN
+    /// blending, so two neighbours' halos meld like light rather than summing
+    /// to white and neither one's draw order is readable in the overlap. That
+    /// target is then laid over the finished lattice.
     ///
     /// Distinct from [`bloom_strength`](Self::bloom_strength) in what it
     /// measures: the bloom thresholds a finished PICTURE, so only the bright
@@ -1050,21 +1050,29 @@ pub struct ViewConfig {
     /// How much light the node glow lays down. Inert while
     /// [`glow_reach`](Self::glow_reach) is 0.
     pub glow_strength: f32,
-    /// The moat: how far past every drawn layer's own footprint the node
-    /// clears its glow away, in the same quad UV units
-    /// [`ring_gap`](Self::ring_gap) reads in.
+    /// The moat: how far past each RING a node draws its own light is held
+    /// off, in the same quad UV units [`ring_gap`](Self::ring_gap) reads in.
     ///
-    /// Without it a wide halo washes over the rings, band, marks and disc it
+    /// Without it a wide halo washes over the rings, the band and the marks it
     /// comes off, and the crisp geometry that carries the reading goes soft.
-    /// It is not a shape of its own: it widens the knockout each layer already
-    /// cuts ([`sevens_gutter`](Self::sevens_gutter)), so a layer that is off,
-    /// refused by the stack, attacking or releasing opens and closes its own
-    /// moat in step with its own level, and the moat fades exactly as the hole
-    /// does.
     ///
-    /// That knockout is composited in screen space, under the node and over
-    /// everything drawn before it — which is what makes the moat cut through
-    /// the NEIGHBOURS' glow too, and not only through the node's own.
+    /// It is an ABSENCE of light and not a shape painted in the ground: the
+    /// glow is assembled in a target of its own, and every node subtracts its
+    /// own rings from all of it before any of it reaches the picture. So
+    /// whatever lies under the gap — the pane, the grid, a sheet behind — comes
+    /// through exactly as it does with the glow off, where a moat knocked out
+    /// in the ground would blot all of it out and read as a dark halo round
+    /// every node. It reaches the NEIGHBOURS' light too, and not only the
+    /// node's own, because it is subtracted after every node has laid its light
+    /// down.
+    ///
+    /// Rings only. The core's solid disc is drawn OVER the light rather than a
+    /// gap out from it — a gap there would be a dark ring between a note's disc
+    /// and its own halo — and inside the innermost ring nothing stands the
+    /// light off at all, which is what lights the middle of a node. Each ring
+    /// carries its own level, so a layer that is off, refused by the stack,
+    /// attacking or releasing opens and closes its own moat in step with the
+    /// ink it stands off.
     ///
     /// Inert while [`glow_reach`](Self::glow_reach) is 0: with no light to
     /// stand off, a moat is a gap in the picture for nothing.
@@ -1878,8 +1886,8 @@ impl ViewConfig {
         // The reach is what the billboard is SIZED on (`quad_margin` in
         // lattice.wgsl), so a non-finite one is not merely a wrong halo: it is
         // a NaN quad, and every node's glow vanishes with nothing on screen to
-        // say why. The gap sizes that same quad, the clearing having grown by
-        // it, so it repairs on the same argument.
+        // say why. The gap sizes that same quad, the moat standing off the same
+        // rim, so it repairs on the same argument.
         self.glow_reach =
             finite_or(self.glow_reach, fresh.glow_reach).clamp(0.0, GLOW_REACH_MAX);
         self.glow_strength =

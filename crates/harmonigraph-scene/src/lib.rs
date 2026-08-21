@@ -187,20 +187,22 @@ pub const GAP_MAX: f32 = 0.4;
 /// (see [`ViewConfig::glow_reach`]), in the same quad UV units the layer sizes
 /// above are in.
 ///
-/// A ceiling on the BILLBOARD rather than on the look: the glow's draw sizes
-/// its quad to hold the whole halo (`quad_margin` in lattice.wgsl), so every
+/// A ceiling on the BILLBOARD rather than on the look: the glow's draws size
+/// their quad to hold the whole halo (`quad_margin` in lattice.wgsl), so every
 /// step out here is fill rate spent on one more ring of fragments around every
 /// node. One node radius past the rim already reaches well past anything the
 /// layers draw, which is what a halo is for.
 pub const GLOW_REACH_MAX: f32 = 1.0;
 
-/// What the node glow multiplies its blurred, masked ink by
+/// What the node glow scales its own skirt by
 /// (see [`ViewConfig::glow_strength`]).
 ///
 /// Its own ceiling rather than [`ViewConfig::bloom_strength`]'s, because it is
 /// a different light: the bloom's chain thresholds, so its strength acts on the
-/// bright end alone, where this one scales one node's own skirt from nothing to
-/// twice what the core's carried and needs no more travel than that.
+/// bright end alone, where this one scales one node's own skirt. Two is where
+/// the travel stops being about the light and starts being about the clamp —
+/// the base (`GLOW_BASE` in lattice.wgsl) is picked so that 1 reads plainly,
+/// which puts the middle of a node at saturation somewhere short of this.
 pub const GLOW_STRENGTH_MAX: f32 = 2.0;
 
 /// Samples in the pitch->color lookup EVERYTHING pitch-colored reads: the
@@ -633,8 +635,8 @@ pub struct Scene {
     /// [`GLOW_STRENGTH_MAX`]. Inert while [`glow_reach`](Self::glow_reach) is
     /// 0, which is the pair's one off switch.
     pub glow_strength: f32,
-    /// The moat between the node's crisp layers and its own light, in the same
-    /// quad UV units (see [`ViewConfig::glow_gap`]); already clamped to
+    /// The moat: how far the light is held off every ring a node draws, in the
+    /// same quad UV units (see [`ViewConfig::glow_gap`]); already clamped to
     /// [`GAP_MAX`]. Inert while [`glow_reach`](Self::glow_reach) is 0.
     pub glow_gap: f32,
 }

@@ -693,20 +693,19 @@ fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBack
         ValueBar::new(&mut view.glow_strength, 0.0..=GLOW_STRENGTH_MAX, "Glow strength")
             .show(ui)
             .on_hover_text("How much light it lays down.");
-        // The moat, beneath the light it stands off, and read out like the
-        // Clearance it is made of: this bar widens that same knockout, layer by
-        // layer, so the two are one hole dialled from two places and a person
-        // comparing them is comparing shares of the node's radius.
+        // The moat, beneath the light it holds off, and read out like the two
+        // gaps and the Clearance above it: every one of them is a share of the
+        // node's radius, so a person comparing them is comparing one unit.
         ValueBar::new(&mut view.glow_gap, 0.0..=GAP_MAX, "Glow gap")
             .decimals(3)
             .display(|v| format!("{:.1}%", v * 100.0))
             .show(ui)
             .on_hover_text(
-                "The dark gap held between a node's crisp layers — its rings, \
-                 its band, its marks and its disc — and the light around them, \
-                 as a share of the node's radius. It is cut through the \
-                 neighbours' light as well as the node's own. 0 lets the glow \
-                 up to the edge of every layer.",
+                "How far the light is held off each ring a node draws — its \
+                 audio ring, its octave band, its marks — as a share of the \
+                 node's radius. A gap is an absence of light, so the grid and \
+                 the sheets behind show through it untouched; the neighbours' \
+                 light is held off too. 0 lets the glow up to every edge.",
             );
     });
 }
