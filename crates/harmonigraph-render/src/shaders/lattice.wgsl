@@ -111,6 +111,16 @@ struct Uniforms {
     // 0; y: 1 where each wedge is ONE reading taken at its own octave's pitch
     // (the FOLD) rather than a window of pitch spread across it; z/w unused.
     misc9: vec4<f32>,
+    // The node glow's knobs. x: how far past a node's outermost drawn edge its
+    // halo is shown, in the node's own uv (0 = the whole pass is off, and
+    // nothing here is drawn at all). y/z/w unused.
+    //
+    // Read by the GLOW pass alone — `vs_node`, which sizes that pass's
+    // billboard to hold the window, and `glow_mask`, which shapes it. The
+    // scene pass reads neither, which is the point: the glow is grown from the
+    // ink the scene already drew, so there is no second description of a node
+    // here to drift from the first.
+    misc10: vec4<f32>,
     // The FREQUENCY color scheme's ramp: the analyzer's own gradient, the
     // table the spectrogram's cells and the Spiral pane's segments are read
     // off. Indexed by a LEVEL, where pitch_lut above is indexed by a pitch —
@@ -332,6 +342,26 @@ struct VsOut {
 
 @vertex
 fn vs_main(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
+    return node_vertex(vertex_index, inst, 0.0);
+}
+
+/// The GLOW pass's billboard: the same node, on a quad grown to hold its glow
+/// window (`glow_mask` closes at the node's rim plus `u.misc10.x`).
+///
+/// A second entry point rather than a wider `vs_main`, because the margin is
+/// what every fragment of the scene pass is measured against: growing that
+/// quad would spend one more ring of discarded fragments per node on every
+/// frame, for a window only this pass reads. The uv is scaled with the quad,
+/// so uv 1.0 is the same world distance either way and nothing inside the node
+/// moves.
+@vertex
+fn vs_glow(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
+    return node_vertex(vertex_index, inst, max(u.misc10.x, 0.0));
+}
+
+/// One node's billboard, with `extra` uv of headroom past what the node itself
+/// needs — 0 for the scene, the glow's reach for the glow pass.
+fn node_vertex(vertex_index: u32, inst: Instance, extra: f32) -> VsOut {
     var corners = array<vec2<f32>, 4>(
         vec2<f32>(-1.0, -1.0),
         vec2<f32>(1.0, -1.0),
@@ -363,7 +393,7 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
     // smallest sheets. Only then does the quad grow: uv 1.0 still maps to
     // the same world distance either way, so nothing about the node's own
     // content moves.
-    let margin = quad_margin(rim, gutter_uv);
+    let margin = quad_margin(rim, max(gutter_uv, extra));
     let radius = u.misc.y * 0.90 * 2.0 * margin * scale;
 
     let world = inst.world_pos
@@ -1686,11 +1716,33 @@ fn core_layer(in: VsOut, d: f32, aa: f32, oct: OctRing) -> vec4<f32> {
     return vec4<f32>(octave_mix * core_alpha, core_alpha);
 }
 
-/// What a node paints at this fragment. Both node entry points below return
-/// exactly this; they differ only in how many attachments they write it to.
-fn node_paint(in: VsOut) -> vec4<f32> {
+/// The three derivatives-and-geometry answers every layer of a node is drawn
+/// against, and the two early-outs that decide there is no node here at all.
+///
+/// One function because the SCENE pass and the GLOW pass both start here, and
+/// what they must agree on exactly is where a node paints nothing: the glow is
+/// grown from the ink the scene drew, so a fragment one of them keeps and the
+/// other drops is ink with no halo or a halo with no ink.
+///
+/// It `discard`s rather than returning a flag. Both callers want exactly that
+/// — a fragment this rejects writes no attachment in either pass — and the
+/// derivatives below have to be taken in uniform control flow, which they are
+/// here and would not be behind a caller's branch.
+struct NodeGeom {
+    /// Distance from the node's center in its own uv (0 at center, 1 at the
+    /// octave band's outer limit).
+    d: f32,
+    /// The screen-constant softness every shape edge is taken over, in uv.
+    aa: f32,
+    /// How much of the shimmer's shared field one pixel spans, in world units.
+    field_step: f32,
+    /// Where this node's ring sits — which octaves it draws and how far it is
+    /// turned.
+    oct: OctRing,
+}
+
+fn node_geom(in: VsOut) -> NodeGeom {
     let d = length(in.uv); // 0 at center, 1 at quad edge (2x disc radius)
-    let activation = in.params.x;
 
     // Screen-constant soft-band width: uv units per pixel (uv.x is linear
     // across the billboard, so fwidth is uniform over the quad and safe to
@@ -1768,6 +1820,20 @@ fn node_paint(in: VsOut) -> vec4<f32> {
     // computed dozens of times over. After the idle branch above, which paints
     // no sector at all.
     let oct = oct_ring(in.cents);
+    return NodeGeom(d, aa, field_step, oct);
+}
+
+/// What a node paints OF ITSELF at this fragment: every layer's ink,
+/// premultiplied, and nothing of the hole it knocks out of the picture behind
+/// it.
+///
+/// Split from [`node_paint`] because this is exactly what the glow pass wants
+/// and the clearing is exactly what it does not: the clearing is painted in the
+/// PANE's own ground colour, so a halo grown over it would blur that ground out
+/// past the node as a bright ring around every hole — light nothing on screen
+/// emits.
+fn node_ink(in: VsOut, d: f32, aa: f32, field_step: f32, oct: OctRing) -> vec4<f32> {
+    let activation = in.params.x;
 
     // Core layer, unified onto ONE solidity axis. The radius (u.misc3.x,
     // quad UV units) sizes it, and a radius of 0 turns it off entirely — no
@@ -2047,6 +2113,19 @@ fn node_paint(in: VsOut) -> vec4<f32> {
     // The active note: glyph over (disc + glow), premultiplied.
     let active_alpha = glyph + base_alpha * (1.0 - glyph);
     let active_rgb = glyph_rgb * glyph + base_rgb * (1.0 - glyph);
+    return vec4<f32>(active_rgb, active_alpha);
+}
+
+/// What a node paints at this fragment, clearing and all. The scene pass's two
+/// entry points below return exactly this; they differ only in how many
+/// attachments they write it to.
+fn node_paint(in: VsOut) -> vec4<f32> {
+    let g = node_geom(in);
+    let ink = node_ink(in, g.d, g.aa, g.field_step, g.oct);
+    let active_alpha = ink.w;
+    let active_rgb = ink.xyz;
+    let d = g.d;
+    let oct = g.oct;
 
     // The knockout gutter, which every node the scene ships carries — the
     // reach is the view's constant, and what decides whether a hole appears is
@@ -2185,6 +2264,70 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 fn fs_main_scene(in: VsOut) -> SceneOut {
     let paint = node_paint(in);
     return SceneOut(paint, paint);
+}
+
+// ---- Node glow -------------------------------------------------------------
+// The two attachments the glow pass fills, and the two draws that fill them.
+// Neither is a picture anybody looks at: the ink is blurred and the mask is a
+// window onto that blur, and what lands on screen is their product (see
+// blit.wgsl's `fs_glow_add`).
+//
+// What makes this worth a pass of its own is where the light COMES FROM. The
+// halo is grown from the node's own ink, re-rendered by the same shader off the
+// same instance, so it cannot disagree with which layers are on, which the
+// stack refused, and where each one is in its attack or release — there is no
+// second description of a node here to drift from the first. A glow drawn as
+// its own shape would be exactly that second description.
+
+/// The glow pass's attachments: the node's layer ink, and the window it is
+/// shown through.
+///
+/// Both entry points write both, and each pipeline masks off the one it does
+/// not own — an empty write mask rather than two shapes of fragment output,
+/// which wgpu would need two pass layouts for.
+struct GlowOut {
+    @location(0) ink: vec4<f32>,
+    @location(1) mask: vec4<f32>,
+};
+
+/// The ink draw. `node_geom` discards where the node paints nothing, exactly as
+/// the scene pass does — which is why the MASK is a second draw rather than the
+/// other half of this fragment: a discard writes no attachment, and the window
+/// has to go on being written out past where the ink stops.
+@fragment
+fn fs_glow_ink(in: VsOut) -> GlowOut {
+    let g = node_geom(in);
+    let ink = node_ink(in, g.d, g.aa, g.field_step, g.oct);
+    return GlowOut(ink, vec4<f32>(0.0));
+}
+
+/// How much of its own halo this node shows at this fragment: solid out to its
+/// outermost drawn edge, easing to nothing over `u.misc10.x` past it, and
+/// scaled by how much the node is doing at all.
+///
+/// The rim is the one `node_rim` sized the billboard on, so the window opens on
+/// exactly the circle the node's ink fits inside — a mark included, on a node
+/// wearing one.
+///
+/// The level is what keeps a silent node from wearing its neighbour's bleed:
+/// the blur spreads ink across node after node, and without a per-node window
+/// scaled by that node's own activity, a wide halo is a haze over the lattice
+/// rather than light coming off the notes. All four levels, because all four
+/// draw ink — the audio ring's wedges are on the same billboard as the note's
+/// own layers, and a ringing node with no key down still has ink to glow.
+fn glow_mask(in: VsOut) -> f32 {
+    // The floor keeps the smoothstep a band rather than a step: at reach 0 the
+    // pass is not encoded at all, so this only guards the arithmetic.
+    let reach = max(u.misc10.x, 0.001);
+    let d = length(in.uv);
+    let level = max(max(in.params.x, in.params.y), max(in.params.z, in.ring));
+    return (1.0 - smoothstep(in.rim, in.rim + reach, d)) * clamp(level, 0.0, 1.0);
+}
+
+/// The mask draw. No discard anywhere on this path — see `fs_glow_ink`.
+@fragment
+fn fs_glow_mask(in: VsOut) -> GlowOut {
+    return GlowOut(vec4<f32>(0.0), vec4<f32>(glow_mask(in), 0.0, 0.0, 0.0));
 }
 
 /// What a grid line or chord beam paints; see [`node_paint`] for why the

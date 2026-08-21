@@ -5,8 +5,8 @@
 use crate::spectral::SpectralReading;
 use crate::style::{Gradient, Pulse, SevensLabel};
 use crate::{
-    Camera, CORE_RADIUS_MAX, GAP_MAX, MARK_THICKNESS_MAX, MAX_DRAWN_NODES, NODE_RADIUS_FACTOR,
-    RING_WIDTH_MAX,
+    Camera, CORE_RADIUS_MAX, GAP_MAX, GLOW_REACH_MAX, GLOW_STRENGTH_MAX, MARK_THICKNESS_MAX,
+    MAX_DRAWN_NODES, NODE_RADIUS_FACTOR, RING_WIDTH_MAX,
 };
 use harmonigraph_core::{coords, Comma, Envelope, LatticePos, Tempered};
 
@@ -1020,6 +1020,28 @@ pub struct ViewConfig {
     /// composite is then exactly the plain scene, so there is deliberately
     /// no separate on/off toggle.
     pub bloom_strength: f32,
+    /// The node glow: how far past a node's outermost drawn edge its own halo
+    /// is shown, in the quad UV units the layer sizes are in. 0 turns the
+    /// whole pass off — no ink target, no blur, no composite — so the pair
+    /// needs no toggle of its own.
+    ///
+    /// A window on the light rather than the light itself. What glows is the
+    /// node's own INK, re-rendered and blurred (see the glow pass in
+    /// `harmonigraph-render`), so the halo can never disagree with which
+    /// layers are on, refused, attacking or releasing — and this says how far
+    /// out of the node that ink is allowed to spread before the window closes.
+    /// Without it a wide blur is a haze over the whole lattice; with it a node
+    /// wears its own light and nothing of its neighbours'.
+    ///
+    /// Distinct from [`bloom_strength`](Self::bloom_strength) in what it
+    /// measures: the bloom thresholds, so only the bright end of the gradient
+    /// blooms, and it is one number over every picture the plugin draws. This
+    /// one takes the ink whole — a dim audio ring glows exactly as much as it
+    /// is drawn — and belongs to the lattice's nodes alone.
+    pub glow_reach: f32,
+    /// How much of the node glow is added back as light. Inert while
+    /// [`glow_reach`](Self::glow_reach) is 0.
+    pub glow_strength: f32,
 }
 
 /// Where each layer of a node lands, in quad UV units, read outward from its
@@ -1820,6 +1842,21 @@ impl ViewConfig {
         self.lattice_ground =
             finite_or(self.lattice_ground, fresh.lattice_ground).clamp(0.0, 100.0);
 
+        // The node glow's pair. The reach repairs to the fresh value — 0, the
+        // off position — on the same argument the ring's gate does: a number
+        // nobody can read is a reason to draw no halo, never to open one over
+        // the whole lattice out of a corrupt blob. The strength rides with it
+        // and repairs to its own fresh value, being inert while the reach is 0.
+        //
+        // The reach is what the billboard is SIZED on (`quad_margin` in
+        // lattice.wgsl), so a non-finite one is not merely a wrong halo: it is
+        // a NaN quad, and every node's glow ink vanishes with nothing on screen
+        // to say why.
+        self.glow_reach =
+            finite_or(self.glow_reach, fresh.glow_reach).clamp(0.0, GLOW_REACH_MAX);
+        self.glow_strength =
+            finite_or(self.glow_strength, fresh.glow_strength).clamp(0.0, GLOW_STRENGTH_MAX);
+
         self.shimmer_speed = finite_or(self.shimmer_speed, fresh.shimmer_speed);
         self.shimmer_width = finite_or(self.shimmer_width, fresh.shimmer_width);
         self.shimmer_intensity = finite_or(self.shimmer_intensity, fresh.shimmer_intensity);
@@ -2067,6 +2104,12 @@ impl Default for ViewConfig {
             // thin octave marks are quiet shapes, and the bloom is what
             // gives them presence.
             bloom_strength: 0.806_154_85,
+            // The node glow off, so a fresh view — and every blob written
+            // before the pass existed — draws exactly the picture it did
+            // without it. The strength is dialled ready underneath, so the
+            // reach alone brings the halo in.
+            glow_reach: 0.0,
+            glow_strength: 1.0,
         }
     }
 }

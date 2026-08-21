@@ -135,15 +135,31 @@ pub fn bloom_strength(raw: f32) -> f32 {
 /// effects; the scene pipelines test `Always` so it never affects output.
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
+/// Format of the node glow's window (see [`NodeGlow::mask_view`]). One
+/// channel, one byte: the mask is a coverage, and the only thing that ever
+/// reads it multiplies a colour by it.
+const GLOW_MASK_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R8Unorm;
+
 /// Clamp on the render-scale view setting, over whatever the UI offers.
 const RENDER_SCALE_RANGE: (f32, f32) = (0.25, 4.0);
 
 /// Entry points a (re)loaded shader must provide. The `_scene` pair is the
 /// two-attachment form the offscreen pass draws through; the bare pair is
-/// the single-attachment one the parity test's reference path uses.
+/// the single-attachment one the parity test's reference path uses; and the
+/// `glow` three are the node-glow pass, whose two draws share one vertex
+/// stage.
 #[cfg(any(test, feature = "hot-reload"))]
-const REQUIRED_ENTRY_POINTS: &[&str] =
-    &["vs_main", "fs_main", "fs_main_scene", "vs_edge", "fs_edge", "fs_edge_scene"];
+const REQUIRED_ENTRY_POINTS: &[&str] = &[
+    "vs_main",
+    "fs_main",
+    "fs_main_scene",
+    "vs_edge",
+    "fs_edge",
+    "fs_edge_scene",
+    "vs_glow",
+    "fs_glow_ink",
+    "fs_glow_mask",
+];
 
 /// Watches the shader source on disk (dev builds only). The first sighting
 /// of the file only records a baseline mtime; edits after launch trigger
@@ -329,6 +345,19 @@ struct Uniforms {
     /// octave's pitch (`SpectralReading::Fold`) rather than a window spread
     /// across it (`::Spectrum`); z/w unused.
     misc9: [f32; 4],
+    /// The node glow's pair. x: how far past a node's outermost drawn edge its
+    /// own halo is shown, in quad UV units, where 0 means the glow pass is not
+    /// encoded at all (`Scene::glow_reach`); y: how much of that halo is added
+    /// back as light (`Scene::glow_strength`).
+    ///
+    /// The SHADER reads x alone — it sizes the glow pass's billboard and shapes
+    /// its window. The strength never reaches lattice.wgsl: it multiplies a
+    /// blurred texture two passes later, in blit.wgsl's `fs_glow_add`, off a
+    /// buffer of its own. It rides here so the two travel together and one
+    /// callback field says whether the pass runs; `prepare` reads y straight
+    /// back off this struct rather than carrying a second copy.
+    /// z/w unused.
+    misc10: [f32; 4],
     /// The FREQUENCY colour scheme's ramp — the analyzer's own gradient
     /// (`SpectrumConfig::spectrogram_gradient`) through `pitch_ramp_lut`, the
     /// same gradient the spectrogram's cells and the Spiral pane's segments
@@ -904,6 +933,7 @@ impl LatticeCallback {
                     std::array::from_fn(|col| scene.octave_layout.bounds[row * 4 + col])
                 }),
                 misc9: [scene.spectral.range, f32::from(u8::from(scene.spectral.folded)), 0.0, 0.0],
+                misc10: [scene.glow_reach, scene.glow_strength, 0.0, 0.0],
                 spectral_lut: std::array::from_fn(|k| scene.spectral.lut[k].to_array()),
                 // Zeroed rather than packed when the ring is off: `u.spectrum`
                 // is read only through `spectral_ring`, which draws nothing off
@@ -960,6 +990,31 @@ impl LatticeCallback {
             blur_v: &resources.blur_v_pipeline,
         }
     }
+
+    /// The same four steps for the node glow, with the threshold step swapped
+    /// for the plain copy beside it.
+    ///
+    /// That one substitution is the whole difference between the two chains,
+    /// and it is the reason this pass has its own: a threshold keeps what is
+    /// already bright, which is the right question to ask of a PICTURE and the
+    /// wrong one to ask of ink whose whole claim is that it glows exactly as
+    /// much as it is drawn. A dim audio ring would otherwise wear no halo at
+    /// all while the note beside it wore a wide one.
+    fn glow_pipelines(resources: &LatticeResources) -> BloomPipelines<'_> {
+        BloomPipelines {
+            bright: &resources.downsample_pipeline,
+            downsample: &resources.downsample_pipeline,
+            blur_h: &resources.blur_h_pipeline,
+            blur_v: &resources.blur_v_pipeline,
+        }
+    }
+
+    /// Whether this frame's view asks for a node glow at all: a reach to show
+    /// it through and a strength to show it at. Either at 0 and nothing is
+    /// allocated, encoded or composited.
+    fn glow_draws(&self) -> bool {
+        self.uniforms.misc10[0] > 0.0 && self.uniforms.misc10[1] > 0.0
+    }
 }
 
 /// GPU objects cached across frames in egui-wgpu's `CallbackResources`.
@@ -972,10 +1027,19 @@ struct LatticeResources {
     downsample_pipeline: wgpu::RenderPipeline,
     blur_h_pipeline: wgpu::RenderPipeline,
     blur_v_pipeline: wgpu::RenderPipeline,
+    /// The node glow: one instanced draw for the ink, one for the window (see
+    /// [`create_glow_pipelines`]), and the composite that lays their product
+    /// over the finished picture as light.
+    glow_ink_pipeline: wgpu::RenderPipeline,
+    glow_mask_pipeline: wgpu::RenderPipeline,
+    glow_add_pipeline: wgpu::RenderPipeline,
     bind_group_layout: wgpu::BindGroupLayout,
     composite_layout: wgpu::BindGroupLayout,
     /// One sampled texture + the shared sampler (bloom chain passes).
     filter_layout: wgpu::BindGroupLayout,
+    /// Blurred node ink, the shared sampler, the glow's strength and its
+    /// window — `fs_glow_add`'s four bindings, at blit.wgsl's own numbers.
+    glow_add_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     /// The node labels: the same glyph shader the rest of the UI's text
     /// draws through (`crate::text`), built for THIS pass — its format and
@@ -1265,8 +1329,46 @@ struct Offscreen {
     bloom: BloomChain,
     /// Composite: scene color + blurred bloom (quarter A) + uniforms.
     composite_bind_group: wgpu::BindGroup,
+    /// The node glow's own targets and chain, present only while the view asks
+    /// for one. Created and dropped as the Reach bar crosses 0, independently
+    /// of the resize that rebuilds everything above — the two changes have
+    /// nothing to do with each other, and a glow left allocated at reach 0
+    /// would be half the pane's offscreen memory held for a feature that is
+    /// off.
+    glow: Option<NodeGlow>,
     size: [u32; 2],
     screen_size: [u32; 2],
+}
+
+/// The node glow's targets: the ink one instanced draw fills, the window a
+/// second one fills beside it, the blur chain over that ink, and the bind group
+/// the composite reads all of it through.
+///
+/// **Why the ink is re-rendered rather than taken off the scene.** The scene
+/// pass already holds a nodes-only copy ([`Offscreen::nodes_view`]), and it is
+/// the wrong picture twice over: it carries the grid and the chord beams, which
+/// would glow as if they were nodes, and it carries each node's knockout
+/// clearing, painted in the pane's own ground — blurred, that is a bright ring
+/// around every hole, light nothing on screen emits. A second draw off the same
+/// instance buffer costs four vertices a node and gets the ink exactly.
+struct NodeGlow {
+    /// Every node's own layer ink and nothing else, premultiplied.
+    ink_view: wgpu::TextureView,
+    /// How much of its own halo each node shows where — one channel, blended
+    /// with MAX so overlapping windows do not sum (see
+    /// [`create_glow_pipelines`]).
+    mask_view: wgpu::TextureView,
+    /// The blur over that ink. The SAME four steps as the bloom's, with the
+    /// threshold step swapped for a plain copy: what a threshold would do here
+    /// is drop the dim half of the ink, and a dim audio ring wearing no halo
+    /// while a bright one wears a wide one is exactly the drift this pass
+    /// exists to make impossible.
+    chain: BloomChain,
+    /// blit.wgsl's `fs_glow_add` strength, in a buffer of its own — the pass
+    /// has no scene uniforms to take the head of, as the roll's halo does not.
+    strength_buffer: wgpu::Buffer,
+    /// Blurred ink + sampler + strength + window, as the composite reads them.
+    add_bind_group: wgpu::BindGroup,
 }
 
 /// The shared, pane-independent objects an [`Offscreen`] binds against.
@@ -1274,6 +1376,7 @@ struct OffscreenShared<'a> {
     format: wgpu::TextureFormat,
     composite_layout: &'a wgpu::BindGroupLayout,
     filter_layout: &'a wgpu::BindGroupLayout,
+    glow_add_layout: &'a wgpu::BindGroupLayout,
     sampler: &'a wgpu::Sampler,
 }
 
@@ -1439,7 +1542,7 @@ impl Offscreen {
         size: [u32; 2],
         screen_size: [u32; 2],
     ) -> Self {
-        let OffscreenShared { format, composite_layout, filter_layout, sampler } = *shared;
+        let OffscreenShared { format, composite_layout, filter_layout, sampler, .. } = *shared;
         let tex = |label, w: u32, h: u32, format, usage| {
             device.create_texture(&wgpu::TextureDescriptor {
                 label: Some(label),
@@ -1507,9 +1610,111 @@ impl Offscreen {
             color_view,
             nodes_view,
             depth_view: depth.create_view(&Default::default()),
+            glow: None,
             size,
             screen_size,
         }
+    }
+
+    /// Make this pane's node glow exist exactly while `want` says so.
+    ///
+    /// Separate from [`Offscreen::new`] because it answers a different
+    /// question: `new` runs when the pane's PIXELS change, this when the Reach
+    /// bar crosses 0. Folding the two would mean either rebuilding the glow on
+    /// every resize (fine, but it is the caller's every-frame path) or keeping
+    /// it allocated while the feature is off.
+    fn ensure_glow(
+        &mut self,
+        device: &wgpu::Device,
+        shared: &OffscreenShared<'_>,
+        want: bool,
+    ) {
+        match (want, self.glow.is_some()) {
+            (true, false) => {
+                self.glow = Some(NodeGlow::new(device, shared, self.size, self.screen_size));
+            }
+            (false, true) => self.glow = None,
+            _ => {}
+        }
+    }
+}
+
+impl NodeGlow {
+    /// `size` is the ink and window's own pixel size — the scene's, so a node's
+    /// halo is grown from ink drawn at exactly the resolution its body was.
+    /// `screen_size` sizes the blur chain, which is deliberately NOT
+    /// render-scaled: the halo's width is a distance on screen, and the render
+    /// scale is not something a reader should be able to see in it.
+    fn new(
+        device: &wgpu::Device,
+        shared: &OffscreenShared<'_>,
+        size: [u32; 2],
+        screen_size: [u32; 2],
+    ) -> Self {
+        let OffscreenShared { format, filter_layout, glow_add_layout, sampler, .. } = *shared;
+        let tex = |label: &str, format| {
+            device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some(label),
+                    size: wgpu::Extent3d {
+                        width: size[0],
+                        height: size[1],
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                        | wgpu::TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
+                })
+                .create_view(&Default::default())
+        };
+        let ink_view = tex("lattice_glow_ink", format);
+        let mask_view = tex("lattice_glow_mask", GLOW_MASK_FORMAT);
+        let chain = BloomChain::new(
+            device,
+            "lattice_glow",
+            format,
+            filter_layout,
+            sampler,
+            &ink_view,
+            screen_size,
+        );
+        let strength_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("lattice_glow_strength"),
+            size: std::mem::size_of::<[f32; 4]>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        // Binding numbers are blit.wgsl's, not this list's order: the module
+        // declares its bindings once for every pass, and `fs_glow_add` reads
+        // 0/1 (the blurred ink and the sampler), 4 (the strength it shares a
+        // declaration with the roll's halo) and 5 (the window).
+        let add_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("lattice_glow_add_bind_group"),
+            layout: glow_add_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&chain.quarter_a_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: strength_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(&mask_view),
+                },
+            ],
+        });
+        NodeGlow { ink_view, mask_view, chain, strength_buffer, add_bind_group }
     }
 }
 
@@ -1633,6 +1838,93 @@ fn create_pipelines(
     )
 }
 
+/// The node glow pass's two pipelines: the ink draw and the window draw, in
+/// that order.
+///
+/// **Two draws over one instance buffer, not one.** Both write the same pair of
+/// attachments and each masks off the one it does not own, which is the only
+/// difference between them on this side — the reason they are separate is in
+/// the shader: the ink path `discard`s where a node paints nothing, and a
+/// discarded fragment writes NO attachment, so a combined draw would punch the
+/// window out exactly where the node's own ink stops. The window has to go on
+/// being written past that, since what it shows is ink the blur has carried out
+/// there.
+///
+/// No depth attachment: the glow pass draws nodes and nothing else, and its ink
+/// composites by draw order the way the scene's does. Sharing the scene's
+/// depth texture would also mean sharing its size, which is the one thing this
+/// pass is free to choose differently.
+fn create_glow_pipelines(
+    device: &wgpu::Device,
+    shader_src: &str,
+    ink_format: wgpu::TextureFormat,
+    bind_group_layout: &wgpu::BindGroupLayout,
+) -> (wgpu::RenderPipeline, wgpu::RenderPipeline) {
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("lattice_shader"),
+        source: wgpu::ShaderSource::Wgsl(shader_src.into()),
+    });
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("lattice_glow_pipeline_layout"),
+        bind_group_layouts: &[Some(bind_group_layout)],
+        ..Default::default()
+    });
+    let ink_target = |write: bool| wgpu::ColorTargetState {
+        format: ink_format,
+        // The shader outputs premultiplied alpha, as the scene's does: the ink
+        // is the same fragment the picture got.
+        blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+        write_mask: if write { wgpu::ColorWrites::ALL } else { wgpu::ColorWrites::empty() },
+    };
+    // MAX rather than a sum: two nodes whose windows overlap are two views of
+    // the same blurred ink, and adding them there would double the light in the
+    // gap between neighbours — brightest exactly where nothing is drawn. The
+    // factors are along for the ride; MIN and MAX ignore them.
+    let mask_target = |write: bool| wgpu::ColorTargetState {
+        format: GLOW_MASK_FORMAT,
+        blend: Some(wgpu::BlendState {
+            color: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::One,
+                dst_factor: wgpu::BlendFactor::One,
+                operation: wgpu::BlendOperation::Max,
+            },
+            alpha: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::One,
+                dst_factor: wgpu::BlendFactor::One,
+                operation: wgpu::BlendOperation::Max,
+            },
+        }),
+        write_mask: if write { wgpu::ColorWrites::ALL } else { wgpu::ColorWrites::empty() },
+    };
+    let build = |entry_point: &str, ink: bool| {
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(entry_point),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_glow"),
+                compilation_options: Default::default(),
+                buffers: &[GpuInstance::LAYOUT],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some(entry_point),
+                compilation_options: Default::default(),
+                targets: &[Some(ink_target(ink)), Some(mask_target(!ink))],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleStrip,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        })
+    };
+    (build("fs_glow_ink", true), build("fs_glow_mask", false))
+}
+
 /// egui's own blend state, verbatim (see egui-wgpu's renderer): premultiplied
 /// color, and alpha accumulated so the pass composites the same way over a
 /// transparent framebuffer.
@@ -1741,6 +2033,8 @@ impl LatticeResources {
         });
         let (pipeline, edge_pipeline) =
             create_pipelines(device, SHADER_SRC, target_format, &bind_group_layout, true);
+        let (glow_ink_pipeline, glow_mask_pipeline) =
+            create_glow_pipelines(device, SHADER_SRC, target_format, &bind_group_layout);
 
         let texture_entry = |binding| wgpu::BindGroupLayoutEntry {
             binding,
@@ -1758,6 +2052,16 @@ impl LatticeResources {
             ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
             count: None,
         };
+        let uniform_entry = |binding| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        };
         let filter_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("lattice_filter_bind_group_layout"),
             entries: &[texture_entry(0), sampler_entry(1)],
@@ -1768,17 +2072,12 @@ impl LatticeResources {
                 texture_entry(0),
                 sampler_entry(1),
                 texture_entry(2),
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
+                uniform_entry(3),
             ],
+        });
+        let glow_add_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("lattice_glow_add_bind_group_layout"),
+            entries: &[texture_entry(0), sampler_entry(1), uniform_entry(4), texture_entry(5)],
         });
         let composite_pipeline = create_post_pipeline(
             device,
@@ -1792,6 +2091,15 @@ impl LatticeResources {
         let downsample_pipeline = filter("fs_blit");
         let blur_h_pipeline = filter("fs_blur_h");
         let blur_v_pipeline = filter("fs_blur_v");
+        // Pure light over a picture already in the pass, exactly as the roll's
+        // and the spiral's halos are — see `EGUI_BLEND`.
+        let glow_add_pipeline = create_post_pipeline(
+            device,
+            "fs_glow_add",
+            target_format,
+            &glow_add_layout,
+            Some(EGUI_BLEND),
+        );
         // Linear filtering: identity when render scale is 1 (texel-aligned
         // sampling), smooth resampling at any other scale.
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -1826,9 +2134,13 @@ impl LatticeResources {
             downsample_pipeline,
             blur_h_pipeline,
             blur_v_pipeline,
+            glow_ink_pipeline,
+            glow_mask_pipeline,
+            glow_add_pipeline,
             bind_group_layout,
             composite_layout,
             filter_layout,
+            glow_add_layout,
             sampler,
             glyph_rim_pipeline,
             glyph_fill_pipeline,
@@ -1891,7 +2203,8 @@ impl LatticeResources {
 
     /// Fetch (or create) a pane's GPU objects, and when `offscreen_size` is
     /// given, make sure its offscreen target exists at exactly that pixel
-    /// size (pane resizes and render-scale changes recreate it).
+    /// size (pane resizes and render-scale changes recreate it), carrying a
+    /// node glow exactly while `glow` asks for one.
     /// `screen_size` is the pane's native (unscaled) pixel size, which
     /// sizes the bloom chain.
     fn pane_buffers(
@@ -1900,6 +2213,7 @@ impl LatticeResources {
         pane_id: u64,
         offscreen_size: Option<[u32; 2]>,
         screen_size: [u32; 2],
+        glow: bool,
     ) -> &mut PaneBuffers {
         let layout = &self.bind_group_layout;
         // Taken before the pane is borrowed: the view is a fresh handle onto
@@ -1913,6 +2227,7 @@ impl LatticeResources {
             format: self.target_format,
             composite_layout: &self.composite_layout,
             filter_layout: &self.filter_layout,
+            glow_add_layout: &self.glow_add_layout,
             sampler: &self.sampler,
         };
         let pane = self.panes.entry(pane_id).or_insert_with(|| {
@@ -1994,6 +2309,11 @@ impl LatticeResources {
             {
                 pane.offscreen =
                     Some(Offscreen::new(device, &shared, &pane.uniform_buffer, size, screen_size));
+            }
+            // After the size check, not inside it: a fresh target has no glow
+            // and a kept one may have the wrong answer, and this settles both.
+            if let Some(offscreen) = pane.offscreen.as_mut() {
+                offscreen.ensure_glow(device, &shared, glow);
             }
         }
         pane
@@ -2079,8 +2399,20 @@ impl CallbackTrait for LatticeCallback {
                         &resources.bind_group_layout,
                         true,
                     );
+                    // The glow's pair off the same source, so an edit to a
+                    // node's ink reaches its halo in the same reload — they are
+                    // one shader drawing one node, and reloading half of it is
+                    // a halo of the previous build.
+                    let (glow_ink, glow_mask) = create_glow_pipelines(
+                        device,
+                        &source,
+                        resources.target_format,
+                        &resources.bind_group_layout,
+                    );
                     resources.pipeline = pipeline;
                     resources.edge_pipeline = edge_pipeline;
+                    resources.glow_ink_pipeline = glow_ink;
+                    resources.glow_mask_pipeline = glow_mask;
                     eprintln!("[harmonigraph-render] shader hot-reloaded");
                 }
                 Err(err) => {
@@ -2127,7 +2459,8 @@ impl CallbackTrait for LatticeCallback {
             !self.instances.is_empty() || !self.edges.is_empty() || !self.glyphs.is_empty();
         let offscreen_size = anything.then_some(size);
 
-        let pane = resources.pane_buffers(device, self.pane_id, offscreen_size, screen_size);
+        let glow = self.glow_draws();
+        let pane = resources.pane_buffers(device, self.pane_id, offscreen_size, screen_size, glow);
 
         if self.instances.len() > pane.instance_capacity {
             pane.instance_capacity = self.instances.len().next_power_of_two();
@@ -2205,6 +2538,16 @@ impl CallbackTrait for LatticeCallback {
         }
 
         queue.write_buffer(&pane.uniform_buffer, 0, bytemuck::bytes_of(&self.uniforms));
+        // The glow's strength, in its own small buffer: `fs_glow_add` has no
+        // scene uniforms to take the head of, the composite it runs beside
+        // having a bind group of its own.
+        if let Some(node_glow) = pane.offscreen.as_ref().and_then(|o| o.glow.as_ref()) {
+            queue.write_buffer(
+                &node_glow.strength_buffer,
+                0,
+                bytemuck::bytes_of(&[self.uniforms.misc10[1], 0.0, 0.0, 0.0]),
+            );
+        }
         let write_ms = write_start.elapsed().as_secs_f32() * 1000.0;
 
         let scene_start = std::time::Instant::now();
@@ -2353,6 +2696,71 @@ impl CallbackTrait for LatticeCallback {
                 offscreen.bloom.run(egui_encoder, Self::bloom_pipelines(resources), "lattice");
             }
 
+            // The node glow: the nodes again, into ink and window targets of
+            // their own, then blurred. Its own pass rather than two more
+            // attachments on the scene's, for two reasons that both point the
+            // same way — the window reaches PAST what a node paints, so its
+            // billboard is a bigger quad than the scene's (`vs_glow`), and the
+            // ink must not carry the grid, the beams, the labels or the
+            // clearing, none of which this pass draws at all.
+            //
+            // Under the bloom's own chain in the encoder, and over the same
+            // instance buffer: nothing here writes anything the scene pass
+            // reads, so the order between the two is free.
+            // Encoded whenever the glow exists, nodes or none: the pass CLEARS
+            // its two targets, and a frame that skipped it would composite
+            // whatever the last frame left in them — a halo around nodes that
+            // are no longer there. A lattice can be a frame of grid and labels
+            // with every node culled, which is exactly that frame.
+            if let Some(node_glow) = offscreen.glow.as_ref() {
+                let mut pass = egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("lattice_glow_pass"),
+                    color_attachments: &[
+                        Some(wgpu::RenderPassColorAttachment {
+                            view: &node_glow.ink_view,
+                            depth_slice: None,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                store: wgpu::StoreOp::Store,
+                            },
+                        }),
+                        Some(wgpu::RenderPassColorAttachment {
+                            view: &node_glow.mask_view,
+                            depth_slice: None,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                store: wgpu::StoreOp::Store,
+                            },
+                        }),
+                    ],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                if pane.instance_count > 0 {
+                    pass.set_bind_group(0, &pane.bind_group, &[]);
+                    pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
+                    // The ink in the scene's own order, so two overlapping
+                    // nodes blend the way the picture blended them; the window
+                    // after it, where the order cannot matter (MAX is
+                    // commutative).
+                    pass.set_pipeline(&resources.glow_ink_pipeline);
+                    pass.draw(0..4, 0..pane.instance_count);
+                    pass.set_pipeline(&resources.glow_mask_pipeline);
+                    pass.draw(0..4, 0..pane.instance_count);
+                }
+                drop(pass);
+
+                node_glow.chain.run(
+                    egui_encoder,
+                    Self::glow_pipelines(resources),
+                    "lattice_glow",
+                );
+            }
+
             if timing {
                 if let Some(timer) = resources.timer.as_mut() {
                     timer.close(egui_encoder);
@@ -2419,6 +2827,18 @@ impl CallbackTrait for LatticeCallback {
         render_pass.set_pipeline(&resources.composite_pipeline);
         render_pass.set_bind_group(0, &offscreen.composite_bind_group, &[]);
         render_pass.draw(0..4, 0..1);
+
+        // The node glow over the finished picture, as pure light. AFTER the
+        // composite, so a node's own body is brightened by its halo exactly as
+        // the bloom brightens it — and over the labels for the same reason the
+        // bloom is: what the halo must stay out of is the light's SOURCE, which
+        // it does by being grown from node ink alone, not out of the pixels it
+        // lands on.
+        if let Some(node_glow) = &offscreen.glow {
+            render_pass.set_pipeline(&resources.glow_add_pipeline);
+            render_pass.set_bind_group(0, &node_glow.add_bind_group, &[]);
+            render_pass.draw(0..4, 0..1);
+        }
     }
 }
 

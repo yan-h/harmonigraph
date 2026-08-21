@@ -15,7 +15,8 @@ use crate::params::{seconds, ParamBackend, ParamKey};
 use crate::widgets::{button_row, choice_row, OctaveStrip, StackBar, ValueBar};
 use crate::SharedState;
 use harmonigraph_scene::{
-    Pulse, SpectralReading, ViewConfig, GAP_MAX, MARK_DELAY_MAX, MIN_EXTRA_SIZE, PITCH_CEIL,
+    Pulse, SpectralReading, ViewConfig, GAP_MAX, GLOW_REACH_MAX, GLOW_STRENGTH_MAX,
+    MARK_DELAY_MAX, MIN_EXTRA_SIZE, PITCH_CEIL,
     PITCH_FLOOR, SPECTRAL_BALLISTICS_MAX, SPECTRAL_GATE_MAX, SPECTRAL_GATE_MIN,
     SPECTRAL_HYSTERESIS_MAX, SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN,
     SPECTRAL_WIDTH_MAX, SPECTRAL_WIDTH_MIN,
@@ -660,4 +661,39 @@ fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBack
          with no note under it, as a share of the node's radius. Solid to the \
          inner handle, faded out by the outer. 0 draws none.",
     );
+    // The glow, last, and in Note rather than beside the Core or with Bloom on
+    // the Colors page. It is the whole node's, not a layer's: what glows is the
+    // ink every drawn layer put down, blurred and shown back through a window
+    // reaching this far past the node's own edge — so a node with nothing but
+    // an audio ring glows its ring, and one wearing every layer glows all of
+    // them, without either being asked for anywhere.
+    //
+    // Not with Bloom, which it otherwise reads like, because the two are
+    // different settings of different things. Bloom is one number over every
+    // picture the plugin draws and it thresholds, so it is the bright end of
+    // the gradient blowing out — colour, which is why it sits with the table
+    // that makes it. This is the lattice's nodes alone, and it takes their ink
+    // whole.
+    //
+    // A share of the node's radius, the unit the two gaps and the Clearance
+    // above it read in, and measured from the same place: the reach is a
+    // distance out from the node's edge exactly as the Clearance is.
+    ValueBar::new(&mut view.glow_reach, 0.0..=GLOW_REACH_MAX, "Glow")
+        .decimals(3)
+        .display(|v| format!("{:.0}%", v * 100.0))
+        .show(ui)
+        .on_hover_text(
+            "How far past its own edge a node's light spreads, as a share of \
+             its radius — the halo is grown from whatever that node is \
+             actually drawing, so it follows every layer's fade. 0 turns it \
+             off.",
+        );
+    // Grayed rather than hidden while the reach is 0, so the row keeps its
+    // place and the number it is dialled to stays readable — the same
+    // arrangement the audio ring's own settings use.
+    ui.add_enabled_ui(view.glow_reach > 0.0, |ui| {
+        ValueBar::new(&mut view.glow_strength, 0.0..=GLOW_STRENGTH_MAX, "Glow strength")
+            .show(ui)
+            .on_hover_text("How bright that light is added back over the picture.");
+    });
 }

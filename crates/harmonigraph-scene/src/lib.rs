@@ -183,6 +183,26 @@ pub const MARK_THICKNESS_MAX: f32 = 0.3;
 /// place that a second constant would be two numbers saying one thing.
 pub const GAP_MAX: f32 = 0.4;
 
+/// How far past a node's outermost drawn edge its glow may be asked to reach
+/// (see [`ViewConfig::glow_reach`]), in the same quad UV units the layer sizes
+/// above are in.
+///
+/// A ceiling on the BILLBOARD rather than on the look: the glow pass sizes its
+/// quad to hold the whole window (`quad_margin` in lattice.wgsl), so every step
+/// out here is fill rate spent on one more ring of fragments around every node.
+/// One node radius past the rim already reaches well past anything the layers
+/// draw, which is what a halo is for.
+pub const GLOW_REACH_MAX: f32 = 1.0;
+
+/// What the node glow multiplies its blurred, masked ink by
+/// (see [`ViewConfig::glow_strength`]).
+///
+/// Its own ceiling rather than [`ViewConfig::bloom_strength`]'s, because it is
+/// a different light: the bloom's chain thresholds, so its strength acts on the
+/// bright end alone, where this one adds back ink of every brightness and needs
+/// less travel to reach the same haze.
+pub const GLOW_STRENGTH_MAX: f32 = 2.0;
+
 /// Samples in the pitch->color lookup EVERYTHING pitch-colored reads: the
 /// disc, the trail and the piano roll on the CPU, the octave glyphs and their
 /// glow in the shader. The shader mirrors this length, and `harmonigraph-render`
@@ -605,6 +625,14 @@ pub struct Scene {
     pub render_scale: f32,
     /// Bloom intensity; 0 disables the whole post-process chain.
     pub bloom_strength: f32,
+    /// How far past a node's outermost drawn edge its own glow is shown, in
+    /// quad UV units; 0 turns the whole glow off (see
+    /// [`ViewConfig::glow_reach`]). Already clamped to [`GLOW_REACH_MAX`].
+    pub glow_reach: f32,
+    /// How much of that glow is added back as light; already clamped to
+    /// [`GLOW_STRENGTH_MAX`]. Inert while [`glow_reach`](Self::glow_reach) is
+    /// 0, which is the pair's one off switch.
+    pub glow_strength: f32,
 }
 
 /// How far the shimmer's sheet has travelled, in world units, reduced onto

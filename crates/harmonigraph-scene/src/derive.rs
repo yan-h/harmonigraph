@@ -585,6 +585,11 @@ pub fn derive_scene(
         brightest_pitch: frame.brightest_pitch,
         render_scale: view.render_scale,
         bloom_strength: view.bloom_strength,
+        // Clamped here as well as in `sanitize`, for the shells that never come
+        // through that door: the reach sizes every node's billboard, so a
+        // number from outside the bar is a quad the pass cannot fill.
+        glow_reach: view.glow_reach.clamp(0.0, crate::GLOW_REACH_MAX),
+        glow_strength: view.glow_strength.clamp(0.0, crate::GLOW_STRENGTH_MAX),
     }
 }
 

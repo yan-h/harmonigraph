@@ -427,6 +427,10 @@ fn parity_scene() -> Scene {
         render_scale: 1.0,
         // Parity with the direct-to-egui-pass reference requires bloom off.
         bloom_strength: 0.0,
+        // And the node glow with it: it is a second light laid over the
+        // composite, which the reference path has no composite to lay it over.
+        glow_reach: 0.0,
+        glow_strength: 1.0,
     }
 }
 
@@ -5516,5 +5520,98 @@ fn a_label_adds_no_light_through_the_bloom() {
          pass's input, so it glows and eats the halo of the node it covers",
         (at / 4) % SCENE_SIZE[0] as usize,
         (at / 4) / SCENE_SIZE[0] as usize,
+    );
+}
+
+/// The node glow's two claims about geometry: it puts light OUTSIDE the node it
+/// comes from, and the Reach bar is what says how far out.
+///
+/// Measured as the farthest pixel the glow changes, rather than as an amount at
+/// a chosen radius, because the second number is the one a reader dials: the
+/// halo is a blur of fixed screen width shown through a per-node WINDOW, so
+/// what the reach moves is where that window closes and not how bright the
+/// light inside it is.
+///
+/// One centered node on a cleared grid — [`single_marked_node`]'s fixture,
+/// which is the one scene here with a node whose surroundings are empty enough
+/// for "outside the node" to mean anything.
+#[test]
+fn the_glow_reach_says_how_far_a_node_lights_past_its_own_edge() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    let at = |reach: f32| -> Scene {
+        let mut scene = single_marked_node(0, 0);
+        scene.glow_reach = reach;
+        scene.glow_strength = 1.5;
+        scene
+    };
+    let off = shooter.shot(&at(0.0));
+    let near = shooter.shot(&at(0.2));
+    let far = shooter.shot(&at(0.8));
+
+    // How far from the node's center — the frame's center, the fixture's one
+    // node sitting at the world origin — the picture changed at all.
+    let farthest = |a: &[u8], b: &[u8]| -> f32 {
+        let row = SIZE[0] as usize;
+        let center = (SIZE[0] as f32 / 2.0, SIZE[1] as f32 / 2.0);
+        a.chunks(4)
+            .zip(b.chunks(4))
+            .enumerate()
+            .filter(|(_, (x, y))| x != y)
+            .map(|(i, _)| {
+                let (px, py) = ((i % row) as f32, (i / row) as f32);
+                ((px - center.0).powi(2) + (py - center.1).powi(2)).sqrt()
+            })
+            .fold(0.0f32, f32::max)
+    };
+    let (near_edge, far_edge) = (farthest(&near, &off), farthest(&far, &off));
+
+    // Non-vacuous first: there has to BE light to measure.
+    assert!(
+        total_light(&near) > total_light(&off),
+        "the glow must add light: {} against {}",
+        total_light(&near),
+        total_light(&off),
+    );
+    assert!(near_edge > 0.0, "a glow at reach 0.2 changed no pixel at all");
+    assert!(
+        far_edge > near_edge + 4.0,
+        "reach 0.8 must light further out than reach 0.2, and it reached {far_edge:.1}px \
+         against {near_edge:.1}px",
+    );
+}
+
+/// What the glow is grown from is node INK, and a lattice drawing no node has
+/// none — grid lines and chord beams included, which are drawn in the same pass
+/// as the nodes and would glow like them if the halo were taken off the scene's
+/// own picture instead of off a draw of its own.
+///
+/// Byte-identical rather than nearly so: the ink target is cleared and nothing
+/// writes to it, so the blur is zero everywhere and the composite adds exactly
+/// nothing. Anything else here is the glow reading a picture it should not be
+/// able to see.
+#[test]
+fn a_lattice_with_no_node_grows_no_glow() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    let at = |reach: f32| -> Scene {
+        let mut scene = parity_scene();
+        scene.nodes.clear();
+        scene.glow_reach = reach;
+        scene.glow_strength = 1.5;
+        scene
+    };
+    let off = shooter.shot(&at(0.0));
+    let on = shooter.shot(&at(0.8));
+    // The grid has to be drawing something, or this passes on a blank frame.
+    assert!(total_light(&off) > 0, "the fixture must draw its grid");
+    assert_eq!(
+        differing_pixels(&on, &off),
+        0,
+        "the glow lit something no node drew",
     );
 }
