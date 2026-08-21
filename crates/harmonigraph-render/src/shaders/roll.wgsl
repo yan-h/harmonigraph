@@ -2,7 +2,8 @@
 // rectangle in the note's own color, wrapped on every side by an outline that
 // fades out, both falling out of a signed distance field. A segment may also
 // end in a fade at its LEADING tip (`lead_coverage`), which takes both layers
-// out together.
+// out together, and carry its own outline cap where the note inside it stops
+// (`cap_coverage`).
 //
 // TWO LAYERS, drawn as two passes over the same instances rather than
 // composited per note: every note's outline (`fs_outline_*`), then every
@@ -78,10 +79,13 @@ struct VertexOut {
     @location(6) @interpolate(flat) lead_fade: f32,
     /// How much of the lead is still standing, 0..1.
     @location(7) @interpolate(flat) lead_alpha: f32,
+    /// How far the outline's cap at the NOTE's own leading end reaches, in
+    /// points. See [`cap_coverage`].
+    @location(8) @interpolate(flat) cap_reach: f32,
     /// Premultiplied, gamma-space, exactly as egui carries `Color32`.
-    @location(8) @interpolate(flat) core: vec4<f32>,
+    @location(9) @interpolate(flat) core: vec4<f32>,
     /// The outline's color at full coverage; the fade takes it from there.
-    @location(9) @interpolate(flat) outline: vec4<f32>,
+    @location(10) @interpolate(flat) outline: vec4<f32>,
 };
 
 @vertex
@@ -95,8 +99,9 @@ fn vs_note(
     @location(5) lead: f32,
     @location(6) lead_fade: f32,
     @location(7) lead_alpha: f32,
-    @location(8) core: vec4<f32>,
-    @location(9) outline: vec4<f32>,
+    @location(8) cap_reach: f32,
+    @location(9) core: vec4<f32>,
+    @location(10) outline: vec4<f32>,
 ) -> VertexOut {
     // Triangle-strip corners: (-1,-1) (1,-1) (-1,1) (1,1).
     let corner = vec2<f32>(
@@ -147,6 +152,7 @@ fn vs_note(
     out.lead = lead;
     out.lead_fade = lead_fade;
     out.lead_alpha = lead_alpha;
+    out.cap_reach = cap_reach;
     out.core = core;
     out.outline = outline;
     return out;
@@ -166,7 +172,11 @@ fn inside(d: f32, edge: f32) -> f32 {
 
 /// How much of the outline survives at distance `d` outside the note: solid
 /// against the note's edge, fading over the last `outline_fade` points of its
-/// reach, gone by `outline_reach`.
+/// reach, gone by `reach`.
+///
+/// The reach is a parameter rather than read off the instance because the cap
+/// at a led note's own end is given a shorter one ([`cap_coverage`]) — the same
+/// band, measured against a different edge and allowed less room.
 ///
 /// The same pair the lattice's knockout gutter takes, and for the same reason
 /// they are two numbers rather than one: a fade tied to the reach makes a
@@ -187,9 +197,9 @@ fn inside(d: f32, edge: f32) -> f32 {
 /// And never wider than the reach either, so a fade set past it eats outward
 /// rather than into the coverage against the note: whatever the two are set to,
 /// the outline is solid where it meets the note's edge.
-fn outline_coverage(in: VertexOut, d: f32) -> f32 {
-    let w = max(min(in.outline_fade, in.outline_reach), max(locals.feather, 1e-6));
-    return clamp((in.outline_reach - max(d, 0.0)) / w, 0.0, 1.0);
+fn outline_coverage(in: VertexOut, d: f32, reach: f32) -> f32 {
+    let w = max(min(in.outline_fade, reach), max(locals.feather, 1e-6));
+    return clamp((reach - max(d, 0.0)) / w, 0.0, 1.0);
 }
 
 /// How much of the ribbon survives at this fragment: 1 across the NOTE, and
@@ -262,6 +272,19 @@ fn lead_coverage(in: VertexOut) -> f32 {
 /// negative inside it, positive outside, and measured PERPENDICULAR to the
 /// note's long edges rather than along the pitch axis.
 fn box_distance(in: VertexOut) -> f32 {
+    return box_distance_trimmed(in, 0.0);
+}
+
+/// The same distance, to the box with its LEADING end pulled in by `trim`
+/// points. `trim` of the lead is the distance to the NOTE inside a box that
+/// carries one; 0 is the box itself.
+///
+/// Pulling one end in shortens the box by `trim` and slides its center half
+/// that far along depth. Only the depth term moves: `across` is measured from
+/// the note's center LINE rather than its center point, and the slide runs
+/// along that line, so a sheared box comes out the same number either way and
+/// the shear needs no correction of its own.
+fn box_distance_trimmed(in: VertexOut, trim: f32) -> f32 {
     let slope = in.shear;
     // A bent note is a sheared box: its long edges run at `slope`, its ends
     // stay square across the depth axis. Shearing the sample point back
@@ -279,8 +302,54 @@ fn box_distance(in: VertexOut) -> f32 {
     // and turns it into a bead. The outline's own corners are round, being a
     // constant distance from a square one, and that is the shape a note wants
     // wrapped around it.
-    let q = vec2<f32>(abs(across) - half_across, abs(in.local.y) - in.half_extent.y);
+    let along = in.local.y - 0.5 * trim;
+    let half_along = in.half_extent.y - 0.5 * trim;
+    let q = vec2<f32>(abs(across) - half_across, abs(along) - half_along);
     return min(max(q.x, q.y), 0.0) + length(max(q, vec2<f32>(0.0)));
+}
+
+/// How much of the outline's cap at the NOTE's own leading end is painted
+/// here: the same surround every other edge gets, standing against the end of
+/// the note inside a box that carries a lead.
+///
+/// Without it that end wears no cap at all. It is INTERIOR to the box — the
+/// lead was added to the box's length, not drawn beside it — and
+/// [`outline_color`]'s mask keeps the outline out of a box's middle, correctly,
+/// since a box has no edge there. So the cap arrives only when the pane drops
+/// the spent lead and the box shrinks back to the note, and it arrives whole,
+/// in one frame, on a ribbon that has been dissolving for a quarter second.
+///
+/// Drawn under the lead it needs no ramp of its own. The outline layer goes
+/// down before ANY body (see the head of this file), so the lead's own ink
+/// covers this while the lead is opaque and uncovers it at exactly the rate the
+/// lead goes: `lead_coverage` and this are the two halves of one boundary and
+/// sum to 1 across it. The crossfade is the compositing.
+///
+/// `cap_reach` is the one thing the caller decides, and it is about ROOM rather
+/// than about time — the cap stands in the stretch the lead was drawn over, and
+/// only the caller knows whether its ink is welcome there. Shortened, the cap
+/// grows out of the note's end rather than fading in over it, so it is wholly
+/// on the near side of whatever the caller is protecting at every reach it is
+/// given, and reaching its full `outline_reach` is the same picture the box's
+/// own outline draws once the lead is dropped.
+///
+/// Unioned with the wrap rather than added to it: the two are the same color
+/// off two shapes that share three of their sides, and beside the note's
+/// leading corners both are looking at the same ink. Added, that overlap comes
+/// out darker than black is.
+fn cap_coverage(in: VertexOut) -> f32 {
+    // Bounded by the outline the cap is part of, in both directions at once.
+    // Wider, the cap would band the note further than every other edge of it
+    // — and `vs_note` sizes the quad from `outline_reach` alone, so the
+    // surplus is CLIPPED across pitch rather than merely drawn, which is a
+    // hard vertical edge standing where a rounded corner belongs. With no
+    // outline at all there is no band for the cap to be part of.
+    let reach = min(in.cap_reach, in.outline_reach);
+    if (in.lead <= 0.0 || reach <= 0.0) {
+        return 0.0;
+    }
+    let d = box_distance_trimmed(in, in.lead);
+    return outline_coverage(in, d, reach) * (1.0 - inside(d, 0.0));
 }
 
 /// Premultiplied gamma-space color of the OUTLINE layer: the dark surround
@@ -305,9 +374,15 @@ fn box_distance(in: VertexOut) -> f32 {
 /// the seam between them never shows what is behind the note — the same
 /// arithmetic the two had when they were composited in one fragment, split
 /// across two passes.
+///
+/// [`cap_coverage`] is the second shape this layer draws, standing against the
+/// end of the note INSIDE a box that carries a lead — a place the mask above
+/// keeps the wrap out of, correctly, and where an edge nonetheless is.
 fn outline_color(in: VertexOut) -> vec4<f32> {
     let d = box_distance(in);
-    return in.outline * outline_coverage(in, d) * (1.0 - inside(d, 0.0)) * lead_coverage(in);
+    let wrap =
+        outline_coverage(in, d, in.outline_reach) * (1.0 - inside(d, 0.0)) * lead_coverage(in);
+    return in.outline * max(wrap, cap_coverage(in));
 }
 
 /// Premultiplied gamma-space color of the BODY layer: the note, solid in its
