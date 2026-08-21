@@ -611,6 +611,11 @@ pub(super) fn note_instances(
             // At its full reach this is the same picture the box's own outline
             // draws, and that is the point `leads` above gives up the lead at —
             // so the two meet at one number and nothing moves at the handover.
+            //
+            // Zeroed with the rest of the lead's numbers where there is no
+            // lead, below. It is read only inside one, and `behind_px` is not
+            // even the leading end for every segment that reaches here — a
+            // number that decides nothing is still worth not carrying.
             let cap_px = outline_px.min((behind_px - 0.5 * feather_px).max(0.0));
 
             // Notes always draw fully opaque — how much of the heatmap comes
@@ -762,7 +767,7 @@ pub(super) fn note_instances(
             // of its final bend), so the one segment a lead can reach has no
             // shear to correct for. Written out because the correction belongs
             // to the shift rather than to that fact about the segments.
-            let (center, half_depth, lead_px, lead_fade_px, standing) = if leads {
+            let (center, half_depth, lead_px, lead_fade_px, standing, cap_px) = if leads {
                 let half = lead_px * 0.5;
                 (
                     center - axes.dir_depth() * half - axes.dir_pitch() * (slope * half),
@@ -770,9 +775,10 @@ pub(super) fn note_instances(
                     lead_px,
                     lead_fade_px,
                     standing,
+                    cap_px,
                 )
             } else {
-                (center, half_depth, 0.0, 0.0, 0.0)
+                (center, half_depth, 0.0, 0.0, 0.0, 0.0)
             };
             instances.push(RollInstance {
                 center: [center.x, center.y],
@@ -1803,6 +1809,14 @@ mod tests {
         let mut elapsed = 0.0f64;
         while elapsed <= 0.4 {
             let note = at(4.0 + elapsed);
+            // Past the handover the box ends at the note and that end's cap is
+            // the box's own outline, so this field says nothing and is zeroed
+            // with the rest of the lead's numbers. That the cap is WHOLE by
+            // then is [`the_lead_is_given_up_only_once_its_cap_is_whole`]'s,
+            // which has the short release this one does not.
+            if note.lead <= 0.0 {
+                break;
+            }
             assert!(
                 note.cap_reach >= previous - 1e-4,
                 "the cap pulled back to {} from {previous} at {elapsed}s",
@@ -1828,6 +1842,60 @@ mod tests {
             standing > 0.5,
             "the cap was only whole with {standing} of the lead left ({full_at}s in) — the \
              release is not a crossfade at that point, it is the pop moved",
+        );
+    }
+
+    /// The lead is given up only once the cap standing inside it is whole, so
+    /// the handover from the one to the other moves nothing.
+    ///
+    /// `leads` and `cap_px` are metered by the same `outline_reach_px`, and
+    /// this is the test that says they have to be. Give the lead up while the
+    /// cap is still short and the note's end loses ink for a frame and then
+    /// gets it back — the pop again, smaller and in the other direction.
+    ///
+    /// A release of 0 is the fixture, because at any real release the question
+    /// does not arise: a note has scrolled points clear of the line before its
+    /// tongue is spent, so the cap is long since whole and any two thresholds
+    /// would agree. At a release of 0 the lead goes at the note-off and the
+    /// handover falls inside the two points of scrolling it takes the note to
+    /// clear its own outline, which is the only place the two can disagree.
+    #[test]
+    fn the_lead_is_given_up_only_once_its_cap_is_whole() {
+        let mut state = fresh();
+        state.spectrum_config.orientation = SpectralOrientation::Left;
+        state.spectrum_config.roll_seconds = 10.0;
+        state.spectrum_config.low_midi = 48.0;
+        state.spectrum_config.high_midi = 84.0;
+        state.spectrum_config.roll_lead = 0.05;
+        state.spectrum_config.roll_lead_fade = 0.04;
+        state.spectrum_config.roll_lead_release = 0.0;
+        state.tracker.handle_event(NoteEvent::on(2.0, 0, 60, 1.0));
+        state.tracker.handle_event(NoteEvent::off(4.0, 0, 60));
+
+        let at = |elapsed: f64| *one(&instances(&state, 4.0 + elapsed));
+        // BISECTED rather than stepped. The cap grows continuously with the
+        // scroll, so the last SAMPLE before the handover is short of the cap by
+        // whatever the note moved in one step — 0.006 points at a 2 ms step,
+        // which is sampling granularity and not the step this is looking for.
+        // Squeezing the bracket to nothing is what tells the two apart.
+        assert!(at(0.0).lead > 0.0, "the lead was never on the box at all");
+        let (mut with, mut without) = (0.0f64, 1.0f64);
+        assert!(at(without).lead <= 0.0, "the lead outlived a release of 0 by a second");
+        for _ in 0..60 {
+            let mid = 0.5 * (with + without);
+            if at(mid).lead > 0.0 {
+                with = mid;
+            } else {
+                without = mid;
+            }
+        }
+        let last = at(with);
+        assert!(
+            last.cap_reach >= last.outline_reach - 1e-4,
+            "the lead was given up at {without}s with its cap at {} of {} — the \
+             handover is a step, not a continuation",
+            last.cap_reach,
+            last.outline_reach,
         );
     }
 
