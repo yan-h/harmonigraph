@@ -67,7 +67,7 @@ use egui::Sense;
 ///
 /// Both stay quieter than the now-line, which is the one line on this pane that
 /// divides two pictures rather than measuring one.
-const RULING_FADE: (f32, f32) = (0.85, 0.45);
+const RULING_FADE: (f32, f32) = (0.55, 0.28);
 
 /// The closest two level numbers may be set, in points along the DEPTH axis —
 /// the axis they are stacked on, and the one [`level_grid`] thins both them and
