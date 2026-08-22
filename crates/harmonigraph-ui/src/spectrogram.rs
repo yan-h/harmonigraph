@@ -941,6 +941,21 @@ pub(crate) struct PaneView {
 }
 
 /// Which stored columns a frame draws — the other half of a [`Plan`]'s inputs.
+///
+/// The whole-song arm counts the UNTRIMMED set, while the fold reads
+/// [`WholeSong::drawn_columns`](crate::WholeSong::drawn_columns) — so `start`
+/// reaches the key through nothing at all, and `span` only through `bucket`,
+/// which is many-to-one wherever [`MIN_BUCKET`] binds. Two windows on one
+/// column set can therefore mint the same key for different images.
+///
+/// What makes that safe rather than the stale-key bug it looks like is that a
+/// [`WholeSong`](crate::WholeSong) is built once per render, before the frame
+/// loop, and only its `roll` is written afterwards — so `start` and `span` are
+/// constants for the life of every key minted from them. It is safe by that
+/// fact and not by the key, which is why the fact is written down: a
+/// `WholeSong` that changed window mid-render would draw the previous
+/// window's texture at the previous window's geometry, and no assertion here
+/// would see it.
 pub(crate) struct Columns {
     /// The oldest in-window column; it advances as the window scrolls one off
     /// the far end. Whole-song draws its entire fixed set, so 0.
