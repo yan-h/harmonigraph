@@ -14,14 +14,16 @@
 # Usage:
 #   ./load-plugin.sh            # interactive menu of every worktree's build
 #   ./load-plugin.sh --list     # print the table only; load nothing
+#   ./load-plugin.sh --tag      # print the overlay tag of THIS worktree's build
 #   ./load-plugin.sh <branch>   # load that branch's build (unique substring ok)
 #
-# Staleness is WARN-ONLY: a build whose dylib predates its branch HEAD is
-# flagged "built before <hash>" but still loadable — the mtime check can't
-# see uncommitted edits, so treat "fresh" as "matches the last commit", not
-# "matches the working tree". The renderer it installs alongside is held to
-# the same test, and is the half that actually goes stale: nothing rebuilds
-# it unless a session names `-p harmonigraph-offline`.
+# Staleness is WARN-ONLY: a build not made at its branch HEAD is flagged but
+# still loadable. The test is the commit STAMPED IN THE BINARY against HEAD,
+# so "fresh" means "matches the last commit" and never "matches the working
+# tree" — a build carrying uncommitted edits reads as fresh, because the tag
+# names the commit underneath them. The renderer it installs alongside has no
+# such stamp and is judged on its mtime, and it is the half that actually goes
+# stale: nothing rebuilds it unless a session names `-p harmonigraph-offline`.
 set -euo pipefail
 
 PKG="harmonigraph-plugin"
@@ -41,6 +43,13 @@ LIB="${PKG//-/_}"
 MAIN="$(git worktree list --porcelain | awk '/^worktree /{print substr($0, 10); exit}')"
 BUNDLED="$MAIN/target/bundled"
 LOADED="$BUNDLED/.loaded"   # records which worktree build is currently in the slot
+
+# Scratch bundle that load_build signs before writing the result across. Held at
+# script scope rather than in the function, so the trap that removes it is still
+# looking at a variable that exists once the function has returned.
+STAGE=""
+cleanup() { [[ -n "$STAGE" ]] && rm -rf "$STAGE"; return 0; }
+trap cleanup EXIT
 
 # --- gather worktrees (parallel indexed arrays; no bash-4 assoc arrays) ------
 WT_PATH=(); WT_BRANCH=()
@@ -71,31 +80,71 @@ find_dylib() {
   return 1
 }
 
-# Echo the display fields for worktree index $1 as: built<TAB>vshead<TAB>marker
+# Echo the build tag stamped into dylib $1, whose worktree is on branch $2.
+#
+# Read out of the BINARY rather than predicted from a log, because the two
+# disagree routinely and only this one is what the overlay will show.
+# `harmonigraph-perf`'s build.rs stamps the commit the build sat on, and the
+# ordinary session order is edit -> build -> commit -> hand over: the commit
+# lands AFTER the build it is meant to describe, so a tag quoted from the log
+# names a commit the binary has never heard of. An amend or a rebase breaks
+# the prediction the other way, leaving a stamped sha that is no longer an
+# object in the worktree at all.
+build_tag() {
+  local name="${2#worktree-}"
+  strings -a "$1" 2>/dev/null | grep -oE "$name @[0-9a-f]{7,40}" | head -1
+}
+
+# Echo the display fields for worktree index $1 as:
+#   built<TAB>overlay<TAB>vshead<TAB>marker
 build_info() {
-  local path="${WT_PATH[$1]}" dylib built vshead marker
+  local path="${WT_PATH[$1]}" dylib built overlay vshead marker
   dylib="$(find_dylib "$path")" || dylib=""
   if [[ -n "$dylib" ]]; then
-    local mtime head_ct head_short
+    local mtime head_ct head_short tag sha
     mtime="$(stat -f %m "$dylib")"
     built="$(ago "$mtime")"
     head_ct="$(git -C "$path" show -s --format=%ct HEAD 2>/dev/null || echo 0)"
     head_short="$(git -C "$path" show -s --format=%h HEAD 2>/dev/null || echo '?')"
-    if (( head_ct > mtime )); then vshead="! built before $head_short"; else vshead="ok fresh"; fi
+    tag="$(build_tag "$dylib" "${WT_BRANCH[$1]}")"
+    sha="${tag##*@}"
+    [[ "$sha" == "$tag" ]] && sha=""   # no tag read; ${..##*@} echoes the input
+    overlay="${sha:+@$sha}"; overlay="${overlay:-@?}"
+    # Judged on the stamped sha ahead of the mtime: it names the commit the
+    # binary was actually built at, where an mtime only says which of the two
+    # came first. An amend or a rebase moves HEAD without moving the clock, and
+    # reads as fresh on time alone. The mtime stays as the fallback for a build
+    # carrying no readable tag (a source tarball, or no git when it compiled).
+    if [[ -n "$sha" && "$head_short" != '?' ]]; then
+      if [[ "$head_short" == "$sha"* || "$sha" == "$head_short"* ]]; then
+        vshead="ok fresh"
+      elif git -C "$path" cat-file -e "$sha^{commit}" 2>/dev/null; then
+        vshead="! built at $sha, HEAD $head_short"
+      else
+        # The stamped commit is not an object here at all: the branch was
+        # amended, rebased or reset out from under the build.
+        vshead="! built at $sha, gone from branch"
+      fi
+    elif (( head_ct > mtime )); then
+      vshead="! built before $head_short"
+    else
+      vshead="ok fresh"
+    fi
   else
-    built="- not built -"; vshead=""
+    built="- not built -"; overlay=""; vshead=""
   fi
   marker=""; [[ -n "$loaded_wt" && "$path" == "$loaded_wt" ]] && marker="<- now"
-  printf '%s\t%s\t%s' "$built" "$vshead" "$marker"
+  printf '%s\t%s\t%s\t%s' "$built" "$overlay" "$vshead" "$marker"
 }
 
 print_table() {
-  printf '\n  %-3s %-30s %-13s %-24s %s\n' '#' 'branch' 'built' 'vs HEAD' 'loaded'
-  printf '  %s\n' '---------------------------------------------------------------------------------'
-  local i info built vshead marker
+  printf '\n  %-3s %-30s %-13s %-10s %-30s %s\n' '#' 'branch' 'built' 'overlay' 'vs HEAD' 'loaded'
+  local rule; rule="$(printf '%*s' 101 '')"; printf '  %s\n' "${rule// /-}"
+  local i built overlay vshead marker
   for i in "${!WT_PATH[@]}"; do
-    IFS=$'\t' read -r built vshead marker <<<"$(build_info "$i")"
-    printf '  %-3s %-30s %-13s %-24s %s\n' "$((i + 1))" "${WT_BRANCH[$i]}" "$built" "$vshead" "$marker"
+    IFS=$'\t' read -r built overlay vshead marker <<<"$(build_info "$i")"
+    printf '  %-3s %-30s %-13s %-10s %-30s %s\n' \
+      "$((i + 1))" "${WT_BRANCH[$i]}" "$built" "$overlay" "$vshead" "$marker"
   done
   echo
 }
@@ -108,7 +157,10 @@ load_build() {  # $1 = worktree index
     echo "       build it first:  (cd \"$path\" && cargo build --release -p $PKG)" >&2
     exit 1
   }
-  local updated=0 ext bundle
+  # Somewhere for the signature to be produced that the host is not looking at.
+  STAGE="$(mktemp -d)"
+
+  local updated=0 ext bundle staged live_bin ino_before ino_after
   for ext in clap vst3; do
     bundle="$BUNDLED/$NAME.$ext"
     if [[ ! -d "$bundle" ]]; then
@@ -116,16 +168,44 @@ load_build() {  # $1 = worktree index
       echo "         (cd \"$MAIN\" && cargo xtask bundle $PKG --release)" >&2
       continue
     fi
-    # Written through the destination's OWN inode, deliberately — `cp` here is
-    # load-bearing and a rename-into-place is not the tidier equivalent. Bitwig's
-    # plugin host keeps the library it opened mapped across a deactivate/activate,
-    # so the only swap a running host can see is one that changes the bytes behind
-    # the inode it already holds; hand it a fresh inode at the same path and it
-    # stays on the old build until Bitwig itself is restarted. The cost is that a
-    # swap under a live host rewrites code that host has not faulted in yet, so do
-    # it while the plugin is deactivated if a session is worth protecting.
-    cp "$dylib" "$bundle/Contents/MacOS/$NAME"
-    codesign --force --sign - "$bundle"
+    # Sign a staging copy FIRST, then write the finished bytes through the
+    # destination's own inode. The order is load-bearing in both directions, and
+    # neither half is the tidier equivalent of the other:
+    #
+    #   - `cp` writes through the inode already at the path. Bitwig's plugin host
+    #     keeps the library it opened mapped for as long as its sandbox PROCESS
+    #     lives, so the only swap such a host can see is one that changes the
+    #     bytes behind the inode it is already holding. Give it a fresh inode at
+    #     the same path and it stays on the old build until that process dies.
+    #   - `codesign` does NOT write through an inode. It writes a new file and
+    #     renames it into place on every run, whether or not the signature
+    #     changes size. Signing the LIVE bundle therefore discards the very inode
+    #     a preceding `cp` just wrote, and leaves a running host mapped to an
+    #     unlinked file — the silent way this swap stops working, with a bundle
+    #     that still verifies and a DAW that still shows the previous build.
+    staged="$STAGE/$NAME.$ext"
+    cp -R "$bundle" "$staged"
+    cp "$dylib" "$staged/Contents/MacOS/$NAME"
+    codesign --force --sign - "$staged"
+    codesign --verify --verbose=1 "$staged"
+
+    live_bin="$bundle/Contents/MacOS/$NAME"
+    ino_before="$(stat -f %i "$live_bin")"
+    cp "$staged/Contents/MacOS/$NAME" "$live_bin"
+    # The seal names the bundle's other files; the executable seals itself, so
+    # this moves only when a resource does. Copied unconditionally rather than
+    # reasoned about per change — it is one small file.
+    cp "$staged/Contents/_CodeSignature/CodeResources" \
+       "$bundle/Contents/_CodeSignature/CodeResources"
+    ino_after="$(stat -f %i "$live_bin")"
+
+    # A tripwire on the paragraph above, because its failure is silent: every
+    # step here still succeeds when the inode moves, and only the DAW knows.
+    if [[ "$ino_before" != "$ino_after" ]]; then
+      echo "WARNING: $live_bin changed inode ($ino_before -> $ino_after)." >&2
+      echo "         A host holding the old one keeps serving the old build until its" >&2
+      echo "         sandbox process exits; restart Bitwig to be sure of this build." >&2
+    fi
     codesign --verify --verbose=1 "$bundle"
     echo "Loaded + signed: $bundle"
     updated=$(( updated + 1 ))
@@ -178,20 +258,98 @@ load_build() {  # $1 = worktree index
     fi
   fi
 
+  # `commit` is where the WORKTREE stands; `tag` is what the binary in the slot
+  # says about itself. They are different facts and they disagree whenever a
+  # session committed after building, so both are recorded and only `tag`
+  # answers "which build am I looking at?".
+  local loaded_tag; loaded_tag="$(build_tag "$dylib" "$branch")"
   { echo "worktree=$path"
     echo "branch=$branch"
     echo "commit=$(git -C "$path" show -s --format=%h HEAD 2>/dev/null || echo '?')"
+    echo "tag=${loaded_tag:-unknown}"
     echo "loaded_at=$(date +%s)"
   } > "$LOADED"
 
   echo
   echo "Now loaded: $branch. Deactivate + reactivate the plugin in Bitwig to pick it up."
+  if [[ -n "$loaded_tag" ]]; then
+    echo "The performance overlay will read:  build  $loaded_tag"
+    local head_short loaded_sha
+    head_short="$(git -C "$path" show -s --format=%h HEAD 2>/dev/null || echo '?')"
+    loaded_sha="${loaded_tag##*@}"
+    if [[ "$head_short" != '?' \
+       && "$head_short" != "$loaded_sha"* && "$loaded_sha" != "$head_short"* ]]; then
+      echo "  (that is NOT the branch's HEAD, $head_short — this build predates the last" >&2
+      echo "   commit on it, which is what building before committing leaves behind.)" >&2
+    fi
+  else
+    echo "WARNING: no build tag readable in that dylib, so the overlay cannot confirm" >&2
+    echo "         which build is live. Expect it to read 'unknown'." >&2
+  fi
+  # That reload only re-reads the file if Harmonigraph's sandbox process exits when
+  # the plugin unloads, which is a question of Bitwig's Plug-in Hosting Mode under
+  # Settings -> Plug-ins. "by Vendor" puts every plug-in sharing a VENDOR string
+  # into ONE process, and that process lives as long as ANY of them is loaded — so
+  # a second plug-in of your own pins the old Harmonigraph image in memory and the
+  # reload is a no-op. "by Plug-in" and "Individually" each give it a process of its
+  # own; "with Bitwig" loads it into the audio engine, which unloads nothing.
+  echo "(Needs a sandbox process of its own to re-read the file: Bitwig's 'by Vendor'"
+  echo " hosting mode shares one process across every plug-in with your VENDOR string.)"
+}
+
+# Echo the index of the worktree containing directory $1, or nothing.
+#
+# LONGEST match, not the first one that fits: the worktrees live under the main
+# checkout's own `.claude/worktrees/`, so every worktree path is also a path
+# inside main, and a first-match search answers "main" for all of them.
+wt_containing() {
+  local dir="$1" i best="" best_len=0 len
+  for i in "${!WT_PATH[@]}"; do
+    if [[ "$dir" == "${WT_PATH[$i]}" || "$dir" == "${WT_PATH[$i]}"/* ]]; then
+      len=${#WT_PATH[$i]}
+      (( len > best_len )) && { best="$i"; best_len=$len; }
+    fi
+  done
+  [[ -n "$best" ]] && { echo "$best"; return 0; }
+  return 1
 }
 
 # --- dispatch ----------------------------------------------------------------
 case "${1:-}" in
   --list|-l)
     print_table
+    ;;
+  --tag|-t)
+    # Print the tag a build will show in the overlay. With no branch, the one
+    # belonging to the worktree you are standing in — which is what a session
+    # handing over its own build wants.
+    if [[ -n "${2:-}" ]]; then
+      # Unique substring, on the same terms as loading: a query that silently
+      # picks one of several matches reports a tag for a build you did not name,
+      # which is the exact failure this mode exists to remove.
+      tag_matches=()
+      for i in "${!WT_BRANCH[@]}"; do
+        [[ "${WT_BRANCH[$i]}" == *"$2"* ]] && tag_matches+=("$i")
+      done
+      if (( ${#tag_matches[@]} == 0 )); then
+        echo "No worktree branch matching '$2'." >&2; exit 1
+      elif (( ${#tag_matches[@]} > 1 )); then
+        echo "'$2' matches multiple branches:" >&2
+        for i in "${tag_matches[@]}"; do echo "  ${WT_BRANCH[$i]}" >&2; done
+        exit 1
+      fi
+      tag_idx="${tag_matches[0]}"
+    else
+      tag_idx="$(wt_containing "$PWD")" || {
+        echo "Not inside a known worktree; pass a branch: ./load-plugin.sh --tag <branch>" >&2
+        exit 1
+      }
+    fi
+    tag_dylib="$(find_dylib "${WT_PATH[$tag_idx]}")" || {
+      echo "No build in ${WT_PATH[$tag_idx]}/target/release." >&2; exit 1; }
+    tag_out="$(build_tag "$tag_dylib" "${WT_BRANCH[$tag_idx]}")"
+    [[ -n "$tag_out" ]] || { echo "No build tag readable in $tag_dylib." >&2; exit 1; }
+    echo "$tag_out"
     ;;
   "")
     print_table
@@ -204,7 +362,7 @@ case "${1:-}" in
     ;;
   --*)
     echo "Unknown option: $1" >&2
-    echo "Usage: ./load-plugin.sh [--list | <branch>]" >&2
+    echo "Usage: ./load-plugin.sh [--list | --tag [branch] | <branch>]" >&2
     exit 1
     ;;
   *)
