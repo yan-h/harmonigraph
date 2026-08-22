@@ -482,8 +482,8 @@ pub enum SevensLabel {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum NoteNames {
     /// Every node on screen, played or not — the lattice read as a map.
-    /// Unplayed nodes are named at the same quiet level a memory draws at,
-    /// so a sounding note still stands out from the field it sits in.
+    /// Every name is equally readable, unplayed and sounding alike; what
+    /// says which note is playing is the NODE under the name, not the name.
     All,
     /// Every node the music has visited, and it never forgets: a whole
     /// piece's territory accumulates as it plays.
