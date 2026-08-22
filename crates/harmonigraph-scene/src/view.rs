@@ -3,7 +3,7 @@
 //! parameters.
 
 use crate::spectral::SpectralReading;
-use crate::style::{Gradient, Pulse, SevensLabel};
+use crate::style::{Gradient, NoteNames, Pulse, SevensLabel};
 use crate::{
     Camera, CORE_RADIUS_MAX, GAP_MAX, GLOW_BALLISTICS_MAX, GLOW_GAP_SOFT_MAX, GLOW_REACH_MAX,
     GLOW_STRENGTH_MAX, MARK_THICKNESS_MAX, MAX_DRAWN_NODES, NODE_RADIUS_FACTOR, RING_WIDTH_MAX,
@@ -322,6 +322,19 @@ pub struct ViewConfig {
     /// Under each note-name label, also show the node's pitch class in
     /// cents. Only meaningful while `show_labels` is on.
     pub show_cents: bool,
+    /// WHICH nodes carry a label: every one, every one the music has
+    /// visited, or only what is sounding (see [`NoteNames`]). Only
+    /// meaningful while `show_labels` is on, which is the on/off for text on
+    /// the lattice as a whole.
+    ///
+    /// The one setting here that reaches into the PAST, and what it reaches
+    /// with is drawn in TYPE alone -- see the [`trail`](crate::trail) module
+    /// for why that is the whole design and not an implementation detail.
+    /// [`NoteNames::Past`] is the only mode that fills
+    /// [`NodeInstance::trail`](crate::NodeInstance::trail); a name under
+    /// [`NoteNames::All`] is the label layer's own answer and carries no
+    /// memory at all.
+    pub note_names: NoteNames,
     // How a sounding node's core is painted has no field here: the core is
     // the steady disc-and-glow, and nothing switches it. The field styles
     // that stood beside it (Vortex, Checker and Spiral) are gone, and with
@@ -916,23 +929,6 @@ pub struct ViewConfig {
     /// the ring's own annulus with it on, which is where a fresh view starts
     /// (the inset sits well inside the ring, so the two do not fight).
     pub grid_inset: f32,
-    // ---- Trail (where the music has already been) ------------------------
-    // The one part of the view about the past rather than the present, and it
-    // is drawn in TYPE alone -- see the `trail` module for why that is the
-    // whole design and not an implementation detail.
-    /// Seconds before a pitch is forgotten, measured from when it last
-    /// sounded. **0 means never** -- the default, and the point of the
-    /// feature: a whole piece's territory rather than a rolling window.
-    pub trail_memory: f32,
-    /// Keep the note name and cents on a visited node, not just on sounding
-    /// and hovered ones -- so the harmonic space can be read off the screen
-    /// by name, with its tuning.
-    ///
-    /// The trail's on/off, the names being the whole of what a memory draws:
-    /// with this off nothing fills [`NodeInstance::trail`](crate::NodeInstance::trail)
-    /// at all.
-    pub trail_labels: bool,
-
     /// Meantone mode: lock the major-third tuning to four perfect fifths
     /// (temper out the syntonic comma, 81/80). While on, the third-tuning
     /// value is derived from the fifth (in `begin_frame`) and note names are
@@ -2087,6 +2083,10 @@ impl Default for ViewConfig {
             sevens_gutter_soft: 0.122_413_49,
             sevens_label: SevensLabel::Name,
             show_labels: true,
+            // Where the music has been is most of what the lattice is for, so
+            // the fresh view opens naming it: every visited node keeps its
+            // name, and none of the unvisited ones carry text yet.
+            note_names: NoteNames::Past,
             // Effectively the built-in size (1) — where the marks and the
             // cents line are proportioned against, so this bar sizes the
             // whole label together.
@@ -2234,12 +2234,6 @@ impl Default for ViewConfig {
             shimmer_softness: 1.0,
             grid_thickness: 1.020_152_6,
             grid_inset: 0.3,
-            // The trail on, forgetting after about a minute and a half: where
-            // the music has been is most of what the lattice is for, but a
-            // window this long still keeps the names from outrunning a piece
-            // in progress the way never-forgetting does.
-            trail_memory: 98.267_45,
-            trail_labels: true,
             meantone: false,
             meantone_auto: true,
             marvel: false,

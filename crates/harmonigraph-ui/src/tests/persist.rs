@@ -4,7 +4,7 @@
 
 use crate::*;
 use crate::state::UI_PERSIST_VERSION;
-use harmonigraph_scene::Camera;
+use harmonigraph_scene::{Camera, NoteNames};
 use super::probe::fresh;
 
 #[test]
@@ -41,9 +41,10 @@ fn persist_round_trips_camera_and_view() {
     state.view.octave_extra_blend = 0.5;
     state.view.grid_thickness = 2.5;
     state.view.grid_inset = 0.0;
-    // The trail's on/off, and on by default -- so off is the value a project
-    // has to keep, and the one a fresh view would overwrite if it did not.
-    state.view.trail_labels = false;
+    // Which nodes are named, and the fresh view keeps the past -- so either
+    // other mode is a value a project has to keep, and the one a fresh view
+    // would overwrite if it did not.
+    state.view.note_names = NoteNames::All;
     state.view.meantone = true;
     // Off is the non-default here, and the one a project has to keep: the
     // detect would otherwise re-engage the mode the user switched it off for.
@@ -78,7 +79,11 @@ fn persist_round_trips_camera_and_view() {
     assert_eq!(restored.view.octave_extra_blend, 0.5);
     assert_eq!(restored.view.grid_thickness, 2.5);
     assert_eq!(restored.view.grid_inset, 0.0, "0 (lines to the center) round-trips");
-    assert!(!restored.view.trail_labels, "a switched-off trail round-trips");
+    assert_eq!(
+        restored.view.note_names,
+        NoteNames::All,
+        "a non-default note-name mode round-trips",
+    );
     assert!(restored.view.meantone);
     assert!(!restored.view.meantone_auto, "a switched-off auto-detect round-trips");
     assert!(!restored.view.marvel, "each comma keeps its own mode");

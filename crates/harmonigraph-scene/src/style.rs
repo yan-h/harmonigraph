@@ -461,3 +461,34 @@ pub enum SevensLabel {
     /// without.
     None,
 }
+
+/// WHICH nodes carry a note-name label, once labels are on at all
+/// ([`ViewConfig::show_labels`](crate::ViewConfig::show_labels)).
+///
+/// One axis, and it is how far a name reaches past the note that put it
+/// there. Nothing here changes what a label says or how big it draws — those
+/// are the rest of the Labels section — only which nodes get one.
+///
+/// [`Past`](NoteNames::Past) is the trail, and the only mode with a history
+/// behind it: it is the one that reads
+/// [`NodeInstance::trail`](crate::NodeInstance::trail), so it is also the
+/// only one Clear note names means anything under. See the
+/// [`trail`](crate::trail) module for why a memory is drawn in TYPE and
+/// nothing else.
+///
+/// A HOVERED node is named under all three. Pointing at a node to ask what it
+/// is belongs to the pointer rather than to this setting, and a mode that
+/// refused it would leave the lattice with no way to answer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum NoteNames {
+    /// Every node on screen, played or not — the lattice read as a map.
+    /// Unplayed nodes are named at the same quiet level a memory draws at,
+    /// so a sounding note still stands out from the field it sits in.
+    All,
+    /// Every node the music has visited, and it never forgets: a whole
+    /// piece's territory accumulates as it plays.
+    #[default]
+    Past,
+    /// Only what is sounding now. The lattice at rest carries no text.
+    Played,
+}
