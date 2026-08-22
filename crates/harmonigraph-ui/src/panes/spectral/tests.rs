@@ -1740,10 +1740,10 @@ fn the_strip_holds_its_leading_sliver_instead_of_reading_round_the_ring() {
 /// A big pane at a high density must not upload a texture the context has
 /// already said it will not take.
 ///
-/// The pane draws through two contexts that disagree about the limit: an
-/// editor's reports the wgpu device's 8192, and a bare `egui::Context` — the
-/// offline renderer's, and every test's — reports egui's own 2048 default. At
-/// 2048 the slab count alone put the image `2 * (1024 + 8)` = 2064 texels
+/// The pane draws through contexts that disagree about the limit: an editor's
+/// and the offline renderer's each report their device's 8192, and a bare
+/// `egui::Context` — every test's, this one included — reports egui's own 2048
+/// default. At 2048 the slab count alone put the image `2 * (1024 + 8)` = 2064
 /// across and `Context::load_texture` asserted on the upload, taking the frame
 /// with it. Issues #333 and #335 are that panic, reached from the profiling
 /// harness at exactly the geometry below.
@@ -1895,6 +1895,75 @@ fn the_now_line_paints_over_the_roll_that_arrives_at_it() {
         quiet_early + 1,
         "the roll paints over the line it arrives at, biting half its width out \
          under every sounding note",
+    );
+}
+
+/// **A whole-song pane must not upload a heatmap past the context's texture
+/// limit**, however much take lies either side of the window it draws.
+///
+/// The call-site half of the spectrogram module's
+/// `a_take_longer_than_the_render_window_folds_inside_what_the_gpu_takes` —
+/// that one holds the trim, this one holds the fold being GIVEN it. Named
+/// rather than linked, because rustdoc never resolves a link inside a
+/// `#[test]` and so never reports one that has gone dead.
+/// `build`'s whole-song arm is one expression away from the bug in either
+/// direction, and only a frame that actually paints can say which expression
+/// is there.
+///
+/// The frame itself is most of the test, because that is how the bug
+/// presented: `Context::load_texture` debug-asserts on an oversized upload
+/// (issues #333/#335, and #367 for this axis of it), so a pane that reaches
+/// the upload at all is the assertion. What puts real columns outside the
+/// window is `--start`/`--end` on a longer bounce —
+/// [`WholeSong::precompute`](crate::WholeSong::precompute) analyses the whole
+/// file whatever window was asked for, and the slab is cut for the window.
+#[test]
+fn a_whole_song_pane_draws_a_window_of_a_longer_take_inside_the_texture_limit() {
+    // What a bare `egui::Context` reports, which is what this harness paints
+    // through and what the assert above compares against.
+    const BARE_MAX_SIDE: usize = 2048;
+    let mut state = fresh();
+    state.spectrum_config.orientation = SpectralOrientation::Left;
+    // Three minutes of columns, sampled far more sparsely than the analyzer
+    // would: an empty slab still takes a texel of its own, so the image's
+    // width follows the columns' EXTENT and not their number.
+    let columns = (0..=360)
+        .map(|i| {
+            crate::SpectrogramColumn::from_power(
+                i as f64 * 0.5,
+                &[0.25; harmonigraph_core::spectrum::SPECTRUM_BINS],
+            )
+        })
+        .collect();
+    // A four-second window a minute into it — short enough that the slab
+    // floors at `MIN_BUCKET`, which is what makes the whole take's fold
+    // several times the limit rather than merely wider than the window's.
+    state.whole_song = Some(crate::WholeSong {
+        start: 60.0,
+        span: 4.0,
+        columns,
+        roll: state.tracker.roll().clone(),
+    });
+    let out = painted_pane(WIDE, &mut state, 61.0);
+
+    let textured = |s: &egui::epaint::ClippedShape| match &s.shape {
+        egui::Shape::Mesh(m) => m.texture_id != egui::TextureId::default(),
+        _ => false,
+    };
+    assert!(
+        out.shapes.iter().any(textured),
+        "no heatmap in the frame, so it never reached the upload this is about",
+    );
+    let widest = out
+        .textures_delta
+        .set
+        .iter()
+        .map(|(_, d)| d.image.width().max(d.image.height()))
+        .max()
+        .unwrap_or(0);
+    assert!(
+        widest <= BARE_MAX_SIDE,
+        "a {widest} texel image went to a context that takes {BARE_MAX_SIDE}",
     );
 }
 
