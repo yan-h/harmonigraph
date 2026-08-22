@@ -1160,6 +1160,34 @@ pub struct ViewConfig {
     ///
     /// Inert while [`glow_reach`](Self::glow_reach) is 0.
     pub glow_gap_soft: f32,
+    /// How the moat's fade is skewed across the width
+    /// [`glow_gap_soft`](Self::glow_gap_soft) gives it, 0..=1: 0 gives the
+    /// light back closest to the ring and trails the rest away, 0.5 the plain
+    /// symmetric ramp, 1 holds the ring dark to the end of that width.
+    ///
+    /// The SHAPE knob to that bar's width, the way
+    /// [`glow_feather`](Self::glow_feather) is to
+    /// [`glow_reach`](Self::glow_reach)'s distance. A symmetric ramp is
+    /// steepest exactly at the gap's end and flat at both ends of its own
+    /// width, so a wide fade spends its first half nearly solid and reads as a
+    /// dark annulus with a soft edge — the very thing the width was widened to
+    /// avoid. Below the middle the dark stays tight against the ring and the
+    /// recovery is a long shallow tail with no edge anywhere in it, which is a
+    /// ring standing in shade rather than in a band.
+    ///
+    /// It moves no boundary: the fade covers the same width at every setting
+    /// (see `moat_coverage` in lattice.wgsl), so
+    /// [`glow_gap`](Self::glow_gap) still says where the moat is solid to and
+    /// [`glow_gap_soft`](Self::glow_gap_soft) still says how far past that it
+    /// reaches. This says only where inside that width the light is given back.
+    ///
+    /// It is dialled against [`glow_gap_depth`](Self::glow_gap_depth) rather
+    /// than alone: the tail is the shallow end of the fade, so a depth well
+    /// under 1 leaves it too faint to read at all, and a depth of 1 makes it a
+    /// broad void that eats the halo it trails into.
+    ///
+    /// Inert while [`glow_reach`](Self::glow_reach) is 0.
+    pub glow_gap_shape: f32,
     /// How much of the light the moat takes away where it stands, 0..=1 —
     /// every ring's coverage scaled once by this.
     ///
@@ -2092,6 +2120,12 @@ impl ViewConfig {
         // band (see `glow_gap_soft`).
         self.glow_gap_soft =
             finite_or(self.glow_gap_soft, fresh.glow_gap_soft).clamp(0.0, GLOW_GAP_SOFT_MAX);
+        // The shape the moat's fade is spent in, which is a share of that
+        // fade's own WIDTH rather than a width itself — the exponent it maps
+        // to is the shader's business (`glow_gap_shape` in lattice.wgsl), and
+        // a bar reading 0..1 is what keeps its neutral point at the middle.
+        self.glow_gap_shape =
+            finite_or(self.glow_gap_shape, fresh.glow_gap_shape).clamp(0.0, 1.0);
         // The four that are SHARES — of the light the moat stands in, of the
         // light's own peak, of a whole turn — so their range is the unit
         // interval.
@@ -2376,6 +2410,12 @@ impl Default for ViewConfig {
             // dip the light comes off at rather than the band a share of the
             // gap could only draw.
             glow_gap_soft: 0.16,
+            // The fade spent evenly across that width, which is the plain
+            // symmetric ramp: the bar's own middle, so the shape is an
+            // addition to the fresh view rather than a restyle of it, and
+            // either half of the bar is somewhere to go from a look that is
+            // already tuned.
+            glow_gap_shape: 0.5,
             // Most of the light off around a ring, and not all of it: a ring
             // in a dim pool of its own halo reads as shade, where the whole of
             // it taken away reads as a black annulus drawn round the node.

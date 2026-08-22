@@ -396,6 +396,102 @@ mod tests {
         }
     }
 
+    /// The moat's picture, written to `target/scratch/` — a sweep of the Gap
+    /// shape, which is where inside the Gap fade's width the light is given
+    /// back.
+    ///
+    /// A probe: it asserts nothing, the verdict being a look rather than a
+    /// number, and a look is the only thing that settles this one. What the
+    /// numbers say — the gap shape's own test in harmonigraph-render — is that
+    /// the bar moves the light monotonically without moving the band. Whether
+    /// the low end reads as a ring standing in shade and the high end as a ring
+    /// in a painted annulus is the whole question and is not in that.
+    ///
+    /// Read CLOSE, where the sibling above reads far: a moat is a per-node
+    /// detail against that node's own rings, and at the distance a wash is
+    /// judged at the whole band is a few pixels and the shape is invisible. The
+    /// fade is set well past the gap because that is the bar's working range —
+    /// penned inside the gap there is nothing for a shape to redistribute — and
+    /// the depth is left where the fresh view has it, since the tail is the
+    /// faint end of the fade and a depth that swallows it hides what is being
+    /// looked at.
+    ///
+    /// ```text
+    /// cargo test -p harmonigraph-offline -- --ignored --nocapture gap_shape
+    /// ```
+    #[test]
+    #[ignore = "a probe: writes PNGs and asserts nothing"]
+    fn the_glow_gap_shape_draws_a_picture() {
+        use harmonigraph_ui::{draw_pane, Layout, SharedState};
+
+        const SIZE: [u32; 2] = [1200, 1000];
+        const PPP: f32 = 2.0;
+        const NOW: f64 = 1.0;
+
+        let Some(mut renderer) = Renderer::new(SIZE) else {
+            eprintln!("no usable GPU adapter; nothing rendered");
+            return;
+        };
+        let context = egui::Context::default();
+        harmonigraph_ui::theme::apply_theme(&context);
+        context.set_pixels_per_point(PPP);
+
+        let layout = Layout::preset("lattice").expect("the lattice preset");
+        let mut state = SharedState::new(FORMAT);
+        state.set_background((24, 25, 29));
+        state.frame_params.fade_time = 0.0;
+        state.view.glow_attack = 0.0;
+        state.view.glow_release = 0.0;
+        // A light worth moating: reached well past the node's own rings, so
+        // there is halo on both sides of the band the shape is spent in.
+        state.view.glow_reach = 1.2;
+        state.view.glow_strength = 2.0;
+        state.view.glow_gap = 0.1;
+        state.view.glow_gap_soft = 0.5;
+        for note in [55u8, 60, 64, 67, 71] {
+            state.tracker.handle_event(harmonigraph_core::NoteEvent::on(0.0, 0, note, 1.0));
+        }
+
+        let points = egui::vec2(SIZE[0] as f32 / PPP, SIZE[1] as f32 / PPP);
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, points);
+        let placements = layout.resolve(points);
+        let background = egui::Color32::from_rgb(
+            layout.background.0,
+            layout.background.1,
+            layout.background.2,
+        );
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/scratch");
+        std::fs::create_dir_all(&dir).expect("a scratch directory");
+
+        let home = state.camera;
+        for shape in [0.0f32, 0.25, 0.5, 0.75, 1.0] {
+            state.camera = home;
+            // In rather than out, and hard: the band is a fraction of ONE
+            // node's radius, and a lattice-wide view resolves none of it.
+            state.camera.zoom_by(3.5);
+            state.view.glow_gap_shape = shape;
+            let output = context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    time: Some(NOW),
+                    ..Default::default()
+                },
+                |ui| {
+                    for (pane, rect) in &placements {
+                        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(*rect));
+                        draw_pane(&mut child, *pane, &mut state, NOW);
+                    }
+                },
+            );
+            let primitives = context.tessellate(output.shapes, PPP);
+            let bytes = renderer.render(&primitives, &output.textures_delta, PPP, background);
+            let path = dir.join(format!("glow-gap-shape{:.0}.png", shape * 100.0));
+            image::save_buffer(&path, &bytes, SIZE[0], SIZE[1], image::ExtendedColorType::Rgba8)
+                .expect("write the png");
+            eprintln!("{}", path.canonicalize().unwrap_or(path.clone()).display());
+        }
+    }
+
     /// The audio ring's picture, written to `target/scratch/` — the only way
     /// to LOOK at this change without the DAW.
     ///
