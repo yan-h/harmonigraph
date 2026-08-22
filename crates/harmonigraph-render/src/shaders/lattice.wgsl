@@ -2781,8 +2781,8 @@ fn vs_ink_blur(
 /// The WHOLE turn, every column, rather than a window narrowed with the lobe:
 /// the widest average the bar asks for is no concentration at all, and the
 /// turn is only [`INK_STRIP_N`] texels wide, so there is nothing to save by
-/// stopping early and a `w` that stays positive for a node drawing ink
-/// anywhere to keep by not.
+/// stopping early and a `w` that stays positive for a node lighting any part
+/// of itself to keep by not.
 ///
 /// One column PAST the strip is the mean — the same accumulation with the lobe
 /// left flat, which is what `kappa = 0` makes of it, so the two are one loop
@@ -2804,8 +2804,8 @@ fn fs_ink_blur(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
         lobes = lobes + lobe;
     }
     // The colour normalised by the ink's own weights, and the weight itself by
-    // the lobe's — the first is a hue, the second is "how much ink is there",
-    // and a sum of sixty-four of them would be neither.
+    // the lobe's — the first is a hue, the second is "how much light is
+    // there", and a sum of sixty-four of them would be neither.
     return vec4<f32>(rgb / max(wsum, 1e-5), wsum / max(lobes, 1e-5));
 }
 
@@ -2818,7 +2818,7 @@ fn strip_texel(col: i32, row: i32) -> vec4<f32> {
 
 /// The colour of a node's light at a fragment: this node's finished strip, read
 /// in the fragment's own direction and eased toward the strip's mean by `mix`.
-/// `xyz` is that colour, `w` how much ink the node lays down anywhere at all.
+/// `xyz` is that colour, `w` how much light the node gives off anywhere at all.
 ///
 /// The blur itself is not here — the strip arrives already blurred, once per
 /// node per frame — so what a lit fragment costs is two texels and a lerp,

@@ -6553,7 +6553,10 @@ fn the_middle_of_a_node_is_where_its_light_is_fullest() {
 /// blended out of is empty here: there is no voice to take a hue from.
 ///
 /// The ring is the one layer an idle node paints, so this is also the case that
-/// says the glow follows what is DRAWN rather than what is played.
+/// says the glow follows every layer that LIGHTS the node rather than the keys
+/// alone. What it does not say is that drawing a layer is enough — see
+/// [`a_ring_reading_nothing_gives_off_no_light`], where the same ring with
+/// nothing in it gives off nothing.
 #[test]
 fn a_node_wearing_only_an_audio_ring_glows() {
     const SIZE: [u32; 2] = [256, 256];
@@ -6917,12 +6920,14 @@ fn a_nodes_light_takes_the_colour_of_whichever_layer_is_drawing() {
 
 /// A slice the node is not sounding puts NO ground in its light.
 ///
-/// The octave band is one lit slice among ten ghosts on any note voiced in a
-/// single octave, and a ghost is `Scene::lattice_ground` flat and opaque — so
-/// weighing the band by its INK gave that note a halo ten elevenths grey, with
-/// its own pitch a lobe inside it. The light weighs each slice by its LEVEL
-/// instead (`ink_at`, through `oct_slot_lit`), so the halo is the octave's own
-/// colour and the ghosts are a thing drawn rather than a thing shining.
+/// A note voiced in a single octave lights one slice of the octave band and
+/// leaves the rest of the wheel ghosts — eight of them at the fresh view's
+/// span of nine, four at this fixture's five — and a ghost is
+/// `Scene::lattice_ground` flat and opaque. Weighing the band by its INK
+/// therefore hands that note a halo that is mostly grey, with its own pitch a
+/// lobe inside it. The light weighs each slice by its LEVEL instead (`ink_at`,
+/// through `oct_slot_lit`), so the halo is the octave's own colour and the
+/// ghosts are a thing drawn rather than a thing shining.
 ///
 /// The ground is set to pure BLUE here, which is a colour the view cannot
 /// actually hold — `grey_of_lightness` is what fills that field in the app —
@@ -6961,11 +6966,104 @@ fn a_silent_slice_puts_none_of_its_ground_in_the_light() {
 
     let lit = added_light(&shooter.shot(&one_octave()), &off);
     assert!(lit[0] > 0, "the node's one lit octave lit nothing: {lit:?}");
-    // Ten slices of eleven are the ground, so weighing the band by its ink put
-    // an order of magnitude more of that grey in the halo than of the pitch.
+    // Four slices of five are the ground here, so weighing the band by its ink
+    // puts four times as much of that grey in the halo as of the pitch, and a
+    // factor of eight is well clear of either reading.
     assert!(
         lit[0] > lit[2] * 8,
         "a note voiced in one octave lit {lit:?} — the halo is carrying its ghosts",
+    );
+}
+
+/// A slice part way through its envelope carries that much of the light, and
+/// no more.
+///
+/// The one place the weight is neither what it was nor zero, and the reason
+/// the drawn ink cannot be asked for it: a slice's OPACITY is the node's
+/// presence, with the ghost filling in whatever its own level does not
+/// account for. So a pitch class held in one octave while another octave
+/// releases draws both slices fully opaque, and weighing the band by its ink
+/// hands the releasing one a full share of the light for the whole of its
+/// release — in a colour that is itself part ghost by then.
+///
+/// THREE channels, one per thing that could be in the halo: the ground pure
+/// green, and a pitch ramp that is pure blue under the two slices' midpoint
+/// and pure red over it, so the held slice is red, the releasing one blue, and
+/// any ghost that reaches the light is green. None of the three is reachable
+/// from the others.
+///
+/// Green is the discriminator — a ghost weighs nothing at any level, so the
+/// halo has none of it while the slice is half out. The blue share falling
+/// with the slice's own level is the positive claim, over three levels rather
+/// than two so that it is the ENVELOPE being followed and not a switch at 0.
+#[test]
+fn a_slice_part_way_out_carries_that_much_of_the_light() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    let beside = slot_beside_middle_c().trailing_zeros() as usize;
+    let lit = harmonigraph_scene::MIDDLE_C_SLOT;
+    assert_ne!(beside, lit, "the two slices have to be different slices");
+    // The node fully PRESENT throughout — that is what makes both slices
+    // opaque and the ink weight blind to which of them is sounding.
+    let at = |releasing: f32, reach: f32| -> Scene {
+        let mut scene = single_marked_node(0, 0);
+        scene.lattice_ground = glam::Vec4::new(0.0, 1.0, 0.0, 1.0);
+        // Split at the two slices' midpoint: one octave either side of it, so
+        // each wears one end of the ramp whole and neither is a blend.
+        let (dark, bright) = (scene.darkest_pitch, scene.brightest_pitch);
+        let mid = (harmonigraph_scene::MIDDLE_C_SLOT + beside) as f32 * 6.0;
+        let split = (mid - dark) / (bright - dark);
+        scene.pitch_lut = std::array::from_fn(|k| {
+            let t = k as f32 / (harmonigraph_scene::PITCH_LUT_N - 1) as f32;
+            if t < split {
+                glam::Vec4::new(0.0, 0.0, 1.0, 1.0)
+            } else {
+                glam::Vec4::new(1.0, 0.0, 0.0, 1.0)
+            }
+        });
+        let node = &mut scene.nodes[0];
+        node.activation = 1.0;
+        node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
+        node.octaves[lit] = 1.0;
+        node.octaves[beside] = releasing;
+        scene.glow_reach = reach;
+        scene.glow_strength = 1.5;
+        // No moat: a hole punched through the band would take the two slices'
+        // own colours out of the reading unevenly.
+        scene.glow_gap = 0.0;
+        scene
+    };
+    // The two slices sit either side of the split, so which of them is red and
+    // which blue follows from their order rather than being assumed.
+    let (held_ch, going_ch) = if beside > lit { (2, 0) } else { (0, 2) };
+    let mut halo = |releasing: f32| -> [i64; 3] {
+        added_light(&shooter.shot(&at(releasing, 0.8)), &shooter.shot(&at(releasing, 0.0)))
+    };
+    let (held, half, gone) = (halo(1.0), halo(0.5), halo(0.0));
+    eprintln!("halo r/g/b — releasing 1.0 {held:?}, 0.5 {half:?}, 0.0 {gone:?}");
+    // Non-vacuous: the two slices do light the halo in their own colours.
+    assert!(
+        held[held_ch] > 0 && held[going_ch] > 0,
+        "both slices sounding lit {held:?}, which is not two colours",
+    );
+    // The ghost never reaches the light — not while the slice is HALF out,
+    // which is where the drawn ink is half ground and fully weighed.
+    for (what, c) in [("both sounding", held), ("half out", half), ("gone", gone)] {
+        let colour = c[0] + c[2];
+        assert!(
+            c[1] * 8 < colour,
+            "with the slice {what} the halo carried {} of ground against {colour} of pitch: {c:?}",
+            c[1],
+        );
+    }
+    // And the share follows the envelope.
+    let share = |c: [i64; 3]| c[going_ch] as f64 / (c[0] + c[2]).max(1) as f64;
+    let (a, b, d) = (share(held), share(half), share(gone));
+    assert!(
+        a > b && b > d,
+        "the light did not follow the releasing slice's level: {a:.4} / {b:.4} / {d:.4}",
     );
 }
 
@@ -7019,8 +7117,18 @@ fn a_ring_reading_nothing_gives_off_no_light() {
     const PARTIAL: f32 = harmonigraph_scene::MIDDLE_C_SLOT as f32 * 12.0;
     let quiet_off = shooter.shot(&at(None, 0.0));
     let quiet_on = shooter.shot(&at(None, 0.8));
-    // Non-vacuous: the ring is drawn in both, and a partial in it does light.
-    assert!(total_light(&quiet_off) > 0, "the fixture must draw its audio ring");
+    // Non-vacuous: the silent ring is ON SCREEN. Against the layer's own off
+    // switch rather than against `total_light`, which the node's clearing
+    // alone would satisfy — and safe as a one-layer diff only because this
+    // node draws nothing else: no key, no octave, no mark, so there is no
+    // layer outside the ring for its width to slide inward (the stack packs
+    // outward from the centre).
+    let mut ringless = at(None, 0.0);
+    (ringless.spectral.inner, ringless.spectral.outer) = (0.0, 0.0);
+    assert!(
+        quiet_off != shooter.shot(&ringless),
+        "the fixture drew no audio ring, so it cannot say a silent one gives off nothing",
+    );
     let loud_off = shooter.shot(&at(Some(PARTIAL), 0.0));
     let loud_on = shooter.shot(&at(Some(PARTIAL), 0.8));
     assert!(
