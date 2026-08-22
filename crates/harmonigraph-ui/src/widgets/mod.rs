@@ -40,4 +40,4 @@ pub(crate) use gradient::{preview_height, spectrum_track_width};
 #[cfg(test)]
 pub(crate) use mesh::{band_bounds, band_columns};
 #[cfg(test)]
-pub(crate) use value::curve_points;
+pub(crate) use value::curve_paths;

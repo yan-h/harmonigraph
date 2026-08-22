@@ -363,12 +363,11 @@ struct Uniforms {
     /// nothing, and a moat held open for it would be a gap in the light around
     /// every node with no light to be a gap in.
     misc10: [f32; 4],
-    /// The node glow's second row. x: how far the moat's edge is feathered, in
-    /// the same units as the gap in `misc10.z` (`Scene::glow_gap_soft`) — a
-    /// width of its own and deliberately free to exceed that gap;
-    /// y: how widely a node's own ink is averaged into the colour of its light
-    /// (`Scene::glow_spread`); w: how much of the light the moat takes away
-    /// where it stands (`Scene::glow_gap_depth`).
+    /// The node glow's second row. x: how much of the moat in `misc10.z` is
+    /// spent fading the light back in, measured back from where it ends
+    /// (`Scene::glow_gap_soft`); y: how widely a node's own ink is averaged
+    /// into the colour of its light (`Scene::glow_blend`); w: how much of the
+    /// light the moat takes away where it stands (`Scene::glow_gap_depth`).
     ///
     /// z: how many rows this frame's ink strip has (`Scene::glow_rows`) — the
     /// one thing `vs_ink_strip` cannot work out for itself, since it is writing
@@ -1070,7 +1069,7 @@ impl LatticeCallback {
                 misc11: if lights {
                     [
                         scene.glow_gap_soft,
-                        scene.glow_spread,
+                        scene.glow_blend,
                         scene.glow_rows.max(1) as f32,
                         scene.glow_gap_depth,
                     ]
