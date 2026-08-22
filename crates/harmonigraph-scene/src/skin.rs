@@ -124,8 +124,13 @@ pub fn ground_color(rgb: (u8, u8, u8)) -> Vec4 {
 /// pane that paints no ground of its own shows through: a picture is recessed
 /// below the chrome around it rather than flush with it, and the lattice being
 /// the one picture at panel level made it read as a lighter card beside the
-/// analyzer. The renderer's own default frame background is this grey too, so
-/// an export and the editor stand the lattice on one ground.
+/// analyzer. The renderer's own default frame background is a shade BELOW this
+/// one — `Layout`'s `background`, the window colour, at (14, 14, 18) against
+/// this (15, 16, 19) — and an export stands the lattice on that, because a
+/// pane paints the ground its shell hands it rather than the skin's
+/// (`the_pane_paints_the_shells_ground_rather_than_the_skins`). The two are a
+/// step apart on purpose: one is the colour a picture is recessed into, the
+/// other the colour a frame is matted with.
 pub fn well_color() -> Vec4 {
     let [r, g, b] = active_skin().well;
     ground_color((r, g, b))

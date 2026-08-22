@@ -119,9 +119,15 @@ pub const SPECTRAL_GATE_MAX: f32 = 1.0;
 ///
 /// The ceiling is what the band MEANS rather than arithmetic. It is the drop
 /// from the gate to the threshold a bucket already open is held by, so at a
-/// quarter of the window a ring that opened at the fresh 0.4 stays lit down to
-/// 0.15 — most of the way to the floor, and about as far as "this node is still
+/// quarter of the window a ring that opened at the fresh 0.30 stays lit down to
+/// 0.05 — nearly to the floor, and about as far as "this node is still
 /// sounding" can be stretched before it reads as "this node once sounded".
+///
+/// The band is allowed to reach the gate and past it, and what happens there
+/// is [`RingGate::opens`]: the held threshold stops one step of the grid above
+/// silence rather than at it, so a band this wide holds a ring until its bucket
+/// reads nothing at all. Only the gate's own floor gives back the ungated
+/// picture.
 pub const SPECTRAL_HYSTERESIS_MAX: f32 = 0.25;
 
 /// The longest attack or release the ring's reading offers, in seconds.

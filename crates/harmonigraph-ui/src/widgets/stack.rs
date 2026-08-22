@@ -23,8 +23,8 @@ use crate::theme;
 /// the four layers stop for good, and the only thing out past it is a strip
 /// that can be [`MARK_THICKNESS_MAX`] deep. A bar carrying anything past that
 /// carries travel no handle can use, at the price of the length the layers'
-/// names need: a fresh node ends at 0.98, which is three quarters of this axis
-/// and under two thirds of the billboard's.
+/// names need: a fresh node ends at 0.94, which is under three quarters of
+/// this axis and under two thirds of the billboard's.
 ///
 /// What it costs is the corner where the rings are pushed hard against the quad
 /// edge, which leaves the strip starting a gap PAST 1.0 with the last of its
@@ -432,7 +432,7 @@ impl<'a> StackBar<'a> {
         // either limit still seats a whole thumb inside the bar. It matters more
         // here than on a range: a node with nothing but its middle parks three
         // thumbs at the bottom of the axis, and a fresh view already stands the
-        // outermost at 0.98 of the quad.
+        // outermost at 0.94 of the quad.
         let inset = HANDLE_INSET * scale;
         let track = rect.shrink2(Vec2::new(inset, 0.0));
         let x_of = |v: f32| track.left() + track.width() * (v / AXIS_TOP).clamp(0.0, 1.0);

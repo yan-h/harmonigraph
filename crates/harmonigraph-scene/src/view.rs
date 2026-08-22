@@ -551,12 +551,14 @@ pub struct ViewConfig {
     /// this node's — and is a hard threshold because a MIDI note either is that
     /// node or is not.
     ///
-    /// Narrow fresh, at 10¢, because just intonation is what this is for:
+    /// Narrow fresh, at 2.1¢, because just intonation is what this is for:
     /// partials of just-tuned notes land dead on nodes, so a narrow kernel
-    /// draws them crisp and rejects everything between. 12-TET material reads
-    /// softer at that width and wants the bar dragged right — a tempered major
-    /// third's 5th harmonic sits 13.7¢ off the node it belongs to and a
-    /// harmonic seventh 31¢ off.
+    /// draws them crisp and rejects everything between. 12-TET material is
+    /// rejected along with the rest at that width and wants the bar dragged
+    /// right — a tempered major third's 5th harmonic sits 13.7¢ off the node
+    /// it belongs to and a harmonic seventh 31¢ off, both several times the
+    /// fresh kernel wide, so neither reaches its node until the bar is opened
+    /// to the order of the miss.
     pub spectral_width: f32,
     /// How thick the audio ring is, in the same quad UV units as the octave
     /// band's own width ([`band_width`](Self::band_width)) — and **0 turns the
@@ -595,12 +597,18 @@ pub struct ViewConfig {
     /// picture turned, and what is worth looking at is the disagreement
     /// between a node's own pitch and where the energy near it actually sits.
     ///
-    /// Fresh at 200¢, a whole tone across a wedge. Wide enough to hold every
-    /// miss the material makes — a tempered major third's 5th harmonic sits
-    /// 13.7¢ off its node, a harmonic seventh 31¢, and the syntonic comma
-    /// between two just spellings is 21.5¢ — and narrow enough that those are
-    /// a seventh of the wedge apart rather than a fiftieth, which is the
-    /// difference between reading a detuning and taking it on trust.
+    /// Fresh at 10¢, a wedge that is very nearly one pitch: what it shows is
+    /// energy AT the node rather than energy somewhere near it, which is the
+    /// reading that says where a partial actually landed.
+    ///
+    /// Every miss the material makes is wider than that — a tempered major
+    /// third's 5th harmonic sits 13.7¢ off its node, a harmonic seventh 31¢,
+    /// and the syntonic comma between two just spellings is 21.5¢ — so at the
+    /// fresh width a detuned partial falls outside its own wedge and reads as
+    /// that node going quiet rather than as a ring off centre. Seeing WHERE it
+    /// went is what the bar is dragged right for, out to the order of the miss;
+    /// a whole tone across the wedge holds all three at once, at the cost of a
+    /// wedge that answers for a range rather than for a pitch.
     pub spectral_ring_range: f32,
     /// How loud the loudest thing a node's ring shows has to read before that
     /// node draws a ring at all, as a level on the analyzer's own Level window
@@ -636,9 +644,17 @@ pub struct ViewConfig {
     /// there is something loud within a hundred cents of nearly every pitch
     /// class, so the nodes' levels sit close together and the bar tips from
     /// most rings to none over a short stretch of its travel. Measured on a
-    /// sawtooth 24 dB down over the fresh window: the fold rings 601 nodes of
+    /// sawtooth 24 dB down over a 200¢ window: the fold rings 601 nodes of
     /// 1025 at 0.1 and 177 at 0.4, where the spectrum rings all 1025 at both
     /// and none by 0.6.
+    ///
+    /// That contrast is a function of the WINDOW, which is why the width it was
+    /// taken at is named rather than called the fresh one: the fold has no
+    /// window at all and the spectrum's is
+    /// [`spectral_ring_range`](Self::spectral_ring_range), so at the fresh 10¢
+    /// the spectrum spreads ±6.25¢ across a wedge rather than ±100¢ and selects
+    /// very nearly as sharply as the fold. The sentence above is what the two
+    /// readings do as that bar is opened, and the numbers are one point on it.
     pub spectral_ring_gate: f32,
     /// How far the gate DROPS for a bucket already open, as a share of the
     /// Level window — a Schmitt trigger's lower threshold.

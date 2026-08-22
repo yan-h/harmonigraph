@@ -10,8 +10,9 @@ Two places a skin reaches, and only one of them is an axis today:
   the stack is read out from (`ring_inner`), the audio ring seated on that, the
   octave band around it, the melody/bass marks past that, each sized on the
   Layers bar. What lights the middle of one is the node glow
-  (`lattice.wgsl`'s `glow_layer`), colored by the octave blend
-  `octave_glow_color` lays around the node. There is no style enum to add a
+  (`lattice.wgsl`'s `glow_layer`), colored by the node's own INK — each layer
+  it draws weighted by the radial width it occupies, laid out by angle in the
+  ink strip (`fs_ink_strip`, read back by `glow_ink`). There is no style enum to add a
   variant to — a second paint means a branch there and a setting to pick it,
   which is what the retired `NodeStyle` was.
 - **Chrome** — grid lines and chord beams live in `fs_edge` /
