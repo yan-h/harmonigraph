@@ -5946,7 +5946,19 @@ fn a_lattice_with_no_node_grows_no_glow() {
 ///
 /// Measured against the SAME light with no moat in it rather than against an
 /// unlit frame: what is being read is what each shape took away, so the light
-/// it took it from has to be the one constant.
+/// it took it from has to be the one constant. That baseline is the fixture at
+/// a gap DEPTH of 0, NOT at a gap WIDTH of 0 — see the comment on it, because
+/// the two are different pictures and only one of them is an absent moat.
+///
+/// A few hundred pixels a shot still come out NEGATIVE — the moated shot
+/// brighter than the unmoated one, in a thin annulus over the node's own lit
+/// sector — and the `lost <= 0` guard drops them. That is a property of the
+/// glow's three-pass composite rather than of the exponent: it reproduces with
+/// the shape at its neutral middle, where this draws the same ramp it always
+/// drew, so it is not this bar's doing. See issue #428. It does not reach the
+/// verdict here: a pixel's contribution is `max(0, cov_shape - cov_none)`,
+/// which is monotone non-decreasing in the exponent, so the ordering holds on
+/// the pixels that are counted whatever those few hundred do.
 #[test]
 fn the_gap_shape_moves_where_the_moat_gives_light_back_not_how_far_it_reaches() {
     const SIZE: [u32; 2] = [256, 256];
@@ -5971,7 +5983,18 @@ fn the_gap_shape_moves_where_the_moat_gives_light_back_not_how_far_it_reaches() 
         scene.glow_gap_shape = shape;
         scene
     };
-    let flush = shooter.shot(&at(0.0, 0.0, 0.5));
+    // The same light with no moat in it, and the way to ask for that is a DEPTH
+    // of 0 rather than a Gap of 0. A gap of 0 is not an absent moat: the edge is
+    // floored (`clearing_edge`) and the feather collapses to a single screen
+    // band, so coverage snaps to a whole 1 everywhere inside a ring's own
+    // annulus and the light is taken from there COMPLETELY — a crisper moat
+    // than any of the shots below rather than a missing one. Read against that,
+    // a wide feather looks like it ADDS light across every ring the node draws.
+    // A depth of 0 is unambiguous: `fs_glow_moat` early-outs on it, and the
+    // pass multiplies the glow's target by one.
+    let mut none = at(GAP, SOFT, 0.5);
+    none.glow_gap_depth = 0.0;
+    let flush = shooter.shot(&none);
     // The neutral shape over one more half-width of fade: what the band looks
     // like when it really has been widened, and so the ceiling the three shapes
     // below have to stay inside.
