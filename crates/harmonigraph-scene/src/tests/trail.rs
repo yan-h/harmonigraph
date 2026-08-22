@@ -19,36 +19,42 @@ fn play_and_forget(tracker: &mut NoteTracker, note: u8, on: f64, off: f64) {
     tracker.prune(off + 2.0, &Envelope::default());
 }
 
-/// The trail switched explicitly on or off. The kept note names ARE the
-/// trail, so that one flag is its on/off — nothing fills `trail` without it.
+/// The trail switched explicitly on or off. The kept past names ARE the
+/// trail, so that one mode is its on/off — nothing fills `trail` under either
+/// of the others.
 fn trail_view(on: bool) -> ViewConfig {
-    ViewConfig { trail_labels: on, ..ViewConfig::default() }
+    let note_names = if on { NoteNames::Past } else { NoteNames::Played };
+    ViewConfig { note_names, ..ViewConfig::default() }
 }
 
 #[test]
-fn nothing_is_remembered_while_the_trail_is_off() {
+fn nothing_is_remembered_under_any_mode_but_past() {
     let mut tracker = NoteTracker::new();
     play_and_forget(&mut tracker, 60, 0.0, 1.0);
-    // Explicitly off rather than `ViewConfig::default()`: the fresh-view
-    // look is Yan's, and is free to ship the trail on.
-    let view = trail_view(false);
-    let scene = scene_of(&tracker, &Tuning::default(), &view, &plain_frame(), 10.0);
-    assert!(scene.nodes.iter().all(|n| n.trail == 0.0));
+    // Explicit modes rather than `ViewConfig::default()`: the fresh-view look
+    // is Yan's, and is free to ship any of the three.
+    //
+    // All is in here because it is the one that looks like it should mark
+    // something: it names every node, but off the label layer's own answer
+    // rather than off a memory, so `trail` stays a record of where the music
+    // has actually been.
+    for names in [NoteNames::Played, NoteNames::All] {
+        let view = ViewConfig { note_names: names, ..ViewConfig::default() };
+        let scene = scene_of(&tracker, &Tuning::default(), &view, &plain_frame(), 10.0);
+        assert!(scene.nodes.iter().all(|n| n.trail == 0.0), "{names:?} marked a node");
+    }
 }
 
 #[test]
 fn a_visited_node_is_marked_and_an_unvisited_one_is_not() {
     let mut tracker = NoteTracker::new();
     play_and_forget(&mut tracker, 60, 0.0, 1.0);
-    // Explicit rather than `trail_view`'s own `ViewConfig::default()`: the
-    // fresh view forgets after a span, and this test is about the memoryless
-    // case, not about what the fresh view happens to dial.
-    let view = ViewConfig { trail_memory: 0.0, ..trail_view(true) };
+    let view = trail_view(true);
     let frame = plain_frame();
     let tuning = Tuning::default();
 
-    // With no memory span the mark holds indefinitely: the point is a whole
-    // piece's territory, not a rolling window.
+    // The mark holds indefinitely: the point is a whole piece's territory,
+    // not a rolling window, so nothing ages out however long the piece runs.
     for now in [5.0, 600.0, 100_000.0] {
         let scene = scene_of(&tracker, &tuning, &view, &frame, now);
         assert_eq!(origin_node(&scene).trail, 1.0, "at t={now}");
@@ -81,14 +87,14 @@ fn a_memory_touches_no_field_but_trail() {
     let bare = scene_of(
         &tracker,
         &tuning,
-        &ViewConfig { trail_labels: false, ..view.clone() },
+        &ViewConfig { note_names: NoteNames::Played, ..view.clone() },
         &frame,
         10.0,
     );
     let marked = scene_of(
         &tracker,
         &tuning,
-        &ViewConfig { trail_labels: true, ..view.clone() },
+        &ViewConfig { note_names: NoteNames::Past, ..view.clone() },
         &frame,
         10.0,
     );
@@ -111,22 +117,6 @@ fn a_memory_touches_no_field_but_trail() {
         assert_eq!(a.strength, b.strength);
         assert_eq!(a.color, b.color);
     }
-}
-
-#[test]
-fn a_memory_span_fades_a_pitch_out_and_then_drops_it() {
-    let mut tracker = NoteTracker::new();
-    play_and_forget(&mut tracker, 60, 0.0, 1.0);
-    let view = ViewConfig { trail_memory: 100.0, ..trail_view(true) };
-    let frame = plain_frame();
-    let tuning = Tuning::default();
-    let trail_at = |now: f64| origin_node(&scene_of(&tracker, &tuning, &view, &frame, now)).trail;
-
-    // Measured from the release, so the mark takes over at full strength.
-    assert!((trail_at(1.0) - 1.0).abs() < 1e-6);
-    assert!((trail_at(51.0) - 0.5).abs() < 1e-5);
-    assert_eq!(trail_at(101.0), 0.0);
-    assert_eq!(trail_at(10_000.0), 0.0);
 }
 
 #[test]

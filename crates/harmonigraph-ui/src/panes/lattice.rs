@@ -5,7 +5,7 @@ use super::{display_note_name, learn_pulse, zoom_gesture};
 use crate::{theme, SharedState};
 use egui::Sense;
 use harmonigraph_render::lattice_paint_callback;
-use harmonigraph_scene::{derive_scene, Camera, Projection, SevensLabel};
+use harmonigraph_scene::{derive_scene, Camera, NoteNames, Projection, SevensLabel};
 use crate::marks::{
     draw_plain_name, draw_stacked_name, painter_ink, CENTS_GAP, CENTS_SIZE, LABEL_REACH,
     NAME_SIZE, REFERENCE_HEIGHT,
@@ -291,9 +291,9 @@ fn learn_badge(ui: &egui::Ui, rect: egui::Rect, now: f64) -> crate::text::TextBa
 /// text is that it can be read: a name at 5% alpha says nothing.
 const TRAIL_LABEL_STRENGTH: f32 = 0.5;
 
-/// How readable one node's label is, 0..1. `trailed` is whether this node
-/// carries a kept name already, `keeps_names` whether the view keeps them at
-/// all (see [`draw_node_labels`]).
+/// How readable one node's label is, 0..1. `names` is which nodes the view
+/// names at all (see [`draw_node_labels`]), and this is where each of the
+/// three answers turns into a level.
 ///
 /// A sounding label rides its note's envelope straight down to nothing. The
 /// one exception is a name this view is about to KEEP, which settles on
@@ -320,28 +320,36 @@ const TRAIL_LABEL_STRENGTH: f32 = 0.5;
 /// vanishing from it is exactly what a visibility floor looks like, and this
 /// was the last one left.
 ///
-/// One corner is left, and it needs a number this layer doesn't have: a trail
-/// Memory *shorter than the Fade* forgets the pitch before the release ends,
-/// so the reserve holds a home-sheet name that then has nothing to hand it to.
-/// Memory is 0 — never forget — by default, and the fix needs the fade time
-/// down here to predict the level the record will land on.
-fn label_strength(node: &harmonigraph_scene::NodeInstance, trailed: bool, keeps_names: bool) -> f32 {
+/// Reserved under [`NoteNames::Past`] alone, which is the only mode a record
+/// is ever coming under. [`All`](NoteNames::All) needs none — every node
+/// already draws at the kept level, so there is nothing to reserve up to —
+/// and under [`Played`](NoteNames::Played) nothing is kept, so a name held
+/// short of zero would hold there for good.
+fn label_strength(node: &harmonigraph_scene::NodeInstance, names: NoteNames) -> f32 {
     if node.hovered {
         return 1.0;
     }
-    let recorded = if trailed { TRAIL_LABEL_STRENGTH * node.trail } else { 0.0 };
-    let reserved = if keeps_names && node.on_home && node.departing && node.activation > 0.0 {
+    // What a name that is not sounding draws at: every node under All, a
+    // visited one under Past, and nothing at all under Played.
+    let resting = match names {
+        NoteNames::All => TRAIL_LABEL_STRENGTH,
+        NoteNames::Past => TRAIL_LABEL_STRENGTH * node.trail,
+        NoteNames::Played => 0.0,
+    };
+    let keeps_past = names == NoteNames::Past;
+    let reserved = if keeps_past && node.on_home && node.departing && node.activation > 0.0 {
         TRAIL_LABEL_STRENGTH
     } else {
         0.0
     };
-    node.activation.max(recorded).max(reserved)
+    node.activation.max(resting).max(reserved)
 }
 
-/// Labels on hovered, sounding, and -- with the trail's "Keep note names"
-/// on -- already-visited nodes, projected with the same camera as the nodes:
-/// the note name centered on the node, optionally its pitch class in cents
-/// just below.
+/// Labels on hovered and sounding nodes, plus whatever else the Show row
+/// names -- every visited node under [`NoteNames::Past`], every node on
+/// screen under [`All`](NoteNames::All) -- projected with the same camera as
+/// the nodes: the note name centered on the node, optionally its pitch class
+/// in cents just below.
 ///
 /// Collected here and drawn by the lattice's own callback, inside its scene
 /// pass, each name at its node's place in the back-to-front order — so a node
@@ -388,25 +396,32 @@ pub(crate) fn draw_node_labels(
     let want = rect.height() / REFERENCE_HEIGHT * view.label_scale * scene.camera.screen_scale();
     let ppp = ui.painter().ctx().pixels_per_point();
     let projector = scene.projector(glam::Vec2::new(rect.width(), rect.height()));
-    // "Keep note names" IS the trail: it is what populates `node.trail` (see
-    // `TrailField::build`) as well as what draws off it. With it clear the
-    // field never fills, so a fading name has nothing to settle onto and
-    // eases all the way out.
-    let keeps_names = view.trail_labels;
+    // Past IS the trail: it is what populates `node.trail` (see
+    // `TrailField::build`) as well as what draws off it. Under either other
+    // mode the field never fills, so a fading name has nothing to settle onto
+    // and eases all the way out.
+    let names = view.note_names;
     for (index, node) in scene.nodes.iter().enumerate() {
-        let trailed = view.trail_labels && node.trail > 0.0;
+        // Named while nothing is happening on it: every node under All, a
+        // visited one under Past. `is_visible` below is what holds All to the
+        // lattice on screen rather than every position the view holds.
+        let resting = match names {
+            NoteNames::All => true,
+            NoteNames::Past => node.trail > 0.0,
+            NoteNames::Played => false,
+        };
         // `is_visible` re-checks what `Scene::pick` already enforces, and
         // `hovered` is picking's alone, so this is a second lock on one door.
         // It stays because the field is public shared state rather than
         // picking's private output, and what it costs to be wrong is a name
         // floating in the sevens dimension on a node that draws nothing.
-        if !(node.hovered || node.activation > 0.0 || trailed) || !node.is_visible() {
+        if !(node.hovered || node.activation > 0.0 || resting) || !node.is_visible() {
             continue;
         }
         let Some(p) = projector.project(node.world_pos) else {
             continue;
         };
-        let strength = label_strength(node, trailed, keeps_names);
+        let strength = label_strength(node, names);
         let center = egui::pos2(rect.min.x + p.x, rect.min.y + p.y);
         // Off the pane: nothing to draw. `project` only rejects what is
         // behind the camera, so a node off to the side still lands at a
@@ -777,32 +792,46 @@ mod tests {
     fn only_a_name_that_will_be_kept_stops_short_of_zero() {
         // Off the home sheet: nothing will ever be recorded there, so the
         // label rides the envelope all the way out.
-        for keeps_names in [false, true] {
-            assert_eq!(label_strength(&fading(0.2, false), false, keeps_names), 0.2);
-            assert_eq!(label_strength(&fading(0.02, false), false, keeps_names), 0.02);
-            assert_eq!(label_strength(&fading(0.0, false), false, keeps_names), 0.0);
+        for names in [NoteNames::Played, NoteNames::Past] {
+            assert_eq!(label_strength(&fading(0.2, false), names), 0.2);
+            assert_eq!(label_strength(&fading(0.02, false), names), 0.02);
+            assert_eq!(label_strength(&fading(0.0, false), names), 0.0);
         }
-        // On the home sheet with the names kept, it settles on the level the
+        // On the home sheet with the past kept, it settles on the level the
         // record will hold it at rather than easing out and popping back.
-        assert_eq!(label_strength(&fading(0.8, true), false, true), 0.8);
-        assert_eq!(label_strength(&fading(0.2, true), false, true), TRAIL_LABEL_STRENGTH);
-        // ...and with them off, the home sheet fades out like anything else.
-        assert_eq!(label_strength(&fading(0.2, true), false, false), 0.2);
+        assert_eq!(label_strength(&fading(0.8, true), NoteNames::Past), 0.8);
+        assert_eq!(label_strength(&fading(0.2, true), NoteNames::Past), TRAIL_LABEL_STRENGTH);
+        // ...and with only the played notes named, the home sheet fades out
+        // like anything else.
+        assert_eq!(label_strength(&fading(0.2, true), NoteNames::Played), 0.2);
         // A silent node reserves nothing at all, wherever it sits: the
         // reserve is for a name on its way to being kept, not for every node
         // the view holds.
-        assert_eq!(label_strength(&fading(0.0, true), false, true), 0.0);
+        assert_eq!(label_strength(&fading(0.0, true), NoteNames::Past), 0.0);
         // A hover is always fully readable, mid-fade or not.
         let mut hovered = fading(0.05, false);
         hovered.hovered = true;
-        assert_eq!(label_strength(&hovered, false, false), 1.0);
-        // Once the name IS recorded, it reads at the kept level, scaled by
-        // how much memory is left.
+        assert_eq!(label_strength(&hovered, NoteNames::Played), 1.0);
+        // Once the name IS recorded, it reads at the kept level.
         let mut kept = fading(0.0, true);
         kept.trail = 1.0;
-        assert_eq!(label_strength(&kept, true, true), TRAIL_LABEL_STRENGTH);
-        kept.trail = 0.5;
-        assert_eq!(label_strength(&kept, true, true), TRAIL_LABEL_STRENGTH * 0.5);
+        assert_eq!(label_strength(&kept, NoteNames::Past), TRAIL_LABEL_STRENGTH);
+    }
+
+    /// Naming every node is a floor under the whole lattice, not a memory:
+    /// silence reads at the kept level on a node that has never sounded and
+    /// on one off the home sheet alike, and a note still outshines the field
+    /// it sits in.
+    #[test]
+    fn naming_everything_puts_every_node_at_the_kept_level() {
+        for on_home in [false, true] {
+            assert_eq!(
+                label_strength(&fading(0.0, on_home), NoteNames::All),
+                TRAIL_LABEL_STRENGTH,
+            );
+            // Louder than the floor, so the note itself carries the name.
+            assert_eq!(label_strength(&fading(0.8, on_home), NoteNames::All), 0.8);
+        }
     }
 
     /// A name ARRIVES on its own note's envelope, like every other layer.
@@ -836,8 +865,12 @@ mod tests {
             None,
             0.05,
         );
-        let keeps_names = state.view.trail_labels;
-        assert!(keeps_names, "the fresh view keeps names; without that this proves nothing");
+        let names = state.view.note_names;
+        assert_eq!(
+            names,
+            NoteNames::Past,
+            "the fresh view keeps the past; without that this proves nothing",
+        );
         let node = scene.nodes.iter().find(|n| n.activation > 0.0).expect("the note lit a node");
         assert!(node.on_home, "the lit node is off the home sheet, where nothing is reserved");
         assert!(
@@ -846,7 +879,7 @@ mod tests {
             node.activation,
         );
         assert_eq!(
-            label_strength(node, false, keeps_names),
+            label_strength(node, names),
             node.activation,
             "an arriving name was drawn at the trail reserve, not at its note's own level",
         );
@@ -875,7 +908,7 @@ mod tests {
             node.activation,
         );
         assert_eq!(
-            label_strength(node, false, keeps_names),
+            label_strength(node, names),
             TRAIL_LABEL_STRENGTH,
             "a departing name stopped reserving the level its trail record takes over at",
         );

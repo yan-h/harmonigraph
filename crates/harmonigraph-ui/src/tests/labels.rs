@@ -513,6 +513,49 @@ fn a_natural_note_label_is_just_the_letter() {
     assert!((text_box(&texts, "G").center().x - anchor.x).abs() < 0.5);
 }
 
+/// Which nodes the Show row names, asked of a lattice at REST: nothing is
+/// playing, nothing has been played and nothing is hovered, so whatever text
+/// turns up is the mode's own answer rather than a note's or the pointer's.
+///
+/// The three differ only here. A sounding node and a hovered one are named
+/// under all of them, which is what makes the resting picture the reading
+/// that tells them apart.
+#[test]
+fn only_the_all_mode_names_a_node_nothing_has_happened_on() {
+    let names_drawn = |names: harmonigraph_scene::NoteNames| -> Vec<String> {
+        let mut state = fresh();
+        state.view.show_labels = true;
+        state.view.note_names = names;
+        let scene = harmonigraph_scene::derive_scene(
+            &state.tracker,
+            &state.tuning,
+            &state.view,
+            &state.view.reach(),
+            &state.frame_params,
+            state.camera,
+            None,
+            0.0,
+        );
+        pane_labels(&scene, &state.view, 1.0)
+            .pieces()
+            .iter()
+            .map(|piece| piece.text.clone())
+            .collect()
+    };
+
+    for names in [harmonigraph_scene::NoteNames::Played, harmonigraph_scene::NoteNames::Past] {
+        let drawn = names_drawn(names);
+        assert!(drawn.is_empty(), "{names:?} named a node at rest: {drawn:?}");
+    }
+    // Named without a note or a memory behind it, which is the whole of what
+    // All adds. The origin is in there by name -- the camera looks straight
+    // at it -- and it is not alone, since the mode is about the field rather
+    // than about one node.
+    let all = names_drawn(harmonigraph_scene::NoteNames::All);
+    assert!(all.iter().any(|text| text == "C"), "the origin went unnamed: {all:?}");
+    assert!(all.len() > 1, "only one node was named: {all:?}");
+}
+
 /// Every label the lattice draws, at one camera and one Size bar setting: the
 /// rasterized type size, and the ink it actually covers.
 fn lattice_labels_at(label_scale: f32, distance: f32, ppp: f32) -> Vec<(f32, egui::Rect)> {
