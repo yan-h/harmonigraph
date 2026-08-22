@@ -6839,6 +6839,73 @@ fn harmonic(profile: &[f64], k: usize) -> f64 {
     2.0 * (re * re + im * im).sqrt() / n
 }
 
+/// A node with no light of its own writes into no other node's colour.
+///
+/// `GlowFade` hands a strip row only to a node that has a light. Everything
+/// else is given `GlowStep::default()` — and that default's row is 0, its mix
+/// 1.0. A node with no light is still SHIPPED whenever it draws anything at
+/// all (`paints`: an audio ring is enough), and `fs_ink_strip` draws for every
+/// instance without looking at the level, so such a node settles its own ink
+/// into row 0 at full weight and takes the colour of whichever node actually
+/// owns that row.
+///
+/// Ordinary material reaches this, not a stress test: turn the audio ring on
+/// and every ringing node that is not itself lit — most of them, with the Gate
+/// low — writes over row 0. The node holding row 0 is the first node to have
+/// lit in the session, so what a listener sees is one node's halo wearing the
+/// wrong hue and flickering between wrong hues, since which of the several
+/// writers lands last is the rasteriser's business and not stable frame to
+/// frame.
+///
+/// Two nodes, two layers, one colour each: the lit node draws the RED octave
+/// band and no ring, the unlit one draws the GREEN audio ring and nothing
+/// else. The lit node's halo has to stay red.
+#[test]
+fn a_node_with_no_light_writes_into_no_other_nodes_colour() {
+    const SIZE: [u32; 2] = [256, 256];
+    const WIDTH: f32 = 0.18;
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    // The band red and the ring green, with the LIT node wearing only the
+    // band — so every green pixel of light in the frame came off the other
+    // node's ink rather than out of this one's own ring.
+    let scene = || -> Scene {
+        let mut scene = two_colour_node(WIDTH, WIDTH);
+        scene.nodes[0].audio_ring = 0.0;
+        scene.nodes[0].glow.mix = 1.0;
+        let mut idle = scene.nodes[0];
+        idle.world_pos.x += 1.2;
+        idle.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
+        idle.activation = 0.0;
+        idle.audio_ring = 1.0;
+        // What `GlowFade` hands a node it gave no row to.
+        idle.glow = harmonigraph_scene::GlowStep::default();
+        scene.nodes.push(idle);
+        scene
+    };
+    let unlit = |mut scene: Scene| -> Scene {
+        scene.glow_reach = 0.0;
+        scene
+    };
+
+    let ground = shooter.shot(&unlit(scene()));
+    let light = added_light(&shooter.shot(&scene()), &ground);
+
+    // Non-vacuous first, on the WHOLE halo rather than on its red: the defect
+    // takes the red to nothing, so a red-only check here reports "nothing is
+    // lit" for a frame that is brightly lit in the wrong colour.
+    assert!(
+        light.iter().sum::<i64>() > 64,
+        "the lit node lit nothing at all: {light:?}",
+    );
+    assert!(
+        light[0] > light[1] * 4,
+        "the lit node's halo came out {light:?}: it is drawing the RED band and no ring, so \
+         the green is the idle node's ink settling into the row it was never given",
+    );
+}
+
 /// A node's light takes its colour from the frame before, not from this frame's
 /// ink alone.
 ///

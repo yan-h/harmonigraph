@@ -2545,6 +2545,21 @@ fn vs_ink_strip(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsO
     let v = (out.strip_row + corner.y) / rows;
     out.clip_pos = vec4<f32>(corner.x * 2.0 - 1.0, 1.0 - 2.0 * v, 0.0, 1.0);
     out.uv = vec2<f32>(corner.x, 0.0);
+    // A node with no light was handed no ROW either, and the two facts are one
+    // fact: `GlowFade` gives a row only to a node that has a light and hands
+    // everything else `GlowStep::default()`, whose row is 0 and whose mix is 1.
+    // Such a node is still SHIPPED whenever it draws anything at all — an audio
+    // ring is enough — so writing its ink here would settle it whole into the
+    // row belonging to whichever node lit first. Collapsed to a point instead,
+    // which rasterises nothing.
+    //
+    // The level is the right test rather than the row, because a row is only
+    // ever ITS OWN while the light is: the frame a light ends the node still
+    // carries its row, ships at a level of exactly 0, and has that row taken
+    // back the same frame — so there is nothing left in it to keep.
+    if inst.glow.x <= 0.0 {
+        out.clip_pos = vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    }
     return out;
 }
 
