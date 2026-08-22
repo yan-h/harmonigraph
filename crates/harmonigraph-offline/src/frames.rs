@@ -391,6 +391,12 @@ mod tests {
     /// own dot rather than grow out of one, which is a comparison between the
     /// dot's radius and where the node's rings start.
     ///
+    /// The last two shots are the NAMES, which take a dot off the position
+    /// they stand on (`NodeInstance::is_named`): one under Past with a memory
+    /// behind it, where names and dots share the field, and one under All,
+    /// where the names take the whole of it. That pair is the reading the rule
+    /// is for, and neither can be judged from a shot with no type in it.
+    ///
     /// ```text
     /// cargo test -p harmonigraph-offline -- --ignored --nocapture resting_dots
     /// ```
@@ -424,17 +430,22 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("a scratch directory");
 
         let fresh = harmonigraph_scene::ViewConfig::default();
-        // Size, feather, and whether a chord is held over it.
-        let shots: Vec<(f32, f32, bool)> = vec![
-            (fresh.dot_size, fresh.dot_feather, false),
-            (fresh.dot_size, 0.0, false),
-            (fresh.dot_size, 1.0, false),
-            (0.1, fresh.dot_feather, false),
-            (0.5, fresh.dot_feather, false),
-            (fresh.dot_size, fresh.dot_feather, true),
+        use harmonigraph_scene::NoteNames;
+        // Size, feather, whether a chord is held over it, and which names show.
+        let shots: Vec<(f32, f32, bool, NoteNames)> = vec![
+            (fresh.dot_size, fresh.dot_feather, false, NoteNames::Played),
+            (fresh.dot_size, 0.0, false, NoteNames::Played),
+            (fresh.dot_size, 1.0, false, NoteNames::Played),
+            (0.1, fresh.dot_feather, false, NoteNames::Played),
+            (0.5, fresh.dot_feather, false, NoteNames::Played),
+            (fresh.dot_size, fresh.dot_feather, true, NoteNames::Played),
+            (fresh.dot_size, fresh.dot_feather, true, NoteNames::Past),
+            (fresh.dot_size, fresh.dot_feather, false, NoteNames::All),
         ];
-        for (size, feather, chord) in shots {
+        for (size, feather, chord, names) in shots {
             let mut state = SharedState::new(FORMAT);
+            state.view.show_labels = true;
+            state.view.note_names = names;
             // The DAW's own lattice ground rather than the preset's near-black:
             // the dots are a step above the panel and nothing else here says
             // how big a step that reads as.
@@ -464,7 +475,7 @@ mod tests {
             let primitives = context.tessellate(output.shapes, PPP);
             let bytes = renderer.render(&primitives, &output.textures_delta, PPP, background);
             let path = dir.join(format!(
-                "dots-size{:.0}-feather{:.0}{}.png",
+                "dots-size{:.0}-feather{:.0}{}-{names:?}.png",
                 size * 100.0,
                 feather * 100.0,
                 if chord { "-chord" } else { "" },

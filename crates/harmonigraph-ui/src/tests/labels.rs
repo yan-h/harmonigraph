@@ -556,6 +556,85 @@ fn only_the_all_mode_names_a_node_nothing_has_happened_on() {
     assert!(all.len() > 1, "only one node was named: {all:?}");
 }
 
+/// A named position draws no resting dot, measured END TO END: the names come
+/// out of the label pass that really draws them and the dots out of the scene
+/// the same frame was derived from.
+///
+/// Both read `NodeInstance::is_named`, so this cannot fail while they share it
+/// — which is the point. What it guards is the day one of them stops: the two
+/// live in different crates, one drawing type and one deriving geometry, and a
+/// second spelling of the rule in either is a lattice that puts a dot behind a
+/// name and looks merely smudged rather than wrong.
+///
+/// Swept over all three Show modes and over the Note names switch, because
+/// each pair is a different balance of the two sets — All names everything and
+/// leaves no dots, Played names nothing at rest and leaves them all, and the
+/// switch off is the case where the mode says one thing and the picture
+/// another.
+#[test]
+fn no_position_wears_both_a_name_and_a_dot() {
+    for show in [true, false] {
+        for names in [
+            harmonigraph_scene::NoteNames::All,
+            harmonigraph_scene::NoteNames::Past,
+            harmonigraph_scene::NoteNames::Played,
+        ] {
+            let mut state = fresh();
+            state.view.show_labels = show;
+            state.view.note_names = names;
+            // Something sounding and something remembered, so every route to a
+            // name is open at once: a live note, a memory under Past, and the
+            // whole field under All.
+            for (time, kind) in [
+                (0.0, harmonigraph_core::NoteEventKind::On { velocity: 1.0 }),
+                (1.0, harmonigraph_core::NoteEventKind::Off),
+            ] {
+                let event =
+                    harmonigraph_core::NoteEvent { time, channel: 0, note: 60, kind };
+                state.tracker.handle_event(event);
+            }
+            state.tracker.prune(3.0, &harmonigraph_core::Envelope::default());
+            state.tracker.handle_event(harmonigraph_core::NoteEvent::on(3.5, 0, 67, 1.0));
+            let scene = harmonigraph_scene::derive_scene(
+                &state.tracker,
+                &state.tuning,
+                &state.view,
+                &state.view.reach(),
+                &state.frame_params,
+                state.camera,
+                None,
+                4.0,
+            );
+            // The label pass is gated on the switch by its CALLER, so mirror
+            // that here rather than asking it to gate itself.
+            let batch = if show {
+                pane_labels(&scene, &state.view, 1.0)
+            } else {
+                crate::text::TextBatch::default()
+            };
+            let named: Vec<glam::Vec3> = batch
+                .labels()
+                .iter()
+                .map(|label| scene.nodes[label.node as usize].world_pos)
+                .collect();
+            for pos in &named {
+                assert!(
+                    !scene.dots.iter().any(|dot| dot.pos == *pos),
+                    "{names:?} (names on: {show}) drew a name and a dot at {pos:?}",
+                );
+            }
+            // And the sweep has to actually reach both sets, or it is passing
+            // on an empty picture.
+            match (show, names) {
+                (true, harmonigraph_scene::NoteNames::All) => {
+                    assert!(!named.is_empty() && scene.dots.is_empty(), "All: {names:?}");
+                }
+                _ => assert!(!scene.dots.is_empty(), "no dots to contradict: {names:?}"),
+            }
+        }
+    }
+}
+
 /// Every label the lattice draws, at one camera and one Size bar setting: the
 /// rasterized type size, and the ink it actually covers.
 fn lattice_labels_at(label_scale: f32, distance: f32, ppp: f32) -> Vec<(f32, egui::Rect)> {

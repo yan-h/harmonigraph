@@ -644,6 +644,14 @@ fn wrapped_cents(from: harmonigraph_core::PitchClass, to: harmonigraph_core::Pit
 /// the whole of what makes one sheet the ground: a 7-limit note sounding off
 /// it floats over the dot field rather than standing in it, and the size it
 /// draws at ([`NodeInstance::scale`]) is what says how far off it has gone.
+///
+/// A NAMED position is unmarked too ([`NodeInstance::is_named`]). Both markers
+/// say "a position is here" and the name says which one, so a dot behind it is
+/// the weaker of two claims on the same spot and the picture is cleaner
+/// without it. Under [`NoteNames::All`](crate::NoteNames::All) that is every
+/// node on screen and the field disappears whole — which is the mode working
+/// as it reads: names ARE the lattice there, and the dots were only ever
+/// standing in for them.
 pub(crate) fn derive_dots(
     view: &ViewConfig,
     nodes: &[NodeInstance],
@@ -674,7 +682,7 @@ pub(crate) fn derive_dots(
     // panel's own `L*` the whole at-rest picture disappears together.
     nodes
         .iter()
-        .filter(|n| n.on_home)
+        .filter(|n| n.on_home && !n.is_named(view))
         .map(|n| DotInstance { pos: n.world_pos, radius, color: ground, strength: ground.w })
         .collect()
 }

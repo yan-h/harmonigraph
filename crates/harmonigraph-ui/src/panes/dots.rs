@@ -16,6 +16,14 @@
 //! below the ground are about one dot's shape and there is no third setting for
 //! what runs to its neighbours.
 //!
+//! A NAMED position draws no dot
+//! ([`is_named`](harmonigraph_scene::NodeInstance::is_named)), which is why
+//! the Show row on the Labels section reaches this picture: both
+//! markers say "a position is here" and the name says which one, so under
+//! `All` the field is gone entirely and these two bars go quiet. That is not a
+//! setting to add here — it is one picture with two readings of it, and the
+//! place to change which is the row that chooses the names.
+//!
 //! The ring WIDTHS stay with the note ([`super::nodes`]), because a width is a
 //! layer's size whether it is lit or not. What is here is only what nothing
 //! sounding looks like.
@@ -67,7 +75,8 @@ pub(super) fn dots_pane(ui: &mut egui::Ui, state: &mut SharedState) {
             "How big the dot at each node position is, in the same units \
              a node's ring radii are dialled in. 0 takes the dots away, and \
              with them everything a resting lattice draws but the node \
-             rings",
+             rings. A position with a note name over it draws no dot, so \
+             showing every name leaves no field for this to size",
         );
     ValueBar::new(&mut state.view.dot_feather, 0.0..=1.0, "Dot feather")
         .show(ui)

@@ -109,16 +109,73 @@ fn a_memory_touches_no_field_but_trail() {
         assert_eq!(a.melody_level, b.melody_level);
         assert_eq!(a.bass_level, b.bass_level);
     }
-    // The dot field stands at the same positions whatever is remembered
-    // there, and pinning that is what says a memory is drawn in TYPE alone:
-    // the one drawn layer under a trailed node has to be the one an unvisited
-    // node stands on.
-    assert_eq!(bare.dots.len(), marked.dots.len());
+    // The resting DOTS are the one thing a memory does reach, and only ever
+    // through the name it draws: a named position draws no dot, and under Past
+    // a remembered one is named. So the trail does not touch the dot field —
+    // the LABEL layer does, on the trail's say-so — and the way to state that
+    // as a claim rather than a distinction is to take the names away.
+    //
+    // With the switch off there is no name anywhere, and a memory is once
+    // again invisible in every drawn thing: same positions, same paint,
+    // however much history has piled up. That is the original claim intact,
+    // and it is what says the dot is not a second channel the trail writes to.
+    let unnamed = |names| {
+        scene_of(
+            &tracker,
+            &tuning,
+            &ViewConfig { show_labels: false, note_names: names, ..view.clone() },
+            &frame,
+            10.0,
+        )
+    };
+    let (bare, marked) = (unnamed(NoteNames::Played), unnamed(NoteNames::Past));
+    assert!(marked.nodes.iter().any(|n| n.trail > 0.0), "nothing was remembered at all");
+    assert_eq!(bare.dots.len(), marked.dots.len(), "a memory moved the dot field on its own");
     for (a, b) in bare.dots.iter().zip(&marked.dots) {
+        assert_eq!(a.pos, b.pos);
         assert_eq!(a.strength, b.strength);
         assert_eq!(a.color, b.color);
         assert_eq!(a.radius, b.radius);
     }
+}
+
+/// The one drawn thing a memory reaches, and the route it takes: under Past a
+/// remembered position is NAMED, and a named position draws no dot.
+///
+/// Split out from [`a_memory_touches_no_field_but_trail`] rather than folded
+/// into it, because it is the opposite claim and the pair is the whole truth:
+/// the trail writes no field but its own, AND the label layer reads that field
+/// and takes a dot away. A test that only said the first would go on passing
+/// with the second silently broken.
+#[test]
+fn a_remembered_position_loses_its_dot_to_its_own_name() {
+    let mut tracker = NoteTracker::new();
+    play_and_forget(&mut tracker, 60, 0.0, 1.0);
+    let view = ViewConfig { extent_sevens: 1, ..ViewConfig::default() };
+    let scene = scene_of(
+        &tracker,
+        &Tuning::default(),
+        &ViewConfig { note_names: NoteNames::Past, ..view.clone() },
+        &plain_frame(),
+        10.0,
+    );
+    let remembered: Vec<&NodeInstance> =
+        scene.nodes.iter().filter(|n| n.trail > 0.0).collect();
+    assert!(!remembered.is_empty(), "nothing was remembered at all");
+    for node in &remembered {
+        assert!(
+            !scene.dots.iter().any(|d| d.pos == node.world_pos),
+            "the remembered position {:?} kept its dot under its own name",
+            node.lattice_pos,
+        );
+    }
+    // Only the remembered ones: a memory takes its own dot and no others.
+    let unvisited = scene
+        .nodes
+        .iter()
+        .filter(|n| n.on_home && n.trail == 0.0 && n.activation == 0.0)
+        .count();
+    assert_eq!(scene.dots.len(), unvisited, "a memory reached past its own position");
 }
 
 #[test]

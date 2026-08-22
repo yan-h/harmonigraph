@@ -595,6 +595,15 @@ impl TextBatch {
         &self.pieces
     }
 
+    /// Which nodes this batch drew a name over, in the order it drew them
+    /// (tests only). One entry per label that put at least one glyph down, so
+    /// this is exactly the set of nodes that ARE named — which is what the
+    /// resting dots have to be the complement of.
+    #[cfg(test)]
+    pub(crate) fn labels(&self) -> &[harmonigraph_render::Label] {
+        &self.labels
+    }
+
     /// Every drawn mark's quad, in the order they were added (tests only).
     #[cfg(test)]
     pub(crate) fn marks(&self) -> &[egui::Rect] {

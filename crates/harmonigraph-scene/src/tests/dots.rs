@@ -6,18 +6,41 @@
 //! off, so the resting picture is a set of marks and not a mesh.
 
 use crate::*;
-use harmonigraph_core::{NoteEvent, NoteTracker, Tuning};
+use harmonigraph_core::{LatticePos, NoteEvent, NoteTracker, Tuning};
 use super::harness::*;
 
 /// A 7x7 window one sevens step deep, so off-sheet positions are in the mix
 /// and can be shown to carry no dot.
+///
+/// The Show row is PINNED to the one mode that names nothing at rest, and it
+/// has to be: a named position draws no dot, so every geometry and colour
+/// claim below would otherwise be measuring the Show row rather than its own
+/// subject — and under `All` there would be no dot left to measure at all. The
+/// naming rule has its own tests, which set the mode themselves.
 fn dot_view() -> ViewConfig {
     ViewConfig {
         extent_threes: 3,
         extent_fives: 3,
         extent_sevens: 1,
+        note_names: NoteNames::Played,
         ..plain_view()
     }
+}
+
+/// A note played and let go of long enough ago that its fade is over and it
+/// has moved out of the live voices into history — which is what
+/// `TrailField::build` reads, and so the only way to get a REMEMBERED position
+/// rather than a releasing one.
+fn played_and_forgotten() -> NoteTracker {
+    let mut tracker = NoteTracker::new();
+    for (time, kind) in [
+        (0.0, harmonigraph_core::NoteEventKind::On { velocity: 1.0 }),
+        (1.0, harmonigraph_core::NoteEventKind::Off),
+    ] {
+        tracker.handle_event(NoteEvent { time, channel: 0, note: 60, kind });
+    }
+    tracker.prune(3.0, &harmonigraph_core::Envelope::default());
+    tracker
 }
 
 fn dots_of(view: &ViewConfig) -> Vec<DotInstance> {
@@ -243,12 +266,12 @@ fn the_dots_the_ring_and_an_idle_node_are_one_grey() {
 }
 
 #[test]
-fn a_dot_never_moves_with_the_music() {
-    // The dots are purely the resting picture. Nothing about them answers to
-    // a note — not a dot under a sounding node, not one between two of them,
-    // not one on the sheet a played note hangs over. What a note does to the
-    // field is COVER its own dot, which is the shader's business and the
-    // node's clearing, and nothing derived here.
+fn a_dot_that_survives_a_chord_is_painted_exactly_as_it_was() {
+    // A dot's own PAINT is purely the resting picture: no note tints one,
+    // lights one, moves one or resizes one. Which positions are marked is a
+    // separate question and a note does move that — a sounding node is named,
+    // and a named position draws no dot — so this walks the survivors by
+    // POSITION rather than by index and says nothing about how many there are.
     //
     // Just intonation and a small window so pitch classes stay unique.
     let tuning = Tuning { tolerance: harmonigraph_core::tuning::microcents(5.0), ..Tuning::just() };
@@ -256,17 +279,23 @@ fn a_dot_never_moves_with_the_music() {
     for note in [60u8, 67] {
         tracker.handle_event(NoteEvent::on(0.0, 0, note, 1.0));
     }
-    let view = ViewConfig { extent_threes: 3, extent_fives: 3, ..ViewConfig::default() };
+    let view = ViewConfig { extent_threes: 3, extent_fives: 3, ..dot_view() };
     let silent = dots_of(&view);
     let played = dots_of_with(&view, &tracker);
-    assert_eq!(silent.len(), played.len(), "a chord changed how many positions are marked");
-    for (a, b) in silent.iter().zip(&played) {
-        assert_eq!(a.pos, b.pos, "a chord moved a dot");
+    assert!(
+        played.len() < silent.len(),
+        "the chord has to take some dots for this to mean anything",
+    );
+    for b in &played {
+        let a = silent
+            .iter()
+            .find(|a| a.pos == b.pos)
+            .expect("a dot appeared at a position that had none while silent");
         assert_eq!(a.color, b.color, "a chord tinted a dot: {b:?}");
         assert_eq!(a.strength, b.strength, "a chord lit a dot: {b:?}");
         assert_eq!(a.radius, b.radius, "a chord resized a dot: {b:?}");
     }
-    // And the two nodes that ARE sounding still stand on the plain ground.
+    // And every survivor stands on the plain ground.
     let scene = scene_of(&tracker, &tuning, &view, &plain_frame(), 0.0);
     for dot in &scene.dots {
         assert_eq!(dot.color, scene.lattice_ground, "{dot:?}");
@@ -276,6 +305,99 @@ fn a_dot_never_moves_with_the_music() {
         scene.nodes.iter().any(|n| n.activation > 0.0),
         "the chord has to reach the lattice for this to mean anything",
     );
+}
+
+#[test]
+fn a_named_position_draws_no_dot() {
+    // Two markers claiming one position is the thing this rule is for, and the
+    // name is the better of the two: it says WHICH position, where the dot only
+    // says that there is one. Held across all three Show modes at once, because
+    // what counts as "named at rest" is the whole of what separates them.
+    let view = ViewConfig { note_names: NoteNames::Past, ..dot_view() };
+    let tracker = played_and_forgotten();
+    let scene = scene_of(&tracker, &Tuning::default(), &view, &plain_frame(), 4.0);
+    let remembered: Vec<&NodeInstance> =
+        scene.nodes.iter().filter(|n| n.trail > 0.0).collect();
+    assert!(!remembered.is_empty(), "nothing was remembered, so nothing is named at rest");
+    for node in &remembered {
+        assert!(
+            !scene.dots.iter().any(|d| d.pos == node.world_pos),
+            "the remembered position {:?} wears both a name and a dot",
+            node.lattice_pos,
+        );
+    }
+    // And the positions with no memory on them keep theirs — the rule is about
+    // the name, not about the mode being on.
+    let unvisited = scene
+        .nodes
+        .iter()
+        .filter(|n| n.on_home && n.trail == 0.0 && n.activation == 0.0)
+        .count();
+    assert_eq!(scene.dots.len(), unvisited, "an unnamed home position lost its dot");
+
+    // All names every node on screen, so the field goes with it — the mode
+    // working as it reads rather than a case to special-case.
+    let all = dots_of(&ViewConfig { note_names: NoteNames::All, ..view.clone() });
+    assert!(all.is_empty(), "All names every node, so no dot should survive: {all:?}");
+
+    // Played names nothing at rest, so every resting position keeps its dot.
+    let played = scene_of(
+        &tracker,
+        &Tuning::default(),
+        &ViewConfig { note_names: NoteNames::Played, ..view.clone() },
+        &plain_frame(),
+        4.0,
+    );
+    let home = played.nodes.iter().filter(|n| n.on_home).count();
+    assert_eq!(played.dots.len(), home, "Played names nothing at rest, so nothing loses a dot");
+}
+
+#[test]
+fn a_hovered_position_draws_no_dot() {
+    // Hovering is the one way a name arrives under every mode, Played
+    // included, so it is the case that proves the dot answers to the NAME
+    // rather than to the Show row.
+    let view = ViewConfig { note_names: NoteNames::Played, ..dot_view() };
+    let at = LatticePos::ORIGIN;
+    let scene = crate::derive_scene(
+        &NoteTracker::new(),
+        &Tuning::default(),
+        &view,
+        &view.reach(),
+        &plain_frame(),
+        crate::Camera::default(),
+        Some(at),
+        0.0,
+    );
+    let hovered = scene
+        .nodes
+        .iter()
+        .find(|n| n.hovered)
+        .expect("the pointer is on the origin");
+    assert!(
+        !scene.dots.iter().any(|d| d.pos == hovered.world_pos),
+        "the hovered position wears both a name and a dot",
+    );
+    assert!(!scene.dots.is_empty(), "and only that one lost it");
+}
+
+#[test]
+fn names_switched_off_leave_every_dot_standing() {
+    // The rule is "a name is over it", not "a name would be over it if names
+    // were on". With the Note names switch off there is no name anywhere, so
+    // the field is whole under every Show mode — including All, which is the
+    // one that would otherwise erase it.
+    for names in [NoteNames::All, NoteNames::Past, NoteNames::Played] {
+        let view = ViewConfig { show_labels: false, note_names: names, ..dot_view() };
+        let tracker = played_and_forgotten();
+        let scene = scene_of(&tracker, &Tuning::default(), &view, &plain_frame(), 4.0);
+        let home = scene.nodes.iter().filter(|n| n.on_home).count();
+        assert_eq!(
+            scene.dots.len(),
+            home,
+            "{names:?} with the names switched off still took a dot away",
+        );
+    }
 }
 
 #[test]

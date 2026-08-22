@@ -4,14 +4,24 @@
 //! The governing constraint is that a trail must never be mistaken for a
 //! note, and the trail is drawn entirely in TYPE: the label layer keeps the
 //! note name and cents on a visited node. Nothing here touches a drawn
-//! layer — not the core, not the octave glyphs, not the dots — so a memory
-//! and a sounding note are never even the same kind of thing on screen. The
-//! whole of what this module produces is [`NodeInstance::trail`], which the
-//! labels read.
+//! layer — not the core, not the octave glyphs — so a memory and a sounding
+//! note are never even the same kind of thing on screen. The whole of what
+//! this module produces is [`NodeInstance::trail`], which the labels read.
+//!
+//! The resting DOT is the one drawn thing a memory reaches, and it reaches it
+//! through the name rather than around it: a named position draws no dot (see
+//! [`NodeInstance::is_named`]), and under
+//! [`NoteNames::Past`] a remembered position is named.
+//! So the rule above holds as written — this module still writes one field —
+//! and what takes the dot away is the label layer, on the same terms it takes
+//! one away from a node that is merely sounding. A memory is still type and
+//! nothing else; what changed is that type now stands where the dot was
+//! instead of over it.
 //!
 //! Two consequences worth stating, because they are what keep it subtle:
 //! - Nothing on a visited node ever brightens or animates. The lattice at
-//!   rest reads exactly as it did, with a little more information in it.
+//!   rest reads exactly as it did, one marker swapped for a more specific
+//!   one.
 //! - Only the home sheet carries a memory. The whole history is remembered —
 //!   every note played, wherever it landed — but an off-sheet idle node stays
 //!   blank: a lone name floating out in the sevens dimension reads as noise,

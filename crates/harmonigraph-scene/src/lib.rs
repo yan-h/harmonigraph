@@ -586,6 +586,45 @@ impl NodeInstance {
     pub fn is_visible(&self) -> bool {
         self.activation > 0.0 || self.on_home || self.trail > 0.0
     }
+
+    /// Whether a NOTE NAME is drawn over this node.
+    ///
+    /// The label pass's own question (`draw_node_labels` in
+    /// `harmonigraph-ui`), answered HERE because two things now turn on it and
+    /// a second spelling of it is a picture that contradicts itself: the pass
+    /// draws the name, and [`derive_dots`](derive::derive_dots) drops the
+    /// resting dot under it. A dot behind a name is the one place in the
+    /// lattice where two markers claim the same position, and the name is the
+    /// better of the two — it says WHICH position, where the dot only says
+    /// that there is one.
+    ///
+    /// So the label layer is the one that decides, and this is the whole of
+    /// its rule: names on at all, then the node is sounding, hovered, or one
+    /// the Show row keeps at rest.
+    ///
+    /// The `is_visible` term re-checks what [`Scene::pick`] already enforces,
+    /// and `hovered` is picking's alone, so it is a second lock on one door.
+    /// It stays because the field is public shared state rather than picking's
+    /// private output, and what it costs to be wrong is a name floating in the
+    /// sevens dimension on a node that draws nothing.
+    ///
+    /// What it does NOT answer is whether the name lands on the PANE — that
+    /// needs a rect and a projector, which is the label pass's business and
+    /// not the scene's. It costs nothing: a name off the pane is a name over a
+    /// dot that is off the pane too, and neither is drawn.
+    pub fn is_named(&self, view: &ViewConfig) -> bool {
+        if !view.show_labels {
+            return false;
+        }
+        // Named while nothing is happening on it: every node under All, a
+        // visited one under Past, and nothing at all under Played.
+        let resting = match view.note_names {
+            NoteNames::All => true,
+            NoteNames::Past => self.trail > 0.0,
+            NoteNames::Played => false,
+        };
+        (self.hovered || self.activation > 0.0 || resting) && self.is_visible()
+    }
 }
 
 /// One marker standing at a lattice position: a feathered dot, drawn under
