@@ -380,6 +380,17 @@ struct Uniforms {
     /// and this holds the rest, and the two are read by different parts of the
     /// shader. Zeroed whole with it, on the same rule.
     misc11: [f32; 4],
+    /// The node glow's third row. x: how flat the light's falloff is across its
+    /// own span (`Scene::glow_feather`), 0 the exponential heaped on the node
+    /// and 1 an even field across it; y/z/w unused.
+    ///
+    /// A row for one scalar, because the two rows above are full and the glow's
+    /// knobs read together: a feather packed into the analyzer ring's spare
+    /// half (`misc9.z`) would be one number filed under another feature, found
+    /// by whoever greps for the ring rather than by whoever is reading the
+    /// light. Zeroed whole with them, on the same rule — `misc10.x > 0.0` is
+    /// the one off switch.
+    misc12: [f32; 4],
     /// The FREQUENCY colour scheme's ramp — the analyzer's own gradient
     /// (`SpectrumConfig::spectrogram_gradient`) through `pitch_ramp_lut`, the
     /// same gradient the spectrogram's cells and the Spiral pane's segments
@@ -1050,6 +1061,7 @@ impl LatticeCallback {
                 } else {
                     [0.0; 4]
                 },
+                misc12: if lights { [scene.glow_feather, 0.0, 0.0, 0.0] } else { [0.0; 4] },
                 spectral_lut: std::array::from_fn(|k| scene.spectral.lut[k].to_array()),
                 // Zeroed rather than packed when the ring is off: `u.spectrum`
                 // is read only through `spectral_ring`, which draws nothing off
