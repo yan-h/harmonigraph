@@ -570,14 +570,17 @@ fn pack_octaves(levels: &[f32; harmonigraph_scene::OCTAVE_SLOTS]) -> [u32; 3] {
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct GpuPlus {
-    /// xyz: the position's world center, w: the marker's outer radius in world
-    /// units — where its feather has run out. Per instance rather than in a
-    /// uniform because it is a WORLD length and the vertex shader sizes the
-    /// billboard off it; the feather beside it is a fraction and is shared
-    /// (`misc5.x`).
+    /// xyz: the position's world center, w: the length of one ARM, crossing to
+    /// tip — the quad reaches `PLUS_QUAD_MARGIN` past it, for the soft band to
+    /// stand in. Per instance rather than in a uniform because it is a WORLD
+    /// length; the two proportions measured against it, the arm's thickness and
+    /// where its ends taper, are the same for the whole field and ride in
+    /// `misc5.x` and `misc5.y`.
     pos_radius: [f32; 4],
     /// rgb: the lattice's ground, a: the marker's opacity. Both come off one
-    /// resolve of `Scene::lattice_ground`, so a marker is that grey exactly.
+    /// resolve of `Scene::lattice_ground`, so a marker at rest is that grey
+    /// exactly; the alpha is under one otherwise, the name fading in over it
+    /// (`NodeInstance::name_level`).
     color: [f32; 4],
 }
 
@@ -2772,7 +2775,7 @@ impl LatticeResources {
                 instance_count: 0,
                 plus_buffer: create_vertex_buffer::<GpuPlus>(
                     device,
-                    "lattice_dots",
+                    "lattice_pluses",
                     INITIAL_PLUS_CAPACITY,
                 ),
                 plus_capacity: INITIAL_PLUS_CAPACITY,
@@ -3043,7 +3046,7 @@ impl CallbackTrait for LatticeCallback {
         if self.pluses.len() > pane.plus_capacity {
             pane.plus_capacity = self.pluses.len().next_power_of_two();
             pane.plus_buffer =
-                create_vertex_buffer::<GpuPlus>(device, "lattice_dots", pane.plus_capacity);
+                create_vertex_buffer::<GpuPlus>(device, "lattice_pluses", pane.plus_capacity);
         }
         pane.plus_count = self.pluses.len() as u32;
         if !self.pluses.is_empty() {
