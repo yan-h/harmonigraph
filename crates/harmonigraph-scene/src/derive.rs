@@ -603,6 +603,18 @@ pub fn derive_scene(
         glow_reach: view.glow_reach.clamp(0.0, crate::GLOW_REACH_MAX),
         glow_strength: view.glow_strength.clamp(0.0, crate::GLOW_STRENGTH_MAX),
         glow_feather: view.glow_feather.clamp(0.0, 1.0),
+        // The standoff on the same footing, a bar's range rather than a
+        // billboard's: it is painted inside the clearing's own quad, so an
+        // absurd gap is a shape nothing can show rather than a quad nothing
+        // can fill.
+        glow_gap: view.glow_gap.clamp(0.0, crate::GLOW_GAP_MAX),
+        // To the axis rather than to the gap, as `sevens_soft` above is: a fade
+        // wider than its gap draws as one exactly as wide (`moat_coverage`
+        // floors it at the ring's edge), and `sanitize` is where the stored
+        // pair is held to the shape the bar can show.
+        glow_gap_soft: view.glow_gap_soft.clamp(0.0, crate::GLOW_GAP_MAX),
+        glow_gap_shape: view.glow_gap_shape.clamp(0.0, 1.0),
+        glow_gap_depth: view.glow_gap_depth.clamp(0.0, 1.0),
         glow_blend: view.glow_blend.clamp(0.0, 1.0),
         // A row per node, so a scene nothing has carried still reads one strip
         // row per node — the shell's pass hands out rows of its own and raises

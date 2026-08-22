@@ -202,6 +202,28 @@ fn the_feather_bars_preview_is_the_skirt_the_shader_draws() {
     }
 }
 
+/// The same contract for the Gap curve bar, whose preview is a copy of the
+/// standoff's ramp and the exponent it is raised to
+/// (`harmonigraph_scene::moat_recovery`).
+#[test]
+fn the_gap_curve_bars_preview_is_the_ramp_the_shader_runs() {
+    let needles = [
+        format!("const GAP_SHAPE_TRAIL: f32 = {:?};", harmonigraph_scene::GAP_SHAPE_TRAIL),
+        format!("const GAP_SHAPE_HOLD: f32 = {:?};", harmonigraph_scene::GAP_SHAPE_HOLD),
+        "return GAP_SHAPE_TRAIL * pow(GAP_SHAPE_HOLD / GAP_SHAPE_TRAIL, t);".to_owned(),
+        "let ramp = smoothstep(inner, edge, sd);".to_owned(),
+        "return 1.0 - pow(ramp, glow_gap_shape());".to_owned(),
+    ];
+    for needle in &needles {
+        assert!(
+            SHADER_SRC.contains(needle),
+            "lattice.wgsl must contain `{needle}`: harmonigraph_scene::moat_recovery mirrors \
+             the standoff's ramp to draw the Gap curve bar's preview, so a change to either is \
+             a change to both",
+        );
+    }
+}
+
 #[test]
 fn octave_packing_matches_the_documented_layout() {
     let mut levels = [0.0f32; harmonigraph_scene::OCTAVE_SLOTS];
@@ -507,6 +529,12 @@ fn parity_scene() -> Scene {
         // The accent's own falloff, which is what every glow test here that
         // does not say otherwise is measuring.
         glow_feather: 0.0,
+        // The fresh standoff and the three shares that shape the light inside
+        // it, inert at reach 0 and here to say so.
+        glow_gap: 0.16,
+        glow_gap_soft: 0.16,
+        glow_gap_shape: 0.5,
+        glow_gap_depth: 0.85,
         glow_blend: 0.5,
         // A row per node, which is what the nodes above are built with.
         glow_rows,
@@ -6240,6 +6268,117 @@ fn the_middle_of_a_node_is_where_its_light_is_fullest() {
         middle(&two_sheets),
         middle(&one_sheet),
     );
+}
+
+/// A node STANDS ITS LIGHT OFF the rings it draws, and the Gap depth is the
+/// one switch on it.
+///
+/// The standoff is a term of the node's own clearing rather than a hole cut in
+/// the light: the clearing paints the finished field over the ground
+/// (`node_paint`), and around every ring the node draws it paints that field
+/// dimmed. So what this measures is a pixel just outside the octave band —
+/// inside the clearing, outside every shape the node inks — where the light is
+/// otherwise at nearly its fullest, the falloff being measured from the node's
+/// centre.
+///
+/// TWO claims, and the second is what makes the bar an A/B rather than a
+/// restyle. The depth takes light: the probe is darker at the fresh 85% than
+/// at 0, and no pixel anywhere in the frame is brighter, the standoff being a
+/// factor on light the clearing was going to paint anyway. And a depth of 0 is
+/// the whole feature off: the frame is byte for byte the same at any Gap,
+/// which is the one place the four dials can be proved not to leak into a
+/// picture that is supposed to have no standoff in it.
+///
+/// A Gap of 0 is deliberately NOT the off position and is not compared here: it
+/// is a standoff whose fade has collapsed onto the ring's own annulus, which is
+/// a CRISPER one, not an absent one.
+///
+/// [`the_middle_of_a_node_is_where_its_light_is_fullest`]'s fixture, whose
+/// clearing is what the standoff lives in, plus one calibration shot: with the
+/// glow and the clearing both off, the outermost pixel the node inks along +x
+/// IS the band's outer edge, which is `rings_outer` in the node's own uv. That
+/// is the scale everything below is measured in, so the probe follows the
+/// fixture instead of naming a pixel.
+#[test]
+fn the_gap_depth_says_how_much_light_a_ring_stands_off() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    let at = |reach: f32, gap: f32, depth: f32| -> Scene {
+        let mut scene = single_marked_node(0, 0);
+        scene.camera = harmonigraph_scene::Camera {
+            projection: harmonigraph_scene::Projection::Orthographic,
+            yaw: 0.0,
+            pitch: 0.0,
+            ..Default::default()
+        };
+        scene.glow_reach = reach;
+        scene.glow_strength = 1.5;
+        scene.glow_gap = gap;
+        // The fade the whole width of the gap, which is the fresh pair.
+        scene.glow_gap_soft = gap;
+        scene.glow_gap_depth = depth;
+        scene.nodes[0].gutter = 0.16;
+        scene
+    };
+    let row = SIZE[0] as usize;
+    let centre = (SIZE[1] / 2) as usize * row + (SIZE[0] / 2) as usize;
+
+    // The scale: the node's own ink with nothing around it. The clearing is off
+    // for this shot alone — it paints the ground out past the ink, and what is
+    // wanted here is where the INK stops.
+    let mut bare = at(0.0, 0.0, 0.0);
+    bare.nodes[0].gutter = 0.0;
+    let plain = shooter.shot(&bare);
+    let inked = |px: &[u8], i: usize| px[i * 4..i * 4 + 4] != [0u8, 0, 0, 255];
+    let band_px = (1..(SIZE[0] / 2) as usize)
+        .rfind(|&x| inked(&plain, centre + x))
+        .expect("the fixture's node must ink something along +x");
+    assert!(band_px > 20, "the node inked only {band_px}px of radius; there is nothing to read");
+    // Half a Gap past the band's outer edge: the standoff is solid there and
+    // the node inks nothing, so the whole of the difference below is light.
+    let probe = centre
+        + (band_px as f32 * (1.0 + 0.08 / bare.rings_outer)).round() as usize;
+    assert!(
+        !inked(&plain, probe),
+        "the probe at {probe} sits on the node's own ink, not outside it",
+    );
+
+    let lit = |px: &[u8], i: usize| brightness(&px[i * 4..i * 4 + 3]);
+    let stood_off = shooter.shot(&at(0.8, 0.16, 0.85));
+    let flat = shooter.shot(&at(0.8, 0.16, 0.0));
+    assert!(
+        lit(&stood_off, probe) < lit(&flat, probe),
+        "the standoff left the pixel outside the ring at {} against {} with the depth at 0",
+        lit(&stood_off, probe),
+        lit(&flat, probe),
+    );
+    // Non-vacuous: there has to be light there to stand off in the first place.
+    let dark = shooter.shot(&at(0.0, 0.16, 0.85));
+    assert!(
+        lit(&flat, probe) > lit(&dark, probe),
+        "the fixture lights the probe no more than the glow off does; the comparison is vacuous",
+    );
+    // A factor on the light the clearing paints, so it can only take: no pixel
+    // in the frame comes out brighter for it.
+    let brighter = stood_off
+        .chunks(4)
+        .zip(flat.chunks(4))
+        .filter(|(a, b)| brightness(&a[..3]) > brightness(&b[..3]))
+        .count();
+    assert_eq!(brighter, 0, "the standoff brightened {brighter} pixels");
+
+    // And the depth is the whole switch: at 0 the Gap and its curve reach the
+    // picture nowhere.
+    for (name, gap) in [("no gap", 0.0), ("a wide gap", 0.5)] {
+        let other = shooter.shot(&at(0.8, gap, 0.0));
+        assert_eq!(
+            differing_pixels(&other, &flat),
+            0,
+            "at a depth of 0, {name} drew a different frame from the fresh gap",
+        );
+    }
 }
 
 /// A node wearing NOTHING BUT AN AUDIO RING glows.

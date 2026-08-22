@@ -359,18 +359,33 @@ struct Uniforms {
     /// here, and lattice.wgsl throughout. A strength of 0 is a glow that draws
     /// nothing, and the three shapes beside it have nothing to shape.
     misc10: [f32; 4],
-    /// The node glow's second row, which is plumbing rather than a dial. x: how
-    /// many rows this frame's ink strip has (`Scene::glow_rows`) — the one
-    /// thing `vs_ink_strip` cannot work out for itself, since it is writing that
+    /// The STANDOFF's four dials — the light a node's own clearing dims where
+    /// it stands over a ring, which is a shape the node paints rather than a
+    /// hole in the light (`node_paint` in lattice.wgsl). x: how far past each
+    /// ring it reaches, in the same quad UV units (`Scene::glow_gap`); y: how
+    /// much of that is spent fading the light back in (`Scene::glow_gap_soft`);
+    /// z: how the fade is skewed across that width (`Scene::glow_gap_shape`);
+    /// w: how much of the light it takes where it stands
+    /// (`Scene::glow_gap_depth`).
+    ///
+    /// A row of its own rather than four slots scattered over the two beside
+    /// it, because the four are one control: the Gap bar's two handles, the
+    /// curve across them, and the depth the finished coverage is scaled by.
+    /// Zeroed whole with `misc10`, on the same rule — a standoff with no light
+    /// to stand off is a dark ring painted for nothing.
+    misc11: [f32; 4],
+    /// The node glow's plumbing row, which is not a dial. x: how many rows this
+    /// frame's ink strip has (`Scene::glow_rows`) — the one thing
+    /// `vs_ink_strip` cannot work out for itself, since it is writing that
     /// texture rather than reading one, and a CAPACITY rather than the instance
     /// count, rows being handed out per node and held for as long as that
     /// node's light lasts. y/z/w unused.
     ///
-    /// A row of its own rather than the spare half of `misc10`, because the two
-    /// answer different questions: everything above is a setting a person
+    /// A row of its own rather than the spare half of one above, because it
+    /// answers a different question: everything up there is a setting a person
     /// dialled, and this is how tall a texture the renderer allocated. Zeroed
-    /// whole with it, on the same rule.
-    misc11: [f32; 4],
+    /// whole with them, on the same rule.
+    misc12: [f32; 4],
     /// The FREQUENCY colour scheme's ramp — the analyzer's own gradient
     /// (`SpectrumConfig::spectrogram_gradient`) through `pitch_ramp_lut`, the
     /// same gradient the spectrogram's cells and the Spiral pane's segments
@@ -996,6 +1011,16 @@ impl LatticeCallback {
                     [0.0; 4]
                 },
                 misc11: if lights {
+                    [
+                        scene.glow_gap,
+                        scene.glow_gap_soft,
+                        scene.glow_gap_shape,
+                        scene.glow_gap_depth,
+                    ]
+                } else {
+                    [0.0; 4]
+                },
+                misc12: if lights {
                     [scene.glow_rows.max(1) as f32, 0.0, 0.0, 0.0]
                 } else {
                     [0.0; 4]
@@ -2944,7 +2969,7 @@ impl CallbackTrait for LatticeCallback {
             // The strip's height is the row map's CAPACITY, which the light's
             // own clock hands out and which has nothing to do with how many
             // nodes this frame draws (`Scene::glow_rows`).
-            self.uniforms.misc11[0] as u32,
+            self.uniforms.misc12[0] as u32,
         );
 
         if self.instances.len() > pane.instance_capacity {

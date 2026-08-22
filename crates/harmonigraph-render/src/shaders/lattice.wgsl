@@ -130,18 +130,34 @@ struct Uniforms {
     // composited at the BOTTOM of the scene pass, so a node's own picture — its
     // knockout included — is drawn over it rather than under it.
     misc10: vec4<f32>,
-    // The node glow's second row, which is plumbing rather than a dial. x: how
-    // many rows the ink strip has — the row map's CAPACITY and not this frame's
-    // instance count, rows being handed out per node and held for as long as
-    // that node's light lasts. What `vs_ink_strip` and `vs_ink_blur` place a
-    // node's row inside. y/z/w unused.
+    // The STANDOFF's four dials. x: how far past each ring a node holds the
+    // light off, in the node's own uv; y: how much of that is spent fading the
+    // light back in, measured back from where the gap ends; z: how that fade is
+    // skewed across its own width (see `moat_coverage`), 0 giving the light
+    // back closest to the ring and 1 holding the ring dark to the end of it;
+    // w: how much of the light it takes where it stands, 1 clearing to the bare
+    // ground.
     //
-    // A row of its own rather than the spare half of `misc10`, because the two
-    // answer different questions: everything above is a setting a person
-    // dialled, and this is how tall a texture the renderer allocated. Zeroed
-    // whole with it, on the same rule and for the same reason: there is one off
-    // switch for the glow and it is `u.misc10.x > 0.0`.
+    // Read by `node_paint` alone: the standoff is a term of the node's own
+    // CLEARING — the light is one field under the whole lattice, and what the
+    // clearing paints is that field scaled by this — so nothing is ever erased
+    // out of the light target and a node dims only what its own clearing
+    // covers.
+    //
+    // ZEROED WHOLE with misc10, on the same rule and for the same reason:
+    // there is one off switch for the glow and it is `u.misc10.x > 0.0`.
     misc11: vec4<f32>,
+    // The node glow's plumbing row, which is not a dial. x: how many rows the
+    // ink strip has — the row map's CAPACITY and not this frame's instance
+    // count, rows being handed out per node and held for as long as that node's
+    // light lasts. What `vs_ink_strip` and `vs_ink_blur` place a node's row
+    // inside. y/z/w unused.
+    //
+    // A row of its own rather than the spare half of one above, because it
+    // answers a different question: everything up there is a setting a person
+    // dialled, and this is how tall a texture the renderer allocated. Zeroed
+    // whole with them, on the same rule.
+    misc12: vec4<f32>,
     // The FREQUENCY color scheme's ramp: the analyzer's own gradient, the
     // table the spectrogram's cells and the Spiral pane's segments are read
     // off. Indexed by a LEVEL, where pitch_lut above is indexed by a pitch —
@@ -197,6 +213,29 @@ const GLOW_BASE: f32 = 0.8;
 // difference between a light on a node and a field the node sits in.
 const GLOW_FALLOFF_TIGHT: f32 = 3.0;
 const GLOW_FALLOFF_FLAT: f32 = 0.25;
+// The two ends of the Gap curve bar, as the exponent the standoff's own ramp is
+// raised to across the Gap bar's fade (`moat_coverage`). Mirrored in
+// harmonigraph-scene on the Feather pair's terms above.
+//
+// TRAIL is the shadow: the light starts coming back almost at the ring and
+// then creeps up to full over the rest of the band, so the dark hugs the ring
+// and the recovery has no edge in it anywhere. HOLD is the band: the ring
+// stays fully dark most of the way out and the light arrives over the last of
+// it, which is a defined annulus with a soft outer edge.
+//
+// RECIPROCALS, and that is the contract rather than a coincidence: a geometric
+// mix between them puts an exponent of exactly 1 — the plain symmetric ramp,
+// the one shape that spends the fade evenly — at the bar's own middle.
+// Retuning one end alone slides that neutral point off the middle and every
+// view tuned against it with it, so the pair moves together or not at all.
+//
+// Both are strictly ABOVE zero, and TRAIL is the one that could be talked down
+// to it. `pow` is an `exp2(y * log2(x))` on the hardware, so an exponent of 0
+// against the ramp's own 0 at the solid end of the band is `0 * -inf` — a NaN
+// coverage, and a NaN scaling the light a node clears to is a node whose
+// clearing is gone with nothing on screen to say why.
+const GAP_SHAPE_TRAIL: f32 = 0.25;
+const GAP_SHAPE_HOLD: f32 = 4.0;
 // How many angles a node's own ink is read at — the width of the strip that
 // reading is kept in (`fs_ink_strip`), and the only rate at which anything
 // about the colour of that node's light is resolved.
@@ -247,6 +286,58 @@ const INK_STRIP_N: u32 = 64u;
 // any filtering would be a blur nobody asked for. It also takes no
 // derivative, which is what keeps it out of the early-out parity test's way.
 @group(1) @binding(0) var glow_tex: texture_2d<f32>;
+
+// The standoff: how far a node's clearing holds the light off every ring it
+// draws, in the node's uv — 0 wherever the glow is off, `u.misc11` being zeroed
+// whole there.
+//
+// A share of the node's radius, like the two gaps it sits with in the view, so
+// it shrinks with a node off the home sheet. That is the right unit for it:
+// what it stands off is the node's own layers, which shrink with the node too.
+fn glow_gap() -> f32 {
+    return max(u.misc11.x, 0.0);
+}
+
+// How much of the standoff is spent fading the light back in (`u.misc11.y`), in
+// the node's uv and measured back from where the Gap ends — the same pair the
+// view's Clearance is (`gutter_coverage`), and the same two-handle bar.
+//
+// A fade the whole width of the gap is the bar's low handle at 0: no solid
+// band at all, the light coming off a ring at one steady rate from its edge.
+// That is what a wide standoff wants, since a band of uniform width with a
+// short edge, laid against a node's own dark rings, is what the eye reads as a
+// painted black ring rather than as light that is not there.
+//
+// At 0 all that is left is the view's own Clearance fade under it, which is an
+// edge a couple of screen pixels wide.
+fn glow_gap_soft() -> f32 {
+    return max(u.misc11.y, 0.0);
+}
+
+// How the standoff's fade is skewed across its own width (`u.misc11.z`), as the
+// exponent `moat_coverage` raises its ramp to: 0 gives the light back closest
+// to the ring and trails the rest away, 0.5 the plain symmetric ramp, 1 holds
+// the ring dark and gives the light back over the last of the width.
+//
+// A geometric mix, so the bar is even-handed: each half of it is the same
+// factor away from the neutral middle, where a linear mix between an exponent
+// of a quarter and one of four would spend seven eighths of the bar above 1.
+fn glow_gap_shape() -> f32 {
+    let t = clamp(u.misc11.z, 0.0, 1.0);
+    return GAP_SHAPE_TRAIL * pow(GAP_SHAPE_HOLD / GAP_SHAPE_TRAIL, t);
+}
+
+// How much of the light the standoff takes away where it stands (`u.misc11.w`):
+// 1 clears to the bare ground, and below it the rings sit in a dimmer pool of
+// their own light.
+//
+// A share of the LIGHT and not of the picture — it scales what the node's
+// clearing paints, so at any depth the node's own ink is exactly what it is
+// with the glow off and what is taken is light alone. At 0 the clearing paints
+// the field untouched, which is the picture with no standoff in it at all.
+fn glow_gap_depth() -> f32 {
+    return clamp(u.misc11.w, 0.0, 1.0);
+}
 
 // How far the MIDI layers reach, in the node's uv: the octave band's outer edge,
 // and 0 on a node whose band is dialled off. A disc about the node's center, so
@@ -1838,6 +1929,150 @@ fn node_clearing(in: VsOut, oct: OctRing, d: f32) -> f32 {
     return cov;
 }
 
+/// Distance to the annulus between `inner` and `outer`, signed: negative inside
+/// the band, and the radial distance to the nearer edge outside it.
+fn annulus_distance(d: f32, inner: f32, outer: f32) -> f32 {
+    return abs(d - 0.5 * (inner + outer)) - 0.5 * (outer - inner);
+}
+
+/// How wide the standoff's fade is, in the node's uv: the Gap bar's own fade,
+/// under the view's Clearance fade.
+///
+/// The floor is what stops the standoff ending in a STEP with the bar's two
+/// handles together, and a step cut across a wide soft light crawls as the
+/// camera moves where a band does not. The CLEARANCE's fade is the right floor
+/// for it because the clearing is what CARRIES the standoff — it is a factor on
+/// the light the clearing paints — so the two die together and the standoff is
+/// never the sharper of the pair. A Clearance with no fade of its own ends in a
+/// step whatever this says, and the standoff inside it ending in the same step
+/// is one edge rather than two.
+///
+/// A width `in.soft` and not one `aa`, which is what the node's shape edges are
+/// taken over: every other length in the clearing is read against `in.soft`
+/// (see [`gutter_coverage`]), and this keeps the whole of the clearing's
+/// arithmetic free of derivatives — as free of them as the light it reads
+/// back.
+fn moat_soft(in: VsOut) -> f32 {
+    return max(in.soft, glow_gap_soft());
+}
+
+/// How much of the light standing `sd` out from a ring's own annulus that ring
+/// holds off: solid across the ring and out to `gap - soft`, the light given
+/// back over the rest of the Gap and fully back at its end, skewed across that
+/// fade by the Gap curve.
+///
+/// [`gutter_coverage`]'s shape exactly — solid to the inner handle, gone by the
+/// outer, the fade floored at the footprint's own edge — because the Gap bar
+/// IS the Clearance bar, and a pair that read one way on one of them and
+/// another way on the other would be one picture with two rulers. The floor is
+/// what keeps a fade wider than its gap (which the view never stores, and a
+/// hand-edited scene can) from starting inside the ring, so the ring's own
+/// footprint is stood off in full at every pair of handles; it is also what
+/// keeps the `clamp` range from inverting, which WGSL leaves undefined, and
+/// the same job [`clearing_edge`]'s floor does for [`gutter_coverage`].
+///
+/// Both SIDES of a ring at once — the halo outside it and the lit middle of the
+/// node inside it — because [`annulus_distance`] hands the two of them one
+/// `sd`, so one band feathers both and the light comes off a ring at the same
+/// rate it comes off anything else. That match is the point: the gap and the
+/// glow are one blur or the gap reads as a cut.
+///
+/// WHERE the fade is and HOW the light is spent across it are then two
+/// questions, and the exponent answers the second alone. The ramp is the same
+/// band at every curve: `pow` is 0 at 0 and 1 at 1, so coverage is still
+/// exactly solid inside `inner` and exactly nothing outside `edge`. The curve
+/// therefore moves no boundary — the Gap bar's two handles still say where the
+/// standoff is solid to and where the light is fully back.
+///
+/// It is the one place the standoff's two sides are treated UNEVENLY, which is
+/// deliberate: the band still softens the node's middle and its halo
+/// together, but a curve below the middle spends most of its width on the far
+/// side, where the light being recovered is the halo's. A ring wants its dark
+/// close and its edge nowhere, and a symmetric ramp cannot give both.
+fn moat_coverage(sd: f32, soft: f32) -> f32 {
+    let edge = clearing_edge(glow_gap());
+    let inner = clamp(edge - soft, 0.0, edge - 0.001);
+    let ramp = smoothstep(inner, edge, sd);
+    return 1.0 - pow(ramp, glow_gap_shape());
+}
+
+/// How much of the light standing here this node holds off: every RING it
+/// draws, dilated by the Gap.
+///
+/// A RING — the octave band, the audio ring, a mark's sector — is measured from
+/// its own ANNULUS rather than filled to the node's centre the way
+/// [`node_clearing`] fills every footprint it walks. That is the whole of what
+/// makes the middle of a node glow: with nothing inside the innermost ring
+/// claiming the pixel, the light runs in to the centre and stops one Gap short
+/// of that ring's inner edge. A knockout wants the opposite — a hole with the
+/// lattice showing through its middle reads as neither a hole nor a node —
+/// which is why this cannot be [`node_clearing`] asked for another reach.
+///
+/// A ring that reaches the centre itself has no such middle, its own annulus
+/// being a disc: the standoff then covers what it covers, and the light is a
+/// halo outside the node alone.
+///
+/// Each term carries its own level, exactly as [`node_clearing`]'s do: a layer
+/// that is off, refused by the stack, attacking or releasing opens and closes
+/// its own standoff in step with the ink it stands off, and a layer nobody is
+/// drawing holds nothing off.
+fn glow_moat(in: VsOut, d: f32, oct: OctRing) -> f32 {
+    let soft = moat_soft(in);
+    var cov = 0.0;
+    // The octave band, on the node's own envelope, as the annulus it is drawn
+    // in: its slices, the gaps between them and the glyphs inside them all live
+    // between these two radii, so this is the whole layer's footprint.
+    if u.misc3.z > u.misc3.y {
+        let ring = annulus_distance(d, u.misc3.y, u.misc3.z);
+        cov = moat_coverage(ring, soft) * clamp(in.params.x, 0.0, 1.0);
+    }
+    // The audio ring, on ITS own: the view's Gate answered per node and carried
+    // on the note Fade. A node nobody played wears one whenever the spectrum
+    // reaches that gate, and this is the term that stands the light off it.
+    if u.misc7.w > u.misc7.z {
+        let ring = annulus_distance(d, u.misc7.z, u.misc7.w);
+        cov = max(cov, moat_coverage(ring, soft) * clamp(in.ring, 0.0, 1.0));
+    }
+    let slots = in.marks.x | in.marks.y;
+    if slots == 0u || u.misc5.w <= 0.0 {
+        return cov;
+    }
+    // Nothing below can raise a pixel already held off in full — the same skip
+    // [`node_clearing`] takes, and exact for the same reason: coverage is
+    // capped at one.
+    if EARLY_OUT && cov >= 1.0 {
+        return cov;
+    }
+    let strip_in = u.misc4.y;
+    let strip_out = u.misc4.y + u.misc5.w;
+    let top = oct.base + i32(oct_span()) - 1;
+    for (var i = 0u; i < OCTAVE_SLOTS; i = i + 1u) {
+        let bit = 1u << i;
+        let s = i32(i);
+        if (slots & bit) == 0u || s < oct.base || s > top {
+            continue;
+        }
+        // This slot's own level, not the strip's: where the two ends are on
+        // different slices, a melody still fading out keeps its own wedge's
+        // standoff while a bass arriving opens one.
+        let level = max(
+            select(0.0, in.params.y, (in.marks.x & bit) != 0u),
+            select(0.0, in.params.z, (in.marks.y & bit) != 0u),
+        );
+        if level > 0.0 {
+            // The mark is an annular SECTOR, which is the pie `sector_distance`
+            // measures intersected with everything past the strip's inner edge
+            // — a max of the two distances, the way an intersection of fields
+            // always is. Filled to the centre instead, one mark would put the
+            // node's whole middle in shadow.
+            let pie = sector_distance(in.uv, oct_sector(s, oct), strip_out);
+            let sd = max(pie, strip_in - d);
+            cov = max(cov, moat_coverage(sd, soft) * clamp(level, 0.0, 1.0));
+        }
+    }
+    return cov;
+}
+
 /// The three derivatives-and-geometry answers every layer of a node is drawn
 /// against, and the two early-outs that decide there is no node here at all.
 ///
@@ -2262,7 +2497,46 @@ fn node_paint(in: VsOut) -> vec4<f32> {
     // the target being the attachment's own size.
     let edge = vec2<i32>(textureDimensions(glow_tex)) - vec2<i32>(1, 1);
     let light = textureLoad(glow_tex, min(vec2<i32>(in.clip_pos.xy), edge), 0);
-    let ground = light.rgb + u.background.rgb * (1.0 - light.a);
+    // The STANDOFF, which is where the Gap bars land: the light this node
+    // clears to is dimmed around every ring it draws (`glow_moat`), so a ring
+    // stands in a pool that brightens outward instead of on the flat maximum of
+    // a falloff measured from the node's own centre. Without it the light is at
+    // its brightest exactly where the rings are, on both of their sides, and
+    // the ring drawn over that is a grey silhouette on a bright field.
+    //
+    // Scaling the light the clearing paints, rather than erasing light out of
+    // the target, and the two are the same arithmetic — `ground + light*(1-cov)`
+    // either way — with the depth ordering thrown in free: a hidden node's
+    // standoff is a shape it paints on its own body, so a node in front of it
+    // covers the standoff exactly as it covers everything else, and no pass has
+    // to work out whose light belongs to whom. What it dims is whatever light
+    // stands here, its NEIGHBOURS' as much as its own, that being what the
+    // melded field holds.
+    //
+    // Premultiplied, so one factor on the whole vector is less light and not a
+    // darker light: where a depth of 1 covers a pixel in full `lit` is nothing
+    // and the ground comes back bare, which is that pixel with no glow in it at
+    // all.
+    //
+    // It lives only where the clearing has COVERAGE, since that is what scales
+    // the ground below — a node with no Clearance has no standoff, and a layer
+    // fading out takes its own standoff down with its own hole. That is the
+    // intent rather than a limit worked around: the standoff is part of how a
+    // node sits in front of the picture, and a node not clearing the picture is
+    // not sitting in front of it.
+    //
+    // The two ways out are EXACT rather than approximations, which is what lets
+    // them stand outside `EARLY_OUT`: a depth of 0 keeps every scrap of the
+    // light by definition, and a clearing with no coverage paints none of the
+    // ground it would have dimmed. Both are the whole quad's answer wherever
+    // they hold at all, where `glow_moat` is otherwise a walk over every mark
+    // per fragment for nothing.
+    var keep = 1.0;
+    if glow_gap_depth() > 0.0 && gutter_cov > 0.0 {
+        keep = 1.0 - glow_gap_depth() * glow_moat(in, d, oct);
+    }
+    let lit = light * keep;
+    let ground = lit.rgb + u.background.rgb * (1.0 - lit.a);
     let with_ground = active_rgb + ground * gutter_cov * (1.0 - active_alpha);
     return vec4<f32>(with_ground, final_alpha);
 }
@@ -2637,7 +2911,7 @@ fn ink_at(in: VsOut, oct: OctRing, angle: f32) -> vec4<f32> {
 /// The instance's own vertex stage does everything but the geometry, so what a
 /// node carries into `ink_at` is spelled once and the strip cannot come to
 /// disagree with the billboard about it. What is replaced is the two things a
-/// row is not: where it sits — the row this node was handed, of `u.misc11.x` —
+/// row is not: where it sits — the row this node was handed, of `u.misc12.x` —
 /// and its uv, which carries the ANGLE across the row rather than a position on
 /// a node. Column `i` therefore falls at `(i + 0.5)/N` of a turn, which is what
 /// [`glow_ink`] reads it back at.
@@ -2645,7 +2919,7 @@ fn ink_at(in: VsOut, oct: OctRing, angle: f32) -> vec4<f32> {
 fn vs_ink_strip(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
     var out = node_vertex(vertex_index, inst, 0.0, false);
     let corner = vec2<f32>(f32(vertex_index & 1u), f32(vertex_index >> 1u));
-    let rows = max(u.misc11.x, 1.0);
+    let rows = max(u.misc12.x, 1.0);
     let v = (out.strip_row + corner.y) / rows;
     out.clip_pos = vec4<f32>(corner.x * 2.0 - 1.0, 1.0 - 2.0 * v, 0.0, 1.0);
     out.uv = vec2<f32>(corner.x, 0.0);
@@ -2714,7 +2988,7 @@ fn vs_ink_blur(
     inst: Instance,
 ) -> @builtin(position) vec4<f32> {
     let corner = vec2<f32>(f32(vertex_index & 1u), f32(vertex_index >> 1u));
-    let rows = max(u.misc11.x, 1.0);
+    let rows = max(u.misc12.x, 1.0);
     let v = (inst.glow.y + corner.y) / rows;
     return vec4<f32>(corner.x * 2.0 - 1.0, 1.0 - 2.0 * v, 0.0, 1.0);
 }
