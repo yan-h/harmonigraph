@@ -277,9 +277,10 @@ fn a_double_click_on_a_soft_edge_restores_the_fresh_pair() {
     );
 }
 
-/// Every soft edge — the lattice's knockout gutter, the roll's note outline,
-/// and the lead a held note carries over the now-line — opens on a pair its own
-/// bar can reach: a fade no wider than the reach it is measured back from.
+/// Every soft edge — the lattice's knockout gutter, the resting marker's arm
+/// and the taper on its ends, the roll's note outline, and the lead a held note
+/// carries over the now-line — opens on a pair its own bar can reach: a fade no
+/// wider than the reach it is measured back from.
 ///
 /// The picture does not care. Every one of the shaders caps the fade at the
 /// reach it is taking out, so a fade dialled past that DRAWS as a fade over the
@@ -317,7 +318,12 @@ fn a_blob_naming_a_fade_wider_than_its_edge_opens_on_one_that_fits() {
         .replace(
             &format!("roll_lead:{:?},", state.spectrum_config.roll_lead),
             "roll_lead:0.05,",
-        );
+        )
+        .replace(
+            &format!("plus_taper:{:?},", state.view.plus_taper),
+            "plus_taper:0.5,",
+        )
+        .replace(&format!("plus_arm:{:?},", state.view.plus_arm), "plus_arm:0.1,");
     assert_ne!(edited, saved, "the edge keys are not in the blob to edit");
 
     let mut restored = fresh();
@@ -337,6 +343,11 @@ fn a_blob_naming_a_fade_wider_than_its_edge_opens_on_one_that_fits() {
         (0.05, 0.05),
         "the lead's fade opened wider than the lead",
     );
+    assert_eq!(
+        (restored.view.plus_arm, restored.view.plus_taper),
+        (0.1, 0.1),
+        "a marker's taper opened longer than the arm it ends",
+    );
     assert_eq!(restored.camera.yaw, 1.23, "the rest of the blob still restores");
 }
 
@@ -354,15 +365,25 @@ fn a_blob_naming_a_fade_wider_than_its_edge_opens_on_one_that_fits() {
 /// the only way in — the same standing this pair's neighbours have, and the
 /// reason `a_blob_naming_an_undrawable_level_range_opens_on_a_drawable_one`
 /// exists a few tests up.
+///
+/// The resting marker's arm is a fourth such reach, and the order it is
+/// repaired in is what keeps it safe: `sanitize` finishes the arm before it
+/// clamps the taper to it, so `clamp` never sees a NaN as its `max`.
 #[test]
 fn a_blob_naming_a_nonsense_soft_edge_opens_on_a_drawable_one() {
-    let cases: [(&str, &str, &str); 6] = [
+    let cases: [(&str, &str, &str); 9] = [
         ("sevens_gutter", "NaN", "a NaN gutter"),
         ("sevens_gutter_soft", "NaN", "a NaN gutter fade"),
         ("roll_outline", "inf", "an infinite outline"),
         ("roll_outline_fade", "NaN", "a NaN outline fade"),
         ("roll_lead", "NaN", "a NaN lead"),
         ("roll_lead_fade", "inf", "an infinite lead fade"),
+        // The marker's own pair, and its width beside them — the width is a
+        // lone number rather than half of a pair, but it rides the same repair
+        // and a NaN one puts a handle nowhere on the same bar.
+        ("plus_arm", "NaN", "a NaN arm"),
+        ("plus_taper", "inf", "an infinite taper"),
+        ("plus_width", "NaN", "a NaN width"),
     ];
     for (key, value, hint) in cases {
         let mut state = fresh();
@@ -374,6 +395,9 @@ fn a_blob_naming_a_nonsense_soft_edge_opens_on_a_drawable_one() {
             "roll_outline" => state.spectrum_config.roll_outline,
             "roll_outline_fade" => state.spectrum_config.roll_outline_fade,
             "roll_lead" => state.spectrum_config.roll_lead,
+            "plus_arm" => state.view.plus_arm,
+            "plus_taper" => state.view.plus_taper,
+            "plus_width" => state.view.plus_width,
             _ => state.spectrum_config.roll_lead_fade,
         };
         let edited = saved.replace(&format!("{key}:{was:?},"), &format!("{key}:{value},"));
@@ -390,13 +414,17 @@ fn a_blob_naming_a_nonsense_soft_edge_opens_on_a_drawable_one() {
             ("roll_outline_fade", cfg.roll_outline_fade),
             ("roll_lead", cfg.roll_lead),
             ("roll_lead_fade", cfg.roll_lead_fade),
+            ("plus_arm", view.plus_arm),
+            ("plus_taper", view.plus_taper),
+            ("plus_width", view.plus_width),
         ] {
             assert!(v.is_finite(), "{hint}: `{name}` opened at {v}");
         }
         assert!(
             view.sevens_gutter_soft <= view.sevens_gutter
                 && cfg.roll_outline_fade <= cfg.roll_outline
-                && cfg.roll_lead_fade <= cfg.roll_lead,
+                && cfg.roll_lead_fade <= cfg.roll_lead
+                && view.plus_taper <= view.plus_arm,
             "{hint}: opened on a fade wider than its reach",
         );
         assert_eq!(restored.camera.yaw, 1.23, "{hint}: the rest of the blob still restores");
