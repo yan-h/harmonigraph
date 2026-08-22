@@ -477,12 +477,12 @@ fn parity_scene() -> Scene {
         // The accent's own falloff, which is what every glow test here that
         // does not say otherwise is measuring.
         glow_feather: 0.0,
-        // The fresh moat and the four shares that shape the light inside it,
+        // The fresh moat and the three shares that shape the light inside it,
         // inert at reach 0 and here to say so.
         glow_gap: 0.08,
         glow_gap_soft: 0.16,
+        glow_gap_shape: 0.5,
         glow_gap_depth: 0.85,
-        glow_centre: 0.5,
         glow_spread: 0.5,
         // A row per node, which is what the nodes above are built with.
         glow_rows,
@@ -4277,11 +4277,10 @@ fn the_lights_colour_seams_run_at_one_width_from_its_edge_to_the_centre() {
     scene.node_radius = 1.6;
     scene.glow_reach = 0.8;
     scene.glow_strength = 1.5;
-    // No moat and no dip: both are shapes laid over the light's own profile,
-    // and what is being read here is its colour.
+    // No moat: it is a shape laid over the light's own profile, and what is
+    // being read here is its colour.
     scene.glow_gap = 0.0;
     scene.glow_gap_soft = 0.0;
-    scene.glow_centre = 1.0;
     // Each octave's hue kept as its own arc rather than averaged round the
     // halo, which is the state a seam exists in at all.
     scene.glow_spread = 0.0;
@@ -6017,6 +6016,228 @@ fn a_lattice_with_no_node_grows_no_glow() {
     );
 }
 
+/// The Gap shape says WHERE inside the fade's width the light is given back,
+/// and nothing about how far the moat reaches.
+///
+/// Two claims, and the second is the one that would break something. The
+/// exponent is applied to a ramp that is still 0 at one end of the band and 1
+/// at the other, so the moat's support is the gap and the feather and nothing
+/// else — which is what lets `vs_glow`'s billboard and `fs_glow_moat`'s
+/// early-out size themselves off those two alone. A shape that scaled the
+/// feather's own half-width instead would pass the first check and clip square
+/// at the quad's corners at the top of the bar.
+///
+/// The second is a BOUND rather than an equality, and the reason is worth
+/// stating so nobody tightens it into a flake. In the continuum the band is
+/// identical at every shape, but nothing at 8 bits isolates that. Coverage
+/// vanishes continuously at the far end with a slope proportional to the
+/// exponent, so where each shape's tail last clears 1/255 differs by a pixel or
+/// two with the same band under all three; and the solid end, where `pow`
+/// genuinely cannot move anything, sits on the ring's own edge at any fade
+/// wider than twice the gap — which is the regime this bar is for — so it is
+/// pinned there rather than free to be measured moving. What is left is a
+/// ceiling,
+/// and it is sized against the failure it exists to catch: a shape wired into
+/// the feather's half-width would push the band out by whole half-widths, so a
+/// shape held inside ONE extra half-width is not that bug.
+///
+/// Measured against the SAME light with no moat in it rather than against an
+/// unlit frame: what is being read is what each shape took away, so the light
+/// it took it from has to be the one constant. That baseline is the fixture at
+/// a gap DEPTH of 0, NOT at a gap WIDTH of 0 — see the comment on it, because
+/// the two are different pictures and only one of them is an absent moat.
+///
+/// A few hundred pixels a shot come out NEGATIVE — the moated shot brighter
+/// than the unmoated one, over the node's own lit sector — and the `lost <= 0`
+/// guard drops them. They are the composite working, not a leak in it: the
+/// light is laid OVER the finished lattice premultiplied, so it REPLACES a
+/// node's ink in the share of its own alpha rather than adding to it, and a
+/// moat that takes the light off ink brighter than the halo hands that ink
+/// back. An erase into a target that is then composited over can raise the
+/// finished picture, and here it should. It does not reach the verdict either
+/// way: a pixel's contribution is `max(0, cov_shape - cov_none)`, which is
+/// monotone non-decreasing in the exponent, so the ordering holds on the pixels
+/// that are counted whatever those few hundred do.
+#[test]
+fn the_gap_shape_moves_where_the_moat_gives_light_back_not_how_far_it_reaches() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    // A wide fade against a modest gap, which is the shape bar's whole working
+    // range: penned inside a narrow band there is nothing for an exponent to
+    // redistribute, and the picture that made this bar worth having is the one
+    // where the fade runs several times the gap.
+    const GAP: f32 = 0.12;
+    const SOFT: f32 = 0.6;
+    let at = |gap: f32, soft: f32, shape: f32| -> Scene {
+        let mut scene = single_marked_node(0, 0);
+        scene.glow_reach = 0.8;
+        scene.glow_strength = 1.5;
+        scene.glow_gap = gap;
+        scene.glow_gap_soft = soft;
+        // A hole, so what the moat takes is the whole of what stood there and
+        // the ordering below is not read through a second scaling.
+        scene.glow_gap_depth = 1.0;
+        scene.glow_gap_shape = shape;
+        scene
+    };
+    // The same light with no moat in it, and the way to ask for that is a DEPTH
+    // of 0 rather than a Gap of 0. A gap of 0 is not an absent moat: the edge is
+    // floored (`clearing_edge`) and the feather collapses to a single screen
+    // band, so coverage snaps to a whole 1 everywhere inside a ring's own
+    // annulus and the light is taken from there COMPLETELY — a crisper moat
+    // than any of the shots below rather than a missing one. Read against that,
+    // a wide feather looks like it ADDS light across every ring the node draws.
+    // A depth of 0 is unambiguous: `fs_glow_moat` early-outs on it, and the
+    // pass multiplies the glow's target by one.
+    let mut none = at(GAP, SOFT, 0.5);
+    none.glow_gap_depth = 0.0;
+    let flush = shooter.shot(&none);
+    // The neutral shape over one more half-width of fade: what the band looks
+    // like when it really has been widened, and so the ceiling the three shapes
+    // below have to stay inside.
+    let wider = shooter.shot(&at(GAP, SOFT * 2.0, 0.5));
+    let trail = shooter.shot(&at(GAP, SOFT, 0.0));
+    let mid = shooter.shot(&at(GAP, SOFT, 0.5));
+    let hold = shooter.shot(&at(GAP, SOFT, 1.0));
+
+    // How much light this shape's moat took out of `flush`, and how far from the
+    // node the furthest pixel it took any from sits.
+    let taken = |shot: &[u8]| -> (i64, f32) {
+        let row = SIZE[0] as usize;
+        let centre = (SIZE[0] as f32 / 2.0, SIZE[1] as f32 / 2.0);
+        let (mut sum, mut edge) = (0i64, 0.0f32);
+        for (i, (held, lit)) in shot.chunks(4).zip(flush.chunks(4)).enumerate() {
+            let lost = brightness(lit) - brightness(held);
+            if lost <= 0 {
+                continue;
+            }
+            sum += lost;
+            let (px, py) = ((i % row) as f32, (i / row) as f32);
+            edge = edge.max(((px - centre.0).powi(2) + (py - centre.1).powi(2)).sqrt());
+        }
+        (sum, edge)
+    };
+    let (trail_took, trail_edge) = taken(&trail);
+    let (mid_took, mid_edge) = taken(&mid);
+    let (hold_took, hold_edge) = taken(&hold);
+    let (_, wider_edge) = taken(&wider);
+
+    assert!(mid_took > 0, "a moat at gap {GAP} took no light at all to measure against");
+    assert!(
+        trail_took < mid_took && mid_took < hold_took,
+        "the shape bar must move the light monotonically across the fade: {trail_took} \
+         taken at 0, {mid_took} at the middle, {hold_took} at 1",
+    );
+    assert!(
+        wider_edge > mid_edge + 2.0,
+        "the ceiling has to be somewhere the band can be seen to have moved: a doubled \
+         fade reached {wider_edge:.1}px against the plain one's {mid_edge:.1}px",
+    );
+    assert!(
+        trail_edge < wider_edge && hold_edge < wider_edge,
+        "no shape may push the moat out the way widening the fade does: {trail_edge:.1}px \
+         at 0 and {hold_edge:.1}px at 1, against {mid_edge:.1}px at the middle and \
+         {wider_edge:.1}px for a fade twice as wide",
+    );
+}
+
+/// A silent slice of the octave band is the same grey with the light on as
+/// with it off: at a full-depth moat the glow does not land on a ring's own
+/// ink at any width of fade.
+///
+/// The light is laid OVER the finished lattice (`LatticeCallback::paint`) and
+/// composited premultiplied, so it does not add to what a ring draws — it
+/// REPLACES that ink in the share of its own alpha. Coverage short of 1
+/// anywhere on a ring is therefore the halo's colour standing on that ring, and
+/// on a slice nothing is sounding at, whose ink is the flat Ground grey, there
+/// is nothing for it to hide in: it reads as a lit rim at each of the band's
+/// two edges with a clean strip between them, which is the shape a fade centred
+/// on the gap's end leaves behind. `moat_coverage` floors the band's inner end
+/// at the ring's own edge so it cannot reach inside the footprint it stands
+/// off, and this is that floor. Issue #428 is the same residue counted from the
+/// other side.
+///
+/// The GROUND is what the check hunts, rather than a radius worked back out of
+/// the projection: a silent slice draws `Scene::lattice_ground` flat and opaque
+/// (`oct_slot_ink`), so the pixels that carry the most common fully-neutral
+/// value in the unlit shot ARE the band's silent slices, found the same way at
+/// any camera. The partially-covered fringe at each edge is left out with them
+/// — it is ground blended toward the background, so it is neither this value
+/// nor a place a moat owes anything.
+///
+/// A DEPTH of 1, because that is the setting that claims a hole. Below it the
+/// moat deliberately leaves a share of the light standing — a ring in a dim
+/// pool of its own halo — and a ring lit through that is the bar working.
+#[test]
+fn a_full_moat_leaves_a_silent_slice_exactly_the_grey_it_draws_unlit() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    // A fade several times its gap, which is both the bar's working range and
+    // the whole of the regime this is about: at `soft` twice `glow_gap`, where
+    // the fresh view sits, the band's inner end already falls exactly on the
+    // ring's edge and there is nothing to hold off it.
+    const GAP: f32 = 0.06;
+    const SOFT: f32 = 0.6;
+    let at = |reach: f32| -> Scene {
+        let mut scene = single_marked_node(0, 0);
+        scene.glow_reach = reach;
+        scene.glow_strength = 1.5;
+        scene.glow_gap = GAP;
+        scene.glow_gap_soft = SOFT;
+        scene.glow_gap_depth = 1.0;
+        scene
+    };
+    let unlit = shooter.shot(&at(0.0));
+    let lit = shooter.shot(&at(0.8));
+
+    // The band's own grey: the commonest value among the fully neutral pixels,
+    // black excluded so the cleared ground around the node cannot win.
+    let mut counts = [0usize; 256];
+    for px in unlit.chunks(4) {
+        if px[0] == px[1] && px[1] == px[2] && px[0] > 0 {
+            counts[px[0] as usize] += 1;
+        }
+    }
+    let (ground, seen) = counts
+        .iter()
+        .enumerate()
+        .skip(1)
+        .max_by_key(|&(_, n)| n)
+        .map(|(v, &n)| (v as u8, n))
+        .expect("a shot has pixels");
+    assert!(
+        seen >= 256,
+        "only {seen} pixels carry the band's grey ({ground}); the fixture has to draw enough \
+         silent slice for the check below to be about the moat",
+    );
+
+    // One step of slack per channel: the composite resamples the glow's target
+    // through a linear sampler, which is texel-aligned here and still rounds an
+    // 8-bit channel. The residue this catches is worth three of a channel over
+    // a sixth of the slice at this camera, and grows with the fade.
+    let (mut touched, mut worst) = (0usize, 0u8);
+    for (dark, light) in unlit.chunks(4).zip(lit.chunks(4)) {
+        if dark[..3] != [ground; 3] {
+            continue;
+        }
+        let slip = (0..3).map(|c| light[c].abs_diff(ground)).max().unwrap_or(0);
+        if slip > 1 {
+            touched += 1;
+            worst = worst.max(slip);
+        }
+    }
+    assert_eq!(
+        touched, 0,
+        "the glow reaches {touched} of the {seen} pixels a silent slice draws, the worst by \
+         {worst} of a channel — the fade is reaching inside the band's own footprint and \
+         leaving the halo standing on its ink",
+    );
+}
+
 /// The moat is an ABSENCE of light, not a shape painted in the dark: a pixel
 /// the Glow gap clears beside a lit node is the pixel the frame has with no
 /// glow at all, to the byte.
@@ -6498,67 +6719,6 @@ fn added_light(on: &[u8], off: &[u8]) -> [i64; 3] {
     sum
 }
 
-/// The Centre bar dips the MIDDLE of a node's light and leaves the skirt
-/// outside it exactly where it was.
-///
-/// Both halves matter and they are one profile: the dip eases back to the whole
-/// of the exponential by the innermost ring's inner edge, so a node's light can
-/// be taken off its own centre without the halo around it moving — which is the
-/// difference between this bar and the Strength bar beside it.
-///
-/// The core's solidity is 0, as
-/// [`the_middle_of_a_node_is_where_its_light_is_fullest`] has it and for the
-/// same reason: at any solidity above it the disc is drawn over the light,
-/// crisp, and the centre pixel would read the disc.
-#[test]
-fn the_centre_bar_dips_a_nodes_middle_and_leaves_its_skirt() {
-    const SIZE: [u32; 2] = [256, 256];
-    let Some(mut shooter) = Shooter::new(SIZE) else {
-        return;
-    };
-    let at = |reach: f32, centre: f32| -> Scene {
-        let mut scene = single_marked_node(0, 0);
-        scene.glow_reach = reach;
-        scene.glow_strength = 1.5;
-        scene.glow_gap = 0.08;
-        scene.glow_centre = centre;
-        scene
-    };
-    let off = shooter.shot(&at(0.0, 1.0));
-    let full = shooter.shot(&at(0.8, 1.0));
-    let dipped = shooter.shot(&at(0.8, 0.2));
-
-    // Out from the node's centre along one row — the fixture's one node sits at
-    // the world origin, which the camera is pointed at, so that is the frame's
-    // centre too.
-    let row = (SIZE[1] / 2) as usize;
-    let mid = SIZE[0] as usize / 2;
-    let px = |shot: &[u8], x: usize| -> i64 {
-        let i = (row * SIZE[0] as usize + x) * 4;
-        brightness(&shot[i..i + 3])
-    };
-    assert!(
-        px(&dipped, mid) < px(&full, mid),
-        "a Centre of 0.2 left the node's middle at {} against {} at 1.0",
-        px(&dipped, mid),
-        px(&full, mid),
-    );
-    // How far out the two profiles differ at all, and how far the light itself
-    // reaches. The first has to finish well inside the second, or the bar is
-    // dimming the whole halo rather than dipping its middle.
-    let last = |f: &dyn Fn(usize) -> bool| -> usize {
-        (mid..SIZE[0] as usize).filter(|&x| f(x)).max().unwrap_or(0)
-    };
-    let dips_to = last(&|x| px(&full, x) != px(&dipped, x));
-    let lights_to = last(&|x| px(&full, x) != px(&off, x));
-    assert!(dips_to > mid, "a Centre of 0.2 changed no pixel on the row at all");
-    assert!(
-        dips_to + 8 < lights_to,
-        "the dip ran to {dips_to} px where the light reaches {lights_to} px — it is \
-         taking the skirt down with the middle",
-    );
-}
-
 /// The Gap fade bar widens the moat's EDGE — the band of pixels over which the
 /// light comes off a ring — without moving the gap itself.
 ///
@@ -6779,7 +6939,6 @@ fn a_nodes_light_has_no_ripple_the_ink_does_not() {
         // the gap laid over it.
         scene.glow_gap = 0.0;
         scene.glow_gap_soft = 0.0;
-        scene.glow_centre = 0.5;
         scene.glow_spread = 0.0;
         // Big enough that a circle inside the node is hundreds of pixels round,
         // which is what resolving a ripple at these rates takes.

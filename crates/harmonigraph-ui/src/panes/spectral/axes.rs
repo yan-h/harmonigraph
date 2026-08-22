@@ -875,7 +875,10 @@ impl TimeAxis {
             Some(ws) => TimeAxis {
                 split,
                 depth_span,
-                window: ws.span.max(0.05),
+                // The take's own, floored there rather than here: the trim
+                // that feeds the heatmap reads the same method, and a second
+                // copy of this floor is what let the two disagree.
+                window: ws.window(),
                 origin: ws.start,
                 now,
                 whole_song: true,
@@ -883,7 +886,10 @@ impl TimeAxis {
             None => TimeAxis {
                 split,
                 depth_span,
-                window: state.spectrum_config.roll_seconds.max(0.05) as f64,
+                // The same floor on the live arm's own input, for the same
+                // reason — a window of nothing maps every time to one depth.
+                window: (state.spectrum_config.roll_seconds as f64)
+                    .max(crate::WholeSong::MIN_WINDOW),
                 origin: now,
                 now,
                 whole_song: false,

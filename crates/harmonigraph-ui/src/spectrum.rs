@@ -225,6 +225,11 @@ pub struct WholeSong {
 }
 
 impl WholeSong {
+    /// The shortest window the depth axis will map time across. A render can
+    /// ask for less — one frame at 30 fps is 33 ms — and the axis draws this
+    /// much regardless, so the picture reaches past what was asked for.
+    pub const MIN_WINDOW: f64 = 0.05;
+
     /// Analyze the entire `samples` buffer, one raw column per hop,
     /// `time`-stamped in take time (`time_origin` is the take time of sample 0).
     /// Raw, exactly like the live store: the heatmap reads what was measured,
@@ -296,6 +301,60 @@ impl WholeSong {
         // The roll is filled in separately by the renderer (it needs the notes,
         // not the audio); the bounce preview leaves it empty.
         WholeSong { start, span, columns, roll: harmonigraph_core::NoteRoll::default() }
+    }
+
+    /// The columns the depth axis can actually draw: those stamped inside
+    /// `[start, start + span]`.
+    ///
+    /// The heatmap's WIDTH comes from the columns the fold is handed, not from
+    /// the span the plan sized its slab against:
+    /// [`Plan::new`](crate::spectrogram::Plan::new) picks `bucket` from the
+    /// window, while the module's `aggregate_slabs` gives every elapsed slab a
+    /// texel between the first column and the last (both private to it, so
+    /// named here rather than linked).
+    /// Those agree only while the columns lie inside the window, and
+    /// [`precompute`](Self::precompute) leaves them free to reach past it: it
+    /// analyses the whole `samples` buffer
+    /// whatever the render's `--start`/`--end`, so a ten-second window on a
+    /// three-minute bounce arrives here with columns spanning the file and a
+    /// bucket cut for ten seconds. Folding those builds a texture around 14 000
+    /// texels wide against a limit of 2048 — issue #367, the same
+    /// `load_texture` assert as #333/#335, reached from the other axis.
+    ///
+    /// The window the depth axis actually maps time across:
+    /// [`span`](Self::span) under [`MIN_WINDOW`](Self::MIN_WINDOW).
+    ///
+    /// A window of nothing maps every take time to one depth, so the axis puts
+    /// a floor under it — and a render shorter than that floor therefore draws
+    /// a region reaching past `start + span`. `TimeAxis::new` reads its
+    /// whole-song window from here rather than restating the floor, because the
+    /// two restatements drifting is exactly what left a 20 ms render's heatmap
+    /// covering 64% of its region.
+    pub fn window(&self) -> f64 {
+        self.span.max(Self::MIN_WINDOW)
+    }
+
+    /// `window` is the axis' own, taken from the caller rather than from
+    /// [`span`](Self::span), and they are NOT the same number: `TimeAxis::new`
+    /// floors the window it maps time across, so a render shorter than that
+    /// floor draws a depth region reaching past `start + span`. Trimming to
+    /// `span` there drops columns that have a depth on screen and stops the
+    /// heatmap part way down a region the rest of the pane keeps drawing — a
+    /// 20 ms render leaves 36% of it bare. `build` hands over the very `f64`
+    /// [`Plan::new`](crate::spectrogram::Plan::new) cut `bucket` from, so the
+    /// trim and the slab cannot drift; two expressions of one window is what
+    /// this takes an argument to avoid.
+    ///
+    /// Trimmed to that window EXACTLY, with no margin either side, and the
+    /// tightness is what `spectrogram::slab_ceiling`'s slabs in hand are
+    /// counted against. Nothing drawn is lost by it: the pane maps take time to
+    /// depth through `TimeAxis::frac`, so a column outside
+    /// `[start, start + window]` has no depth on screen, and the quad samples
+    /// the texture by ABSOLUTE time (`u_drawn` over `t_origin`/`tex_span`), so
+    /// dropping texels off the ends moves none of the ones that remain.
+    pub fn drawn_columns(&self, window: f64) -> impl Iterator<Item = &SpectrogramColumn> {
+        let (from, to) = (self.start, self.start + window);
+        self.columns.iter().filter(move |c| c.time >= from && c.time <= to)
     }
 }
 

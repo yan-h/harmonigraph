@@ -699,21 +699,10 @@ fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBack
                  a light per node. It adds light rather than moving it, so a \
                  wash usually wants a lower Strength than the accent did.",
             );
-        // The two that shape the light itself, between the amount of it and the
-        // moat that holds it off: one says where in the node it is brightest,
-        // the other what colour it comes out. Both read as percentages because
-        // both are SHARES — of the light's own peak, and of a whole turn — and
-        // neither is a distance, which is what keeps them from being read
-        // against the three bars above that are.
-        ValueBar::new(&mut view.glow_centre, 0.0..=1.0, "Glow centre")
-            .display(|v| format!("{:.0}%", v * 100.0))
-            .show(ui)
-            .on_hover_text(
-                "How bright a node's light is at its own middle, against the \
-                 peak it reaches at the inner edge of its innermost ring. 100% \
-                 is hottest dead centre; lower dips the middle, so the node \
-                 reads as a lit ring rather than as a lamp.",
-            );
+        // What colour the light comes out, between the amount of it and the
+        // moat that holds it off. It reads as a percentage because it is a
+        // SHARE — of a whole turn — and not a distance, which is what keeps it
+        // from being read against the three bars above that are.
         ValueBar::new(&mut view.glow_spread, 0.0..=1.0, "Glow spread")
             .display(|v| format!("{:.0}%", v * 100.0))
             .show(ui)
@@ -753,6 +742,28 @@ fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBack
                  outside a ring and the lit middle inside it soften together; \
                  set it wider than the gap and the light dips away over a broad \
                  band instead of stopping in one. 0 cuts it in one screen band.",
+            );
+        // The shape to that width, directly under it, on the Reach/Feather
+        // arrangement above: a bar saying how far something goes and a bar
+        // saying how it is spent over that distance belong together, and this
+        // one reads as a percentage because it is a share of the fade's width
+        // rather than a width of its own — which is what keeps it from being
+        // read against the two bars above it that ARE distances.
+        ValueBar::new(&mut view.glow_gap_shape, 0.0..=1.0, "Glow gap shape")
+            .display(|v| format!("{:.0}%", v * 100.0))
+            .show(ui)
+            .on_hover_text(
+                "Where inside the fade's width the light is given back. 50% \
+                 spends it evenly, which is steepest exactly at the gap's end \
+                 and leaves a wide fade reading as a dark annulus with a soft \
+                 edge. Lower gives the light back closest to the ring and \
+                 trails the rest away over a long tail, so the dark hugs the \
+                 ring and has no edge anywhere; higher holds the ring dark and \
+                 lets the light back over the last of the width. It moves no \
+                 boundary — \
+                 the Gap and the Gap fade still say where the moat is. Dial it \
+                 with the depth below: a tail is the faint end of the fade, so \
+                 a shallow depth loses it and a full one turns it into a void.",
             );
         ValueBar::new(&mut view.glow_gap_depth, 0.0..=1.0, "Glow gap depth")
             .display(|v| format!("{:.0}%", v * 100.0))

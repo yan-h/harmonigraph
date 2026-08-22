@@ -1135,11 +1135,6 @@ pub struct ViewConfig {
     /// feathered wash usually wants a lower Strength than the accent it came
     /// from did.
     ///
-    /// It leaves [`glow_centre`](Self::glow_centre) doing its own job — the dip
-    /// is taken out of whatever profile this makes, at the innermost ring's own
-    /// edge — so a node still reads as a lit ring inside a flattened halo, and
-    /// a field with nothing of the node in its middle wants both bars up.
-    ///
     /// Inert while [`glow_reach`](Self::glow_reach) is 0.
     pub glow_feather: f32,
     /// The moat: how far past each RING a node draws its own light is held
@@ -1183,14 +1178,45 @@ pub struct ViewConfig {
     /// The feather stays CENTRED on where the gap ends, so it softens the halo
     /// outside a ring and the lit middle of the node inside it together — one
     /// blur across the whole moat rather than a soft outer edge on a hard
-    /// inner one. Past the gap's own width it reaches back inside the ring's
-    /// footprint, and that costs nothing: the ring's ink is drawn over the
-    /// light there a pass later. At 0 all that is left under it is the
+    /// inner one. Past twice the gap it would reach back inside the ring's
+    /// footprint, and there it is held at the ring's own edge instead
+    /// (`moat_coverage` in lattice.wgsl): the light is laid OVER the finished
+    /// lattice, so a fade that ate into a ring would leave that share of the
+    /// halo sitting on the ring's ink rather than under it. At 0 all that is
+    /// left under it is the
     /// [`sevens_gutter_soft`](Self::sevens_gutter_soft) fade, which is an edge
     /// a couple of screen pixels wide.
     ///
     /// Inert while [`glow_reach`](Self::glow_reach) is 0.
     pub glow_gap_soft: f32,
+    /// How the moat's fade is skewed across the width
+    /// [`glow_gap_soft`](Self::glow_gap_soft) gives it, 0..=1: 0 gives the
+    /// light back closest to the ring and trails the rest away, 0.5 the plain
+    /// symmetric ramp, 1 holds the ring dark to the end of that width.
+    ///
+    /// The SHAPE knob to that bar's width, the way
+    /// [`glow_feather`](Self::glow_feather) is to
+    /// [`glow_reach`](Self::glow_reach)'s distance. A symmetric ramp is
+    /// steepest exactly at the gap's end and flat at both ends of its own
+    /// width, so a wide fade spends its first half nearly solid and reads as a
+    /// dark annulus with a soft edge — the very thing the width was widened to
+    /// avoid. Below the middle the dark stays tight against the ring and the
+    /// recovery is a long shallow tail with no edge anywhere in it, which is a
+    /// ring standing in shade rather than in a band.
+    ///
+    /// It moves no boundary: the fade covers the same width at every setting
+    /// (see `moat_coverage` in lattice.wgsl), so
+    /// [`glow_gap`](Self::glow_gap) still says where the moat is solid to and
+    /// [`glow_gap_soft`](Self::glow_gap_soft) still says how far past that it
+    /// reaches. This says only where inside that width the light is given back.
+    ///
+    /// It is dialled against [`glow_gap_depth`](Self::glow_gap_depth) rather
+    /// than alone: the tail is the shallow end of the fade, so a depth well
+    /// under 1 leaves it too faint to read at all, and a depth of 1 makes it a
+    /// broad void that eats the halo it trails into.
+    ///
+    /// Inert while [`glow_reach`](Self::glow_reach) is 0.
+    pub glow_gap_shape: f32,
     /// How much of the light the moat takes away where it stands, 0..=1 —
     /// every ring's coverage scaled once by this.
     ///
@@ -1203,16 +1229,6 @@ pub struct ViewConfig {
     ///
     /// Inert while [`glow_reach`](Self::glow_reach) is 0.
     pub glow_gap_depth: f32,
-    /// How bright a node's light is at its own MIDDLE, as a share of the peak
-    /// it reaches out at the innermost ring's inner edge. 1 is the plain
-    /// exponential, hottest at the exact centre; below it the middle dips and
-    /// the light reads as a lit ring rather than as a lamp.
-    ///
-    /// One continuous profile: the dip eases back to the whole of the skirt by
-    /// that inner edge and the falloff outside it is untouched, so this moves
-    /// the middle of a node and nothing about how far its light reaches.
-    /// Inert while [`glow_reach`](Self::glow_reach) is 0.
-    pub glow_centre: f32,
     /// How widely a node's own ink is averaged into the colour of its light.
     ///
     /// The glow's colour is not a formula naming its sources — it is what the
@@ -2123,12 +2139,17 @@ impl ViewConfig {
         // band (see `glow_gap_soft`).
         self.glow_gap_soft =
             finite_or(self.glow_gap_soft, fresh.glow_gap_soft).clamp(0.0, GLOW_GAP_SOFT_MAX);
+        // The shape the moat's fade is spent in, which is a share of that
+        // fade's own WIDTH rather than a width itself — the exponent it maps
+        // to is the shader's business (`glow_gap_shape` in lattice.wgsl), and
+        // a bar reading 0..1 is what keeps its neutral point at the middle.
+        self.glow_gap_shape =
+            finite_or(self.glow_gap_shape, fresh.glow_gap_shape).clamp(0.0, 1.0);
         // The four that are SHARES — of the light the moat stands in, of the
         // light's own peak, of a whole turn — so their range is the unit
         // interval.
         self.glow_gap_depth =
             finite_or(self.glow_gap_depth, fresh.glow_gap_depth).clamp(0.0, 1.0);
-        self.glow_centre = finite_or(self.glow_centre, fresh.glow_centre).clamp(0.0, 1.0);
         self.glow_spread = finite_or(self.glow_spread, fresh.glow_spread).clamp(0.0, 1.0);
         // The light's own pair, in seconds, on the ring's rule: a bar's range,
         // and a poisoned number repaired to the fresh value rather than left
@@ -2435,11 +2456,16 @@ impl Default for ViewConfig {
             // dip the light comes off at rather than the band a share of the
             // gap could only draw.
             glow_gap_soft: 0.16,
+            // The fade spent evenly across that width, which is the plain
+            // symmetric ramp: the bar's own middle, so the shape is an
+            // addition to the fresh view rather than a restyle of it, and
+            // either half of the bar is somewhere to go from a look that is
+            // already tuned.
+            glow_gap_shape: 0.5,
             // Most of the light off around a ring, and not all of it: a ring
             // in a dim pool of its own halo reads as shade, where the whole of
             // it taken away reads as a black annulus drawn round the node.
             glow_gap_depth: 0.85,
-            glow_centre: 0.5,
             glow_spread: 0.5,
             // Slow and fluid, which is what the pair is for: a light that
             // arrives inside a third of a second and takes a couple of seconds

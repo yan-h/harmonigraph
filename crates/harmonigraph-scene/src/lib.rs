@@ -885,13 +885,15 @@ pub struct Scene {
     /// already clamped to [`GLOW_GAP_SOFT_MAX`], which is deliberately several
     /// times the gap's own ceiling.
     pub glow_gap_soft: f32,
+    /// How the moat's fade is skewed across that width (see
+    /// [`ViewConfig::glow_gap_shape`]), 0 giving the light back closest to the
+    /// ring and 1 holding the ring dark to the end of that width; already
+    /// clamped to 0..=1.
+    /// Inert while [`glow_reach`](Self::glow_reach) is 0.
+    pub glow_gap_shape: f32,
     /// How much of the light the moat takes away where it stands (see
     /// [`ViewConfig::glow_gap_depth`]); already clamped to 0..=1.
     pub glow_gap_depth: f32,
-    /// How bright the light is at a node's middle against its peak out at the
-    /// innermost ring's inner edge (see [`ViewConfig::glow_centre`]); already
-    /// clamped to 0..=1.
-    pub glow_centre: f32,
     /// How widely a node's own ink is averaged into the colour of its light
     /// (see [`ViewConfig::glow_spread`]); already clamped to 0..=1.
     pub glow_spread: f32,

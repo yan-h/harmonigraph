@@ -354,9 +354,8 @@ struct Uniforms {
     /// The node glow's lengths. x: how far past a node's outermost drawn edge
     /// its light spreads, in quad UV units (`Scene::glow_reach`); y: how much
     /// light (`Scene::glow_strength`); z: the moat the light is held out of
-    /// around every ring a node draws, same units (`Scene::glow_gap`); w: how
-    /// bright that light is at the node's middle against its peak out at the
-    /// innermost ring (`Scene::glow_centre`).
+    /// around every ring a node draws, same units (`Scene::glow_gap`);
+    /// w unused.
     ///
     /// ZEROED WHOLE where the glow does not draw, so `x > 0.0` is the single
     /// test on either side of the boundary — [`LatticeCallback::glow_draws`]
@@ -381,11 +380,15 @@ struct Uniforms {
     /// and this holds the rest, and the two are read by different parts of the
     /// shader. Zeroed whole with it, on the same rule.
     misc11: [f32; 4],
-    /// The node glow's third row. x: how flat the light's falloff is across its
-    /// own span (`Scene::glow_feather`), 0 the exponential heaped on the node
-    /// and 1 an even field across it; y/z/w unused.
+    /// The node glow's third row — the glow's two SHAPE knobs, against the
+    /// distances in `misc10` and the rest in `misc11`. x: how flat the light's
+    /// falloff is across its own span (`Scene::glow_feather`), 0 the
+    /// exponential heaped on the node and 1 an even field across it; y: how the
+    /// moat's fade is skewed across its own width (`Scene::glow_gap_shape`), 0
+    /// giving the light back closest to the ring and 1 holding the ring dark to
+    /// the end of that width; z/w unused.
     ///
-    /// A row for one scalar, because the two rows above are full and the glow's
+    /// A row of its own, because the two rows above are full and the glow's
     /// knobs read together: a feather packed into the analyzer ring's spare
     /// half (`misc9.z`) would be one number filed under another feature, found
     /// by whoever greps for the ring rather than by whoever is reading the
@@ -1060,12 +1063,7 @@ impl LatticeCallback {
                 // it belongs to the glow: it is the moat that light stands
                 // behind, and with no light there is nothing to stand off.
                 misc10: if lights {
-                    [
-                        scene.glow_reach,
-                        scene.glow_strength,
-                        scene.glow_gap,
-                        scene.glow_centre,
-                    ]
+                    [scene.glow_reach, scene.glow_strength, scene.glow_gap, 0.0]
                 } else {
                     [0.0; 4]
                 },
@@ -1079,7 +1077,11 @@ impl LatticeCallback {
                 } else {
                     [0.0; 4]
                 },
-                misc12: if lights { [scene.glow_feather, 0.0, 0.0, 0.0] } else { [0.0; 4] },
+                misc12: if lights {
+                    [scene.glow_feather, scene.glow_gap_shape, 0.0, 0.0]
+                } else {
+                    [0.0; 4]
+                },
                 spectral_lut: std::array::from_fn(|k| scene.spectral.lut[k].to_array()),
                 // Zeroed rather than packed when the ring is off: `u.spectrum`
                 // is read only through `spectral_ring`, which draws nothing off

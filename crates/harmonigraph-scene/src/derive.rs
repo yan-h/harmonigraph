@@ -605,8 +605,8 @@ pub fn derive_scene(
         glow_feather: view.glow_feather.clamp(0.0, 1.0),
         glow_gap: view.glow_gap.clamp(0.0, crate::GAP_MAX),
         glow_gap_soft: view.glow_gap_soft.clamp(0.0, crate::GLOW_GAP_SOFT_MAX),
+        glow_gap_shape: view.glow_gap_shape.clamp(0.0, 1.0),
         glow_gap_depth: view.glow_gap_depth.clamp(0.0, 1.0),
-        glow_centre: view.glow_centre.clamp(0.0, 1.0),
         glow_spread: view.glow_spread.clamp(0.0, 1.0),
         // A row per node, so a scene nothing has carried still reads one strip
         // row per node — the shell's pass hands out rows of its own and raises
