@@ -657,14 +657,23 @@ fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBack
     // A share of the node's radius, the unit the two gaps and the Clearance
     // above it read in, and measured from the same place: the reach is a
     // distance out from the node's edge exactly as the Clearance is.
+    // Eased, because the bar now spans two pictures rather than one range of
+    // one: the accent — a halo reaching about as far as the gap to a
+    // neighbour — is the bottom eighth of it, and the wash is everything above.
+    // Cubic travel gives the accent half the bar, so a light meant to sit on
+    // its own node is still dialled a hundredth at a time, and the far end is
+    // reachable in the same drag.
     ValueBar::new(&mut view.glow_reach, 0.0..=GLOW_REACH_MAX, "Glow")
+        .eased(true)
         .decimals(3)
         .display(|v| format!("{:.0}%", v * 100.0))
         .show(ui)
         .on_hover_text(
             "How far past its own edge a node's light spreads, as a share of \
-             its radius. Neighbouring nodes' light melds where it overlaps. 0 \
-             turns it off, leaving the rings alone.",
+             its radius. Neighbouring nodes' light melds where it overlaps — \
+             around 100% reaches a neighbour, and several hundred washes the \
+             whole lattice in one field. 0 turns it off, leaving the rings \
+             alone.",
         );
     // Grayed rather than hidden while the reach is 0, so the rows keep their
     // place and the numbers they are dialled to stay readable — the same
@@ -673,6 +682,23 @@ fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBack
         ValueBar::new(&mut view.glow_strength, 0.0..=GLOW_STRENGTH_MAX, "Glow strength")
             .show(ui)
             .on_hover_text("How much light it lays down.");
+        // Directly under the Reach, being the other half of one decision: that
+        // bar says how far the light goes and this one says where inside it the
+        // light actually is. A wide reach at 0 feather is a bigger accent, not
+        // a wash — the falloff keeps the light on the node either way — so the
+        // two are dialled together or neither does what it looks like it does.
+        ValueBar::new(&mut view.glow_feather, 0.0..=1.0, "Glow feather")
+            .display(|v| format!("{:.0}%", v * 100.0))
+            .show(ui)
+            .on_hover_text(
+                "How evenly a node's light is spread across its reach. 0% \
+                 heaps it on the node and thins it out to nothing — an accent \
+                 on that node, however far it reaches. 100% carries it flat \
+                 out to half its reach and comes off over the rest, so \
+                 overlapping halos read as one amorphous field rather than as \
+                 a light per node. It adds light rather than moving it, so a \
+                 wash usually wants a lower Strength than the accent did.",
+            );
         // The two that shape the light itself, between the amount of it and the
         // moat that holds it off: one says where in the node it is brightest,
         // the other what colour it comes out. Both read as percentages because

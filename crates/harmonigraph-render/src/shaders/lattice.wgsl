@@ -150,6 +150,13 @@ struct Uniforms {
     // ZEROED WHOLE with misc10, on the same rule and for the same reason: there
     // is one off switch for the glow and it is `u.misc10.x > 0.0`.
     misc11: vec4<f32>,
+    // The node glow's third row. x: how flat the light's falloff is across its
+    // own span — 0 the exponential heaped on the node, 1 an even field across
+    // it (see `glow_layer`); y/z/w unused.
+    //
+    // ZEROED WHOLE with misc10 and misc11, on the same rule: the glow has one
+    // off switch and it is `u.misc10.x > 0.0`.
+    misc12: vec4<f32>,
     // The FREQUENCY color scheme's ramp: the analyzer's own gradient, the
     // table the spectrogram's cells and the Spiral pane's segments are read
     // off. Indexed by a LEVEL, where pitch_lut above is indexed by a pitch —
@@ -187,6 +194,22 @@ const GLYPH_FADE_LIMIT: f32 = 1.3;
 // plainly visible, at 2 — the bar's top — the middle saturates and the halo
 // doubles.
 const GLOW_BASE: f32 = 0.8;
+// The two ends of the Feather bar, as the rate the light's exponential comes
+// off at across one span (`glow_layer`).
+//
+// TIGHT is the accent: down to a fifth of its peak by half the span and to
+// nothing well before the end of it, so the falloff is the whole shape and the
+// node is plainly what the light belongs to.
+//
+// FLAT is the wash: a tenth off by half the span and a fifth by the far edge,
+// where the window has the light near nothing anyway — a constant, as far as
+// the eye is concerned. What shapes the light is then the window alone, full
+// out to half the span and a smoothstep to nothing across the other half,
+// zero-sloped at both ends and so with no rim in it at any width. A node in the
+// middle of that is not lit more than the space around it, which is the whole
+// difference between a light on a node and a field the node sits in.
+const GLOW_FALLOFF_TIGHT: f32 = 3.0;
+const GLOW_FALLOFF_FLAT: f32 = 0.25;
 // How many angles a node's own ink is read at — the width of the strip that
 // reading is kept in (`fs_ink_strip`), and the only rate at which anything
 // about the colour of that node's light is resolved.
@@ -2366,6 +2389,12 @@ fn glow_gap_depth() -> f32 {
     return clamp(u.misc11.w, 0.0, 1.0);
 }
 
+/// How flat the light's falloff is across its own span (`u.misc12.x`): 0 the
+/// exponential heaped on the node, 1 an even field across it.
+fn glow_feather() -> f32 {
+    return clamp(u.misc12.x, 0.0, 1.0);
+}
+
 /// How widely a node's own ink is averaged into the colour of its light, as the
 /// concentration that average is taken at (`u.misc11.y`): the bar's bottom is
 /// GLOW_LOBE_KAPPA, where each layer's sectors stay distinct, and its top is no
@@ -2718,7 +2747,12 @@ fn glow_layer(in: VsOut, d: f32) -> vec4<f32> {
     if EARLY_OUT && d >= span {
         discard;
     }
+    // The window, which is where the light STOPS: full to half the span and
+    // shut by the end of it, at every setting of every bar. What the Feather
+    // moves is the falloff underneath it — how much light is left to be shut
+    // off out there — so the Reach alone says how far the light goes.
     let window = 1.0 - smoothstep(span * 0.5, span, d);
+    let rate = mix(GLOW_FALLOFF_TIGHT, GLOW_FALLOFF_FLAT, glow_feather());
     // The falloff, and then the DIP taken out of its middle. The exponential
     // alone is hottest at the node's exact centre, which is the one place the
     // light has nothing of the node's own in front of it — inside the innermost
@@ -2732,7 +2766,7 @@ fn glow_layer(in: VsOut, d: f32) -> vec4<f32> {
     // exactly the plain skirt everywhere.
     let bowl_edge = glow_bowl_edge();
     let bowl = mix(glow_centre(), 1.0, smoothstep(0.0, bowl_edge, d));
-    let skirt = GLOW_BASE * exp(-3.0 * d / span) * window
+    let skirt = GLOW_BASE * exp(-rate * d / span) * window
         * select(1.0, bowl, bowl_edge > 0.0);
 
     // How much of the strip's own DIRECTION this fragment gets, against the
