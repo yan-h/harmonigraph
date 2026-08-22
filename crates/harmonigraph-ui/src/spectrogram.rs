@@ -1105,7 +1105,7 @@ pub(crate) fn build(
         // `bucket` is cut for the window, so folding a longer take's whole
         // column set would spend texels on time no pixel shows and hand the GPU
         // an image several times over its limit.
-        Some(ws) => aggregate_slabs(ws.drawn_columns(), bucket),
+        Some(ws) => aggregate_slabs(ws.drawn_columns(view.window), bucket),
         // Live: fold only the new column(s) into the kept slab grid instead of
         // rescanning the whole window every rebuild. `history` and the
         // aggregator are disjoint fields of `spectrum`.
@@ -3020,7 +3020,8 @@ mod tests {
                             ws.start = offset.min(TAKE - span);
                             ws.span = span;
                             let p = plan_for(max_side, ppp, depth, span);
-                            let (centers, _) = aggregate_slabs(ws.drawn_columns(), p.bucket);
+                            let (centers, _) =
+                                aggregate_slabs(ws.drawn_columns(span), p.bucket);
                             assert!(
                                 centers.len() <= max_side,
                                 "a {span} s window at {} of a {TAKE} s take folds to {} texels, \
@@ -3051,7 +3052,7 @@ mod tests {
         // ABSOLUTE, so the window's slabs are the same slabs at the same times
         // carrying the same bytes — the trimmed grid is a contiguous run of the
         // untrimmed one, which is the whole claim that this costs no picture.
-        let (kept, kept_power) = aggregate_slabs(ws.drawn_columns(), p.bucket);
+        let (kept, kept_power) = aggregate_slabs(ws.drawn_columns(10.0), p.bucket);
         let at = all
             .iter()
             .position(|c| (c - kept[0]).abs() < 1e-9)
@@ -3061,6 +3062,85 @@ mod tests {
             &all_power[at * SPECTRUM_BINS..(at + kept.len()) * SPECTRUM_BINS],
             &kept_power[..],
             "the window's slabs changed value",
+        );
+    }
+
+    /// **The fold is trimmed to the window the AXIS draws, not to the span the
+    /// take was asked for** — the two are the same number only above the axis'
+    /// own floor.
+    ///
+    /// `TimeAxis::new` puts a floor of 0.05 s under the window it maps time
+    /// across, so a render shorter than that draws a depth region reaching past
+    /// `start + span`, and the columns out there have a real depth on screen.
+    /// Trimming to `span` dropped them: a 20 ms render folded out to 60.032 of
+    /// a region drawn to 60.05, leaving 36% of the heatmap as bare bed with the
+    /// columns for it sitting unused in `WholeSong::columns`.
+    ///
+    /// Through [`build`] rather than
+    /// [`drawn_columns`](crate::WholeSong::drawn_columns) directly, and that is
+    /// the whole point of the test: what broke was not the trim but WHICH
+    /// window `build` hands it, so a test that passes the window in itself
+    /// asserts its own arithmetic and would have passed throughout. The
+    /// returned [`TexLayout`] is where the answer shows.
+    ///
+    /// A sub-50 ms export is degenerate (one frame at 30 fps), which is why the
+    /// fix is to hand the trim the plan's own `window` rather than to lower the
+    /// axis' floor: two expressions of one window are what drift, and the
+    /// degenerate case is only where the drift becomes visible.
+    #[test]
+    fn the_fold_covers_the_whole_depth_region_a_short_render_draws() {
+        // The axis' own floor, from `TimeAxis::new`.
+        const FLOOR: f64 = 0.05;
+        let (start, span) = (60.0, 0.02);
+        // Columns at the analyzer's rate across the window and past it —
+        // `precompute` stamps them over the whole take whatever was asked for.
+        let columns: Vec<_> = (0..40)
+            .map(|i| col(59.9 + i as f64 * crate::AudioSpectrum::FFT_INTERVAL, &[(1000, 1.0)]))
+            .collect();
+        let ws = crate::WholeSong {
+            start,
+            span,
+            columns,
+            roll: harmonigraph_core::NoteRoll::default(),
+        };
+        // What the pane hands the plan: `time.window()`, the FLOORED one.
+        let window = ws.span.max(FLOOR);
+        let view = PaneView {
+            ppp: 2.0,
+            max_side: BARE_MAX_SIDE,
+            max_rows: BARE_MAX_SIDE,
+            pitch_len: 500.0,
+            depth_len: 300.0,
+            window,
+            scale: SWEEP_SCALE,
+            cfg: SpectrumConfig { roll_seconds: window as f32, ..SpectrumConfig::default() },
+            whole: true,
+            coarse: false,
+        };
+        let columns_in = Columns { first: 0, len: ws.columns.len(), newest: 60.2 };
+        let plan = Plan::new(&view, &columns_in);
+        let bins = bins_for(plan.rows, &SWEEP_SCALE, false);
+        let mut spectrum = crate::AudioSpectrum::default();
+        let ctx = egui::Context::default();
+        let layout = build(&ctx, &mut spectrum, Some(&ws), 0, &plan, &view, &bins)
+            .expect("a whole-song build over columns this dense");
+
+        // The last column the axis puts inside the region. The image has to
+        // reach it: `depth_of` maps both through the same `frac`, so a texture
+        // ending short of it leaves the rest of the region bare.
+        let last_on_screen = ws
+            .columns
+            .iter()
+            .rev()
+            .find(|c| c.time <= start + window)
+            .expect("the fixture spans the window")
+            .time;
+        let reach = layout.t_origin + layout.tex_span;
+        assert!(
+            reach >= last_on_screen,
+            "the image reaches {reach}, short of the column at {last_on_screen} that the \
+             region still draws — {:.0}% of the depth region is bare",
+            100.0 * (start + window - reach) / window,
         );
     }
 

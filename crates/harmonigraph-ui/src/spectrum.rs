@@ -316,15 +316,26 @@ impl WholeSong {
     /// texels wide against a limit of 2048 — issue #367, the same
     /// `load_texture` assert as #333/#335, reached from the other axis.
     ///
-    /// Trimmed to the window EXACTLY, with no margin either side, and the
+    /// `window` is the axis' own, taken from the caller rather than from
+    /// [`span`](Self::span), and they are NOT the same number: `TimeAxis::new`
+    /// floors the window it maps time across, so a render shorter than that
+    /// floor draws a depth region reaching past `start + span`. Trimming to
+    /// `span` there drops columns that have a depth on screen and stops the
+    /// heatmap part way down a region the rest of the pane keeps drawing — a
+    /// 20 ms render leaves 36% of it bare. `build` hands over the very `f64`
+    /// [`Plan::new`](crate::spectrogram::Plan::new) cut `bucket` from, so the
+    /// trim and the slab cannot drift; two expressions of one window is what
+    /// this takes an argument to avoid.
+    ///
+    /// Trimmed to that window EXACTLY, with no margin either side, and the
     /// tightness is what `spectrogram::slab_ceiling`'s slabs in hand are
-    /// counted against. Nothing drawn is lost by it: the pane
-    /// maps take time to depth through `TimeAxis::frac`, so a column outside
-    /// `[start, start + span]` has no depth on screen, and the quad samples the
-    /// texture by ABSOLUTE time (`u_drawn` over `t_origin`/`tex_span`), so
+    /// counted against. Nothing drawn is lost by it: the pane maps take time to
+    /// depth through `TimeAxis::frac`, so a column outside
+    /// `[start, start + window]` has no depth on screen, and the quad samples
+    /// the texture by ABSOLUTE time (`u_drawn` over `t_origin`/`tex_span`), so
     /// dropping texels off the ends moves none of the ones that remain.
-    pub(crate) fn drawn_columns(&self) -> impl Iterator<Item = &SpectrogramColumn> {
-        let (from, to) = (self.start, self.start + self.span);
+    pub(crate) fn drawn_columns(&self, window: f64) -> impl Iterator<Item = &SpectrogramColumn> {
+        let (from, to) = (self.start, self.start + window);
         self.columns.iter().filter(move |c| c.time >= from && c.time <= to)
     }
 }
