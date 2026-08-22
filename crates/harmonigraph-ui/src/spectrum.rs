@@ -225,6 +225,11 @@ pub struct WholeSong {
 }
 
 impl WholeSong {
+    /// The shortest window the depth axis will map time across. A render can
+    /// ask for less — one frame at 30 fps is 33 ms — and the axis draws this
+    /// much regardless, so the picture reaches past what was asked for.
+    pub const MIN_WINDOW: f64 = 0.05;
+
     /// Analyze the entire `samples` buffer, one raw column per hop,
     /// `time`-stamped in take time (`time_origin` is the take time of sample 0).
     /// Raw, exactly like the live store: the heatmap reads what was measured,
@@ -316,6 +321,19 @@ impl WholeSong {
     /// texels wide against a limit of 2048 — issue #367, the same
     /// `load_texture` assert as #333/#335, reached from the other axis.
     ///
+    /// The window the depth axis actually maps time across:
+    /// [`span`](Self::span) under [`MIN_WINDOW`](Self::MIN_WINDOW).
+    ///
+    /// A window of nothing maps every take time to one depth, so the axis puts
+    /// a floor under it — and a render shorter than that floor therefore draws
+    /// a region reaching past `start + span`. `TimeAxis::new` reads its
+    /// whole-song window from here rather than restating the floor, because the
+    /// two restatements drifting is exactly what left a 20 ms render's heatmap
+    /// covering 64% of its region.
+    pub fn window(&self) -> f64 {
+        self.span.max(Self::MIN_WINDOW)
+    }
+
     /// `window` is the axis' own, taken from the caller rather than from
     /// [`span`](Self::span), and they are NOT the same number: `TimeAxis::new`
     /// floors the window it maps time across, so a render shorter than that
@@ -334,7 +352,7 @@ impl WholeSong {
     /// `[start, start + window]` has no depth on screen, and the quad samples
     /// the texture by ABSOLUTE time (`u_drawn` over `t_origin`/`tex_span`), so
     /// dropping texels off the ends moves none of the ones that remain.
-    pub(crate) fn drawn_columns(&self, window: f64) -> impl Iterator<Item = &SpectrogramColumn> {
+    pub fn drawn_columns(&self, window: f64) -> impl Iterator<Item = &SpectrogramColumn> {
         let (from, to) = (self.start, self.start + window);
         self.columns.iter().filter(move |c| c.time >= from && c.time <= to)
     }

@@ -42,6 +42,38 @@ impl Settings {
     }
 }
 
+/// Why this render's whole-song spectrogram will draw nothing, if it will.
+///
+/// The heatmap is built from the columns inside the window
+/// (`WholeSong::drawn_columns`), and a window can miss the audio entirely — a
+/// `--start` past the end of the bounce, or before `audio_start`. The frame
+/// then draws the roll and the lattice over a bare bed, which is the right
+/// picture and an easy one to mistake for a bug in the analyzer.
+///
+/// It has to be SAID, because the alternative failure is loud: before the
+/// window bounded the fold, this same input built a texture spanning the whole
+/// take and panicked on the upload. Trading that for a silent blank is only
+/// acceptable with a line to read, on the same reasoning as the refused
+/// `ui_state` above — the console the editor would log to is not drawn here.
+///
+/// Two columns rather than one, because that is what `spectrogram::build`
+/// refuses under: a single slab has no time axis to stretch over.
+fn empty_window_warning(ws: &harmonigraph_ui::WholeSong) -> Option<String> {
+    let drawn = ws.drawn_columns(ws.window()).take(2).count();
+    (drawn < 2).then(|| {
+        let (first, last) = match (ws.columns.first(), ws.columns.last()) {
+            (Some(f), Some(l)) => (f.time, l.time),
+            _ => (f64::NAN, f64::NAN),
+        };
+        format!(
+            "warning: no audio inside the render's window, so the spectrogram is blank \
+             (window {:.3}s-{:.3}s, audio {first:.3}s-{last:.3}s in take time)",
+            ws.start,
+            ws.start + ws.window(),
+        )
+    })
+}
+
 /// The input every offline frame is drawn with.
 ///
 /// One constructor rather than a literal at each call site, because the field
@@ -140,6 +172,9 @@ pub fn render(
         // whole piece at once, not filling in as the playhead passes over it.
         if let Some(ws) = state.whole_song.as_mut() {
             ws.roll = replay.full_roll();
+        }
+        if let Some(warning) = state.whole_song.as_ref().and_then(empty_window_warning) {
+            eprintln!("{warning}");
         }
     }
 
@@ -374,6 +409,57 @@ mod tests {
         let settings = settings();
         let Some(frames) = render_frames(&settings) else { return };
         assert!(frames[0] != frames[frames.len() / 2], "nothing changed as notes arrived");
+    }
+
+    /// **A window with no audio in it says so.**
+    ///
+    /// The heatmap draws the columns inside the render's window, so a `--start`
+    /// past the end of the bounce — or before `audio_start` — leaves it blank
+    /// while the roll and the lattice keep drawing. Verified on the real
+    /// thing: `--playhead --start 100 --end 102` on a 78 s take renders its ten
+    /// frames and reports "done", with nothing about the spectrogram.
+    ///
+    /// Worth a line because the alternative failure was LOUD: before the window
+    /// bounded the fold, that input built a texture spanning the whole take and
+    /// panicked on the upload. A silent blank in its place is a fair trade only
+    /// with something to read.
+    ///
+    /// The message is asserted rather than just its presence, because what
+    /// makes it useful is the two ranges side by side — a window and an audio
+    /// extent that do not overlap is the whole diagnosis. `eprintln!` itself is
+    /// the one line here no test covers; it has no branch of its own.
+    #[test]
+    fn a_render_window_with_no_audio_in_it_says_so() {
+        let column = |t: f64| {
+            harmonigraph_ui::SpectrogramColumn::from_power(
+                t,
+                &[0.25; harmonigraph_core::spectrum::SPECTRUM_BINS],
+            )
+        };
+        let take = |start: f64, span: f64| harmonigraph_ui::WholeSong {
+            start,
+            span,
+            columns: (0..=78).map(|i| column(i as f64)).collect(),
+            roll: harmonigraph_core::NoteRoll::default(),
+        };
+
+        let past = empty_window_warning(&take(100.0, 2.0)).expect("a window past the audio");
+        assert!(past.contains("100.000s-102.000s"), "the window is not in {past:?}");
+        assert!(past.contains("0.000s-78.000s"), "the audio's extent is not in {past:?}");
+
+        // And a window that DOES hold audio says nothing — a warning on every
+        // ordinary render is a warning nobody reads.
+        assert_eq!(empty_window_warning(&take(20.0, 4.0)), None);
+
+        // One column in the window is still nothing to draw: `build` refuses
+        // under two, so the blank is the same blank.
+        let sparse = harmonigraph_ui::WholeSong {
+            start: 10.0,
+            span: 0.5,
+            columns: vec![column(10.25)],
+            roll: harmonigraph_core::NoteRoll::default(),
+        };
+        assert!(empty_window_warning(&sparse).is_some(), "one column is not a heatmap");
     }
 
     /// **The texture limit the context is told is what the DEVICE takes**, and
