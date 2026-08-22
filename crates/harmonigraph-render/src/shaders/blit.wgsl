@@ -135,11 +135,11 @@ fn fs_bloom_add(in: BlitOut) -> @location(0) vec4<f32> {
     return vec4<f32>(bloom.rgb * add.strength.x, 0.0);
 }
 
-// The lattice's node glow, laid over the picture inside the scene pass itself
-// (`crate::LatticeCallback::prepare`). `scene_tex` is the glow's own target
-// here: light where the nodes put it, cleared to transparent everywhere else
-// and already moated, so this is a plain premultiplied-over blit and every
-// decision about the shape was taken in lattice.wgsl.
+// The lattice's node glow, laid down at the BOTTOM of the scene pass, before
+// any node, marker or label (`crate::LatticeCallback::prepare`). `scene_tex` is
+// the glow's own target here: light where the nodes put it, cleared to
+// transparent everywhere else, so this is a plain premultiplied-over blit and
+// every decision about the shape was taken in lattice.wgsl.
 //
 // TWO attachments, because the pass it draws into carries two. The second is
 // the picture without the LABELS, which the bloom's bright pass reads — and the

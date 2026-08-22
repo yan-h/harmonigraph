@@ -532,32 +532,30 @@ mod tests {
         }
     }
 
-    /// The moat's picture, written to `target/scratch/` — a sweep of the Gap
-    /// curve, which is where inside the Gap bar's fade the light is given
-    /// back.
+    /// A node is a LAMP with a sheet behind it, not a hole: its own middle is
+    /// at least as bright as the ground a few pixels away, at one sheet and at
+    /// two alike.
     ///
-    /// A probe: it asserts nothing, the verdict being a look rather than a
-    /// number, and a look is the only thing that settles this one. What the
-    /// numbers say — the gap curve's own test in harmonigraph-render — is that
-    /// the bar moves the light monotonically without moving the band. Whether
-    /// the low end reads as a ring standing in shade and the high end as a ring
-    /// in a painted annulus is the whole question and is not in that.
+    /// The pair is the reading, not either number alone. A node's middle holds
+    /// its own light plus every neighbour's, and so does the ground between the
+    /// nodes; what says the light is UNDER the node is that the middle is not
+    /// the darker of the two. Adding a sevens sheet must not change which way
+    /// that reads, and it is `extent_sevens` alone that moves between the two
+    /// shots here.
     ///
-    /// Read CLOSE, where the sibling above reads far: a moat is a per-node
-    /// detail against that node's own rings, and at the distance a wash is
-    /// judged at the whole band is a few pixels and the shape is invisible. The
-    /// gap is wide and faded over the whole of it because that is the bar's
-    /// working range — a narrow band leaves nothing for a curve to
-    /// redistribute — and the depth is left where the fresh view has it, since
-    /// the tail is the faint end of the fade and a depth that swallows it hides
-    /// what is being looked at.
+    /// Read at a wide Reach because that is the regime where it matters most:
+    /// the light a node stands in is then mostly its NEIGHBOURS', which is
+    /// exactly what a pass taking the light of the sheets behind off a node's
+    /// body would take away. This is #435's measurement, made an assertion —
+    /// it reported one sheet 73.7 against a ground of 54.6 and two sheets 101.3
+    /// against 128.1, the relation inverting on the sheet count alone.
     ///
-    /// ```text
-    /// cargo test -p harmonigraph-offline -- --ignored --nocapture gap_curve
-    /// ```
+    /// The two sample points are fixed pixels: the C node sits at the middle of
+    /// the pane under this camera in both shots, and (600, 690) is ground clear
+    /// of every node's ink. A camera change moves both, which is why the
+    /// fixture sets its own rather than taking the layout's.
     #[test]
-    #[ignore = "a probe: writes PNGs and asserts nothing"]
-    fn the_glow_gap_curve_draws_a_picture() {
+    fn a_node_with_a_sheet_behind_it_is_still_a_lamp() {
         use harmonigraph_ui::{draw_pane, Layout, SharedState};
 
         const SIZE: [u32; 2] = [1200, 1000];
@@ -573,21 +571,6 @@ mod tests {
         context.set_pixels_per_point(PPP);
 
         let layout = Layout::preset("lattice").expect("the lattice preset");
-        let mut state = SharedState::new(FORMAT);
-        state.set_background((24, 25, 29));
-        state.frame_params.fade_time = 0.0;
-        state.view.glow_attack = 0.0;
-        state.view.glow_release = 0.0;
-        // A light worth moating: reached well past the node's own rings, so
-        // there is halo on both sides of the band the shape is spent in.
-        state.view.glow_reach = 1.2;
-        state.view.glow_strength = 2.0;
-        state.view.glow_gap = 0.35;
-        state.view.glow_gap_soft = 0.35;
-        for note in [55u8, 60, 64, 67, 71] {
-            state.tracker.handle_event(harmonigraph_core::NoteEvent::on(0.0, 0, note, 1.0));
-        }
-
         let points = egui::vec2(SIZE[0] as f32 / PPP, SIZE[1] as f32 / PPP);
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, points);
         let placements = layout.resolve(points);
@@ -596,20 +579,35 @@ mod tests {
             layout.background.1,
             layout.background.2,
         );
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/scratch");
-        std::fs::create_dir_all(&dir).expect("a scratch directory");
 
-        let home = state.camera;
-        for shape in [0.0f32, 0.25, 0.5, 0.75, 1.0] {
-            state.camera = home;
-            // In rather than out, and hard: the band is a fraction of ONE
-            // node's radius, and a lattice-wide view resolves none of it.
-            state.camera.zoom_by(3.5);
-            state.view.glow_gap_shape = shape;
+        // One luma out of a pixel, the same weighting for both points.
+        let at = |b: &[u8], x: u32, y: u32| {
+            let i = ((y * SIZE[0] + x) * 4) as usize;
+            0.2126 * b[i] as f64 + 0.7152 * b[i + 1] as f64 + 0.0722 * b[i + 2] as f64
+        };
+        let mut read = |extent: i32| -> (f64, f64) {
+            let mut state = SharedState::new(FORMAT);
+            state.set_background((24, 25, 29));
+            state.frame_params.fade_time = 0.0;
+            // Settled: the light's own clock would otherwise leave a one-frame
+            // shot part way up its attack, which is a reading of the ramp.
+            state.view.glow_attack = 0.0;
+            state.view.glow_release = 0.0;
+            state.view.extent_sevens = extent;
+            // The off-sheet nodes at the home sheet's own size, so what differs
+            // between the two shots is the sheet COUNT and not how big anything
+            // on it is drawn.
+            state.view.sevens_size = 1.0;
+            state.view.glow_reach = 4.0;
+            for note in [60u8, 64, 67, 70] {
+                state.tracker.handle_event(harmonigraph_core::NoteEvent::on(0.0, 0, note, 1.0));
+            }
+            state.camera.zoom_by(2.0);
             let output = context.run_ui(
                 egui::RawInput {
                     screen_rect: Some(screen),
                     time: Some(NOW),
+                    max_texture_side: Some(renderer.max_texture_side()),
                     ..Default::default()
                 },
                 |ui| {
@@ -621,11 +619,29 @@ mod tests {
             );
             let primitives = context.tessellate(output.shapes, PPP);
             let bytes = renderer.render(&primitives, &output.textures_delta, PPP, background);
-            let path = dir.join(format!("glow-gap-shape{:.0}.png", shape * 100.0));
-            image::save_buffer(&path, &bytes, SIZE[0], SIZE[1], image::ExtendedColorType::Rgba8)
-                .expect("write the png");
-            eprintln!("{}", path.canonicalize().unwrap_or(path.clone()).display());
-        }
+            (at(&bytes, 600, 500), at(&bytes, 600, 690))
+        };
+
+        let (flat_centre, flat_ground) = read(0);
+        let (sheets_centre, sheets_ground) = read(1);
+        eprintln!("one sheet:  centre {flat_centre:.1}  ground {flat_ground:.1}");
+        eprintln!("two sheets: centre {sheets_centre:.1}  ground {sheets_ground:.1}");
+        // Non-vacuous: a frame with no light in it reads 0 at both points and
+        // satisfies every comparison below.
+        assert!(
+            flat_centre > 1.0 && sheets_centre > 1.0,
+            "the fixture drew no light at the node's middle",
+        );
+        assert!(
+            flat_centre >= flat_ground,
+            "on a flat lattice the node's middle ({flat_centre:.1}) is darker than the ground \
+             beside it ({flat_ground:.1})",
+        );
+        assert!(
+            sheets_centre >= sheets_ground,
+            "with a sevens sheet the node's middle ({sheets_centre:.1}) is darker than the \
+             ground beside it ({sheets_ground:.1}): its own light is being taken off its body",
+        );
     }
 
     /// The audio ring's picture, written to `target/scratch/` — the only way

@@ -15,7 +15,7 @@ use crate::params::{seconds, ParamBackend, ParamKey};
 use crate::widgets::{button_row, choice_row, OctaveStrip, StackBar, ValueBar};
 use crate::SharedState;
 use harmonigraph_scene::{
-    Pulse, SpectralReading, ViewConfig, GAP_MAX, GLOW_BALLISTICS_MAX, GLOW_GAP_MAX,
+    Pulse, SpectralReading, ViewConfig, GAP_MAX, GLOW_BALLISTICS_MAX,
     GLOW_REACH_MAX, GLOW_STRENGTH_MAX, MARK_DELAY_MAX, MIN_EXTRA_SIZE, PITCH_CEIL,
     PITCH_FLOOR, SPECTRAL_BALLISTICS_MAX, SPECTRAL_GATE_MAX, SPECTRAL_GATE_MIN,
     SPECTRAL_HYSTERESIS_MAX, SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN,
@@ -657,13 +657,13 @@ fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBack
 ///
 /// **A section of its own, directly under Note**, and not the tail of it: a
 /// glow is the whole node's rather than any layer's, which is what Note is
-/// for, but it is also one feature with nine settings that answer four
-/// different questions — how far and how much, what colour, what it is held
-/// off, and how fast it follows the note. Nine bars all named "Glow …" at the
-/// foot of Note are a column of one word the eye has to skip past to find the
-/// one that differs; a heading says the word once. It leads the layers rather
-/// than following Shimmer because, like everything in Note, it is reached for
-/// more than any one layer is.
+/// for, but it is also one feature with six settings that answer three
+/// different questions — how far and how much, what colour, and how fast it
+/// follows the note. Six bars all named "Glow …" at the foot of Note are a
+/// column of one word the eye has to skip past to find the one that differs;
+/// a heading says the word once. It leads the layers rather than following
+/// Shimmer because, like everything in Note, it is reached for more than any
+/// one layer is.
 ///
 /// **Not with Bloom**, which it otherwise reads like, because the two are
 /// different settings of different things. Bloom is one number over every
@@ -674,8 +674,7 @@ fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBack
 ///
 /// The bars run in the order the questions do. The light itself first — Reach,
 /// Strength, and the Feather that says how the one is spent over the other —
-/// then its colour, then the Gap that holds it off the rings with the two bars
-/// that shape the gap, and last its own clock. Everything under Reach greys
+/// then its colour, and last its own clock. Everything under Reach greys
 /// while Reach is 0 rather than hiding, so the rows keep their place and the
 /// numbers they are dialled to stay readable — the arrangement the audio
 /// ring's own settings use.
@@ -731,8 +730,8 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                  a light per node. It adds light rather than moving it, so a \
                  wash usually wants a lower Strength than the accent did.",
             );
-        // What colour the light comes out, between the amount of it and the
-        // moat that holds it off. "Color blend" and not "Spread": under this
+        // What colour the light comes out, after how much of it there is and
+        // how it is spent. "Color blend" and not "Spread": under this
         // heading, beside a Reach and a Feather that are both about distance,
         // a "spread" reads as how far the light goes, and this moves no light
         // at all. It reads as a percentage because it is a SHARE — of a whole
@@ -747,73 +746,6 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                  is and how wide the Layers bar made it — so 0% keeps each \
                  sector's colour a distinct arc and 100% averages the node \
                  into one tint.",
-            );
-        // The moat, beneath the light it holds off: ONE bar for how far the
-        // light is held off each ring and how much of that is spent fading it
-        // back in, on exactly the terms the Clearance bar in Note is one —
-        // solid to the inner handle, gone by the outer, the fade the distance
-        // between them. The same widget, because it is the same shape of
-        // setting: two distances from one edge, and a fill that draws the
-        // edge it sets. Two bars apiece would say the fade in a unit of its
-        // own with nothing on screen relating it to the gap it is spent in,
-        // and a fade is only ever read against its gap.
-        //
-        // Read out like the two gaps and the Clearance: every one of them is
-        // a share of the node's radius, so a person comparing them is
-        // comparing one unit. A tenth of a percent, as the gaps are.
-        edge_bar(
-            ui,
-            (&mut view.glow_gap, &mut view.glow_gap_soft),
-            GLOW_GAP_MAX,
-            "Gap",
-            {
-                let fresh = ViewConfig::default();
-                (fresh.glow_gap, fresh.glow_gap_soft)
-            },
-            |v| format!("{:.1}%", v * 100.0),
-        )
-        .on_hover_text(
-            "How far the light is held off each ring a node draws — its audio \
-             ring, its octave band, its marks — as a share of the node's \
-             radius. Dark to the inner handle, faded back in by the outer; drag \
-             the inner to the left edge to fade the whole gap, which is what \
-             keeps a wide gap from reading as a black ring. A gap is an \
-             absence of light, so the grid and the sheets behind show through \
-             it untouched; the neighbours' light is held off too. Both handles \
-             at 0 lets the glow up to every edge. Double-click to restore.",
-        );
-        // The curve the fade runs on, directly under the bar that sets its
-        // width, on the Reach/Feather arrangement above: a bar saying how far
-        // something goes and a bar saying how it is spent over that distance
-        // belong together. Drawn on itself as the Feather is, and named for
-        // Note's Fade curve, which is the same kind of bar: the light coming
-        // back across the fade, from the ring's edge at the left to the halo at
-        // the right.
-        ValueBar::new(&mut view.glow_gap_shape, 0.0..=1.0, "Gap curve")
-            .curve(harmonigraph_scene::moat_recovery)
-            .display(|v| format!("{:.0}%", v * 100.0))
-            .show(ui)
-            .on_hover_text(
-                "Where inside the Gap's fade the light is given back, drawn as \
-                 the light coming back from the ring's edge out to the halo. \
-                 50% spends it evenly, which is steepest in the middle and \
-                 leaves a wide fade reading as a dark annulus with a soft edge. \
-                 Lower gives the light back closest to the ring and trails the \
-                 rest away over a long tail, so the dark hugs the ring and has \
-                 no edge anywhere; higher holds the ring dark and lets the \
-                 light back over the last of the fade. It moves no boundary — \
-                 the Gap's handles still say where the moat is. Dial it with \
-                 the depth below: a tail is the faint end of the fade, so a \
-                 shallow depth loses it and a full one turns it into a void.",
-            );
-        ValueBar::new(&mut view.glow_gap_depth, 0.0..=1.0, "Gap depth")
-            .display(|v| format!("{:.0}%", v * 100.0))
-            .show(ui)
-            .on_hover_text(
-                "How much of the light the gap takes away. 100% is a hole — the \
-                 picture there is exactly what it is with the glow off — and \
-                 lower leaves the rings sitting in a dimmer pool of their own \
-                 light rather than in a void.",
             );
         // The light's own clock, last, under everything it shapes. Its own pair
         // and not the note Fade in Note, because a halo is the slow part of the
