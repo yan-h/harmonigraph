@@ -5,7 +5,7 @@
 use crate::spectral::SpectralReading;
 use crate::style::{Gradient, NoteNames, Pulse, SevensLabel};
 use crate::{
-    Camera, PLUS_SIZE_MAX, GAP_MAX, GLOW_BALLISTICS_MAX, GLOW_GAP_SOFT_MAX,
+    Camera, PLUS_SIZE_MAX, GAP_MAX, GLOW_BALLISTICS_MAX, GLOW_GAP_MAX,
     GLOW_REACH_MAX, GLOW_STRENGTH_MAX, MARK_THICKNESS_MAX, MAX_DRAWN_NODES,
     NODE_RADIUS_FACTOR, RING_INNER_MAX, RING_WIDTH_MAX,
 };
@@ -1076,8 +1076,8 @@ pub struct ViewConfig {
     pub bloom_strength: f32,
     /// The node glow: how far past a node's outermost drawn edge its own light
     /// spreads, in the quad UV units the layer sizes are in. 0 turns it off —
-    /// nothing is drawn at all — so the three fields need no toggle of their
-    /// own.
+    /// nothing is drawn at all — so the glow's other fields need no toggle of
+    /// their own, and the Glow section greys them under it.
     ///
     /// What it draws is every sounding octave's hue laid round the node by
     /// angle, over a falloff sized to the whole node: the node's outermost
@@ -1138,7 +1138,12 @@ pub struct ViewConfig {
     /// Inert while [`glow_reach`](Self::glow_reach) is 0.
     pub glow_feather: f32,
     /// The moat: how far past each RING a node draws its own light is held
-    /// off, in the same quad UV units [`ring_gap`](Self::ring_gap) reads in.
+    /// off, in the same quad UV units [`ring_gap`](Self::ring_gap) reads in —
+    /// the far end of the gap, where the light is fully back. With
+    /// [`glow_gap_soft`](Self::glow_gap_soft) it is ONE control, the Glow
+    /// section's Gap bar, on exactly the terms the Clearance pair
+    /// ([`sevens_gutter`](Self::sevens_gutter)) is one: solid out to
+    /// `gap - soft`, gone by `gap`.
     ///
     /// Without it a wide halo washes over the rings, the band and the marks it
     /// comes off, and the crisp geometry that carries the reading goes soft.
@@ -1160,30 +1165,31 @@ pub struct ViewConfig {
     /// attacking or releasing opens and closes its own moat in step with the
     /// ink it stands off.
     ///
+    /// The ceiling is [`GLOW_GAP_MAX`], a whole radius where the two paddings
+    /// stop at [`GAP_MAX`]: what stops a moat reading as a black RING rather
+    /// than as a lack of light is a dip broad enough to come off at the rate
+    /// the skirt does, and that is a gap a good deal wider than any padding.
+    ///
     /// Inert while [`glow_reach`](Self::glow_reach) is 0: with no light to
     /// stand off, a moat is a gap in the picture for nothing.
     pub glow_gap: f32,
-    /// How far the moat's edge is feathered, in the same quad UV units the
-    /// [`glow_gap`](Self::glow_gap) it stands astride is measured in — a WIDTH
-    /// of its own and not a share of that gap.
+    /// How much of the moat is spent fading the light back in, measured back
+    /// from where [`glow_gap`](Self::glow_gap) ends, in the same quad UV units:
+    /// the gap is solid out to `gap - soft` and the light is given back over
+    /// the rest. The Gap bar's low handle.
     ///
-    /// A share is what made the moat read as a black RING rather than as a lack
-    /// of light: penned inside the gap, the transition is a uniform-width
-    /// annulus with a short edge, and laid against the node's own dark rings
-    /// the eye takes the pair for a painted band. Unpenned, the erase is a
-    /// broad gentle dip whose slope can be matched to the skirt's own — the
-    /// ceiling is [`GLOW_GAP_SOFT_MAX`], several times the gap's, so the
-    /// feather is free to run wider than the thing it feathers.
+    /// Held inside the gap (`sanitize`), as the Clearance's fade is, because
+    /// that is the shape the bar draws: its low handle is where the fade
+    /// starts and cannot stand below the axis. A fade the whole width of the
+    /// gap is the bar's low handle at 0 — no solid band at all, the light
+    /// coming off a ring at one steady rate — and that is the one a wide moat
+    /// usually wants: a solid band with a short edge, laid against a node's
+    /// own dark rings, is what the eye takes for a painted black annulus.
     ///
-    /// The feather stays CENTRED on where the gap ends, so it softens the halo
-    /// outside a ring and the lit middle of the node inside it together — one
-    /// blur across the whole moat rather than a soft outer edge on a hard
-    /// inner one. Past twice the gap it would reach back inside the ring's
-    /// footprint, and there it is held at the ring's own edge instead
-    /// (`moat_coverage` in lattice.wgsl): the light is laid OVER the finished
-    /// lattice, so a fade that ate into a ring would leave that share of the
-    /// halo sitting on the ring's ink rather than under it. At 0 all that is
-    /// left under it is the
+    /// The fade sits on BOTH sides of a ring at once — the halo outside it and
+    /// the lit middle of the node inside it — because a ring is measured from
+    /// its own annulus (`annulus_distance` in lattice.wgsl) and one band
+    /// feathers both. At 0 all that is left under it is the
     /// [`sevens_gutter_soft`](Self::sevens_gutter_soft) fade, which is an edge
     /// a couple of screen pixels wide.
     ///
@@ -1197,7 +1203,7 @@ pub struct ViewConfig {
     /// The SHAPE knob to that bar's width, the way
     /// [`glow_feather`](Self::glow_feather) is to
     /// [`glow_reach`](Self::glow_reach)'s distance. A symmetric ramp is
-    /// steepest exactly at the gap's end and flat at both ends of its own
+    /// steepest exactly at the fade's middle and flat at both ends of its own
     /// width, so a wide fade spends its first half nearly solid and reads as a
     /// dark annulus with a soft edge — the very thing the width was widened to
     /// avoid. Below the middle the dark stays tight against the ring and the
@@ -1205,10 +1211,10 @@ pub struct ViewConfig {
     /// ring standing in shade rather than in a band.
     ///
     /// It moves no boundary: the fade covers the same width at every setting
-    /// (see `moat_coverage` in lattice.wgsl), so
-    /// [`glow_gap`](Self::glow_gap) still says where the moat is solid to and
-    /// [`glow_gap_soft`](Self::glow_gap_soft) still says how far past that it
-    /// reaches. This says only where inside that width the light is given back.
+    /// (see `moat_coverage` in lattice.wgsl), so the Gap bar's two handles
+    /// still say where the moat is solid to and where the light is fully
+    /// back. This says only where between them the light is given back, and
+    /// the bar draws that curve on itself ([`moat_recovery`](crate::moat_recovery)).
     ///
     /// It is dialled against [`glow_gap_depth`](Self::glow_gap_depth) rather
     /// than alone: the tail is the shallow end of the fade, so a depth well
@@ -1242,7 +1248,12 @@ pub struct ViewConfig {
     /// This is how far round that average is taken: at 0 each layer's sectors
     /// stay distinct arcs of colour, and at 1 the whole node's ink averages
     /// into one tint. Inert while [`glow_reach`](Self::glow_reach) is 0.
-    pub glow_spread: f32,
+    ///
+    /// A BLEND and not a spread, in the name as on the bar: under the Glow
+    /// heading, beside a Reach and a Feather that are both distances, a
+    /// "spread" reads as how far the light goes, and this moves no light at
+    /// all — only what colour it is.
+    pub glow_blend: f32,
     /// How fast a node's light follows the node, in seconds: the time constant
     /// of the exponential its LEVEL and its COLOUR are both carried on — this
     /// one while the light is coming up, [`glow_release`](Self::glow_release)
@@ -2132,13 +2143,14 @@ impl ViewConfig {
         self.glow_strength =
             finite_or(self.glow_strength, fresh.glow_strength).clamp(0.0, GLOW_STRENGTH_MAX);
         self.glow_feather = finite_or(self.glow_feather, fresh.glow_feather).clamp(0.0, 1.0);
-        self.glow_gap = finite_or(self.glow_gap, fresh.glow_gap).clamp(0.0, GAP_MAX);
-        // The moat's feather is a WIDTH in the gap's own units, with a ceiling
-        // of its own: it is deliberately free to run wider than the gap it
-        // stands astride, which is what makes the erase a dip rather than a
-        // band (see `glow_gap_soft`).
+        // The moat and its fade, one control over two numbers on the
+        // Clearance pair's terms above: the fade is measured back from the
+        // gap's end, so one wider than the gap is a low end off the bottom of
+        // the axis, and it draws the same as one exactly as wide either way
+        // (`moat_coverage` floors it at the ring's edge).
+        self.glow_gap = finite_or(self.glow_gap, fresh.glow_gap).clamp(0.0, GLOW_GAP_MAX);
         self.glow_gap_soft =
-            finite_or(self.glow_gap_soft, fresh.glow_gap_soft).clamp(0.0, GLOW_GAP_SOFT_MAX);
+            finite_or(self.glow_gap_soft, fresh.glow_gap_soft).clamp(0.0, self.glow_gap);
         // The shape the moat's fade is spent in, which is a share of that
         // fade's own WIDTH rather than a width itself — the exponent it maps
         // to is the shader's business (`glow_gap_shape` in lattice.wgsl), and
@@ -2150,7 +2162,7 @@ impl ViewConfig {
         // interval.
         self.glow_gap_depth =
             finite_or(self.glow_gap_depth, fresh.glow_gap_depth).clamp(0.0, 1.0);
-        self.glow_spread = finite_or(self.glow_spread, fresh.glow_spread).clamp(0.0, 1.0);
+        self.glow_blend = finite_or(self.glow_blend, fresh.glow_blend).clamp(0.0, 1.0);
         // The light's own pair, in seconds, on the ring's rule: a bar's range,
         // and a poisoned number repaired to the fresh value rather than left
         // to make a coefficient nothing can carry.
@@ -2444,17 +2456,12 @@ impl Default for ViewConfig {
             // Flat off: the fresh light is an accent on each node, which is
             // what the rest of the fresh view is drawn to be read against.
             glow_feather: 0.0,
-            glow_gap: 0.08,
-            // The moat feathered over most of its own width, so the gap and
-            // the light either side of it read as one blur rather than as a cut
-            // through it; the middle of a node at half its peak, so the light
-            // reads as the node's rings lit rather than as a lamp behind them;
-            // and the colour averaged half way round, which keeps a chord's
-            // hues as arcs while a lone wedge still tints the whole halo.
-            // Twice the gap above it: the feather is a width of its own, and
-            // one that reaches a gap either side of where the gap ends is the
-            // dip the light comes off at rather than the band a share of the
-            // gap could only draw.
+            // A moat a sixth of a radius past every ring and faded over the
+            // whole of it — the Gap bar's low handle at 0 — so the gap and the
+            // light either side of it read as one blur rather than as a cut
+            // through it: a solid band inside the gap, however short its edge,
+            // is what the eye takes for a black annulus drawn round the node.
+            glow_gap: 0.16,
             glow_gap_soft: 0.16,
             // The fade spent evenly across that width, which is the plain
             // symmetric ramp: the bar's own middle, so the shape is an
@@ -2466,7 +2473,9 @@ impl Default for ViewConfig {
             // in a dim pool of its own halo reads as shade, where the whole of
             // it taken away reads as a black annulus drawn round the node.
             glow_gap_depth: 0.85,
-            glow_spread: 0.5,
+            // The colour averaged half way round, which keeps a chord's hues
+            // as arcs while a lone wedge still tints the whole halo.
+            glow_blend: 0.5,
             // Slow and fluid, which is what the pair is for: a light that
             // arrives inside a third of a second and takes a couple of seconds
             // to leave, so a halo trails the notes that lit it instead of

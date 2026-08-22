@@ -137,6 +137,12 @@ fn every_settings_pane_scrolls_when_its_content_overflows() {
 /// number it was handed rather than against the notes: put a mapping between
 /// the two — a rescale of how hard the setting bends, say — and the picture
 /// drifts from the lattice with this still green.
+///
+/// The Glow section's Feather and Gap curve bars draw a line the same way, and
+/// are checked in the same pass: against the scene's own function of the
+/// view's own field, which is as near the picture as the CPU can get — those
+/// two curves run on the GPU, and the render crate is what holds the scene's
+/// copies to the shader.
 #[test]
 fn the_shape_bars_preview_is_the_curve_the_notes_run_on() {
     let shapes: Vec<egui::Shape> = settings_pane_at_width(
@@ -147,8 +153,13 @@ fn the_shape_bars_preview_is_the_curve_the_notes_run_on() {
     .into_iter()
     .map(|cs| cs.shape)
     .collect();
-    let points = crate::widgets::curve_points(&shapes);
-    assert!(points.len() > 8, "the Lattice page drew {} preview points", points.len());
+    // Three bars on the page draw a curve on themselves, and the Fade curve
+    // leads — Note is the first section and the bar is its second row. The
+    // other two are the Glow section's, checked below once this one is.
+    let paths = crate::widgets::curve_paths(&shapes);
+    assert_eq!(paths.len(), 3, "the Lattice page drew {} preview lines", paths.len());
+    let points = &paths[0];
+    assert!(points.len() > 8, "the Fade curve bar drew {} preview points", points.len());
 
     // A unit-length arrival, which is the whole curve: the shape lives in the
     // fraction and not in the seconds, so any positive duration draws it.
@@ -164,7 +175,7 @@ fn the_shape_bars_preview_is_the_curve_the_notes_run_on() {
     // must NOT be is a fraction of the picture — the plot is 13 points tall, so
     // the half-point that reads as "close enough on screen" is 0.04 in level,
     // and a preview quietly softened to `shape * 0.9` sits inside it.
-    for point in &points {
+    for point in points {
         let p = (point.x - left) / (right - left);
         let want = floor - (floor - ceiling) * envelope.attack(p as f64, 0.0);
         assert!(
@@ -179,6 +190,37 @@ fn the_shape_bars_preview_is_the_curve_the_notes_run_on() {
         envelope.shape > 0.0,
         "a fresh view fades on a straight line; the test above proves nothing",
     );
+
+    // The Glow section's two, in the order the section lays them: the Feather
+    // drawing the light's falloff at the fresh feather, then the Gap curve
+    // drawing the moat's recovery at the fresh curve. Each against the scene's
+    // own function of the view's own field, so a bar handed the other's curve,
+    // or its own curve of the wrong field, is caught here and nowhere else —
+    // the widget draws whatever it is handed. Each line's own ends calibrate
+    // its box as the Fade curve's did, the two running opposite ways: the
+    // light starts full and ends at nothing, the recovery the reverse, so the
+    // lower of the two ends is the floor whichever end it is.
+    let view = harmonigraph_scene::ViewConfig::default();
+    type Curve = fn(f32, f32) -> f32;
+    let curves: [(&str, f32, Curve); 2] = [
+        ("Feather", view.glow_feather, harmonigraph_scene::glow_skirt),
+        ("Gap curve", view.glow_gap_shape, harmonigraph_scene::moat_recovery),
+    ];
+    for ((name, value, curve), points) in curves.into_iter().zip(&paths[1..]) {
+        let (first, last) = (points[0], points[points.len() - 1]);
+        assert!(last.x > first.x, "the {name} line runs backwards");
+        let (floor, ceiling) = (first.y.max(last.y), first.y.min(last.y));
+        assert!(floor > ceiling, "the {name} line is flat, and calibrates nothing");
+        for point in points {
+            let p = (point.x - first.x) / (last.x - first.x);
+            let want = floor - (floor - ceiling) * curve(value, p).clamp(0.0, 1.0);
+            assert!(
+                (point.y - want).abs() < 0.02,
+                "{p} along the {name} bar the line is at {} and its curve at {want}",
+                point.y,
+            );
+        }
+    }
 }
 
 /// The Video pane drawn through the REAL dock, soloed, for a shell that can or
@@ -443,13 +485,14 @@ fn every_bar_in_a_settings_pane_is_the_width_of_the_pane() {
 /// say nothing about which body was reached. Each needle is a string only its
 /// own page draws: "Name size" would be the natural one for the Lattice page
 /// and is not, the Analyzer's piano-roll group having a bar of that name too,
-/// and "Octave gap" is the Lattice page's own where a bare "Gap" would not be.
+/// and "Octave gap" is the Lattice page's own where a bare "Gap" would not be
+/// — nor a bare "Release", which the Glow section and the analyzer both draw.
 #[test]
 fn the_picker_draws_the_page_it_holds_and_only_that_page() {
     const CASES: [(DisplayPage, &str); 4] = [
         (DisplayPage::Colors, "Bloom"),
         (DisplayPage::Lattice, "Octave gap"),
-        (DisplayPage::Analyzer, "Release"),
+        (DisplayPage::Analyzer, "Level range"),
         (DisplayPage::System, "Render scale"),
     ];
     for (page, needle) in CASES {
@@ -1380,4 +1423,3 @@ fn each_readings_own_bar_is_the_one_that_is_live() {
         assert_eq!(row(state, "Gate"), want_gate, "{state:?}: Gate is the wrong way");
     }
 }
-

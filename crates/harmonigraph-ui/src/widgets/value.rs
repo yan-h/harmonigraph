@@ -39,14 +39,15 @@ pub(crate) fn curve_color() -> Color32 {
     theme::text_dim().gamma_multiply(0.55)
 }
 
-/// The preview line in `shapes`, as the points it was drawn through.
+/// Every preview line in `shapes`, each as the points it was drawn through, in
+/// paint order.
 ///
 /// Shared by the two places that ask: the bar's own tests, which check WHERE
-/// the line is drawn, and the Note section's, which checks WHICH curve it is.
-/// The color is what identifies it — nothing else in a settings pane draws an
-/// open path in it.
+/// the line is drawn, and the Lattice page's, which checks WHICH curve each
+/// bar draws. The color is what identifies a line — nothing else in a settings
+/// pane draws an open path in it.
 #[cfg(test)]
-pub(crate) fn curve_points(shapes: &[egui::Shape]) -> Vec<egui::Pos2> {
+pub(crate) fn curve_paths(shapes: &[egui::Shape]) -> Vec<Vec<egui::Pos2>> {
     shapes
         .iter()
         .filter_map(|shape| match shape {
@@ -57,8 +58,13 @@ pub(crate) fn curve_points(shapes: &[egui::Shape]) -> Vec<egui::Pos2> {
             }
             _ => None,
         })
-        .flatten()
         .collect()
+}
+
+/// The one preview line in `shapes`, for a fixture that paints one bar.
+#[cfg(test)]
+fn curve_points(shapes: &[egui::Shape]) -> Vec<egui::Pos2> {
+    curve_paths(shapes).into_iter().flatten().collect()
 }
 
 pub struct ValueBar<'a> {

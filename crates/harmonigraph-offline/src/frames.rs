@@ -533,12 +533,12 @@ mod tests {
     }
 
     /// The moat's picture, written to `target/scratch/` — a sweep of the Gap
-    /// shape, which is where inside the Gap fade's width the light is given
+    /// curve, which is where inside the Gap bar's fade the light is given
     /// back.
     ///
     /// A probe: it asserts nothing, the verdict being a look rather than a
     /// number, and a look is the only thing that settles this one. What the
-    /// numbers say — the gap shape's own test in harmonigraph-render — is that
+    /// numbers say — the gap curve's own test in harmonigraph-render — is that
     /// the bar moves the light monotonically without moving the band. Whether
     /// the low end reads as a ring standing in shade and the high end as a ring
     /// in a painted annulus is the whole question and is not in that.
@@ -546,18 +546,18 @@ mod tests {
     /// Read CLOSE, where the sibling above reads far: a moat is a per-node
     /// detail against that node's own rings, and at the distance a wash is
     /// judged at the whole band is a few pixels and the shape is invisible. The
-    /// fade is set well past the gap because that is the bar's working range —
-    /// penned inside the gap there is nothing for a shape to redistribute — and
-    /// the depth is left where the fresh view has it, since the tail is the
-    /// faint end of the fade and a depth that swallows it hides what is being
-    /// looked at.
+    /// gap is wide and faded over the whole of it because that is the bar's
+    /// working range — a narrow band leaves nothing for a curve to
+    /// redistribute — and the depth is left where the fresh view has it, since
+    /// the tail is the faint end of the fade and a depth that swallows it hides
+    /// what is being looked at.
     ///
     /// ```text
-    /// cargo test -p harmonigraph-offline -- --ignored --nocapture gap_shape
+    /// cargo test -p harmonigraph-offline -- --ignored --nocapture gap_curve
     /// ```
     #[test]
     #[ignore = "a probe: writes PNGs and asserts nothing"]
-    fn the_glow_gap_shape_draws_a_picture() {
+    fn the_glow_gap_curve_draws_a_picture() {
         use harmonigraph_ui::{draw_pane, Layout, SharedState};
 
         const SIZE: [u32; 2] = [1200, 1000];
@@ -582,8 +582,8 @@ mod tests {
         // there is halo on both sides of the band the shape is spent in.
         state.view.glow_reach = 1.2;
         state.view.glow_strength = 2.0;
-        state.view.glow_gap = 0.1;
-        state.view.glow_gap_soft = 0.5;
+        state.view.glow_gap = 0.35;
+        state.view.glow_gap_soft = 0.35;
         for note in [55u8, 60, 64, 67, 71] {
             state.tracker.handle_event(harmonigraph_core::NoteEvent::on(0.0, 0, note, 1.0));
         }

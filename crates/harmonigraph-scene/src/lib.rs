@@ -250,17 +250,76 @@ pub const GLOW_REACH_MAX: f32 = 8.0;
 /// which puts the middle of a node at saturation somewhere short of this.
 pub const GLOW_STRENGTH_MAX: f32 = 2.0;
 
-/// The widest feather the glow's moat offers (see
-/// [`ViewConfig::glow_gap_soft`]), in the quad UV units the gap it stands
-/// astride is measured in.
+/// How far past each ring the glow's moat may be asked to reach (see
+/// [`ViewConfig::glow_gap`]), in the quad UV units the layer sizes above are
+/// in — the far end of the Glow section's Gap bar, and with it the widest fade
+/// that bar can spend, the fade being held inside the gap.
 ///
-/// Three [`GAP_MAX`]s, so the fade is free to run several times as wide as the
-/// widest gap under it. That is the whole point of the number: a feather held
-/// inside its own gap can only draw a band with an edge, and what stops the
+/// A whole node radius, where the two paddings above stop at [`GAP_MAX`]: a
+/// padding is room between two layers of one node and has no business being
+/// wider than a layer, but the moat is a dip in the LIGHT, and what stops a
 /// moat reading as a black ring is a dip broad enough to come off at the rate
-/// the skirt does. Three is where the band is wider than any node's whole ring
-/// stack, past which there is no more shape to soften.
-pub const GLOW_GAP_SOFT_MAX: f32 = 3.0 * GAP_MAX;
+/// the skirt does. One radius past every ring is a band wider than the whole
+/// ring stack it stands off, past which there is no more shape to soften.
+pub const GLOW_GAP_MAX: f32 = 1.0;
+
+/// The two ends of the Glow section's Feather bar, as the rate the light's
+/// exponential comes off at across its own span. Mirrored in lattice.wgsl
+/// (`GLOW_FALLOFF_TIGHT`/`FLAT`), which holds the rationale for the numbers
+/// and is the copy the picture is drawn from; `harmonigraph-render` asserts the
+/// two agree. This copy is what the bar's own preview is drawn from
+/// ([`glow_skirt`]).
+pub const GLOW_FALLOFF_TIGHT: f32 = 3.0;
+pub const GLOW_FALLOFF_FLAT: f32 = 0.25;
+
+/// The two ends of the Glow section's Gap curve bar, as the exponent the
+/// moat's fade is raised to across its own width. Mirrored in lattice.wgsl
+/// (`GAP_SHAPE_TRAIL`/`HOLD`) on the same terms as the pair above — the shader
+/// holds the rationale, including why the two are reciprocals, and the render
+/// crate asserts the copies agree. What this copy draws is the bar's preview
+/// ([`moat_recovery`]).
+pub const GAP_SHAPE_TRAIL: f32 = 0.25;
+pub const GAP_SHAPE_HOLD: f32 = 4.0;
+
+/// `smoothstep(0, 1, x)`, as WGSL spells it.
+fn smoothstep(x: f32) -> f32 {
+    let t = x.clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// How much of a node's light is left `p` of the way from its centre to where
+/// the light stops, 0..=1 of the peak, at `feather`
+/// ([`ViewConfig::glow_feather`]): the Feather bar's preview.
+///
+/// A COPY of `glow_layer` in lattice.wgsl and not the function itself, which
+/// is the one thing the Fade curve bar's preview did not have to be: that one
+/// is handed the envelope the notes run on, and the light's falloff runs on
+/// the GPU with nothing on the CPU to hand over. So it is a copy, kept to the
+/// shader's own two lines — the exponential at the rate the bar mixes, under
+/// the window that shuts it over the far half of the span — and the render
+/// crate holds both lines to the shader's text
+/// (`the_feather_bars_preview_is_the_skirt_the_shader_draws`). The base the
+/// shader scales by is left out, the preview being a shape rather than an
+/// amount; the Strength bar is that.
+pub fn glow_skirt(feather: f32, p: f32) -> f32 {
+    let rate = GLOW_FALLOFF_TIGHT + (GLOW_FALLOFF_FLAT - GLOW_FALLOFF_TIGHT) * feather;
+    let window = 1.0 - smoothstep((p - 0.5) / 0.5);
+    (-rate * p).exp() * window
+}
+
+/// How much of its light a ring has given back `p` of the way across the
+/// moat's fade, 0..=1, at `shape` ([`ViewConfig::glow_gap_shape`]): the Gap
+/// curve bar's preview, drawn as the light coming BACK because that is the
+/// direction the fade runs in — the ring's edge at the left, the halo at the
+/// right.
+///
+/// A copy of `moat_coverage`'s ramp and the exponent `glow_gap_shape` raises
+/// it to, on the terms [`glow_skirt`] states, and held to the shader's text
+/// the same way (`the_gap_curve_bars_preview_is_the_ramp_the_shader_runs`).
+pub fn moat_recovery(shape: f32, p: f32) -> f32 {
+    let exponent = GAP_SHAPE_TRAIL * (GAP_SHAPE_HOLD / GAP_SHAPE_TRAIL).powf(shape.clamp(0.0, 1.0));
+    smoothstep(p).powf(exponent)
+}
 
 /// The longest attack or release the node glow offers, in seconds (see
 /// [`ViewConfig::glow_attack`]).
@@ -876,14 +935,14 @@ pub struct Scene {
     /// shuts it (see [`ViewConfig::glow_feather`]); already clamped to 0..=1.
     /// Inert while [`glow_reach`](Self::glow_reach) is 0.
     pub glow_feather: f32,
-    /// The moat: how far the light is held off every ring a node draws, in the
-    /// same quad UV units (see [`ViewConfig::glow_gap`]); already clamped to
-    /// [`GAP_MAX`]. Inert while [`glow_reach`](Self::glow_reach) is 0.
+    /// The moat: how far past every ring a node draws the light is held off,
+    /// in the same quad UV units (see [`ViewConfig::glow_gap`]); already
+    /// clamped to [`GLOW_GAP_MAX`]. Inert while [`glow_reach`](Self::glow_reach)
+    /// is 0.
     pub glow_gap: f32,
-    /// How far the moat's edge is feathered, in the same quad UV units
-    /// [`glow_gap`](Self::glow_gap) is (see [`ViewConfig::glow_gap_soft`]);
-    /// already clamped to [`GLOW_GAP_SOFT_MAX`], which is deliberately several
-    /// times the gap's own ceiling.
+    /// How much of that gap is spent fading the light back in, measured back
+    /// from its end in the same units (see [`ViewConfig::glow_gap_soft`]);
+    /// already clamped to the gap.
     pub glow_gap_soft: f32,
     /// How the moat's fade is skewed across that width (see
     /// [`ViewConfig::glow_gap_shape`]), 0 giving the light back closest to the
@@ -895,8 +954,8 @@ pub struct Scene {
     /// [`ViewConfig::glow_gap_depth`]); already clamped to 0..=1.
     pub glow_gap_depth: f32,
     /// How widely a node's own ink is averaged into the colour of its light
-    /// (see [`ViewConfig::glow_spread`]); already clamped to 0..=1.
-    pub glow_spread: f32,
+    /// (see [`ViewConfig::glow_blend`]); already clamped to 0..=1.
+    pub glow_blend: f32,
     /// How many rows the frame's ink strip has to hold — the ceiling on every
     /// [`GlowStep::row`] in `nodes`, plus one.
     ///
