@@ -285,11 +285,33 @@ fn learn_badge(ui: &egui::Ui, rect: egui::Rect, now: f64) -> crate::text::TextBa
     badge
 }
 
-/// How readable a label on a visited node is next to a sounding one. Well
-/// below full so the notes actually playing still read first -- but flat,
-/// not scaled by the trail level, because the whole point of keeping the
-/// text is that it can be read: a name at 5% alpha says nothing.
-const TRAIL_LABEL_STRENGTH: f32 = 0.5;
+/// The ink every lattice label is drawn in — the note name, its marks and
+/// the cents under it alike — and it is white rather than the skin's
+/// [`text`](theme::text)/[`text_dim`](theme::text_dim) pair.
+///
+/// Type over the lattice is not chrome. The skin dresses the panels around
+/// the picture; what stands ON the picture is the picture's own ink, and a
+/// node's light is where its colour lives, not its name. Two ranks of grey
+/// said something the label does not mean — the note the brighter, its cents
+/// the fainter — where they are one label naming one node.
+const LABEL_INK: egui::Color32 = egui::Color32::WHITE;
+
+/// How readable a label on a node that is not sounding is: exactly as
+/// readable as one that is.
+///
+/// A kept name and a sounding name carry the same ink, and what tells them
+/// apart is the NODE — a sounding one is lit and a remembered one is not.
+/// Dimming the type as well says it twice, and it costs the quieter half its
+/// legibility rather than merely its rank, because alpha over the lattice's
+/// dark ground is grey rather than a fainter white.
+///
+/// It is also the level the marker underneath already assumes.
+/// [`name_level`](harmonigraph_scene::NodeInstance::name_level) is what the
+/// resting marker cross-fades OUT on and it reaches 1.0 for a kept name;
+/// short of that here, the marker left the position completely while the
+/// name replacing it arrived at a fraction, so the handoff lost ink in the
+/// middle. One level on both sides and the swap is even.
+const RESTING_LABEL_STRENGTH: f32 = 1.0;
 
 /// How readable one node's label is, 0..1. `names` is which nodes the view
 /// names at all (see [`draw_node_labels`]), and this is where each of the
@@ -297,7 +319,7 @@ const TRAIL_LABEL_STRENGTH: f32 = 0.5;
 ///
 /// A sounding label rides its note's envelope straight down to nothing. The
 /// one exception is a name this view is about to KEEP, which settles on
-/// `TRAIL_LABEL_STRENGTH` instead of fading out: `node.trail` is the recorded
+/// `RESTING_LABEL_STRENGTH` instead of fading out: `node.trail` is the recorded
 /// memory, and it is only written the frame the release finishes, so during
 /// the fade there is nothing to settle onto and the level has to be reserved
 /// ahead of the record. Without that reserve the name eases to zero and the
@@ -308,14 +330,14 @@ const TRAIL_LABEL_STRENGTH: f32 = 0.5;
 /// The argument above is entirely about a record that is coming, and nothing
 /// is coming for a note easing IN — a low activation there is a note that has
 /// barely started rather than one nearly gone. Reserving on both ends puts
-/// the name at half brightness the instant a key goes down, over a node still
+/// the name at full brightness the instant a key goes down, over a node still
 /// at a fraction of it, which is the same "steady, then switched" the reserve
 /// exists to remove, mirrored.
 ///
 /// Reserved only where a trail can actually land, which is the home sheet:
 /// off-sheet nodes are deliberately never marked (a lone memory floating out
 /// in the sevens dimension reads as noise — see `harmonigraph_scene::trail`), so
-/// reserving there held the label at half brightness through the whole
+/// reserving there held the label at full brightness through the whole
 /// release and then dropped it to nothing at prune. Fading to a level and
 /// vanishing from it is exactly what a visibility floor looks like, and this
 /// was the last one left.
@@ -332,13 +354,13 @@ fn label_strength(node: &harmonigraph_scene::NodeInstance, names: NoteNames) -> 
     // What a name that is not sounding draws at: every node under All, a
     // visited one under Past, and nothing at all under Played.
     let resting = match names {
-        NoteNames::All => TRAIL_LABEL_STRENGTH,
-        NoteNames::Past => TRAIL_LABEL_STRENGTH * node.trail,
+        NoteNames::All => RESTING_LABEL_STRENGTH,
+        NoteNames::Past => RESTING_LABEL_STRENGTH * node.trail,
         NoteNames::Played => 0.0,
     };
     let keeps_past = names == NoteNames::Past;
     let reserved = if keeps_past && node.on_home && node.departing && node.activation > 0.0 {
-        TRAIL_LABEL_STRENGTH
+        RESTING_LABEL_STRENGTH
     } else {
         0.0
     };
@@ -464,7 +486,7 @@ pub(crate) fn draw_node_labels(
                     ui.painter(),
                     center,
                     &format!("{:.0}", node.cents),
-                    theme::text().gamma_multiply(strength),
+                    LABEL_INK.gamma_multiply(strength),
                     outline,
                     scale,
                     magnify,
@@ -476,7 +498,7 @@ pub(crate) fn draw_node_labels(
                         ui.painter(),
                         center,
                         name,
-                        theme::text().gamma_multiply(strength),
+                        LABEL_INK.gamma_multiply(strength),
                         outline,
                         scale,
                         magnify,
@@ -506,7 +528,7 @@ pub(crate) fn draw_node_labels(
                         egui::Align2::CENTER_TOP,
                         text,
                         font,
-                        theme::text_dim().gamma_multiply(strength),
+                        LABEL_INK.gamma_multiply(strength),
                         outline,
                     );
                 });
@@ -790,9 +812,12 @@ mod tests {
             assert_eq!(label_strength(&fading(0.0, false), names), 0.0);
         }
         // On the home sheet with the past kept, it settles on the level the
-        // record will hold it at rather than easing out and popping back.
-        assert_eq!(label_strength(&fading(0.8, true), NoteNames::Past), 0.8);
-        assert_eq!(label_strength(&fading(0.2, true), NoteNames::Past), TRAIL_LABEL_STRENGTH);
+        // record will hold it at rather than easing out and popping back. That
+        // level being full, a name on its way to being kept never dims at all:
+        // the release is the NODE's, and the name it carries is one the view is
+        // about to keep saying.
+        assert_eq!(label_strength(&fading(0.8, true), NoteNames::Past), RESTING_LABEL_STRENGTH);
+        assert_eq!(label_strength(&fading(0.2, true), NoteNames::Past), RESTING_LABEL_STRENGTH);
         // ...and with only the played notes named, the home sheet fades out
         // like anything else.
         assert_eq!(label_strength(&fading(0.2, true), NoteNames::Played), 0.2);
@@ -807,22 +832,28 @@ mod tests {
         // Once the name IS recorded, it reads at the kept level.
         let mut kept = fading(0.0, true);
         kept.trail = 1.0;
-        assert_eq!(label_strength(&kept, NoteNames::Past), TRAIL_LABEL_STRENGTH);
+        assert_eq!(label_strength(&kept, NoteNames::Past), RESTING_LABEL_STRENGTH);
     }
 
     /// Naming every node is a floor under the whole lattice, not a memory:
     /// silence reads at the kept level on a node that has never sounded and
-    /// on one off the home sheet alike, and a note still outshines the field
-    /// it sits in.
+    /// on one off the home sheet alike.
+    ///
+    /// A sounding node does NOT outshine the field it sits in, and that is
+    /// the point rather than a gap in the mode. Its LIGHT does that; the type
+    /// over it says what the node is called, and a name dimmed to mean "not
+    /// this one" was a second answer to a question the lattice had already
+    /// answered — paid for in the legibility of every name that was not
+    /// currently playing.
     #[test]
     fn naming_everything_puts_every_node_at_the_kept_level() {
         for on_home in [false, true] {
-            assert_eq!(
-                label_strength(&fading(0.0, on_home), NoteNames::All),
-                TRAIL_LABEL_STRENGTH,
-            );
-            // Louder than the floor, so the note itself carries the name.
-            assert_eq!(label_strength(&fading(0.8, on_home), NoteNames::All), 0.8);
+            for activation in [0.0, 0.8] {
+                assert_eq!(
+                    label_strength(&fading(activation, on_home), NoteNames::All),
+                    RESTING_LABEL_STRENGTH,
+                );
+            }
         }
     }
 
@@ -831,15 +862,14 @@ mod tests {
     /// The reserve is a departure device and its argument only holds there:
     /// it stands in for a record that `node.trail` does not carry until the
     /// frame the release finishes. A note on its way IN has no record coming
-    /// and nothing to settle onto, so reserving there pins the name at half
+    /// and nothing to settle onto, so reserving there pins the name at full
     /// brightness over a node still at a fraction of it — the same "holding
     /// steady and then switching" the reserve exists to remove, at the other
     /// end of the note.
     ///
-    /// The band `0 < activation < TRAIL_LABEL_STRENGTH` was reachable only on
-    /// the way out when the reserve was written, because a note's core simply
-    /// appeared at full. It is now climbed on every note-on, and at the fresh
-    /// view — the trail's kept names on — that is every lit node.
+    /// The band `0 < activation < RESTING_LABEL_STRENGTH` is the whole of a
+    /// note's climb, and it is climbed on every note-on: at the fresh view —
+    /// the trail's kept names on — that is every lit node.
     #[test]
     fn a_name_arriving_is_no_brighter_than_the_note_it_names() {
         let mut state = fresh();
@@ -866,7 +896,7 @@ mod tests {
         let node = scene.nodes.iter().find(|n| n.activation > 0.0).expect("the note lit a node");
         assert!(node.on_home, "the lit node is off the home sheet, where nothing is reserved");
         assert!(
-            node.activation < TRAIL_LABEL_STRENGTH,
+            node.activation < RESTING_LABEL_STRENGTH,
             "sampled past the reserve's band at {}, so this cannot see the plateau",
             node.activation,
         );
@@ -895,13 +925,13 @@ mod tests {
         let node = scene.nodes.iter().find(|n| n.activation > 0.0).expect("the note still lights");
         assert!(node.departing, "the key is up and the arrival landed, so this is a departure");
         assert!(
-            node.activation < TRAIL_LABEL_STRENGTH,
+            node.activation < RESTING_LABEL_STRENGTH,
             "sampled at {}, above the reserve, so this cannot see it hold",
             node.activation,
         );
         assert_eq!(
             label_strength(node, names),
-            TRAIL_LABEL_STRENGTH,
+            RESTING_LABEL_STRENGTH,
             "a departing name stopped reserving the level its trail record takes over at",
         );
     }
