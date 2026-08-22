@@ -151,9 +151,9 @@ const REQUIRED_ENTRY_POINTS: &[&str] = &[
     "vs_main",
     "fs_main",
     "fs_main_scene",
-    "vs_dot",
-    "fs_dot",
-    "fs_dot_scene",
+    "vs_plus",
+    "fs_plus",
+    "fs_plus_scene",
     "vs_glow",
     "fs_glow",
     "fs_glow_moat",
@@ -274,10 +274,10 @@ struct Uniforms {
     /// like `misc.x`. (The blit pipeline binds only the head of this
     /// buffer, so trailing fields are safe to add here.)
     misc4: [f32; 4],
-    /// x: which shape a resting marker is (`Scene::dot_shape`) — 0 the disc,
-    /// then one index per shape, see `DotShape::shader_index`;
-    /// y: where a plus's arms start to taper, as a share of one arm
-    /// (`Scene::plus_taper_start`) — 1 is a square end. Inert for the disc;
+    /// x: half a resting marker's arm thickness, as a share of one arm's
+    /// length (`Scene::plus_half_width`) — 1 is a filled square;
+    /// y: where a marker's arms start to taper, as a share of one arm
+    /// (`Scene::plus_taper_start`) — 1 is a square end;
     /// z: the node's ANGULAR padding in quad UV units — the gap between two
     /// neighbouring sectors, wherever sectors are drawn. Its RADIAL counterpart
     /// never arrives: every stand-off that one buys is already spent in the
@@ -565,25 +565,25 @@ fn pack_octaves(levels: &[f32; harmonigraph_scene::OCTAVE_SLOTS]) -> [u32; 3] {
     octaves
 }
 
-/// One dot-pipeline instance: the marker standing at one home-sheet
+/// One marker-pipeline instance: the marker standing at one home-sheet
 /// lattice position.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct GpuDot {
-    /// xyz: the position's world center, w: the dot's outer radius in world
+struct GpuPlus {
+    /// xyz: the position's world center, w: the marker's outer radius in world
     /// units — where its feather has run out. Per instance rather than in a
     /// uniform because it is a WORLD length and the vertex shader sizes the
     /// billboard off it; the feather beside it is a fraction and is shared
     /// (`misc5.x`).
     pos_radius: [f32; 4],
-    /// rgb: the lattice's ground, a: the dot's opacity. Both come off one
-    /// resolve of `Scene::lattice_ground`, so a dot is that grey exactly.
+    /// rgb: the lattice's ground, a: the marker's opacity. Both come off one
+    /// resolve of `Scene::lattice_ground`, so a marker is that grey exactly.
     color: [f32; 4],
 }
 
-impl GpuDot {
+impl GpuPlus {
     const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
-        array_stride: std::mem::size_of::<GpuDot>() as u64,
+        array_stride: std::mem::size_of::<GpuPlus>() as u64,
         step_mode: wgpu::VertexStepMode::Instance,
         attributes: &wgpu::vertex_attr_array![
             0 => Float32x4, 1 => Float32x4
@@ -622,7 +622,7 @@ pub struct LatticeStats {
     pub poll_ms: std::sync::atomic::AtomicU32,
     /// Of that, staging this frame's data: sizing the offscreen targets,
     /// recreating them when the size moved, the `queue.write_buffer` calls for
-    /// instances, dots, labels and both sets of uniforms, and — on the rare
+    /// instances, markers, labels and both sets of uniforms, and — on the rare
     /// frame that brings one — the copy of egui's font atlas the labels are
     /// read out of.
     pub write_ms: std::sync::atomic::AtomicU32,
@@ -658,7 +658,7 @@ pub fn lattice_paint_callback(
 struct LatticeCallback {
     instances: Vec<GpuInstance>,
     /// Index into `instances` where the grid is drawn (see `from_scene`).
-    dots_at: u32,
+    pluses_at: u32,
     /// Where each sheet's run of `instances` ends, back to front: sheet `k`
     /// is `sheets[k-1]..sheets[k]` (0 for the first). A sheet every node of
     /// which was culled is an empty run, kept so a label's `sheet` still
@@ -674,7 +674,7 @@ struct LatticeCallback {
     marks: Option<FontAtlas>,
     /// Which way these names travel, for the glyph shader's filter.
     slide: SlideAxis,
-    dots: Vec<GpuDot>,
+    pluses: Vec<GpuPlus>,
     uniforms: Uniforms,
     target_format: wgpu::TextureFormat,
     pane_id: u64,
@@ -706,11 +706,11 @@ struct GlyphSeam {
     count: u32,
     /// Whether the node this names is in the home run, which draws AFTER the
     /// grid — carried rather than inferred from `at`, because the two runs
-    /// meet at `dots_at` and a culled node sits on the boundary without
+    /// meet at `pluses_at` and a culled node sits on the boundary without
     /// having moved it. The last far-sheet node to ship and a home node
-    /// culled before any home node ships both land on `at == dots_at`, and
+    /// culled before any home node ships both land on `at == pluses_at`, and
     /// they belong on opposite sides of the grid.
-    after_dots: bool,
+    after_pluses: bool,
     /// Which sheet the node this names is on — its run index in the sorted
     /// order, back to front. The glow pass erases a sheet's names after that
     /// sheet's light and before the next sheet's, so a name a nearer sheet
@@ -723,7 +723,7 @@ struct GlyphSeam {
 #[derive(Clone, Copy, Debug)]
 struct Seam {
     at: u32,
-    after_dots: bool,
+    after_pluses: bool,
     sheet: u32,
 }
 
@@ -758,16 +758,16 @@ fn place_labels(
     // Stable, so two labels at one seam keep the order they were drawn in —
     // which is the order the nodes are in, and the only thing that decides
     // between two names sharing a pixel. By the side of the grid before the
-    // count, so the two labels that share `dots_at` from opposite runs sort
+    // count, so the two labels that share `pluses_at` from opposite runs sort
     // the way they draw rather than by which node came first. The sheet
     // last, for the same boundary: the last node of one sheet to ship and a
     // node culled at the head of the next share an `at`, and the nearer
     // sheet's name draws after.
-    runs.sort_by_key(|&(seam, _, _)| (seam.at, seam.after_dots, seam.sheet));
+    runs.sort_by_key(|&(seam, _, _)| (seam.at, seam.after_pluses, seam.sheet));
 
     let mut placed = Vec::with_capacity(glyphs.len());
     let mut seams: Vec<GlyphSeam> = Vec::new();
-    for (Seam { at, after_dots, sheet }, start, count) in runs {
+    for (Seam { at, after_pluses, sheet }, start, count) in runs {
         if count == 0 {
             continue;
         }
@@ -777,10 +777,18 @@ fn place_labels(
         // sheet: two labels at one `at` are one uninterrupted draw, unless
         // the grid or a sheet's moats go between them.
         match seams.last_mut() {
-            Some(last) if last.at == at && last.after_dots == after_dots && last.sheet == sheet => {
+            Some(last)
+                if last.at == at && last.after_pluses == after_pluses && last.sheet == sheet =>
+            {
                 last.count += count as u32
             }
-            _ => seams.push(GlyphSeam { at, start: first, count: count as u32, after_dots, sheet }),
+            _ => seams.push(GlyphSeam {
+                at,
+                start: first,
+                count: count as u32,
+                after_pluses,
+                sheet,
+            }),
         }
     }
     (placed, seams)
@@ -944,13 +952,13 @@ impl LatticeCallback {
             }
             sheet_of[i] = sheet_count - 1;
         }
-        let mut seam_of = vec![Seam { at: 0, after_dots: false, sheet: 0 }; scene.nodes.len()];
+        let mut seam_of = vec![Seam { at: 0, after_pluses: false, sheet: 0 }; scene.nodes.len()];
         let mut sheets: Vec<u32> = Vec::with_capacity(sheet_count as usize);
         let drawn = |out: &mut Vec<GpuInstance>,
                      seam_of: &mut [Seam],
                      sheets: &mut Vec<u32>,
                      ns: &[(f32, f32, usize)],
-                     after_dots: bool| {
+                     after_pluses: bool| {
             for &(_, _, i) in ns {
                 let node = &scene.nodes[i];
                 let sheet = sheet_of[i];
@@ -963,7 +971,7 @@ impl LatticeCallback {
                 if paints(&instance) {
                     out.push(instance);
                 }
-                seam_of[i] = Seam { at: out.len() as u32, after_dots, sheet };
+                seam_of[i] = Seam { at: out.len() as u32, after_pluses, sheet };
             }
         };
         let mut instances = Vec::with_capacity(order.len());
@@ -971,7 +979,7 @@ impl LatticeCallback {
         // Where the grid is drawn inside that run: after the sheets BEHIND the
         // home one, counted over the kept instances rather than over `split`,
         // which indexes the list before the cull.
-        let dots_at = instances.len() as u32;
+        let pluses_at = instances.len() as u32;
         drawn(&mut instances, &mut seam_of, &mut sheets, &order[split..], true);
         // The last sheet ends where the instances do — and so does every
         // sheet whose nodes were all culled, which still owns its labels.
@@ -980,11 +988,11 @@ impl LatticeCallback {
         }
         let (glyphs, seams) = place_labels(labels.glyphs, &labels.labels, &seam_of);
 
-        // The dots draw under the nodes.
-        let dots = scene
-            .dots
+        // The markers draw under the nodes.
+        let pluses = scene
+            .pluses
             .iter()
-            .map(|d| GpuDot {
+            .map(|d| GpuPlus {
                 pos_radius: [d.pos.x, d.pos.y, d.pos.z, d.radius],
                 color: [d.color.x, d.color.y, d.color.z, d.strength],
             })
@@ -992,7 +1000,7 @@ impl LatticeCallback {
 
         LatticeCallback {
             instances,
-            dots_at,
+            pluses_at,
             sheets,
             glyphs,
             seams,
@@ -1000,7 +1008,7 @@ impl LatticeCallback {
             atlas: labels.atlas,
             marks: labels.marks,
             slide: labels.slide,
-            dots,
+            pluses,
             uniforms: Uniforms {
                 view_proj: view_proj.to_cols_array(),
                 cam_right: right.extend(0.0).to_array(),
@@ -1016,7 +1024,7 @@ impl LatticeCallback {
                 pitch_lut: std::array::from_fn(|k| scene.pitch_lut[k].to_array()),
                 misc4: [0.0, scene.mark_inner, 0.0, 0.0],
                 misc5: [
-                    scene.dot_shape.shader_index() as f32,
+                    scene.plus_half_width,
                     scene.plus_taper_start,
                     scene.octave_gap,
                     scene.mark_thickness,
@@ -1138,7 +1146,7 @@ impl LatticeCallback {
 /// GPU objects cached across frames in egui-wgpu's `CallbackResources`.
 struct LatticeResources {
     pipeline: wgpu::RenderPipeline,
-    dot_pipeline: wgpu::RenderPipeline,
+    plus_pipeline: wgpu::RenderPipeline,
     composite_pipeline: wgpu::RenderPipeline,
     /// Bloom chain: bright pass, half->quarter downsample, blur x2.
     bright_pipeline: wgpu::RenderPipeline,
@@ -1402,12 +1410,12 @@ struct PaneBuffers {
     /// are the sheets behind the home one plus the home sheet's own
     /// clearings, and must land under the grid; the rest go over it. See
     /// `LatticeCallback::from_scene`.
-    dots_at: u32,
+    pluses_at: u32,
     /// Where each sheet's run of instances ends (see `LatticeCallback::sheets`).
     sheets: Vec<u32>,
-    dot_buffer: wgpu::Buffer,
-    dot_capacity: usize,
-    dot_count: u32,
+    plus_buffer: wgpu::Buffer,
+    plus_capacity: usize,
+    plus_count: u32,
     /// This pane's labels: the glyphs, and where each label falls in the node
     /// run above (see [`GlyphSeam`]).
     glyph_buffer: wgpu::Buffer,
@@ -1993,7 +2001,7 @@ impl InkStrip {
 }
 
 /// Build one of the scene pipelines from WGSL source (startup uses the
-/// baked-in source; hot-reload rebuilds from disk). Node and dot pipelines
+/// baked-in source; hot-reload rebuilds from disk). Node and marker pipelines
 /// share the module, bind group layout, blending, and topology; only entry
 /// points and vertex layout differ.
 ///
@@ -2039,7 +2047,7 @@ fn create_pipeline(
 
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         // Name the pipeline after its vertex entry point, so a GPU capture
-        // can tell the node and dot passes apart.
+        // can tell the node and marker passes apart.
         label: Some(entry_points.0),
         layout: Some(&layout),
         vertex: wgpu::VertexState {
@@ -2085,10 +2093,10 @@ fn create_pipelines(
     bind_group_layout: &wgpu::BindGroupLayout,
     offscreen: bool,
 ) -> (wgpu::RenderPipeline, wgpu::RenderPipeline) {
-    let (node, dot) = if offscreen {
-        ("fs_main_scene", "fs_dot_scene")
+    let (node, plus) = if offscreen {
+        ("fs_main_scene", "fs_plus_scene")
     } else {
-        ("fs_main", "fs_dot")
+        ("fs_main", "fs_plus")
     };
     (
         create_pipeline(
@@ -2105,8 +2113,8 @@ fn create_pipelines(
             shader_src,
             target_format,
             bind_group_layout,
-            ("vs_dot", dot),
-            GpuDot::LAYOUT,
+            ("vs_plus", plus),
+            GpuPlus::LAYOUT,
             offscreen,
         ),
     )
@@ -2502,7 +2510,7 @@ impl LatticeResources {
                 count: None,
             }],
         });
-        let (pipeline, dot_pipeline) =
+        let (pipeline, plus_pipeline) =
             create_pipelines(device, SHADER_SRC, target_format, &bind_group_layout, true);
         // Unfilterable, because every read of it is a `textureLoad`: a row is a
         // node and a column is an angle, so there is no axis a filter would be
@@ -2628,7 +2636,7 @@ impl LatticeResources {
 
         LatticeResources {
             pipeline,
-            dot_pipeline,
+            plus_pipeline,
             composite_pipeline,
             bright_pipeline,
             downsample_pipeline,
@@ -2762,14 +2770,14 @@ impl LatticeResources {
                 ),
                 instance_capacity: INITIAL_INSTANCE_CAPACITY,
                 instance_count: 0,
-                dot_buffer: create_vertex_buffer::<GpuDot>(
+                plus_buffer: create_vertex_buffer::<GpuPlus>(
                     device,
                     "lattice_dots",
-                    INITIAL_DOT_CAPACITY,
+                    INITIAL_PLUS_CAPACITY,
                 ),
-                dot_capacity: INITIAL_DOT_CAPACITY,
-                dot_count: 0,
-                dots_at: 0,
+                plus_capacity: INITIAL_PLUS_CAPACITY,
+                plus_count: 0,
+                pluses_at: 0,
                 glyph_buffer: create_vertex_buffer::<GlyphInstance>(
                     device,
                     "lattice_glyphs",
@@ -2846,16 +2854,16 @@ impl LatticeResources {
     }
 }
 
-/// Starting element counts for a pane's per-instance and per-dot buffers;
+/// Starting element counts for a pane's per-instance and per-marker buffers;
 /// both grow by `next_power_of_two` when a frame overflows them.
 const INITIAL_INSTANCE_CAPACITY: usize = 256;
-const INITIAL_DOT_CAPACITY: usize = 64;
+const INITIAL_PLUS_CAPACITY: usize = 64;
 /// And for its labels. Only sounding, hovered and remembered nodes are named,
 /// so a lattice's glyph count is a fraction of a text pane's.
 const INITIAL_GLYPH_CAPACITY: usize = 512;
 
 /// A `capacity`-element vertex buffer (VERTEX | COPY_DST) sized for `T`.
-/// Used for both the instance and dot buffers, which differ only in label
+/// Used for both the instance and marker buffers, which differ only in label
 /// and element type.
 fn create_vertex_buffer<T>(device: &wgpu::Device, label: &str, capacity: usize) -> wgpu::Buffer {
     device.create_buffer(&wgpu::BufferDescriptor {
@@ -2918,7 +2926,7 @@ impl CallbackTrait for LatticeCallback {
         if let Some(source) = resources.watcher.poll() {
             match validate_wgsl(&source) {
                 Ok(()) => {
-                    let (pipeline, dot_pipeline) = create_pipelines(
+                    let (pipeline, plus_pipeline) = create_pipelines(
                         device,
                         &source,
                         resources.target_format,
@@ -2947,7 +2955,7 @@ impl CallbackTrait for LatticeCallback {
                         &resources.strip_layout,
                     );
                     resources.pipeline = pipeline;
-                    resources.dot_pipeline = dot_pipeline;
+                    resources.plus_pipeline = plus_pipeline;
                     resources.glow_pipeline = glow_pipeline;
                     resources.glow_moat_pipeline = glow_moat_pipeline;
                     resources.glow_cover_pipeline = glow_cover_pipeline;
@@ -2996,7 +3004,7 @@ impl CallbackTrait for LatticeCallback {
         // other end: a hovered idle node paints nothing and is named, so a
         // lattice can be a frame of one label and nothing else.
         let anything =
-            !self.instances.is_empty() || !self.dots.is_empty() || !self.glyphs.is_empty();
+            !self.instances.is_empty() || !self.pluses.is_empty() || !self.glyphs.is_empty();
         let offscreen_size = anything.then_some(size);
 
         let glow = self.glow_draws();
@@ -3021,7 +3029,7 @@ impl CallbackTrait for LatticeCallback {
             );
         }
         pane.instance_count = self.instances.len() as u32;
-        pane.dots_at = self.dots_at.min(pane.instance_count);
+        pane.pluses_at = self.pluses_at.min(pane.instance_count);
         pane.sheets.clear();
         pane.sheets.extend(self.sheets.iter().map(|&end| end.min(pane.instance_count)));
         if !self.instances.is_empty() {
@@ -3032,14 +3040,14 @@ impl CallbackTrait for LatticeCallback {
             );
         }
 
-        if self.dots.len() > pane.dot_capacity {
-            pane.dot_capacity = self.dots.len().next_power_of_two();
-            pane.dot_buffer =
-                create_vertex_buffer::<GpuDot>(device, "lattice_dots", pane.dot_capacity);
+        if self.pluses.len() > pane.plus_capacity {
+            pane.plus_capacity = self.pluses.len().next_power_of_two();
+            pane.plus_buffer =
+                create_vertex_buffer::<GpuPlus>(device, "lattice_dots", pane.plus_capacity);
         }
-        pane.dot_count = self.dots.len() as u32;
-        if !self.dots.is_empty() {
-            queue.write_buffer(&pane.dot_buffer, 0, bytemuck::cast_slice(&self.dots));
+        pane.plus_count = self.pluses.len() as u32;
+        if !self.pluses.is_empty() {
+            queue.write_buffer(&pane.plus_buffer, 0, bytemuck::cast_slice(&self.pluses));
         }
 
         // The labels. With no atlas there is nothing to sample, so the pass
@@ -3110,7 +3118,7 @@ impl CallbackTrait for LatticeCallback {
             .panes
             .get(&self.pane_id)
             .expect("created by pane_buffers above");
-        let draws = pane.instance_count > 0 || pane.dot_count > 0 || pane.glyph_count > 0;
+        let draws = pane.instance_count > 0 || pane.plus_count > 0 || pane.glyph_count > 0;
         if let Some(offscreen) = pane.offscreen.as_ref().filter(|_| draws) {
             // Bracket the scene pass and the bloom chain together: what the
             // overlay wants is the cost of drawing THE LATTICE, which is both.
@@ -3314,15 +3322,15 @@ impl CallbackTrait for LatticeCallback {
                 multiview_mask: None,
             });
 
-            // The dots sit at the home sheet's own depth, so they go
+            // The markers sit at the home sheet's own depth, so they go
             // between the sheets behind it and the home sheet itself —
             // NOT under everything. Under everything, a node on a sheet
-            // behind the home one punches its clearing through the dot
+            // behind the home one punches its clearing through the marker
             // field, which puts a hole in the layer it is supposed to be
-            // hidden by. `dots_at` is where that seam falls; the home
+            // hidden by. `pluses_at` is where that seam falls; the home
             // sheet's own clearings are the tail of the first run, ahead of
-            // the dots, so they can hide the sheets behind without eating
-            // the dots they sit on.
+            // the markers, so they can hide the sheets behind without eating
+            // the markers they sit on.
             let nodes = |pass: &mut wgpu::RenderPass<'_>, range: std::ops::Range<u32>| {
                 if range.is_empty() {
                     return;
@@ -3332,14 +3340,14 @@ impl CallbackTrait for LatticeCallback {
                 pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
                 pass.draw(0..4, range);
             };
-            let dots = |pass: &mut wgpu::RenderPass<'_>| {
-                if pane.dot_count == 0 {
+            let pluses = |pass: &mut wgpu::RenderPass<'_>| {
+                if pane.plus_count == 0 {
                     return;
                 }
-                pass.set_pipeline(&resources.dot_pipeline);
+                pass.set_pipeline(&resources.plus_pipeline);
                 pass.set_bind_group(0, &pane.bind_group, &[]);
-                pass.set_vertex_buffer(0, pane.dot_buffer.slice(..));
-                pass.draw(0..4, 0..pane.dot_count);
+                pass.set_vertex_buffer(0, pane.plus_buffer.slice(..));
+                pass.draw(0..4, 0..pane.plus_count);
             };
             // One label, at its own place in the order: every rim, then every
             // fill. Stamping had that order for free and the shader keeps it,
@@ -3366,36 +3374,36 @@ impl CallbackTrait for LatticeCallback {
             // node it names — so what covers a name is exactly what covers
             // its node. The seams are sorted, so this walks forward once.
             //
-            // Which side of the dots a label goes is the run its node was in,
-            // not how its seam compares to `dots_at`: the runs MEET at that
+            // Which side of the markers a label goes is the run its node was
+            // in, not how its seam compares to `pluses_at`: the runs MEET at that
             // number, so the last far node to ship and a home node culled
             // before any home node ships share it while belonging on
-            // opposite sides. A dot covers a name if and only if it is
+            // opposite sides. A marker covers a name if and only if it is
             // drawn after it, which is the same rule everything else in this
             // pass follows.
             let mut cursor = 0u32;
-            let mut dots_drawn = false;
+            let mut pluses_drawn = false;
             for seam in &pane.seams {
-                if !dots_drawn && seam.after_dots {
-                    nodes(&mut pass, cursor..pane.dots_at);
-                    dots(&mut pass);
-                    (cursor, dots_drawn) = (pane.dots_at, true);
+                if !pluses_drawn && seam.after_pluses {
+                    nodes(&mut pass, cursor..pane.pluses_at);
+                    pluses(&mut pass);
+                    (cursor, pluses_drawn) = (pane.pluses_at, true);
                 }
                 nodes(&mut pass, cursor..seam.at);
                 cursor = seam.at;
                 label(&mut pass, seam);
             }
-            if !dots_drawn {
-                nodes(&mut pass, cursor..pane.dots_at);
-                dots(&mut pass);
-                cursor = pane.dots_at;
+            if !pluses_drawn {
+                nodes(&mut pass, cursor..pane.pluses_at);
+                pluses(&mut pass);
+                cursor = pane.pluses_at;
             }
             nodes(&mut pass, cursor..pane.instance_count);
 
             // The glow, over the finished lattice — every node drawn, every
             // label spliced in, and the light laid on top of all of it.
             //
-            // LAST, and not between the dots and the home sheet where "under
+            // LAST, and not between the markers and the home sheet where "under
             // the nodes" would put it, because of what a node's knockout is: it
             // paints the pane's own ground filled to the node's CENTRE, one
             // Clearance out past every layer (`node_clearing`). Light
@@ -3476,10 +3484,10 @@ impl CallbackTrait for LatticeCallback {
         let Some(pane) = resources.panes.get(&self.pane_id) else {
             return;
         };
-        // Nothing was rendered into the offscreen target. The dots and the
+        // Nothing was rendered into the offscreen target. The markers and the
         // labels count as much as the nodes here — see `prepare`, where the
         // same test decides whether the target exists at all.
-        if pane.instance_count == 0 && pane.dot_count == 0 && pane.glyph_count == 0 {
+        if pane.instance_count == 0 && pane.plus_count == 0 && pane.glyph_count == 0 {
             return;
         }
         let Some(offscreen) = &pane.offscreen else {

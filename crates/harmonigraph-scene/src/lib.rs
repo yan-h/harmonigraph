@@ -5,9 +5,9 @@
 //!
 //! What lives where:
 //! - `lib.rs` (this file) — the render-facing types: [`Scene`],
-//!   [`NodeInstance`], [`DotInstance`], and the constants they share.
+//!   [`NodeInstance`], [`PlusInstance`], and the constants they share.
 //! - [`derive`](mod@derive) — the per-frame derivation ([`derive_scene`]): note tracker
-//!   + tuning -> node/dot lists. Envelope and animation policy.
+//!   + tuning -> node/marker lists. Envelope and animation policy.
 //! - [`view`] — [`ViewConfig`] (persisted visual settings and their serde
 //!   defaults) and [`FrameParams`].
 //! - [`style`] — the visual-style enums and their shader indices, and the
@@ -51,7 +51,7 @@ pub use spectral::{
     SPECTRAL_BALLISTICS_MAX, SPECTRAL_GATE_MAX, SPECTRAL_GATE_MIN, SPECTRAL_HYSTERESIS_MAX,
     SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN,
 };
-pub use style::{DotShape, Gradient, NoteNames, Pulse, SevensLabel};
+pub use style::{Gradient, NoteNames, Pulse, SevensLabel};
 pub use view::{DrawnWindow, FrameParams, RingStack, ViewConfig};
 
 use glam::{Vec3, Vec4};
@@ -190,18 +190,26 @@ pub const RING_INNER_MAX: f32 = 0.9;
 /// place that a second constant would be two numbers saying one thing.
 pub const GAP_MAX: f32 = 0.4;
 
-/// How big a resting dot may be asked to get (see [`ViewConfig::dot_size`]),
-/// in the same quad UV units the layer sizes above are in — so a dot and a
-/// ring radius are two readings on one axis and can be compared by their
-/// numbers.
+/// How far a resting marker may be asked to reach on EITHER of its two axes —
+/// the length of an arm ([`ViewConfig::plus_arm`]) and the thickness across
+/// one ([`ViewConfig::plus_width`]) — in the same quad UV units the layer
+/// sizes above are in, so a marker and a ring radius are two readings on one
+/// axis and can be compared by their numbers.
 ///
-/// Sized against [`RING_INNER_MAX`] rather than under it: a dot is not part of
-/// the ring stack and owes it no room, so at the top of this bar it fills the
-/// middle a node's rings stand around and then some, and the lattice at rest
-/// is a field of discs rather than of points. That is the far end being a
-/// different picture, which is what a bar's far end is for; the small dot the
-/// fresh view draws is a tenth of the way along it.
-pub const DOT_SIZE_MAX: f32 = 0.9;
+/// ONE constant under both bars rather than two: the two numbers are lengths
+/// on the same axis, and a second ceiling would be two numbers saying one
+/// thing (as [`GAP_MAX`] says of the pair above it). It does not make the two
+/// bars read alike — a length is measured from the crossing OUT and a width
+/// ACROSS an arm, so a plus has filled its own square once the width reaches
+/// twice the length, and the rest of the width bar is that same square.
+///
+/// Sized against [`RING_INNER_MAX`] rather than under it: a marker is not part
+/// of the ring stack and owes it no room, so at the top of the arm bar it
+/// reaches past the middle a node's rings stand around, and the lattice at
+/// rest is a field of crosses rather than of points. That is the far end being
+/// a different picture, which is what a bar's far end is for; the small marker
+/// the fresh view draws is a fifth of the way along it.
+pub const PLUS_SIZE_MAX: f32 = 0.9;
 
 /// How far past a node's outermost drawn edge its glow may be asked to reach
 /// (see [`ViewConfig::glow_reach`]), in the same quad UV units the layer sizes
@@ -406,9 +414,9 @@ pub struct NodeInstance {
     pub octaves: [f32; OCTAVE_SLOTS],
     pub hovered: bool,
     /// On the home (center sevens) sheet. An idle node draws nothing
-    /// wherever it sits; what marks a home position is its DOT, standing
+    /// wherever it sits; what marks a home position is the MARKER standing
     /// under where the node itself would draw, and off-sheet positions have
-    /// not even that (see [`derive_dots`](derive::derive_dots)).
+    /// not even that (see [`derive_pluses`](derive::derive_pluses)).
     pub on_home: bool,
     /// Billboard size, as a factor of the scene's `node_radius` (see
     /// [`ViewConfig::sevens_size`]): 1 on the home sheet, smaller with every
@@ -425,7 +433,7 @@ pub struct NodeInstance {
     /// per LAYER and settled in the shader, each layer's hole scaled by the
     /// level that paints it. Gating this on the note instead is what left a
     /// node wearing an audio ring with no key down — which the Gate hands out
-    /// freely — drawing that ring over an uncut dot.
+    /// freely — drawing that ring over an uncut marker.
     pub gutter: f32,
     /// Signed cents from the home-sheet node this one shares a LETTER and an
     /// accidental with: `(threes - 2*(sevens - center), fives, center)`,
@@ -567,12 +575,12 @@ impl NodeInstance {
     /// Whether this node is somewhere the picture accounts for, and so can
     /// carry pitch info (hover label, tuning readout). Sounding nodes always
     /// draw; an idle one draws nothing at all, but a home-sheet position is
-    /// still a place the dot field says is there — a dot stands exactly
+    /// still a place the marker field says is there — a marker stands exactly
     /// where a pointer goes looking.
     ///
     /// So this is deliberately NOT "does this node paint a pixel": an empty
     /// home sheet would then be uninspectable, and it is the thing most worth
-    /// inspecting. Off-sheet idle positions carry no dot and are
+    /// inspecting. Off-sheet idle positions carry no marker and are
     /// correspondingly not hoverable — a pitch revealed there would be
     /// information from nowhere.
     ///
@@ -592,10 +600,10 @@ impl NodeInstance {
     /// The label pass's own question (`draw_node_labels` in
     /// `harmonigraph-ui`), answered HERE because two things now turn on it and
     /// a second spelling of it is a picture that contradicts itself: the pass
-    /// draws the name, and [`derive_dots`](derive::derive_dots) drops the
-    /// resting dot under it. A dot behind a name is the one place in the
+    /// draws the name, and [`derive_pluses`](derive::derive_pluses) drops the
+    /// resting marker under it. A marker behind a name is the one place in the
     /// lattice where two markers claim the same position, and the name is the
-    /// better of the two — it says WHICH position, where the dot only says
+    /// better of the two — it says WHICH position, where the marker only says
     /// that there is one.
     ///
     /// So the label layer is the one that decides, and this is the whole of
@@ -611,7 +619,7 @@ impl NodeInstance {
     /// What it does NOT answer is whether the name lands on the PANE — that
     /// needs a rect and a projector, which is the label pass's business and
     /// not the scene's. It costs nothing: a name off the pane is a name over a
-    /// dot that is off the pane too, and neither is drawn.
+    /// marker that is off the pane too, and neither is drawn.
     pub fn is_named(&self, view: &ViewConfig) -> bool {
         if !view.show_labels {
             return false;
@@ -627,22 +635,23 @@ impl NodeInstance {
     }
 }
 
-/// One marker standing at a lattice position: a small dot or cross (see
-/// [`Scene::dot_shape`]), drawn under the nodes, and the whole of what an
-/// unplayed lattice draws.
+/// One marker standing at a lattice position: a small cross, drawn under the
+/// nodes, and the whole of what an unplayed lattice draws.
 #[derive(Clone, Copy, Debug)]
-pub struct DotInstance {
+pub struct PlusInstance {
     /// The position's own world center.
     pub pos: Vec3,
-    /// How far the marker reaches, in WORLD units: a dot's radius, or the
-    /// length of a plus's arms. Its edge either way, which the shader cuts
-    /// with the one screen-constant soft band every ring here is cut with.
-    /// Already resolved from [`ViewConfig::dot_size`]'s quad UV against the
-    /// scene's node radius, so the renderer sizes the billboard off this
-    /// alone.
+    /// How far the marker reaches, in WORLD units: the length of one arm,
+    /// crossing to tip. Both of the other two numbers a plus has — its
+    /// thickness and where its ends start to fade — are shares of THIS, so
+    /// this alone is what sizes the billboard.
+    ///
+    /// Already resolved from [`ViewConfig::plus_arm`]'s quad UV against the
+    /// scene's node radius, so nothing downstream carries a second copy of
+    /// that convention.
     pub radius: f32,
     pub color: Vec4,
-    /// Dot opacity.
+    /// The marker's opacity.
     pub strength: f32,
 }
 
@@ -701,7 +710,7 @@ pub struct Scene {
     /// annulus is a per-fragment test, and the shader is where the fragments
     /// are.
     pub octave_gap: f32,
-    /// The lattice at rest — its dots, and both of a node's rings where
+    /// The lattice at rest — its markers, and both of a node's rings where
     /// nothing is lit — already resolved from
     /// [`ViewConfig::lattice_ground`]'s `L*` to the neutral grey it names.
     ///
@@ -718,7 +727,7 @@ pub struct Scene {
     /// sounding one's pitch is painted over as the note fades. The lattice's
     /// two other at-rest surfaces carry the same grey without reading this
     /// field, because neither reaches the shader as a uniform: every
-    /// [`dots`](Self::dots) instance carries it as its own colour, and the
+    /// [`pluses`](Self::pluses) instance carries it as its own colour, and the
     /// audio ring carries it as the `t` = 0 end of its table. Three copies of
     /// one resolve, not three answers.
     pub lattice_ground: Vec4,
@@ -743,20 +752,27 @@ pub struct Scene {
     /// its own octaves fall against the center pitch, which is what makes an
     /// indicator's ANGLE mean an absolute pitch.
     pub octave_layout: OctaveLayout,
-    /// The lattice's resting markers (see [`derive_dots`](derive::derive_dots)):
-    /// one dot per visible HOME-sheet position, each carrying
-    /// [`lattice_ground`](Self::lattice_ground) as its colour — so a dot IS
+    /// The lattice's resting markers (see
+    /// [`derive_pluses`](derive::derive_pluses)): one cross per visible
+    /// HOME-sheet position, each carrying
+    /// [`lattice_ground`](Self::lattice_ground) as its colour — so a marker IS
     /// that grey rather than a brightness of it.
     ///
     /// Off-sheet positions get none, and that is the whole of what says which
-    /// sheet is the ground: a note there floats over the dot field instead of
-    /// standing on it.
-    pub dots: Vec<DotInstance>,
-    /// Which shape each of them is (see [`ViewConfig::dot_shape`]). View-wide,
-    /// as the radius is not — a dot's size reaches the renderer per instance
-    /// because it is a world length, while the shape is one answer the whole
-    /// field shares and the shader reads out of a uniform.
-    pub dot_shape: DotShape,
+    /// sheet is the ground: a note there floats over the marker field instead
+    /// of standing in it.
+    pub pluses: Vec<PlusInstance>,
+    /// Half an arm's thickness, as a SHARE of the arm's length — the shape's
+    /// one proportion, and what the shader folds a fragment's distance against
+    /// (see [`ViewConfig::plus_width`], which is the WHOLE thickness and in
+    /// quad UV).
+    ///
+    /// View-wide, as the length beside it is not: a length reaches the renderer
+    /// per instance because it is a world distance, while a proportion is one
+    /// answer the whole field shares and the shader reads out of a uniform.
+    /// Already clamped, and to 1 at the top — at half an arm's thickness the
+    /// cross has filled its own square and there is nothing past it to draw.
+    pub plus_half_width: f32,
     /// Where a plus's arms stop being solid and start fading out, as a SHARE
     /// of one arm's length: 1 is a square end, 0 an arm that fades the whole
     /// way from the crossing to its tip (see [`ViewConfig::plus_taper`], which
@@ -766,7 +782,7 @@ pub struct Scene {
     /// the arm's own units — uv 1 IS the tip — so it needs the point on that
     /// axis rather than a length it would have to divide out per fragment.
     /// Already clamped, and held short of 1 so the fade never collapses to a
-    /// zero-width `smoothstep`. Read only under [`DotShape::Plus`].
+    /// zero-width `smoothstep`.
     pub plus_taper_start: f32,
     /// How wide the sevens knockout's fade is, in the uv of a full-size
     /// node (see [`ViewConfig::sevens_gutter_soft`]). View-wide, as the reach

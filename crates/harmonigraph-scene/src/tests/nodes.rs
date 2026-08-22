@@ -167,15 +167,15 @@ fn drawable(c: glam::Vec4) -> bool {
 }
 
 /// The lattice's ground, as a scene draws it: the field itself, every resting
-/// dot's colour, and what an unplayed node falls back to — three copies of
+/// marker's colour, and what an unplayed node falls back to — three copies of
 /// one resolve ([`Scene::lattice_ground`]), which is why a single poisoned
 /// number can be asked about all three at once.
 fn ground_of(view: &ViewConfig) -> (Vec4, Vec<Vec4>, Vec4) {
     let scene = scene_of(&NoteTracker::new(), &Tuning::default(), view, &plain_frame(), 0.0);
-    let lines: Vec<Vec4> = scene.dots.iter().map(|d| d.color).collect();
+    let lines: Vec<Vec4> = scene.pluses.iter().map(|d| d.color).collect();
     assert!(
-        scene.dots.iter().any(|d| d.strength > 0.0),
-        "the home sheet has to draw a resting dot field, or the colours below \
+        scene.pluses.iter().any(|d| d.strength > 0.0),
+        "the home sheet has to draw a resting marker field, or the colours below \
          test nothing",
     );
     let idle = scene
@@ -216,11 +216,11 @@ fn a_non_finite_ground_still_draws_the_lattice_a_grey() {
             "a ground of {broken} resolves to an L* no colour can be solved for",
         );
         let want = crate::grey_of_lightness(fresh);
-        let (ground, dots, idle) = ground_of(&view);
+        let (ground, pluses, idle) = ground_of(&view);
         assert!(drawable(ground), "a ground of {broken} put {ground:?} in the scene");
         assert_eq!(ground, want, "a ground of {broken} is not repaired to the fresh grey");
-        for dot in dots {
-            assert_eq!(dot, ground, "a ground of {broken} drew a marker {dot:?}");
+        for marker in pluses {
+            assert_eq!(marker, ground, "a ground of {broken} drew a marker {marker:?}");
         }
         assert_eq!(idle, ground, "a ground of {broken} left an idle node at {idle:?}");
         // And the ring's table, the accessor's other reader: the two rings sit
@@ -261,15 +261,15 @@ fn a_ground_past_either_end_of_the_bar_is_held_to_the_l_star_axis() {
             want,
             "a ground of {asked} resolves to an L* off the axis",
         );
-        let (ground, dots, idle) = ground_of(&view);
+        let (ground, pluses, idle) = ground_of(&view);
         assert!(drawable(ground), "a ground of {asked} put {ground:?} in the scene");
         assert_eq!(
             ground,
             crate::grey_of_lightness(want),
             "a ground of {asked} draws a grey the axis does not name",
         );
-        for dot in dots {
-            assert_eq!(dot, ground, "a ground of {asked} drew a marker {dot:?}");
+        for marker in pluses {
+            assert_eq!(marker, ground, "a ground of {asked} drew a marker {marker:?}");
         }
         assert_eq!(idle, ground, "a ground of {asked} left an idle node at {idle:?}");
     }

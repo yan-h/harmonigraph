@@ -8,14 +8,14 @@
 //! note are never even the same kind of thing on screen. The whole of what
 //! this module produces is [`NodeInstance::trail`], which the labels read.
 //!
-//! The resting DOT is the one drawn thing a memory reaches, and it reaches it
-//! through the name rather than around it: a named position draws no dot (see
+//! The resting MARKER is the one drawn thing a memory reaches, and it reaches it
+//! through the name rather than around it: a named position draws no marker (see
 //! [`NodeInstance::is_named`]), and under
 //! [`NoteNames::Past`] a remembered position is named.
 //! So the rule above holds as written — this module still writes one field —
-//! and what takes the dot away is the label layer, on the same terms it takes
+//! and what takes the marker away is the label layer, on the same terms it takes
 //! one away from a node that is merely sounding. A memory is still type and
-//! nothing else; what changed is that type now stands where the dot was
+//! nothing else; what changed is that type now stands where the marker was
 //! instead of over it.
 //!
 //! Two consequences worth stating, because they are what keep it subtle:

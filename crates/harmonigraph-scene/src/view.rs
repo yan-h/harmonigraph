@@ -3,9 +3,9 @@
 //! parameters.
 
 use crate::spectral::SpectralReading;
-use crate::style::{DotShape, Gradient, NoteNames, Pulse, SevensLabel};
+use crate::style::{Gradient, NoteNames, Pulse, SevensLabel};
 use crate::{
-    Camera, DOT_SIZE_MAX, GAP_MAX, GLOW_BALLISTICS_MAX, GLOW_GAP_SOFT_MAX,
+    Camera, PLUS_SIZE_MAX, GAP_MAX, GLOW_BALLISTICS_MAX, GLOW_GAP_SOFT_MAX,
     GLOW_REACH_MAX, GLOW_STRENGTH_MAX, MARK_THICKNESS_MAX, MAX_DRAWN_NODES,
     NODE_RADIUS_FACTOR, RING_INNER_MAX, RING_WIDTH_MAX,
 };
@@ -218,8 +218,8 @@ pub struct ViewConfig {
     // How the sheets other than the home one draw. `sevens_size` and
     // `sevens_label` go inert while `extent_sevens` is 0, which is where a
     // fresh view starts; `sevens_gutter` does NOT — it is named for this
-    // layer but cuts the dot under a sounding node at any extent (see its
-    // own doc below, and `a_flat_lattice_still_clears_its_dot`).
+    // layer but cuts the marker under a sounding node at any extent (see its
+    // own doc below, and `a_flat_lattice_still_clears_its_marker`).
     //
     // The problem all three settings answer: the 5-limit sheet wants its
     // pitch classes as large as they will go, and at the default spacing a
@@ -285,7 +285,7 @@ pub struct ViewConfig {
     ///
     /// Named for the sevens layer it was built for, but not confined to it:
     /// the home sheet clears too, and at any sevenths extent — with the
-    /// lattice flat there is no sheet behind to hide, but the resting dots
+    /// lattice flat there is no sheet behind to hide, but the resting markers
     /// are still cut, which is a look worth having on its own.
     pub sevens_gutter: f32,
     /// How wide the clearing's fade is, same units — and deliberately NOT
@@ -436,8 +436,8 @@ pub struct ViewConfig {
     /// The whole lattice AT REST, as an `L*` 0..100 — one neutral grey under
     /// the three surfaces that draw where nothing is sounding:
     ///
-    /// - the **dots** standing at the home sheet's node positions, every one
-    ///   of them ([`derive_dots`](crate::derive::derive_dots));
+    /// - the **markers** standing at the home sheet's node positions, every one
+    ///   of them ([`derive_pluses`](crate::derive::derive_pluses));
     /// - the **audio ring** wherever it reads silence, which its ramp is
     ///   re-anchored to open on ([`ring_gradient`](crate::ring_gradient));
     /// - the **MIDI ring**'s octave slices that are not sounding, which ARE
@@ -445,12 +445,12 @@ pub struct ViewConfig {
     ///
     /// One number under all three, like [`octave_gap`](Self::octave_gap) above
     /// it, and for the same reason: they are one picture read together — two annuli
-    /// a gap apart, standing over the dot that marks the position — so a
+    /// a gap apart, standing over the cross that marks the position — so a
     /// ground that differed between them says the three are different KINDS of
     /// thing when the only thing they have in common is being empty. Each
     /// deriving its own ground instead — the audio ring off the analyzer's
     /// gradient (whose dark end carries that gradient's own hue), the MIDI ring
-    /// off the note's colour whitened and laid on at a fixed opacity, the dots
+    /// off the note's colour whitened and laid on at a fixed opacity, the markers
     /// off the CHROME's hairline at another — lands three near-greys a hair
     /// apart in tint, and no bar can dial three routes onto one value.
     ///
@@ -462,7 +462,7 @@ pub struct ViewConfig {
     /// brightness, the same units [`Gradient::lightness`](crate::Gradient) is
     /// authored in, so a ground and a gradient can be compared by their
     /// numbers. There is no off position and it needs none — each layer has its
-    /// own ([`dot_size`](Self::dot_size) for the dots, a width for
+    /// own ([`plus_arm`](Self::plus_arm) for the markers, a width for
     /// each ring). What the bottom of the bar reaches is black, which against
     /// this skin's panel reads as holes punched through the lattice; a little
     /// above it, at the panel's own `L*` (8.8 on the fresh skin), the whole
@@ -718,9 +718,9 @@ pub struct ViewConfig {
     /// `#[serde(default)]` makes `impl Default` the one fallback, and
     /// `a_view_missing_any_one_key_reloads_at_the_fresh_value` holds it.
     pub fade_shape: f32,
-    // An unlit node has no mark of its own: the dot standing at a node
+    // An unlit node has no mark of its own: the marker standing at a node
     // position is the whole of what says the position is there, and it stands
-    // on the home sheet alone (see `derive_dots`) — off it, a position at
+    // on the home sheet alone (see `derive_pluses`) — off it, a position at
     // rest is unmarked, which is the same reason it is not hoverable. So a
     // resting lattice is its own drawing rather than a field of
     // placeholders, and every disc on screen is a note.
@@ -930,53 +930,62 @@ pub struct ViewConfig {
     /// mostly-dark at once.
     pub shimmer_softness: f32,
 
-    // ---- Home dots -------------------------------------------------------
-    // The marker standing at each home-sheet node position (see `derive_dots`),
-    // and the whole of what an unplayed lattice draws. Its SHAPE and its SIZE
-    // are what is set here — the edge is a ring's edge either way, carrying the
-    // shader's one screen-constant soft band rather than a softness of its
-    // own — and its colour is
+    // ---- Home markers ----------------------------------------------------
+    // The cross standing at each home-sheet node position (see
+    // `derive_pluses`), and the whole of what an unplayed lattice draws. Its
+    // three lengths are what is set here — how far an arm reaches, how thick
+    // it is, and how much of its end fades out — while the EDGE is not one of
+    // them: it is a ring's edge, carrying the shader's one screen-constant
+    // soft band rather than a softness of its own.
+    //
+    // Its colour is not here either. That is
     // [`lattice_ground`](Self::lattice_ground), up with the note's own layers,
-    // because that one grey is the whole at-rest picture — these dots and both
-    // of a node's rings where nothing is lit — and a bar that moved only the
-    // dots would take the lattice apart.
-    /// A resting dot's outer radius, in the quad UV a node's ring radii are
-    /// dialled in ([`RING_INNER_MAX`] and the widths around it) — so the dot
-    /// and the middle a node's rings stand around are two readings on ONE
-    /// axis, and a dot that fits inside `ring_inner` can be read off the two
-    /// numbers rather than by eye. 0 takes the dots away and with them the
-    /// lattice's resting picture.
+    // because that one grey is the whole at-rest picture — these markers and
+    // both of a node's rings where nothing is lit — and a bar that moved only
+    // the markers would take the lattice apart.
+    /// How far one arm reaches, crossing to tip, in the quad UV a node's ring
+    /// radii are dialled in ([`RING_INNER_MAX`] and the widths around it) — so
+    /// a marker and the middle a node's rings stand around are two readings on
+    /// ONE axis, and a marker that fits inside `ring_inner` can be read off the
+    /// two numbers rather than by eye. 0 takes the markers away and with them
+    /// the lattice's resting picture.
     ///
-    /// A world length by the time it reaches the renderer: `derive_dots` spends
-    /// the uv against the scene's node radius, so nothing downstream carries a
+    /// The one length that reaches the renderer as a WORLD distance:
+    /// `derive_pluses` spends the uv against the scene's node radius, and the
+    /// other two travel as shares of this, so nothing downstream carries a
     /// second copy of the convention.
-    pub dot_size: f32,
-    /// Which shape stands at each position — a disc or a cross ([`DotShape`]).
+    pub plus_arm: f32,
+    /// How thick an arm is, ACROSS it and all the way across — the whole bar,
+    /// not half of one — in the same quad UV [`plus_arm`](Self::plus_arm) is
+    /// in.
     ///
-    /// A row rather than a bar, and it changes nothing but the character: both
-    /// shapes are sized by [`dot_size`](Self::dot_size), coloured by
-    /// [`lattice_ground`](Self::lattice_ground), cut with the same soft band,
-    /// and drawn at exactly the same positions.
-    pub dot_shape: DotShape,
-    /// How far the tapered END of a plus's arm runs, in the same quad UV
-    /// [`dot_size`](Self::dot_size) is in: each arm is solid out to
-    /// `dot_size - plus_taper` and fades to nothing by its tip. 0 is a square
+    /// A length of its own rather than a share of the arm, which is what lets
+    /// a long arm be a hairline and a short one a block: tied to the arm, the
+    /// shape would have one proportion and the arm bar would be the only
+    /// control the marker has. Past twice the arm the cross has filled its own
+    /// square, and every width above that draws that same square.
+    ///
+    /// 0 is not off. An arm with no thickness is still cut with the same
+    /// screen-constant band as one with, so the bottom of the bar is the
+    /// thinnest cross this screen can draw rather than no cross —
+    /// [`plus_arm`](Self::plus_arm) at 0 is what takes the field away.
+    pub plus_width: f32,
+    /// How far the tapered END of an arm runs, in the same quad UV
+    /// [`plus_arm`](Self::plus_arm) is in: each arm is solid out to
+    /// `plus_arm - plus_taper` and fades to nothing by its tip. 0 is a square
     /// end; a taper equal to the arm fades the whole of it, from full at the
     /// crossing to nothing at the tip.
     ///
     /// A WIDTH beside the reach rather than a share of it, and paired with
-    /// `dot_size` on one two-handle bar, for the reason every soft edge here
+    /// `plus_arm` on one two-handle bar, for the reason every soft edge here
     /// is a pair: a taper tied to the arm as a fraction would make a longer
     /// arm always a softer one, and there would be no way to ask for a long
     /// crisp arm or a short misty one.
     ///
     /// The four ends taper and the arms' SIDES do not. What is being softened
     /// is where the marker STOPS; a cross faded along its sides as well is a
-    /// blurred plus rather than one reaching out of its crossing.
-    ///
-    /// Read only under [`DotShape::Plus`]. A disc has no end to taper, and
-    /// what it would mean there is a soft rim, which is the feather this
-    /// deliberately does not bring back.
+    /// blurred plus rather than one reaching out of its crossing, and a soft
+    /// rim is the feather this deliberately does not bring back.
     pub plus_taper: f32,
     /// Meantone mode: lock the major-third tuning to four perfect fifths
     /// (temper out the syntonic comma, 81/80). While on, the third-tuning
@@ -1142,7 +1151,7 @@ pub struct ViewConfig {
     /// It is an ABSENCE of light and not a shape painted in the ground: the
     /// glow is assembled in a target of its own, and every node subtracts its
     /// own rings from all of it before any of it reaches the picture. So
-    /// whatever lies under the gap — the pane, a dot, a sheet behind — comes
+    /// whatever lies under the gap — the pane, a marker, a sheet behind — comes
     /// through exactly as it does with the glow off, where a moat knocked out
     /// in the ground would blot all of it out and read as a dark halo round
     /// every node. It reaches the NEIGHBOURS' light too, and not only the
@@ -2134,14 +2143,20 @@ impl ViewConfig {
         self.shimmer_intensity = finite_or(self.shimmer_intensity, fresh.shimmer_intensity);
         self.shimmer_softness = finite_or(self.shimmer_softness, fresh.shimmer_softness);
 
-        // The resting marker's pair, held the way every reach-and-fade pair
-        // here is: the fade clamped to its own reach. `derive_dots` clamps the
-        // reach again for the PICTURE, which is a separate job — this is what
-        // keeps the two-handle bar reading out the numbers the blob holds,
-        // since `edge_bar` puts `reach - taper` on the axis and a taper wider
-        // than its arm would show a low end the value does not say.
-        self.dot_size = finite_or(self.dot_size, fresh.dot_size).clamp(0.0, DOT_SIZE_MAX);
-        self.plus_taper = finite_or(self.plus_taper, fresh.plus_taper).clamp(0.0, self.dot_size);
+        // The resting marker's three lengths. The arm and its taper are a
+        // reach-and-fade PAIR, held the way every such pair here is — the fade
+        // clamped to its own reach — because `edge_bar` puts `reach - taper` on
+        // the axis and a taper wider than its arm would show a low end the
+        // value does not say. `derive_pluses` clamps the reach again for the
+        // PICTURE, which is a separate job.
+        //
+        // The width is clamped to the axis and NOT to the arm: past twice the
+        // arm it draws a filled square, which is a picture rather than an
+        // error, and holding it to the arm here would drag a dialled width down
+        // whenever the arm bar was pulled in.
+        self.plus_arm = finite_or(self.plus_arm, fresh.plus_arm).clamp(0.0, PLUS_SIZE_MAX);
+        self.plus_width = finite_or(self.plus_width, fresh.plus_width).clamp(0.0, PLUS_SIZE_MAX);
+        self.plus_taper = finite_or(self.plus_taper, fresh.plus_taper).clamp(0.0, self.plus_arm);
     }
 }
 
@@ -2371,14 +2386,17 @@ impl Default for ViewConfig {
             shimmer_width: 0.639_271_56,
             shimmer_intensity: 0.517_033_16,
             shimmer_softness: 1.0,
-            // A small dot: a fifth of the way out the quad, which is well
-            // inside the middle a node's rings stand around (see ring_inner,
-            // at 0.55), so a note arriving covers its own dot rather than
-            // growing out of it.
-            dot_size: 0.2,
-            // A disc: the resting field is a ground for the music to arrive
-            // on, and a cross is the more insistent of the two shapes.
-            dot_shape: DotShape::Dot,
+            // A small marker: arms a fifth of the way out the quad, which is
+            // well inside the middle a node's rings stand around (see
+            // ring_inner, at 0.55), so a note arriving covers its own marker
+            // rather than growing out of it.
+            plus_arm: 0.2,
+            // Just over half the arm's length across, so the fresh cross reads
+            // as two strokes rather than as a blob with dents — at this
+            // proportion it carries about 60% of the ink a disc of the same
+            // reach would (8t - 4t^2 against pi), which is light enough to be
+            // a ground for the music to arrive on.
+            plus_width: 0.11,
             // A little under half the arm, so a fresh plus reads as reaching
             // out of its crossing rather than as a drawn glyph: the ends
             // arrive at nothing rather than stopping at something.

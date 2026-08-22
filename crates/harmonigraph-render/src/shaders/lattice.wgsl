@@ -49,8 +49,9 @@ struct Uniforms {
     // idle marker's radius and style, from when an unlit node drew a
     // placeholder of its own.
     misc4: vec4<f32>,
-    // x: how much of a resting dot's radius is its feather, as a fraction.
-    // y: unused.
+    // x: half a resting marker's arm thickness, as a share of one arm's
+    // length; 1 is a filled square. y: where its arms start to taper, as a
+    // share of one arm; 1 is a square end.
     // z: the node's ANGULAR padding, in quad UV units — the gap between two
     // neighbouring sectors, wherever sectors are drawn. The RADIAL padding is
     // a second setting and never arrives: every stand-off it buys is already
@@ -2212,72 +2213,54 @@ fn node_paint(in: VsOut) -> vec4<f32> {
     return vec4<f32>(with_ground, final_alpha);
 }
 
-// ---- Resting dots ----------------------------------------------------------
-// One marker per home-sheet lattice position: a feathered dot, drawn under the
-// nodes, and the whole of what an unplayed lattice draws. Lines between the
-// positions are NOT drawn — the field's regularity is what the eye reads the
-// rows and columns off, and the ink they would cost goes to the notes.
+// ---- Resting markers -------------------------------------------------------
+// One cross per home-sheet lattice position, drawn under the nodes, and the
+// whole of what an unplayed lattice draws. Lines between the positions are NOT
+// drawn — the field's regularity is what the eye reads the rows and columns
+// off, and the ink they would cost goes to the notes. A cross is that argument
+// at its sharpest: it draws exactly what a pair of gridlines draws where they
+// meet, and nothing of what they draw between one meeting and the next.
 
-struct DotInstance {
-    // xyz: the position's world center, w: the dot's outer radius in world
-    // units — where the feather has run out and it paints nothing.
+struct PlusInstance {
+    // xyz: the position's world center, w: the length of one arm in world
+    // units, crossing to tip.
     @location(0) pos_radius: vec4<f32>,
-    // rgb: the lattice's ground, a: this dot's opacity.
+    // rgb: the lattice's ground, a: this marker's opacity.
     @location(1) color: vec4<f32>,
 };
 
-struct DotVsOut {
+struct PlusVsOut {
     @builtin(position) clip_pos: vec4<f32>,
-    // Distance from the dot's centre as a fraction of its own radius, per axis:
-    // 1 is the edge and the quad reaches DOT_QUAD_MARGIN past it. Expressed in
-    // the dot's OWN radius rather than in the quad, so one threshold cuts every
-    // dot at its edge whatever size it is drawn at.
+    // Distance from the crossing as a fraction of one ARM, per axis: 1 is a
+    // tip and the quad reaches PLUS_QUAD_MARGIN past it. Expressed in the
+    // marker's own arm rather than in the quad, so the two proportions the
+    // uniform carries — the thickness and where the taper starts — are read
+    // against it directly and cut every marker the same way whatever size it
+    // is drawn at.
     @location(0) uv: vec2<f32>,
     @location(1) color: vec4<f32>,
 };
 
-// How far a dot's billboard reaches past the dot, in the dot's own radii.
+// How far a marker's billboard reaches past the tips of its arms, in arms.
 //
 // A margin for the same reason a node's QUAD_MARGIN is one: the edge's soft
-// band is CENTRED on the radius, as every ring's is, so its outer half stands
-// outside the shape and needs quad to stand in. Without it a small dot — where
-// the band is a large share of the radius — gets that half cut flat by the
-// quad, and the dot reads square-shouldered at exactly the size it is hardest
-// to see. Measured off the rendered picture at the bottom of the size bar: a
-// dot of radius 5.6px carried ink out to 8px, so the shape wants 1.4 radii of
-// quad and a margin under that cuts the faint end of the band flat.
+// band is CENTRED on the shape's boundary, as every ring's is, so its outer
+// half stands outside the shape and needs quad to stand in. Without it a small
+// marker — where the band is a large share of the arm — gets that half cut
+// flat by the quad, and the marker reads square-shouldered at exactly the size
+// it is hardest to see. Measured off the rendered picture at the bottom of the
+// arm bar: a shape of radius 5.6px carried ink out to 8px, so it wants 1.4
+// radii of quad and a margin under that cuts the faint end of the band flat.
 //
-// It is a share of the DOT rather than a length, so the headroom shrinks with
-// the dot while the band, being screen-constant, does not — which is why
-// `dot_paint` also caps the band at what this holds rather than trusting the
+// It is a share of the ARM rather than a length, so the headroom shrinks with
+// the marker while the band, being screen-constant, does not — which is why
+// `plus_paint` also caps the band at what this holds rather than trusting the
 // margin alone.
-const DOT_QUAD_MARGIN: f32 = 1.6;
+const PLUS_QUAD_MARGIN: f32 = 1.6;
 
-// Half the thickness of a plus's arms, in the same radii its reach is 1 of.
-//
-// Derived rather than dialled, so the shape row stays a row and the size bar
-// stays the only number a resting marker has. It is a SHARE of the reach, like
-// everything else about a dot, so a plus keeps its proportions across the size
-// bar instead of turning into a square at the top of it and a crosshair at the
-// bottom.
-//
-// A plus this thick carries about 60% of the ink a disc of the same reach does
-// (8t - 4t^2 against pi), which is the margin that keeps the two shapes
-// comparable at one size: heavier and it reads as a blob with dents, lighter
-// and the arms disappear at the sizes the bar actually sits at.
-const PLUS_ARM: f32 = 0.28;
-
-// How much of the marker this fragment is inside, `uv` measured in the
-// marker's own radii and `aa` the soft band both shapes share.
-//
-// One function for the two so the band is provably the same on each: what
-// differs between a disc and a cross is a distance field, and the edge that
-// field is cut at is written once.
-fn dot_coverage(uv: vec2<f32>, aa: f32) -> f32 {
-    if u.misc5.x < 0.5 {
-        // The disc, cut at its radius.
-        return aa_inside(1.0, length(uv), aa);
-    }
+// How much of the marker this fragment is inside, `uv` measured in the arm's
+// own length and `aa` the soft band the whole shape is cut with.
+fn plus_coverage(uv: vec2<f32>, aa: f32) -> f32 {
     // The cross, as the union of two bars — but folded into one. Reflecting
     // into the octant where x >= y maps the upright bar onto the flat one, so
     // a single box's distance field answers for both and there is no union to
@@ -2285,7 +2268,12 @@ fn dot_coverage(uv: vec2<f32>, aa: f32) -> f32 {
     // double up on the diagonals).
     let p = abs(uv);
     let q = vec2<f32>(max(p.x, p.y), min(p.x, p.y));
-    let corner = vec2<f32>(q.x - 1.0, q.y - PLUS_ARM);
+    // `misc5.x` is HALF the arm's thickness, as a share of its length: the bar
+    // sets a whole thickness across the arm and `derive_plus_half_width` halves
+    // it, because what the fold measures is the distance out from the arm's
+    // own centre line. At 1 the box covers the octant and the cross is a filled
+    // square, which is the top of that bar and not an accident of the field.
+    let corner = vec2<f32>(q.x - 1.0, q.y - u.misc5.x);
     // The exact signed distance to that box: outside, the distance to its
     // nearest point; inside, how far in. Exact rather than approximate is what
     // makes the arms' inner corners as clean as their ends — an approximation
@@ -2319,7 +2307,7 @@ fn dot_coverage(uv: vec2<f32>, aa: f32) -> f32 {
 }
 
 @vertex
-fn vs_dot(@builtin(vertex_index) vertex_index: u32, inst: DotInstance) -> DotVsOut {
+fn vs_plus(@builtin(vertex_index) vertex_index: u32, inst: PlusInstance) -> PlusVsOut {
     var corners = array<vec2<f32>, 4>(
         vec2<f32>(-1.0, -1.0),
         vec2<f32>(1.0, -1.0),
@@ -2327,16 +2315,16 @@ fn vs_dot(@builtin(vertex_index) vertex_index: u32, inst: DotInstance) -> DotVsO
         vec2<f32>(1.0, 1.0),
     );
     let corner = corners[vertex_index];
-    // Camera-facing, like every other billboard here: a dot is a mark ON the
-    // lattice rather than an object standing in it, so it keeps its shape
+    // Camera-facing, like every other billboard here: a marker is a mark ON
+    // the lattice rather than an object standing in it, so it keeps its shape
     // under an orbit instead of foreshortening into an ellipse.
-    let reach = inst.pos_radius.w * DOT_QUAD_MARGIN;
+    let reach = inst.pos_radius.w * PLUS_QUAD_MARGIN;
     let world = inst.pos_radius.xyz
         + (u.cam_right.xyz * corner.x + u.cam_up.xyz * corner.y) * reach;
 
-    var out: DotVsOut;
+    var out: PlusVsOut;
     out.clip_pos = u.view_proj * vec4<f32>(world, 1.0);
-    out.uv = corner * DOT_QUAD_MARGIN;
+    out.uv = corner * PLUS_QUAD_MARGIN;
     out.color = inst.color;
     return out;
 }
@@ -3073,14 +3061,14 @@ fn fs_glow_cover(in: VsOut) -> @location(0) vec4<f32> {
     return vec4<f32>(0.0, 0.0, 0.0, node_paint(in).w);
 }
 
-/// What a resting dot paints; see [`node_paint`] for why the entry points are
-/// two.
-fn dot_paint(in: DotVsOut) -> vec4<f32> {
-    // A marker's edge is a RING's edge: `aa_inside` at the radius, carrying the
-    // one screen-constant soft band the octave band and the audio ring are cut
-    // with. That is the whole shape — a dot has no softness of its own to dial,
-    // so the resting field and the layers that stand on it come to an end the
-    // same way, at every zoom.
+/// What a resting marker paints; see [`node_paint`] for why the entry points
+/// are two.
+fn plus_paint(in: PlusVsOut) -> vec4<f32> {
+    // A marker's edge is a RING's edge: `aa_inside` at its boundary, carrying
+    // the one screen-constant soft band the octave band and the audio ring are
+    // cut with. A marker has no softness of its own to dial, so the resting
+    // field and the layers that stand on it come to an end the same way, at
+    // every zoom.
     //
     // The band's width is taken off `fwidth` of a quad AXIS, which is the
     // rings' choice too and is load-bearing rather than incidental: the
@@ -3089,29 +3077,29 @@ fn dot_paint(in: DotVsOut) -> vec4<f32> {
     // about a fifth of its radius. An axis has one derivative everywhere on the
     // quad, so the band closes evenly all the way round.
     //
-    // Capped at the margin, which binds only where a dot is a few pixels
-    // across and the band would otherwise want more quad than there is. A dot
+    // Capped at the margin, which binds only where a marker is a few pixels
+    // across and the band would otherwise want more quad than there is. One
     // that small trades softness it cannot show for a shape it can: the band
-    // narrows, and the dot stays a full circle at every size instead of
-    // squaring off at the bottom of the bar.
-    let aa = min(aa_width(fwidth(in.uv.x)), DOT_QUAD_MARGIN - 1.0);
-    let alpha = in.color.a * dot_coverage(in.uv, aa);
+    // narrows, and the arms keep their ends instead of squaring off against
+    // the quad at the bottom of the bar.
+    let aa = min(aa_width(fwidth(in.uv.x)), PLUS_QUAD_MARGIN - 1.0);
+    let alpha = in.color.a * plus_coverage(in.uv, aa);
     if alpha < 0.01 {
         discard;
     }
-    // Premultiplied, as every draw in this pass is: the dot IS the lattice's
-    // ground rather than a brightness of it, so its colour is laid down flat
-    // and only its coverage varies across the edge.
+    // Premultiplied, as every draw in this pass is: the marker IS the
+    // lattice's ground rather than a brightness of it, so its colour is laid
+    // down flat and only its coverage varies across the edge.
     return vec4<f32>(in.color.rgb * alpha, alpha);
 }
 
 @fragment
-fn fs_dot(in: DotVsOut) -> @location(0) vec4<f32> {
-    return dot_paint(in);
+fn fs_plus(in: PlusVsOut) -> @location(0) vec4<f32> {
+    return plus_paint(in);
 }
 
 @fragment
-fn fs_dot_scene(in: DotVsOut) -> SceneOut {
-    let paint = dot_paint(in);
+fn fs_plus_scene(in: PlusVsOut) -> SceneOut {
+    let paint = plus_paint(in);
     return SceneOut(paint, paint);
 }

@@ -370,7 +370,7 @@ mod tests {
         }
     }
 
-    /// The resting dot field's picture, written to `target/scratch/` — a sweep
+    /// The resting marker field's picture, written to `target/scratch/` — a sweep
     /// of the Size and the Feather together, which is the pair that decides
     /// whether the lattice at rest is a field of marks or a field of objects.
     ///
@@ -381,19 +381,19 @@ mod tests {
     /// Those conditions: NOTHING sounding, because the subject is what an
     /// unplayed lattice draws and a chord over it is exactly the thing that
     /// hides it; the camera pulled back so several rows are on screen, a field
-    /// being a claim about regularity rather than about one dot; and the
+    /// being a claim about regularity rather than about one marker; and the
     /// skin's panel as the ground rather than the preset's near-black, because
-    /// the dots are the ground's own grey a step above it and the whole
+    /// the markers are the ground's own grey a step above it and the whole
     /// judgement is how far above.
     ///
     /// One shot holds a held chord, and it is the one that answers the
     /// question the size bar is really for: a node arriving has to COVER its
-    /// own dot rather than grow out of one, which is a comparison between the
-    /// dot's radius and where the node's rings start.
+    /// own marker rather than grow out of one, which is a comparison between the
+    /// marker's radius and where the node's rings start.
     ///
-    /// The last two shots are the NAMES, which take a dot off the position
+    /// The last two shots are the NAMES, which take a marker off the position
     /// they stand on (`NodeInstance::is_named`): one under Past with a memory
-    /// behind it, where names and dots share the field, and one under All,
+    /// behind it, where names and markers share the field, and one under All,
     /// where the names take the whole of it. That pair is the reading the rule
     /// is for, and neither can be judged from a shot with no type in it.
     ///
@@ -402,7 +402,7 @@ mod tests {
     /// ```
     #[test]
     #[ignore = "a probe: writes PNGs and asserts nothing"]
-    fn the_resting_dots_draw_a_picture() {
+    fn the_resting_markers_draw_a_picture() {
         use harmonigraph_ui::{draw_pane, Layout, SharedState};
 
         const SIZE: [u32; 2] = [1200, 1000];
@@ -431,36 +431,39 @@ mod tests {
 
         let fresh = harmonigraph_scene::ViewConfig::default();
         use harmonigraph_scene::NoteNames;
-        // Shape, size, whether a chord is held over it, and which names show.
-        // The smallest sizes earn their shots: a marker's edge is the rings'
-        // band, which is a fixed number of PIXELS, so it is at the bottom of
-        // the size bar that the band is most of the marker and the shape has
-        // the least room to be the shape it claims.
-        use harmonigraph_scene::DotShape;
-        let shots: Vec<(DotShape, f32, f32, bool, NoteNames)> = vec![
-            (DotShape::Dot, fresh.dot_size, 0.0, false, NoteNames::Played),
-            (DotShape::Dot, 0.05, 0.0, false, NoteNames::Played),
-            (DotShape::Dot, 0.5, 0.0, false, NoteNames::Played),
-            (DotShape::Dot, fresh.dot_size, 0.0, true, NoteNames::Past),
-            (DotShape::Dot, fresh.dot_size, 0.0, false, NoteNames::All),
-            // The taper, across its whole span at one size: a square end, the
-            // fresh pair, half the arm, and an arm that fades the whole way.
-            (DotShape::Plus, fresh.dot_size, 0.0, false, NoteNames::Played),
-            (DotShape::Plus, fresh.dot_size, fresh.plus_taper, false, NoteNames::Played),
-            (DotShape::Plus, fresh.dot_size, 0.5 * fresh.dot_size, false, NoteNames::Played),
-            (DotShape::Plus, fresh.dot_size, fresh.dot_size, false, NoteNames::Played),
-            // And the ends of the size bar, at the fresh taper, where a
-            // tapering arm has the fewest pixels to do it in.
-            (DotShape::Plus, 0.05, fresh.plus_taper, false, NoteNames::Played),
-            (DotShape::Plus, 0.5, fresh.plus_taper, false, NoteNames::Played),
-            (DotShape::Plus, fresh.dot_size, fresh.plus_taper, true, NoteNames::Past),
+        // Arm length, arm width, taper, whether a chord is held over it, and
+        // which names show. The smallest arms earn their shots: a marker's
+        // edge is the rings' band, which is a fixed number of PIXELS, so it is
+        // at the bottom of the arm bar that the band is most of the marker and
+        // the shape has the least room to be the shape it claims.
+        let shots: Vec<(f32, f32, f32, bool, NoteNames)> = vec![
+            // The fresh marker, then the ends of the arm bar, then the two
+            // pictures the naming rule makes of the field.
+            (fresh.plus_arm, fresh.plus_width, fresh.plus_taper, false, NoteNames::Played),
+            (0.05, fresh.plus_width, fresh.plus_taper, false, NoteNames::Played),
+            (0.5, fresh.plus_width, fresh.plus_taper, false, NoteNames::Played),
+            (fresh.plus_arm, fresh.plus_width, fresh.plus_taper, true, NoteNames::Past),
+            (fresh.plus_arm, fresh.plus_width, fresh.plus_taper, false, NoteNames::All),
+            // The width, across its whole span at one arm: a hairline, the
+            // fresh proportion, a heavy cross, and the square at the top.
+            (fresh.plus_arm, 0.0, fresh.plus_taper, false, NoteNames::Played),
+            (fresh.plus_arm, 0.25, fresh.plus_taper, false, NoteNames::Played),
+            (fresh.plus_arm, 0.5, fresh.plus_taper, false, NoteNames::Played),
+            // A long arm at a fresh width, which is the proportion the width
+            // bar exists to make askable.
+            (0.5, fresh.plus_width, fresh.plus_taper, false, NoteNames::Played),
+            // The taper, across its whole span: a square end, half the arm,
+            // and an arm that fades the whole way from the crossing.
+            (fresh.plus_arm, fresh.plus_width, 0.0, false, NoteNames::Played),
+            (fresh.plus_arm, fresh.plus_width, 0.5 * fresh.plus_arm, false, NoteNames::Played),
+            (fresh.plus_arm, fresh.plus_width, fresh.plus_arm, false, NoteNames::Played),
         ];
-        for (shape, size, taper, chord, names) in shots {
+        for (size, width, taper, chord, names) in shots {
             let mut state = SharedState::new(FORMAT);
             state.view.show_labels = true;
             state.view.note_names = names;
             // The DAW's own lattice ground rather than the preset's near-black:
-            // the dots are a step above the panel and nothing else here says
+            // the markers are a step above the panel and nothing else here says
             // how big a step that reads as.
             state.set_background((24, 25, 29));
             state.frame_params.fade_time = 0.0;
@@ -470,8 +473,8 @@ mod tests {
                 }
             }
             state.camera.zoom_by(2.5);
-            state.view.dot_size = size;
-            state.view.dot_shape = shape;
+            state.view.plus_arm = size;
+            state.view.plus_width = width;
             state.view.plus_taper = taper;
             let output = context.run_ui(
                 egui::RawInput {
@@ -489,8 +492,9 @@ mod tests {
             let primitives = context.tessellate(output.shapes, PPP);
             let bytes = renderer.render(&primitives, &output.textures_delta, PPP, background);
             let path = dir.join(format!(
-                "dots-{shape:?}-size{:.0}-taper{:.0}{}-{names:?}.png",
+                "plus-arm{:.0}-width{:.0}-taper{:.0}{}-{names:?}.png",
                 size * 100.0,
+                width * 100.0,
                 taper * 100.0,
                 if chord { "-chord" } else { "" },
             ));

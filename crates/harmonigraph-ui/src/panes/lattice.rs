@@ -403,7 +403,7 @@ pub(crate) fn draw_node_labels(
     let names = view.note_names;
     for (index, node) in scene.nodes.iter().enumerate() {
         // Whether this node is named at all — asked of the node rather than
-        // spelled out here, because the resting DOT under it turns on the same
+        // spelled out here, because the resting MARKER under it turns on the same
         // answer and the two have to be one rule (see
         // `NodeInstance::is_named`). What is left to this pass is where the
         // name lands and what it says.

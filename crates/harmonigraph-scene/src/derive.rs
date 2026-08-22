@@ -8,8 +8,8 @@ use crate::octaves::octave_layout;
 use crate::trail::TrailField;
 use crate::view::{DrawnWindow, FrameParams, ViewConfig};
 use crate::{
-    lattice_to_world, DotInstance, GlowStep, NodeInstance, Pulse, Scene, SpectralPaint,
-    DOT_SIZE_MAX, MARK_DELAY_MAX, NODE_RADIUS_FACTOR, OCTAVE_SLOTS,
+    lattice_to_world, PlusInstance, GlowStep, NodeInstance, Pulse, Scene, SpectralPaint,
+    PLUS_SIZE_MAX, MARK_DELAY_MAX, NODE_RADIUS_FACTOR, OCTAVE_SLOTS,
 };
 use glam::Vec4;
 use harmonigraph_core::{HeldEnd, LatticePos, NoteTracker, Time, Tuning, VoiceState};
@@ -179,7 +179,7 @@ pub fn derive_scene(
     // recompute each node's pitch class to do it.
     let mut node_pcs = Vec::with_capacity(window.count());
     let center = view.center();
-    // The lattice AT REST, resolved once for the frame: what the resting dots
+    // The lattice AT REST, resolved once for the frame: what the resting markers
     // draw in, what both of a node's rings stand on where nothing is lit, and
     // the neutral an unplayed node falls back to. One resolve rather than
     // three, so the three cannot answer differently.
@@ -187,7 +187,7 @@ pub fn derive_scene(
     // Read by nothing that draws while a node stays unplayed -- an idle node
     // paints no pixel -- so this is a fallback rather than a look. The ground
     // rather than an arbitrary grey so that a node arriving or leaving crosses
-    // no seam against the dot standing under it.
+    // no seam against the marker standing under it.
     let node_idle = ground;
     let live_extremes = held_extremes(tracker, view.mark_melody, view.mark_bass);
     let mark_delay = view.mark_delay.clamp(0.0, MARK_DELAY_MAX) as f64;
@@ -459,11 +459,11 @@ pub fn derive_scene(
         // very little — and neither sheet then read as being in front of the
         // other.
         //
-        // The home sheet's clearing cuts its own resting DOT as well as the
+        // The home sheet's clearing cuts its own resting MARKER as well as the
         // sheets behind it — a sounding node sits in a clean gap in the
         // lattice rather than on top of it. That is reason enough on its
         // own, so it does NOT wait for depth: on a flat lattice there are
-        // no sheets to hide, but the dot field is still there to be cut, and
+        // no sheets to hide, but the marker field is still there to be cut, and
         // a gap in it is the look either way. (It was gated on the
         // sevenths extent when the clearing was purely an inter-sheet
         // device; a flat lattice then had to turn the gutter on by growing
@@ -536,7 +536,7 @@ pub fn derive_scene(
     }
 
     let nodes_len = nodes.len() as u32;
-    let dots = derive_dots(view, &nodes, ground);
+    let pluses = derive_pluses(view, &nodes, ground);
 
     // Every radius on a node, off the one stack the size bars describe
     // (`ViewConfig::rings`, which is also where their clamps live): each ring
@@ -562,8 +562,8 @@ pub fn derive_scene(
         // channel arrives empty and the Lattice pane's fold is what fills it.
         spectral: SpectralPaint::silent(),
         octave_layout,
-        dots,
-        dot_shape: view.dot_shape,
+        pluses,
+        plus_half_width: derive_plus_half_width(view),
         plus_taper_start: derive_plus_taper_start(view),
         mark_thickness: rings.mark_thickness,
         // A mark sheet reaches the extension AND the octave slice it extends,
@@ -630,35 +630,60 @@ fn wrapped_cents(from: harmonigraph_core::PitchClass, to: harmonigraph_core::Pit
 }
 
 /// The lattice's resting picture: idle positions draw no disc, so a small
-/// marker stands at each one and carries the structure instead — a dot or a
-/// cross, per [`ViewConfig::dot_shape`]. Only the home (center) sheet gets
-/// them.
+/// cross stands at each one and carries the structure instead. Only the home
+/// (center) sheet gets them.
 ///
-/// A dot rather than a line between dots, and the difference is what the
-/// picture claims. Lines drew the INTERVALS — one segment per unit step along
-/// a prime axis — so the lattice arrived as a mesh and a note landed on a
-/// junction in it. Dots draw the POSITIONS and nothing else: what runs between
-/// two of them is left to the eye, which reads the rows and columns off a
-/// regular field anyway, and the ink that used to run between every pair goes
-/// back to the notes.
+/// A marker at each position rather than a line between them, and the
+/// difference is what the picture claims. Lines drew the INTERVALS — one
+/// segment per unit step along a prime axis — so the lattice arrived as a mesh
+/// and a note landed on a junction in it. These draw the POSITIONS and nothing
+/// else: what runs between two of them is left to the eye, which reads the rows
+/// and columns off a regular field anyway, and the ink that used to run between
+/// every pair goes back to the notes.
 ///
-/// [`DotShape::Plus`](crate::DotShape::Plus) is that argument at its sharpest:
-/// a cross is exactly what a pair of gridlines draws where they meet, so it
-/// keeps every junction a mesh would have and still spends no ink getting from
-/// one junction to the next.
+/// A CROSS is that argument at its sharpest: it is exactly what a pair of
+/// gridlines draws where they meet, so it keeps every junction a mesh would
+/// have and still spends no ink getting from one junction to the next.
 ///
 /// Off-sheet positions stay unmarked, as they were under the lines. That is
 /// the whole of what makes one sheet the ground: a 7-limit note sounding off
-/// it floats over the dot field rather than standing in it, and the size it
+/// it floats over the marker field rather than standing in it, and the size it
 /// draws at ([`NodeInstance::scale`]) is what says how far off it has gone.
 ///
-/// A NAMED position is unmarked too ([`NodeInstance::is_named`]). Both markers
-/// say "a position is here" and the name says which one, so a dot behind it is
-/// the weaker of two claims on the same spot and the picture is cleaner
-/// without it. Under [`NoteNames::All`](crate::NoteNames::All) that is every
-/// node on screen and the field disappears whole — which is the mode working
-/// as it reads: names ARE the lattice there, and the dots were only ever
-/// standing in for them.
+/// A NAMED position is unmarked too ([`NodeInstance::is_named`]). Both a marker
+/// and a name say "a position is here", and the name says which one, so the
+/// marker behind it is the weaker of two claims on the same spot and the
+/// picture is cleaner without it. Under [`NoteNames::All`](crate::NoteNames::All)
+/// that is every node on screen and the field disappears whole — which is the
+/// mode working as it reads: names ARE the lattice there, and the markers were
+/// only ever standing in for them.
+/// Half an arm's thickness, as a share of the arm's length (see
+/// [`Scene::plus_half_width`]).
+///
+/// The view keeps the width as a LENGTH beside the arm, because that is what
+/// makes the two bars independent — a long hairline and a short block are both
+/// askable. The shader wants the PROPORTION, its uv being the arm's own units.
+/// This is the one place that conversion happens, and the one place the square
+/// at the top of the width bar is decided.
+pub(crate) fn derive_plus_half_width(view: &ViewConfig) -> f32 {
+    let arm = view.plus_arm.clamp(0.0, PLUS_SIZE_MAX);
+    // An arm of 0 draws no markers at all, so this is only ever asked of one
+    // with length — answer a proportion the shader can use rather than divide
+    // by nothing, and leave the emptiness to `derive_pluses`.
+    if arm <= 0.0 {
+        return 0.0;
+    }
+    // Half, because the bar is the WHOLE thickness across an arm and the
+    // shader measures out from the arm's centre line.
+    let half = view.plus_width.clamp(0.0, PLUS_SIZE_MAX) * 0.5;
+    // At 1 the cross has filled its own square: every fragment inside the quad
+    // is inside one arm or the other, and a wider one has nowhere left to
+    // spread. Clamped rather than left to the shader so the square is a stated
+    // end of the bar rather than whatever a distance field happens to do past
+    // it.
+    (half / arm).clamp(0.0, 1.0)
+}
+
 /// Closest a taper's start may come to the arm's tip.
 ///
 /// The shader reads this as the low end of a `smoothstep`, and a span of zero
@@ -677,10 +702,10 @@ const TAPER_START_MAX: f32 = 0.999;
 /// shader wants the POINT on an axis whose 1 is the tip. This is the one place
 /// that conversion happens.
 pub(crate) fn derive_plus_taper_start(view: &ViewConfig) -> f32 {
-    let reach = view.dot_size.clamp(0.0, DOT_SIZE_MAX);
+    let reach = view.plus_arm.clamp(0.0, PLUS_SIZE_MAX);
     // A reach of 0 draws no markers at all, so this is only ever asked of an
     // arm that has length — answer the square end rather than dividing by
-    // nothing, and leave the emptiness to `derive_dots`.
+    // nothing, and leave the emptiness to `derive_pluses`.
     if reach <= 0.0 {
         return TAPER_START_MAX;
     }
@@ -688,18 +713,18 @@ pub(crate) fn derive_plus_taper_start(view: &ViewConfig) -> f32 {
     ((reach - taper) / reach).clamp(0.0, TAPER_START_MAX)
 }
 
-pub(crate) fn derive_dots(
+pub(crate) fn derive_pluses(
     view: &ViewConfig,
     nodes: &[NodeInstance],
     ground: Vec4,
-) -> Vec<DotInstance> {
+) -> Vec<PlusInstance> {
     // uv 1 is 1.8 node radii out (`node_vertex` in lattice.wgsl), so the bar's
     // quad-uv reading — the units every ring radius on a node is dialled in —
     // resolves to a world length here, once, rather than the shader carrying a
     // second copy of the convention for one more layer.
-    let radius = view.spacing * NODE_RADIUS_FACTOR * 1.8 * view.dot_size.clamp(0.0, DOT_SIZE_MAX);
-    // 0 takes the dots away, and with them everything a resting lattice draws
-    // but the node rings. Skipping the instances is the same picture the
+    let radius = view.spacing * NODE_RADIUS_FACTOR * 1.8 * view.plus_arm.clamp(0.0, PLUS_SIZE_MAX);
+    // 0 takes the markers away, and with them everything a resting lattice
+    // draws but the node rings. Skipping the instances is the same picture the
     // shader would discard to, one draw earlier.
     if radius <= 0.0 {
         return Vec::new();
@@ -707,18 +732,18 @@ pub(crate) fn derive_dots(
     // The lattice at rest, handed in already resolved — the same colour, to
     // the byte, that a node's rings stand on where nothing is lit. OPAQUE, and
     // that is what makes the claim true rather than nearly true: `strength` is
-    // the dot's own opacity and the shader premultiplies by it, so a dot
+    // the marker's own opacity and the shader premultiplies by it, so a marker
     // carrying an alpha of its own would land on a blend of the ground and
     // whatever happened to be behind it, which is a different grey per
     // background and none of them this one.
     //
     // How FAINT the structure is, which an alpha of its own is the other way
     // to say, is the Ground bar's to say instead — and it says it for the
-    // rings in the same breath, which a per-dot alpha cannot. Dialled to the
+    // rings in the same breath, which a per-marker alpha cannot. Dialled to the
     // panel's own `L*` the whole at-rest picture disappears together.
     nodes
         .iter()
         .filter(|n| n.on_home && !n.is_named(view))
-        .map(|n| DotInstance { pos: n.world_pos, radius, color: ground, strength: ground.w })
+        .map(|n| PlusInstance { pos: n.world_pos, radius, color: ground, strength: ground.w })
         .collect()
 }

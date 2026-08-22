@@ -556,23 +556,23 @@ fn only_the_all_mode_names_a_node_nothing_has_happened_on() {
     assert!(all.len() > 1, "only one node was named: {all:?}");
 }
 
-/// A named position draws no resting dot, measured END TO END: the names come
-/// out of the label pass that really draws them and the dots out of the scene
+/// A named position draws no resting marker, measured END TO END: the names come
+/// out of the label pass that really draws them and the markers out of the scene
 /// the same frame was derived from.
 ///
 /// Both read `NodeInstance::is_named`, so this cannot fail while they share it
 /// — which is the point. What it guards is the day one of them stops: the two
 /// live in different crates, one drawing type and one deriving geometry, and a
-/// second spelling of the rule in either is a lattice that puts a dot behind a
+/// second spelling of the rule in either is a lattice that puts a marker behind a
 /// name and looks merely smudged rather than wrong.
 ///
 /// Swept over all three Show modes and over the Note names switch, because
 /// each pair is a different balance of the two sets — All names everything and
-/// leaves no dots, Played names nothing at rest and leaves them all, and the
+/// leaves no markers, Played names nothing at rest and leaves them all, and the
 /// switch off is the case where the mode says one thing and the picture
 /// another.
 #[test]
-fn no_position_wears_both_a_name_and_a_dot() {
+fn no_position_wears_both_a_name_and_a_marker() {
     for show in [true, false] {
         for names in [
             harmonigraph_scene::NoteNames::All,
@@ -619,17 +619,17 @@ fn no_position_wears_both_a_name_and_a_dot() {
                 .collect();
             for pos in &named {
                 assert!(
-                    !scene.dots.iter().any(|dot| dot.pos == *pos),
-                    "{names:?} (names on: {show}) drew a name and a dot at {pos:?}",
+                    !scene.pluses.iter().any(|marker| marker.pos == *pos),
+                    "{names:?} (names on: {show}) drew a name and a marker at {pos:?}",
                 );
             }
             // And the sweep has to actually reach both sets, or it is passing
             // on an empty picture.
             match (show, names) {
                 (true, harmonigraph_scene::NoteNames::All) => {
-                    assert!(!named.is_empty() && scene.dots.is_empty(), "All: {names:?}");
+                    assert!(!named.is_empty() && scene.pluses.is_empty(), "All: {names:?}");
                 }
-                _ => assert!(!scene.dots.is_empty(), "no dots to contradict: {names:?}"),
+                _ => assert!(!scene.pluses.is_empty(), "no pluses to contradict: {names:?}"),
             }
         }
     }

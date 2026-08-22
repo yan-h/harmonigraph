@@ -598,7 +598,7 @@ impl TextBatch {
     /// Which nodes this batch drew a name over, in the order it drew them
     /// (tests only). One entry per label that put at least one glyph down, so
     /// this is exactly the set of nodes that ARE named — which is what the
-    /// resting dots have to be the complement of.
+    /// resting markers have to be the complement of.
     #[cfg(test)]
     pub(crate) fn labels(&self) -> &[harmonigraph_render::Label] {
         &self.labels
