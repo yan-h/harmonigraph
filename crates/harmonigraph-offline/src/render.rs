@@ -250,8 +250,34 @@ mod tests {
         }
     }
 
+    /// The same take with the node glow dialled on, through the one channel a
+    /// take has for a look: the blob the header carries.
+    ///
+    /// Its own fixture rather than a setting on the one above, because the
+    /// light is the only thing in the draw path that is CARRIED between frames
+    /// — a node's row of the ink strip holds the colour it had last frame — and
+    /// what the tests above measure is the frame count and the picture, neither
+    /// of which wants a halo over it.
+    fn lit_take() -> Take {
+        let mut state = SharedState::new(TextureFormat::Rgba8Unorm);
+        state.view.glow_reach = 0.8;
+        state.view.glow_strength = 1.5;
+        // Long against the tenth of a second a frame is here, so several frames
+        // of every note's light are a mix of the frames before it rather than a
+        // settle.
+        state.view.glow_attack = 0.3;
+        state.view.glow_release = 2.5;
+        let mut take = take();
+        take.header.ui_state = Some(state.save_persist());
+        take
+    }
+
     fn render_frames(settings: &Settings) -> Option<Vec<Vec<u8>>> {
-        let mut replay = Replay::new(take());
+        render_take(take(), settings)
+    }
+
+    fn render_take(take: Take, settings: &Settings) -> Option<Vec<Vec<u8>>> {
+        let mut replay = Replay::new(take);
         let mut frames = Vec::new();
         match render(&mut replay, None, settings, |bytes| {
             frames.push(bytes.to_vec());
@@ -295,6 +321,32 @@ mod tests {
         for (i, (a, b)) in first.iter().zip(&second).enumerate() {
             assert!(a == b, "frame {i} differs between two runs of the same take");
         }
+    }
+
+    /// The same take renders to the same bytes with a CARRIED light in it.
+    ///
+    /// The determinism above is a claim about a draw path with no state in it,
+    /// and the node glow is the one thing that has some: a node's light is
+    /// filtered on the CPU against the frame clock, and its colour is mixed
+    /// into a texture the last frame left behind. Both are deterministic — the
+    /// clock comes off the frame index and the strip is built afresh with the
+    /// renderer — but neither is deterministic by CONSTRUCTION the way a pure
+    /// function of `now` is, so it is measured rather than reasoned about.
+    #[test]
+    fn rendering_a_take_with_a_carried_light_twice_is_byte_identical() {
+        let settings = settings();
+        let Some(first) = render_take(lit_take(), &settings) else { return };
+        let second = render_take(lit_take(), &settings).expect("second run also has a GPU");
+        assert_eq!(first.len(), second.len());
+        for (i, (a, b)) in first.iter().zip(&second).enumerate() {
+            assert!(a == b, "frame {i} differs between two runs of the same lit take");
+        }
+        // Non-vacuous: the light has to be in the picture, or this is the test
+        // above with more steps. Against the same take drawn without it, which
+        // differs in nothing else.
+        let dark = render_frames(&settings).expect("a third run also has a GPU");
+        let mid = first.len() / 2;
+        assert!(first[mid] != dark[mid], "the glow changed no pixel of frame {mid}");
     }
 
     /// Frames must actually change over time — a determinism test alone

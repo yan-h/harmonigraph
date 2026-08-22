@@ -359,19 +359,22 @@ struct Uniforms {
     /// nothing, and a moat held open for it would be a gap in the light around
     /// every node with no light to be a gap in.
     misc10: [f32; 4],
-    /// The node glow's two SHARES of something else. x: how far the moat's edge
-    /// is feathered, as a fraction of the gap in `misc10.z`
-    /// (`Scene::glow_gap_soft`); y: how widely a node's own ink is averaged
-    /// into the colour of its light (`Scene::glow_spread`).
+    /// The node glow's second row. x: how far the moat's edge is feathered, in
+    /// the same units as the gap in `misc10.z` (`Scene::glow_gap_soft`) — a
+    /// width of its own and deliberately free to exceed that gap;
+    /// y: how widely a node's own ink is averaged into the colour of its light
+    /// (`Scene::glow_spread`); w: how much of the light the moat takes away
+    /// where it stands (`Scene::glow_gap_depth`).
     ///
-    /// z: how many rows this frame's ink strip has, which is the instance count
-    /// — the one thing `vs_ink_strip` cannot work out for itself, since it is
-    /// writing that texture rather than reading one. Not a share of anything;
-    /// here because it belongs to the glow and this row had the space. w unused.
+    /// z: how many rows this frame's ink strip has (`Scene::glow_rows`) — the
+    /// one thing `vs_ink_strip` cannot work out for itself, since it is writing
+    /// that texture rather than reading one, and a CAPACITY rather than the
+    /// instance count, rows being handed out per node and held for as long as
+    /// that node's light lasts.
     ///
     /// A second row rather than a repack: `misc10` holds the glow's distances
-    /// and this holds its fractions, and the two are read by different parts of
-    /// the shader. Zeroed whole with it, on the same rule.
+    /// and this holds the rest, and the two are read by different parts of the
+    /// shader. Zeroed whole with it, on the same rule.
     misc11: [f32; 4],
     /// The FREQUENCY colour scheme's ramp — the analyzer's own gradient
     /// (`SpectrumConfig::spectrogram_gradient`) through `pitch_ramp_lut`, the
@@ -479,6 +482,17 @@ struct GpuInstance {
     /// is a level because a ring arrives and leaves on the Fade like every
     /// other layer of a node (see `harmonigraph_scene::RingFade`).
     ring: f32,
+    /// The node's own light: x how bright it is, y which ROW of the ink strip
+    /// keeps its colour, z how much of this frame's reading the two of them
+    /// take (`harmonigraph_scene::GlowStep`, filled in by the shell's
+    /// `panes::glow_fade`).
+    ///
+    /// All three are the glow's and nothing else reads them. The level is a
+    /// CARRIED one and not the largest envelope on the node, which is the whole
+    /// point of it: it can be above zero on a node whose every layer has gone
+    /// silent, and such a node is shipped for exactly that reason (see the cull
+    /// in `from_scene`) so its light can go on leaving.
+    glow: [f32; 3],
 }
 
 impl GpuInstance {
@@ -499,7 +513,8 @@ impl GpuInstance {
         attributes: &wgpu::vertex_attr_array![
             0 => Float32x3, 1 => Float32x4, 2 => Float32x3, 3 => Uint32x3,
             4 => Float32, 6 => Uint32x2,
-            7 => Float32x4, 8 => Float32x4, 10 => Float32x2, 11 => Float32
+            7 => Float32x4, 8 => Float32x4, 10 => Float32x2, 11 => Float32,
+            12 => Float32x3
         ],
     };
 }
@@ -812,6 +827,7 @@ impl LatticeCallback {
                 bass_color: n.bass_color.to_array(),
                 sevens: [n.scale, gutter],
                 ring: n.audio_ring,
+                glow: [n.glow.level, n.glow.row as f32, n.glow.mix],
         };
 
         let split = order
@@ -846,9 +862,19 @@ impl LatticeCallback {
         // out is shipped for exactly as long as it is drawn. The shader's idle
         // branch pays the rest per fragment, keeping an otherwise idle node to
         // the ring's own annulus and the hole that ring clears around it.
+        //
+        // A node's own LIGHT is the one thing here that is not a layer, and it
+        // is why the cull is not simply "does this node draw ink": the light is
+        // carried on a clock of its own (`panes::glow_fade`), so it outlives
+        // every layer that lit it, and a node dropped the frame its last layer
+        // went silent would take its whole halo off in one. It ships until the
+        // light is over — exactly 0, again rather than nearly, so a shipped
+        // instance is always one with something to draw.
         let ringing = scene.spectral.ring_draws();
+        let lights = scene.glow_reach > 0.0 && scene.glow_strength > 0.0;
         let paints = |g: &GpuInstance| {
             (ringing && g.ring > 0.0)
+                || (lights && g.glow[0] > 0.0)
                 || g.params[0] > 0.0
                 || g.params[1] > 0.0
                 || g.params[2] > 0.0
@@ -882,9 +908,6 @@ impl LatticeCallback {
         let grid_at = instances.len() as u32;
         drawn(&mut instances, &mut seam_of, &order[split..], true);
         let (glyphs, seams) = place_labels(labels.glyphs, &labels.labels, &seam_of);
-        // The ink strip's height, taken before the instances move into the
-        // callback below: one row per instance, in the order they are drawn in.
-        let strip_rows = instances.len() as f32;
 
         // The grid draws under the nodes.
         let edges = scene
@@ -955,7 +978,7 @@ impl LatticeCallback {
                 // draw — see `Uniforms::misc10`. The gap rides in it because
                 // it belongs to the glow: it is the moat that light stands
                 // behind, and with no light there is nothing to stand off.
-                misc10: if scene.glow_reach > 0.0 && scene.glow_strength > 0.0 {
+                misc10: if lights {
                     [
                         scene.glow_reach,
                         scene.glow_strength,
@@ -965,8 +988,13 @@ impl LatticeCallback {
                 } else {
                     [0.0; 4]
                 },
-                misc11: if scene.glow_reach > 0.0 && scene.glow_strength > 0.0 {
-                    [scene.glow_gap_soft, scene.glow_spread, strip_rows, 0.0]
+                misc11: if lights {
+                    [
+                        scene.glow_gap_soft,
+                        scene.glow_spread,
+                        scene.glow_rows.max(1) as f32,
+                        scene.glow_gap_depth,
+                    ]
                 } else {
                     [0.0; 4]
                 },
@@ -1409,15 +1437,32 @@ struct GlowTarget {
 /// that size. That is what the light costs in memory to stop costing a whole
 /// reading of the node per lit fragment.
 struct InkStrip {
-    raw_view: wgpu::TextureView,
+    /// The raw reading, in a PAIR that ping-pongs: the frame writes one and
+    /// reads the other, which is what lets a row hold an average of this
+    /// frame's ink and the ink that same row already had (`fs_ink_strip`).
+    ///
+    /// A node's light is carried on a clock of its own, and the COLOUR half of
+    /// that is here — the ink is read in WGSL by the same functions that draw
+    /// each layer, so there is nowhere else it could be carried without
+    /// spelling every layer's colour a second time in Rust. Which is also why
+    /// the row a node writes has to be the row it wrote last frame: this is a
+    /// texture read back by identity, and the identity is the row
+    /// (`harmonigraph_scene::GlowStep::row`).
+    raw_views: [wgpu::TextureView; 2],
+    /// Each of the two, as a texture to read: `[parity]` is what the blur takes
+    /// and `[parity ^ 1]` is last frame's, which the reading pass mixes into.
+    raw_bind_groups: [wgpu::BindGroup; 2],
     blurred_view: wgpu::TextureView,
-    /// The raw strip, as the blur pass reads it...
-    raw_bind_group: wgpu::BindGroup,
-    /// ...and the blurred one, as the light's own draw does.
+    /// The blurred strip, as the light's own draw reads it. Not a pair: the
+    /// blur is a pure function of the raw strip that has just been written, so
+    /// there is nothing in it to carry.
     blurred_bind_group: wgpu::BindGroup,
-    /// How many rows the pair was built for — the instance count of the frame
-    /// that built it, which is what [`Offscreen::ensure_glow`] compares.
+    /// How many rows the set was built for — the row map's capacity on the
+    /// frame that built it, which is what [`Offscreen::ensure_glow`] compares.
     rows: u32,
+    /// Which of [`raw_views`](Self::raw_views) this frame writes. Flipped once
+    /// per frame, in `prepare`.
+    parity: usize,
 }
 
 /// How many angles a node's ink is read at, and so how wide its strip is.
@@ -1688,12 +1733,12 @@ impl Offscreen {
     /// every resize (harmless, but this is the caller's every-frame path) or
     /// keeping it allocated while the feature is off.
     ///
-    /// `rows` is this frame's instance count, and the strip follows it exactly
-    /// rather than growing to a capacity: a row IS an instance index, so a
-    /// texture taller than the frame would hold rows nothing writes, and the
-    /// pair is a few hundred KB at the sizes a lattice reaches. The light
-    /// target beside it is untouched by any of that — it is the pane's own
-    /// pixels — which is why only the strip is rebuilt here.
+    /// `rows` is the row map's own capacity (`Scene::glow_rows`), which grows
+    /// and never shrinks within a session — rebuilding the strip is what takes
+    /// every node's colour history with it, and the whole set is a few hundred
+    /// KB at the sizes a lattice reaches. The light target beside it is
+    /// untouched by any of that — it is the pane's own pixels — which is why
+    /// only the strip is rebuilt here.
     fn ensure_glow(
         &mut self,
         device: &wgpu::Device,
@@ -1763,10 +1808,15 @@ impl GlowTarget {
 }
 
 impl InkStrip {
-    /// The pair, for a frame of `rows` instances. `rows` is floored at one: a
-    /// frame can be all grid and no node, and a texture of zero height is not a
-    /// texture — where a spare row nothing draws into is simply never sampled,
-    /// the light's own draw being over those same instances.
+    /// The set, for a strip `rows` tall. `rows` is floored at one: a texture of
+    /// zero height is not a texture, and a spare row nothing draws into is
+    /// simply never sampled — the light's own draw is over the instances, each
+    /// of which reads the row it just wrote.
+    ///
+    /// A strip built here holds NOTHING, which is why the frame that builds one
+    /// seeds rather than mixing: the clock that hands out rows asks for a
+    /// height and knows when its answer changed (`panes::glow_fade` in
+    /// harmonigraph-ui), and says so by handing every node a mix of 1.
     fn new(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, rows: u32) -> Self {
         let tex = |label: &str, width: u32| {
             device
@@ -1790,7 +1840,10 @@ impl InkStrip {
         // One column wider than the reading it blurs: the extra one holds the
         // row's MEAN, which is the same convolution at no concentration and so
         // falls out of the same loop (`fs_ink_blur`).
-        let raw_view = tex("lattice_ink_strip_raw", INK_STRIP_N);
+        let raw_views = [
+            tex("lattice_ink_strip_raw_a", INK_STRIP_N),
+            tex("lattice_ink_strip_raw_b", INK_STRIP_N),
+        ];
         let blurred_view = tex("lattice_ink_strip", INK_STRIP_N + 1);
         let bind = |label: &str, view: &wgpu::TextureView| {
             device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1803,12 +1856,32 @@ impl InkStrip {
             })
         };
         InkStrip {
-            raw_bind_group: bind("lattice_ink_strip_raw_bind_group", &raw_view),
+            raw_bind_groups: [
+                bind("lattice_ink_strip_raw_a_bind_group", &raw_views[0]),
+                bind("lattice_ink_strip_raw_b_bind_group", &raw_views[1]),
+            ],
             blurred_bind_group: bind("lattice_ink_strip_bind_group", &blurred_view),
-            raw_view,
+            raw_views,
             blurred_view,
             rows,
+            parity: 0,
         }
+    }
+
+    /// The raw strip this frame writes...
+    fn writing(&self) -> &wgpu::TextureView {
+        &self.raw_views[self.parity]
+    }
+
+    /// ...the one it wrote LAST frame, which is what a row's ink is carried
+    /// from...
+    fn carried(&self) -> &wgpu::BindGroup {
+        &self.raw_bind_groups[self.parity ^ 1]
+    }
+
+    /// ...and the one it has just written, which the blur reads.
+    fn written(&self) -> &wgpu::BindGroup {
+        &self.raw_bind_groups[self.parity]
     }
 }
 
@@ -2034,13 +2107,24 @@ fn create_glow_pipelines(
 /// whatever the zoom, and the light's own draw reads two texels.
 ///
 /// **Why two.** A blur cannot read the target it is writing. The first pass
-/// lays the raw reading down over the instance buffer, one row per node; the
-/// second convolves each row with the Spread bar's lobe. Both are pure
-/// functions of this frame's instances and uniforms, so the draw path stays
-/// stateless and a frame still renders the same picture twice running — which
-/// the offline renderer's determinism test is what holds.
+/// lays the reading down over the instance buffer, one row per node; the second
+/// convolves each row with the Spread bar's lobe.
 ///
-/// **No blending on either.** Each writes its whole target, and a strip texel
+/// **Both are over the INSTANCES**, each drawing the one row its node was
+/// handed rather than a quad over the whole strip. A strip is as tall as the
+/// row map's capacity and a frame lights whatever share of it it lights, so a
+/// full-target quad would blur rows nothing wrote — and, worse for the reading
+/// pass, would have no instance to take a row and a mix off.
+///
+/// **The reading is not stateless**, and it is the one thing in the draw path
+/// that is not: a row is an average of this frame's ink and what that row
+/// already held, so the pass reads last frame's strip
+/// (`InkStrip::carried`). Deterministic all the same, and that is what the
+/// offline renderer needs: the mix arrives per instance from the frame's own
+/// clock, and a render started afresh builds the strips afresh and seeds them
+/// on the first frame.
+///
+/// **No blending on either.** Each writes the row it draws, and a strip texel
 /// is a colour and a weight rather than something to composite.
 fn create_ink_strip_pipelines(
     device: &wgpu::Device,
@@ -2085,15 +2169,11 @@ fn create_ink_strip_pipelines(
             cache: None,
         })
     };
-    // The reading takes the node instances and nothing else; the blur takes the
-    // reading, so it names the strip's layout as well.
-    let read_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+    // One layout for the two: each takes the node instances and one strip — the
+    // reading takes the strip it is carrying from, the blur the strip that
+    // reading has just left.
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("lattice_ink_strip_pipeline_layout"),
-        bind_group_layouts: &[Some(bind_group_layout)],
-        ..Default::default()
-    });
-    let blur_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("lattice_ink_blur_pipeline_layout"),
         bind_group_layouts: &[Some(bind_group_layout), Some(strip_layout)],
         ..Default::default()
     });
@@ -2101,10 +2181,15 @@ fn create_ink_strip_pipelines(
         build(
             "fs_ink_strip",
             ("vs_ink_strip", "fs_ink_strip"),
-            &read_layout,
+            &layout,
             &[GpuInstance::LAYOUT],
         ),
-        build("fs_ink_blur", ("vs_ink_blur", "fs_ink_blur"), &blur_layout, &[]),
+        build(
+            "fs_ink_blur",
+            ("vs_ink_blur", "fs_ink_blur"),
+            &layout,
+            &[GpuInstance::LAYOUT],
+        ),
     )
 }
 
@@ -2776,7 +2861,10 @@ impl CallbackTrait for LatticeCallback {
             offscreen_size,
             screen_size,
             glow,
-            self.instances.len() as u32,
+            // The strip's height is the row map's CAPACITY, which the light's
+            // own clock hands out and which has nothing to do with how many
+            // nodes this frame draws (`Scene::glow_rows`).
+            self.uniforms.misc11[2] as u32,
         );
 
         if self.instances.len() > pane.instance_capacity {
@@ -2861,6 +2949,16 @@ impl CallbackTrait for LatticeCallback {
         // The scene pass: draw into the pane's offscreen target, on the
         // encoder egui-wgpu executes before its own render pass. paint()
         // then just composites the finished texture.
+        // Mutable, for the one thing a pane carries from one frame to the next:
+        // which of the ink strip's two raw textures this frame writes (see
+        // [`InkStrip`]).
+        let pane = resources
+            .panes
+            .get_mut(&self.pane_id)
+            .expect("created by pane_buffers above");
+        if let Some(glow) = pane.offscreen.as_mut().and_then(|o| o.glow.as_mut()) {
+            glow.strip.parity ^= 1;
+        }
         let pane = resources
             .panes
             .get(&self.pane_id)
@@ -2904,18 +3002,18 @@ impl CallbackTrait for LatticeCallback {
                     let mut pass = egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("lattice_ink_strip_pass"),
                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: &glow.strip.raw_view,
+                            view: glow.strip.writing(),
                             depth_slice: None,
                             resolve_target: None,
                             ops: wgpu::Operations {
-                                // Cleared although every texel is written — one
-                                // row per instance, one fragment per column.
-                                // A few thousand texels is nothing to clear,
-                                // and it is what makes the pass a function of
-                                // this frame alone rather than of this frame
-                                // and whatever the last one left in the
-                                // texture, which is the property the offline
-                                // renderer's determinism test rests on.
+                                // Cleared, though what the pass leaves behind
+                                // is not this frame's ink alone: every row a
+                                // node holds is written whole, and the rows in
+                                // between are ones no node has been handed. It
+                                // is what a row that has just been handed BACK
+                                // needs — the next node to take it seeds off
+                                // its own reading rather than off a stranger's
+                                // ink two frames old.
                                 load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                                 store: wgpu::StoreOp::Store,
                             },
@@ -2926,6 +3024,9 @@ impl CallbackTrait for LatticeCallback {
                         multiview_mask: None,
                     });
                     pass.set_bind_group(0, &pane.bind_group, &[]);
+                    // The strip this same pass wrote last frame: what a node's
+                    // light is carried FROM (see [`InkStrip`]).
+                    pass.set_bind_group(1, glow.strip.carried(), &[]);
                     pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
                     pass.set_pipeline(&resources.ink_strip_pipeline);
                     pass.draw(0..4, 0..pane.instance_count);
@@ -2948,9 +3049,10 @@ impl CallbackTrait for LatticeCallback {
                         multiview_mask: None,
                     });
                     pass.set_bind_group(0, &pane.bind_group, &[]);
-                    pass.set_bind_group(1, &glow.strip.raw_bind_group, &[]);
+                    pass.set_bind_group(1, glow.strip.written(), &[]);
+                    pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
                     pass.set_pipeline(&resources.ink_blur_pipeline);
-                    pass.draw(0..4, 0..1);
+                    pass.draw(0..4, 0..pane.instance_count);
                 }
 
                 let mut pass = egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

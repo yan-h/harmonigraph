@@ -130,19 +130,20 @@ struct Uniforms {
     // w: how bright the light is at the node's MIDDLE, as a share of the peak
     // it reaches out at the innermost ring's inner edge; 1 is no dip at all.
     misc10: vec4<f32>,
-    // The node glow's second row: the two of its knobs that are SHARES of
-    // something else rather than lengths of their own, which is why they are
-    // not in with the three above.
+    // The node glow's second row: what is left of its knobs once the three
+    // lengths above have theirs.
     //
-    // x: how far the moat's edge is feathered, as a fraction of the Gap it
-    // stands off. y: how widely a node's own ink is averaged into the colour of
-    // its light, 0 keeping each layer's sectors distinct and 1 laying one tint
-    // over the whole halo.
+    // x: how far the moat's edge is feathered, in the same uv the Gap is —
+    // a width of its own, free to run several times that gap, which is what
+    // makes the erase a dip rather than a band. y: how widely a node's own ink
+    // is averaged into the colour of its light, 0 keeping each layer's sectors
+    // distinct and 1 laying one tint over the whole halo. w: how much of the
+    // light the moat takes where it stands, 1 being a hole.
     //
-    // z: how many rows the ink strip has this frame — the instance count, which
-    // is what `vs_ink_strip` puts a node's own row at. Not a share of anything,
-    // and here rather than with the lengths above because it belongs to the
-    // glow and this row had the space. w unused.
+    // z: how many rows the ink strip has — the row map's CAPACITY and not this
+    // frame's instance count, rows being handed out per node and held for as
+    // long as that node's light lasts. What `vs_ink_strip` and `vs_ink_blur`
+    // place a node's row inside.
     //
     // ZEROED WHOLE with misc10, on the same rule and for the same reason: there
     // is one off switch for the glow and it is `u.misc10.x > 0.0`.
@@ -215,13 +216,16 @@ const INK_STRIP_N: u32 = 64u;
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
 
-// A node's ink read round the node: one ROW per instance, angle across it.
+// A node's ink read round the node: one ROW per lit node, angle across it.
 //
-// Bound TWICE, at the two stages it is written in — the blur pass reads the raw
-// strip `fs_ink_strip` laid down, and the light's own draw reads the blurred
-// one `fs_ink_blur` left behind it. One declaration and two bind groups, the
-// shape being the same both times; which of the two a draw is looking at is the
-// bind group it was recorded with.
+// Bound at THREE stages, and one declaration for all of them, the shape being
+// the same every time; which strip a draw is looking at is the bind group it
+// was recorded with:
+//
+//  - `fs_ink_strip` reads the raw strip IT wrote last frame, which is what a
+//    node's colour is carried from (the pair ping-pongs — see `InkStrip`).
+//  - `fs_ink_blur` reads the raw strip that pass has just written.
+//  - the light's own draw reads the blurred one.
 @group(1) @binding(0) var ink_strip: texture_2d<f32>;
 
 // The moat: how far a node holds its light off every ring it draws, in the
@@ -380,6 +384,18 @@ struct Instance {
     // this shader reads), so the ring's annulus is the layer's own off switch
     // and this is which NODES the layer is on at, and how far.
     @location(11) ring: f32,
+    // The node's own light: x how bright it is, y which ROW of the ink strip
+    // keeps its colour, z how much of this frame's reading the two of them
+    // take. All three are settled on the CPU, where a node has an identity that
+    // outlives a frame (`panes::glow_fade` in harmonigraph-ui).
+    //
+    // The level is CARRIED and not the largest envelope on the node, which is
+    // the whole point of it: a light runs on a clock of its own, so it is above
+    // zero on a node whose every layer has gone silent, and such a node is
+    // shipped for exactly that reason. The mix is 1 where the row is new — a
+    // strip just built, or a row just handed over — and there is nothing to
+    // carry from.
+    @location(12) glow: vec3<f32>,
 };
 
 struct VsOut {
@@ -389,10 +405,12 @@ struct VsOut {
     @location(2) params: vec3<f32>,
     @location(3) @interpolate(flat) octaves: vec3<u32>,
     @location(4) @interpolate(flat) cents: f32,
-    // Which ROW of the ink strip is this node's — its index in the instance
-    // buffer, which is what the strip is laid out by (`fs_ink_strip` draws one
-    // row per instance, in order). Carried rather than recomputed because the
-    // fragment stage has no instance index of its own.
+    // Which ROW of the ink strip is this node's — the row the light's own clock
+    // handed it, which it keeps for as long as its light lasts. NOT the index
+    // in the instance buffer, which is sorted by depth and culled and so moves
+    // under a node between frames; the row is where last frame's colour is read
+    // back from, so a row that moved would be a node taking on a stranger's
+    // ink.
     @location(5) @interpolate(flat) strip_row: f32,
     @location(6) @interpolate(flat) marks: vec2<u32>,
     @location(7) @interpolate(flat) melody_color: vec4<f32>,
@@ -418,15 +436,15 @@ struct VsOut {
     // How much of the audio ring this node wears (see Instance::ring), which
     // multiplies the ring's coverage and nothing else on the node.
     @location(14) @interpolate(flat) ring: f32,
+    // The node's light: x how bright it is, y how much of this frame's ink its
+    // row takes (see Instance::glow). Read by the glow's three stages and by
+    // nothing else on the node.
+    @location(15) @interpolate(flat) glow: vec2<f32>,
 };
 
 @vertex
-fn vs_main(
-    @builtin(vertex_index) vertex_index: u32,
-    @builtin(instance_index) instance_index: u32,
-    inst: Instance,
-) -> VsOut {
-    return node_vertex(vertex_index, instance_index, inst, 0.0);
+fn vs_main(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
+    return node_vertex(vertex_index, inst, 0.0);
 }
 
 /// The GLOW's billboard, shared by both of its draws: the same node, on a quad
@@ -441,24 +459,22 @@ fn vs_main(
 /// the glow paints in. The uv is scaled with the quad, so uv 1.0 is the same
 /// world distance either way and nothing inside the node moves.
 @vertex
-fn vs_glow(
-    @builtin(vertex_index) vertex_index: u32,
-    @builtin(instance_index) instance_index: u32,
-    inst: Instance,
-) -> VsOut {
-    // Twice the Gap, because the moat's feather is CENTRED on where the gap
-    // ends (`moat_coverage`) and so stands up to one more gap past it. A bound
-    // rather than the exact width, which depends on the fade the fragment stage
-    // reads: a loose billboard costs one ring of discarded fragments, a tight
-    // one clips the moat square at the quad's corners.
+fn vs_glow(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
+    // Twice the Gap and the whole feather, because the feather is CENTRED on
+    // where the gap ends (`moat_coverage`) and is a width of its own with no
+    // ceiling in the gap — so at the top of its bar the moat's outer edge
+    // stands a good way past the gap it belongs to. A bound rather than the
+    // exact width, which depends on the fade the fragment stage reads: a loose
+    // billboard costs one ring of discarded fragments, a tight one clips the
+    // moat square at the quad's corners.
     return node_vertex(
-        vertex_index, instance_index, inst, max(max(u.misc10.x, 0.0), 2.0 * glow_gap()),
+        vertex_index, inst, max(max(u.misc10.x, 0.0), 2.0 * glow_gap() + glow_gap_soft()),
     );
 }
 
 /// One node's billboard, with `extra` uv of headroom past what the node itself
 /// needs — 0 for the node draw, the glow's reach for the glow draw.
-fn node_vertex(vertex_index: u32, instance_index: u32, inst: Instance, extra: f32) -> VsOut {
+fn node_vertex(vertex_index: u32, inst: Instance, extra: f32) -> VsOut {
     var corners = array<vec2<f32>, 4>(
         vec2<f32>(-1.0, -1.0),
         vec2<f32>(1.0, -1.0),
@@ -503,7 +519,8 @@ fn node_vertex(vertex_index: u32, instance_index: u32, inst: Instance, extra: f3
     out.params = inst.params;
     out.octaves = inst.octaves;
     out.cents = inst.cents;
-    out.strip_row = f32(instance_index);
+    out.strip_row = inst.glow.y;
+    out.glow = vec2<f32>(inst.glow.x, inst.glow.z);
     out.marks = inst.marks;
     out.melody_color = inst.melody_color;
     out.bass_color = inst.bass_color;
@@ -2443,16 +2460,23 @@ fn fs_main_scene(in: VsOut) -> SceneOut {
 // The target is then composited over the finished lattice; where that lands, and
 // why it is not under the nodes, is in `LatticeCallback::prepare`.
 
-/// How lit this node is, for the purpose of the light it gives off: the largest
-/// of every level that puts ink on it.
+/// How lit this node is, for the purpose of the light it gives off — carried on
+/// the glow's own attack and release, and handed over per instance.
 ///
-/// The note's own envelope is only one of them. A mark rides the marked VOICE's
+/// Its TARGET is the largest of every level that puts ink on the node, and the
+/// note's own envelope is only one of them: a mark rides the marked VOICE's
 /// level rather than the node's, and the audio ring rides the analyzer through
-/// the view's Gate — so a node with no key down and a ring showing is a node
-/// with something on screen, and a light that asked the activation alone would
-/// leave it dark while its own ring glowed at nothing.
+/// the view's Gate, so a node with no key down and a ring showing is a node
+/// with something on screen. But this is where that target has GOT to, not the
+/// target — a light runs slower than every layer under it, which is what makes
+/// it read as light, and it can stand above zero on a node that has gone
+/// silent entirely.
+///
+/// Settled on the CPU because that is where a node has an identity that
+/// outlives a frame (`panes::glow_fade` in harmonigraph-ui). A shader has this
+/// frame's instances and nothing else.
 fn glow_level(in: VsOut) -> f32 {
-    return clamp(max(max(in.params.x, in.params.y), max(in.params.z, in.ring)), 0.0, 1.0);
+    return clamp(in.glow.x, 0.0, 1.0);
 }
 
 /// How bright a node's light is at its own middle, against the peak it reaches
@@ -2462,11 +2486,29 @@ fn glow_centre() -> f32 {
     return clamp(u.misc10.w, 0.0, 1.0);
 }
 
-/// How far the moat's edge is feathered, as a share of the Gap it stands in
-/// (`u.misc11.x`). At 0 all that is left is the view's own Clearance fade under
-/// it, which is an edge a couple of screen pixels wide.
+/// How far the moat's edge is feathered (`u.misc11.x`), in the node's uv — the
+/// same units as the Gap it stands astride, and NOT a share of it.
+///
+/// Not a share, because a fade penned inside its own gap can only ever draw a
+/// band with an edge on it, and a band of uniform width laid against a node's
+/// own dark rings is what the eye reads as a painted black ring rather than as
+/// light that is not there. Free of the gap it is a dip, as broad as the bar
+/// asks, coming off at the rate the skirt beside it does.
+///
+/// At 0 all that is left is the view's own Clearance fade under it, which is an
+/// edge a couple of screen pixels wide.
 fn glow_gap_soft() -> f32 {
-    return clamp(u.misc11.x, 0.0, 1.0);
+    return max(u.misc11.x, 0.0);
+}
+
+/// How much of the light the moat takes away where it stands (`u.misc11.w`): 1
+/// is a hole, and below it the rings sit in a dimmer pool of their own light.
+///
+/// A share of the LIGHT and not of the picture — the moat's blend multiplies
+/// what is in the glow's target, so at any depth what lies under it comes
+/// through untouched and what is taken is light alone.
+fn glow_gap_depth() -> f32 {
+    return clamp(u.misc11.w, 0.0, 1.0);
 }
 
 /// How widely a node's own ink is averaged into the colour of its light, as the
@@ -2631,8 +2673,9 @@ fn ink_at(in: VsOut, oct: OctRing, angle: f32) -> vec4<f32> {
 // instead, both of them pure functions of the frame's own instances and
 // uniforms:
 //
-//  - `fs_ink_strip` lays the raw reading down, one ROW per instance and
-//    [`INK_STRIP_N`] columns across the turn.
+//  - `fs_ink_strip` lays the reading down, one ROW per lit node and
+//    [`INK_STRIP_N`] columns across the turn, mixed into what that row already
+//    held on the glow's own attack and release.
 //  - `fs_ink_blur` convolves each row with the von Mises lobe the Spread bar
 //    asks for and normalises it, so what it leaves behind is the finished
 //    colour per angle. Its last column is the same average at no concentration
@@ -2649,35 +2692,71 @@ fn ink_at(in: VsOut, oct: OctRing, angle: f32) -> vec4<f32> {
 /// The instance's own vertex stage does everything but the geometry, so what a
 /// node carries into `ink_at` is spelled once and the strip cannot come to
 /// disagree with the billboard about it. What is replaced is the two things a
-/// row is not: where it sits — its own line of the target, `u.misc11.z` rows
-/// tall — and its uv, which carries the ANGLE across the row rather than a
-/// position on a node. Column `i` therefore falls at `(i + 0.5)/N` of a turn,
-/// which is what [`glow_ink`] reads it back at.
+/// row is not: where it sits — the row this node was handed, of `u.misc11.z` —
+/// and its uv, which carries the ANGLE across the row rather than a position on
+/// a node. Column `i` therefore falls at `(i + 0.5)/N` of a turn, which is what
+/// [`glow_ink`] reads it back at.
 @vertex
-fn vs_ink_strip(
-    @builtin(vertex_index) vertex_index: u32,
-    @builtin(instance_index) instance_index: u32,
-    inst: Instance,
-) -> VsOut {
-    var out = node_vertex(vertex_index, instance_index, inst, 0.0);
+fn vs_ink_strip(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
+    var out = node_vertex(vertex_index, inst, 0.0);
     let corner = vec2<f32>(f32(vertex_index & 1u), f32(vertex_index >> 1u));
     let rows = max(u.misc11.z, 1.0);
-    let v = (f32(instance_index) + corner.y) / rows;
+    let v = (out.strip_row + corner.y) / rows;
     out.clip_pos = vec4<f32>(corner.x * 2.0 - 1.0, 1.0 - 2.0 * v, 0.0, 1.0);
     out.uv = vec2<f32>(corner.x, 0.0);
     return out;
 }
 
+/// The reading, mixed into the one this row already held.
+///
+/// This is the COLOUR half of the glow's own clock, and the whole of it: the
+/// level is carried on the CPU, and the colour cannot be, because what a node
+/// is drawing is stated in WGSL by the same functions that draw it and a mirror
+/// of that in Rust is the one thing this design refuses. So it is carried
+/// where it lives — a row of the strip, read back from the strip this pass
+/// wrote last frame.
+///
+/// PREMULTIPLIED, which is what makes the mix a colour rather than a fade to
+/// black: `ink_at` returns each layer's colour times the weight it carries and
+/// those weights summed, so a node going silent takes both to zero together
+/// and their RATIO — the hue — is untouched on the way. `fs_ink_blur`
+/// normalises at the end, so what a fading node's light keeps is the colour it
+/// had at full, dimming. Mixing a normalised colour instead would drag the hue
+/// toward whatever the empty texel says, which is black.
+///
+/// A mix of 1 takes the reading whole and does not touch the other strip at
+/// all — a row just handed to this node holds a stranger's ink, and a strip
+/// just rebuilt holds nothing.
 @fragment
 fn fs_ink_strip(in: VsOut) -> @location(0) vec4<f32> {
-    return ink_at(in, oct_ring(in.cents), in.uv.x * TAU);
+    let ink = ink_at(in, oct_ring(in.cents), in.uv.x * TAU);
+    let carry = clamp(in.glow.y, 0.0, 1.0);
+    if carry >= 1.0 {
+        return ink;
+    }
+    let held = textureLoad(
+        ink_strip, vec2<i32>(i32(in.clip_pos.x), i32(in.strip_row)), 0,
+    );
+    return mix(held, ink, carry);
 }
 
-/// The blur pass's quad, over the whole of its target.
+/// The blur pass's quad: one node's row, exactly as the reading pass laid it
+/// out, one column wider (see [`fs_ink_blur`]).
+///
+/// Over the INSTANCES rather than over the whole target, because the strip is
+/// as tall as the row map's capacity and this frame lights whatever share of
+/// that it lights — the rows in between belong to nobody, and blurring them
+/// would be the one cost that grew with how many nodes have ever glowed at once
+/// rather than with how many are glowing.
 @vertex
-fn vs_ink_blur(@builtin(vertex_index) vertex_index: u32) -> @builtin(position) vec4<f32> {
+fn vs_ink_blur(
+    @builtin(vertex_index) vertex_index: u32,
+    inst: Instance,
+) -> @builtin(position) vec4<f32> {
     let corner = vec2<f32>(f32(vertex_index & 1u), f32(vertex_index >> 1u));
-    return vec4<f32>(corner.x * 2.0 - 1.0, 1.0 - 2.0 * corner.y, 0.0, 1.0);
+    let rows = max(u.misc11.z, 1.0);
+    let v = (inst.glow.y + corner.y) / rows;
+    return vec4<f32>(corner.x * 2.0 - 1.0, 1.0 - 2.0 * v, 0.0, 1.0);
 }
 
 /// Each row of the raw strip, convolved with the Spread bar's lobe and
@@ -2868,9 +2947,8 @@ fn annulus_distance(d: f32, inner: f32, outer: f32) -> f32 {
     return abs(d - 0.5 * (inner + outer)) - 0.5 * (outer - inner);
 }
 
-/// How wide the moat's edge is feathered, in the node's uv: a share of the Gap
-/// it stands in (the Gap fade bar), over the wider of the view's own Clearance
-/// fade and one soft band.
+/// How wide the moat's edge is feathered, in the node's uv: the Gap fade bar's
+/// own width, over the wider of the view's Clearance fade and one soft band.
 ///
 /// The floor is what stops the moat ending in a STEP at the bottom of the bar,
 /// and a step cut across a wide soft light crawls as the camera moves where a
@@ -2878,17 +2956,22 @@ fn annulus_distance(d: f32, inner: f32, outer: f32) -> f32 {
 /// taken over, so at 0 the gap ends exactly as crisply as the ring it stands
 /// off and no crisper.
 fn moat_soft(in: VsOut, aa: f32) -> f32 {
-    return max(max(in.soft, aa), glow_gap() * glow_gap_soft());
+    return max(max(in.soft, aa), glow_gap_soft());
 }
 
-/// Half that feather, which is how far past the end of the Gap the moat's own
-/// fade stands. Floored so the band is never a step answering a half everywhere
-/// (`clearing_edge`'s reason), and capped at the Gap so the fade never begins
-/// inside the ring's own footprint: a ring holds its own ink clear of the light
-/// at every width, and only the light OUTSIDE it is what softens.
+/// Half that feather, which is how far either side of the Gap's end the moat's
+/// own fade stands. Floored so the band is never a step answering a half
+/// everywhere (`clearing_edge`'s reason), and NOT capped at the Gap.
+///
+/// Uncapped is the difference between a dip and a band. Held to the gap, the
+/// erase is a fixed-width annulus with a short transition at each end — read
+/// against a node's own dark rings, a black ring — where a feather several
+/// times the gap takes the light away over a stretch as broad as the halo's own
+/// falloff, which is a lack of light rather than a shape. What it costs is that
+/// the fade begins inside the ring's own footprint, and that costs nothing:
+/// the ring's ink is drawn over the light there a pass later.
 fn moat_half(soft: f32) -> f32 {
-    let edge = clearing_edge(glow_gap());
-    return clamp(0.5 * soft, 0.0005, edge);
+    return max(0.5 * soft, 0.0005);
 }
 
 /// How much of the light standing `sd` out from a ring's own annulus that ring
@@ -3005,13 +3088,22 @@ fn fs_glow_moat(in: VsOut) -> @location(0) vec4<f32> {
     let d = length(in.uv);
     // The derivative first and in uniform control flow, as everywhere here.
     let aa = aa_width(fwidth(in.uv.x));
+    let depth = glow_gap_depth();
     // Past the node's own circle plus one gap and the half of the feather that
     // stands beyond it there is nothing to hold off, and a discarded fragment
-    // leaves the light exactly as it found it.
-    if EARLY_OUT && d >= in.rim + clearing_edge(glow_gap()) + moat_half(moat_soft(in, aa)) {
+    // leaves the light exactly as it found it. A depth of 0 is the same
+    // statement about the whole quad: a moat that takes no light is a pass over
+    // the instance buffer multiplying the target by one.
+    if EARLY_OUT
+        && (depth <= 0.0
+            || d >= in.rim + clearing_edge(glow_gap()) + moat_half(moat_soft(in, aa))) {
         discard;
     }
-    return vec4<f32>(0.0, 0.0, 0.0, glow_moat(in, d, aa, oct_ring(in.cents)));
+    // The depth scales the coverage once, at the end, so every term above keeps
+    // its own level and its own shape and only how much light the finished moat
+    // removes is dialled. Which is what makes the bar read as one thing: a ring
+    // sitting in a dim pool of its own halo rather than in a hole.
+    return vec4<f32>(0.0, 0.0, 0.0, glow_moat(in, d, aa, oct_ring(in.cents)) * depth);
 }
 
 /// What a grid line or chord beam paints; see [`node_paint`] for why the

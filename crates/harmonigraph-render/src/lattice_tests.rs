@@ -365,6 +365,15 @@ fn parity_scene() -> Scene {
             // The lattice pass draws the ring on every node it ships; the
             // gate is the fold's answer and there is no fold here.
             audio_ring: 1.0,
+            // A row per node in the order they are built, settled: the light's
+            // own clock is the shell's pass and no shell has run here, so this
+            // fixture is the picture with nothing carried — which is exactly
+            // what a still image of the draw paths wants.
+            glow: harmonigraph_scene::GlowStep {
+                level: 1.0,
+                row: i,
+                mix: 1.0,
+            },
             trail: 0.0,
         });
     }
@@ -384,6 +393,7 @@ fn parity_scene() -> Scene {
             dashed: true,
         },
     ];
+    let glow_rows = nodes.len() as u32;
     Scene {
         nodes,
         camera: harmonigraph_scene::Camera::default(),
@@ -456,12 +466,15 @@ fn parity_scene() -> Scene {
         // single-attachment reference path has no pass to composite into.
         glow_reach: 0.0,
         glow_strength: 1.0,
-        // The fresh moat and the three shares that shape the light inside it,
+        // The fresh moat and the four shares that shape the light inside it,
         // inert at reach 0 and here to say so.
         glow_gap: 0.08,
-        glow_gap_soft: 0.6,
+        glow_gap_soft: 0.16,
+        glow_gap_depth: 0.85,
         glow_centre: 0.5,
         glow_spread: 0.5,
+        // A row per node, which is what the nodes above are built with.
+        glow_rows,
     }
 }
 
@@ -520,6 +533,23 @@ impl Shooter {
     /// atlas, and its own reasons to be tested.
     fn shot_with(&mut self, scene: &Scene, labels: LatticeLabels) -> Vec<u8> {
         self.pane += 1;
+        self.draw(scene, labels)
+    }
+
+    /// The frame AFTER the last shot, on the same pane rather than a picture
+    /// of its own.
+    ///
+    /// One thing survives a frame here and it is a node's light: the ink strip
+    /// keeps each row's colour, and a row's next reading is mixed into what it
+    /// already held (`harmonigraph_scene::GlowStep::mix`). That is exactly what
+    /// every other shot's fresh pane exists to keep out — a fixture is settled
+    /// unless it says otherwise — so a test that wants the carrying has to ask
+    /// for it.
+    fn shot_again(&mut self, scene: &Scene) -> Vec<u8> {
+        self.draw(scene, LatticeLabels::default())
+    }
+
+    fn draw(&mut self, scene: &Scene, labels: LatticeLabels) -> Vec<u8> {
         let size = self.size;
         let vec_size = egui::vec2(size[0] as f32, size[1] as f32);
         let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, vec_size);
@@ -1353,13 +1383,36 @@ fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
         // The lattice pass draws the ring on every node it ships; the
         // gate is the fold's answer and there is no fold here.
         audio_ring: 1.0,
+        // Lit and settled on the strip's first row: one node, nothing carried.
+        glow: harmonigraph_scene::GlowStep { level: 1.0, row: 0, mix: 1.0 },
         trail: 0.0,
     }];
+    // One node, so one row — the strip follows the scene it is handed.
+    scene.glow_rows = 1;
     scene.grid.clear();
     // Fill a good share of the frame, so the measurements below are
     // about the mark's design rather than about pixel quantization.
     scene.node_radius = 1.1;
     scene
+}
+
+/// Hand every node in a scene its own row of the ink strip, and size the strip
+/// to them.
+///
+/// What the shell's own pass does with a map from node to row
+/// (`panes::glow_fade` in harmonigraph-ui), reduced to what a fixture needs: a
+/// scene assembled by hand is one frame with nothing carried, so a row per node
+/// in the list's own order is both unique and stable. It is [`derive_scene`]'s
+/// own answer, and the reason a fixture has to restate it is that replacing
+/// `scene.nodes` replaces the rows with copies of one.
+///
+/// A row is read back by identity, so two nodes sharing one is not a subtle
+/// wrong: both write it and both read whichever won.
+fn rows_per_node(scene: &mut Scene) {
+    for (row, node) in scene.nodes.iter_mut().enumerate() {
+        node.glow.row = row as u32;
+    }
+    scene.glow_rows = scene.nodes.len() as u32;
 }
 
 /// The slot beside middle C's, as a mask — a second sector for the two ends to
@@ -5879,6 +5932,7 @@ fn two_nodes_light_melds_rather_than_summing() {
                 n
             })
             .collect();
+        rows_per_node(&mut scene);
         scene.glow_reach = 0.8;
         // High on its bar, so the overlap is a reading with room in it rather
         // than three quantization steps: the claim is about the SHAPE of the
@@ -6328,14 +6382,16 @@ fn a_nodes_light_has_no_ripple_the_ink_does_not() {
     }
 }
 
-/// One row of the ink strip per node, however many nodes a frame has — asked
-/// across a frame that ADDS one, on the pane that drew the frame before it.
+/// The ink strip is as tall as the scene says it is, however that changes —
+/// asked across a frame that ADDS a node, on the pane that drew the frame
+/// before it.
 ///
-/// A row IS an instance index (`VsOut::strip_row`), so a strip left at the
-/// previous frame's height is a node reading another node's colour, or a row
-/// past the end of the texture. Both are silent: `textureLoad` out of bounds
-/// hands back zeros, which reads as a node drawing nothing, and a node that has
-/// simply stopped glowing looks like a setting rather than a bug.
+/// A node's row is handed out by the light's own clock and the scene carries
+/// the height that goes with it (`Scene::glow_rows`), so a strip left at the
+/// previous frame's height is a node writing past the end of the texture and
+/// reading zeros back — which looks like a node that has stopped glowing rather
+/// than like a bug. The fixture here settles for a row per node, which is what
+/// a scene assembled by hand has (`rows_per_node`).
 ///
 /// The same pane through every frame, which is the whole point — a fresh pane
 /// allocates a fresh strip and could not be wrong about this. What is under
@@ -6364,6 +6420,7 @@ fn the_ink_strip_has_a_row_for_every_node() {
                 nd
             })
             .collect();
+        rows_per_node(&mut scene);
         scene.glow_reach = 0.8;
         scene.glow_strength = 1.5;
         scene
@@ -6448,6 +6505,7 @@ fn a_node_added_to_a_pane_lights_in_its_own_colour() {
             node
         };
         scene.nodes = if arrived { vec![band, ring] } else { vec![band] };
+        rows_per_node(&mut scene);
         scene
     };
     let one = shooter.shot(&scene_of(false));
@@ -6517,4 +6575,206 @@ fn harmonic(profile: &[f64], k: usize) -> f64 {
         im += v * a.sin();
     }
     2.0 * (re * re + im * im).sqrt() / n
+}
+
+/// A node's light takes its colour from the frame before, not from this frame's
+/// ink alone.
+///
+/// The COLOUR half of the glow's own clock. A node's ink is read in WGSL and
+/// kept in a strip on the GPU, so this is where it is carried: the reading is
+/// mixed into the row that node already had
+/// (`harmonigraph_scene::GlowStep::mix`), on the same coefficient the level
+/// took on the CPU. What that buys is a hue that MORPHS when the chord under it
+/// changes, rather than one that cuts.
+///
+/// [`two_colour_node`]'s two layers, which is the fixture built for exactly
+/// this reading: the octave band flat RED and the audio ring flat GREEN, so a
+/// halo's red against its green is which layer coloured it, with no mixture of
+/// one able to be mistaken for the other. The node keeps its identity across
+/// the two frames — same position, same row — and swaps which of the two layers
+/// it is drawing, which is as sharp a change of hue as a node can make.
+#[test]
+fn a_nodes_light_takes_its_colour_from_the_frame_before() {
+    const SIZE: [u32; 2] = [256, 256];
+    const WIDTH: f32 = 0.18;
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    // The band alone, and the ring alone, each at the same width so neither
+    // layer carries more of the node than the other.
+    let red = |mix: f32| -> Scene {
+        let mut scene = two_colour_node(WIDTH, 0.0);
+        scene.nodes[0].glow.mix = mix;
+        scene
+    };
+    let green = |mix: f32| -> Scene {
+        let mut scene = two_colour_node(0.0, WIDTH);
+        scene.nodes[0].glow.mix = mix;
+        scene
+    };
+    let unlit = |mut scene: Scene| -> Scene {
+        scene.glow_reach = 0.0;
+        scene
+    };
+    // The two ends, each settled on a pane of its own.
+    let red_off = shooter.shot(&unlit(red(1.0)));
+    let green_off = shooter.shot(&unlit(green(1.0)));
+    let all_red = added_light(&shooter.shot(&red(1.0)), &red_off);
+    let all_green = added_light(&shooter.shot(&green(1.0)), &green_off);
+    // And the frame after a red one, on the same pane, taking a tenth of the
+    // new reading — a Glow attack long against the frame it is stepped over.
+    let _ = shooter.shot(&red(1.0));
+    let carried = added_light(&shooter.shot_again(&green(0.1)), &green_off);
+
+    // Non-vacuous first: each layer alone has to light the halo in its own
+    // colour, or the reading below is measuring nothing.
+    assert!(
+        all_red[0] > all_red[1] * 4,
+        "the band alone must light the halo red: {all_red:?}",
+    );
+    assert!(
+        all_green[1] > all_green[0] * 4,
+        "the ring alone must light the halo green: {all_green:?}",
+    );
+    // The claim: one frame in, the light is still mostly the colour it was,
+    // though the node is drawing nothing but the ring.
+    assert!(
+        carried[0] > carried[1],
+        "a light that took a tenth of the new reading came out {carried:?} — that is the \
+         ring's green, so the row was written rather than mixed into",
+    );
+}
+
+/// The Gap depth says how much of the light the moat takes: at half, a moated
+/// pixel is half way between the light that would stand there and the frame
+/// with no light at all.
+///
+/// The linearity is the claim rather than a coincidence of the number. The moat
+/// multiplies the light in the glow's own target by `1 - coverage * depth` and
+/// the composite is affine in what that target holds, so a depth of a half
+/// lands exactly half way — which is what makes the bar read as "how deep",
+/// rather than as some curve through a knockout.
+///
+/// Measured only where the moat is doing something, which the shots find for
+/// themselves: a pixel the flush light and the unlit frame agree on has no
+/// depth to have.
+#[test]
+fn the_gap_depth_says_how_much_light_the_moat_takes() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    let at = |depth: f32, reach: f32| -> Scene {
+        let mut scene = single_marked_node(0, 0);
+        scene.glow_reach = reach;
+        scene.glow_strength = 1.5;
+        // A wide moat with a crisp edge, so the band holds pixels that are
+        // fully covered and the reading is the depth alone rather than the
+        // depth times a feather.
+        scene.glow_gap = harmonigraph_scene::GAP_MAX;
+        scene.glow_gap_soft = 0.0;
+        scene.glow_gap_depth = depth;
+        scene
+    };
+    // Three depths of ONE moat, rather than a moat against the glow switched
+    // off: the light replaces the core's own skirt, so the frame at reach 0 is
+    // a different picture inside the node and not the same one with the halo
+    // removed. That the deepest moat IS the unlit frame is
+    // `a_moat_beside_a_lit_node_is_the_frame_with_no_glow_at_all`'s claim, made
+    // out where the node draws nothing; this one is about the travel between.
+    let flush = shooter.shot(&at(0.0, 0.8));
+    let half = shooter.shot(&at(0.5, 0.8));
+    let deep = shooter.shot(&at(1.0, 0.8));
+
+    // Non-vacuous: the moat has to be taking real light off somewhere.
+    // Saturated channels are skipped: where the flush light is already at 255
+    // the picture has nowhere to put the rest of it, so the "half way" it is
+    // half way to is a clamp rather than a reading.
+    let moated = |i: usize| {
+        flush[i..i + 3].iter().all(|c| *c < 255)
+            && brightness(&flush[i..i + 4]) - brightness(&deep[i..i + 4]) > 30
+    };
+    let taken: Vec<usize> = (0..flush.len()).step_by(4).filter(|i| moated(*i)).collect();
+    assert!(taken.len() > 200, "the fixture's moat took light off {} pixels", taken.len());
+
+    let (mut worst, mut at_px) = (0i64, 0usize);
+    for i in taken {
+        let want = (brightness(&flush[i..i + 4]) + brightness(&deep[i..i + 4])) / 2;
+        let d = brightness(&half[i..i + 4]) - want;
+        if d.abs() > worst.abs() {
+            (worst, at_px) = (d, i);
+        }
+    }
+    // Three channels, each rounded to a byte twice on the way here (the light's
+    // own target, then the composite).
+    assert!(
+        worst.abs() <= 6,
+        "a moat at half depth was {worst}/765 off the half way point at pixel ({}, {})",
+        (at_px / 4) % SIZE[0] as usize,
+        (at_px / 4) / SIZE[0] as usize,
+    );
+}
+
+/// The Gap fade is a WIDTH and not a share of the gap: dialled past the gap it
+/// stands in, the moat takes light off over a wider band.
+///
+/// Which is the whole of what makes a moat read as a lack of light rather than
+/// as a black ring drawn round the node. Held inside its own gap the fade can
+/// only ever draw a fixed-width annulus with a short edge, and against a node's
+/// own dark rings the eye takes that for ink.
+///
+/// Measured as the FOOTPRINT — how many pixels the moat changes at all —
+/// because that is the band itself: the feather is centred on where the gap
+/// ends, so widening it eats outward into the halo and inward toward the node
+/// together, and the count grows with the band whatever shape the falloff has.
+#[test]
+fn a_wider_gap_fade_takes_the_light_off_over_a_wider_band() {
+    const SIZE: [u32; 2] = [256, 256];
+    const GAP: f32 = 0.08;
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    let at = |soft: f32| -> Scene {
+        let mut scene = single_marked_node(0, 0);
+        scene.glow_reach = 0.8;
+        scene.glow_strength = 1.5;
+        scene.glow_gap = GAP;
+        scene.glow_gap_soft = soft;
+        scene.glow_gap_depth = 1.0;
+        // The moat's feather is floored at the view's own Clearance fade, which
+        // this fixture carries at a quarter of a node — several times the gap.
+        // Left there it would be the floor rather than the bar under test at
+        // every step below.
+        scene.sevens_soft = 0.0;
+        scene
+    };
+    // The same light with no moat under it at all, which every band below is
+    // measured against.
+    let flush = shooter.shot(&{
+        let mut scene = at(0.0);
+        scene.glow_gap = 0.0;
+        scene
+    });
+    let mut band = |soft: f32| -> usize {
+        let shot = shooter.shot(&at(soft));
+        shot.chunks(4)
+            .zip(flush.chunks(4))
+            .filter(|(moated, lit)| brightness(lit) - brightness(moated) > 2)
+            .count()
+    };
+    // The gap's own edge, one gap of feather, and four — the far end of the bar
+    // against the fresh gap.
+    let (crisp, one, four) = (band(0.0), band(GAP), band(4.0 * GAP));
+    assert!(crisp > 0, "the fixture's moat took no light off at all");
+    assert!(
+        one > crisp && four > one,
+        "the moat's band did not widen with the fade: {crisp}, {one}, {four}",
+    );
+    // And plainly, rather than by a pixel. The band is an annulus, so its area
+    // grows more slowly than its width: half again over is a fade reaching a
+    // long way either side of the gap it stands in.
+    assert!(
+        four > crisp * 3 / 2,
+        "a fade four times the gap left a band of {four} pixels against the gap's own {crisp}",
+    );
 }

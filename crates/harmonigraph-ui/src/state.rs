@@ -219,6 +219,16 @@ pub struct SharedState {
     /// this struct between frames and nothing else, so state kept anywhere else
     /// would draw one picture live and another in an export.
     pub ring_levels: crate::panes::spectral_fold::RingLevels,
+    /// Where every node's own light has got to, and which row of the ink strip
+    /// is keeping its colour, per lattice surface
+    /// ([`GlowFade`](crate::panes::glow_fade::GlowFade)). Runtime-only.
+    ///
+    /// Here for the reason the two above it are: the offline renderer carries
+    /// this struct between frames and nothing else, so a light kept anywhere
+    /// else would linger live and not in an export. Keyed by the surface id
+    /// each lattice pane claims, because the strip it describes is that pane's
+    /// own texture.
+    pub(crate) glow_fade: std::collections::HashMap<usize, crate::panes::glow_fade::GlowFade>,
     /// Where the analyzer's divider stands on the DOCKED pane as that pane is
     /// resized — the spectrum keeps its size and the spectrogram takes the
     /// difference. See [`panes::spectral::SpectrumHold`].
@@ -692,6 +702,7 @@ impl SharedState {
             spectrum: AudioSpectrum::default(),
             spectrum_config: SpectrumConfig::default(),
             ring_fade: harmonigraph_scene::RingFade::default(),
+            glow_fade: std::collections::HashMap::new(),
             ring_levels: crate::panes::spectral_fold::RingLevels::default(),
             spectrum_hold: panes::spectral::SpectrumHold::default(),
             spiral_view: panes::spiral::SpiralView::default(),
