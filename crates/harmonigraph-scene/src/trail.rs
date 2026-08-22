@@ -20,46 +20,34 @@
 
 use harmonigraph_core::{NoteHistory, PitchClass, Tuning};
 
+use crate::style::NoteNames;
 use crate::view::ViewConfig;
 use crate::NodeInstance;
 
-/// The frame's memories, reduced to what a node needs: which pitch class,
-/// and how strongly.
+/// The frame's memories, reduced to what a node needs: which pitch classes
+/// the music has been to.
 pub(crate) struct TrailField {
-    marks: Vec<(PitchClass, f32)>,
+    marks: Vec<PitchClass>,
 }
 
-/// Below this a mark is invisible anyway, and dropping it here saves the
-/// per-node matching it would cost.
-const MIN_LEVEL: f32 = 0.01;
-
 impl TrailField {
-    /// Reduce `history` to this frame's marks, or `None` when the trail is
-    /// off or has nothing to show.
+    /// Reduce `history` to this frame's marks, or `None` when nothing is
+    /// remembered or nothing reads a memory.
     ///
-    /// `trail_labels` IS the trail's on/off, the names being the whole of
-    /// what a memory draws: with them off nothing reads `trail`, so filling
-    /// it would be per-frame work for a field no layer looks at.
-    pub(crate) fn build(history: &NoteHistory, view: &ViewConfig, now: f64) -> Option<TrailField> {
-        if !view.trail_labels || history.is_empty() {
+    /// [`NoteNames::Past`] IS the trail's on/off, the kept names being the
+    /// whole of what a memory draws: under any other mode nothing reads
+    /// `trail`, so filling it would be per-frame work for a field no layer
+    /// looks at. [`NoteNames::All`] names every node without asking where the
+    /// music has been, so it is a mode of the LABEL layer and takes no
+    /// memory either.
+    pub(crate) fn build(history: &NoteHistory, view: &ViewConfig) -> Option<TrailField> {
+        if view.note_names != NoteNames::Past || history.is_empty() {
             return None;
         }
-        // 0 means never forget, which is the point of the feature: the
-        // whole piece's territory. A positive span fades a pitch out over
-        // that many seconds since it last sounded.
-        let span = f64::from(view.trail_memory.max(0.0));
-        let marks: Vec<_> = history
-            .visits()
-            .filter_map(|visit| {
-                let level = if span <= 0.0 {
-                    1.0
-                } else {
-                    let age = (now - visit.last_off).max(0.0);
-                    (1.0 - age / span).clamp(0.0, 1.0) as f32
-                };
-                (level >= MIN_LEVEL).then_some((visit.pitch_class, level))
-            })
-            .collect();
+        // A memory never fades: the point of the feature is a whole piece's
+        // territory rather than a rolling window, so every visit counts the
+        // same however long ago it sounded.
+        let marks: Vec<_> = history.visits().map(|visit| visit.pitch_class).collect();
         (!marks.is_empty()).then_some(TrailField { marks })
     }
 
@@ -85,12 +73,14 @@ impl TrailField {
             if !node.on_home {
                 continue;
             }
-            for &(pitch_class, level) in &self.marks {
-                // `max`, not a sum: two remembered pitches matching one node
-                // under a wide tolerance are the same node visited twice,
-                // not a stronger memory.
-                if level > node.trail && tuning.matches(pitch_class, node_pc) {
-                    node.trail = level;
+            for &pitch_class in &self.marks {
+                // Full strength or nothing: a memory has no level of its own
+                // to carry, and two remembered pitches matching one node
+                // under a wide tolerance are the same node visited twice
+                // rather than a stronger memory.
+                if tuning.matches(pitch_class, node_pc) {
+                    node.trail = 1.0;
+                    break;
                 }
             }
         }

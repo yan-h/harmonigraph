@@ -488,15 +488,18 @@ struct GpuInstance {
     ring: f32,
     /// The node's own light: x how bright it is, y which ROW of the ink strip
     /// keeps its colour, z how much of this frame's reading the two of them
-    /// take (`harmonigraph_scene::GlowStep`, filled in by the shell's
+    /// take, w how much of a MARK the light still has the node wearing
+    /// (`harmonigraph_scene::GlowStep`, filled in by the shell's
     /// `panes::glow_fade`).
     ///
-    /// All three are the glow's and nothing else reads them. The level is a
+    /// All four are the glow's and nothing else reads them. The level is a
     /// CARRIED one and not the largest envelope on the node, which is the whole
     /// point of it: it can be above zero on a node whose every layer has gone
     /// silent, and such a node is shipped for exactly that reason (see the cull
-    /// in `from_scene`) so its light can go on leaving.
-    glow: [f32; 3],
+    /// in `from_scene`) so its light can go on leaving. So is the mark, and for
+    /// the same reason: it is the light's SIZE, and a size that stepped when
+    /// the marking voice was pruned snapped a halo still at full brightness.
+    glow: [f32; 4],
 }
 
 impl GpuInstance {
@@ -518,7 +521,7 @@ impl GpuInstance {
             0 => Float32x3, 1 => Float32x4, 2 => Float32x3, 3 => Uint32x3,
             4 => Float32, 6 => Uint32x2,
             7 => Float32x4, 8 => Float32x4, 10 => Float32x2, 11 => Float32,
-            12 => Float32x3
+            12 => Float32x4
         ],
     };
 }
@@ -853,7 +856,7 @@ impl LatticeCallback {
                 bass_color: n.bass_color.to_array(),
                 sevens: [n.scale, gutter],
                 ring: n.audio_ring,
-                glow: [n.glow.level, n.glow.row as f32, n.glow.mix],
+                glow: [n.glow.level, n.glow.row as f32, n.glow.mix, n.glow.marked],
         };
 
         let split = order

@@ -520,6 +520,7 @@ pub fn derive_scene(
                 level: activation.max(melody.level).max(bass.level),
                 row: nodes.len() as u32,
                 mix: 1.0,
+                marked: f32::from((melody.slots | bass.slots) != 0),
             },
             trail: 0.0,
         });
@@ -530,7 +531,7 @@ pub fn derive_scene(
     // that reads "is sounding" — the grid's sevens chains above all — can
     // pick a memory up by mistake, whatever order these run in. The label
     // layer is the only reader, and it draws no shape.
-    if let Some(field) = TrailField::build(tracker.history(), view, now) {
+    if let Some(field) = TrailField::build(tracker.history(), view) {
         field.apply(&mut nodes, &node_pcs, tuning);
     }
 
