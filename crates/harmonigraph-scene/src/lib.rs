@@ -149,35 +149,42 @@ pub const SPECTRAL_WIDTH_MIN: f32 = 1.0;
 /// See [`SPECTRAL_WIDTH_MIN`].
 pub const SPECTRAL_WIDTH_MAX: f32 = 50.0;
 
-/// The ends of the four bars that size a node's layers, in quad UV units — the
+/// The ends of the bars that size a node's layers, in quad UV units — the
 /// stack [`ViewConfig::rings`] reads outward from the center, and what it holds
 /// a hand-edited view to.
 ///
-/// Every one of them has 0 for its low end, and 0 is that layer's off position
-/// rather than a hairline of it: one way to turn a layer off, in the same place
-/// on every layer. What the high ends buy is a bar whose useful settings are
-/// spread over its whole travel — the quad is 1 across, so a ring bar reaching
-/// 1 would spend most of itself on stacks that are already off the node's edge.
+/// Every one of them has 0 for its low end, and on a WIDTH 0 is that layer's
+/// off position rather than a hairline of it: one way to turn a layer off, in
+/// the same place on every layer. What the high ends buy is a bar whose useful
+/// settings are spread over its whole travel — the quad is 1 across, so a ring
+/// bar reaching 1 would spend most of itself on stacks that are already off the
+/// node's edge.
 ///
 /// [`RING_WIDTH_MAX`] is the same for the audio ring and the octave band,
 /// because they are read the same way: a wedge whose radial extent is a
 /// hairline says nothing about how loud it is, whichever ring it is on, and
-/// neither is worth more of the quad than the other. The core keeps the widest
-/// bar of the four, being the one layer that starts at the center and so the
-/// only one that can fill the node by itself.
-pub const CORE_RADIUS_MAX: f32 = 0.9;
-/// See [`CORE_RADIUS_MAX`].
+/// neither is worth more of the quad than the other.
 pub const RING_WIDTH_MAX: f32 = 0.6;
-/// See [`CORE_RADIUS_MAX`].
+/// See [`RING_WIDTH_MAX`].
 pub const MARK_THICKNESS_MAX: f32 = 0.3;
-/// See [`CORE_RADIUS_MAX`]. The ceiling on BOTH of a node's paddings, which are
+/// See [`RING_WIDTH_MAX`]. The one bar of the stack that is a POSITION rather
+/// than a width — how far out the innermost layer begins
+/// ([`ViewConfig::ring_inner`]) — which is why its low end is not an off
+/// position: nothing is switched off there, the stack simply seats on the
+/// node's own center.
+///
+/// Short of the quad edge by a tenth, so the top of the bar is a node whose
+/// rings are being refused one at a time rather than one with nowhere at all to
+/// put them.
+pub const RING_INNER_MAX: f32 = 0.9;
+/// See [`RING_WIDTH_MAX`]. The ceiling on BOTH of a node's paddings, which are
 /// a padding rather than a layer and so share one.
 ///
 /// It is the RADIAL one ([`ViewConfig::ring_gap`]) the number is sized for,
-/// that being the one spent out of the quad, and spent up to three times over
-/// on one node (between the core and the audio ring, that ring and the band,
-/// and the band and the marks): at the top of the bar the gaps alone are more
-/// than the quad. The ANGULAR one ([`ViewConfig::octave_gap`]) costs the stack
+/// that being the one spent out of the quad, and spent twice over on one node
+/// (between the audio ring and the band, and between the band and the marks):
+/// at the top of the bar the gaps alone are half of it. The ANGULAR one
+/// ([`ViewConfig::octave_gap`]) costs the stack
 /// nothing and wants a ceiling for a different reason — a gap of a whole
 /// sector's arc is every indicator erased — and lands near enough the same
 /// place that a second constant would be two numbers saying one thing.
@@ -583,13 +590,6 @@ pub struct Scene {
     pub now: f64,
     /// Base node radius in world units (scales with lattice spacing).
     pub node_radius: f32,
-    /// The core's radius in quad UV units; `0` turns the core off (nothing
-    /// at all). Sizes both the disc and its glow; the shader reads solidity
-    /// separately (`core_solidity`).
-    pub core_radius: f32,
-    /// The core's solidity 0..1 (see [`ViewConfig::core_solidity`]): 0 a
-    /// soft glow, 1 the solid orb. Ignored when the core is off.
-    pub core_solidity: f32,
     /// The outer octave layer's radial band (quad UV units), already
     /// sanitized: outer is always ahead of inner on a band that draws, and
     /// both are 0 when the layer is off (see [`ViewConfig::band_width`]).
@@ -606,8 +606,9 @@ pub struct Scene {
     pub rings_outer: f32,
     /// Where the melody/bass mark strip starts (see
     /// [`RingStack::mark_inner`]) — a padding out from
-    /// [`rings_outer`](Self::rings_outer), or the node's center on a node with
-    /// no rings at all, where there is nothing for it to stand off.
+    /// [`rings_outer`](Self::rings_outer), or the stack's own start
+    /// ([`ViewConfig::ring_inner`]) on a node with no rings at all, where there
+    /// is nothing for it to stand off.
     ///
     /// Handed over rather than re-derived from `rings_outer + ring_gap`,
     /// because that sum is only right while some ring is there to owe the

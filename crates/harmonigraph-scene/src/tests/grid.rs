@@ -9,9 +9,8 @@ use super::harness::*;
 #[test]
 fn grid_segments_connect_neighbors_but_leave_node_gaps() {
     // A 3×3 window: 2·3 horizontal + 3·2 vertical inter-neighbor
-    // segments, none along the unused sevens axis. The gap-clears-the-disc
-    // half of this is a claim about ONE inset (the classic 1.05, which was
-    // chosen to contain the classic 0.46 disc), so pin both here rather
+    // segments, none along the unused sevens axis. The gap-clears-the-node
+    // half of this is a claim about ONE inset (1.05), so pin it here rather
     // than ride whatever the current defaults are — a smaller default gap
     // is a look choice, not a regression.
     let view = ViewConfig {
@@ -19,7 +18,6 @@ fn grid_segments_connect_neighbors_but_leave_node_gaps() {
         extent_fives: 1,
         extent_sevens: 0,
         grid_inset: 1.05,
-        core_radius: 0.46,
         ..ViewConfig::default()
     };
     let scene = scene_of(

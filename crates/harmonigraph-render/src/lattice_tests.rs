@@ -425,8 +425,6 @@ fn parity_scene() -> Scene {
         shimmer_width: PARITY_SHIMMER_WIDTH,
         shimmer_intensity: 1.0,
         shimmer_softness: 0.8,
-        core_radius: 0.46,
-        core_solidity: 1.0,
         outer_inner: 0.545,
         outer_outer: 0.795,
         // The band is the outermost ring here, as it is on a fresh node, so it
@@ -1529,6 +1527,15 @@ const PARTIAL_HALF_CENTS: f32 = 40.0;
 /// pixels apart, and one reading a sector wants the seams pixels wide.
 const PROBE_GAP: f32 = 0.12;
 
+/// Where the probe stacks BEGIN, and it is the node's own centre: a radius read
+/// off one of these pictures is then a width, or a sum of widths and gaps, with
+/// no offset under it. Stated rather than inherited for the same reason every
+/// other size here is — a fresh view stands its stack well out from the centre
+/// (see [`ViewConfig::ring_inner`](harmonigraph_scene::ViewConfig)), and the
+/// probe widths, deliberately wide so a pixel reading can tell one layer's edge
+/// from the next, do not fit in what that leaves.
+const PROBE_INNER: f32 = 0.0;
+
 /// The octave band's width for the probes below, standing in for the fresh
 /// view's own (see [`ViewConfig::band_width`](harmonigraph_scene::ViewConfig))
 /// the same way [`PROBE_GAP`] stands in for the gap: the band is the outermost
@@ -1561,15 +1568,12 @@ const PROBE_RANGE: f32 = 200.0;
 /// from the other — a proportion, not the shipped one. Inheriting the fresh
 /// widths would tie every reading here to an aesthetic that moves whenever a
 /// dialled-in look is captured, and it moves the readings the wrong way:
-/// [`PROBE_BAND_WIDTH`] is the outermost layer, so a retune of the core or the
-/// audio ring INSIDE it can push the band off the quad edge, and a refused
+/// [`PROBE_BAND_WIDTH`] is the outermost ring, so a retune of the audio ring
+/// INSIDE it can push the band off the quad edge, and a refused
 /// band leaves these measurements nothing to find. That the shipped stack
-/// draws four visible layers inside the quad is held where it belongs, on the
+/// draws three visible layers inside the quad is held where it belongs, on the
 /// fresh view itself, by `harmonigraph_scene`'s
-/// `the_fresh_node_stacks_four_visible_layers_inside_the_quad`.
-///
-/// The core is the one layer turned off — its glow is light at every radius
-/// the measurements read, and what is being measured is where two annuli are.
+/// `the_fresh_node_stacks_three_visible_layers_inside_the_quad`.
 ///
 /// The PADDING is the probe's for a second reason: the Ring gap is what
 /// separates every layer of a node, and a gap of the order the fresh view
@@ -1591,17 +1595,16 @@ fn ringing_node(held: Option<usize>, sounding: Option<f32>, range: f32) -> Scene
     if let Some(slot) = held {
         node.octaves[slot] = 1.0;
     }
-    // The probe's stack, less its core: the two rings land far enough apart to
-    // be measured in pixels, at radii no capture of a dialled-in look moves.
+    // The probe's stack: the two rings land far enough apart to be measured in
+    // pixels, at radii no capture of a dialled-in look moves.
     let rings = harmonigraph_scene::ViewConfig {
+        ring_inner: PROBE_INNER,
         ring_gap: PROBE_GAP,
-        core_radius: PROBE_CORE_RADIUS,
         spectral_ring_width: PROBE_RING_WIDTH,
         band_width: PROBE_BAND_WIDTH,
         ..fresh.clone()
     }
     .rings();
-    scene.core_radius = 0.0;
     scene.outer_inner = rings.band.0;
     scene.outer_outer = rings.band.1;
     scene.rings_outer = rings.outer;
@@ -1976,14 +1979,14 @@ fn a_mark_stands_off_the_outermost_ring_the_node_draws() {
         return;
     };
 
-    // The probe's stack, so the layers are pixels apart: core, audio ring,
-    // band, and the mark outside all three. The claim is that the mark finds
-    // whichever ring is outermost, which wants a stack that draws all of them
-    // rather than the one the fresh view happens to be dialled to.
+    // The probe's stack, so the layers are pixels apart: audio ring, band, and
+    // the mark outside both. The claim is that the mark finds whichever ring is
+    // outermost, which wants a stack that draws all of them rather than the one
+    // the fresh view happens to be dialled to.
     let fresh = harmonigraph_scene::ViewConfig::default();
     let rings = harmonigraph_scene::ViewConfig {
+        ring_inner: PROBE_INNER,
         ring_gap: PROBE_GAP,
-        core_radius: PROBE_CORE_RADIUS,
         spectral_ring_width: PROBE_RING_WIDTH,
         band_width: PROBE_BAND_WIDTH,
         ..fresh.clone()
@@ -1991,7 +1994,6 @@ fn a_mark_stands_off_the_outermost_ring_the_node_draws() {
     .rings();
     let staged = |band: bool| -> Scene {
         let mut scene = single_marked_node(MIDDLE_C, 0);
-        scene.core_radius = 0.0;
         scene.octave_gap = PROBE_GAP;
         scene.mark_thickness = rings.mark_thickness;
         // The audio ring is drawn from an all-zero grid, which paints the
@@ -2081,8 +2083,8 @@ fn a_mark_with_no_ring_under_it_reaches_the_nodes_centre() {
     // a strip no deeper than that disc would have nothing left to measure once
     // it reached the centre, which is the very state under test.
     let fresh = harmonigraph_scene::ViewConfig {
+        ring_inner: PROBE_INNER,
         ring_gap: PROBE_GAP,
-        core_radius: 0.0,
         spectral_ring_width: 0.0,
         mark_thickness: harmonigraph_scene::MARK_THICKNESS_MAX,
         ..harmonigraph_scene::ViewConfig::default()
@@ -2094,7 +2096,6 @@ fn a_mark_with_no_ring_under_it_reaches_the_nodes_centre() {
 
     let staged = |rings: &harmonigraph_scene::RingStack, mark: bool| -> Scene {
         let mut scene = single_marked_node(MIDDLE_C, 0);
-        scene.core_radius = rings.core_radius;
         scene.octave_gap = PROBE_GAP;
         scene.mark_thickness = rings.mark_thickness;
         // Silent paint carries the empty pair, so the audio ring is off the
@@ -2157,30 +2158,20 @@ const CLEAR_REACH: f32 = 0.30;
 /// past it for the clearing-fraction reading below to hold its tolerance.
 const PROBE_RING_WIDTH: f32 = 0.3;
 
-/// The core radius the clearing probe stacks its rings on, standing in for
-/// the fresh view's own (see
-/// [`ViewConfig::core_radius`](harmonigraph_scene::ViewConfig)) the same way
-/// [`PROBE_GAP`] and [`PROBE_RING_WIDTH`] stand in for theirs: the probe's
-/// wider gap and ring leave no room under the fresh view's own core before
-/// the stack runs past the node's own edge, so this pins the radius the rest
-/// of the stack is measured from instead of inheriting whatever the core is
-/// currently dialled to.
-const PROBE_CORE_RADIUS: f32 = 0.256_256_76;
-
-/// The stack the clearing tests are measured against: four layers at the
+/// The stack the clearing tests are measured against: three layers at the
 /// probe's own widths and wider padding, so a pixel reading can tell one
 /// layer's edge from the next.
 ///
 /// Every width the stack is built from is stated rather than inherited. What
-/// the clearing tests need is a node wearing all four layers with room between
+/// the clearing tests need is a node wearing all three layers with room between
 /// them; a capture of a dialled-in look is free to dial any of them to a
 /// hairline, and each one left inheriting is a way for these readings to fail
 /// on a change that has nothing to do with clearing.
 fn clearing_rings() -> harmonigraph_scene::RingStack {
     let fresh = harmonigraph_scene::ViewConfig::default();
     harmonigraph_scene::ViewConfig {
+        ring_inner: PROBE_INNER,
         ring_gap: PROBE_GAP,
-        core_radius: PROBE_CORE_RADIUS,
         spectral_ring_width: PROBE_RING_WIDTH,
         band_width: PROBE_BAND_WIDTH,
         octave_gap: PROBE_OCTAVE_GAP,
@@ -2207,7 +2198,6 @@ fn clearing_node(melody: u32, ring: f32, band: bool, gutter: f32) -> Scene {
     let mut scene = single_marked_node(melody, 0);
     scene.background = glam::Vec4::ONE;
     scene.node_radius = 1.4;
-    scene.core_radius = rings.core_radius;
     scene.octave_gap = PROBE_GAP;
     scene.mark_thickness = rings.mark_thickness;
     // The audio ring drawn off an all-zero grid: the ramp's floor across the
@@ -2433,20 +2423,27 @@ fn a_clearing_is_one_hole_covering_the_centre_and_every_ring() {
         return;
     };
 
-    let staged = |melody: u32, band: bool, core: f32, gutter: f32| -> Scene {
-        let mut scene = clearing_node(melody, 1.0, band, gutter);
-        scene.core_radius = core;
+    let staged = |melody: u32, band: bool, ring: f32, gutter: f32| -> Scene {
+        let mut scene = clearing_node(melody, ring, band, gutter);
+        // No grid. The ray below reads the picture for anything lit, and a grid
+        // line crossing just outside the hole is a lit sample past its rim with
+        // bare pane between — which reads as a gap in the hole and is nothing
+        // of the kind. What the clearing cuts out of the grid is a separate
+        // claim, and `a_node_wearing_only_an_audio_ring_clears_around_it` is
+        // where the added light is measured against it.
+        scene.grid.clear();
         scene
     };
-    // Everything a node can wear, and then the same node with its core dialled
-    // off — which leaves the audio ring an annulus with the lattice showing
-    // through the middle of it.
-    for (name, melody, band, core) in [
-        ("every layer", MIDDLE_C, true, clearing_rings().core_radius),
-        ("the audio ring alone", 0, false, 0.0),
+    // Everything a node can wear, and then the same node with its audio ring
+    // gated shut — which leaves the octave band an annulus with the lattice
+    // showing through the middle of it, the case the fill-to-the-centre rule
+    // is for.
+    for (name, melody, band, ring) in [
+        ("every layer", MIDDLE_C, true, 1.0),
+        ("the octave band alone", 0, true, 0.0),
     ] {
-        let bare = gpu.shot(&staged(melody, band, core, 0.0));
-        let holed = gpu.shot(&staged(melody, band, core, CLEAR_REACH));
+        let bare = gpu.shot(&staged(melody, band, ring, 0.0));
+        let holed = gpu.shot(&staged(melody, band, ring, CLEAR_REACH));
         let reach = light_about_center(&light_over(&holed, &bare), SIZE).far;
         assert!(reach > 8.0, "{name}: no clearing to read, {reach:.1} px");
 
@@ -2465,7 +2462,13 @@ fn a_clearing_is_one_hole_covering_the_centre_and_every_ring() {
             let Some(rim) = (0..=steps).rev().map(|s| s as f64 / 2.0).find(|&r| lit(r, a)) else {
                 continue;
             };
-            let gap = (0..=(rim * 2.0) as usize)
+            // Stopping two pixels short of the rim, which is the hole's own
+            // anti-aliased edge: out there a lobe's angular boundary and the
+            // rounding of a sample to a pixel can disagree, so a single lit
+            // sample sits past a dark one and reads as a gap the picture does
+            // not have. Everything a gap in the hole would actually be is
+            // inside this.
+            let gap = (0..=((rim - 2.0).max(0.0) * 2.0) as usize)
                 .map(|s| s as f64 / 2.0)
                 .find(|&r| !lit(r, a));
             assert!(
@@ -2528,17 +2531,17 @@ fn a_clearing_follows_the_audio_ring_its_node_wears() {
     let (half, half_far) = hole(&mut gpu, 0.5);
 
     let scale = worn_far / (rings.audio.1 + CLEAR_REACH) as f64;
-    let want = |rim: f32| (rim + CLEAR_REACH) as f64 * scale;
     eprintln!(
-        "ring worn {worn_far:.1} px, closed {closed_far:.1} (want {:.1}), half \
-         {half_far:.1}, at {scale:.1} px/uv",
-        want(rings.core_radius),
+        "ring worn {worn_far:.1} px, closed {closed_far:.1}, half {half_far:.1}, \
+         at {scale:.1} px/uv",
     );
+    // The band is off and the note is silent, so a node the gate closed is
+    // wearing nothing at all and has nothing to clear. That is the per-layer
+    // split at its limit: a hole sized to what the VIEW has on would still cut
+    // a ring-sized gap here, around ink nobody drew.
     assert!(
-        (closed_far - want(rings.core_radius)).abs() < 2.0,
-        "a node the gate closed still clears {closed_far:.1} px, not the {:.1} px its \
-         core is left reaching",
-        want(rings.core_radius),
+        closed_far < 2.0,
+        "a node the gate closed still clears {closed_far:.1} px, with no layer on it",
     );
     assert!(
         (half_far - worn_far).abs() < 2.0,
@@ -2676,7 +2679,6 @@ fn a_band_dialled_off_paints_no_dot_at_the_nodes_centre() {
     // it, and the dot this is looking for shows at its own size.
     let collapsed = |node: bool| -> Scene {
         let mut scene = single_marked_node(0, 0);
-        scene.core_radius = 0.0;
         scene.mark_thickness = 0.0;
         scene.rings_outer = 0.0;
         scene.octave_gap = 0.0;
@@ -3523,13 +3525,12 @@ fn a_real_held_chord_shows_its_melody_and_bass_marks() {
 }
 
 /// A node showing every octave it can, for reading the wheel's geometry off
-/// the picture: no core and no mark rings, so the only thing drawn is the
+/// the picture: no audio ring and no mark rings, so the only thing drawn is the
 /// band, and a wide gap so the seams between indicators are several pixels
 /// across at the size this renders at.
 fn octave_wheel_scene(layout: harmonigraph_scene::OctaveLayout, cents: f32) -> Scene {
     let mut scene = single_marked_node(0, 0);
     scene.octave_layout = layout;
-    scene.core_radius = 0.0;
     scene.outer_inner = 0.30;
     scene.outer_outer = 0.95;
     scene.rings_outer = 0.95;
@@ -4193,101 +4194,90 @@ fn a_silent_slice_wears_the_ground_the_scene_names() {
     }
 }
 
-/// The seams between a chord's colors run at ONE width from the rim to the
-/// centre. They are laid down as lobes of fixed ANGULAR width, so the arc each
-/// spans shrinks with the radius and they would otherwise converge to a cusp at
-/// the node's centre — sharpest exactly where the node has the fewest pixels to
-/// say it with.
+/// The seams between a chord's colors run at ONE width from the edge of a
+/// node's light to its middle. They are laid down as lobes of fixed ANGULAR
+/// width, so the arc each spans shrinks with the radius and they would
+/// otherwise converge to a cusp at the node's centre — sharpest exactly where
+/// the node has the fewest pixels to say it with.
 ///
 /// Both halves of the bargain, because either alone has a trivial cheat: the
-/// centre has to lose its seam, AND the rim has to keep its colors, which is
-/// what stops the cure from being "average the whole node".
+/// centre has to lose its seam, AND the outside has to keep its colors, which
+/// is what stops the cure from being "average the whole halo".
 ///
-/// Taken at both ends of the solidity axis and at the shipped default, because
-/// the claim of this shape is that the width does NOT depend on solidity — the
-/// cusp belongs to the kernel, and the glow skirt that carries the same blend
-/// has no solidity of its own. So the three readings have to AGREE, not merely
-/// each pass.
+/// The node's light is the only place this can be read. It is the one thing a
+/// node draws whose colour is laid in ANGLE at every radius at once — every
+/// ring paints its own annulus and nothing inside it — so the cusp is the
+/// glow's own to have, and `glow_layer`'s ease toward the strip's mean is the
+/// cure being measured.
 ///
 /// Measured as how far the colors around a ring point APART as directions, not
-/// as how much they differ: a soft core is also a dimmer one, and any measure
-/// of magnitude would read that dimming as a blur and pass on it.
+/// as how much they differ: the light dims inward under the Centre dip and
+/// outward under its falloff, and any measure of magnitude would read that
+/// dimming as a blur and pass on it.
 #[test]
-fn the_color_seams_run_at_one_width_from_the_rim_to_the_centre() {
-    let Some((device, queue)) = headless_device() else {
+fn the_lights_colour_seams_run_at_one_width_from_its_edge_to_the_centre() {
+    const SIZE: [u32; 2] = [512, 512];
+    // Inside the node's own middle, where the light runs in to the centre with
+    // nothing standing it off, and out past every ring the node draws, where
+    // the light is all there is. Both are pure light: the node's ink is an
+    // annulus between them (the octave band, 80..120 px at this node size), and
+    // a reading taken on it would be the band's colour rather than the halo's.
+    const INNER: f32 = 20.0;
+    const OUTER: f32 = 170.0;
+    let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
     };
-    const SIZE: [u32; 2] = [512, 512];
-    let format = wgpu::TextureFormat::Rgba8Unorm;
-    let vec_size = egui::vec2(SIZE[0] as f32, SIZE[1] as f32);
-    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, vec_size);
-    let mut resources = CallbackResources::default();
-    let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
 
-    let mut pane = 300;
-    let mut shot = |solidity: f32, core_radius: f32| -> Vec<u8> {
-        let mut scene = single_marked_node(0, 0);
-        scene.core_solidity = solidity;
-        // The disc held at one size on screen whatever fraction of the quad it
-        // is, so both cases below are measured at the same pixel scale. What
-        // the seam floor asks for is a fraction of the core radius, so the
-        // profile it produces is the same shape at any size; keeping the disc
-        // big just leaves the `aa` floor — the one absolute term — too small to
-        // be what these readings are about.
-        scene.node_radius *= 0.46 / core_radius;
-        scene.core_radius = core_radius;
-        // Every octave the wheel draws for this pitch class. A single sounding
-        // voice takes the node's own color everywhere (octave_glow_color's solo
-        // fallback), which leaves no seam to measure at all.
-        let layout = scene.octave_layout;
-        let node = &mut scene.nodes[0];
-        let (low, high) = layout.slots(node.cents);
-        node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
-        for slot in low.max(0)..=high.min(harmonigraph_scene::OCTAVE_SLOTS as i32 - 1) {
-            node.octaves[slot as usize] = 1.0;
-        }
-        let labels = LatticeLabels::default();
-        let cb = LatticeCallback::from_scene(&scene, labels, vec_size, format, pane, None);
-        pane += 1;
-        let mut encoder = device.create_command_encoder(&Default::default());
-        let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
-        queue.submit(bufs.into_iter().chain([encoder.finish()]));
-        let tex = render_to_texture(&device, &queue, SIZE, format, wgpu::Color::BLACK, |pass| {
-            cb.paint(
-                egui::PaintCallbackInfo {
-                    viewport: rect,
-                    clip_rect: rect,
-                    pixels_per_point: 1.0,
-                    screen_size_px: SIZE,
-                },
-                pass,
-                &resources,
-            );
-        });
-        readback(&device, &queue, &tex, SIZE)
-    };
+    let mut scene = single_marked_node(0, 0);
+    // Every octave the wheel draws for this pitch class. A single sounding
+    // voice takes the node's own color everywhere (octave_glow_color's solo
+    // fallback), which leaves no seam to measure at all.
+    let layout = scene.octave_layout;
+    let node = &mut scene.nodes[0];
+    let (low, high) = layout.slots(node.cents);
+    node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
+    for slot in low.max(0)..=high.min(harmonigraph_scene::OCTAVE_SLOTS as i32 - 1) {
+        node.octaves[slot as usize] = 1.0;
+    }
+    // The octave band is the ink the light's colour is read off, and it is the
+    // only layer on: nothing is drawn inside it, so every pixel sampled below
+    // is light and nothing else.
+    scene.mark_thickness = 0.0;
+    scene.spectral = harmonigraph_scene::SpectralPaint::silent();
+    scene.node_radius = 1.6;
+    scene.glow_reach = 0.8;
+    scene.glow_strength = 1.5;
+    // No moat and no dip: both are shapes laid over the light's own profile,
+    // and what is being read here is its colour.
+    scene.glow_gap = 0.0;
+    scene.glow_gap_soft = 0.0;
+    scene.glow_centre = 1.0;
+    // Each octave's hue kept as its own arc rather than averaged round the
+    // halo, which is the state a seam exists in at all.
+    scene.glow_spread = 0.0;
+    let px = shooter.shot(&scene);
 
     // The node is alone at the world origin and the camera looks at it, so the
     // frame's centre is its centre.
     let c = (SIZE[0] / 2) as i32;
-    let rgb = |px: &[u8], x: i32, y: i32| -> glam::Vec3 {
+    let rgb = |x: i32, y: i32| -> glam::Vec3 {
         let i = ((y as u32 * SIZE[0] + x as u32) * 4) as usize;
         glam::Vec3::new(px[i] as f32, px[i + 1] as f32, px[i + 2] as f32) / 255.0
     };
     // How far apart, in degrees, the most divergent pair of colors around a
     // ring of radius `r` point. Zero is one flat color all the way round.
-    let spread = |px: &[u8], r: f32| -> f32 {
+    let spread = |r: f32| -> f32 {
         let dirs: Vec<glam::Vec3> = (0..64)
             .map(|i| {
                 let a = std::f32::consts::TAU * i as f32 / 64.0;
                 // Screen y grows downward; the sample angle is negated.
-                rgb(px, c + (r * a.cos()).round() as i32, c - (r * a.sin()).round() as i32)
+                rgb(c + (r * a.cos()).round() as i32, c - (r * a.sin()).round() as i32)
             })
             .filter(|v| v.length() > 0.02)
             .map(|v| v.normalize())
             .collect();
         let lit = dirs.len();
-        assert!(lit > 56, "the ring at r={r:.0} is not on the node: {lit} lit samples of 64");
+        assert!(lit > 56, "the ring at r={r:.0} is not lit: {lit} lit samples of 64");
         let mut worst = 0.0f32;
         for (i, a) in dirs.iter().enumerate() {
             for b in &dirs[i + 1..] {
@@ -4297,68 +4287,29 @@ fn the_color_seams_run_at_one_width_from_the_rim_to_the_centre() {
         worst
     };
 
-    // The disc's radius in pixels, read off the SOLID end, where its edge is
-    // the first sharp fall from the centre; at the soft end it has dissolved
-    // into the glow and there is no edge to find. It is the same disc either
-    // way, so one reading sizes every ring. Taken as the median of eight rays
-    // rather than one: a single ray's answer depends on which octave's hue
-    // happens to lie along it and how bright that one is, so a fixture whose
-    // colors moved would quietly resize the rings instead of failing.
-    let disc_radius = |px: &[u8]| -> f32 {
-        let ray = |a: f32| -> f32 {
-            let at = |r: f32| rgb(px, c + (r * a.cos()) as i32, c - (r * a.sin()) as i32).length();
-            let centre = at(0.0);
-            (2..c).map(|r| r as f32).find(|r| at(*r) < centre * 0.4).unwrap_or(c as f32)
-        };
-        let mut rs: Vec<f32> = (0..8)
-            .map(|i| ray(std::f32::consts::TAU * i as f32 / 8.0))
-            .collect();
-        rs.sort_by(f32::total_cmp);
-        rs[4]
-    };
-
-    for (name, core_radius) in [("the default core", 0.2f32), ("the classic radius", 0.46)] {
-        // The disc's edge is a matter of COVERAGE, which none of this touches,
-        // so the solid end still has one to find whatever the colors inside it
-        // are doing.
-        let r_disc = disc_radius(&shot(1.0, core_radius));
-        assert!(r_disc > 20.0, "{name}: the disc is too small to sample rings in ({r_disc} px)");
-        let (inner, outer) = (r_disc * 0.2, r_disc * 0.75);
-
-        let mut centres = Vec::new();
-        for solidity in [1.0f32, 0.4, 0.25] {
-            let px = shot(solidity, core_radius);
-            let at_centre = spread(&px, inner);
-            let at_rim = spread(&px, outer);
-            // No cusp: the middle is a blend rather than the point where every
-            // seam meets. This is what fails if the lobes go back to one fixed
-            // concentration — the centre then reads as separated as the rim.
-            assert!(
-                at_centre < at_rim * 0.5,
-                "{name} at solidity {solidity}: the seams still converge — {at_centre:.0} deg \
-                 across the centre against {at_rim:.0} at the rim"
-            );
-            // And what stops the cure being "average the node": the seams are
-            // never held wider than the arc they already span where the disc
-            // ends, so the node still shows its notes as distinct colors.
-            assert!(
-                at_rim > 30.0,
-                "{name} at solidity {solidity}: the colors washed out instead of \
-                 their seams widening — only {at_rim:.0} deg across the rim"
-            );
-            centres.push(at_centre);
-        }
-        // The point of this shape over hanging the cure off the solidity axis:
-        // the seam width is the same whatever solidity is dialed. A reading
-        // that tracked the axis would spread these three apart.
-        let lo = centres.iter().cloned().fold(f32::MAX, f32::min);
-        let hi = centres.iter().cloned().fold(0.0f32, f32::max);
-        assert!(
-            hi - lo < 6.0,
-            "{name}: the seam width moved with solidity — the centre reads {lo:.0}..{hi:.0} deg \
-             across the axis, and this shape is meant to be independent of it"
-        );
-    }
+    let (at_centre, at_edge) = (spread(INNER), spread(OUTER));
+    eprintln!("seams: {at_centre:.0} deg at {INNER} px, {at_edge:.0} at {OUTER}");
+    // No cusp: the middle is a blend rather than the point where every seam
+    // meets. This is what fails if the mix toward the strip's mean goes away
+    // and the light is laid at one fixed concentration — the centre then reads
+    // as separated as the edge.
+    assert!(
+        at_centre < at_edge * 0.5,
+        "the seams still converge — {at_centre:.0} deg across the centre against \
+         {at_edge:.0} further out",
+    );
+    // And what stops the cure being "average the node": the seams are never
+    // held wider than the arc they already span out where the ink is, so the
+    // node still shows its notes as distinct colors.
+    // The arc is the strip's own — the light is a BLEND of the chord's hues by
+    // design, and out where the mix reaches the strip in full it spans the arc
+    // GLOW_LOBE_KAPPA gives it. What this rules out is that arc collapsing to
+    // the flat mean everywhere, which is what "average the node" looks like.
+    assert!(
+        at_edge > 15.0,
+        "the colors washed out instead of their seams widening — only {at_edge:.0} deg \
+         across the outer ring",
+    );
 }
 
 #[test]
@@ -4559,18 +4510,6 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         "the EARLY_OUT switch was renamed; this test is no longer comparing anything",
     );
 
-    // A core dialed near the top of its bar, with the solidity axis in the
-    // middle. Every other fixture here runs the default 0.46 radius at full
-    // solidity, where `core_reach` is GLOW_LIMIT and the radius arm of it is
-    // never the larger — so collapsing that bound to the constant passes.
-    // At 0.9 the disc still carries alpha where the glow's window has closed,
-    // and clipping it there is a hard circular cut across a soft core.
-    let fat_core = || {
-        let mut scene = parity_scene();
-        scene.core_radius = 0.9;
-        scene.core_solidity = 0.5;
-        scene
-    };
     // The sheet running, at one fixed instant. `paint_reach` is where the
     // claim that shimmer keeps every bound exact has to be checked, and it can
     // only be checked here: the sheet relights the rings and the marked
@@ -4659,7 +4598,6 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
     // on the CPU side where the decision actually lives.
     for (name, scene) in [
         ("lit", parity_scene()),
-        ("fat core", fat_core()),
         ("shimmering", shimmering()),
         ("ringing", ringing()),
         ("folded", folded()),
@@ -4875,9 +4813,6 @@ fn a_ring_wedge_wears_its_own_levels_ramp_entry() {
         // wedges are the MIDI picture and would sum into the channels below.
         node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
         node.activation = 1.0;
-        // The core off for the same reason ringing_node turns it off: its
-        // glow is light at every radius, and the reading below is the ring's.
-        scene.core_radius = 0.0;
         let rings = fresh.rings();
         scene.outer_inner = rings.band.0;
         scene.outer_outer = rings.band.1;
@@ -5144,9 +5079,9 @@ fn a_lattice_with_nothing_to_draw_reports_no_gpu_time() {
 const STACK_AT: glam::Vec2 = glam::Vec2::new(0.7, -0.5);
 
 /// The pane this scene is drawn into. Bigger than the text fixtures, because
-/// this one is about a node's DISC rather than about a glyph: at the real
+/// this one is about a node's RINGS rather than about a glyph: at the real
 /// ratio of node radius to lattice spacing, 64 points across puts the whole
-/// disc inside a couple of pixels.
+/// node inside a couple of pixels.
 const SCENE_SIZE: [u32; 2] = [256, 256];
 
 /// Two nodes on the same pixels, one sevens step apart, and nothing else.
@@ -5163,7 +5098,12 @@ fn one_node_behind_another() -> Scene {
         pitch: 0.0,
         ..Default::default()
     };
-    scene.node_radius = 0.25;
+    // Big enough that the octave band — the one thing this node paints — is
+    // several pixels deep and reaches full coverage in the middle of itself.
+    // A band's two soft edges are screen-constant, so on a small node they
+    // overlap and the annulus never becomes opaque, which is the one property
+    // the covering claim below is read off.
+    scene.node_radius = 0.5;
     let mut near = scene.nodes[0];
     near.world_pos = STACK_AT.extend(0.0);
     near.activation = 1.0;
@@ -5283,6 +5223,12 @@ fn a_nearer_node_covers_the_label_of_the_node_behind() {
     // means.
     const NEAR: u32 = 0;
     const FAR: u32 = 1;
+    /// Points out from the node's centre to the middle of its octave band,
+    /// where the annulus is opaque; to that band's own fading edge; and to
+    /// bare quad past every ring, where the node paints nothing at all.
+    const ON_RING: f32 = 15.0;
+    const ON_EDGE: f32 = 18.0;
+    const PAST_RING: f32 = 30.0;
 
     for (what, instance) in
         [("a letter", crate::text::tests::glyph()), ("a drawn mark", crate::text::tests::mark())]
@@ -5293,45 +5239,47 @@ fn a_nearer_node_covers_the_label_of_the_node_behind() {
             frame[i + 1]
         };
 
-        // On the disc, which is opaque: the far node's name is gone, exactly
-        // gone — this is compositing, not a mask, so "under an opaque disc" is
-        // the picture with no label in it at all.
-        let (bare_disc, under, over) = (at(0.0, None), at(0.0, Some(FAR)), at(0.0, Some(NEAR)));
+        // On the octave band, which is opaque: the far node's name is gone,
+        // exactly gone — this is compositing, not a mask, so "under an opaque
+        // ring" is the picture with no label in it at all.
+        let (bare_ring, under, over) =
+            (at(ON_RING, None), at(ON_RING, Some(FAR)), at(ON_RING, Some(NEAR)));
         assert_eq!(
-            under, bare_disc,
-            "{what} under an opaque disc must leave no trace of itself",
+            under, bare_ring,
+            "{what} under an opaque ring must leave no trace of itself",
         );
         assert!(
-            over.abs_diff(bare_disc) > 32,
-            "{what} drawn after the disc must be plainly visible on it, \
-             got {over} against a bare disc's {bare_disc} — if these agree the \
+            over.abs_diff(bare_ring) > 32,
+            "{what} drawn after the ring must be plainly visible on it, \
+             got {over} against a bare ring's {bare_ring} — if these agree the \
              glyph is not landing on the node and the assertion above is vacuous",
         );
 
-        // Across the disc's own fading edge, where the difference between
-        // covering and cutting shows: the name dims by exactly what the disc
+        // Across the band's own fading edge, where the difference between
+        // covering and cutting shows: the name dims by exactly what the ring
         // took, rather than being taken out whole or left alone.
         let (bare_edge, under_edge, over_edge) =
-            (at(6.0, None), at(6.0, Some(FAR)), at(6.0, Some(NEAR)));
+            (at(ON_EDGE, None), at(ON_EDGE, Some(FAR)), at(ON_EDGE, Some(NEAR)));
         assert!(
             under_edge > bare_edge && under_edge < over_edge,
-            "over the disc's fading edge {what} must dim rather than vanish: \
+            "over the ring's fading edge {what} must dim rather than vanish: \
              {under_edge} against {bare_edge} bare and {over_edge} drawn on top",
         );
 
-        // And out in the glow — inside the node's quad, a percent or two of
-        // opacity, nothing a reader can see — a name is left alone.
-        let (bare_halo, under_halo, over_halo) =
-            (at(16.0, None), at(16.0, Some(FAR)), at(16.0, Some(NEAR)));
+        // And past every ring the node draws — still inside its own quad, and
+        // painted with nothing at all — a name is left exactly alone. A node
+        // covers what it PAINTS and no more of its billboard than that.
+        let (bare_out, under_out, over_out) =
+            (at(PAST_RING, None), at(PAST_RING, Some(FAR)), at(PAST_RING, Some(NEAR)));
         assert!(
-            over_halo.abs_diff(bare_halo) > 32,
-            "the halo probe must be somewhere {what} shows at all: {over_halo} \
-             against {bare_halo}",
+            over_out.abs_diff(bare_out) > 32,
+            "the probe past the rings must be somewhere {what} shows at all: {over_out} \
+             against {bare_out}",
         );
         assert!(
-            under_halo.abs_diff(over_halo) <= 3,
-            "out in the invisible glow {what} must be left alone: {under_halo} \
-             against {over_halo} drawn on top",
+            under_out.abs_diff(over_out) <= 3,
+            "past every ring it draws, a node must leave {what} alone: {under_out} \
+             against {over_out} drawn on top",
         );
     }
 }
@@ -5932,17 +5880,16 @@ fn a_node_under_a_nearer_sheets_node_cuts_nothing_out_of_its_light() {
 /// stand the light off, so it runs all the way in — which is what makes the
 /// glow the note's own light rather than a rim around it.
 ///
-/// The node's exact centre, with the core's solidity dialled to 0 — the fresh
-/// view's own value, and [`parity_scene`] is the departure from it. At 0 no
-/// disc is drawn, so what the pixel carries is the light and only the light. At
-/// a solidity above 0 the disc is drawn over that light, crisp: the moat stands
-/// the glow off exactly the disc's own edge and no wider, so the two shots
-/// would agree there whatever the glow did.
+/// The node's exact centre, on a node whose innermost drawn layer is an
+/// ANNULUS — [`parity_scene`]'s octave band, with the audio ring off. Nothing
+/// is painted inside it, so what the pixel carries is the light and only the
+/// light. (A node whose innermost ring reaches the centre has no such middle:
+/// the moat covers what the ring covers, and the halo is outside the node.)
 ///
 /// Against the glow OFF rather than against a neighbouring pixel, because the
-/// thing that must not happen is the middle going DARK: the glow replaces the
-/// core's skirt (see `core_layer`), and a moat that reached the centre would
-/// take the skirt away and put nothing in its place.
+/// thing that must not happen is the middle going DARK: the light is the only
+/// thing a node draws there, and a moat that reached the centre would take it
+/// away and put nothing in its place.
 #[test]
 fn the_middle_of_a_node_is_where_its_light_is_fullest() {
     const SIZE: [u32; 2] = [256, 256];
@@ -5956,7 +5903,6 @@ fn the_middle_of_a_node_is_where_its_light_is_fullest() {
         // The moat as the fresh view holds it: a centre lit only with the gap
         // dialled to nothing would be a test of the gap, not of the light.
         scene.glow_gap = 0.08;
-        scene.core_solidity = 0.0;
         scene
     };
     let off = shooter.shot(&at(0.0));
@@ -6137,27 +6083,31 @@ fn two_nodes_light_melds_rather_than_summing() {
 fn two_colour_node(band_width: f32, ring_width: f32) -> Scene {
     let fresh = harmonigraph_scene::ViewConfig::default();
     let mut scene = single_marked_node(0, 0);
-    // The stack laid out AROUND a core the node then does not draw, exactly as
-    // [`ringing_node`] does it: the angular gap is a constant chord, so a ring
-    // packed against the node's centre has its wedges eaten by that gap and
-    // paints almost nothing — which would make the ring's share of the light a
-    // reading of the padding rather than of its width.
+    // The probe's wide padding, exactly as [`ringing_node`] uses it: the angular
+    // gap is a constant chord, so a ring packed against the node's centre has
+    // its wedges eaten by that gap and paints almost nothing — which would make
+    // the ring's share of the light a reading of the padding rather than of its
+    // width.
     let rings = harmonigraph_scene::ViewConfig {
+        ring_inner: PROBE_INNER,
         ring_gap: PROBE_GAP,
-        core_radius: PROBE_CORE_RADIUS,
         spectral_ring_width: ring_width,
         band_width,
         mark_thickness: 0.0,
         ..fresh.clone()
     }
     .rings();
-    scene.core_radius = 0.0;
     scene.mark_thickness = 0.0;
     scene.outer_inner = rings.band.0;
     scene.outer_outer = rings.band.1;
     scene.rings_outer = rings.outer;
     scene.mark_inner = rings.mark_inner;
-    scene.octave_gap = PROBE_GAP;
+    // A NARROW angular gap, where the radial one is the probe's wide one: the
+    // sector gap is a constant Euclidean chord, so at the radii the innermost
+    // ring occupies — it reaches the node's centre — the probe's own 0.12 would
+    // blank the ring's wedges outright and the light would carry none of its
+    // colour.
+    scene.octave_gap = 0.03;
     scene.pitch_lut = [glam::Vec4::new(1.0, 0.0, 0.0, 1.0); harmonigraph_scene::PITCH_LUT_N];
 
     let mut paint = harmonigraph_scene::SpectralPaint::silent();
@@ -6224,7 +6174,6 @@ fn the_centre_bar_dips_a_nodes_middle_and_leaves_its_skirt() {
         scene.glow_strength = 1.5;
         scene.glow_gap = 0.08;
         scene.glow_centre = centre;
-        scene.core_solidity = 0.0;
         scene
     };
     let off = shooter.shot(&at(0.0, 1.0));
@@ -6314,9 +6263,14 @@ fn the_gap_fade_bar_widens_the_edge_the_light_comes_off_a_ring() {
             .count()
     };
     let (thin, wide) = (edge_pixels(&hard), edge_pixels(&soft));
+    eprintln!("moat edge: {thin} px at a fade of 0, {wide} px at 0.8");
     assert!(thin > 0, "the moat at a fade of 0 has no edge at all to measure");
+    // Half again, and not double: a hard moat already has an edge of its own
+    // here. The gap is dilated around an annulus whose inner side faces the
+    // node's own lit middle, so both sides of it are counted at every fade,
+    // and the fade widens a band that was never nothing.
     assert!(
-        wide > thin * 2,
+        wide * 2 > thin * 3,
         "a fade of 0.8 spread the moat's edge over {wide} px against {thin} px at 0",
     );
 }
@@ -6449,10 +6403,11 @@ fn widening_a_layer_gives_its_colour_more_of_the_light() {
 #[test]
 fn a_nodes_light_has_no_ripple_the_ink_does_not() {
     const SIZE: [u32; 2] = [512, 512];
-    // Every radius here is inside the node's own middle, where the light runs
-    // in to the centre with nothing standing it off — which is where the fan
-    // converged, and where the mix toward the strip's mean does its work.
-    const RADII: [f32; 5] = [14.0, 22.0, 30.0, 38.0, 46.0];
+    // Every radius here is out past the ring's own annulus (0..45 px at this
+    // node size), where the light is all there is and a spoke has nothing to
+    // hide behind. The ring reaches the node's centre, being the innermost
+    // layer of the stack, so there is no middle to read inside it.
+    const RADII: [f32; 5] = [55.0, 70.0, 85.0, 100.0, 115.0];
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
     };
@@ -6471,11 +6426,13 @@ fn a_nodes_light_has_no_ripple_the_ink_does_not() {
         node.audio_ring = 1.0;
         scene.glow_reach = reach;
         scene.glow_strength = 1.5;
-        scene.glow_gap = 0.08;
-        scene.glow_gap_soft = 0.6;
+        // No moat: it would take the light off exactly the band the radii above
+        // read, and what is under test is the light's own colour rather than
+        // the gap laid over it.
+        scene.glow_gap = 0.0;
+        scene.glow_gap_soft = 0.0;
         scene.glow_centre = 0.5;
         scene.glow_spread = 0.0;
-        scene.core_solidity = 0.0;
         // Big enough that a circle inside the node is hundreds of pixels round,
         // which is what resolving a ripple at these rates takes.
         scene.node_radius = 1.6;

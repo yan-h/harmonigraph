@@ -44,13 +44,14 @@ keep sitting there unused at zero cost.
 - **Render-style final trim.** **Done.** The aesthetic pass the entry asked
   for was made, and none of the animated paints was kept: Vortex, Checker and
   Spiral are gone along with the field machinery behind them (the noise, the
-  sphere mapping, the per-node seed and the swirl gradient), and the core is
-  the steady disc-and-glow alone. `NodeStyle` went with them rather than
+  sphere mapping, the per-node seed and the swirl gradient). `NodeStyle` went
+  with them rather than
   surviving as a one-variant enum, the way `OuterStyle` and `CoreStyle` did
   before it: a blob's `node_style` is now an ignored unknown field, held by
-  `a_persist_blob_naming_a_retired_node_style_still_loads`. What the core IS
-  is two bars — `core_radius` and `core_solidity` — and the octave-color
-  blend `octave_glow_color` lays around it.
+  `a_persist_blob_naming_a_retired_node_style_still_loads`. The disc they
+  painted is gone too: a node is its ring stack read out from an empty middle
+  (`ring_inner`), and what lights that middle is the node glow, in the
+  octave-color blend `octave_glow_color` lays around it.
 - **The piano roll's geometry** (was two entries here: baking settled notes
   into cached meshes, then superseding that with a wgpu callback). **Built.**
   The roll now draws as one instanced quad per note segment through
