@@ -660,7 +660,7 @@ pub fn lattice_paint_callback(
 /// Per-frame, per-pane draw data, computed on the UI thread.
 struct LatticeCallback {
     instances: Vec<GpuInstance>,
-    /// Index into `instances` where the grid is drawn (see `from_scene`).
+    /// Index into `instances` where the markers are drawn (see `from_scene`).
     pluses_at: u32,
     /// Where each sheet's run of `instances` ends, back to front: sheet `k`
     /// is `sheets[k-1]..sheets[k]` (0 for the first). A sheet every node of
@@ -708,11 +708,11 @@ struct GlyphSeam {
     start: u32,
     count: u32,
     /// Whether the node this names is in the home run, which draws AFTER the
-    /// grid — carried rather than inferred from `at`, because the two runs
+    /// markers — carried rather than inferred from `at`, because the two runs
     /// meet at `pluses_at` and a culled node sits on the boundary without
     /// having moved it. The last far-sheet node to ship and a home node
     /// culled before any home node ships both land on `at == pluses_at`, and
-    /// they belong on opposite sides of the grid.
+    /// they belong on opposite sides of the marker run.
     after_pluses: bool,
     /// Which sheet the node this names is on — its run index in the sorted
     /// order, back to front. The glow pass erases a sheet's names after that
@@ -760,7 +760,7 @@ fn place_labels(
     }
     // Stable, so two labels at one seam keep the order they were drawn in —
     // which is the order the nodes are in, and the only thing that decides
-    // between two names sharing a pixel. By the side of the grid before the
+    // between two names sharing a pixel. By the side of the markers before the
     // count, so the two labels that share `pluses_at` from opposite runs sort
     // the way they draw rather than by which node came first. The sheet
     // last, for the same boundary: the last node of one sheet to ship and a
@@ -776,9 +776,9 @@ fn place_labels(
         }
         let first = placed.len() as u32;
         placed.extend_from_slice(&glyphs[start..start + count]);
-        // Merged only with a seam on the SAME side of the grid and the same
-        // sheet: two labels at one `at` are one uninterrupted draw, unless
-        // the grid or a sheet's moats go between them.
+        // Merged only with a seam on the SAME side of the markers and the
+        // same sheet: two labels at one `at` are one uninterrupted draw,
+        // unless the markers or a sheet's moats go between them.
         match seams.last_mut() {
             Some(last)
                 if last.at == at && last.after_pluses == after_pluses && last.sheet == sheet =>
@@ -824,7 +824,7 @@ impl LatticeCallback {
         // the first key is only its depth — but it stays EXACT when the
         // camera is orbited, where two nodes on one sheet have different
         // depths and a plain depth sort interleaves the sheets. Interleaving
-        // is not a cosmetic problem: it puts the grid in the wrong place in
+        // is not a cosmetic problem: it puts the markers in the wrong place in
         // the order and leaves the home sheet's clearings with almost
         // nothing drawn before them to clear, so the knockout quietly did
         // nothing under perspective and orthographic while working under
@@ -855,8 +855,8 @@ impl LatticeCallback {
             .collect();
         order.sort_by(|a, b| b.0.total_cmp(&a.0).then(b.1.total_cmp(&a.1)));
 
-        // The grid belongs to the home sheet — that is the only sheet that
-        // draws one — so its place in the order is between the sheets behind
+        // The markers belong to the home sheet — that is the only sheet that
+        // draws any — so their place in the order is between the sheets behind
         // it and the home sheet itself. Under it, a node on a sheet BEHIND
         // the home one punches its clearing through the home markers, putting
         // a hole in the layer that is supposed to be hiding it.
@@ -894,8 +894,8 @@ impl LatticeCallback {
         // bigger than the node (QUAD_MARGIN and then some), so the discard is
         // paid a fragment at a time over a quad the disc never reaches — and
         // an unplayed lattice is ENTIRELY such nodes: an idle node draws no
-        // marker and carries no trail mark, so a still lattice ships its grid
-        // and nothing else.
+        // light of its own and carries no trail mark, so a still lattice ships
+        // its markers and nothing else.
         //
         // The gates are the ones `fs_main`'s idle branch reads, in the same
         // order, off the packed instance rather than the scene node — so this
@@ -979,8 +979,8 @@ impl LatticeCallback {
         };
         let mut instances = Vec::with_capacity(order.len());
         drawn(&mut instances, &mut seam_of, &mut sheets, &order[..split], false);
-        // Where the grid is drawn inside that run: after the sheets BEHIND the
-        // home one, counted over the kept instances rather than over `split`,
+        // Where the markers are drawn inside that run: after the sheets BEHIND
+        // the home one, counted over the kept instances rather than `split`,
         // which indexes the list before the cull.
         let pluses_at = instances.len() as u32;
         drawn(&mut instances, &mut seam_of, &mut sheets, &order[split..], true);
@@ -1409,9 +1409,9 @@ struct PaneBuffers {
     instance_buffer: wgpu::Buffer,
     instance_capacity: usize,
     instance_count: u32,
-    /// Where the grid is drawn inside the node run: instances before this
+    /// Where the markers are drawn inside the node run: instances before this
     /// are the sheets behind the home one plus the home sheet's own
-    /// clearings, and must land under the grid; the rest go over it. See
+    /// clearings, and must land under the markers; the rest go over them. See
     /// `LatticeCallback::from_scene`.
     pluses_at: u32,
     /// Where each sheet's run of instances ends (see `LatticeCallback::sheets`).
@@ -1501,9 +1501,9 @@ struct Offscreen {
 /// A target of its own, rather than the glow drawn straight into the scene
 /// pass, because the moat has to be an ABSENCE. What removes light there is a
 /// blend that multiplies the destination by `1 - coverage`, and the destination
-/// has to be light alone: run against the picture it would take the grid, the
-/// ground and the sheets behind out with it, which is the feathered dark halo
-/// this design exists to not have. Here every node's light melds first
+/// has to be light alone: run against the picture it would take the markers,
+/// the ground and the sheets behind out with it, which is the feathered dark
+/// halo this design exists to not have. Here every node's light melds first
 /// (`fs_glow`), every node's moat is then subtracted from all of it
 /// (`fs_glow_moat`), and what lands on the lattice is one finished layer.
 ///
@@ -2137,8 +2137,8 @@ fn create_pipelines(
 ///
 /// **The moat writes nothing.** [`GLOW_ERASE`] multiplies the destination by
 /// `1 - a` and never reads the source colour at all. That is what makes the gap
-/// an ABSENCE of light — the pane, the grid and the sheets behind come through
-/// it exactly as they do with the glow off — where a moat painted in the ground
+/// an ABSENCE of light — the pane, the markers and the sheets behind come
+/// through it exactly as with the glow off — where a moat painted in the ground
 /// is a feathered dark halo blocking the picture. Second, so it acts on every
 /// node's light and not only on the light of nodes drawn before it. The two
 /// label shapes are subtracted the same way and for the same reason
@@ -3001,9 +3001,9 @@ impl CallbackTrait for LatticeCallback {
         // Nothing to draw (matches paint()'s early-out): skip the offscreen
         // target and pass entirely. The EDGES count as much as the nodes —
         // `from_scene` drops nodes that can paint nothing, and an idle node
-        // paints nothing, so a still lattice is exactly a frame of grid and
+        // paints nothing, so a still lattice is exactly a frame of markers and
         // no instances — and keying this on the instances alone would take the
-        // grid down with them. So do the LABELS, for the same reason from the
+        // markers down with them. So do the LABELS, for the same reason from the
         // other end: a hovered idle node paints nothing and is named, so a
         // lattice can be a frame of one label and nothing else.
         let anything =
@@ -3149,8 +3149,8 @@ impl CallbackTrait for LatticeCallback {
             // Encoded whenever the target exists, nodes or none: the pass
             // CLEARS it, and a frame that skipped it would composite whatever
             // the last frame left there — light around nodes that are no longer
-            // on screen. A lattice can be a frame of grid and labels with every
-            // node culled, which is exactly that frame.
+            // on screen. A lattice can be a frame of markers and labels with
+            // every node culled, which is exactly that frame.
             if let Some(glow) = offscreen.glow.as_ref() {
                 // What colour that light is, before any of it is laid down: the
                 // ink read round every node, then blurred (see [`InkStrip`]).
@@ -3416,7 +3416,7 @@ impl CallbackTrait for LatticeCallback {
             // every crisp shape by the moat, the picture is the same one with
             // the two operations in the order that survives the knockout: the
             // rings, the band, the marks and the disc stay exactly as drawn,
-            // and what the light lands on is the ground, the grid and the
+            // and what the light lands on is the ground, the markers and the
             // cleared hole — which is what a node's own light should land on.
             //
             // The node LABELS are stood off, in the glow's own pass: a name at

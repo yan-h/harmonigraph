@@ -694,8 +694,8 @@ fn offscreen_composite_matches_direct_draw() {
         create_pipelines(&device, SHADER_SRC, format, &res.bind_group_layout, false);
     let pane = res.panes.get(&7).expect("prepare created the pane");
     let direct_tex = render_to_texture(&device, &queue, SIZE, format, clear, |pass| {
-        // The grid sits at the home sheet's depth, so it is drawn INSIDE the
-        // node run, at `pluses_at` — mirror that here or the two paths differ
+        // The markers sit at the home sheet's depth, so they are drawn INSIDE
+        // the node run, at `pluses_at` — mirror that or the two paths differ
         // by draw order rather than by the thing under test.
         let nodes = |pass: &mut wgpu::RenderPass<'static>, range: std::ops::Range<u32>| {
             if !range.is_empty() {
@@ -2437,7 +2437,7 @@ fn a_clearing_over_a_wedge_past_a_half_turn_covers_the_whole_wedge() {
 /// ink would leave the lattice showing through every gap on the node, which
 /// reads as neither a hole nor a node; and the node whose rings leave the widest
 /// hole in the middle is the one with no core at all, where the ink is an
-/// annulus and its middle is the grid.
+/// annulus and its middle is the marker standing under it.
 ///
 /// Read along rays out of the node's centre, which is the one sweep that does
 /// not need to know where the rim is in each direction — and the marked node's
@@ -2602,8 +2602,8 @@ fn a_clearing_follows_the_audio_ring_its_node_wears() {
 /// The ring is a window onto the spectrum rather than a level a node carries, so
 /// a node nobody played wears one wherever the view's Gate lets it. That is ink,
 /// and ink with no hole under it reads as painted ON the lattice rather than in
-/// front of it: the grid runs straight through the ring and the sheets behind
-/// show through its gaps.
+/// front of it: the marker under it shows through the ring, and so do the
+/// sheets behind.
 ///
 /// The other half is what such a node must NOT clear. Its band and its core are
 /// drawn at the note's level, which is nothing, so a hole sized to the layers
@@ -4987,7 +4987,7 @@ fn each_thing_that_makes_a_node_sounding_keeps_it_alone() {
 /// between them: the seam has to land at 1, and it is `split` (2) that says
 /// otherwise.
 #[test]
-fn the_grid_seam_counts_the_nodes_that_ship() {
+fn the_marker_seam_counts_the_nodes_that_ship() {
     let mut scene = idle_scene();
     scene.nodes.truncate(3);
     for node in &mut scene.nodes {
@@ -5400,25 +5400,25 @@ fn a_label_takes_its_own_nodes_place_in_the_order() {
     );
 }
 
-/// A name on a node that ships no disc still draws over the grid, not under
-/// it — the case where the two runs meet at the same number.
+/// A name on a node that ships no disc still draws over the markers, not
+/// under them — the case where the two runs meet at the same number.
 ///
-/// `pluses_at` is where the grid goes, counted over the instances that SHIP.
-/// The sheets behind the home one draw before it and the home sheet after,
+/// `pluses_at` is where the markers go, counted over the instances that SHIP.
+/// The sheets behind the home one draw before them and the home sheet after,
 /// so the boundary between the two runs is exactly `pluses_at`. A node that
 /// paints nothing ships nothing, which leaves its seam sitting on the
 /// boundary rather than past it: with every node on the home sheet — the
 /// stock `extent_sevens: 0` — the far run is empty, `pluses_at` is 0, and the
 /// first home node to be culled takes seam 0 as well. Reading the side off
 /// `at > pluses_at` then files that node's name with the sheets BEHIND the
-/// grid, and the grid is painted over the name.
+/// markers, and they are painted over the name.
 ///
 /// The state is the plugin's resting one, which is what makes it worth a
 /// test of its own: stock view, nothing played, hover any node. An idle node
 /// draws nothing at all, and a hovered node is named whether or not it
 /// draws.
 #[test]
-fn a_culled_home_nodes_name_draws_over_the_grid_it_shares_a_seam_with() {
+fn a_culled_home_nodes_name_draws_over_the_markers_it_shares_a_seam_with() {
     let mut scene = parity_scene();
     scene.camera = harmonigraph_scene::Camera {
         projection: harmonigraph_scene::Projection::Orthographic,
