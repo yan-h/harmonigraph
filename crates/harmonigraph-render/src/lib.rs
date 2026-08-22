@@ -1445,6 +1445,17 @@ struct Offscreen {
     depth_view: wgpu::TextureView,
     /// The halo, grown from the scene WITHOUT its labels.
     bloom: BloomChain,
+    /// An ink strip rescued from the target this one replaced, for
+    /// [`ensure_glow`](Offscreen::ensure_glow) to adopt instead of building a
+    /// fresh one.
+    ///
+    /// A rebuild here is about the pane's PIXELS, and the strip is rows: it
+    /// holds every lit node's colour and nothing about it depends on the size
+    /// of the pane. Dropping it costs the one thing a node in its release
+    /// cannot replace — such a node draws no layer at all, so its halo's
+    /// colour is entirely what the strip already held, and a strip rebuilt
+    /// from nothing takes the halo with it in a single frame.
+    carried_strip: Option<InkStrip>,
     /// The node glow's own target, present only while the view asks for one.
     glow: Option<GlowTarget>,
     /// Composite: scene color + blurred bloom (quarter A) + uniforms.
@@ -1706,6 +1717,7 @@ impl Offscreen {
         uniform_buffer: &wgpu::Buffer,
         size: [u32; 2],
         screen_size: [u32; 2],
+        carried_strip: Option<InkStrip>,
     ) -> Self {
         let OffscreenShared { format, composite_layout, filter_layout, sampler, .. } = *shared;
         let tex = |label, w: u32, h: u32, format, usage| {
@@ -1772,6 +1784,7 @@ impl Offscreen {
         Offscreen {
             bloom,
             glow: None,
+            carried_strip,
             composite_bind_group,
             color_view,
             nodes_view,
@@ -1786,8 +1799,15 @@ impl Offscreen {
     /// Separate from [`Offscreen::new`] because it answers a different
     /// question: `new` runs when the pane's PIXELS change, this when the Reach
     /// bar crosses 0. Folding the two would mean either rebuilding the glow on
-    /// every resize (harmless, but this is the caller's every-frame path) or
-    /// keeping it allocated while the feature is off.
+    /// every resize or keeping it allocated while the feature is off, and this
+    /// is the caller's every-frame path.
+    ///
+    /// A resize rebuilds the light target, which is the pane's own pixels and
+    /// has to be rebuilt, and CARRIES the strip across
+    /// (`Offscreen::carried_strip`), which is rows and does not. The two are
+    /// not interchangeable: dropping the strip is what takes every node's
+    /// colour history with it, and a node in its release has no ink of its own
+    /// to seed a new one from.
     ///
     /// `rows` is the row map's own capacity (`Scene::glow_rows`), which grows
     /// and never shrinks within a session — rebuilding the strip is what takes
@@ -1804,11 +1824,23 @@ impl Offscreen {
     ) {
         match (want, self.glow.is_some()) {
             (true, false) => {
-                self.glow = Some(GlowTarget::new(device, shared, self.size, rows));
+                let mut target = GlowTarget::new(device, shared, self.size, rows);
+                // A strip rescued from the target this one replaced, where
+                // there is one: see `carried_strip`. Only when it is the right
+                // height — a strip of the wrong `rows` is rebuilt below anyway,
+                // and adopting it first would only move the same work.
+                if let Some(strip) = self.carried_strip.take().filter(|s| s.rows == rows) {
+                    target.strip = strip;
+                }
+                self.glow = Some(target);
             }
             (false, true) => self.glow = None,
             _ => {}
         }
+        // Nothing carried survives past the frame that could adopt it: holding
+        // it longer would hand a stale set of colours to a glow switched back
+        // on much later.
+        self.carried_strip = None;
         if let Some(glow) = self.glow.as_mut().filter(|g| g.strip.rows != rows) {
             glow.strip = InkStrip::new(device, shared.strip_layout, rows);
         }
@@ -2764,8 +2796,25 @@ impl LatticeResources {
                 .as_ref()
                 .is_none_or(|o| o.size != size || o.screen_size != screen_size)
             {
-                pane.offscreen =
-                    Some(Offscreen::new(device, &shared, &pane.uniform_buffer, size, screen_size));
+                // The outgoing target's ink strip comes across. What is being
+                // rebuilt is the pane's PIXELS — the strip is rows, and holds
+                // every lit node's colour. A node whose note fade has run out
+                // draws no layer at all, so its halo's colour is entirely what
+                // the strip already held; rebuilt from nothing, every light
+                // still running out goes off in one frame, while lights on
+                // nodes still holding keys are untouched. That reads as a bug
+                // in the release rather than in the resize, and a resize is
+                // one drag of a window edge, a dock separator, or a move
+                // between displays of different scale.
+                let carried = pane.offscreen.take().and_then(|o| o.glow).map(|g| g.strip);
+                pane.offscreen = Some(Offscreen::new(
+                    device,
+                    &shared,
+                    &pane.uniform_buffer,
+                    size,
+                    screen_size,
+                    carried,
+                ));
             }
             // After the size check rather than inside it: a target rebuilt just
             // above carries no glow, and one kept from last frame may carry the

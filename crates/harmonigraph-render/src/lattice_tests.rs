@@ -6906,6 +6906,89 @@ fn a_node_with_no_light_writes_into_no_other_nodes_colour() {
     );
 }
 
+/// A light already in its RELEASE survives the pane changing size.
+///
+/// The colour half of a node's light lives only in the ink strip, and a node
+/// whose note fade has run out draws no layer at all — `ink_at` gates the band
+/// on `params.x`, the ring on `in.ring` and the marks on `params.y`/`z`, and
+/// every one of them is 0. That is the designed state, not an edge: a level can
+/// stand above zero on a node whose every layer has gone silent, and such a
+/// node is shipped for exactly that reason. Its halo's colour is therefore
+/// entirely what the strip already HELD.
+///
+/// So the strip is the one thing that must not be dropped underneath it. Any
+/// change to the pane's pixel size rebuilds the offscreen targets, and a strip
+/// rebuilt from nothing hands a releasing node `held = 0` with no ink to seed
+/// from — `glow_layer` reads `ink.w <= 0` and returns nothing, on that frame
+/// and every frame after. The halo does not fade, it disappears.
+///
+/// What that looks like: hold a chord, let go, and while the light is still
+/// running out drag the window's edge, drag the dock separator over the
+/// lattice, or drag the window between a Retina display and an external
+/// monitor — that last one moves `pixels_per_point`, so the pixel size changes
+/// at an unchanged point size. Every lingering halo snaps off in one frame,
+/// while halos on nodes still holding keys are untouched (they have ink of
+/// their own). It reads as a bug in the release rather than in the resize.
+///
+/// Measured against the SAME node one ordinary frame on, so the claim is
+/// "a resize is not different from a frame" rather than a number.
+#[test]
+fn a_light_in_its_release_survives_the_pane_changing_size() {
+    const SIZE: [u32; 2] = [256, 256];
+    const GROWN: [u32; 2] = [256, 260];
+    const WIDTH: f32 = 0.18;
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    // Sounding: the octave band alone, which is what puts a colour in the row.
+    let sounding = || -> Scene {
+        let mut scene = two_colour_node(WIDTH, 0.0);
+        scene.nodes[0].glow.mix = 1.0;
+        scene
+    };
+    // Releasing: the note fade has run out, so the node draws no layer at all
+    // and takes none of this frame's ink — only its light is left, and only
+    // the strip knows what colour it is.
+    let releasing = || -> Scene {
+        let mut scene = two_colour_node(0.0, 0.0);
+        scene.nodes[0].glow.mix = 0.0;
+        scene
+    };
+    let unlit = |mut scene: Scene| -> Scene {
+        scene.glow_reach = 0.0;
+        scene
+    };
+
+    // The two grounds first, each on a pane of its own, so that the carrying
+    // sequence below runs without a shot in the middle of it taking the pane.
+    let ground = shooter.shot(&unlit(releasing()));
+    shooter.size = GROWN;
+    let ground_grown = shooter.shot(&unlit(releasing()));
+    shooter.size = SIZE;
+
+    // A sounding frame to put a colour in the row, then the release.
+    let _ = shooter.shot(&sounding());
+    let kept = added_light(&shooter.shot_again(&releasing()), &ground);
+    // And the same release again, with the pane one pixel wider.
+    shooter.size = GROWN;
+    let resized = added_light(&shooter.shot_again(&releasing()), &ground_grown);
+
+    // Non-vacuous first: the release has to light the halo at all, or the
+    // comparison below is between two nothings.
+    assert!(
+        kept[0] > 64,
+        "a releasing node lit nothing to begin with: {kept:?}",
+    );
+    // The claim. Half is generous — the frame is a little larger, and the
+    // light is stepped once more — where the failure takes it to zero.
+    assert!(
+        resized[0] > kept[0] / 2,
+        "the light went from {kept:?} to {resized:?} when the pane changed size: \
+         a node drawing no ink of its own has only the strip's held colour, and \
+         a strip rebuilt with the offscreen targets hands it none",
+    );
+}
+
 /// A node's light takes its colour from the frame before, not from this frame's
 /// ink alone.
 ///
