@@ -42,6 +42,25 @@ impl Settings {
     }
 }
 
+/// The input every offline frame is drawn with.
+///
+/// One constructor rather than a literal at each call site, because the field
+/// that matters here is invisible by its ABSENCE: `max_texture_side` left unset
+/// makes egui report its own 2048 default and the spectrogram plan against it
+/// (issue #368, and see [`Renderer::max_texture_side`](crate::frames::Renderer::max_texture_side)).
+/// A second `RawInput` built by hand is a second place for that field to go
+/// missing, and nothing downstream reports the loss — the frames still render,
+/// a quarter of the area smaller. Sharing it puts the render loop's own input
+/// under the test that measures what the limit buys.
+fn frame_input(screen: egui::Rect, now: f64, max_texture_side: usize) -> egui::RawInput {
+    egui::RawInput {
+        screen_rect: Some(screen),
+        time: Some(now),
+        max_texture_side: Some(max_texture_side),
+        ..Default::default()
+    }
+}
+
 /// Render every frame, handing each to `emit` as tightly packed RGBA8.
 ///
 /// `emit` returning an error stops the render — that is how a dead encoder
@@ -173,15 +192,7 @@ pub fn render(
         // background is the render pass's clear color rather than a
         // painted rect.
         let output = context.run_ui(
-            egui::RawInput {
-                screen_rect: Some(screen),
-                time: Some(now),
-                // Without this egui reports its own 2048 default and the
-                // spectrogram plans against it — see
-                // [`Renderer::max_texture_side`](crate::frames::Renderer::max_texture_side).
-                max_texture_side: Some(max_texture_side),
-                ..Default::default()
-            },
+            frame_input(screen, now, max_texture_side),
             |ui| {
                 for (pane, rect) in &placements {
                     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(*rect));
@@ -390,7 +401,9 @@ mod tests {
     /// upload's own size carries the claim and the pixels only corroborate it.
     ///
     /// A one-frame shot rather than a `render` call, because `render` owns its
-    /// context and the limit under test is what that context is built with.
+    /// context and the limit under test is what that context is built with —
+    /// but through [`frame_input`], the loop's own constructor, so the field
+    /// this pins is the field an export is drawn with and not a copy of it.
     #[test]
     fn the_context_is_told_what_this_device_takes_and_it_costs_the_picture_rows() {
         // egui's `InputState` default — what a context reports when nothing
@@ -442,12 +455,9 @@ mod tests {
             );
             let now = span;
             let output = context.run_ui(
-                egui::RawInput {
-                    screen_rect: Some(screen),
-                    time: Some(now),
-                    max_texture_side: Some(max_texture_side),
-                    ..Default::default()
-                },
+                // The loop's own constructor, which is what puts `render`'s
+                // input under this test rather than beside it.
+                frame_input(screen, now, max_texture_side),
                 |ui| {
                     for (pane, rect) in &placements {
                         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(*rect));
