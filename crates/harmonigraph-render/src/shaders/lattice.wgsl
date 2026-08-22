@@ -272,6 +272,26 @@ fn node_rim(marked: bool) -> f32 {
     return rim;
 }
 
+// The rim a node's LIGHT is measured against: the same two answers `node_rim`
+// chooses between, with the mark's share of the choice CARRIED (Instance::glow
+// w, `panes::glow_fade` in harmonigraph-ui) rather than switched by the bit.
+//
+// The light's whole span is this plus the Reach, so reading the bit put a step
+// in it: the bit is set while the marking voice exists and clear the frame it
+// is pruned, one Fade after the key came up, and the halo — still near full,
+// with seconds of its own release to run — jumped a size smaller in one frame.
+// A light is the slow part of the picture in its size exactly as in its
+// brightness, and this is where the two are made to agree.
+//
+// Interpolating the two rims rather than the mark's own drawn width, because
+// what the light needs is one length to lay its falloff over, and a mark is a
+// wedge: its width is a direction the node reaches in, not a circle it fills.
+// The pair are the circle with the mark and the circle without, and the light
+// eases between them.
+fn glow_rim(inst: Instance) -> f32 {
+    return mix(node_rim(false), node_rim(true), clamp(inst.glow.w, 0.0, 1.0));
+}
+
 // How far the billboard has to reach, in uv, for a clearing of reach `g` around
 // a node reaching `rim` to finish inside it rather than being clipped square at
 // the corners. Measured on the circle the node fits inside, so a clearing that
@@ -386,16 +406,19 @@ struct Instance {
     @location(11) ring: f32,
     // The node's own light: x how bright it is, y which ROW of the ink strip
     // keeps its colour, z how much of this frame's reading the two of them
-    // take. All three are settled on the CPU, where a node has an identity that
-    // outlives a frame (`panes::glow_fade` in harmonigraph-ui).
+    // take, w how much of a MARK the light still has this node wearing. All
+    // four are settled on the CPU, where a node has an identity that outlives a
+    // frame (`panes::glow_fade` in harmonigraph-ui).
     //
     // The level is CARRIED and not the largest envelope on the node, which is
     // the whole point of it: a light runs on a clock of its own, so it is above
     // zero on a node whose every layer has gone silent, and such a node is
     // shipped for exactly that reason. The mix is 1 where the row is new — a
     // strip just built, or a row just handed over — and there is nothing to
-    // carry from.
-    @location(12) glow: vec3<f32>,
+    // carry from. The mark is carried for the same reason the level is: it is
+    // the light's SIZE (`glow_rim`), and the bit it is carried from steps the
+    // frame the marking voice is pruned.
+    @location(12) glow: vec4<f32>,
 };
 
 struct VsOut {
@@ -437,20 +460,27 @@ struct VsOut {
     // multiplies the ring's coverage and nothing else on the node.
     @location(14) @interpolate(flat) ring: f32,
     // The node's light: x how bright it is, y how much of this frame's ink its
-    // row takes (see Instance::glow). Read by the glow's three stages and by
+    // row takes (see Instance::glow), z the rim the LIGHT is drawn against in
+    // this node's uv (`glow_rim`). Read by the glow's three stages and by
     // nothing else on the node.
-    @location(15) @interpolate(flat) glow: vec2<f32>,
+    //
+    // The rim rides here rather than in a location of its own because there is
+    // no location left: a vertex stage may hand on sixteen, and `rim` beside it
+    // is the last of them. It belongs with these two anyway — all three are
+    // what the light carries, and `rim` is what the NODE is measured against.
+    @location(15) @interpolate(flat) glow: vec3<f32>,
 };
 
 @vertex
 fn vs_main(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
-    return node_vertex(vertex_index, inst, 0.0);
+    return node_vertex(vertex_index, inst, 0.0, false);
 }
 
 /// The GLOW's billboard, shared by both of its draws: the same node, on a quad
-/// grown to hold its light — `glow_layer` shuts the window at the node's rim
-/// plus the Reach, and `glow_moat` stands the light off that same rim by the
-/// Gap, so the wider of the two is what has to finish inside the quad. The
+/// grown to hold its light — `glow_layer` shuts the window at the light's own
+/// rim ([`glow_rim`]) plus the Reach, and `glow_moat` stands the light off that
+/// same rim by the Gap, so the wider of the two is what has to finish inside
+/// the quad. The
 /// margin below is that with room to spare.
 ///
 /// A second entry point rather than a wider `vs_main`, because the margin is
@@ -468,13 +498,18 @@ fn vs_glow(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
     // billboard costs one ring of discarded fragments, a tight one clips the
     // moat square at the quad's corners.
     return node_vertex(
-        vertex_index, inst, max(max(u.misc10.x, 0.0), 2.0 * glow_gap() + glow_gap_soft()),
+        vertex_index,
+        inst,
+        max(max(u.misc10.x, 0.0), 2.0 * glow_gap() + glow_gap_soft()),
+        true,
     );
 }
 
 /// One node's billboard, with `extra` uv of headroom past what the node itself
-/// needs — 0 for the node draw, the glow's reach for the glow draw.
-fn node_vertex(vertex_index: u32, inst: Instance, extra: f32) -> VsOut {
+/// needs — 0 for the node draw, the glow's reach for the glow draw. `light`
+/// says which of the two rims sizes the quad ([`glow_rim`]); both are handed on
+/// either way, since the fragment stages of one draw never read the other's.
+fn node_vertex(vertex_index: u32, inst: Instance, extra: f32, light: bool) -> VsOut {
     var corners = array<vec2<f32>, 4>(
         vec2<f32>(-1.0, -1.0),
         vec2<f32>(1.0, -1.0),
@@ -502,11 +537,19 @@ fn node_vertex(vertex_index: u32, inst: Instance, extra: f32) -> VsOut {
     // full-size node", i.e. one fixed distance everywhere.
     let gutter_uv = max(inst.sevens.y, 0.0) / scale;
     let rim = node_rim((inst.marks.x | inst.marks.y) != 0u);
+    let lit_rim = glow_rim(inst);
     // ...which can want more room than the standard billboard has, on the
     // smallest sheets. Only then does the quad grow: uv 1.0 still maps to
     // the same world distance either way, so nothing about the node's own
     // content moves.
-    let margin = quad_margin(rim, max(gutter_uv, extra));
+    // The glow's quad holds BOTH rims. Its light is measured against the one
+    // the light carries and its MOAT against the shapes the node is drawing
+    // right now, which is the other — and a mark arriving on a node already
+    // lit puts the second ahead of the first for the whole of the light's
+    // attack. Tight to either alone, the other is clipped square at the
+    // corners; the wider of the two costs the ring of discarded fragments
+    // between them, which is what a bound is for.
+    let margin = quad_margin(select(rim, max(rim, lit_rim), light), max(gutter_uv, extra));
     let radius = u.misc.y * 0.90 * 2.0 * margin * scale;
 
     let world = inst.world_pos
@@ -520,7 +563,7 @@ fn node_vertex(vertex_index: u32, inst: Instance, extra: f32) -> VsOut {
     out.octaves = inst.octaves;
     out.cents = inst.cents;
     out.strip_row = inst.glow.y;
-    out.glow = vec2<f32>(inst.glow.x, inst.glow.z);
+    out.glow = vec3<f32>(inst.glow.x, inst.glow.z, lit_rim);
     out.marks = inst.marks;
     out.melody_color = inst.melody_color;
     out.bass_color = inst.bass_color;
@@ -2698,7 +2741,7 @@ fn ink_at(in: VsOut, oct: OctRing, angle: f32) -> vec4<f32> {
 /// [`glow_ink`] reads it back at.
 @vertex
 fn vs_ink_strip(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
-    var out = node_vertex(vertex_index, inst, 0.0);
+    var out = node_vertex(vertex_index, inst, 0.0, false);
     let corner = vec2<f32>(f32(vertex_index & 1u), f32(vertex_index >> 1u));
     let rows = max(u.misc11.z, 1.0);
     let v = (out.strip_row + corner.y) / rows;
@@ -2846,12 +2889,13 @@ fn glow_layer(in: VsOut, d: f32) -> vec4<f32> {
     let level = glow_level(in);
     let reach = max(u.misc10.x, 0.0);
     let strength = max(u.misc10.y, 0.0);
-    // ONE length under the whole layer: the node's outermost drawn edge plus
-    // the Reach. It is the falloff's domain, so the halo is a field the node
-    // sits inside rather than a rim light on its edge — `CORE_R_CLASSIC /
-    // radius` in `core_layer` is this same scaling written against the disc,
-    // which is the shape this one is not — and it is where the window shuts, so
-    // the Reach bar says exactly how far the light goes.
+    // ONE length under the whole layer: the node's outermost drawn edge as the
+    // LIGHT has it ([`glow_rim`]) plus the Reach. It is the falloff's domain,
+    // so the halo is a field the node sits inside rather than a rim light on
+    // its edge — `CORE_R_CLASSIC / radius` in `core_layer` is this same scaling
+    // written against the disc, which is the shape this one is not — and it is
+    // where the window shuts, so the Reach bar says exactly how far the light
+    // goes.
     //
     // Not the quad's own margin, which is the tempting reading of "window it at
     // the edge": `quad_margin` floors at QUAD_MARGIN, so on a small reach the
@@ -2859,7 +2903,7 @@ fn glow_layer(in: VsOut, d: f32) -> vec4<f32> {
     // under that floor would draw one width of halo. The guarantee runs the
     // other way instead — the quad is SIZED to hold this, with room to spare
     // (`node_vertex`), so the light is never clipped square at the corners.
-    let span = max(in.rim + reach, 0.1);
+    let span = max(in.glow.z + reach, 0.1);
     if EARLY_OUT && d >= span {
         discard;
     }
@@ -3096,7 +3140,7 @@ fn fs_glow_moat(in: VsOut) -> @location(0) vec4<f32> {
     // the instance buffer multiplying the target by one.
     if EARLY_OUT
         && (depth <= 0.0
-            || d >= in.rim + clearing_edge(glow_gap()) + moat_half(moat_soft(in, aa))) {
+            || d >= in.glow.z + clearing_edge(glow_gap()) + moat_half(moat_soft(in, aa))) {
         discard;
     }
     // The depth scales the coverage once, at the end, so every term above keeps

@@ -274,12 +274,14 @@ pub const PITCH_LUT_N: usize = 64;
 /// One node's state in the glow's own slow filter: what the light is doing at
 /// this node, and where its colour is being kept.
 ///
-/// Three numbers rather than one because the light is carried in two places at
-/// once. The LEVEL is stepped on the CPU, where the node's identity lives; the
-/// COLOUR is stepped on the GPU, where the node's ink is read (the ink strip in
-/// harmonigraph-render). What ties them is [`mix`](Self::mix): the same
-/// coefficient carries both, so the two halves of one light can never be
-/// running at different speeds.
+/// Several numbers rather than one because the light is carried in two places
+/// at once. The LEVEL is stepped on the CPU, where the node's identity lives;
+/// the COLOUR is stepped on the GPU, where the node's ink is read (the ink
+/// strip in harmonigraph-render). What ties them is [`mix`](Self::mix): the
+/// same coefficient carries both, so the two halves of one light can never be
+/// running at different speeds — and [`marked`](Self::marked), the light's own
+/// memory of how big the node is, rides that same coefficient for the same
+/// reason.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GlowStep {
     /// How lit this node is for the purpose of the light it gives off, carried
@@ -305,6 +307,24 @@ pub struct GlowStep {
     /// just handed to a node, and a strip that has just been rebuilt all say
     /// the one thing, and none of them needs a flag of its own.
     pub mix: f32,
+    /// How much of a MARK the light still has this node wearing, carried on the
+    /// same [`mix`](Self::mix) as everything else about it.
+    ///
+    /// The light's span is the node's outermost drawn edge plus the Reach, and
+    /// a mark is the one layer that moves that edge per node: a marked node
+    /// reaches its strip past the outermost ring, an unmarked one stops at the
+    /// ring. Read straight off `melody_slots | bass_slots` that edge is a STEP
+    /// — the bit is set while the marking voice exists and clear the frame it
+    /// is pruned — so the whole halo snapped a size smaller one Fade after the
+    /// key came up, while its own level was still near full and had seconds of
+    /// release left to run. Carried instead, the light's size comes off on the
+    /// light's own clock, exactly as its brightness and its colour do.
+    ///
+    /// A share rather than a bit, and read as one: the shader interpolates the
+    /// node's rim between the two the mark chooses between (`glow_rim` in
+    /// lattice.wgsl), so what the light draws against is the edge as the light
+    /// remembers it and not the edge the node has this frame.
+    pub marked: f32,
 }
 
 impl Default for GlowStep {
@@ -312,7 +332,7 @@ impl Default for GlowStep {
     /// light, and the mix is the value that makes the next step a settle rather
     /// than a fade up from a colour nobody drew.
     fn default() -> GlowStep {
-        GlowStep { level: 0.0, row: 0, mix: 1.0 }
+        GlowStep { level: 0.0, row: 0, mix: 1.0, marked: 0.0 }
     }
 }
 
