@@ -5,7 +5,7 @@
 
 mod harness;
 mod nodes;
-mod grid;
+mod dots;
 mod marks;
 mod sheet;
 mod camera;

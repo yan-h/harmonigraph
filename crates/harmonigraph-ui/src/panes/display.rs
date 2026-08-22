@@ -1,7 +1,7 @@
 //! The Display tab: how everything on screen is drawn, one PAGE per picture —
 //! the [`color`](super::color) tables and the light on them, the lattice
 //! itself ([`view`](super::view), [`nodes`](super::nodes),
-//! [`labels`](super::labels), [`grid`](super::grid)), the Analyzer's own
+//! [`labels`](super::labels), [`dots`](super::dots)), the Analyzer's own
 //! settings ([`spectral`](super::spectral)), and the machine around all of
 //! them ([`system`](super::system)).
 //!
@@ -28,7 +28,7 @@
 //! shared with the display pane's title — see [`tab_title`](super::tab_title).
 
 use super::color::color_pane;
-use super::grid::grid_pane;
+use super::dots::dots_pane;
 use super::labels::labels_pane;
 use super::nodes::nodes_pane;
 use super::spectral::spectrum_settings_pane;
@@ -126,7 +126,7 @@ fn page_picker(ui: &mut egui::Ui, page: &mut DisplayPage) {
 /// The Lattice page: the whole lattice picture, read from the camera in front
 /// of it inward. What is framed ([`view_pane`]), how a sounding note draws
 /// ([`nodes_pane`]), the text riding it ([`labels_pane`]), and last what is
-/// there when nothing sounds at all ([`grid_pane`]).
+/// there when nothing sounds at all ([`dots_pane`]).
 ///
 /// [`view_pane`] leads, so its own first heading is the page's and stays plain
 /// — see [`section`](super::section) for the rule that separates a section from
@@ -135,5 +135,5 @@ fn lattice_page(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBa
     view_pane(ui, state);
     nodes_pane(ui, state, params);
     labels_pane(ui, state);
-    grid_pane(ui, state);
+    dots_pane(ui, state);
 }

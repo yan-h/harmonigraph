@@ -49,7 +49,7 @@ struct Uniforms {
     // idle marker's radius and style, from when an unlit node drew a
     // placeholder of its own.
     misc4: vec4<f32>,
-    // x: grid line thickness, a multiple of the built-in grid width.
+    // x: how much of a resting dot's radius is its feather, as a fraction.
     // y: unused.
     // z: the node's ANGULAR padding, in quad UV units — the gap between two
     // neighbouring sectors, wherever sectors are drawn. The RADIAL padding is
@@ -2212,67 +2212,49 @@ fn node_paint(in: VsOut) -> vec4<f32> {
     return vec4<f32>(with_ground, final_alpha);
 }
 
-// ---- Chord edges & grid lines ----------------------------------------------
-// One pipeline, two kinds of instance: beams between simultaneously
-// sounding, lattice-adjacent nodes (a held chord's interval structure
-// rendered as geometry), and the faint background grid between node
-// positions (segments arrive pre-inset from the scene, leaving a gap at
-// every node position). Drawn under the nodes, grid first.
+// ---- Resting dots ----------------------------------------------------------
+// One marker per home-sheet lattice position: a feathered dot, drawn under the
+// nodes, and the whole of what an unplayed lattice draws. Lines between the
+// positions are NOT drawn — the field's regularity is what the eye reads the
+// rows and columns off, and the ink they would cost goes to the notes.
 
-struct EdgeInstance {
-    // xyz: endpoint A, w: strength (chord: min of the two node
-    // activations; grid: line opacity)
-    @location(0) a_strength: vec4<f32>,
-    // xyz: endpoint B, w: kind (0 chord beam, 1 grid line, 2 dashed grid)
-    @location(1) b_kind: vec4<f32>,
-    @location(2) color: vec4<f32>,
+struct DotInstance {
+    // xyz: the position's world center, w: the dot's outer radius in world
+    // units — where the feather has run out and it paints nothing.
+    @location(0) pos_radius: vec4<f32>,
+    // rgb: the lattice's ground, a: this dot's opacity.
+    @location(1) color: vec4<f32>,
 };
 
-struct EdgeVsOut {
+struct DotVsOut {
     @builtin(position) clip_pos: vec4<f32>,
-    // x: 0..1 along the edge, y: -1..1 across it
+    // -1..1 across the quad on each axis, so `length(uv)` is the fragment's
+    // distance from the dot's centre as a fraction of its OUTER radius. The
+    // feather is a fraction of that same radius, which is what lets one
+    // uniform shape every dot whatever its size.
     @location(0) uv: vec2<f32>,
     @location(1) color: vec4<f32>,
-    @location(2) strength: f32,
-    @location(3) @interpolate(flat) kind: f32,
 };
 
 @vertex
-fn vs_edge(@builtin(vertex_index) vertex_index: u32, inst: EdgeInstance) -> EdgeVsOut {
+fn vs_dot(@builtin(vertex_index) vertex_index: u32, inst: DotInstance) -> DotVsOut {
     var corners = array<vec2<f32>, 4>(
-        vec2<f32>(0.0, -1.0),
+        vec2<f32>(-1.0, -1.0),
         vec2<f32>(1.0, -1.0),
-        vec2<f32>(0.0, 1.0),
+        vec2<f32>(-1.0, 1.0),
         vec2<f32>(1.0, 1.0),
     );
     let corner = corners[vertex_index];
+    // Camera-facing, like every other billboard here: a dot is a mark ON the
+    // lattice rather than an object standing in it, so it keeps its shape
+    // under an orbit instead of foreshortening into an ellipse.
+    let world = inst.pos_radius.xyz
+        + (u.cam_right.xyz * corner.x + u.cam_up.xyz * corner.y) * inst.pos_radius.w;
 
-    let a = inst.a_strength.xyz;
-    let b = inst.b_kind.xyz;
-    let axis = b - a;
-    // Billboard the beam's width: perpendicular to both the edge and the
-    // view direction, falling back to camera-up for edge-on views.
-    let view_dir = cross(u.cam_right.xyz, u.cam_up.xyz);
-    var perp = cross(normalize(axis), view_dir);
-    let plen = length(perp);
-    if plen < 1e-4 {
-        perp = u.cam_up.xyz;
-    } else {
-        perp = perp / plen;
-    }
-    // Grid lines (kind >= 1) are much thinner than chord beams, and carry
-    // the user's thickness multiplier; chord beams keep their fixed width.
-    let is_grid = min(inst.b_kind.w, 1.0);
-    let grid_width = 0.09 * u.misc5.x;
-    let half_width = u.misc.y * mix(0.35, grid_width, is_grid);
-    let world = a + axis * corner.x + perp * corner.y * half_width;
-
-    var out: EdgeVsOut;
+    var out: DotVsOut;
     out.clip_pos = u.view_proj * vec4<f32>(world, 1.0);
     out.uv = corner;
     out.color = inst.color;
-    out.strength = inst.a_strength.w;
-    out.kind = inst.b_kind.w;
     return out;
 }
 
@@ -3008,53 +2990,46 @@ fn fs_glow_cover(in: VsOut) -> @location(0) vec4<f32> {
     return vec4<f32>(0.0, 0.0, 0.0, node_paint(in).w);
 }
 
-/// What a grid line or chord beam paints; see [`node_paint`] for why the
-/// entry points are two.
-fn edge_paint(in: EdgeVsOut) -> vec4<f32> {
-    // Screen-constant soft band across the beam (see aa_inside; computed
-    // before the branch so the derivative stays in uniform control flow).
-    let aa_y = aa_width(fwidth(in.uv.y));
-
-    // Grid line: uniformly faint with a screen-constant soft edge (line
-    // edge at the old 0.35..1.0 band's midpoint), the ends easing off
-    // toward the node gaps.
-    if in.kind > 0.5 {
-        let across = aa_inside(0.675, abs(in.uv.y), aa_y);
-        var along = smoothstep(0.0, 0.12, in.uv.x) * (1.0 - smoothstep(0.88, 1.0, in.uv.x));
-        // Dashed grid lines (kind 2): the sevens links, plus every in-plane
-        // line when the grid's dashed style is on. Chop the length into
-        // short dashes, leaving a faint floor in the gaps so the line still
-        // reads as continuous structure.
-        if in.kind > 1.5 {
-            let tri = abs(fract(in.uv.x * 5.0) - 0.5) * 2.0;
-            along = along * (0.15 + 0.85 * smoothstep(0.35, 0.65, tri));
-        }
-        let alpha = in.strength * across * along;
-        if alpha < 0.01 {
-            discard;
-        }
-        return vec4<f32>(in.color.rgb * alpha, alpha);
-    }
-
-    // Soft-edged beam with a brighter core; the ends taper so the node
-    // discs own the joints.
-    let across = 1.0 - smoothstep(0.15, 1.0, abs(in.uv.y));
-    let along = smoothstep(0.0, 0.10, in.uv.x) * (1.0 - smoothstep(0.90, 1.0, in.uv.x));
-    let alpha = in.strength * across * along * 0.85;
+/// What a resting dot paints; see [`node_paint`] for why the entry points are
+/// two.
+fn dot_paint(in: DotVsOut) -> vec4<f32> {
+    // Distance from the centre as a fraction of the outer radius, so 1 is the
+    // quad's inscribed circle and the corners past it are discarded below.
+    let d = length(in.uv);
+    // Screen-constant AA, the same softness every other shape here carries.
+    // It is a FLOOR on the falloff rather than a band added outside it, and
+    // that distinction is the dot's shape: `fwidth` of a radial coordinate is
+    // half again as wide on the diagonal as on the axes, so a band added
+    // around the feather pinches the circle at 45° — measurably, about a fifth
+    // of the radius at the fresh setting. As a floor it is inert wherever the
+    // feather is wider than a pixel, which is everywhere but the bar's own
+    // bottom, and there it is the whole of the edge and there is no shape left
+    // for it to distort.
+    let aa = aa_width(fwidth(d));
+    // The falloff runs INWARD from the outer radius: `misc5.x` of the radius is
+    // soft and the rest is solid. At 0 that is a disc with only the AA band on
+    // it; at 1 the falloff starts at the dot's own centre and there is no solid
+    // part at all, which is a soft point of light rather than a shape with an
+    // edge.
+    let width = max(clamp(u.misc5.x, 0.0, 1.0), aa);
+    let cov = 1.0 - smoothstep(1.0 - width, 1.0, d);
+    let alpha = in.color.a * cov;
     if alpha < 0.01 {
         discard;
     }
-    let rgb = in.color.rgb * (0.55 + 0.45 * across);
-    return vec4<f32>(rgb * alpha, alpha);
+    // Premultiplied, as every draw in this pass is: the dot IS the lattice's
+    // ground rather than a brightness of it, so its colour is laid down flat
+    // and only its coverage varies across the feather.
+    return vec4<f32>(in.color.rgb * alpha, alpha);
 }
 
 @fragment
-fn fs_edge(in: EdgeVsOut) -> @location(0) vec4<f32> {
-    return edge_paint(in);
+fn fs_dot(in: DotVsOut) -> @location(0) vec4<f32> {
+    return dot_paint(in);
 }
 
 @fragment
-fn fs_edge_scene(in: EdgeVsOut) -> SceneOut {
-    let paint = edge_paint(in);
+fn fs_dot_scene(in: DotVsOut) -> SceneOut {
+    let paint = dot_paint(in);
     return SceneOut(paint, paint);
 }

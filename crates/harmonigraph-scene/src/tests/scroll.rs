@@ -665,12 +665,12 @@ fn a_nonsense_camera_still_yields_a_drawable_window() {
 /// `index_of` inverts `positions` exactly, on a block that is lopsided on
 /// every axis.
 ///
-/// `derive_grid` finds a node's neighbour by arithmetic rather than by
-/// hashing, which is only sound while the two agree — and it is the ONE place
-/// the window's iteration order is load-bearing rather than incidental. A
-/// symmetric block hides a whole class of mistake here, because a min derived
-/// as `-extent` and a span derived as `2 * extent + 1` agree with each other
-/// even when both are wrong about where the block starts.
+/// The window finds a node by arithmetic rather than by hashing, which is only
+/// sound while the walk and the inverse agree — and the iteration order is
+/// load-bearing here rather than incidental. A symmetric block hides a whole
+/// class of mistake, because a min derived as `-extent` and a span derived as
+/// `2 * extent + 1` agree with each other even when both are wrong about
+/// where the block starts.
 #[test]
 fn the_index_of_a_position_is_where_the_walk_puts_it() {
     let window =
@@ -681,7 +681,7 @@ fn the_index_of_a_position_is_where_the_walk_puts_it() {
         assert_eq!(window.index_of(*pos), Some(i), "{pos:?} is not at its own index");
     }
     // And nothing outside it lands on a slot at all — one step past each face,
-    // which is exactly the step `derive_grid` takes looking for a neighbour.
+    // which is exactly the step a caller takes looking for a neighbour.
     for outside in [
         LatticePos::new(window.min.threes - 1, 0, 0),
         LatticePos::new(window.max.threes + 1, 0, 0),

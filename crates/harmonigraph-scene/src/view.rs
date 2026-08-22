@@ -56,7 +56,7 @@ impl DrawnWindow {
     /// Every position in the block, threes outer and sevens inner.
     ///
     /// The order is load-bearing: [`index_of`](Self::index_of) inverts it, so
-    /// `derive_grid` can find a neighbour by arithmetic instead of hashing.
+    /// the renderer can find a neighbour by arithmetic instead of hashing.
     pub fn positions(&self) -> impl Iterator<Item = LatticePos> {
         coords::positions_within(
             self.min.threes..=self.max.threes,
@@ -218,8 +218,8 @@ pub struct ViewConfig {
     // How the sheets other than the home one draw. `sevens_size` and
     // `sevens_label` go inert while `extent_sevens` is 0, which is where a
     // fresh view starts; `sevens_gutter` does NOT — it is named for this
-    // layer but cuts the grid under a sounding node at any extent (see its
-    // own doc below, and `a_flat_lattice_still_clears_its_grid`).
+    // layer but cuts the dot under a sounding node at any extent (see its
+    // own doc below, and `a_flat_lattice_still_clears_its_dot`).
     //
     // The problem all three settings answer: the 5-limit sheet wants its
     // pitch classes as large as they will go, and at the default spacing a
@@ -285,7 +285,7 @@ pub struct ViewConfig {
     ///
     /// Named for the sevens layer it was built for, but not confined to it:
     /// the home sheet clears too, and at any sevenths extent — with the
-    /// lattice flat there is no sheet behind to hide, but the grid lines
+    /// lattice flat there is no sheet behind to hide, but the resting dots
     /// are still cut, which is a look worth having on its own.
     pub sevens_gutter: f32,
     /// How wide the clearing's fade is, same units — and deliberately NOT
@@ -436,9 +436,8 @@ pub struct ViewConfig {
     /// The whole lattice AT REST, as an `L*` 0..100 — one neutral grey under
     /// the three surfaces that draw where nothing is sounding:
     ///
-    /// - the **grid** between node positions, every segment of it, and the
-    ///   colour a sevens link fades in to as a note hangs from it
-    ///   ([`derive_grid`](crate::derive::derive_grid));
+    /// - the **dots** standing at the home sheet's node positions, every one
+    ///   of them ([`derive_dots`](crate::derive::derive_dots));
     /// - the **audio ring** wherever it reads silence, which its ramp is
     ///   re-anchored to open on ([`ring_gradient`](crate::ring_gradient));
     /// - the **MIDI ring**'s octave slices that are not sounding, which ARE
@@ -446,12 +445,12 @@ pub struct ViewConfig {
     ///
     /// One number under all three, like [`octave_gap`](Self::octave_gap) above
     /// it, and for the same reason: they are one picture read together — two annuli
-    /// a gap apart with the lines of the lattice running into them — so a
+    /// a gap apart, standing over the dot that marks the position — so a
     /// ground that differed between them says the three are different KINDS of
     /// thing when the only thing they have in common is being empty. Each
     /// deriving its own ground instead — the audio ring off the analyzer's
     /// gradient (whose dark end carries that gradient's own hue), the MIDI ring
-    /// off the note's colour whitened and laid on at a fixed opacity, the grid
+    /// off the note's colour whitened and laid on at a fixed opacity, the dots
     /// off the CHROME's hairline at another — lands three near-greys a hair
     /// apart in tint, and no bar can dial three routes onto one value.
     ///
@@ -463,7 +462,7 @@ pub struct ViewConfig {
     /// brightness, the same units [`Gradient::lightness`](crate::Gradient) is
     /// authored in, so a ground and a gradient can be compared by their
     /// numbers. There is no off position and it needs none — each layer has its
-    /// own ([`grid_thickness`](Self::grid_thickness) for the lines, a width for
+    /// own ([`dot_size`](Self::dot_size) for the dots, a width for
     /// each ring). What the bottom of the bar reaches is black, which against
     /// this skin's panel reads as holes punched through the lattice; a little
     /// above it, at the panel's own `L*` (8.8 on the fresh skin), the whole
@@ -719,9 +718,9 @@ pub struct ViewConfig {
     /// `#[serde(default)]` makes `impl Default` the one fallback, and
     /// `a_view_missing_any_one_key_reloads_at_the_fresh_value` holds it.
     pub fade_shape: f32,
-    // An unlit node has no mark of its own: the grid lines between node
-    // positions are the whole of what says a position is there, and they say
-    // it on the home sheet alone (see `derive_grid`) — off it, a position at
+    // An unlit node has no mark of its own: the dot standing at a node
+    // position is the whole of what says the position is there, and it stands
+    // on the home sheet alone (see `derive_dots`) — off it, a position at
     // rest is unmarked, which is the same reason it is not hoverable. So a
     // resting lattice is its own drawing rather than a field of
     // placeholders, and every disc on screen is a note.
@@ -931,31 +930,38 @@ pub struct ViewConfig {
     /// mostly-dark at once.
     pub shimmer_softness: f32,
 
-    // ---- Home grid -------------------------------------------------------
-    // The structural grid between node positions (see `derive_grid`), and with
-    // no idle marker under it, the whole of what an unplayed lattice draws.
-    // Line width and inset are its settings HERE; its colour is
+    // ---- Home dots -------------------------------------------------------
+    // The marker standing at each home-sheet node position (see `derive_dots`),
+    // and the whole of what an unplayed lattice draws. Size and feather are its
+    // settings HERE; its colour is
     // [`lattice_ground`](Self::lattice_ground), up with the note's own layers,
-    // because that one grey is the whole at-rest picture — this grid and both
+    // because that one grey is the whole at-rest picture — these dots and both
     // of a node's rings where nothing is lit — and a bar that moved only the
-    // lines would take the lattice apart. A lit segment is the same ground,
-    // arrived rather than brighter.
-    /// Grid line thickness as a multiple of the built-in width. 1 is the
-    /// classic hairline; the shader scales its grid half-width by this, so 0
-    /// takes the lines away and with them the lattice's resting picture.
-    pub grid_thickness: f32,
-    /// How far a grid segment stops short of each node center, as a factor
-    /// of the node radius — the gap a line leaves around the position it
-    /// runs to. 0 runs the lines right into the centers; 1.05 sits slightly
-    /// wider than the disc's visual radius, so the gap fully contains a
-    /// sounding note's circle.
+    // dots would take the lattice apart.
+    /// A resting dot's outer radius, in the quad UV a node's ring radii are
+    /// dialled in ([`RING_INNER_MAX`] and the widths around it) — so the dot
+    /// and the middle a node's rings stand around are two readings on ONE
+    /// axis, and a dot that fits inside `ring_inner` can be read off the two
+    /// numbers rather than by eye. 0 takes the dots away and with them the
+    /// lattice's resting picture.
     ///
-    /// The gap is what the LINES leave around a node position: they say a node
-    /// is there by stopping short of it. What stands in the gap is whatever
-    /// the node draws at rest — nothing at all with the audio ring off, and
-    /// the ring's own annulus with it on, which is where a fresh view starts
-    /// (the inset sits well inside the ring, so the two do not fight).
-    pub grid_inset: f32,
+    /// A world length by the time it reaches the renderer: `derive_dots` spends
+    /// the uv against the scene's node radius, so nothing downstream carries a
+    /// second copy of the convention.
+    pub dot_size: f32,
+    /// How much of that radius is the dot's soft edge, 0..1. 0 is a hard-edged
+    /// disc — antialiased, but a disc — and 1 falls off from the dot's own
+    /// centre, which is a soft point of light rather than a shape with an edge.
+    ///
+    /// The fresh view sits well up the bar, because the dots are STRUCTURE and
+    /// a hard edge reads as a drawn object: a lattice of crisp discs competes
+    /// with the notes for being the thing on screen, and a lattice of soft ones
+    /// is a ground for them to arrive on.
+    ///
+    /// A FRACTION of the radius rather than a width of its own, so growing a
+    /// dot keeps its look instead of sharpening it — one bar moves size, the
+    /// other moves character, and neither undoes the other.
+    pub dot_feather: f32,
     /// Meantone mode: lock the major-third tuning to four perfect fifths
     /// (temper out the syntonic comma, 81/80). While on, the third-tuning
     /// value is derived from the fifth (in `begin_frame`) and note names are
@@ -1120,7 +1126,7 @@ pub struct ViewConfig {
     /// It is an ABSENCE of light and not a shape painted in the ground: the
     /// glow is assembled in a target of its own, and every node subtracts its
     /// own rings from all of it before any of it reaches the picture. So
-    /// whatever lies under the gap — the pane, the grid, a sheet behind — comes
+    /// whatever lies under the gap — the pane, a dot, a sheet behind — comes
     /// through exactly as it does with the glow off, where a moat knocked out
     /// in the ground would blot all of it out and read as a dark halo round
     /// every node. It reaches the NEIGHBOURS' light too, and not only the
@@ -2340,8 +2346,14 @@ impl Default for ViewConfig {
             shimmer_width: 0.639_271_56,
             shimmer_intensity: 0.517_033_16,
             shimmer_softness: 1.0,
-            grid_thickness: 1.020_152_6,
-            grid_inset: 0.3,
+            // A small dot: a fifth of the way out the quad, which is well
+            // inside the middle a node's rings stand around (see ring_inner,
+            // at 0.55), so a note arriving covers its own dot rather than
+            // growing out of it.
+            dot_size: 0.2,
+            // Mostly feather. What is wanted is a position marked, not an
+            // object drawn — see the field's own doc.
+            dot_feather: 0.75,
             meantone: false,
             meantone_auto: true,
             marvel: false,

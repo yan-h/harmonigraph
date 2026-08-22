@@ -166,16 +166,17 @@ fn drawable(c: glam::Vec4) -> bool {
     c.to_array().iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v))
 }
 
-/// The lattice's ground, as a scene draws it: the field itself, every grid
-/// segment's colour, and what an unplayed node falls back to — three copies of
+/// The lattice's ground, as a scene draws it: the field itself, every resting
+/// dot's colour, and what an unplayed node falls back to — three copies of
 /// one resolve ([`Scene::lattice_ground`]), which is why a single poisoned
 /// number can be asked about all three at once.
 fn ground_of(view: &ViewConfig) -> (Vec4, Vec<Vec4>, Vec4) {
     let scene = scene_of(&NoteTracker::new(), &Tuning::default(), view, &plain_frame(), 0.0);
-    let lines: Vec<Vec4> = scene.grid.iter().map(|s| s.color).collect();
+    let lines: Vec<Vec4> = scene.dots.iter().map(|d| d.color).collect();
     assert!(
-        scene.grid.iter().any(|s| s.strength > 0.0),
-        "the home sheet has to draw a resting grid, or the lines below test nothing",
+        scene.dots.iter().any(|d| d.strength > 0.0),
+        "the home sheet has to draw a resting dot field, or the colours below \
+         test nothing",
     );
     let idle = scene
         .nodes

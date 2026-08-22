@@ -5,9 +5,9 @@
 //!
 //! What lives where:
 //! - `lib.rs` (this file) — the render-facing types: [`Scene`],
-//!   [`NodeInstance`], [`EdgeInstance`], and the constants they share.
+//!   [`NodeInstance`], [`DotInstance`], and the constants they share.
 //! - [`derive`](mod@derive) — the per-frame derivation ([`derive_scene`]): note tracker
-//!   + tuning -> node/edge lists. Envelope and animation policy.
+//!   + tuning -> node/dot lists. Envelope and animation policy.
 //! - [`view`] — [`ViewConfig`] (persisted visual settings and their serde
 //!   defaults) and [`FrameParams`].
 //! - [`style`] — the visual-style enums and their shader indices, and the
@@ -189,6 +189,19 @@ pub const RING_INNER_MAX: f32 = 0.9;
 /// sector's arc is every indicator erased — and lands near enough the same
 /// place that a second constant would be two numbers saying one thing.
 pub const GAP_MAX: f32 = 0.4;
+
+/// How big a resting dot may be asked to get (see [`ViewConfig::dot_size`]),
+/// in the same quad UV units the layer sizes above are in — so a dot and a
+/// ring radius are two readings on one axis and can be compared by their
+/// numbers.
+///
+/// Sized against [`RING_INNER_MAX`] rather than under it: a dot is not part of
+/// the ring stack and owes it no room, so at the top of this bar it fills the
+/// middle a node's rings stand around and then some, and the lattice at rest
+/// is a field of discs rather than of points. That is the far end being a
+/// different picture, which is what a bar's far end is for; the small dot the
+/// fresh view draws is a tenth of the way along it.
+pub const DOT_SIZE_MAX: f32 = 0.9;
 
 /// How far past a node's outermost drawn edge its glow may be asked to reach
 /// (see [`ViewConfig::glow_reach`]), in the same quad UV units the layer sizes
@@ -393,9 +406,9 @@ pub struct NodeInstance {
     pub octaves: [f32; OCTAVE_SLOTS],
     pub hovered: bool,
     /// On the home (center sevens) sheet. An idle node draws nothing
-    /// wherever it sits; what marks a home position is the GRID, whose
-    /// lines stop short of it on every side, and off-sheet positions have
-    /// not even that (see [`derive_grid`](derive::derive_grid)).
+    /// wherever it sits; what marks a home position is its DOT, standing
+    /// under where the node itself would draw, and off-sheet positions have
+    /// not even that (see [`derive_dots`](derive::derive_dots)).
     pub on_home: bool,
     /// Billboard size, as a factor of the scene's `node_radius` (see
     /// [`ViewConfig::sevens_size`]): 1 on the home sheet, smaller with every
@@ -412,7 +425,7 @@ pub struct NodeInstance {
     /// per LAYER and settled in the shader, each layer's hole scaled by the
     /// level that paints it. Gating this on the note instead is what left a
     /// node wearing an audio ring with no key down — which the Gate hands out
-    /// freely — drawing that ring over an uncut grid.
+    /// freely — drawing that ring over an uncut dot.
     pub gutter: f32,
     /// Signed cents from the home-sheet node this one shares a LETTER and an
     /// accidental with: `(threes - 2*(sevens - center), fives, center)`,
@@ -554,12 +567,12 @@ impl NodeInstance {
     /// Whether this node is somewhere the picture accounts for, and so can
     /// carry pitch info (hover label, tuning readout). Sounding nodes always
     /// draw; an idle one draws nothing at all, but a home-sheet position is
-    /// still a place the grid lines say is there — they stop short of it on
-    /// every side, which is exactly the gap a pointer goes looking in.
+    /// still a place the dot field says is there — a dot stands exactly
+    /// where a pointer goes looking.
     ///
     /// So this is deliberately NOT "does this node paint a pixel": an empty
     /// home sheet would then be uninspectable, and it is the thing most worth
-    /// inspecting. Off-sheet idle positions have no lines around them and are
+    /// inspecting. Off-sheet idle positions carry no dot and are
     /// correspondingly not hoverable — a pitch revealed there would be
     /// information from nowhere.
     ///
@@ -575,17 +588,20 @@ impl NodeInstance {
     }
 }
 
-/// One line segment of the lattice grid, between two adjacent positions
-/// (one unit step along exactly one prime axis = one interval).
+/// One marker standing at a lattice position: a feathered dot, drawn under
+/// the nodes, and the whole of what an unplayed lattice draws.
 #[derive(Clone, Copy, Debug)]
-pub struct EdgeInstance {
-    pub a: Vec3,
-    pub b: Vec3,
+pub struct DotInstance {
+    /// The position's own world center.
+    pub pos: Vec3,
+    /// Outer radius in WORLD units — where the feather has run all the way
+    /// out and the dot paints nothing. Already resolved from
+    /// [`ViewConfig::dot_size`]'s quad UV against the scene's node radius, so
+    /// the renderer sizes the billboard off this alone.
+    pub radius: f32,
     pub color: Vec4,
-    /// Line opacity.
+    /// Dot opacity.
     pub strength: f32,
-    /// Render as short dashes (the sevens-axis links between sheets).
-    pub dashed: bool,
 }
 
 /// Everything the renderer needs for one frame.
@@ -643,7 +659,7 @@ pub struct Scene {
     /// annulus is a per-fragment test, and the shader is where the fragments
     /// are.
     pub octave_gap: f32,
-    /// The lattice at rest — its grid, and both of a node's rings where
+    /// The lattice at rest — its dots, and both of a node's rings where
     /// nothing is lit — already resolved from
     /// [`ViewConfig::lattice_ground`]'s `L*` to the neutral grey it names.
     ///
@@ -660,9 +676,9 @@ pub struct Scene {
     /// sounding one's pitch is painted over as the note fades. The lattice's
     /// two other at-rest surfaces carry the same grey without reading this
     /// field, because neither reaches the shader as a uniform: every
-    /// [`grid`](Self::grid) segment carries it as its own colour, and the audio
-    /// ring carries it as the `t` = 0 end of its table. Three copies of one
-    /// resolve, not three answers.
+    /// [`dots`](Self::dots) instance carries it as its own colour, and the
+    /// audio ring carries it as the `t` = 0 end of its table. Three copies of
+    /// one resolve, not three answers.
     pub lattice_ground: Vec4,
     /// The lattice's AUDIO channel: what the analyzer measured, where the
     /// ring that draws it sits, and the ramp every audio-lit element on the
@@ -685,16 +701,22 @@ pub struct Scene {
     /// its own octaves fall against the center pitch, which is what makes an
     /// indicator's ANGLE mean an absolute pitch.
     pub octave_layout: OctaveLayout,
-    /// The background grid (see [`derive_grid`](derive::derive_grid)): one
-    /// segment per adjacent pair of visible positions, inset so every node
-    /// position keeps a circular gap where its disc draws while sounding.
-    /// Reuses [`EdgeInstance`]; `strength` carries the line opacity, and every
-    /// segment's colour is [`lattice_ground`](Self::lattice_ground) — so a
-    /// resting line IS that grey and a sevens link fades in to it.
-    pub grid: Vec<EdgeInstance>,
-    /// Grid line thickness as a multiple of the shader's built-in grid
-    /// width (see [`ViewConfig::grid_thickness`]), already clamped.
-    pub grid_thickness: f32,
+    /// The lattice's resting markers (see [`derive_dots`](derive::derive_dots)):
+    /// one dot per visible HOME-sheet position, each carrying
+    /// [`lattice_ground`](Self::lattice_ground) as its colour — so a dot IS
+    /// that grey rather than a brightness of it.
+    ///
+    /// Off-sheet positions get none, and that is the whole of what says which
+    /// sheet is the ground: a note there floats over the dot field instead of
+    /// standing on it.
+    pub dots: Vec<DotInstance>,
+    /// How much of a dot's radius is its soft edge, as a fraction (see
+    /// [`ViewConfig::dot_feather`]), already clamped: 0 is a hard-edged disc
+    /// with only antialiasing on it, 1 a blob that falls off from its own
+    /// centre. View-wide, as the radius is not — a dot's size reaches the
+    /// renderer per instance because it is a world length, and this is a
+    /// SHAPE the whole field shares.
+    pub dot_feather: f32,
     /// How wide the sevens knockout's fade is, in the uv of a full-size
     /// node (see [`ViewConfig::sevens_gutter_soft`]). View-wide, as the reach
     /// beside it is — what varies node to node is the STRENGTH, which the

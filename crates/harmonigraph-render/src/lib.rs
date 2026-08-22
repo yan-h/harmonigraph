@@ -151,9 +151,9 @@ const REQUIRED_ENTRY_POINTS: &[&str] = &[
     "vs_main",
     "fs_main",
     "fs_main_scene",
-    "vs_edge",
-    "fs_edge",
-    "fs_edge_scene",
+    "vs_dot",
+    "fs_dot",
+    "fs_dot_scene",
     "vs_glow",
     "fs_glow",
     "fs_glow_moat",
@@ -274,8 +274,9 @@ struct Uniforms {
     /// like `misc.x`. (The blit pipeline binds only the head of this
     /// buffer, so trailing fields are safe to add here.)
     misc4: [f32; 4],
-    /// x: grid line thickness as a multiple of the shader's built-in grid
-    /// width; y unused (a retired slot rather than a repack, like `misc4.y`);
+    /// x: how much of a resting dot's radius is its feather, as a fraction
+    /// (`Scene::dot_feather`); y unused (a retired slot rather than a repack,
+    /// like `misc4.y`);
     /// z: the node's ANGULAR padding in quad UV units — the gap between two
     /// neighbouring sectors, wherever sectors are drawn. Its RADIAL counterpart
     /// never arrives: every stand-off that one buys is already spent in the
@@ -284,7 +285,7 @@ struct Uniforms {
     /// w: how far a melody/bass mark reaches past the band, same units, where
     /// 0 means no marks (so this slot is NOT free — `mark_extension` reads it,
     /// and the octave layer gates the marks on it). Every earlier misc slot is
-    /// spoken for, so the grid's knob starts a new one — safe per the note on
+    /// spoken for, so the dots' knob starts a new one — safe per the note on
     /// `misc4`.
     misc5: [f32; 4],
     /// x/y unused — they carried the trail's mark style and strength, from
@@ -564,25 +565,28 @@ fn pack_octaves(levels: &[f32; harmonigraph_scene::OCTAVE_SLOTS]) -> [u32; 3] {
     octaves
 }
 
-/// One edge-pipeline instance: a chord beam between two active adjacent
-/// nodes, or a faint background grid line.
+/// One dot-pipeline instance: the feathered marker standing at one home-sheet
+/// lattice position.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct GpuEdge {
-    /// xyz: endpoint A, w: strength (grid lines: opacity).
-    a_strength: [f32; 4],
-    /// xyz: endpoint B, w: kind (0 chord beam, 1 grid line, 2 dashed
-    /// grid line).
-    b_kind: [f32; 4],
+struct GpuDot {
+    /// xyz: the position's world center, w: the dot's outer radius in world
+    /// units — where its feather has run out. Per instance rather than in a
+    /// uniform because it is a WORLD length and the vertex shader sizes the
+    /// billboard off it; the feather beside it is a fraction and is shared
+    /// (`misc5.x`).
+    pos_radius: [f32; 4],
+    /// rgb: the lattice's ground, a: the dot's opacity. Both come off one
+    /// resolve of `Scene::lattice_ground`, so a dot is that grey exactly.
     color: [f32; 4],
 }
 
-impl GpuEdge {
+impl GpuDot {
     const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
-        array_stride: std::mem::size_of::<GpuEdge>() as u64,
+        array_stride: std::mem::size_of::<GpuDot>() as u64,
         step_mode: wgpu::VertexStepMode::Instance,
         attributes: &wgpu::vertex_attr_array![
-            0 => Float32x4, 1 => Float32x4, 2 => Float32x4
+            0 => Float32x4, 1 => Float32x4
         ],
     };
 }
@@ -618,7 +622,7 @@ pub struct LatticeStats {
     pub poll_ms: std::sync::atomic::AtomicU32,
     /// Of that, staging this frame's data: sizing the offscreen targets,
     /// recreating them when the size moved, the `queue.write_buffer` calls for
-    /// instances, edges, labels and both sets of uniforms, and — on the rare
+    /// instances, dots, labels and both sets of uniforms, and — on the rare
     /// frame that brings one — the copy of egui's font atlas the labels are
     /// read out of.
     pub write_ms: std::sync::atomic::AtomicU32,
@@ -654,7 +658,7 @@ pub fn lattice_paint_callback(
 struct LatticeCallback {
     instances: Vec<GpuInstance>,
     /// Index into `instances` where the grid is drawn (see `from_scene`).
-    grid_at: u32,
+    dots_at: u32,
     /// Where each sheet's run of `instances` ends, back to front: sheet `k`
     /// is `sheets[k-1]..sheets[k]` (0 for the first). A sheet every node of
     /// which was culled is an empty run, kept so a label's `sheet` still
@@ -670,7 +674,7 @@ struct LatticeCallback {
     marks: Option<FontAtlas>,
     /// Which way these names travel, for the glyph shader's filter.
     slide: SlideAxis,
-    edges: Vec<GpuEdge>,
+    dots: Vec<GpuDot>,
     uniforms: Uniforms,
     target_format: wgpu::TextureFormat,
     pane_id: u64,
@@ -702,11 +706,11 @@ struct GlyphSeam {
     count: u32,
     /// Whether the node this names is in the home run, which draws AFTER the
     /// grid — carried rather than inferred from `at`, because the two runs
-    /// meet at `grid_at` and a culled node sits on the boundary without
+    /// meet at `dots_at` and a culled node sits on the boundary without
     /// having moved it. The last far-sheet node to ship and a home node
-    /// culled before any home node ships both land on `at == grid_at`, and
+    /// culled before any home node ships both land on `at == dots_at`, and
     /// they belong on opposite sides of the grid.
-    after_grid: bool,
+    after_dots: bool,
     /// Which sheet the node this names is on — its run index in the sorted
     /// order, back to front. The glow pass erases a sheet's names after that
     /// sheet's light and before the next sheet's, so a name a nearer sheet
@@ -719,7 +723,7 @@ struct GlyphSeam {
 #[derive(Clone, Copy, Debug)]
 struct Seam {
     at: u32,
-    after_grid: bool,
+    after_dots: bool,
     sheet: u32,
 }
 
@@ -754,16 +758,16 @@ fn place_labels(
     // Stable, so two labels at one seam keep the order they were drawn in —
     // which is the order the nodes are in, and the only thing that decides
     // between two names sharing a pixel. By the side of the grid before the
-    // count, so the two labels that share `grid_at` from opposite runs sort
+    // count, so the two labels that share `dots_at` from opposite runs sort
     // the way they draw rather than by which node came first. The sheet
     // last, for the same boundary: the last node of one sheet to ship and a
     // node culled at the head of the next share an `at`, and the nearer
     // sheet's name draws after.
-    runs.sort_by_key(|&(seam, _, _)| (seam.at, seam.after_grid, seam.sheet));
+    runs.sort_by_key(|&(seam, _, _)| (seam.at, seam.after_dots, seam.sheet));
 
     let mut placed = Vec::with_capacity(glyphs.len());
     let mut seams: Vec<GlyphSeam> = Vec::new();
-    for (Seam { at, after_grid, sheet }, start, count) in runs {
+    for (Seam { at, after_dots, sheet }, start, count) in runs {
         if count == 0 {
             continue;
         }
@@ -773,10 +777,10 @@ fn place_labels(
         // sheet: two labels at one `at` are one uninterrupted draw, unless
         // the grid or a sheet's moats go between them.
         match seams.last_mut() {
-            Some(last) if last.at == at && last.after_grid == after_grid && last.sheet == sheet => {
+            Some(last) if last.at == at && last.after_dots == after_dots && last.sheet == sheet => {
                 last.count += count as u32
             }
-            _ => seams.push(GlyphSeam { at, start: first, count: count as u32, after_grid, sheet }),
+            _ => seams.push(GlyphSeam { at, start: first, count: count as u32, after_dots, sheet }),
         }
     }
     (placed, seams)
@@ -940,13 +944,13 @@ impl LatticeCallback {
             }
             sheet_of[i] = sheet_count - 1;
         }
-        let mut seam_of = vec![Seam { at: 0, after_grid: false, sheet: 0 }; scene.nodes.len()];
+        let mut seam_of = vec![Seam { at: 0, after_dots: false, sheet: 0 }; scene.nodes.len()];
         let mut sheets: Vec<u32> = Vec::with_capacity(sheet_count as usize);
         let drawn = |out: &mut Vec<GpuInstance>,
                      seam_of: &mut [Seam],
                      sheets: &mut Vec<u32>,
                      ns: &[(f32, f32, usize)],
-                     after_grid: bool| {
+                     after_dots: bool| {
             for &(_, _, i) in ns {
                 let node = &scene.nodes[i];
                 let sheet = sheet_of[i];
@@ -959,7 +963,7 @@ impl LatticeCallback {
                 if paints(&instance) {
                     out.push(instance);
                 }
-                seam_of[i] = Seam { at: out.len() as u32, after_grid, sheet };
+                seam_of[i] = Seam { at: out.len() as u32, after_dots, sheet };
             }
         };
         let mut instances = Vec::with_capacity(order.len());
@@ -967,7 +971,7 @@ impl LatticeCallback {
         // Where the grid is drawn inside that run: after the sheets BEHIND the
         // home one, counted over the kept instances rather than over `split`,
         // which indexes the list before the cull.
-        let grid_at = instances.len() as u32;
+        let dots_at = instances.len() as u32;
         drawn(&mut instances, &mut seam_of, &mut sheets, &order[split..], true);
         // The last sheet ends where the instances do — and so does every
         // sheet whose nodes were all culled, which still owns its labels.
@@ -976,21 +980,19 @@ impl LatticeCallback {
         }
         let (glyphs, seams) = place_labels(labels.glyphs, &labels.labels, &seam_of);
 
-        // The grid draws under the nodes.
-        let edges = scene
-            .grid
+        // The dots draw under the nodes.
+        let dots = scene
+            .dots
             .iter()
-            .map(|g| (g, if g.dashed { 2.0 } else { 1.0 }))
-            .map(|(e, kind)| GpuEdge {
-                a_strength: [e.a.x, e.a.y, e.a.z, e.strength],
-                b_kind: [e.b.x, e.b.y, e.b.z, kind],
-                color: e.color.to_array(),
+            .map(|d| GpuDot {
+                pos_radius: [d.pos.x, d.pos.y, d.pos.z, d.radius],
+                color: [d.color.x, d.color.y, d.color.z, d.strength],
             })
             .collect();
 
         LatticeCallback {
             instances,
-            grid_at,
+            dots_at,
             sheets,
             glyphs,
             seams,
@@ -998,7 +1000,7 @@ impl LatticeCallback {
             atlas: labels.atlas,
             marks: labels.marks,
             slide: labels.slide,
-            edges,
+            dots,
             uniforms: Uniforms {
                 view_proj: view_proj.to_cols_array(),
                 cam_right: right.extend(0.0).to_array(),
@@ -1013,7 +1015,7 @@ impl LatticeCallback {
                 misc3: [0.0, scene.outer_inner, scene.outer_outer, scene.rings_outer],
                 pitch_lut: std::array::from_fn(|k| scene.pitch_lut[k].to_array()),
                 misc4: [0.0, scene.mark_inner, 0.0, 0.0],
-                misc5: [scene.grid_thickness, 0.0, scene.octave_gap, scene.mark_thickness],
+                misc5: [scene.dot_feather, 0.0, scene.octave_gap, scene.mark_thickness],
                 misc6: [0.0, 0.0, scene.sevens_soft, scene.pulse_marks.shader_index() as f32],
                 background: scene.background.to_array(),
                 lattice_ground: scene.lattice_ground.to_array(),
@@ -1131,7 +1133,7 @@ impl LatticeCallback {
 /// GPU objects cached across frames in egui-wgpu's `CallbackResources`.
 struct LatticeResources {
     pipeline: wgpu::RenderPipeline,
-    edge_pipeline: wgpu::RenderPipeline,
+    dot_pipeline: wgpu::RenderPipeline,
     composite_pipeline: wgpu::RenderPipeline,
     /// Bloom chain: bright pass, half->quarter downsample, blur x2.
     bright_pipeline: wgpu::RenderPipeline,
@@ -1395,12 +1397,12 @@ struct PaneBuffers {
     /// are the sheets behind the home one plus the home sheet's own
     /// clearings, and must land under the grid; the rest go over it. See
     /// `LatticeCallback::from_scene`.
-    grid_at: u32,
+    dots_at: u32,
     /// Where each sheet's run of instances ends (see `LatticeCallback::sheets`).
     sheets: Vec<u32>,
-    edge_buffer: wgpu::Buffer,
-    edge_capacity: usize,
-    edge_count: u32,
+    dot_buffer: wgpu::Buffer,
+    dot_capacity: usize,
+    dot_count: u32,
     /// This pane's labels: the glyphs, and where each label falls in the node
     /// run above (see [`GlyphSeam`]).
     glyph_buffer: wgpu::Buffer,
@@ -1986,7 +1988,7 @@ impl InkStrip {
 }
 
 /// Build one of the scene pipelines from WGSL source (startup uses the
-/// baked-in source; hot-reload rebuilds from disk). Node and edge pipelines
+/// baked-in source; hot-reload rebuilds from disk). Node and dot pipelines
 /// share the module, bind group layout, blending, and topology; only entry
 /// points and vertex layout differ.
 ///
@@ -2032,7 +2034,7 @@ fn create_pipeline(
 
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         // Name the pipeline after its vertex entry point, so a GPU capture
-        // can tell the node and edge passes apart.
+        // can tell the node and dot passes apart.
         label: Some(entry_points.0),
         layout: Some(&layout),
         vertex: wgpu::VertexState {
@@ -2078,10 +2080,10 @@ fn create_pipelines(
     bind_group_layout: &wgpu::BindGroupLayout,
     offscreen: bool,
 ) -> (wgpu::RenderPipeline, wgpu::RenderPipeline) {
-    let (node, edge) = if offscreen {
-        ("fs_main_scene", "fs_edge_scene")
+    let (node, dot) = if offscreen {
+        ("fs_main_scene", "fs_dot_scene")
     } else {
-        ("fs_main", "fs_edge")
+        ("fs_main", "fs_dot")
     };
     (
         create_pipeline(
@@ -2098,8 +2100,8 @@ fn create_pipelines(
             shader_src,
             target_format,
             bind_group_layout,
-            ("vs_edge", edge),
-            GpuEdge::LAYOUT,
+            ("vs_dot", dot),
+            GpuDot::LAYOUT,
             offscreen,
         ),
     )
@@ -2495,7 +2497,7 @@ impl LatticeResources {
                 count: None,
             }],
         });
-        let (pipeline, edge_pipeline) =
+        let (pipeline, dot_pipeline) =
             create_pipelines(device, SHADER_SRC, target_format, &bind_group_layout, true);
         // Unfilterable, because every read of it is a `textureLoad`: a row is a
         // node and a column is an angle, so there is no axis a filter would be
@@ -2621,7 +2623,7 @@ impl LatticeResources {
 
         LatticeResources {
             pipeline,
-            edge_pipeline,
+            dot_pipeline,
             composite_pipeline,
             bright_pipeline,
             downsample_pipeline,
@@ -2755,14 +2757,14 @@ impl LatticeResources {
                 ),
                 instance_capacity: INITIAL_INSTANCE_CAPACITY,
                 instance_count: 0,
-                edge_buffer: create_vertex_buffer::<GpuEdge>(
+                dot_buffer: create_vertex_buffer::<GpuDot>(
                     device,
-                    "lattice_edges",
-                    INITIAL_EDGE_CAPACITY,
+                    "lattice_dots",
+                    INITIAL_DOT_CAPACITY,
                 ),
-                edge_capacity: INITIAL_EDGE_CAPACITY,
-                edge_count: 0,
-                grid_at: 0,
+                dot_capacity: INITIAL_DOT_CAPACITY,
+                dot_count: 0,
+                dots_at: 0,
                 glyph_buffer: create_vertex_buffer::<GlyphInstance>(
                     device,
                     "lattice_glyphs",
@@ -2839,16 +2841,16 @@ impl LatticeResources {
     }
 }
 
-/// Starting element counts for a pane's per-instance and per-edge buffers;
+/// Starting element counts for a pane's per-instance and per-dot buffers;
 /// both grow by `next_power_of_two` when a frame overflows them.
 const INITIAL_INSTANCE_CAPACITY: usize = 256;
-const INITIAL_EDGE_CAPACITY: usize = 64;
+const INITIAL_DOT_CAPACITY: usize = 64;
 /// And for its labels. Only sounding, hovered and remembered nodes are named,
 /// so a lattice's glyph count is a fraction of a text pane's.
 const INITIAL_GLYPH_CAPACITY: usize = 512;
 
 /// A `capacity`-element vertex buffer (VERTEX | COPY_DST) sized for `T`.
-/// Used for both the instance and edge buffers, which differ only in label
+/// Used for both the instance and dot buffers, which differ only in label
 /// and element type.
 fn create_vertex_buffer<T>(device: &wgpu::Device, label: &str, capacity: usize) -> wgpu::Buffer {
     device.create_buffer(&wgpu::BufferDescriptor {
@@ -2911,7 +2913,7 @@ impl CallbackTrait for LatticeCallback {
         if let Some(source) = resources.watcher.poll() {
             match validate_wgsl(&source) {
                 Ok(()) => {
-                    let (pipeline, edge_pipeline) = create_pipelines(
+                    let (pipeline, dot_pipeline) = create_pipelines(
                         device,
                         &source,
                         resources.target_format,
@@ -2940,7 +2942,7 @@ impl CallbackTrait for LatticeCallback {
                         &resources.strip_layout,
                     );
                     resources.pipeline = pipeline;
-                    resources.edge_pipeline = edge_pipeline;
+                    resources.dot_pipeline = dot_pipeline;
                     resources.glow_pipeline = glow_pipeline;
                     resources.glow_moat_pipeline = glow_moat_pipeline;
                     resources.glow_cover_pipeline = glow_cover_pipeline;
@@ -2989,7 +2991,7 @@ impl CallbackTrait for LatticeCallback {
         // other end: a hovered idle node paints nothing and is named, so a
         // lattice can be a frame of one label and nothing else.
         let anything =
-            !self.instances.is_empty() || !self.edges.is_empty() || !self.glyphs.is_empty();
+            !self.instances.is_empty() || !self.dots.is_empty() || !self.glyphs.is_empty();
         let offscreen_size = anything.then_some(size);
 
         let glow = self.glow_draws();
@@ -3014,7 +3016,7 @@ impl CallbackTrait for LatticeCallback {
             );
         }
         pane.instance_count = self.instances.len() as u32;
-        pane.grid_at = self.grid_at.min(pane.instance_count);
+        pane.dots_at = self.dots_at.min(pane.instance_count);
         pane.sheets.clear();
         pane.sheets.extend(self.sheets.iter().map(|&end| end.min(pane.instance_count)));
         if !self.instances.is_empty() {
@@ -3025,14 +3027,14 @@ impl CallbackTrait for LatticeCallback {
             );
         }
 
-        if self.edges.len() > pane.edge_capacity {
-            pane.edge_capacity = self.edges.len().next_power_of_two();
-            pane.edge_buffer =
-                create_vertex_buffer::<GpuEdge>(device, "lattice_edges", pane.edge_capacity);
+        if self.dots.len() > pane.dot_capacity {
+            pane.dot_capacity = self.dots.len().next_power_of_two();
+            pane.dot_buffer =
+                create_vertex_buffer::<GpuDot>(device, "lattice_dots", pane.dot_capacity);
         }
-        pane.edge_count = self.edges.len() as u32;
-        if !self.edges.is_empty() {
-            queue.write_buffer(&pane.edge_buffer, 0, bytemuck::cast_slice(&self.edges));
+        pane.dot_count = self.dots.len() as u32;
+        if !self.dots.is_empty() {
+            queue.write_buffer(&pane.dot_buffer, 0, bytemuck::cast_slice(&self.dots));
         }
 
         // The labels. With no atlas there is nothing to sample, so the pass
@@ -3103,7 +3105,7 @@ impl CallbackTrait for LatticeCallback {
             .panes
             .get(&self.pane_id)
             .expect("created by pane_buffers above");
-        let draws = pane.instance_count > 0 || pane.edge_count > 0 || pane.glyph_count > 0;
+        let draws = pane.instance_count > 0 || pane.dot_count > 0 || pane.glyph_count > 0;
         if let Some(offscreen) = pane.offscreen.as_ref().filter(|_| draws) {
             // Bracket the scene pass and the bloom chain together: what the
             // overlay wants is the cost of drawing THE LATTICE, which is both.
@@ -3307,15 +3309,15 @@ impl CallbackTrait for LatticeCallback {
                 multiview_mask: None,
             });
 
-            // The grid sits at the home sheet's own depth, so it goes
+            // The dots sit at the home sheet's own depth, so they go
             // between the sheets behind it and the home sheet itself —
             // NOT under everything. Under everything, a node on a sheet
-            // behind the home one punches its clearing through the home
-            // grid, which puts a hole in the layer it is supposed to be
-            // hidden by. `grid_at` is where that seam falls; the home
+            // behind the home one punches its clearing through the dot
+            // field, which puts a hole in the layer it is supposed to be
+            // hidden by. `dots_at` is where that seam falls; the home
             // sheet's own clearings are the tail of the first run, ahead of
-            // the grid, so they can hide the sheets behind without eating
-            // the grid they sit on.
+            // the dots, so they can hide the sheets behind without eating
+            // the dots they sit on.
             let nodes = |pass: &mut wgpu::RenderPass<'_>, range: std::ops::Range<u32>| {
                 if range.is_empty() {
                     return;
@@ -3325,14 +3327,14 @@ impl CallbackTrait for LatticeCallback {
                 pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
                 pass.draw(0..4, range);
             };
-            let grid = |pass: &mut wgpu::RenderPass<'_>| {
-                if pane.edge_count == 0 {
+            let dots = |pass: &mut wgpu::RenderPass<'_>| {
+                if pane.dot_count == 0 {
                     return;
                 }
-                pass.set_pipeline(&resources.edge_pipeline);
+                pass.set_pipeline(&resources.dot_pipeline);
                 pass.set_bind_group(0, &pane.bind_group, &[]);
-                pass.set_vertex_buffer(0, pane.edge_buffer.slice(..));
-                pass.draw(0..4, 0..pane.edge_count);
+                pass.set_vertex_buffer(0, pane.dot_buffer.slice(..));
+                pass.draw(0..4, 0..pane.dot_count);
             };
             // One label, at its own place in the order: every rim, then every
             // fill. Stamping had that order for free and the shader keeps it,
@@ -3359,36 +3361,36 @@ impl CallbackTrait for LatticeCallback {
             // node it names — so what covers a name is exactly what covers
             // its node. The seams are sorted, so this walks forward once.
             //
-            // Which side of the grid a label goes is the run its node was in,
-            // not how its seam compares to `grid_at`: the runs MEET at that
+            // Which side of the dots a label goes is the run its node was in,
+            // not how its seam compares to `dots_at`: the runs MEET at that
             // number, so the last far node to ship and a home node culled
             // before any home node ships share it while belonging on
-            // opposite sides. The grid covers a name if and only if it is
+            // opposite sides. A dot covers a name if and only if it is
             // drawn after it, which is the same rule everything else in this
             // pass follows.
             let mut cursor = 0u32;
-            let mut grid_drawn = false;
+            let mut dots_drawn = false;
             for seam in &pane.seams {
-                if !grid_drawn && seam.after_grid {
-                    nodes(&mut pass, cursor..pane.grid_at);
-                    grid(&mut pass);
-                    (cursor, grid_drawn) = (pane.grid_at, true);
+                if !dots_drawn && seam.after_dots {
+                    nodes(&mut pass, cursor..pane.dots_at);
+                    dots(&mut pass);
+                    (cursor, dots_drawn) = (pane.dots_at, true);
                 }
                 nodes(&mut pass, cursor..seam.at);
                 cursor = seam.at;
                 label(&mut pass, seam);
             }
-            if !grid_drawn {
-                nodes(&mut pass, cursor..pane.grid_at);
-                grid(&mut pass);
-                cursor = pane.grid_at;
+            if !dots_drawn {
+                nodes(&mut pass, cursor..pane.dots_at);
+                dots(&mut pass);
+                cursor = pane.dots_at;
             }
             nodes(&mut pass, cursor..pane.instance_count);
 
             // The glow, over the finished lattice — every node drawn, every
             // label spliced in, and the light laid on top of all of it.
             //
-            // LAST, and not between the grid and the home sheet where "under
+            // LAST, and not between the dots and the home sheet where "under
             // the nodes" would put it, because of what a node's knockout is: it
             // paints the pane's own ground filled to the node's CENTRE, one
             // Clearance out past every layer (`node_clearing`). Light
@@ -3473,10 +3475,10 @@ impl CallbackTrait for LatticeCallback {
         let Some(pane) = resources.panes.get(&self.pane_id) else {
             return;
         };
-        // Nothing was rendered into the offscreen target. The edges and the
+        // Nothing was rendered into the offscreen target. The dots and the
         // labels count as much as the nodes here — see `prepare`, where the
         // same test decides whether the target exists at all.
-        if pane.instance_count == 0 && pane.edge_count == 0 && pane.glyph_count == 0 {
+        if pane.instance_count == 0 && pane.dot_count == 0 && pane.glyph_count == 0 {
             return;
         }
         let Some(offscreen) = &pane.offscreen else {

@@ -370,6 +370,111 @@ mod tests {
         }
     }
 
+    /// The resting dot field's picture, written to `target/scratch/` — a sweep
+    /// of the Size and the Feather together, which is the pair that decides
+    /// whether the lattice at rest is a field of marks or a field of objects.
+    ///
+    /// A probe: it asserts nothing, the verdict being a look rather than a
+    /// number, and it is kept and `#[ignore]`d for the reason the two below it
+    /// are — the reading conditions are the expensive part.
+    ///
+    /// Those conditions: NOTHING sounding, because the subject is what an
+    /// unplayed lattice draws and a chord over it is exactly the thing that
+    /// hides it; the camera pulled back so several rows are on screen, a field
+    /// being a claim about regularity rather than about one dot; and the
+    /// skin's panel as the ground rather than the preset's near-black, because
+    /// the dots are the ground's own grey a step above it and the whole
+    /// judgement is how far above.
+    ///
+    /// One shot holds a held chord, and it is the one that answers the
+    /// question the size bar is really for: a node arriving has to COVER its
+    /// own dot rather than grow out of one, which is a comparison between the
+    /// dot's radius and where the node's rings start.
+    ///
+    /// ```text
+    /// cargo test -p harmonigraph-offline -- --ignored --nocapture resting_dots
+    /// ```
+    #[test]
+    #[ignore = "a probe: writes PNGs and asserts nothing"]
+    fn the_resting_dots_draw_a_picture() {
+        use harmonigraph_ui::{draw_pane, Layout, SharedState};
+
+        const SIZE: [u32; 2] = [1200, 1000];
+        const PPP: f32 = 2.0;
+        const NOW: f64 = 1.0;
+
+        let Some(mut renderer) = Renderer::new(SIZE) else {
+            eprintln!("no usable GPU adapter; nothing rendered");
+            return;
+        };
+        let context = egui::Context::default();
+        harmonigraph_ui::theme::apply_theme(&context);
+        context.set_pixels_per_point(PPP);
+
+        let layout = Layout::preset("lattice").expect("the lattice preset");
+        let points = egui::vec2(SIZE[0] as f32 / PPP, SIZE[1] as f32 / PPP);
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, points);
+        let placements = layout.resolve(points);
+        let background = egui::Color32::from_rgb(
+            layout.background.0,
+            layout.background.1,
+            layout.background.2,
+        );
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/scratch");
+        std::fs::create_dir_all(&dir).expect("a scratch directory");
+
+        let fresh = harmonigraph_scene::ViewConfig::default();
+        // Size, feather, and whether a chord is held over it.
+        let shots: Vec<(f32, f32, bool)> = vec![
+            (fresh.dot_size, fresh.dot_feather, false),
+            (fresh.dot_size, 0.0, false),
+            (fresh.dot_size, 1.0, false),
+            (0.1, fresh.dot_feather, false),
+            (0.5, fresh.dot_feather, false),
+            (fresh.dot_size, fresh.dot_feather, true),
+        ];
+        for (size, feather, chord) in shots {
+            let mut state = SharedState::new(FORMAT);
+            // The DAW's own lattice ground rather than the preset's near-black:
+            // the dots are a step above the panel and nothing else here says
+            // how big a step that reads as.
+            state.set_background((24, 25, 29));
+            state.frame_params.fade_time = 0.0;
+            if chord {
+                for note in [55u8, 60, 64, 67, 71] {
+                    state.tracker.handle_event(harmonigraph_core::NoteEvent::on(0.0, 0, note, 1.0));
+                }
+            }
+            state.camera.zoom_by(2.5);
+            state.view.dot_size = size;
+            state.view.dot_feather = feather;
+            let output = context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    time: Some(NOW),
+                    ..Default::default()
+                },
+                |ui| {
+                    for (pane, rect) in &placements {
+                        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(*rect));
+                        draw_pane(&mut child, *pane, &mut state, NOW);
+                    }
+                },
+            );
+            let primitives = context.tessellate(output.shapes, PPP);
+            let bytes = renderer.render(&primitives, &output.textures_delta, PPP, background);
+            let path = dir.join(format!(
+                "dots-size{:.0}-feather{:.0}{}.png",
+                size * 100.0,
+                feather * 100.0,
+                if chord { "-chord" } else { "" },
+            ));
+            image::save_buffer(&path, &bytes, SIZE[0], SIZE[1], image::ExtendedColorType::Rgba8)
+                .expect("write the png");
+            eprintln!("{}", path.canonicalize().unwrap_or(path.clone()).display());
+        }
+    }
+
     /// The audio ring's picture, written to `target/scratch/` — the only way
     /// to LOOK at this change without the DAW.
     ///

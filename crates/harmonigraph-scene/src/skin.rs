@@ -18,7 +18,7 @@ use glam::Vec4;
 #[derive(Clone, Debug)]
 pub struct Skin {
     // ---- UI chrome (sRGB bytes; converted to egui colors in theme) ----
-    // CHROME only. What the lattice is drawn AT REST in — its grid, both of
+    // CHROME only. What the lattice is drawn AT REST in — its dots, both of
     // a node's rings where nothing is lit — is a view setting rather than a
     // skin color (`ViewConfig::lattice_ground`), because it is a thing to be
     // dialled while a picture is being read. The skin's part in it is
@@ -69,7 +69,8 @@ impl Default for Skin {
     /// slider fills now separate clearly from the background, and secondary
     /// text (labels, inactive tabs, console, disclosure arrows — all routed
     /// through `text_dim`) rises from ~5.5:1 to ~8:1. Idle nodes and the
-    /// grid brighten to match. See git history for the pre-pass values.
+    /// resting dots brighten to match. See git history for the pre-pass
+    /// values.
     fn default() -> Self {
         Skin {
             panel: [24, 25, 29],
@@ -138,14 +139,14 @@ pub fn well_color() -> Vec4 {
 
 /// The active skin's `surface_faint`: the grey a subtly raised surface of the
 /// chrome sits at, and the rung [`ViewConfig::lattice_ground`](crate::ViewConfig)
-/// opens on — what the whole lattice is drawn in at rest: its grid, and both of
+/// opens on — what the whole lattice is drawn in at rest: its dots, and both of
 /// a node's rings where nothing is lit.
 ///
 /// Which rung of the ladder is the whole of what that default is, and the
 /// ladder is short: [`well_color`] — the ground the lattice is composited
 /// OVER — at `L*` 4.7, the chrome's panel at 8.8, and this at 20.0. The
 /// lattice's ground has to sit well ABOVE the ground it stands on, so that a
-/// quiet ring and an idle grid line read as faintly raised structure rather
+/// quiet ring and a resting dot read as faintly raised structure rather
 /// than as marks on the surface. The well IS the pane exactly, and structure
 /// standing there vanishes into it — which is what a ring dialled to no width
 /// looks like, the off switch
@@ -154,13 +155,13 @@ pub fn well_color() -> Vec4 {
 /// smudge on the ground rather than as a surface above it.
 ///
 /// A step DOWN from the chrome's own [`hairline`](Skin::hairline), which is
-/// the other grey the grid could rule itself with — the argument for that one
-/// being that the picture and the panel around it then cannot drift. What it
-/// costs is the whole reason this is the rung instead: it holds the lattice's
-/// structure to a CHROME decision, so the lines answer to the settings pane's
-/// dividers rather than to the rings a gap away from them, and no bar can move
-/// any of it. The rings are on the same sheet as the grid; the dividers are
-/// not.
+/// the other grey the lattice could rule itself with — the argument for that
+/// one being that the picture and the panel around it then cannot drift. What
+/// it costs is the whole reason this is the rung instead: it holds the
+/// lattice's structure to a CHROME decision, so the dots answer to the settings
+/// pane's dividers rather than to the rings standing over them, and no bar can
+/// move any of it. The rings are on the same sheet as the dots; the dividers
+/// are not.
 ///
 /// A DEFAULT and not the value itself: the bar reaches the whole `L*` axis, and
 /// `the_fresh_ground_is_the_skins_faint_surface` is what keeps this rung and

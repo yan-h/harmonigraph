@@ -305,8 +305,8 @@ fn a_second_lattice_view_in_the_same_frame_does_not_break_the_submit() {
 const PARITY_SHIMMER_WIDTH: f32 = 5.0;
 
 /// A scene exercising every draw path: lit + idle + hovered nodes with
-/// octave indicators, a chord beam, and solid + dashed grid lines, all
-/// overlapping so blend order matters.
+/// octave indicators, and resting dots under them, all overlapping so blend
+/// order matters.
 fn parity_scene() -> Scene {
     use glam::{Vec3, Vec4};
     use harmonigraph_core::LatticePos;
@@ -380,20 +380,21 @@ fn parity_scene() -> Scene {
             trail: 0.0,
         });
     }
-    let grid = vec![
-        harmonigraph_scene::EdgeInstance {
-            a: Vec3::new(-1.8, -0.6, -0.3),
-            b: Vec3::new(1.6, -0.6, -0.3),
-            color: Vec4::new(0.16, 0.17, 0.20, 0.55),
+    // Two dots, one under a node and one clear of every node, so the pass is
+    // exercised both where the nodes composite over it and where it stands
+    // alone. Different radii, because the size is per instance.
+    let dots = vec![
+        harmonigraph_scene::DotInstance {
+            pos: Vec3::new(-1.8, -0.6, -0.3),
+            radius: 0.22,
+            color: Vec4::new(0.16, 0.17, 0.20, 1.0),
             strength: 0.55,
-            dashed: false,
         },
-        harmonigraph_scene::EdgeInstance {
-            a: Vec3::new(-1.2, 0.7, -0.6),
-            b: Vec3::new(1.2, 0.4, 0.6),
-            color: Vec4::new(0.16, 0.17, 0.20, 0.55),
+        harmonigraph_scene::DotInstance {
+            pos: Vec3::new(0.0, 0.0, 0.0),
+            radius: 0.13,
+            color: Vec4::new(0.16, 0.17, 0.20, 1.0),
             strength: 0.4,
-            dashed: true,
         },
     ];
     let glow_rows = nodes.len() as u32;
@@ -445,8 +446,8 @@ fn parity_scene() -> Scene {
         // paths composite, so the indicators are the ones every other
         // setting is a departure from.
         octave_layout: harmonigraph_scene::OctaveLayout::default(),
-        grid,
-        grid_thickness: 1.0,
+        dots,
+        dot_feather: 0.75,
         // A blue->red sweep across the whole table, so a glyph's color is a
         // reading of which entry it landed on. Spanned off PITCH_LUT_N rather
         // than a literal: `from_fn` sizes itself from the field, so a literal
@@ -683,12 +684,12 @@ fn offscreen_composite_matches_direct_draw() {
     // Path B: the pre-offscreen renderer — same buffers and draw order,
     // depthless pipelines, straight into the target pass.
     let res: &LatticeResources = resources.get().expect("prepare created resources");
-    let (node_pipeline, edge_pipeline) =
+    let (node_pipeline, dot_pipeline) =
         create_pipelines(&device, SHADER_SRC, format, &res.bind_group_layout, false);
     let pane = res.panes.get(&7).expect("prepare created the pane");
     let direct_tex = render_to_texture(&device, &queue, SIZE, format, clear, |pass| {
         // The grid sits at the home sheet's depth, so it is drawn INSIDE the
-        // node run, at `grid_at` — mirror that here or the two paths differ
+        // node run, at `dots_at` — mirror that here or the two paths differ
         // by draw order rather than by the thing under test.
         let nodes = |pass: &mut wgpu::RenderPass<'static>, range: std::ops::Range<u32>| {
             if !range.is_empty() {
@@ -698,14 +699,14 @@ fn offscreen_composite_matches_direct_draw() {
                 pass.draw(0..4, range);
             }
         };
-        nodes(pass, 0..pane.grid_at);
-        if pane.edge_count > 0 {
-            pass.set_pipeline(&edge_pipeline);
+        nodes(pass, 0..pane.dots_at);
+        if pane.dot_count > 0 {
+            pass.set_pipeline(&dot_pipeline);
             pass.set_bind_group(0, &pane.bind_group, &[]);
-            pass.set_vertex_buffer(0, pane.edge_buffer.slice(..));
-            pass.draw(0..4, 0..pane.edge_count);
+            pass.set_vertex_buffer(0, pane.dot_buffer.slice(..));
+            pass.draw(0..4, 0..pane.dot_count);
         }
-        nodes(pass, pane.grid_at..pane.instance_count);
+        nodes(pass, pane.dots_at..pane.instance_count);
     });
 
     let composite = readback(&device, &queue, &composite_tex, SIZE);
@@ -1419,7 +1420,7 @@ fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
     }];
     // One node, so one row — the strip follows the scene it is handed.
     scene.glow_rows = 1;
-    scene.grid.clear();
+    scene.dots.clear();
     // Fill a good share of the frame, so the measurements below are
     // about the mark's design rather than about pixel quantization.
     scene.node_radius = 1.1;
@@ -2448,13 +2449,13 @@ fn a_clearing_is_one_hole_covering_the_centre_and_every_ring() {
 
     let staged = |melody: u32, band: bool, ring: f32, gutter: f32| -> Scene {
         let mut scene = clearing_node(melody, ring, band, gutter);
-        // No grid. The ray below reads the picture for anything lit, and a grid
-        // line crossing just outside the hole is a lit sample past its rim with
+        // No dots. The ray below reads the picture for anything lit, and a dot
+        // sitting just outside the hole is a lit sample past its rim with
         // bare pane between — which reads as a gap in the hole and is nothing
-        // of the kind. What the clearing cuts out of the grid is a separate
-        // claim, and `a_node_wearing_only_an_audio_ring_clears_around_it` is
-        // where the added light is measured against it.
-        scene.grid.clear();
+        // of the kind. What the clearing cuts out of the dot field is a
+        // separate claim, and `a_node_wearing_only_an_audio_ring_clears_around_it`
+        // is where the added light is measured against it.
+        scene.dots.clear();
         scene
     };
     // Everything a node can wear, and then the same node with its audio ring
@@ -4680,20 +4681,20 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
     }
 }
 
-/// A node that can paint nothing is not shipped at all — and the grid it
-/// sits in still is.
+/// A node that can paint nothing is not shipped at all — and the dot standing
+/// at its position still is.
 ///
 /// The billboard is deliberately bigger than the node, so a node the shader
 /// discards every fragment of still costs a quad's worth of rasterizing; on
-/// an unplayed lattice that is EVERY node, there being no idle marker and no
-/// trail mark for one to draw. So the frame drops to a grid and nothing
-/// else, and the callback has to keep drawing that grid — which is why
-/// neither `prepare` nor `paint` may read "no instances" as "nothing to
-/// draw": that test takes the grid down with the nodes.
+/// an unplayed lattice that is EVERY node, an idle one drawing nothing of its
+/// own and carrying no trail mark. So the frame drops to the dot field and
+/// nothing else, and the callback has to keep drawing that field — which is
+/// why neither `prepare` nor `paint` may read "no instances" as "nothing to
+/// draw": that test takes the dots down with the nodes.
 #[test]
-fn a_silent_lattice_ships_no_nodes_and_still_draws_its_grid() {
+fn a_silent_lattice_ships_no_nodes_and_still_draws_its_dots() {
     let scene = idle_scene();
-    assert!(!scene.grid.is_empty(), "the fixture has to carry a grid");
+    assert!(!scene.dots.is_empty(), "the fixture has to carry a dot field");
     let cb = LatticeCallback::from_scene(
         &scene,
         LatticeLabels::default(),
@@ -4706,7 +4707,7 @@ fn a_silent_lattice_ships_no_nodes_and_still_draws_its_grid() {
         cb.instances.is_empty(),
         "every node is idle with nothing to draw at one, so none should ship",
     );
-    assert!(!cb.edges.is_empty(), "the grid is not a node and must survive");
+    assert!(!cb.dots.is_empty(), "a dot is not a node and must survive");
 
     let Some((device, queue)) = headless_device() else {
         return;
@@ -4967,7 +4968,7 @@ fn each_thing_that_makes_a_node_sounding_keeps_it_alone() {
 /// The grid's place in the draw order is counted over the nodes actually
 /// shipped, not over the ones the scene held.
 ///
-/// `grid_at` is the seam between the sheets BEHIND the home sheet and the
+/// `dots_at` is the seam between the sheets BEHIND the home sheet and the
 /// home sheet itself, and the whole argument for it is in `from_scene`: put
 /// the grid under everything and a node on a sheet behind the home one
 /// punches its clearing through the home grid. Culling breaks the old
@@ -5008,7 +5009,7 @@ fn the_grid_seam_counts_the_nodes_that_ship() {
     );
     assert_eq!(call.instances.len(), 2, "the idle node behind home is culled");
     assert_eq!(
-        call.grid_at, 1,
+        call.dots_at, 1,
         "the grid draws after the one sheet-behind node that ships, not after \
          the two the scene held",
     );
@@ -5076,7 +5077,7 @@ fn a_lattice_with_nothing_to_draw_reports_no_gpu_time() {
 
     // Now the same pane with nothing at all in it.
     let mut empty = idle_scene();
-    empty.grid.clear();
+    empty.dots.clear();
     let blank = LatticeCallback::from_scene(
         &empty,
         LatticeLabels::default(),
@@ -5085,7 +5086,7 @@ fn a_lattice_with_nothing_to_draw_reports_no_gpu_time() {
         40,
         Some(stats.clone()),
     );
-    assert!(blank.instances.is_empty() && blank.edges.is_empty(), "nothing to draw");
+    assert!(blank.instances.is_empty() && blank.dots.is_empty(), "nothing to draw");
     frame(&blank);
     assert_eq!(
         stats.gpu_ms.load(std::sync::atomic::Ordering::Relaxed),
@@ -5138,9 +5139,9 @@ fn one_node_behind_another() -> Scene {
     far.world_pos = STACK_AT.extend(-1.0);
     far.on_home = false;
     scene.nodes = vec![near, far];
-    // The grid would draw across the same pixels, and whether IT covers a
+    // The dots would draw across the same pixels, and whether ONE covers a
     // label is a separate question that this fixture cannot answer twice.
-    scene.grid.clear();
+    scene.dots.clear();
     scene
 }
 
@@ -5325,7 +5326,7 @@ fn a_label_takes_its_own_nodes_place_in_the_order() {
         pitch: 0.0,
         ..Default::default()
     };
-    scene.grid.clear();
+    scene.dots.clear();
     let node = |z: f32, activation: f32| harmonigraph_scene::NodeInstance {
         world_pos: glam::Vec3::new(0.0, 0.0, z),
         activation,
@@ -5373,11 +5374,11 @@ fn a_label_takes_its_own_nodes_place_in_the_order() {
             // Both silent nodes: nothing has been drawn yet, and two labels
             // at one seam are one uninterrupted draw. They are behind the
             // home sheet, so they are also behind the grid.
-            GlyphSeam { at: 0, start: 0, count: 2, after_grid: false, sheet: 0 },
+            GlyphSeam { at: 0, start: 0, count: 2, after_dots: false, sheet: 0 },
             // The home sheet's own name, after its disc.
-            GlyphSeam { at: 1, start: 2, count: 1, after_grid: true, sheet: 1 },
+            GlyphSeam { at: 1, start: 2, count: 1, after_dots: true, sheet: 1 },
             // And the near sheet's, after everything.
-            GlyphSeam { at: 2, start: 3, count: 1, after_grid: true, sheet: 2 },
+            GlyphSeam { at: 2, start: 3, count: 1, after_dots: true, sheet: 2 },
         ],
         "a label goes after its own node, over the instances that ship",
     );
@@ -5396,14 +5397,14 @@ fn a_label_takes_its_own_nodes_place_in_the_order() {
 /// A name on a node that ships no disc still draws over the grid, not under
 /// it — the case where the two runs meet at the same number.
 ///
-/// `grid_at` is where the grid goes, counted over the instances that SHIP.
+/// `dots_at` is where the grid goes, counted over the instances that SHIP.
 /// The sheets behind the home one draw before it and the home sheet after,
-/// so the boundary between the two runs is exactly `grid_at`. A node that
+/// so the boundary between the two runs is exactly `dots_at`. A node that
 /// paints nothing ships nothing, which leaves its seam sitting on the
 /// boundary rather than past it: with every node on the home sheet — the
-/// stock `extent_sevens: 0` — the far run is empty, `grid_at` is 0, and the
+/// stock `extent_sevens: 0` — the far run is empty, `dots_at` is 0, and the
 /// first home node to be culled takes seam 0 as well. Reading the side off
-/// `at > grid_at` then files that node's name with the sheets BEHIND the
+/// `at > dots_at` then files that node's name with the sheets BEHIND the
 /// grid, and the grid is painted over the name.
 ///
 /// The state is the plugin's resting one, which is what makes it worth a
@@ -5434,7 +5435,7 @@ fn a_culled_home_nodes_name_draws_over_the_grid_it_shares_a_seam_with() {
         ..scene.nodes[0]
     };
     // The hovered one is silent and first, so it is culled before anything
-    // has shipped and its seam is 0 — the same number as `grid_at`.
+    // has shipped and its seam is 0 — the same number as `dots_at`.
     scene.nodes = vec![node(0.0), node(1.0)];
     let glyph = GlyphInstance { rect: [0.0, 0.0, 1.0, 1.0], ..crate::text::tests::glyph() };
     let call = LatticeCallback::from_scene(
@@ -5453,12 +5454,12 @@ fn a_culled_home_nodes_name_draws_over_the_grid_it_shares_a_seam_with() {
         None,
     );
 
-    assert!(!scene.grid.is_empty(), "the fixture needs a grid for the name to be covered BY");
-    assert_eq!(call.grid_at, 0, "with one sheet there is nothing to draw before the grid");
+    assert!(!scene.dots.is_empty(), "the fixture needs a dot for the name to be covered BY");
+    assert_eq!(call.dots_at, 0, "with one sheet there is nothing to draw before the dots");
     assert_eq!(
         call.seams,
-        vec![GlyphSeam { at: 0, start: 0, count: 1, after_grid: true, sheet: 0 }],
-        "a home node's name draws after the grid even when the cull leaves it on grid_at",
+        vec![GlyphSeam { at: 0, start: 0, count: 1, after_dots: true, sheet: 0 }],
+        "a home node's name draws after the dots even when the cull leaves it on dots_at",
     );
     assert_eq!(call.sheets, vec![1], "one sheet, ending where the one shipped node does");
 }

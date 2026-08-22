@@ -4,7 +4,7 @@
 //! The governing constraint is that a trail must never be mistaken for a
 //! note, and the trail is drawn entirely in TYPE: the label layer keeps the
 //! note name and cents on a visited node. Nothing here touches a drawn
-//! layer — not the core, not the octave glyphs, not the grid — so a memory
+//! layer — not the core, not the octave glyphs, not the dots — so a memory
 //! and a sounding note are never even the same kind of thing on screen. The
 //! whole of what this module produces is [`NodeInstance::trail`], which the
 //! labels read.

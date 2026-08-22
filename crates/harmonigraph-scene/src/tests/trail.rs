@@ -109,13 +109,15 @@ fn a_memory_touches_no_field_but_trail() {
         assert_eq!(a.melody_level, b.melody_level);
         assert_eq!(a.bass_level, b.bass_level);
     }
-    // The grid is derived from those same activations, so it follows — but
-    // pin it too, since it is the layer a trail would most plausibly leak
-    // into (the sevens chains read a node's activation and color).
-    assert_eq!(bare.grid.len(), marked.grid.len());
-    for (a, b) in bare.grid.iter().zip(&marked.grid) {
+    // The dot field stands at the same positions whatever is remembered
+    // there, and pinning that is what says a memory is drawn in TYPE alone:
+    // the one drawn layer under a trailed node has to be the one an unvisited
+    // node stands on.
+    assert_eq!(bare.dots.len(), marked.dots.len());
+    for (a, b) in bare.dots.iter().zip(&marked.dots) {
         assert_eq!(a.strength, b.strength);
         assert_eq!(a.color, b.color);
+        assert_eq!(a.radius, b.radius);
     }
 }
 

@@ -8,8 +8,8 @@ use crate::octaves::octave_layout;
 use crate::trail::TrailField;
 use crate::view::{DrawnWindow, FrameParams, ViewConfig};
 use crate::{
-    lattice_to_world, EdgeInstance, GlowStep, NodeInstance, Pulse, Scene, SpectralPaint,
-    MARK_DELAY_MAX, NODE_RADIUS_FACTOR, OCTAVE_SLOTS,
+    lattice_to_world, DotInstance, GlowStep, NodeInstance, Pulse, Scene, SpectralPaint,
+    DOT_SIZE_MAX, MARK_DELAY_MAX, NODE_RADIUS_FACTOR, OCTAVE_SLOTS,
 };
 use glam::Vec4;
 use harmonigraph_core::{HeldEnd, LatticePos, NoteTracker, Time, Tuning, VoiceState};
@@ -179,7 +179,7 @@ pub fn derive_scene(
     // recompute each node's pitch class to do it.
     let mut node_pcs = Vec::with_capacity(window.count());
     let center = view.center();
-    // The lattice AT REST, resolved once for the frame: what the grid lines
+    // The lattice AT REST, resolved once for the frame: what the resting dots
     // draw in, what both of a node's rings stand on where nothing is lit, and
     // the neutral an unplayed node falls back to. One resolve rather than
     // three, so the three cannot answer differently.
@@ -187,7 +187,7 @@ pub fn derive_scene(
     // Read by nothing that draws while a node stays unplayed -- an idle node
     // paints no pixel -- so this is a fallback rather than a look. The ground
     // rather than an arbitrary grey so that a node arriving or leaving crosses
-    // no seam against the grid lines running into it.
+    // no seam against the dot standing under it.
     let node_idle = ground;
     let live_extremes = held_extremes(tracker, view.mark_melody, view.mark_bass);
     let mark_delay = view.mark_delay.clamp(0.0, MARK_DELAY_MAX) as f64;
@@ -459,12 +459,12 @@ pub fn derive_scene(
         // very little — and neither sheet then read as being in front of the
         // other.
         //
-        // The home sheet's clearing cuts the grid lines as well as the
+        // The home sheet's clearing cuts its own resting DOT as well as the
         // sheets behind it — a sounding node sits in a clean gap in the
         // lattice rather than on top of it. That is reason enough on its
         // own, so it does NOT wait for depth: on a flat lattice there are
-        // no sheets to hide, but the grid is still there to be cut, and a
-        // gap in the lines is the look either way. (It was gated on the
+        // no sheets to hide, but the dot field is still there to be cut, and
+        // a gap in it is the look either way. (It was gated on the
         // sevenths extent when the clearing was purely an inter-sheet
         // device; a flat lattice then had to turn the gutter on by growing
         // depth it didn't want.)
@@ -528,15 +528,15 @@ pub fn derive_scene(
     }
 
     // Writes `trail` and nothing else (see `trail`), so nothing downstream
-    // that reads "is sounding" — the grid's sevens chains above all — can
-    // pick a memory up by mistake, whatever order these run in. The label
-    // layer is the only reader, and it draws no shape.
+    // that reads "is sounding" can pick a memory up by mistake, whatever
+    // order these run in. The label layer is the only reader, and it draws no
+    // shape.
     if let Some(field) = TrailField::build(tracker.history(), view) {
         field.apply(&mut nodes, &node_pcs, tuning);
     }
 
     let nodes_len = nodes.len() as u32;
-    let grid = derive_grid(view, window, &nodes, ground);
+    let dots = derive_dots(view, &nodes, ground);
 
     // Every radius on a node, off the one stack the size bars describe
     // (`ViewConfig::rings`, which is also where their clamps live): each ring
@@ -562,8 +562,8 @@ pub fn derive_scene(
         // channel arrives empty and the Lattice pane's fold is what fills it.
         spectral: SpectralPaint::silent(),
         octave_layout,
-        grid,
-        grid_thickness: view.grid_thickness.clamp(0.0, 8.0),
+        dots,
+        dot_feather: view.dot_feather.clamp(0.0, 1.0),
         mark_thickness: rings.mark_thickness,
         // A mark sheet reaches the extension AND the octave slice it extends,
         // so with the mark layer off — no end marked, or no depth to
@@ -628,142 +628,53 @@ fn wrapped_cents(from: harmonigraph_core::PitchClass, to: harmonigraph_core::Pit
     }
 }
 
-/// The faint background grid: idle positions draw no disc, so these
-/// segments carry the lattice's structure instead, inset at both ends so
-/// each node position keeps a clear circular gap. Only the home (center)
-/// sheet draws an idle grid.
+/// The lattice's resting picture: idle positions draw no disc, so a small
+/// feathered dot stands at each one and carries the structure instead. Only
+/// the home (center) sheet gets them.
 ///
-/// The one thing that lights is a dashed sevens-axis link, as the chain
-/// from a FLOATING sounding off-sheet note down to the home sheet — so a
-/// note on another sheet hangs from something visible instead of floating.
-/// That is about ONE note's depth, not a relationship between two: in-plane
-/// lines do not brighten because the notes at both ends happen to sound.
+/// A dot rather than a line between dots, and the difference is what the
+/// picture claims. Lines drew the INTERVALS — one segment per unit step along
+/// a prime axis — so the lattice arrived as a mesh and a note landed on a
+/// junction in it. Dots draw the POSITIONS and nothing else: what runs between
+/// two of them is left to the eye, which reads the rows and columns off a
+/// regular field anyway, and the ink that used to run between every pair goes
+/// back to the notes.
 ///
-/// A chain runs only through silence, and stops at the first sounding note
-/// under it: a note already sitting over a sounding one is connected to it
-/// visibly, by being the same site a step apart, and the line would only
-/// say so twice. Lit or not, a link keeps the lattice's own color — it says
-/// where a note hangs from, not what the note is.
-pub(crate) fn derive_grid(
+/// Off-sheet positions stay unmarked, as they were under the lines. That is
+/// the whole of what makes one sheet the ground: a 7-limit note sounding off
+/// it floats over the dot field rather than standing in it, and the size it
+/// draws at ([`NodeInstance::scale`]) is what says how far off it has gone.
+pub(crate) fn derive_dots(
     view: &ViewConfig,
-    window: &DrawnWindow,
     nodes: &[NodeInstance],
     ground: Vec4,
-) -> Vec<EdgeInstance> {
-    let inset = view.spacing * NODE_RADIUS_FACTOR * view.grid_inset.max(0.0);
+) -> Vec<DotInstance> {
+    // uv 1 is 1.8 node radii out (`node_vertex` in lattice.wgsl), so the bar's
+    // quad-uv reading — the units every ring radius on a node is dialled in —
+    // resolves to a world length here, once, rather than the shader carrying a
+    // second copy of the convention for one more layer.
+    let radius = view.spacing * NODE_RADIUS_FACTOR * 1.8 * view.dot_size.clamp(0.0, DOT_SIZE_MAX);
+    // 0 takes the dots away, and with them everything a resting lattice draws
+    // but the node rings. Skipping the instances is the same picture the
+    // shader would discard to, one draw earlier.
+    if radius <= 0.0 {
+        return Vec::new();
+    }
     // The lattice at rest, handed in already resolved — the same colour, to
     // the byte, that a node's rings stand on where nothing is lit. OPAQUE, and
     // that is what makes the claim true rather than nearly true: `strength` is
-    // the line's own opacity and the shader premultiplies by it, so a line
+    // the dot's own opacity and the shader premultiplies by it, so a dot
     // carrying an alpha of its own would land on a blend of the ground and
     // whatever happened to be behind it, which is a different grey per
     // background and none of them this one.
     //
     // How FAINT the structure is, which an alpha of its own is the other way
     // to say, is the Ground bar's to say instead — and it says it for the
-    // rings in the same breath, which a per-line alpha cannot. Dialled to the
+    // rings in the same breath, which a per-dot alpha cannot. Dialled to the
     // panel's own `L*` the whole at-rest picture disappears together.
-    let base = ground;
-    // `nodes` is exactly `window.positions()` in order, so a neighbor's index
-    // is plain offset arithmetic — no per-frame HashMap build and no hashing
-    // per lookup. `index_of` is that arithmetic and owns the bounds check with
-    // it, which is what keeps an out-of-range step on one axis from aliasing
-    // onto a different node's slot.
-    let node_at = |p: LatticePos| -> Option<&NodeInstance> {
-        window.index_of(p).and_then(|i| nodes.get(i))
-    };
-    // Upper bound: three +1 axis-steps per node.
-    let mut grid = Vec::with_capacity(nodes.len() * 3);
-    for node in nodes {
-        let p = node.lattice_pos;
-        // +1 steps only, so each undirected pair appears once; positions
-        // outside the window simply miss the index.
-        for (axis, step) in [
-            LatticePos::new(p.threes + 1, p.fives, p.sevens),
-            LatticePos::new(p.threes, p.fives + 1, p.sevens),
-            LatticePos::new(p.threes, p.fives, p.sevens + 1),
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            let Some(neighbor) = node_at(step) else {
-                continue;
-            };
-            let along_sevens = axis == 2;
-            // Only the home (center) sheet draws an idle grid; other
-            // sheets' lines and the links between sheets stay invisible
-            // until the music lights them. Links render dashed.
-            let on_home = !along_sevens && p.sevens == view.center_sevens;
-            let idle = if on_home { base.w } else { 0.0 };
-            // A sevens link is dashed and an in-sheet line is not, and that
-            // is structural rather than a style: the dash is the whole of
-            // what tells a depth link from a line drawn within one sheet.
-            let dashed = along_sevens;
-
-            // A sevens link lights as part of the chain hanging a sounding
-            // off-sheet note from something visible: it runs from that note
-            // down toward the home sheet — and only through SILENCE. The
-            // moment there is a sounding note under it to hang from, the
-            // chain has done its job and stops.
-            //
-            // Drawing it anyway is what made a 7-limit note sitting over a
-            // sounding one wear a dash it did not need: the two are already
-            // connected, visibly, by being the same site one step apart, and
-            // the line only says it a second time. It is the FLOATING note —
-            // nothing sounding beneath it anywhere down the column — that
-            // has no anchor without one.
-            let mut lit = 0.0f32;
-            if along_sevens {
-                let level = |s: i32| {
-                    node_at(LatticePos::new(p.threes, p.fives, s))
-                        .map_or(0.0, |n| n.activation)
-                };
-                // `p` is the link's lower index; which of its ends is the
-                // one nearer home flips with the side of the axis, and so
-                // does which direction "beyond" runs.
-                let (beyond, toward_home) = if p.sevens >= view.center_sevens {
-                    (p.sevens + 1..=window.max.sevens, view.center_sevens..=p.sevens)
-                } else {
-                    (window.min.sevens..=p.sevens, p.sevens + 1..=view.center_sevens)
-                };
-                // Inclusive of the link's own near end: a note directly on
-                // top of a sounding one needs no line at all.
-                if !toward_home.into_iter().any(|s| level(s) > 0.0) {
-                    lit = beyond.into_iter().map(level).fold(0.0f32, f32::max);
-                }
-            }
-
-            // Fully invisible: skip the instance instead of shipping a
-            // discarded quad.
-            if idle <= 0.0 && lit <= 0.0 {
-                continue;
-            }
-            // Inset each end by ITS OWN node's size: a sevens chain runs
-            // between sheets that draw at different sizes, and one inset for
-            // both ends would leave the small end ringed by a gap far wider
-            // than the node it clears.
-            let dir = (neighbor.world_pos - node.world_pos).normalize_or_zero();
-            grid.push(EdgeInstance {
-                a: node.world_pos + dir * inset * node.scale,
-                b: neighbor.world_pos - dir * inset * neighbor.scale,
-                // The lattice's own ground, always. A lit link is the same
-                // structural line as a resting one, merely arrived — it says
-                // WHERE a note hangs from, not what the note is, and the
-                // note's color is already on the node at each end. Taking the
-                // note's hue makes the chain read as a third sounding thing
-                // strung between two others.
-                color: base,
-                // From this line's resting level up to the ground itself. A
-                // home-sheet line rests there already (`idle` is the ground's
-                // own alpha, 1) and never lights, so it is simply the ground;
-                // a sevens link rests at nothing and this is its fade IN, as
-                // the note it hangs arrives. Both ends of the lerp are the one
-                // colour, so what a link fades between is invisible and the
-                // ground, not two brightnesses of it.
-                strength: idle + (1.0 - idle) * lit,
-                dashed,
-            });
-        }
-    }
-    grid
+    nodes
+        .iter()
+        .filter(|n| n.on_home)
+        .map(|n| DotInstance { pos: n.world_pos, radius, color: ground, strength: ground.w })
+        .collect()
 }

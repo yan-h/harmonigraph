@@ -15,11 +15,11 @@ Two places a skin reaches, and only one of them is an axis today:
   ink strip (`fs_ink_strip`, read back by `glow_ink`). There is no style enum to add a
   variant to — a second paint means a branch there and a setting to pick it,
   which is what the retired `NodeStyle` was.
-- **Chrome** — grid lines and chord beams live in `fs_edge` /
-  `derive_grid` / `derive_edges`. The `Skin` struct
+- **Chrome** — the resting dot at each home-sheet position lives in `fs_dot` /
+  `derive_dots`; nothing is drawn between two positions. The `Skin` struct
   (`harmonigraph-scene::skin`) owns every color the CHROME draws — panel,
-  well, hairline, accent — but not what the LATTICE draws at rest. The grid
-  lines, the audio ring where it reads silence, the octave band's unsounding
+  well, hairline, accent — but not what the LATTICE draws at rest. The dots,
+  the audio ring where it reads silence, the octave band's unsounding
   slices and an unplayed node all stand on one view setting instead,
   `ViewConfig::lattice_ground`: a neutral `L*` resolved per frame off the
   Ground bar, so it is dialable while a picture is being read. The skin's
