@@ -467,6 +467,9 @@ fn parity_scene() -> Scene {
         // single-attachment reference path has no pass to composite into.
         glow_reach: 0.0,
         glow_strength: 1.0,
+        // The accent's own falloff, which is what every glow test here that
+        // does not say otherwise is measuring.
+        glow_feather: 0.0,
         // The fresh moat and the four shares that shape the light inside it,
         // inert at reach 0 and here to say so.
         glow_gap: 0.08,
@@ -5655,6 +5658,86 @@ fn the_glow_reach_says_how_far_a_node_lights_past_its_own_edge() {
         far_edge > near_edge + 4.0,
         "reach 0.8 must light further out than reach 0.2, and it reached {far_edge:.1}px \
          against {near_edge:.1}px",
+    );
+}
+
+/// The Feather bar's claim: it fills a node's own reach in rather than
+/// reaching further. The light's centre of mass moves outward, and the far
+/// edge — which the Reach alone decides — stays where it was.
+///
+/// A light-weighted mean RADIUS, over the pixels the glow changed, rather than
+/// an amount at a chosen distance: what the bar moves is where inside one span
+/// the light sits, and any single annulus reads that as brightness. One
+/// centered node on a cleared grid ([`single_marked_node`]) with no moat, so
+/// the profile under the measurement is the falloff and nothing else.
+#[test]
+fn the_glow_feather_fills_a_nodes_reach_in_rather_than_reaching_further() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    let at = |feather: f32| -> Scene {
+        let mut scene = single_marked_node(0, 0);
+        scene.glow_reach = 0.8;
+        scene.glow_strength = 1.0;
+        scene.glow_feather = feather;
+        scene.glow_gap = 0.0;
+        scene
+    };
+    let mut off = at(0.0);
+    off.glow_reach = 0.0;
+    let dark = shooter.shot(&off);
+    let tight = shooter.shot(&at(0.0));
+    let flat = shooter.shot(&at(1.0));
+
+    // Every pixel the glow changed, as (radius from the node's centre, how much
+    // light it gained) — the frame's centre being where the fixture's one node
+    // sits.
+    let lit = |a: &[u8]| -> Vec<(f32, f64)> {
+        let row = SIZE[0] as usize;
+        let centre = (SIZE[0] as f32 / 2.0, SIZE[1] as f32 / 2.0);
+        a.chunks(4)
+            .zip(dark.chunks(4))
+            .enumerate()
+            .filter_map(|(i, (x, y))| {
+                let gained = (brightness(x) - brightness(y)) as f64;
+                if gained <= 0.0 {
+                    return None;
+                }
+                let (px, py) = ((i % row) as f32, (i / row) as f32);
+                let r = ((px - centre.0).powi(2) + (py - centre.1).powi(2)).sqrt();
+                Some((r, gained))
+            })
+            .collect()
+    };
+    let mean_radius = |lit: &[(f32, f64)]| -> f64 {
+        let weight: f64 = lit.iter().map(|&(_, w)| w).sum();
+        assert!(weight > 0.0, "a glow at reach 0.8 added no light at all");
+        lit.iter().map(|&(r, w)| r as f64 * w).sum::<f64>() / weight
+    };
+    let edge = |lit: &[(f32, f64)]| -> f32 { lit.iter().fold(0.0f32, |m, &(r, _)| m.max(r)) };
+
+    let (tight_lit, flat_lit) = (lit(&tight), lit(&flat));
+    let (tight_r, flat_r) = (mean_radius(&tight_lit), mean_radius(&flat_lit));
+    assert!(
+        flat_r > tight_r * 1.2,
+        "a feathered light must sit further out in its own span: {flat_r:.1}px against \
+         {tight_r:.1}px",
+    );
+    // And barely further out than the unfeathered one: the window is the same
+    // smoothstep across the same span at either setting, so the edge belongs to
+    // the Reach. Not "the same to the pixel", and the tenth is not slack —
+    // what a picture shows is where the light last cleared 1/255, and the flat
+    // profile arrives at the window's own tail with sixteen times the amplitude
+    // under it, which buys a few more pixels of a cubic tail before it
+    // quantizes away. A tenth of the span is small against the difference the
+    // Reach itself makes over that range (`the_glow_reach_says_how_far_a_node_
+    // lights_past_its_own_edge`), which is the distinction being drawn.
+    let (tight_edge, flat_edge) = (edge(&tight_lit), edge(&flat_lit));
+    assert!(
+        flat_edge <= tight_edge * 1.1,
+        "the Feather bar moved the light's far edge from {tight_edge:.1}px to \
+         {flat_edge:.1}px — the span is the Reach's to say",
     );
 }
 

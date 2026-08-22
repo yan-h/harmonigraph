@@ -194,12 +194,29 @@ pub const GAP_MAX: f32 = 0.4;
 /// (see [`ViewConfig::glow_reach`]), in the same quad UV units the layer sizes
 /// above are in.
 ///
-/// A ceiling on the BILLBOARD rather than on the look: the glow's draws size
-/// their quad to hold the whole halo (`quad_margin` in lattice.wgsl), so every
-/// step out here is fill rate spent on one more ring of fragments around every
-/// node. One node radius past the rim already reaches well past anything the
-/// layers draw, which is what a halo is for.
-pub const GLOW_REACH_MAX: f32 = 1.0;
+/// Sized for the light that stops being an ACCENT. A uv of 1 is 0.45 of the
+/// step between two neighbouring nodes — the node's own radius is
+/// `NODE_RADIUS_FACTOR` of that step and its quad is 1.8 radii across at uv 1
+/// (`node_vertex`) — so a reach of about one covers the gap to a neighbour and
+/// no further, which is a halo on each node. Eight crosses three or four
+/// lattice steps: every node's light overlaps every node's light for a
+/// neighbourhood around it, the moats are the only structure left in the layer,
+/// and what the pane draws is a coloured field with the lattice sitting in it.
+/// That is a different picture rather than more of the same one, and it is the
+/// one the far end of this bar is for.
+///
+/// What it costs is fill rate, and the bar is where it is spent: the glow's
+/// draws size their quad to hold the whole halo (`quad_margin` in
+/// lattice.wgsl), so a node's billboard is as wide as its rim plus this and the
+/// fragments in it go as the square — about twenty times as many at the top of
+/// the bar as at a reach of one. Cheap fragments, the ink strip having already
+/// answered the colour, so what that comes to depends on how many nodes are
+/// lit at once: measured off `the_node_glow_draws_a_picture` at 1200x1000, a
+/// chord's worth of light costs the same at 8 as at the fresh 0.35 (5.4 ms a
+/// frame either way), and a lattice with thirty-odd nodes lit goes from 6.6 ms
+/// to 12.2. A bar to turn up while watching the frame rate, in other words,
+/// rather than a number the renderer defends.
+pub const GLOW_REACH_MAX: f32 = 8.0;
 
 /// What the node glow scales its own skirt by
 /// (see [`ViewConfig::glow_strength`]).
@@ -740,6 +757,11 @@ pub struct Scene {
     /// [`GLOW_STRENGTH_MAX`]. Inert while [`glow_reach`](Self::glow_reach) is
     /// 0, which is the pair's one off switch.
     pub glow_strength: f32,
+    /// How flat the light's falloff is across that reach, 0 the exponential
+    /// heaped on the node and 1 an even field lit right out to where the window
+    /// shuts it (see [`ViewConfig::glow_feather`]); already clamped to 0..=1.
+    /// Inert while [`glow_reach`](Self::glow_reach) is 0.
+    pub glow_feather: f32,
     /// The moat: how far the light is held off every ring a node draws, in the
     /// same quad UV units (see [`ViewConfig::glow_gap`]); already clamped to
     /// [`GAP_MAX`]. Inert while [`glow_reach`](Self::glow_reach) is 0.
