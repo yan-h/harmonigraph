@@ -629,42 +629,6 @@ fn wrapped_cents(from: harmonigraph_core::PitchClass, to: harmonigraph_core::Pit
     }
 }
 
-/// The lattice's resting picture: idle positions draw no disc, so a small
-/// cross stands at each one and carries the structure instead. Only the home
-/// (center) sheet gets them.
-///
-/// A marker at each position rather than a line between them, and the
-/// difference is what the picture claims. Lines drew the INTERVALS — one
-/// segment per unit step along a prime axis — so the lattice arrived as a mesh
-/// and a note landed on a junction in it. These draw the POSITIONS and nothing
-/// else: what runs between two of them is left to the eye, which reads the rows
-/// and columns off a regular field anyway, and the ink that used to run between
-/// every pair goes back to the notes.
-///
-/// A CROSS is that argument at its sharpest: it is exactly what a pair of
-/// gridlines draws where they meet, so it keeps every junction a mesh would
-/// have and still spends no ink getting from one junction to the next.
-///
-/// Off-sheet positions stay unmarked, as they were under the lines. That is
-/// the whole of what makes one sheet the ground: a 7-limit note sounding off
-/// it floats over the marker field rather than standing in it, and the size it
-/// draws at ([`NodeInstance::scale`]) is what says how far off it has gone.
-///
-/// A NAMED position is unmarked too ([`NodeInstance::name_level`]). Both a
-/// marker and a name say "a position is here", and the name says which one, so
-/// the marker behind it is the weaker of two claims on the same spot and the
-/// picture is cleaner without it. Under [`NoteNames::All`](crate::NoteNames::All)
-/// that is every node on screen and the field disappears whole — which is the
-/// mode working as it reads: names ARE the lattice there, and a marker only
-/// ever stands in for one.
-///
-/// The name takes the marker by DEGREE, not by decree: a marker's opacity is
-/// what is left over from the name above it. Under
-/// [`Played`](crate::NoteNames::Played) a name is drawn at the node's own
-/// activation, so a released note's name spends the end of its fade invisible —
-/// and a marker that waited for the name to be gone ENTIRELY would leave the
-/// position empty for that stretch and then pop in at full opacity. The
-/// complement makes the two one crossing surface.
 /// Half an arm's thickness, as a share of the arm's length (see
 /// [`Scene::plus_half_width`]).
 ///
@@ -721,6 +685,42 @@ pub(crate) fn derive_plus_taper_start(view: &ViewConfig) -> f32 {
     ((reach - taper) / reach).clamp(0.0, TAPER_START_MAX)
 }
 
+/// The lattice's resting picture: idle positions draw no disc, so a small
+/// cross stands at each one and carries the structure instead. Only the home
+/// (center) sheet gets them.
+///
+/// A marker at each position rather than a line between them, and the
+/// difference is what the picture claims. Lines drew the INTERVALS — one
+/// segment per unit step along a prime axis — so the lattice arrived as a mesh
+/// and a note landed on a junction in it. These draw the POSITIONS and nothing
+/// else: what runs between two of them is left to the eye, which reads the rows
+/// and columns off a regular field anyway, and the ink that used to run between
+/// every pair goes back to the notes.
+///
+/// A CROSS is that argument at its sharpest: it is exactly what a pair of
+/// gridlines draws where they meet, so it keeps every junction a mesh would
+/// have and still spends no ink getting from one junction to the next.
+///
+/// Off-sheet positions stay unmarked, as they were under the lines. That is
+/// the whole of what makes one sheet the ground: a 7-limit note sounding off
+/// it floats over the marker field rather than standing in it, and the size it
+/// draws at ([`NodeInstance::scale`]) is what says how far off it has gone.
+///
+/// A NAMED position is unmarked too ([`NodeInstance::name_level`]). Both a
+/// marker and a name say "a position is here", and the name says which one, so
+/// the marker behind it is the weaker of two claims on the same spot and the
+/// picture is cleaner without it. Under [`NoteNames::All`](crate::NoteNames::All)
+/// that is every node on screen and the field disappears whole — which is the
+/// mode working as it reads: names ARE the lattice there, and a marker only
+/// ever stands in for one.
+///
+/// The name takes the marker by DEGREE, not by decree: a marker's opacity is
+/// what is left over from the name above it. Under
+/// [`Played`](crate::NoteNames::Played) a name is drawn at the node's own
+/// activation, so a released note's name spends the end of its fade invisible —
+/// and a marker that waited for the name to be gone ENTIRELY would leave the
+/// position empty for that stretch and then pop in at full opacity. The
+/// complement makes the two one crossing surface.
 pub(crate) fn derive_pluses(
     view: &ViewConfig,
     nodes: &[NodeInstance],
