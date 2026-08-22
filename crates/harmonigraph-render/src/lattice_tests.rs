@@ -4494,7 +4494,7 @@ fn sheets_draw_back_to_front_along_the_sevens_axis() {
 ///
 /// `on_home` and `trail` are still set, on different cycles, and neither is
 /// read by anything in THIS crate: no `GpuInstance` carries them, and the
-/// grid and the labels both arrive already built. They stay because a
+/// markers and the labels both arrive already built. They stay because a
 /// fixture whose two sets coincide cannot tell a predicate that reads one
 /// from a predicate that reads the other, and the cull is where such a
 /// predicate would go — but nothing here separates them today, so treat the
@@ -4743,6 +4743,97 @@ fn a_silent_lattice_ships_no_nodes_and_still_draws_its_markers() {
     assert!(
         px.chunks(4).any(|p| p.iter().zip(bg).any(|(&c, b)| c.abs_diff(b) > 4)),
         "the grid vanished with the nodes",
+    );
+}
+
+/// One marker alone on a black field, at the size an area measurement wants:
+/// no nodes, so nothing composites over it, and nothing else in the shot can
+/// be mistaken for its ink.
+fn lone_marker_scene(half_width: f32, taper_start: f32) -> Scene {
+    let mut scene = idle_scene();
+    scene.nodes.clear();
+    scene.pluses = vec![harmonigraph_scene::PlusInstance {
+        pos: glam::Vec3::ZERO,
+        // Big enough that the screen-constant soft band is a thin rim on it
+        // rather than a share of the area — the band is the error term in
+        // every ratio below, and a small marker is mostly band.
+        radius: 0.5,
+        color: glam::Vec4::ONE,
+        strength: 1.0,
+    }];
+    scene.plus_half_width = half_width;
+    scene.plus_taper_start = taper_start;
+    scene
+}
+
+/// The two proportions a marker carries are read by the SHADER as the shapes
+/// they name: a filled square at the top of the width bar, and ends that
+/// actually run out at the bottom of the taper.
+///
+/// `the_width_reaches_the_scene_as_a_share_of_the_arm` pins the conversion on
+/// the way in, and it cannot see this: the number arriving correct in the
+/// uniform says nothing about the distance field spending it. What is measured
+/// here is AREA, which is a number rather than a look — a cross of half-width
+/// `t` covers `8t - 4t^2` of an arm-squared where a filled square covers 4, so
+/// the ratio between two widths is arithmetic the picture either agrees with
+/// or does not.
+///
+/// The premultiplied ink is linear in coverage (`plus_paint` returns
+/// `rgb * alpha`), so summing the light IS integrating the area, with the soft
+/// band as a proportional rim on both — which is why the marker is drawn big
+/// and the tolerance is a tenth rather than a percent.
+///
+/// What stays a look, and stays with `the_resting_markers_draw_a_picture`:
+/// whether a cross reads as a crossing rather than as a glyph, and whether the
+/// tapered end arrives at nothing rather than stopping at something.
+#[test]
+fn the_shader_spends_a_markers_proportions_on_the_shape_they_name() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut gpu) = Shooter::new(SIZE) else {
+        return;
+    };
+
+    // Square ends throughout, so this half measures the WIDTH alone.
+    let ink = |gpu: &mut Shooter, t: f32| total_light(&gpu.shot(&lone_marker_scene(t, 1.0)));
+    let cross = ink(&mut gpu, 0.275) as f64;
+    let square = ink(&mut gpu, 1.0) as f64;
+    assert!(cross > 0.0, "the fixture drew no marker at all");
+
+    let want = 4.0 / (8.0 * 0.275 - 4.0 * 0.275 * 0.275);
+    let got = square / cross;
+    assert!(
+        (got - want).abs() / want < 0.1,
+        "a half-width of 1 covers {got:.3}x what 0.275 does, and the shape says {want:.3}x \
+         — the box's y-extent is not being read as half the arm's thickness",
+    );
+
+    // And the square really is filled rather than a very fat cross: at
+    // half-width 1 the box covers the whole octant, so there is nothing left
+    // for a wider one to add.
+    let over = ink(&mut gpu, 1.0) as f64;
+    assert!(
+        (over - square).abs() / square < 0.01,
+        "past a full half-width the marker is still growing: {square} then {over}",
+    );
+
+    // The taper, at one width: an arm solid to its tip, then to half way, then
+    // fading the whole way from the crossing. Ink has to fall each time, and by
+    // a share the smoothstep can account for — it integrates to half over the
+    // span it covers, and the crossing keeps its own.
+    let taper = |gpu: &mut Shooter, start: f32| {
+        total_light(&gpu.shot(&lone_marker_scene(0.275, start))) as f64
+    };
+    let (square_end, half, whole) = (taper(&mut gpu, 1.0), taper(&mut gpu, 0.5), taper(&mut gpu, 0.0));
+    assert!(
+        square_end > half && half > whole,
+        "a longer taper has to take more ink, not less: {square_end} {half} {whole}",
+    );
+    let lost = (square_end - whole) / square_end;
+    assert!(
+        (0.25..0.65).contains(&lost),
+        "tapering the whole arm took {:.0}% of the ink; a smoothstep over the arm \
+         with the crossing keeping its own is nearer 40%",
+        lost * 100.0,
     );
 }
 
