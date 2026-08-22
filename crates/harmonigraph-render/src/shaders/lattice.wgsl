@@ -49,8 +49,9 @@ struct Uniforms {
     // idle marker's radius and style, from when an unlit node drew a
     // placeholder of its own.
     misc4: vec4<f32>,
-    // x: grid line thickness, a multiple of the built-in grid width.
-    // y: unused.
+    // x: half a resting marker's arm thickness, as a share of one arm's
+    // length; 1 is a filled square. y: where its arms start to taper, as a
+    // share of one arm; 1 is a square end.
     // z: the node's ANGULAR padding, in quad UV units — the gap between two
     // neighbouring sectors, wherever sectors are drawn. The RADIAL padding is
     // a second setting and never arrives: every stand-off it buys is already
@@ -2234,67 +2235,119 @@ fn node_paint(in: VsOut) -> vec4<f32> {
     return vec4<f32>(with_ground, final_alpha);
 }
 
-// ---- Chord edges & grid lines ----------------------------------------------
-// One pipeline, two kinds of instance: beams between simultaneously
-// sounding, lattice-adjacent nodes (a held chord's interval structure
-// rendered as geometry), and the faint background grid between node
-// positions (segments arrive pre-inset from the scene, leaving a gap at
-// every node position). Drawn under the nodes, grid first.
+// ---- Resting markers -------------------------------------------------------
+// One cross per home-sheet lattice position, drawn under the nodes, and the
+// whole of what an unplayed lattice draws. Lines between the positions are NOT
+// drawn — the field's regularity is what the eye reads the rows and columns
+// off, and the ink they would cost goes to the notes. A cross is that argument
+// at its sharpest: it draws exactly what a pair of gridlines draws where they
+// meet, and nothing of what they draw between one meeting and the next.
 
-struct EdgeInstance {
-    // xyz: endpoint A, w: strength (chord: min of the two node
-    // activations; grid: line opacity)
-    @location(0) a_strength: vec4<f32>,
-    // xyz: endpoint B, w: kind (0 chord beam, 1 grid line, 2 dashed grid)
-    @location(1) b_kind: vec4<f32>,
-    @location(2) color: vec4<f32>,
+struct PlusInstance {
+    // xyz: the position's world center, w: the length of one arm in world
+    // units, crossing to tip.
+    @location(0) pos_radius: vec4<f32>,
+    // rgb: the lattice's ground, a: this marker's opacity.
+    @location(1) color: vec4<f32>,
 };
 
-struct EdgeVsOut {
+struct PlusVsOut {
     @builtin(position) clip_pos: vec4<f32>,
-    // x: 0..1 along the edge, y: -1..1 across it
+    // Distance from the crossing as a fraction of one ARM, per axis: 1 is a
+    // tip and the quad reaches PLUS_QUAD_MARGIN past it. Expressed in the
+    // marker's own arm rather than in the quad, so the two proportions the
+    // uniform carries — the thickness and where the taper starts — are read
+    // against it directly and cut every marker the same way whatever size it
+    // is drawn at.
     @location(0) uv: vec2<f32>,
     @location(1) color: vec4<f32>,
-    @location(2) strength: f32,
-    @location(3) @interpolate(flat) kind: f32,
 };
 
+// How far a marker's billboard reaches past the tips of its arms, in arms.
+//
+// A margin for the same reason a node's QUAD_MARGIN is one: the edge's soft
+// band is CENTRED on the shape's boundary, as every ring's is, so its outer
+// half stands outside the shape and needs quad to stand in. Without it a small
+// marker — where the band is a large share of the arm — gets that half cut
+// flat by the quad, and the marker reads square-shouldered at exactly the size
+// it is hardest to see. Measured off the rendered picture at the bottom of the
+// arm bar: a shape of radius 5.6px carried ink out to 8px, so it wants 1.4
+// radii of quad and a margin under that cuts the faint end of the band flat.
+//
+// It is a share of the ARM rather than a length, so the headroom shrinks with
+// the marker while the band, being screen-constant, does not — which is why
+// `plus_paint` also caps the band at what this holds rather than trusting the
+// margin alone.
+const PLUS_QUAD_MARGIN: f32 = 1.6;
+
+// How much of the marker this fragment is inside, `uv` measured in the arm's
+// own length and `aa` the soft band the whole shape is cut with.
+fn plus_coverage(uv: vec2<f32>, aa: f32) -> f32 {
+    // The cross, as the union of two bars — but folded into one. Reflecting
+    // into the octant where x >= y maps the upright bar onto the flat one, so
+    // a single box's distance field answers for both and there is no union to
+    // take (and so no seam where two soft edges would cross and the band would
+    // double up on the diagonals).
+    let p = abs(uv);
+    let q = vec2<f32>(max(p.x, p.y), min(p.x, p.y));
+    // `misc5.x` is HALF the arm's thickness, as a share of its length: the bar
+    // sets a whole thickness across the arm and `derive_plus_half_width` halves
+    // it, because what the fold measures is the distance out from the arm's
+    // own centre line. At 1 the box covers the octant and the cross is a filled
+    // square, which is the top of that bar and not an accident of the field.
+    let corner = vec2<f32>(q.x - 1.0, q.y - u.misc5.x);
+    // The exact signed distance to that box: outside, the distance to its
+    // nearest point; inside, how far in. Exact rather than approximate is what
+    // makes the arms' inner corners as clean as their ends — an approximation
+    // rounds them off at exactly the four places the shape is doing its work.
+    let sd = length(max(corner, vec2<f32>(0.0))) + min(max(corner.x, corner.y), 0.0);
+    // The four ends taper: an arm is solid out to `misc5.y` of its length and
+    // fades to nothing by its tip, the way a line drawn into a node arrives at
+    // nothing rather than stopping at something. `q.x` is the distance along
+    // whichever arm this fragment is on — the same fold that spares the union
+    // spares this a branch, since folding puts every arm on one axis.
+    //
+    // ALPHA rather than width. A cross narrowed to a point is four spikes,
+    // which reads as a drawn glyph; one that fades stops being there, which is
+    // what a marker running out has to say.
+    //
+    // Inside the crossing the two arms' claims meet, and `q.x` is the
+    // Chebyshev distance there — so a fully tapered plus is brightest at the
+    // centre and eases off in every direction at once, with no seam where the
+    // arms overlap.
+    //
+    // The sides do NOT taper. Only the ends are being softened — where the
+    // marker stops — and fading the sides as well would blur the plus rather
+    // than let it reach out of its crossing.
+    //
+    // `derive_plus_taper_start` already holds the start short of the tip; the
+    // guard is here too because a zero-width `smoothstep` has no answer and
+    // this is the one line that would have to give it.
+    let start = min(u.misc5.y, 1.0 - 1e-3);
+    let taper = 1.0 - smoothstep(start, 1.0, q.x);
+    return aa_inside(0.0, sd, aa) * taper;
+}
+
 @vertex
-fn vs_edge(@builtin(vertex_index) vertex_index: u32, inst: EdgeInstance) -> EdgeVsOut {
+fn vs_plus(@builtin(vertex_index) vertex_index: u32, inst: PlusInstance) -> PlusVsOut {
     var corners = array<vec2<f32>, 4>(
-        vec2<f32>(0.0, -1.0),
+        vec2<f32>(-1.0, -1.0),
         vec2<f32>(1.0, -1.0),
-        vec2<f32>(0.0, 1.0),
+        vec2<f32>(-1.0, 1.0),
         vec2<f32>(1.0, 1.0),
     );
     let corner = corners[vertex_index];
+    // Camera-facing, like every other billboard here: a marker is a mark ON
+    // the lattice rather than an object standing in it, so it keeps its shape
+    // under an orbit instead of foreshortening into an ellipse.
+    let reach = inst.pos_radius.w * PLUS_QUAD_MARGIN;
+    let world = inst.pos_radius.xyz
+        + (u.cam_right.xyz * corner.x + u.cam_up.xyz * corner.y) * reach;
 
-    let a = inst.a_strength.xyz;
-    let b = inst.b_kind.xyz;
-    let axis = b - a;
-    // Billboard the beam's width: perpendicular to both the edge and the
-    // view direction, falling back to camera-up for edge-on views.
-    let view_dir = cross(u.cam_right.xyz, u.cam_up.xyz);
-    var perp = cross(normalize(axis), view_dir);
-    let plen = length(perp);
-    if plen < 1e-4 {
-        perp = u.cam_up.xyz;
-    } else {
-        perp = perp / plen;
-    }
-    // Grid lines (kind >= 1) are much thinner than chord beams, and carry
-    // the user's thickness multiplier; chord beams keep their fixed width.
-    let is_grid = min(inst.b_kind.w, 1.0);
-    let grid_width = 0.09 * u.misc5.x;
-    let half_width = u.misc.y * mix(0.35, grid_width, is_grid);
-    let world = a + axis * corner.x + perp * corner.y * half_width;
-
-    var out: EdgeVsOut;
+    var out: PlusVsOut;
     out.clip_pos = u.view_proj * vec4<f32>(world, 1.0);
-    out.uv = corner;
+    out.uv = corner * PLUS_QUAD_MARGIN;
     out.color = inst.color;
-    out.strength = inst.a_strength.w;
-    out.kind = inst.b_kind.w;
     return out;
 }
 
@@ -3042,53 +3095,45 @@ fn fs_glow_cover(in: VsOut) -> @location(0) vec4<f32> {
     return vec4<f32>(0.0, 0.0, 0.0, node_paint(in).w);
 }
 
-/// What a grid line or chord beam paints; see [`node_paint`] for why the
-/// entry points are two.
-fn edge_paint(in: EdgeVsOut) -> vec4<f32> {
-    // Screen-constant soft band across the beam (see aa_inside; computed
-    // before the branch so the derivative stays in uniform control flow).
-    let aa_y = aa_width(fwidth(in.uv.y));
-
-    // Grid line: uniformly faint with a screen-constant soft edge (line
-    // edge at the old 0.35..1.0 band's midpoint), the ends easing off
-    // toward the node gaps.
-    if in.kind > 0.5 {
-        let across = aa_inside(0.675, abs(in.uv.y), aa_y);
-        var along = smoothstep(0.0, 0.12, in.uv.x) * (1.0 - smoothstep(0.88, 1.0, in.uv.x));
-        // Dashed grid lines (kind 2): the sevens links, plus every in-plane
-        // line when the grid's dashed style is on. Chop the length into
-        // short dashes, leaving a faint floor in the gaps so the line still
-        // reads as continuous structure.
-        if in.kind > 1.5 {
-            let tri = abs(fract(in.uv.x * 5.0) - 0.5) * 2.0;
-            along = along * (0.15 + 0.85 * smoothstep(0.35, 0.65, tri));
-        }
-        let alpha = in.strength * across * along;
-        if alpha < 0.01 {
-            discard;
-        }
-        return vec4<f32>(in.color.rgb * alpha, alpha);
-    }
-
-    // Soft-edged beam with a brighter core; the ends taper so the node
-    // discs own the joints.
-    let across = 1.0 - smoothstep(0.15, 1.0, abs(in.uv.y));
-    let along = smoothstep(0.0, 0.10, in.uv.x) * (1.0 - smoothstep(0.90, 1.0, in.uv.x));
-    let alpha = in.strength * across * along * 0.85;
+/// What a resting marker paints; see [`node_paint`] for why the entry points
+/// are two.
+fn plus_paint(in: PlusVsOut) -> vec4<f32> {
+    // A marker's edge is a RING's edge: `aa_inside` at its boundary, carrying
+    // the one screen-constant soft band the octave band and the audio ring are
+    // cut with. A marker has no softness of its own to dial, so the resting
+    // field and the layers that stand on it come to an end the same way, at
+    // every zoom.
+    //
+    // The band's width is taken off `fwidth` of a quad AXIS, which is the
+    // rings' choice too and is load-bearing rather than incidental: the
+    // derivative of the RADIAL coordinate is half again as wide on the diagonal
+    // as on the axes, so a band measured that way pinches the circle at 45° by
+    // about a fifth of its radius. An axis has one derivative everywhere on the
+    // quad, so the band closes evenly all the way round.
+    //
+    // Capped at the margin, which binds only where a marker is a few pixels
+    // across and the band would otherwise want more quad than there is. One
+    // that small trades softness it cannot show for a shape it can: the band
+    // narrows, and the arms keep their ends instead of squaring off against
+    // the quad at the bottom of the bar.
+    let aa = min(aa_width(fwidth(in.uv.x)), PLUS_QUAD_MARGIN - 1.0);
+    let alpha = in.color.a * plus_coverage(in.uv, aa);
     if alpha < 0.01 {
         discard;
     }
-    let rgb = in.color.rgb * (0.55 + 0.45 * across);
-    return vec4<f32>(rgb * alpha, alpha);
+    // Premultiplied, as every draw in this pass is: the marker IS the
+    // lattice's ground rather than a brightness of it, so its colour is laid
+    // down flat and only its coverage varies across the edge.
+    return vec4<f32>(in.color.rgb * alpha, alpha);
 }
 
 @fragment
-fn fs_edge(in: EdgeVsOut) -> @location(0) vec4<f32> {
-    return edge_paint(in);
+fn fs_plus(in: PlusVsOut) -> @location(0) vec4<f32> {
+    return plus_paint(in);
 }
 
 @fragment
-fn fs_edge_scene(in: EdgeVsOut) -> SceneOut {
-    let paint = edge_paint(in);
+fn fs_plus_scene(in: PlusVsOut) -> SceneOut {
+    let paint = plus_paint(in);
     return SceneOut(paint, paint);
 }

@@ -28,54 +28,37 @@ fn home_sheet_nodes_are_flagged_for_the_blank_ring() {
 }
 
 #[test]
-fn off_sheet_grid_appears_only_where_the_music_reaches() {
-    // A window two sevens layers deep above/below the center, so the
-    // chain rule has an intermediate link to prove itself on.
+fn the_marker_field_is_the_home_sheet_and_only_it() {
+    // The resting picture belongs to ONE sheet, and that is the whole of what
+    // makes it the ground: a position off it is unmarked at rest, which is
+    // also why it is not hoverable. Nothing the music does changes that — an
+    // off-sheet note floats over the field at the size its sheet gives it,
+    // with nothing drawn between it and home.
     let view = ViewConfig {
         extent_threes: 1,
         extent_fives: 0,
         extent_sevens: 2,
         ..plain_view()
     };
-    let is_link = |s: &EdgeInstance| (s.b.z - s.a.z).abs() > 0.25;
-    let off_home = |s: &EdgeInstance| is_link(s) || s.a.z.abs() > 0.5;
+    let home_count = |scene: &Scene| scene.nodes.iter().filter(|n| n.on_home).count();
 
-    // Idle: only the home sheet's solid lines exist.
-    let scene = scene_of(
-        &NoteTracker::new(),
-        &Tuning::default(),
-        &view,
-        &plain_frame(),
-        0.0,
-    );
-    assert!(!scene.grid.is_empty());
-    assert!(scene.grid.iter().all(|s| !off_home(s) && !s.dashed && s.strength > 0.0));
+    // Idle: a marker at every home position, and no mark anywhere off it.
+    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, &plain_frame(), 0.0);
+    assert_eq!(scene.pluses.len(), home_count(&scene));
+    assert!(scene.pluses.iter().all(|d| d.pos.z.abs() < 1e-5), "{:?}", scene.pluses);
 
     // Hold the note two sevens steps up from C (12-TET default:
     // 2 × 1000¢ → pitch class 800¢ = G#/Ab, MIDI 68). It lights node
-    // (0,0,2) only, yet BOTH links of the chain down to the home
-    // sheet must display, dashed, in that note's color — the nodes
-    // under it are silent.
+    // (0,0,2) only, and the field under it is untouched.
     let mut tracker = NoteTracker::new();
     tracker.handle_event(NoteEvent::on(0.0, 0, 68, 1.0));
-    let scene =
-        scene_of(&tracker, &Tuning::default(), &view, &plain_frame(), 0.0);
-    let column_links: Vec<&EdgeInstance> = scene
-        .grid
-        .iter()
-        .filter(|s| is_link(s) && s.a.x.abs() < 0.01 && s.a.y.abs() < 0.01)
-        .collect();
-    // The two links spanning 0->1 and 1->2; nothing below the sheet.
-    assert_eq!(column_links.len(), 2, "{column_links:?}");
-    for link in &column_links {
-        assert!(link.a.z > -0.5 && link.dashed && link.strength > 0.5, "{link:?}");
-    }
-    // No off-sheet IN-SHEET lines appeared: the played node's sheet
-    // neighbors are silent, so only the chain and home sheet render.
-    assert!(scene
-        .grid
-        .iter()
-        .all(|s| is_link(s) || s.a.z.abs() < 0.5));
+    let played = scene_of(&tracker, &Tuning::default(), &view, &plain_frame(), 0.0);
+    assert!(
+        played.nodes.iter().any(|n| !n.on_home && n.activation > 0.0),
+        "the off-sheet note has to be lit for this to mean anything",
+    );
+    assert_eq!(played.pluses.len(), scene.pluses.len(), "a note off the sheet changed the field");
+    assert!(played.pluses.iter().all(|d| d.pos.z.abs() < 1e-5), "{:?}", played.pluses);
 }
 
 #[test]

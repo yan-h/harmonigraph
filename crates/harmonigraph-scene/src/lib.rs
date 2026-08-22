@@ -5,9 +5,9 @@
 //!
 //! What lives where:
 //! - `lib.rs` (this file) — the render-facing types: [`Scene`],
-//!   [`NodeInstance`], [`EdgeInstance`], and the constants they share.
+//!   [`NodeInstance`], [`PlusInstance`], and the constants they share.
 //! - [`derive`](mod@derive) — the per-frame derivation ([`derive_scene`]): note tracker
-//!   + tuning -> node/edge lists. Envelope and animation policy.
+//!   + tuning -> node/marker lists. Envelope and animation policy.
 //! - [`view`] — [`ViewConfig`] (persisted visual settings and their serde
 //!   defaults) and [`FrameParams`].
 //! - [`style`] — the visual-style enums and their shader indices, and the
@@ -189,6 +189,27 @@ pub const RING_INNER_MAX: f32 = 0.9;
 /// sector's arc is every indicator erased — and lands near enough the same
 /// place that a second constant would be two numbers saying one thing.
 pub const GAP_MAX: f32 = 0.4;
+
+/// How far a resting marker may be asked to reach on EITHER of its two axes —
+/// the length of an arm ([`ViewConfig::plus_arm`]) and the thickness across
+/// one ([`ViewConfig::plus_width`]) — in the same quad UV units the layer
+/// sizes above are in, so a marker and a ring radius are two readings on one
+/// axis and can be compared by their numbers.
+///
+/// ONE constant under both bars rather than two: the two numbers are lengths
+/// on the same axis, and a second ceiling would be two numbers saying one
+/// thing (as [`GAP_MAX`] says of the pair above it). It does not make the two
+/// bars read alike — a length is measured from the crossing OUT and a width
+/// ACROSS an arm, so a plus has filled its own square once the width reaches
+/// twice the length, and the rest of the width bar is that same square.
+///
+/// Sized against [`RING_INNER_MAX`] rather than under it: a marker is not part
+/// of the ring stack and owes it no room, so at the top of the arm bar it
+/// reaches past the middle a node's rings stand around, and the lattice at
+/// rest is a field of crosses rather than of points. That is the far end being
+/// a different picture, which is what a bar's far end is for; the small marker
+/// the fresh view draws is a fifth of the way along it.
+pub const PLUS_SIZE_MAX: f32 = 0.9;
 
 /// How far past a node's outermost drawn edge its glow may be asked to reach
 /// (see [`ViewConfig::glow_reach`]), in the same quad UV units the layer sizes
@@ -393,9 +414,9 @@ pub struct NodeInstance {
     pub octaves: [f32; OCTAVE_SLOTS],
     pub hovered: bool,
     /// On the home (center sevens) sheet. An idle node draws nothing
-    /// wherever it sits; what marks a home position is the GRID, whose
-    /// lines stop short of it on every side, and off-sheet positions have
-    /// not even that (see [`derive_grid`](derive::derive_grid)).
+    /// wherever it sits; what marks a home position is the MARKER standing
+    /// under where the node itself would draw, and off-sheet positions have
+    /// not even that (see [`derive_pluses`](derive::derive_pluses)).
     pub on_home: bool,
     /// Billboard size, as a factor of the scene's `node_radius` (see
     /// [`ViewConfig::sevens_size`]): 1 on the home sheet, smaller with every
@@ -412,7 +433,7 @@ pub struct NodeInstance {
     /// per LAYER and settled in the shader, each layer's hole scaled by the
     /// level that paints it. Gating this on the note instead is what left a
     /// node wearing an audio ring with no key down — which the Gate hands out
-    /// freely — drawing that ring over an uncut grid.
+    /// freely — drawing that ring over an uncut marker.
     pub gutter: f32,
     /// Signed cents from the home-sheet node this one shares a LETTER and an
     /// accidental with: `(threes - 2*(sevens - center), fives, center)`,
@@ -554,12 +575,12 @@ impl NodeInstance {
     /// Whether this node is somewhere the picture accounts for, and so can
     /// carry pitch info (hover label, tuning readout). Sounding nodes always
     /// draw; an idle one draws nothing at all, but a home-sheet position is
-    /// still a place the grid lines say is there — they stop short of it on
-    /// every side, which is exactly the gap a pointer goes looking in.
+    /// still a place the marker field says is there — a marker stands exactly
+    /// where a pointer goes looking.
     ///
     /// So this is deliberately NOT "does this node paint a pixel": an empty
     /// home sheet would then be uninspectable, and it is the thing most worth
-    /// inspecting. Off-sheet idle positions have no lines around them and are
+    /// inspecting. Off-sheet idle positions carry no marker and are
     /// correspondingly not hoverable — a pitch revealed there would be
     /// information from nowhere.
     ///
@@ -573,19 +594,90 @@ impl NodeInstance {
     pub fn is_visible(&self) -> bool {
         self.activation > 0.0 || self.on_home || self.trail > 0.0
     }
+
+    /// How much NOTE NAME stands over this node, 0 to 1.
+    ///
+    /// The label pass's own question (`draw_node_labels` in
+    /// `harmonigraph-ui`), answered HERE because two things turn on it and a
+    /// second spelling of it is a picture that contradicts itself: the pass
+    /// draws the name, and [`derive_pluses`](derive::derive_pluses) clears the
+    /// resting marker out from under it. A marker behind a name is the one
+    /// place in the lattice where two marks claim the same position, and the
+    /// name is the better of the two — it says WHICH position, where the
+    /// marker only says that there is one.
+    ///
+    /// So the label layer is the one that decides, and this is the whole of
+    /// its rule: names on at all, then the node is sounding, hovered, or one
+    /// the Show row keeps at rest.
+    ///
+    /// A LEVEL rather than a yes or no, and that is the whole of what keeps
+    /// the handoff continuous. Under [`NoteNames::Played`] a name is drawn at
+    /// exactly the node's `activation` (`label_strength` in `harmonigraph-ui`),
+    /// so a released note spends the end of its fade with a name too faint to
+    /// see. Answered as a predicate, the marker under it stays away for all of
+    /// that and then arrives at full ground opacity the frame activation
+    /// reaches 0 — a hole in the field, and then a cross popping into it, once
+    /// per note. As a level the two cross-fade: what the name gives up, the
+    /// marker takes, and the position carries the same ink throughout.
+    ///
+    /// The `is_visible` term re-checks what [`Scene::pick`] already enforces,
+    /// and `hovered` is picking's alone, so it is a second lock on one door.
+    /// It stays because the field is public shared state rather than picking's
+    /// private output, and what it costs to be wrong is a name floating in the
+    /// sevens dimension on a node that draws nothing.
+    ///
+    /// What it does NOT answer is whether the name lands on the PANE — that
+    /// needs a rect and a projector, which is the label pass's business and
+    /// not the scene's. It costs nothing: a name off the pane is a name over a
+    /// marker that is off the pane too, and neither is drawn.
+    pub fn name_level(&self, view: &ViewConfig) -> f32 {
+        if !view.show_labels || !self.is_visible() {
+            return 0.0;
+        }
+        if self.hovered {
+            return 1.0;
+        }
+        // Named while nothing is happening on it: every node under All, a
+        // visited one under Past, and nothing at all under Played. A trail is
+        // written whole or not at all (`TrailField::apply`), so Past is a level
+        // only in the sense that 0 and 1 are levels — what actually ramps here
+        // is a sounding note's own fade.
+        let resting = match view.note_names {
+            NoteNames::All => 1.0,
+            NoteNames::Past => self.trail,
+            NoteNames::Played => 0.0,
+        };
+        self.activation.max(resting).clamp(0.0, 1.0)
+    }
+
+    /// Whether a note name is drawn over this node AT ALL — the gate the label
+    /// pass asks before it lays a glyph out, where the marker under it wants
+    /// [`name_level`](Self::name_level)'s ramp instead.
+    ///
+    /// One spelling still: this IS the level, asked for any at all.
+    pub fn is_named(&self, view: &ViewConfig) -> bool {
+        self.name_level(view) > 0.0
+    }
 }
 
-/// One line segment of the lattice grid, between two adjacent positions
-/// (one unit step along exactly one prime axis = one interval).
+/// One marker standing at a lattice position: a small cross, drawn under the
+/// nodes, and the whole of what an unplayed lattice draws.
 #[derive(Clone, Copy, Debug)]
-pub struct EdgeInstance {
-    pub a: Vec3,
-    pub b: Vec3,
+pub struct PlusInstance {
+    /// The position's own world center.
+    pub pos: Vec3,
+    /// How far the marker reaches, in WORLD units: the length of one arm,
+    /// crossing to tip. Both of the other two numbers a plus has — its
+    /// thickness and where its ends start to fade — are shares of THIS, so
+    /// this alone is what sizes the billboard.
+    ///
+    /// Already resolved from [`ViewConfig::plus_arm`]'s quad UV against the
+    /// scene's node radius, so nothing downstream carries a second copy of
+    /// that convention.
+    pub radius: f32,
     pub color: Vec4,
-    /// Line opacity.
+    /// The marker's opacity.
     pub strength: f32,
-    /// Render as short dashes (the sevens-axis links between sheets).
-    pub dashed: bool,
 }
 
 /// Everything the renderer needs for one frame.
@@ -643,7 +735,7 @@ pub struct Scene {
     /// annulus is a per-fragment test, and the shader is where the fragments
     /// are.
     pub octave_gap: f32,
-    /// The lattice at rest — its grid, and both of a node's rings where
+    /// The lattice at rest — its markers, and both of a node's rings where
     /// nothing is lit — already resolved from
     /// [`ViewConfig::lattice_ground`]'s `L*` to the neutral grey it names.
     ///
@@ -660,9 +752,9 @@ pub struct Scene {
     /// sounding one's pitch is painted over as the note fades. The lattice's
     /// two other at-rest surfaces carry the same grey without reading this
     /// field, because neither reaches the shader as a uniform: every
-    /// [`grid`](Self::grid) segment carries it as its own colour, and the audio
-    /// ring carries it as the `t` = 0 end of its table. Three copies of one
-    /// resolve, not three answers.
+    /// [`pluses`](Self::pluses) instance carries it as its own colour, and the
+    /// audio ring carries it as the `t` = 0 end of its table. Three copies of
+    /// one resolve, not three answers.
     pub lattice_ground: Vec4,
     /// The lattice's AUDIO channel: what the analyzer measured, where the
     /// ring that draws it sits, and the ramp every audio-lit element on the
@@ -685,16 +777,38 @@ pub struct Scene {
     /// its own octaves fall against the center pitch, which is what makes an
     /// indicator's ANGLE mean an absolute pitch.
     pub octave_layout: OctaveLayout,
-    /// The background grid (see [`derive_grid`](derive::derive_grid)): one
-    /// segment per adjacent pair of visible positions, inset so every node
-    /// position keeps a circular gap where its disc draws while sounding.
-    /// Reuses [`EdgeInstance`]; `strength` carries the line opacity, and every
-    /// segment's colour is [`lattice_ground`](Self::lattice_ground) — so a
-    /// resting line IS that grey and a sevens link fades in to it.
-    pub grid: Vec<EdgeInstance>,
-    /// Grid line thickness as a multiple of the shader's built-in grid
-    /// width (see [`ViewConfig::grid_thickness`]), already clamped.
-    pub grid_thickness: f32,
+    /// The lattice's resting markers (see
+    /// [`derive_pluses`](derive::derive_pluses)): one cross per visible
+    /// HOME-sheet position, each carrying
+    /// [`lattice_ground`](Self::lattice_ground) as its colour — so a marker IS
+    /// that grey rather than a brightness of it.
+    ///
+    /// Off-sheet positions get none, and that is the whole of what says which
+    /// sheet is the ground: a note there floats over the marker field instead
+    /// of standing in it.
+    pub pluses: Vec<PlusInstance>,
+    /// Half an arm's thickness, as a SHARE of the arm's length — the shape's
+    /// one proportion, and what the shader folds a fragment's distance against
+    /// (see [`ViewConfig::plus_width`], which is the WHOLE thickness and in
+    /// quad UV).
+    ///
+    /// View-wide, as the length beside it is not: a length reaches the renderer
+    /// per instance because it is a world distance, while a proportion is one
+    /// answer the whole field shares and the shader reads out of a uniform.
+    /// Already clamped, and to 1 at the top — at half an arm's thickness the
+    /// cross has filled its own square and there is nothing past it to draw.
+    pub plus_half_width: f32,
+    /// Where a plus's arms stop being solid and start fading out, as a SHARE
+    /// of one arm's length: 1 is a square end, 0 an arm that fades the whole
+    /// way from the crossing to its tip (see [`ViewConfig::plus_taper`], which
+    /// is the same edge measured from the other side and in quad UV).
+    ///
+    /// A share here, where the view keeps a width, because the shader works in
+    /// the arm's own units — uv 1 IS the tip — so it needs the point on that
+    /// axis rather than a length it would have to divide out per fragment.
+    /// Already clamped, and held short of 1 so the fade never collapses to a
+    /// zero-width `smoothstep`.
+    pub plus_taper_start: f32,
     /// How wide the sevens knockout's fade is, in the uv of a full-size
     /// node (see [`ViewConfig::sevens_gutter_soft`]). View-wide, as the reach
     /// beside it is — what varies node to node is the STRENGTH, which the

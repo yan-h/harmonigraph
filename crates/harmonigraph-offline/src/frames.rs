@@ -396,6 +396,142 @@ mod tests {
         }
     }
 
+    /// The resting marker field's picture, written to `target/scratch/` — a
+    /// sweep of the three bars that shape a cross: how far its arms reach, how
+    /// thick they are, and how much of each end fades out. Together they decide
+    /// whether the lattice at rest is a field of marks or a field of objects.
+    ///
+    /// A probe: it asserts nothing, the verdict being a look rather than a
+    /// number, and it is kept and `#[ignore]`d for the reason the two below it
+    /// are — the reading conditions are the expensive part.
+    ///
+    /// Those conditions: NOTHING sounding, because the subject is what an
+    /// unplayed lattice draws and a chord over it is exactly the thing that
+    /// hides it; the camera pulled back so several rows are on screen, a field
+    /// being a claim about regularity rather than about one marker; and the
+    /// skin's panel as the ground rather than the preset's near-black, because
+    /// the markers are the ground's own grey a step above it and the whole
+    /// judgement is how far above.
+    ///
+    /// One shot holds a held chord, and it is the one that answers the
+    /// question the arm bar is really for: a node arriving has to COVER its own
+    /// marker rather than grow out of one, which is a comparison between the
+    /// arm's reach and where the node's rings start.
+    ///
+    /// Two shots are the NAMES, which take a marker off the position they
+    /// stand on (`NodeInstance::name_level`): one under Past with a memory
+    /// behind it, where names and markers share the field, and one under All,
+    /// where the names take the whole of it. That pair is the reading the rule
+    /// is for, and neither can be judged from a shot with no type in it.
+    ///
+    /// ```text
+    /// cargo test -p harmonigraph-offline -- --ignored --nocapture resting_markers
+    /// ```
+    #[test]
+    #[ignore = "a probe: writes PNGs and asserts nothing"]
+    fn the_resting_markers_draw_a_picture() {
+        use harmonigraph_ui::{draw_pane, Layout, SharedState};
+
+        const SIZE: [u32; 2] = [1200, 1000];
+        const PPP: f32 = 2.0;
+        const NOW: f64 = 1.0;
+
+        let Some(mut renderer) = Renderer::new(SIZE) else {
+            eprintln!("no usable GPU adapter; nothing rendered");
+            return;
+        };
+        let context = egui::Context::default();
+        harmonigraph_ui::theme::apply_theme(&context);
+        context.set_pixels_per_point(PPP);
+
+        let layout = Layout::preset("lattice").expect("the lattice preset");
+        let points = egui::vec2(SIZE[0] as f32 / PPP, SIZE[1] as f32 / PPP);
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, points);
+        let placements = layout.resolve(points);
+        let background = egui::Color32::from_rgb(
+            layout.background.0,
+            layout.background.1,
+            layout.background.2,
+        );
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/scratch");
+        std::fs::create_dir_all(&dir).expect("a scratch directory");
+
+        let fresh = harmonigraph_scene::ViewConfig::default();
+        use harmonigraph_scene::NoteNames;
+        // Arm length, arm width, taper, whether a chord is held over it, and
+        // which names show. The smallest arms earn their shots: a marker's
+        // edge is the rings' band, which is a fixed number of PIXELS, so it is
+        // at the bottom of the arm bar that the band is most of the marker and
+        // the shape has the least room to be the shape it claims.
+        let shots: Vec<(f32, f32, f32, bool, NoteNames)> = vec![
+            // The fresh marker, then the ends of the arm bar, then the two
+            // pictures the naming rule makes of the field.
+            (fresh.plus_arm, fresh.plus_width, fresh.plus_taper, false, NoteNames::Played),
+            (0.05, fresh.plus_width, fresh.plus_taper, false, NoteNames::Played),
+            (0.5, fresh.plus_width, fresh.plus_taper, false, NoteNames::Played),
+            (fresh.plus_arm, fresh.plus_width, fresh.plus_taper, true, NoteNames::Past),
+            (fresh.plus_arm, fresh.plus_width, fresh.plus_taper, false, NoteNames::All),
+            // The width, across its whole span at one arm: a hairline, the
+            // fresh proportion, a heavy cross, and the square at the top.
+            (fresh.plus_arm, 0.0, fresh.plus_taper, false, NoteNames::Played),
+            (fresh.plus_arm, 0.25, fresh.plus_taper, false, NoteNames::Played),
+            (fresh.plus_arm, 0.5, fresh.plus_taper, false, NoteNames::Played),
+            // The taper, across its whole span: a square end, half the arm,
+            // and an arm that fades the whole way from the crossing.
+            (fresh.plus_arm, fresh.plus_width, 0.0, false, NoteNames::Played),
+            (fresh.plus_arm, fresh.plus_width, 0.5 * fresh.plus_arm, false, NoteNames::Played),
+            (fresh.plus_arm, fresh.plus_width, fresh.plus_arm, false, NoteNames::Played),
+        ];
+        for (size, width, taper, chord, names) in shots {
+            let mut state = SharedState::new(FORMAT);
+            state.view.show_labels = true;
+            state.view.note_names = names;
+            // The DAW's own lattice ground rather than the preset's near-black:
+            // the markers are a step above the panel and nothing else here says
+            // how big a step that reads as.
+            state.set_background((24, 25, 29));
+            state.frame_params.fade_time = 0.0;
+            if chord {
+                for note in [55u8, 60, 64, 67, 71] {
+                    state.tracker.handle_event(harmonigraph_core::NoteEvent::on(0.0, 0, note, 1.0));
+                }
+            }
+            state.camera.zoom_by(2.5);
+            state.view.plus_arm = size;
+            state.view.plus_width = width;
+            state.view.plus_taper = taper;
+            let output = context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    time: Some(NOW),
+                    // The device's own limit, as the render loop reports it —
+                    // a probe drawn against a different ceiling from the export
+                    // is a probe of a picture nothing ships.
+                    max_texture_side: Some(renderer.max_texture_side()),
+                    ..Default::default()
+                },
+                |ui| {
+                    for (pane, rect) in &placements {
+                        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(*rect));
+                        draw_pane(&mut child, *pane, &mut state, NOW);
+                    }
+                },
+            );
+            let primitives = context.tessellate(output.shapes, PPP);
+            let bytes = renderer.render(&primitives, &output.textures_delta, PPP, background);
+            let path = dir.join(format!(
+                "plus-arm{:.0}-width{:.0}-taper{:.0}{}-{names:?}.png",
+                size * 100.0,
+                width * 100.0,
+                taper * 100.0,
+                if chord { "-chord" } else { "" },
+            ));
+            image::save_buffer(&path, &bytes, SIZE[0], SIZE[1], image::ExtendedColorType::Rgba8)
+                .expect("write the png");
+            eprintln!("{}", path.canonicalize().unwrap_or(path.clone()).display());
+        }
+    }
+
     /// The moat's picture, written to `target/scratch/` — a sweep of the Gap
     /// shape, which is where inside the Gap fade's width the light is given
     /// back.

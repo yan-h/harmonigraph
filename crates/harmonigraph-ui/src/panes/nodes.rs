@@ -636,10 +636,10 @@ fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBack
         |v| format!("{:.0}%", v * 100.0),
     )
     .on_hover_text(
-        "The dark gap a node clears around its own shape, over grid lines and \
-         back sheets — around each layer it is drawing, including an audio ring \
-         with no note under it, as a share of the node's radius. Solid to the \
-         inner handle, faded out by the outer. 0 draws none.",
+        "The dark gap a node clears around its own shape, over the resting \
+         markers and back sheets — around each layer it is drawing, including \
+         an audio ring with no note under it, as a share of the node's radius. \
+         Solid to the inner handle, faded out by the outer. 0 draws none.",
     );
     // The glow, last, and in Note rather than in a layer's section or with
     // Bloom on the Colors page. It is the whole node's, not a layer's: a node's

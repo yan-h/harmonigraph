@@ -402,20 +402,12 @@ pub(crate) fn draw_node_labels(
     // and eases all the way out.
     let names = view.note_names;
     for (index, node) in scene.nodes.iter().enumerate() {
-        // Named while nothing is happening on it: every node under All, a
-        // visited one under Past. `is_visible` below is what holds All to the
-        // lattice on screen rather than every position the view holds.
-        let resting = match names {
-            NoteNames::All => true,
-            NoteNames::Past => node.trail > 0.0,
-            NoteNames::Played => false,
-        };
-        // `is_visible` re-checks what `Scene::pick` already enforces, and
-        // `hovered` is picking's alone, so this is a second lock on one door.
-        // It stays because the field is public shared state rather than
-        // picking's private output, and what it costs to be wrong is a name
-        // floating in the sevens dimension on a node that draws nothing.
-        if !(node.hovered || node.activation > 0.0 || resting) || !node.is_visible() {
+        // Whether this node is named at all — asked of the node rather than
+        // spelled out here, because the resting MARKER under it turns on the same
+        // answer and the two have to be one rule (see
+        // `NodeInstance::is_named`). What is left to this pass is where the
+        // name lands and what it says.
+        if !node.is_named(view) {
             continue;
         }
         let Some(p) = projector.project(node.world_pos) else {

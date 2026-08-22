@@ -7,8 +7,8 @@
 //! which page a setting lands on is written out in [`display`]): Colors
 //! ([`color`], both color tables and the bloom over one of them), Lattice
 //! ([`view`] for what is framed, [`nodes`] for a played note's own layers,
-//! [`labels`] for the text on them, [`grid`] for the lines between them),
-//! Analyzer ([`spectral`]'s own settings), and System ([`system`], the
+//! [`labels`] for the text on them, [`plus`] for the marker standing at each
+//! node position), Analyzer ([`spectral`]'s own settings), and System ([`system`], the
 //! plugin's render/layout knobs). Alongside are the [`spectral`] display, the
 //! [`spiral`] one beside it (the same analyzer wound onto a chroma circle),
 //! [`render`] (the Video tab), and [`notes`] (Console + Notes). This file holds
@@ -24,10 +24,10 @@ use crate::SharedState;
 
 pub mod color;
 pub mod display;
+pub mod plus;
 // Not a pane either — the node glow's own clock, run by the Lattice pane over
 // the scene it has just derived.
 pub mod glow_fade;
-pub mod grid;
 pub mod labels;
 pub mod lattice;
 pub mod nodes;
@@ -448,9 +448,10 @@ pub(super) fn param_range_bar(
 }
 
 /// One bar for a soft edge: how far it REACHES past whatever it surrounds, and
-/// how much of that reach it spends FADING out. Three settings are this shape —
-/// the lattice's node clearance, the piano roll's note outline, and the lead a
-/// sounding note carries over the now-line.
+/// how much of that reach it spends FADING out. Four settings are this shape —
+/// the lattice's node clearance, the resting marker's arm and the taper on its
+/// ends, the piano roll's note outline, and the lead a sounding note carries
+/// over the now-line.
 ///
 /// The lead is the one whose axis is not in points, and it is worth saying that
 /// this bar does not care: it is handed two numbers and a far end, and what

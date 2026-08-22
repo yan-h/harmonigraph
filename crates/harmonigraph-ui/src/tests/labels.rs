@@ -556,6 +556,111 @@ fn only_the_all_mode_names_a_node_nothing_has_happened_on() {
     assert!(all.len() > 1, "only one node was named: {all:?}");
 }
 
+/// A name and the marker under it always add up to ONE mark, measured END TO
+/// END: the names come out of the label pass that really draws them and the
+/// markers out of the scene the same frame was derived from.
+///
+/// Both read `NodeInstance::name_level`, so this cannot fail while they share
+/// it — which is the point. What it guards is the day one of them stops: the
+/// two live in different crates, one drawing type and one deriving geometry,
+/// and a second spelling of the rule in either is a lattice that puts a marker
+/// behind a name and looks merely smudged rather than wrong.
+///
+/// A SUM rather than "never both", because the handoff is a fade and the
+/// middle of a fade is both: a name arriving at half strength stands over half
+/// a marker, and it is the total that has to stay put. The strict reading held
+/// only while the rule was a predicate, and it is what a note's release breaks
+/// — see `a_marker_takes_back_what_a_names_fade_gives_up`, which measures the
+/// same crossing from the scene side.
+///
+/// Swept over all three Show modes and over the Note names switch, because
+/// each pair is a different balance of the two sets — All names everything and
+/// leaves no markers, Played names nothing at rest and leaves them all, and the
+/// switch off is the case where the mode says one thing and the picture
+/// another.
+#[test]
+fn a_name_and_the_marker_under_it_add_up_to_one_mark() {
+    for show in [true, false] {
+        for names in [
+            harmonigraph_scene::NoteNames::All,
+            harmonigraph_scene::NoteNames::Past,
+            harmonigraph_scene::NoteNames::Played,
+        ] {
+            let mut state = fresh();
+            state.view.show_labels = show;
+            state.view.note_names = names;
+            // Something sounding and something remembered, so every route to a
+            // name is open at once: a live note, a memory under Past, and the
+            // whole field under All.
+            for (time, kind) in [
+                (0.0, harmonigraph_core::NoteEventKind::On { velocity: 1.0 }),
+                (1.0, harmonigraph_core::NoteEventKind::Off),
+            ] {
+                let event =
+                    harmonigraph_core::NoteEvent { time, channel: 0, note: 60, kind };
+                state.tracker.handle_event(event);
+            }
+            state.tracker.prune(3.0, &harmonigraph_core::Envelope::default());
+            state.tracker.handle_event(harmonigraph_core::NoteEvent::on(3.5, 0, 67, 1.0));
+            let scene = harmonigraph_scene::derive_scene(
+                &state.tracker,
+                &state.tuning,
+                &state.view,
+                &state.view.reach(),
+                &state.frame_params,
+                state.camera,
+                None,
+                4.0,
+            );
+            // The label pass is gated on the switch by its CALLER, so mirror
+            // that here rather than asking it to gate itself.
+            let batch = if show {
+                pane_labels(&scene, &state.view, 1.0)
+            } else {
+                crate::text::TextBatch::default()
+            };
+            let named: Vec<(glam::Vec3, f32)> = batch
+                .labels()
+                .iter()
+                .map(|label| {
+                    let node = &scene.nodes[label.node as usize];
+                    (node.world_pos, node.name_level(&state.view))
+                })
+                .collect();
+            let ground = scene.lattice_ground.w;
+            for (pos, level) in &named {
+                let standing = scene
+                    .pluses
+                    .iter()
+                    .find(|marker| marker.pos == *pos)
+                    .map_or(0.0, |marker| marker.strength);
+                let want = ground * (1.0 - level);
+                assert!(
+                    (standing - want).abs() < 1e-5,
+                    "{names:?} (names on: {show}) at {pos:?}: a name at {level} \
+                     over a marker at {standing}, which wanted {want}",
+                );
+            }
+            // The half of it a sum cannot say on its own: a name at full
+            // strength leaves NO instance, rather than one shipped at zero.
+            for (pos, _) in named.iter().filter(|(_, level)| *level >= 1.0) {
+                assert!(
+                    !scene.pluses.iter().any(|marker| marker.pos == *pos),
+                    "{names:?} (names on: {show}) shipped a marker under a whole name at {pos:?}",
+                );
+            }
+            // And the sweep has to actually reach both sets, or it is passing
+            // on an empty picture.
+            match (show, names) {
+                (true, harmonigraph_scene::NoteNames::All) => {
+                    assert!(!named.is_empty() && scene.pluses.is_empty(), "All: {names:?}");
+                }
+                _ => assert!(!scene.pluses.is_empty(), "no pluses to contradict: {names:?}"),
+            }
+        }
+    }
+}
+
 /// Every label the lattice draws, at one camera and one Size bar setting: the
 /// rasterized type size, and the ink it actually covers.
 fn lattice_labels_at(label_scale: f32, distance: f32, ppp: f32) -> Vec<(f32, egui::Rect)> {

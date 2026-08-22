@@ -15,15 +15,15 @@ Two places a skin reaches, and only one of them is an axis today:
   ink strip (`fs_ink_strip`, read back by `glow_ink`). There is no style enum to add a
   variant to — a second paint means a branch there and a setting to pick it,
   which is what the retired `NodeStyle` was.
-- **Chrome** — grid lines and chord beams live in `fs_edge` /
-  `derive_grid` / `derive_edges`. The `Skin` struct
-  (`harmonigraph-scene::skin`) owns every color the CHROME draws — panel,
-  well, hairline, accent — but not what the LATTICE draws at rest. The grid
-  lines, the audio ring where it reads silence, the octave band's unsounding
-  slices and an unplayed node all stand on one view setting instead,
-  `ViewConfig::lattice_ground`: a neutral `L*` resolved per frame off the
-  Ground bar, so it is dialable while a picture is being read. The skin's
-  part in it is `surface_faint`, the rung a fresh view opens on.
+- **Chrome** — the resting cross at each home-sheet position lives in
+  `fs_plus` / `derive_pluses`; nothing is drawn between two positions. The
+  `Skin` struct (`harmonigraph-scene::skin`) owns every color the CHROME
+  draws — panel, well, hairline, accent — but not what the LATTICE draws at
+  rest. The markers, the audio ring where it reads silence, the octave
+  band's unsounding slices and an unplayed node all stand on one view
+  setting instead, `ViewConfig::lattice_ground`: a neutral `L*` resolved per
+  frame off the Ground bar, so it is dialable while a picture is being read.
+  The skin's part in it is `surface_faint`, the rung a fresh view opens on.
 
 A node is a camera-facing billboard with signed-distance masks, so new node
 shapes are cheap: change the coverage math, keep the compositing.
@@ -48,36 +48,56 @@ shapes are cheap: change the coverage math, keep the compositing.
   the lattice-as-tiling geometry (hex especially suits the triangular
   just-intonation grid).
 
-## Idle placeholder (currently a faint grey ring on the home sheet)
+## Resting marker (a `+` at each home-sheet position)
 
-- **Filled dot** — a small solid dot at each position instead of a ring;
-  denser, more graph-like, and sidesteps the ring/disc shape mismatch that
-  the fade fix works around.
-- **Cross tick** — a tiny `+` at each node (blueprint look).
-- **Grid-only** — drop the placeholder entirely and let the grid gaps mark
-  positions (relies on a slightly stronger grid).
+**Cross tick is the shipped design** (PR #429), so this section is what is
+left to want rather than a menu. Three bars set it — an arm's length, the
+taper on its four ends, and the thickness across it — and its edge is a
+ring's edge, the one screen-constant band every layer here is cut with.
 
-## Lines (grid + chord beams)
+- **Filled dot** — a small solid disc instead of the cross. It was a Shape
+  row for two commits and came out again: one field of marks reads as a
+  ground for the music to arrive on, and a choice between two of them is a
+  setting nobody has a reason to move twice. Rebuilding it is a variant in
+  `plus_coverage` and a row to pick it.
+- **Open ring** — a hollow circle rather than ink, so a position reads as a
+  socket a note lands in. The one shape here that a note arriving could grow
+  OUT of rather than cover.
+- **Nothing at all** — the arm bar at 0, which is already reachable, leaving
+  the lattice at rest as the node rings alone.
 
-- **Solid hairlines** — thin continuous grid lines with a faint glow,
-  instead of the current soft band; sharper, more technical.
-- **Dotted grid** — render each grid segment as a row of dots rather than a
-  line; lighter, less cage-like.
-- **Comet beams** — chord beams brighter at the root end, fading toward the
-  other notes, so chord direction reads.
-- **Weight by consonance** — simpler intervals get thicker/brighter beams
-  (octave/fifth heavy, high-limb intervals thin).
+## Lines between positions
+
+**Nothing is drawn between two positions** — PR #429 removed the grid
+pipeline whole, and the chord beams that shared its buffer went with it. What
+the eye reads the rows and columns off is the regularity of the field itself,
+and a cross draws exactly what a pair of lines would draw where they meet.
+
+So each of these is a NEW pipeline rather than a flag on an existing one,
+which is most of what they cost:
+
+- **Solid hairlines** — thin continuous lines between neighbours with a faint
+  glow; sharper, more technical, and the thing the field was traded for.
+- **Comet beams** — a chord's notes joined, brighter at the root end, so
+  chord direction reads.
+- **Weight by consonance** — simpler intervals thicker or brighter
+  (octave/fifth heavy, high-limit intervals thin).
 - **Flow pulse** — a bright pulse travelling along a chord edge from the
   root, looping while the chord is held.
-- **Accent-tinted grid** — a desaturated hue over the field instead of the
-  neutral grey. Still an idea, but no longer a skin swap: the grid's color
-  is `ViewConfig::lattice_ground`, an `L*` with no hue axis at all, so it
-  means giving that setting a chroma and a hue of its own. It also reaches
-  further than the grid — the audio ring's silent end and the band's
-  unsounding slices stand on that same number, and
-  `the_grid_the_ring_and_an_idle_node_are_one_grey` says they must — so what
-  is really on offer is "tint the lattice AT REST", all three surfaces
-  together, rather than the lines alone.
+- **The sevens tether** — the one line that ever LIT: a dashed chain hanging
+  an off-sheet note down to the home sheet, so it had something visible to
+  hang from. It went with the rest, and an off-sheet note now floats over the
+  field with only its draw SIZE saying how far off it has gone. The narrowest
+  of these to bring back, and the only one that was answering a question.
+- **Accent-tinted ground** — a desaturated hue over the field instead of the
+  neutral grey. Not a skin swap: the markers' color is
+  `ViewConfig::lattice_ground`, an `L*` with no hue axis at all, so it means
+  giving that setting a chroma and a hue of its own. It also reaches further
+  than the markers — the audio ring's silent end and the band's unsounding
+  slices stand on that same number, and
+  `the_markers_the_ring_and_an_idle_node_are_one_grey` says they must — so
+  what is really on offer is "tint the lattice AT REST", all three surfaces
+  together.
 
 ## Whole-look skins (coordinated palettes)
 
@@ -87,7 +107,8 @@ what the resting lattice is drawn in, and a light skin under a dark ground
 is two looks at once — plus a matching node/line choice:
 
 - **Blueprint** — deep blue field, cyan hairlines, hollow rings, mono
-  labels.
+  labels. The closest of these to what already draws: the resting cross is
+  the blueprint tick.
 - **Paper / ink** — light background, dark ink strokes, solid black dots
   (needs a light skin variant).
 - **Neon** — black field, saturated glowing filled circles, bright beams.
@@ -99,8 +120,8 @@ is two looks at once — plus a matching node/line choice:
 1. **Solid fill** node body — a two-line branch in the node's ink and a
    setting to reach it; immediately gives the "filled circles" the backlog
    asked about.
-2. **Filled-dot idle placeholder** — swap the placeholder ring mask for a
-   small disc; tiny change, and it removes the disc/ring shape mismatch at
-   the root of the fade issues.
-3. **Dotted or solid grid** — a variant flag in `fs_edge`, mirroring the
-   existing dashed-links path.
+2. **A second marker shape** — a variant in `plus_coverage` (which is one
+   distance field and an edge) plus a row to pick it. The cheapest of these
+   by a wide margin, and the only one that adds no pipeline.
+3. **The sevens tether** — a pipeline of its own now, but the smallest one:
+   one instanced segment per off-sheet note, hanging to the home sheet.

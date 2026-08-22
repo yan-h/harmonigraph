@@ -305,8 +305,8 @@ fn a_second_lattice_view_in_the_same_frame_does_not_break_the_submit() {
 const PARITY_SHIMMER_WIDTH: f32 = 5.0;
 
 /// A scene exercising every draw path: lit + idle + hovered nodes with
-/// octave indicators, a chord beam, and solid + dashed grid lines, all
-/// overlapping so blend order matters.
+/// octave indicators, and resting markers under them, all overlapping so blend
+/// order matters.
 fn parity_scene() -> Scene {
     use glam::{Vec3, Vec4};
     use harmonigraph_core::LatticePos;
@@ -380,20 +380,21 @@ fn parity_scene() -> Scene {
             trail: 0.0,
         });
     }
-    let grid = vec![
-        harmonigraph_scene::EdgeInstance {
-            a: Vec3::new(-1.8, -0.6, -0.3),
-            b: Vec3::new(1.6, -0.6, -0.3),
-            color: Vec4::new(0.16, 0.17, 0.20, 0.55),
+    // Two markers, one under a node and one clear of every node, so the pass is
+    // exercised both where the nodes composite over it and where it stands
+    // alone. Different radii, because the size is per instance.
+    let pluses = vec![
+        harmonigraph_scene::PlusInstance {
+            pos: Vec3::new(-1.8, -0.6, -0.3),
+            radius: 0.22,
+            color: Vec4::new(0.16, 0.17, 0.20, 1.0),
             strength: 0.55,
-            dashed: false,
         },
-        harmonigraph_scene::EdgeInstance {
-            a: Vec3::new(-1.2, 0.7, -0.6),
-            b: Vec3::new(1.2, 0.4, 0.6),
-            color: Vec4::new(0.16, 0.17, 0.20, 0.55),
+        harmonigraph_scene::PlusInstance {
+            pos: Vec3::new(0.0, 0.0, 0.0),
+            radius: 0.13,
+            color: Vec4::new(0.16, 0.17, 0.20, 1.0),
             strength: 0.4,
-            dashed: true,
         },
     ];
     let glow_rows = nodes.len() as u32;
@@ -445,8 +446,14 @@ fn parity_scene() -> Scene {
         // paths composite, so the indicators are the ones every other
         // setting is a departure from.
         octave_layout: harmonigraph_scene::OctaveLayout::default(),
-        grid,
-        grid_thickness: 1.0,
+        pluses,
+        // Arms a little over half their length across, the proportion a fresh
+        // view draws, so a marker here is the shape every width test is a
+        // departure from.
+        plus_half_width: 0.275,
+        // Square-ended arms, so the fixture's markers are the shape the taper
+        // is a departure from.
+        plus_taper_start: 1.0,
         // A blue->red sweep across the whole table, so a glyph's color is a
         // reading of which entry it landed on. Spanned off PITCH_LUT_N rather
         // than a literal: `from_fn` sizes itself from the field, so a literal
@@ -683,12 +690,12 @@ fn offscreen_composite_matches_direct_draw() {
     // Path B: the pre-offscreen renderer — same buffers and draw order,
     // depthless pipelines, straight into the target pass.
     let res: &LatticeResources = resources.get().expect("prepare created resources");
-    let (node_pipeline, edge_pipeline) =
+    let (node_pipeline, plus_pipeline) =
         create_pipelines(&device, SHADER_SRC, format, &res.bind_group_layout, false);
     let pane = res.panes.get(&7).expect("prepare created the pane");
     let direct_tex = render_to_texture(&device, &queue, SIZE, format, clear, |pass| {
-        // The grid sits at the home sheet's depth, so it is drawn INSIDE the
-        // node run, at `grid_at` — mirror that here or the two paths differ
+        // The markers sit at the home sheet's depth, so they are drawn INSIDE
+        // the node run, at `pluses_at` — mirror that or the two paths differ
         // by draw order rather than by the thing under test.
         let nodes = |pass: &mut wgpu::RenderPass<'static>, range: std::ops::Range<u32>| {
             if !range.is_empty() {
@@ -698,14 +705,14 @@ fn offscreen_composite_matches_direct_draw() {
                 pass.draw(0..4, range);
             }
         };
-        nodes(pass, 0..pane.grid_at);
-        if pane.edge_count > 0 {
-            pass.set_pipeline(&edge_pipeline);
+        nodes(pass, 0..pane.pluses_at);
+        if pane.plus_count > 0 {
+            pass.set_pipeline(&plus_pipeline);
             pass.set_bind_group(0, &pane.bind_group, &[]);
-            pass.set_vertex_buffer(0, pane.edge_buffer.slice(..));
-            pass.draw(0..4, 0..pane.edge_count);
+            pass.set_vertex_buffer(0, pane.plus_buffer.slice(..));
+            pass.draw(0..4, 0..pane.plus_count);
         }
-        nodes(pass, pane.grid_at..pane.instance_count);
+        nodes(pass, pane.pluses_at..pane.instance_count);
     });
 
     let composite = readback(&device, &queue, &composite_tex, SIZE);
@@ -1419,7 +1426,7 @@ fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
     }];
     // One node, so one row — the strip follows the scene it is handed.
     scene.glow_rows = 1;
-    scene.grid.clear();
+    scene.pluses.clear();
     // Fill a good share of the frame, so the measurements below are
     // about the mark's design rather than about pixel quantization.
     scene.node_radius = 1.1;
@@ -2272,7 +2279,7 @@ fn far_toward(weights: &[f64], size: [u32; 2], toward: f64, cone: f64) -> f64 {
 /// do: a marked node cleared a gap wider than itself all the way round, so a
 /// hole that says "this node is in front of that one" said it about a ring of
 /// empty lattice too. That is visible exactly where the clearing is for — over
-/// the grid lines and the sheets behind — and invisible in the node's own
+/// the resting markers and the sheets behind — and invisible in the node's own
 /// picture, which is why every reading here is off the difference the gutter
 /// makes rather than off the node.
 #[test]
@@ -2430,7 +2437,7 @@ fn a_clearing_over_a_wedge_past_a_half_turn_covers_the_whole_wedge() {
 /// ink would leave the lattice showing through every gap on the node, which
 /// reads as neither a hole nor a node; and the node whose rings leave the widest
 /// hole in the middle is the one with no core at all, where the ink is an
-/// annulus and its middle is the grid.
+/// annulus and its middle is the marker standing under it.
 ///
 /// Read along rays out of the node's centre, which is the one sweep that does
 /// not need to know where the rim is in each direction — and the marked node's
@@ -2448,13 +2455,13 @@ fn a_clearing_is_one_hole_covering_the_centre_and_every_ring() {
 
     let staged = |melody: u32, band: bool, ring: f32, gutter: f32| -> Scene {
         let mut scene = clearing_node(melody, ring, band, gutter);
-        // No grid. The ray below reads the picture for anything lit, and a grid
-        // line crossing just outside the hole is a lit sample past its rim with
+        // No markers. The ray below reads the picture for anything lit, and a marker
+        // sitting just outside the hole is a lit sample past its rim with
         // bare pane between — which reads as a gap in the hole and is nothing
-        // of the kind. What the clearing cuts out of the grid is a separate
-        // claim, and `a_node_wearing_only_an_audio_ring_clears_around_it` is
-        // where the added light is measured against it.
-        scene.grid.clear();
+        // of the kind. What the clearing cuts out of the marker field is a
+        // separate claim, and `a_node_wearing_only_an_audio_ring_clears_around_it`
+        // is where the added light is measured against it.
+        scene.pluses.clear();
         scene
     };
     // Everything a node can wear, and then the same node with its audio ring
@@ -2595,8 +2602,8 @@ fn a_clearing_follows_the_audio_ring_its_node_wears() {
 /// The ring is a window onto the spectrum rather than a level a node carries, so
 /// a node nobody played wears one wherever the view's Gate lets it. That is ink,
 /// and ink with no hole under it reads as painted ON the lattice rather than in
-/// front of it: the grid runs straight through the ring and the sheets behind
-/// show through its gaps.
+/// front of it: the marker under it shows through the ring, and so do the
+/// sheets behind.
 ///
 /// The other half is what such a node must NOT clear. Its band and its core are
 /// drawn at the note's level, which is nothing, so a hole sized to the layers
@@ -4486,7 +4493,7 @@ fn sheets_draw_back_to_front_along_the_sevens_axis() {
 ///
 /// `on_home` and `trail` are still set, on different cycles, and neither is
 /// read by anything in THIS crate: no `GpuInstance` carries them, and the
-/// grid and the labels both arrive already built. They stay because a
+/// markers and the labels both arrive already built. They stay because a
 /// fixture whose two sets coincide cannot tell a predicate that reads one
 /// from a predicate that reads the other, and the cull is where such a
 /// predicate would go — but nothing here separates them today, so treat the
@@ -4679,20 +4686,20 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
     }
 }
 
-/// A node that can paint nothing is not shipped at all — and the grid it
-/// sits in still is.
+/// A node that can paint nothing is not shipped at all — and the marker standing
+/// at its position still is.
 ///
 /// The billboard is deliberately bigger than the node, so a node the shader
 /// discards every fragment of still costs a quad's worth of rasterizing; on
-/// an unplayed lattice that is EVERY node, there being no idle marker and no
-/// trail mark for one to draw. So the frame drops to a grid and nothing
-/// else, and the callback has to keep drawing that grid — which is why
-/// neither `prepare` nor `paint` may read "no instances" as "nothing to
-/// draw": that test takes the grid down with the nodes.
+/// an unplayed lattice that is EVERY node, an idle one drawing nothing of its
+/// own and carrying no trail mark. So the frame drops to the marker field and
+/// nothing else, and the callback has to keep drawing that field — which is
+/// why neither `prepare` nor `paint` may read "no instances" as "nothing to
+/// draw": that test takes the markers down with the nodes.
 #[test]
-fn a_silent_lattice_ships_no_nodes_and_still_draws_its_grid() {
+fn a_silent_lattice_ships_no_nodes_and_still_draws_its_markers() {
     let scene = idle_scene();
-    assert!(!scene.grid.is_empty(), "the fixture has to carry a grid");
+    assert!(!scene.pluses.is_empty(), "the fixture has to carry a marker field");
     let cb = LatticeCallback::from_scene(
         &scene,
         LatticeLabels::default(),
@@ -4705,7 +4712,7 @@ fn a_silent_lattice_ships_no_nodes_and_still_draws_its_grid() {
         cb.instances.is_empty(),
         "every node is idle with nothing to draw at one, so none should ship",
     );
-    assert!(!cb.edges.is_empty(), "the grid is not a node and must survive");
+    assert!(!cb.pluses.is_empty(), "a marker is not a node and must survive");
 
     let Some((device, queue)) = headless_device() else {
         return;
@@ -4735,6 +4742,97 @@ fn a_silent_lattice_ships_no_nodes_and_still_draws_its_grid() {
     assert!(
         px.chunks(4).any(|p| p.iter().zip(bg).any(|(&c, b)| c.abs_diff(b) > 4)),
         "the grid vanished with the nodes",
+    );
+}
+
+/// One marker alone on a black field, at the size an area measurement wants:
+/// no nodes, so nothing composites over it, and nothing else in the shot can
+/// be mistaken for its ink.
+fn lone_marker_scene(half_width: f32, taper_start: f32) -> Scene {
+    let mut scene = idle_scene();
+    scene.nodes.clear();
+    scene.pluses = vec![harmonigraph_scene::PlusInstance {
+        pos: glam::Vec3::ZERO,
+        // Big enough that the screen-constant soft band is a thin rim on it
+        // rather than a share of the area — the band is the error term in
+        // every ratio below, and a small marker is mostly band.
+        radius: 0.5,
+        color: glam::Vec4::ONE,
+        strength: 1.0,
+    }];
+    scene.plus_half_width = half_width;
+    scene.plus_taper_start = taper_start;
+    scene
+}
+
+/// The two proportions a marker carries are read by the SHADER as the shapes
+/// they name: a filled square at the top of the width bar, and ends that
+/// actually run out at the bottom of the taper.
+///
+/// `the_width_reaches_the_scene_as_a_share_of_the_arm` pins the conversion on
+/// the way in, and it cannot see this: the number arriving correct in the
+/// uniform says nothing about the distance field spending it. What is measured
+/// here is AREA, which is a number rather than a look — a cross of half-width
+/// `t` covers `8t - 4t^2` of an arm-squared where a filled square covers 4, so
+/// the ratio between two widths is arithmetic the picture either agrees with
+/// or does not.
+///
+/// The premultiplied ink is linear in coverage (`plus_paint` returns
+/// `rgb * alpha`), so summing the light IS integrating the area, with the soft
+/// band as a proportional rim on both — which is why the marker is drawn big
+/// and the tolerance is a tenth rather than a percent.
+///
+/// What stays a look, and stays with `the_resting_markers_draw_a_picture`:
+/// whether a cross reads as a crossing rather than as a glyph, and whether the
+/// tapered end arrives at nothing rather than stopping at something.
+#[test]
+fn the_shader_spends_a_markers_proportions_on_the_shape_they_name() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut gpu) = Shooter::new(SIZE) else {
+        return;
+    };
+
+    // Square ends throughout, so this half measures the WIDTH alone.
+    let ink = |gpu: &mut Shooter, t: f32| total_light(&gpu.shot(&lone_marker_scene(t, 1.0)));
+    let cross = ink(&mut gpu, 0.275) as f64;
+    let square = ink(&mut gpu, 1.0) as f64;
+    assert!(cross > 0.0, "the fixture drew no marker at all");
+
+    let want = 4.0 / (8.0 * 0.275 - 4.0 * 0.275 * 0.275);
+    let got = square / cross;
+    assert!(
+        (got - want).abs() / want < 0.1,
+        "a half-width of 1 covers {got:.3}x what 0.275 does, and the shape says {want:.3}x \
+         — the box's y-extent is not being read as half the arm's thickness",
+    );
+
+    // And the square really is filled rather than a very fat cross: at
+    // half-width 1 the box covers the whole octant, so there is nothing left
+    // for a wider one to add.
+    let over = ink(&mut gpu, 1.0) as f64;
+    assert!(
+        (over - square).abs() / square < 0.01,
+        "past a full half-width the marker is still growing: {square} then {over}",
+    );
+
+    // The taper, at one width: an arm solid to its tip, then to half way, then
+    // fading the whole way from the crossing. Ink has to fall each time, and by
+    // a share the smoothstep can account for — it integrates to half over the
+    // span it covers, and the crossing keeps its own.
+    let taper = |gpu: &mut Shooter, start: f32| {
+        total_light(&gpu.shot(&lone_marker_scene(0.275, start))) as f64
+    };
+    let (square_end, half, whole) = (taper(&mut gpu, 1.0), taper(&mut gpu, 0.5), taper(&mut gpu, 0.0));
+    assert!(
+        square_end > half && half > whole,
+        "a longer taper has to take more ink, not less: {square_end} {half} {whole}",
+    );
+    let lost = (square_end - whole) / square_end;
+    assert!(
+        (0.25..0.65).contains(&lost),
+        "tapering the whole arm took {:.0}% of the ink; a smoothstep over the arm \
+         with the crossing keeping its own is nearer 40%",
+        lost * 100.0,
     );
 }
 
@@ -4966,7 +5064,7 @@ fn each_thing_that_makes_a_node_sounding_keeps_it_alone() {
 /// The grid's place in the draw order is counted over the nodes actually
 /// shipped, not over the ones the scene held.
 ///
-/// `grid_at` is the seam between the sheets BEHIND the home sheet and the
+/// `pluses_at` is the seam between the sheets BEHIND the home sheet and the
 /// home sheet itself, and the whole argument for it is in `from_scene`: put
 /// the grid under everything and a node on a sheet behind the home one
 /// punches its clearing through the home grid. Culling breaks the old
@@ -4979,7 +5077,7 @@ fn each_thing_that_makes_a_node_sounding_keeps_it_alone() {
 /// between them: the seam has to land at 1, and it is `split` (2) that says
 /// otherwise.
 #[test]
-fn the_grid_seam_counts_the_nodes_that_ship() {
+fn the_marker_seam_counts_the_nodes_that_ship() {
     let mut scene = idle_scene();
     scene.nodes.truncate(3);
     for node in &mut scene.nodes {
@@ -5007,7 +5105,7 @@ fn the_grid_seam_counts_the_nodes_that_ship() {
     );
     assert_eq!(call.instances.len(), 2, "the idle node behind home is culled");
     assert_eq!(
-        call.grid_at, 1,
+        call.pluses_at, 1,
         "the grid draws after the one sheet-behind node that ships, not after \
          the two the scene held",
     );
@@ -5075,7 +5173,7 @@ fn a_lattice_with_nothing_to_draw_reports_no_gpu_time() {
 
     // Now the same pane with nothing at all in it.
     let mut empty = idle_scene();
-    empty.grid.clear();
+    empty.pluses.clear();
     let blank = LatticeCallback::from_scene(
         &empty,
         LatticeLabels::default(),
@@ -5084,7 +5182,7 @@ fn a_lattice_with_nothing_to_draw_reports_no_gpu_time() {
         40,
         Some(stats.clone()),
     );
-    assert!(blank.instances.is_empty() && blank.edges.is_empty(), "nothing to draw");
+    assert!(blank.instances.is_empty() && blank.pluses.is_empty(), "nothing to draw");
     frame(&blank);
     assert_eq!(
         stats.gpu_ms.load(std::sync::atomic::Ordering::Relaxed),
@@ -5137,9 +5235,9 @@ fn one_node_behind_another() -> Scene {
     far.world_pos = STACK_AT.extend(-1.0);
     far.on_home = false;
     scene.nodes = vec![near, far];
-    // The grid would draw across the same pixels, and whether IT covers a
+    // The markers would draw across the same pixels, and whether ONE covers a
     // label is a separate question that this fixture cannot answer twice.
-    scene.grid.clear();
+    scene.pluses.clear();
     scene
 }
 
@@ -5324,7 +5422,7 @@ fn a_label_takes_its_own_nodes_place_in_the_order() {
         pitch: 0.0,
         ..Default::default()
     };
-    scene.grid.clear();
+    scene.pluses.clear();
     let node = |z: f32, activation: f32| harmonigraph_scene::NodeInstance {
         world_pos: glam::Vec3::new(0.0, 0.0, z),
         activation,
@@ -5372,11 +5470,11 @@ fn a_label_takes_its_own_nodes_place_in_the_order() {
             // Both silent nodes: nothing has been drawn yet, and two labels
             // at one seam are one uninterrupted draw. They are behind the
             // home sheet, so they are also behind the grid.
-            GlyphSeam { at: 0, start: 0, count: 2, after_grid: false, sheet: 0 },
+            GlyphSeam { at: 0, start: 0, count: 2, after_pluses: false, sheet: 0 },
             // The home sheet's own name, after its disc.
-            GlyphSeam { at: 1, start: 2, count: 1, after_grid: true, sheet: 1 },
+            GlyphSeam { at: 1, start: 2, count: 1, after_pluses: true, sheet: 1 },
             // And the near sheet's, after everything.
-            GlyphSeam { at: 2, start: 3, count: 1, after_grid: true, sheet: 2 },
+            GlyphSeam { at: 2, start: 3, count: 1, after_pluses: true, sheet: 2 },
         ],
         "a label goes after its own node, over the instances that ship",
     );
@@ -5392,25 +5490,25 @@ fn a_label_takes_its_own_nodes_place_in_the_order() {
     );
 }
 
-/// A name on a node that ships no disc still draws over the grid, not under
-/// it — the case where the two runs meet at the same number.
+/// A name on a node that ships no disc still draws over the markers, not
+/// under them — the case where the two runs meet at the same number.
 ///
-/// `grid_at` is where the grid goes, counted over the instances that SHIP.
-/// The sheets behind the home one draw before it and the home sheet after,
-/// so the boundary between the two runs is exactly `grid_at`. A node that
+/// `pluses_at` is where the markers go, counted over the instances that SHIP.
+/// The sheets behind the home one draw before them and the home sheet after,
+/// so the boundary between the two runs is exactly `pluses_at`. A node that
 /// paints nothing ships nothing, which leaves its seam sitting on the
 /// boundary rather than past it: with every node on the home sheet — the
-/// stock `extent_sevens: 0` — the far run is empty, `grid_at` is 0, and the
+/// stock `extent_sevens: 0` — the far run is empty, `pluses_at` is 0, and the
 /// first home node to be culled takes seam 0 as well. Reading the side off
-/// `at > grid_at` then files that node's name with the sheets BEHIND the
-/// grid, and the grid is painted over the name.
+/// `at > pluses_at` then files that node's name with the sheets BEHIND the
+/// markers, and they are painted over the name.
 ///
 /// The state is the plugin's resting one, which is what makes it worth a
 /// test of its own: stock view, nothing played, hover any node. An idle node
 /// draws nothing at all, and a hovered node is named whether or not it
 /// draws.
 #[test]
-fn a_culled_home_nodes_name_draws_over_the_grid_it_shares_a_seam_with() {
+fn a_culled_home_nodes_name_draws_over_the_markers_it_shares_a_seam_with() {
     let mut scene = parity_scene();
     scene.camera = harmonigraph_scene::Camera {
         projection: harmonigraph_scene::Projection::Orthographic,
@@ -5433,7 +5531,7 @@ fn a_culled_home_nodes_name_draws_over_the_grid_it_shares_a_seam_with() {
         ..scene.nodes[0]
     };
     // The hovered one is silent and first, so it is culled before anything
-    // has shipped and its seam is 0 — the same number as `grid_at`.
+    // has shipped and its seam is 0 — the same number as `pluses_at`.
     scene.nodes = vec![node(0.0), node(1.0)];
     let glyph = GlyphInstance { rect: [0.0, 0.0, 1.0, 1.0], ..crate::text::tests::glyph() };
     let call = LatticeCallback::from_scene(
@@ -5452,12 +5550,12 @@ fn a_culled_home_nodes_name_draws_over_the_grid_it_shares_a_seam_with() {
         None,
     );
 
-    assert!(!scene.grid.is_empty(), "the fixture needs a grid for the name to be covered BY");
-    assert_eq!(call.grid_at, 0, "with one sheet there is nothing to draw before the grid");
+    assert!(!scene.pluses.is_empty(), "the fixture needs a marker for the name to be covered BY");
+    assert_eq!(call.pluses_at, 0, "with one sheet there is nothing to draw before the pluses");
     assert_eq!(
         call.seams,
-        vec![GlyphSeam { at: 0, start: 0, count: 1, after_grid: true, sheet: 0 }],
-        "a home node's name draws after the grid even when the cull leaves it on grid_at",
+        vec![GlyphSeam { at: 0, start: 0, count: 1, after_pluses: true, sheet: 0 }],
+        "a home node's name draws after the pluses even when the cull leaves it on pluses_at",
     );
     assert_eq!(call.sheets, vec![1], "one sheet, ending where the one shipped node does");
 }
@@ -5886,9 +5984,9 @@ fn the_glow_spread_says_how_separate_a_node_keeps_its_colours() {
 }
 
 /// What the glow is a layer OF is a node, and a lattice drawing none has no
-/// light — grid lines and chord beams included, which are drawn in the same
-/// pass and would glow like nodes if the light were a post-process over the
-/// picture rather than a draw off the node instance buffer.
+/// light — the resting markers included, which are drawn in the same pass and
+/// would glow like nodes if the light were a post-process over the picture
+/// rather than a draw off the node instance buffer.
 ///
 /// Byte-identical rather than nearly so: both of the glow's draws are over the
 /// instance buffer, which is empty, so the target is cleared to transparent and
