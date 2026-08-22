@@ -1,9 +1,9 @@
 // Instanced billboard rendering of lattice nodes.
 //
 // Each instance is one node, expanded into a camera-facing quad in the
-// vertex shader; the fragment shader draws a soft disc with a glow whose
-// strength follows the node's activation. Skins/effects iterate here:
-// this file is the main thing to edit when trying a new look.
+// vertex shader; the fragment shader draws the node's stack of rings, and a
+// second pass lays that node's own light around them. Skins/effects iterate
+// here: this file is the main thing to edit when trying a new look.
 
 struct Uniforms {
     view_proj: mat4x4<f32>,
@@ -17,9 +17,10 @@ struct Uniforms {
     //    the same clock is how a later pattern would clock on the wrong one.
     // y: base node radius (world units),
     // z: unused,
-    // w: unused — it carried the node style, the core orb's paint, from
-    //    when the core had more than one. A retired slot rather than a
-    //    repack, which would renumber the ones around it for nothing.
+    // w: unused — it carried the node style, the paint of a disc at the
+    //    node's centre, from when that disc had more than one. A retired
+    //    slot rather than a repack, which would renumber the ones around it
+    //    for nothing.
     misc: vec4<f32>,
     // x: darkest_pitch, y: brightest_pitch (MIDI notes); z: render scale
     // (offscreen pixels per screen pixel — converts the screen-pixel
@@ -28,7 +29,8 @@ struct Uniforms {
     // nothing in this file touches it suggests. An octave glyph maps its
     // pitch through x/y to index pitch_lut.
     misc2: vec4<f32>,
-    // x: core radius in quad UV units (0 turns the core off). y/z: the
+    // x: unused — it carried the radius of a disc at the node's centre, the
+    // one layer that was not a ring. Retired in place. y/z: the
     // outer layer's inner/outer band radii (same units; the scene guarantees
     // z > y where the band draws at all, and hands both as 0 where it does
     // not). w: the outer edge of the outermost RING the node draws — z, save
@@ -42,10 +44,10 @@ struct Uniforms {
     // exactly rather than closely (length mirrors
     // harmonigraph_scene::PITCH_LUT_N).
     pitch_lut: array<vec4<f32>, 64>,
-    // x: core solidity (0 = soft glow, 1 = solid orb) — the single axis the
-    // core layer runs on. y/z/w: unused — y carried the octave glyphs'
-    // solidity, which is fixed crisp below, and z/w the idle marker's radius
-    // and style, from when an unlit node drew a placeholder of its own.
+    // x: unused — it carried the solidity of a disc at the node's centre.
+    // y: where the melody/bass strip starts. z/w: unused — they carried the
+    // idle marker's radius and style, from when an unlit node drew a
+    // placeholder of its own.
     misc4: vec4<f32>,
     // x: grid line thickness, a multiple of the built-in grid width.
     // y: unused.
@@ -119,9 +121,9 @@ struct Uniforms {
     // the one test anything here makes and no half-on state exists — a moat
     // held open for a light nobody draws is a gap in the picture for nothing.
     //
-    // Read by the GLOW's own two draws (`vs_glow` sizes their billboard,
-    // `glow_layer` shapes the light, `glow_moat` shapes the gap) and, in the
-    // node draw, by `core_layer`'s skirt switch and nothing else. The light and
+    // Read by the GLOW's own two draws and nothing else (`vs_glow` sizes their
+    // billboard, `glow_layer` shapes the light, `glow_moat` shapes the gap).
+    // The light and
     // its moat are both written into a target of the glow's own, so a node's
     // own picture — its knockout included — is exactly what it is with the glow
     // off, and the moat is an ABSENCE of light rather than a shape painted in
@@ -176,22 +178,11 @@ const QUAD_MARGIN: f32 = 1.6;
 // fade was tuned, so widening the billboard for the marks doesn't
 // quietly restyle the glyph edges.
 const GLYPH_FADE_LIMIT: f32 = 1.3;
-// Where the glow's window closes: past this the exponential is multiplied by
-// exactly zero, which is what stops the quad boundary reading as a boxy halo.
-// Named because `core_reach` is built on it — but it is only ONE of that
-// bound's two arms, and the disc's own reach passes it once the core radius
-// is dialed much past two thirds. Collapsing `core_reach` to this constant
-// clips a big soft core, which is why the bound is a max rather than this.
-const GLOW_LIMIT: f32 = 0.95;
-
 // The node glow's base amplitude at a node's centre, before the Strength bar
 // scales it — what a strength of 1 lays down where the light is fullest.
 //
-// The glow IS `core_layer`'s skirt regrown over the whole node, but NOT that
-// skirt's number, and the difference is the domain. The skirt spends its
-// amplitude over a falloff scaled to a disc at most two thirds of a node wide;
-// this one's runs over the node's outermost edge plus the whole Reach, several
-// times that, and by the rim there is a fraction of it left. Tuned so the
+// The amplitude is spent over a falloff spanning the node's outermost edge plus
+// the whole Reach, so by the rim there is a fraction of it left. Tuned so the
 // Strength bar reads: at 1 a node's middle is unmistakably lit and its halo
 // plainly visible, at 2 — the bar's top — the middle saturates and the halo
 // doubles.
@@ -239,16 +230,14 @@ fn glow_gap() -> f32 {
 }
 
 // How far the MIDI layers reach, in the node's uv: the octave band's outer edge,
-// or the core's radius on a node whose band is dialled off, and 0 where the view
-// has neither. One answer for the two because they ride ONE envelope — the
-// node's own activation — and both are discs about its center, so the wider of
-// them says everything about where the pair reaches.
+// and 0 on a node whose band is dialled off. A disc about the node's center, so
+// this one radius says everything about where the layer reaches — which is what
+// the clearing wants, the hole being that footprint filled to the center.
 fn midi_rim() -> f32 {
-    var rim = max(u.misc3.x, 0.0);
     if u.misc3.z > u.misc3.y {
-        rim = max(rim, u.misc3.z);
+        return max(u.misc3.z, 0.0);
     }
-    return rim;
+    return 0.0;
 }
 
 // The node's own outermost feature in ANY direction: a MARK where this node is
@@ -339,11 +328,8 @@ fn clearing_edge(reach: f32) -> f32 {
 // Every term here is the radius at which the corresponding layer's own
 // smoothstep has reached zero, so the bound is exact rather than generous:
 //
-//   - the glow's `window` closes at 0.95, inside GLYPH_FADE_LIMIT;
 //   - the octave glyphs (and their eased-off fringe) end at
 //     GLYPH_FADE_LIMIT;
-//   - the core disc ends at its radius plus the widest edge softness the
-//     solidity axis can ask for;
 //   - the marks taper off at QUAD_MARGIN, but only exist while a slot
 //     is marked;
 //   - the knockout clears to `clearing_edge` past the node's body, which fits
@@ -352,7 +338,7 @@ fn clearing_edge(reach: f32) -> f32 {
 //     the raw reach because a bound that stops short of what the coverage
 //     paints is a discarded fragment the slow pipeline fills.
 fn paint_reach(in: VsOut, aa: f32) -> f32 {
-    var reach = max(GLYPH_FADE_LIMIT, u.misc3.x + CORE_EDGE_SOFT + aa);
+    var reach = GLYPH_FADE_LIMIT;
     if in.marks.x != 0u || in.marks.y != 0u {
         reach = max(reach, QUAD_MARGIN);
     }
@@ -1176,8 +1162,8 @@ fn shimmer_light(rgb: vec3<f32>, terms: vec2<f32>) -> vec3<f32> {
 // Every outer style draws its glyphs inside the radial band
 // [u.misc3.y, u.misc3.z] (quad UV units): the band IS the glyph set's
 // radial footprint, so switching styles keeps the octave display the same
-// size. The glyphs are drawn identically whatever the core does — the
-// layers are independent.
+// size. The glyphs are drawn identically whatever the ring inside them does —
+// the layers are independent.
 //
 // The backdrop is always on: it is the cohesion device that makes a note
 // read as ONE whole shape even when a single octave sounds, so the SILENT
@@ -1216,21 +1202,6 @@ fn slice_gap_half() -> f32 {
 // number in the view (Ground), and the fade to it rides the ACTIVATION, so the
 // whole ring still fades in and out with the pitch class.
 
-// The disc-edge radius the glow's falloff is written against: its one use
-// is scaling that falloff's domain by `CORE_R_CLASSIC / radius`, so a core
-// dialled smaller carries its glow in with it rather than keeping a halo
-// sized for a disc that is no longer there. A reference length, not a
-// radius anything is drawn at.
-const CORE_R_CLASSIC: f32 = 0.46;
-// Extra half-width added to the core disc's edge as solidity drops from 1
-// to 0: at solidity 1 the edge is a crisp screen-constant band (the
-// classic orb), at 0 it has spread this far and the disc has faded out
-// into the glow skirt. Tunes how "soft" a mid-solidity core reads.
-const CORE_EDGE_SOFT: f32 = 0.30;
-// Radius below which the whole core fades to nothing, so a radius of 0 is
-// the off state and the core grows in smoothly (no pop) as the bar leaves
-// the bottom.
-const CORE_FADE_IN: f32 = 0.06;
 // How much of the glyph BAND this pixel is inside, which every slot's glyph
 // is scaled by. It asks only about the radius, so it is the same answer for
 // every slot on the node — hoisted out of [`outer_glyph`] so the caller can
@@ -1296,11 +1267,11 @@ fn oct_slot_ink(in: VsOut, slot: i32) -> vec4<f32> {
     // lights everywhere else, which `ghost_rest` is what holds: it is nothing
     // where `level` reaches `presence`, so a fully lit slot AND a lone note's
     // whole release wear the pitch alone. The LUT is the pitch ramp
-    // (pitch_ramp_lch in harmonigraph-scene), and the core disc and the piano
-    // roll sample that same table — so all three read as one colour where the
-    // note is sounding. A white mix there would be a second definition of what
-    // a lit pitch looks like, and it would drift off the disc the moment the
-    // gradient's brightness moved. Where the node OUTLIVES the slot, the mix
+    // (pitch_ramp_lch in harmonigraph-scene), and the node's own light and the
+    // piano roll sample that same table — so all three read as one colour where
+    // the note is sounding. A white mix there would be a second definition of
+    // what a lit pitch looks like, and it would drift off the halo the moment
+    // the gradient's brightness moved. Where the node OUTLIVES the slot, the mix
     // toward the ground is the ghost coming through as that one octave goes,
     // which is the fade itself rather than a second definition of anything.
     //
@@ -1312,8 +1283,8 @@ fn oct_slot_ink(in: VsOut, slot: i32) -> vec4<f32> {
 }
 
 // Coverage (0..1) of the outer glyph for octave slot `s` on the node whose
-// ring is `ring`, drawn in the uniform band. Reads nothing from the core
-// layer — the outer glyphs are independent of it. `aa` is the caller's
+// ring is `ring`, drawn in the uniform band. Reads nothing from the ring
+// inside it — the outer glyphs are independent of it. `aa` is the caller's
 // per-pixel soft-band width, giving the shape screen-constant edges.
 //
 // `band` is this pixel's radial coverage, from [`glyph_band`]: the caller
@@ -1440,8 +1411,8 @@ fn folded() -> bool {
 // included — the reading in full, and hundreds of rings saying only where the
 // nodes are.
 //
-// The radius is its own (u.misc7.z/w, an annulus the fresh view puts in the
-// gap the core and the octave band leave); the slices are the band's, off the
+// The radius is its own (u.misc7.z/w, the innermost slot of the stack at the
+// fresh view, reaching the node's own centre); the slices are the band's, off the
 // same `OctRing`, so the two rings share one rhythm of wedges and one meaning
 // for an angle.
 
@@ -1573,40 +1544,20 @@ fn spectral_ring(in: VsOut, oct: OctRing, uv: vec2<f32>, band: f32, aa: f32) -> 
     return vec4<f32>(spectral_lut_color(spectrum_at(pitch)), cov * in.ring);
 }
 
-// ---- The core's color ------------------------------------------------------
-// An active disc is one calm shape carrying every sounding octave's color at
-// once, laid around it by angle. There is no second paint to switch to: the
-// core is this blend, at whatever solidity the disc is set to.
+// ---- A node's chord color ---------------------------------------------------
+// Every sounding octave's color at once, laid around the node by angle. One
+// blend, and it is what the node's light is painted in and what the ink strip
+// reads the middle of a node at.
 
 // The TIGHTEST each octave's angular color lobe is drawn at (a von Mises-like
 // falloff): higher is tighter, more separated arcs. Tuned so neighbouring
 // octaves blend softly rather than banding at the widest span, where they sit
-// closest together. A ceiling rather than the concentration itself — a pixel
-// near the node's centre is blended at less, so that the seams, which are
-// fixed in ANGLE and would otherwise converge to a cusp there, keep the arc
-// width they have at the rim (`core_layer`, and note that the rim width is
-// 1/sqrt of this, so the two move together).
+// closest together. A ceiling rather than the concentration itself — the seams
+// are fixed in ANGLE and so converge to a cusp at the node's centre, and a
+// caller holding them to one width asks for less there (`glow_layer`, which
+// eases to the blend's mean instead; the rim width is 1/sqrt of this, so the
+// two move together).
 const GLOW_LOBE_KAPPA: f32 = 4.0;
-
-// The TIGHTEST the node glow's own average is ever taken at (`glow_spread_kappa`
-// — the Spread bar's bottom), which is tighter than the core's ceiling above:
-// the core blends a handful of octave hues that are MEANT to melt into one
-// another, where the light is read off sectors — a lit band slice, an audio
-// wedge, a mark — whose whole reading is that they are separate. Four times
-// GLOW_LOBE_KAPPA, so the bar's midpoint lands on it exactly.
-//
-// What caps it is the RIPPLE GUARD and not the strip's own resolution, which is
-// the tempting reading and the loose one: 64 columns would carry a lobe half
-// this width, and `a_nodes_light_has_no_ripple_the_ink_does_not` is what says
-// they must not be asked to. That test watches the harmonics a spoke would ride
-// — 8 and up, where the twelve-fold fan the strip was built to kill used to sit
-// — on the understanding that the tightest lobe has already taken everything
-// there to nothing. A von Mises passes its k-th harmonic at about
-// exp(-k^2 / 2 kappa), so the bound is real and it is this: at 16 the eighth
-// harmonic comes through at a seventh and the twelfth at a hundredth, and at 64
-// the eighth comes through at three fifths and a node's own wedges read as a
-// fan the guard cannot tell from the machinery's.
-const GLOW_SPREAD_KAPPA_MAX: f32 = GLOW_LOBE_KAPPA * 4.0;
 
 // The glow's color when a chord sounds: every sounding octave's hue laid
 // around the halo in the direction of its OWN indicator, so the glow shows
@@ -1619,7 +1570,7 @@ const GLOW_SPREAD_KAPPA_MAX: f32 = GLOW_LOBE_KAPPA * 4.0;
 // which the lit slot's is not once a note folds onto an outer indicator.
 //
 // `kappa` is how tightly to pack those hues — at most GLOW_LOBE_KAPPA, and
-// less where the caller wants their seams held open (see `core_layer`). At 0
+// less where the caller wants their seams held open. At 0
 // every weight collapses to the octave's own level and the hues average into
 // one color.
 fn octave_glow_color(
@@ -1799,7 +1750,7 @@ fn gutter_coverage(sd: f32, reach: f32, soft: f32) -> f32 {
 //
 // The clearing FOLLOWS THE NODE. A node's layers are dialled independently and
 // worn independently — the audio ring is on where the view's Gate says, the
-// marks on the octaves a chord's outer voices took, the band and core wherever
+// marks on the octaves a chord's outer voices took, the band wherever
 // a key is down — so what a node draws is a different shape node to node and
 // moment to moment, and a circle sized to hold all of it clears a gap wider
 // than the node nearly everywhere. Here every layer is read off the same radii
@@ -1876,117 +1827,6 @@ fn node_clearing(in: VsOut, oct: OctRing, d: f32) -> f32 {
     return cov;
 }
 
-// How much of the core's solid disc covers this fragment, before the node's own
-// envelope: a disc of radius `radius` whose edge softens (CORE_EDGE_SOFT) and
-// whose opacity fades as the solidity drops, so a full orb (solidity 1: crisp
-// screen-constant edge, fully opaque) dissolves smoothly into nothing
-// (solidity 0: the skirt, or the node glow, then carries the note alone). At
-// solidity 1 this is exactly the classic aa_inside(R) disc.
-//
-// Its own function because the glow's moat has to stand the light off exactly
-// this shape and no wider (`glow_moat`). A second spelling of that edge is a
-// hairline of light left round every core, or a hairline of disc left dark.
-fn core_disc_fill(radius: f32, solidity: f32, d: f32, aa: f32) -> f32 {
-    let edge = aa + (1.0 - solidity) * CORE_EDGE_SOFT;
-    return (1.0 - smoothstep(radius - edge, radius + edge, d)) * solidity;
-}
-
-// The core layer -- the note's disc and the glow skirt around it --
-// premultiplied, as `rgb * alpha` in `xyz` and the coverage in `w`.
-//
-// A layer of its own so that the one bound governing all of it can be stated
-// and taken once. Past `core_reach` every term below is exactly zero: the
-// glow's `window` closes at GLOW_LIMIT, and the disc's coverage runs out at
-// its radius plus the widest edge the solidity axis can ask for -- the same
-// bound `paint_reach` takes for this layer. It is worth taking because the
-// layer is the expensive one and its reach is SHORT: the marks live out
-// at QUAD_MARGIN and the glyph fade runs to GLYPH_FADE_LIMIT, so the outer
-// half of a lit node's billboard is past it -- an atan2 and an 11-slot color
-// blend for a coverage of zero.
-fn core_layer(in: VsOut, d: f32, aa: f32, oct: OctRing) -> vec4<f32> {
-    let activation = in.params.x;
-    let radius = max(u.misc3.x, 0.0);  // core radius; 0 = off
-    let solidity = u.misc4.x;          // 0 glow .. 1 orb
-    // Radius 0 is off; fade the whole core in over the first sliver of the
-    // bar so it grows from nothing with no pop.
-    let core_on = smoothstep(0.0, CORE_FADE_IN, radius);
-
-    let core_reach = max(GLOW_LIMIT, radius + CORE_EDGE_SOFT + aa);
-    if EARLY_OUT && d >= core_reach {
-        return vec4<f32>(0.0);
-    }
-
-    // The opaque disc.
-    let filled = core_disc_fill(radius, solidity, d, aa);
-    let disc = filled * activation * core_on;
-
-    // Soft additive-looking glow for active nodes. The exponential alone
-    // never reaches zero, so the quad boundary showed as a boxy halo;
-    // window it so it fades to exactly zero (with zero slope) inside the
-    // quad edge.
-    let window = 1.0 - smoothstep(0.5, GLOW_LIMIT, d);
-    // Glow domain scale: the falloff is authored for the classic 0.46 orb,
-    // so scale its coordinates to the sized core (a bigger radius spreads
-    // the glow with it; at the default radius this is 1). The glow dims
-    // toward the soft end of the solidity axis (an under-glow) and brightens
-    // toward the orb.
-    let fs = CORE_R_CLASSIC / max(radius, 0.1);
-    let glow_base = mix(0.35, 0.6, solidity);
-    // ...and gone entirely where the node glow is on, because that glow IS this
-    // skirt: same hues by the same angular blend over the same exponential,
-    // written against the whole node instead of against the disc (`glow_layer`).
-    // Leaving this one lit would lay a second, tighter copy inside the first,
-    // and the two would fight over how far a note's light reaches.
-    //
-    // The SKIRT alone, not the layer. The disc solidity paints is a crisp shape
-    // the light is laid UNDER rather than one it stands off, so it goes on being
-    // drawn, and a view wanting nothing but light dials the solidity down as it
-    // always did.
-    let skirt = select(glow_base * exp(-3.0 * d * fs) * window, 0.0, u.misc10.x > 0.0);
-    let glow = skirt * activation * core_on;
-
-    // Every sounding octave's color, blended by angle — each hue laid in
-    // its dot's direction (see octave_glow_color). This is the node's
-    // multi-color fill: the disc shows it directly (so a chord's disc mixes
-    // ALL its notes, not just the loudest), and the glow skirt carries the
-    // same blend, so disc and halo read as one colored field. A solo note
-    // falls back to its single color.
-    //
-    // Those hues are laid in lobes fixed in ANGLE, so the arc a seam spans is
-    // d/sqrt(kappa) — it shrinks with the radius, and every seam converges to a
-    // cusp at the node's centre. That is a property of the KERNEL, not of any
-    // setting: the cusp is there at every solidity, and the glow skirt, which
-    // has no solidity of its own, carries the same blend. So the cure is not
-    // hung off the solidity axis (whose business is the disc's opacity and its
-    // rim, and which is at its widest exactly where there is no disc left to
-    // soften) — one width, everywhere.
-    //
-    // Hold the seams to that width and pick the concentration that gives it:
-    // k = (d/seam)^2, capped at GLOW_LOBE_KAPPA so this only ever loosens the
-    // blend, never tightens it. The width is the lobe's own arc where the disc
-    // ends, radius/sqrt(GLOW_LOBE_KAPPA), carried inward unchanged: the seams
-    // then run at one screen width from rim to centre instead of tapering to a
-    // point, and no pixel is ever blurrier than the rim already was.
-    let seam = radius * inverseSqrt(GLOW_LOBE_KAPPA);
-    let kappa = min(GLOW_LOBE_KAPPA, (d * d) / max(seam * seam, 1e-8));
-    let octave_mix = octave_glow_color(
-        in.octaves, in.cents, oct, atan2(in.uv.y, in.uv.x), kappa, in.color.rgb,
-    ) * activation;
-
-    // Disc and glow carry the SAME blend, so there is nothing to composite
-    // between them: the color of the pixel is that blend, and its coverage is
-    // the two summed — exactly the additive glow. (A disc painted some other
-    // way would need the halo held out of it, which is a mix weighted by the
-    // share of the coverage that is glow-beyond-disc.)
-    //
-    // Premultiplied, like every layer here: the knockout gutter composites
-    // the GROUND under this at the end of fs_main, and the pass itself blends
-    // premultiplied onto the pane. Coverage and color travel together or the
-    // glow's soft edge darkens against whatever is behind it.
-    let core_alpha = clamp(disc + glow, 0.0, 1.0);
-    return vec4<f32>(octave_mix * core_alpha, core_alpha);
-}
-
 /// The three derivatives-and-geometry answers every layer of a node is drawn
 /// against, and the two early-outs that decide there is no node here at all.
 ///
@@ -2038,8 +1878,8 @@ fn node_geom(in: VsOut) -> NodeGeom {
     }
 
     // An idle node paints NOTHING but its audio ring and the hole that ring
-    // clears — no disc (presence gates it), no glow, no glyphs (a ghost needs
-    // presence too), no mark rings (their own levels gate them), and no marker
+    // clears — no glyphs (a ghost needs presence), no mark rings (their own
+    // levels gate them), and no marker
     // of its own: the grid's gap around the position is what says a node is
     // there. Everything below still computes all of that and multiplies it away,
     // which on a lattice where most nodes are idle most of the time is most of
@@ -2108,24 +1948,20 @@ fn node_geom(in: VsOut) -> NodeGeom {
 fn node_ink(in: VsOut, d: f32, aa: f32, field_step: f32, oct: OctRing) -> vec4<f32> {
     let activation = in.params.x;
 
-    // Core layer, unified onto ONE solidity axis. The radius (u.misc3.x,
-    // quad UV units) sizes it, and a radius of 0 turns it off entirely — no
-    // enum, no separate flag. Solidity (u.misc4.x, 0..1) morphs the core
-    // between the two ends of a single shape: 0 is a soft under-glow, 1 is
-    // the classic solid orb, and in between the opaque disc fades in over
-    // its glow skirt while its edge crisps. Every voice draws the same
-    // shape, whatever channel carried it; unplayed nodes draw no disc (the
-    // grid gap marks the position). Activation fades the disc in and back
-    // out on release.
+    // A node is its RINGS and nothing else: the stack starts at the node's own
+    // centre, so the innermost layer left on fills the middle with its own
+    // sectors rather than sitting a padding out from a disc. What lights that
+    // middle is the node glow, drawn in a pass of its own (`glow_layer`), and
+    // it is the one light a node has — nothing here paints a halo.
+    //
+    // The ground the rings composite onto is therefore empty, and that IS the
+    // picture where every layer is off: the grid's gap around the position is
+    // what says a node is there.
     let presence = activation;
-    // The disc and its glow, premultiplied. Everything the layer needs is on
-    // the instance or the uniforms, and nothing below reads its internals --
-    // see `core_layer`, which is also where it stops being computed at all.
-    let core = core_layer(in, d, aa, oct);
-    var base_alpha = core.w;
-    var base_rgb = core.xyz;
+    var base_alpha = 0.0;
+    var base_rgb = vec3<f32>(0.0);
 
-    // Octave indicators, composited over the disc/glow. Each slot fades on
+    // Octave indicators, composited over that ground. Each slot fades on
     // its own envelope. Whichever element covers a pixel most strongly owns
     // its color there, and within one slot the color is a CONTINUUM rather
     // than a pair: a fully sounding glyph is its own pitch exactly, a silent
@@ -2270,8 +2106,8 @@ fn node_ink(in: VsOut, d: f32, aa: f32, field_step: f32, oct: OctRing) -> vec4<f
     glyph_rgb = shimmer_light(glyph_rgb, glyph_shimmer);
 
     // The audio ring, over the octave layer. A layer of its own, and radially
-    // disjoint from the band above and the marks below, so the four bands
-    // of a node — core, audio ring, octave band, marks — simply stack outward.
+    // disjoint from the band above and the marks below, so the three bands
+    // of a node — audio ring, octave band, marks — simply stack outward.
     // OVER rather than under so that a hand-dialled pair of radii that does
     // overlap the band still shows the measurement: the band's own reading is
     // drawn twice over in that case (its wedge and its ghost), and the
@@ -2489,14 +2325,12 @@ fn fs_main_scene(in: VsOut) -> SceneOut {
 // A node's own light, drawn into a target of its own and laid over the finished
 // lattice.
 //
-// It REPLACES the core's skirt rather than joining it. `core_layer`'s glow half
-// is every sounding octave's hue laid round the node by angle over an
-// exponential falloff, windowed to nothing before the quad's edge; this is that
-// same expression with its scale taken off the core disc and put on the whole
-// node — the falloff spans the node's outermost drawn edge plus the Reach, and
-// the window shuts at the end of that same span. The core suppresses its own
-// skirt wherever this draws (see there), so the note's light is one thing at one
-// size and not two.
+// It is the ONLY light a node has: every sounding octave's hue laid round the
+// node by angle over an exponential falloff, windowed to nothing before the
+// quad's edge. The falloff spans the node's outermost drawn edge plus the
+// Reach, and the window shuts at the end of that same span, so the Reach bar
+// says exactly how far a note's light goes and there is no second skirt at a
+// second size for it to fight with.
 //
 // The COLOUR is settled before either of them, in a pass of its own: a node's
 // ink is read round the node once per frame and kept as a strip (see The ink
@@ -2576,23 +2410,11 @@ fn glow_gap_depth() -> f32 {
 
 /// How widely a node's own ink is averaged into the colour of its light, as the
 /// concentration that average is taken at (`u.misc11.y`): the bar's bottom is
-/// [`GLOW_SPREAD_KAPPA_MAX`], where each layer's sectors stay distinct arcs,
-/// and its top is no concentration at all, one tint over the halo. Read by
-/// [`fs_ink_blur`], which is where the average is taken.
-///
-/// The SQUARE of the bar, which is what makes the two ends both usable. The
-/// lobe's own width goes as `1/sqrt(kappa)`, so a bar linear in the
-/// concentration spends most of its travel between arcs nobody can tell apart
-/// and lands the whole visible change in its last sliver. Squared, the width
-/// goes as `1/(1 - s)` — it doubles at every half step toward the top, which is
-/// an even walk in the thing the eye actually reads.
-///
-/// It also puts GLOW_LOBE_KAPPA, the concentration the node's own hues are
-/// blended at, at exactly the bar's midpoint: half way is the core's look, and
-/// the half below it is tighter than the core can be asked for.
+/// GLOW_LOBE_KAPPA, where each layer's sectors stay distinct, and its top is no
+/// concentration at all, one tint over the halo. Read by [`fs_ink_blur`], which
+/// is where the average is taken.
 fn glow_spread_kappa() -> f32 {
-    let s = 1.0 - clamp(u.misc11.y, 0.0, 1.0);
-    return GLOW_SPREAD_KAPPA_MAX * s * s;
+    return GLOW_LOBE_KAPPA * (1.0 - clamp(u.misc11.y, 0.0, 1.0));
 }
 
 /// Where the light's peak sits: the inner edge of the innermost RING the view
@@ -2652,20 +2474,6 @@ fn ink_at(in: VsOut, oct: OctRing, angle: f32) -> vec4<f32> {
     let dir = vec2<f32>(cos(angle), sin(angle));
     var rgb = vec3<f32>(0.0);
     var wsum = 0.0;
-
-    // The core's disc, in its own blend of every sounding octave's hue, taken
-    // at the disc's rim where `core_layer` takes it at full concentration.
-    // Weighted by the radius, which for a disc about the node's centre IS the
-    // width the stack gave it.
-    let core_r = max(u.misc3.x, 0.0);
-    let core_level = clamp(in.params.x, 0.0, 1.0) * smoothstep(0.0, CORE_FADE_IN, core_r);
-    if core_r > 0.0 && core_level > 0.0 {
-        let w = core_level * core_r;
-        rgb = rgb + octave_glow_color(
-            in.octaves, in.cents, oct, angle, GLOW_LOBE_KAPPA, in.color.rgb,
-        ) * w;
-        wsum = wsum + w;
-    }
 
     // The audio ring, read on its own annulus: `spectral_ring` whole, so the
     // wedge that owns this direction, the pitch it reads the grid at and the
@@ -2887,7 +2695,7 @@ fn strip_texel(col: i32, row: i32) -> vec4<f32> {
 /// interpolation below lands exactly on a column at exactly that angle and the
 /// wrap between the last and the first is one more step of the same walk.
 ///
-/// The MIX is the seam argument `core_layer` makes at length, kept: the ink is
+/// The MIX is the node's own seam argument, kept: the ink is
 /// laid in angle, so an arc shrinks with the radius and every seam between two
 /// layers' colours would converge to a cusp at the node's middle. The mean is
 /// the same strip at no concentration at all — one flat tint — so easing toward
@@ -2924,10 +2732,8 @@ fn glow_layer(in: VsOut, d: f32) -> vec4<f32> {
     // ONE length under the whole layer: the node's outermost drawn edge as the
     // LIGHT has it ([`glow_rim`]) plus the Reach. It is the falloff's domain,
     // so the halo is a field the node sits inside rather than a rim light on
-    // its edge — `CORE_R_CLASSIC / radius` in `core_layer` is this same scaling
-    // written against the disc, which is the shape this one is not — and it is
-    // where the window shuts, so the Reach bar says exactly how far the light
-    // goes.
+    // its edge, and it is where the window shuts, so the Reach bar says exactly
+    // how far the light goes.
     //
     // Not the quad's own margin, which is the tempting reading of "window it at
     // the edge": `quad_margin` floors at QUAD_MARGIN, so on a small reach the
@@ -2957,23 +2763,21 @@ fn glow_layer(in: VsOut, d: f32) -> vec4<f32> {
         * select(1.0, bowl, bowl_edge > 0.0);
 
     // How much of the strip's own DIRECTION this fragment gets, against the
-    // flat tint of its mean: the seam argument `core_layer` makes at length,
-    // written against the node's own RIM the way that one is written against
-    // the disc's radius. Every seam converges to a cusp at the node's middle
-    // otherwise, the ink being laid in angle, so an arc shrinks with the
+    // flat tint of its mean. Every seam converges to a cusp at the node's
+    // middle otherwise, the ink being laid in angle, so an arc shrinks with the
     // radius; easing to the mean instead carries the arc the seam has where the
     // ink ends inward unchanged.
     //
-    // The rim and NOT the glow's whole span, which is the tempting reading of
-    // "ease out over the light" and takes the colour out of the light
-    // altogether: the ramp is quadratic and the skirt is an exponential over
-    // the same length, so measuring it against `span` leaves the light about a
-    // fifth directional however far the Reach is dialled — the halo is then the
-    // flat mean nearly everywhere and the Spread bar, which is exactly the
-    // concentration that mean is NOT taken at, has almost nothing to move.
-    // Against the rim the light is fully the node's own colours from the ink's
-    // outer edge outward, which is all of the halo proper, and the easing is
-    // left doing the one job it is for.
+    // The reference length is the node's own RIM and NOT the glow's span, which
+    // is the tempting reading of "ease out over the light" and takes the colour
+    // out of the light altogether: the ramp is quadratic and the skirt is an
+    // exponential over the same length, so measuring it against `span` leaves
+    // the light about a fifth directional however far the Reach is dialled —
+    // the halo is then the flat mean nearly everywhere, and the Spread bar,
+    // which is exactly the concentration that mean is NOT taken at, has almost
+    // nothing to move. Against the rim the light is fully the node's own
+    // colours from the ink's outer edge outward, which is all of the halo
+    // proper, and the easing is left doing the one job it is for.
     //
     // Floored where the span is and for the same reason: a node drawn down to
     // almost nothing has almost no rim, and a ramp measured against that is
@@ -2982,9 +2786,7 @@ fn glow_layer(in: VsOut, d: f32) -> vec4<f32> {
     let seam = max(in.glow.z, 0.1);
     let mix_out = min(1.0, (d * d) / (seam * seam));
 
-    // The level scales the COVERAGE, once. `core_layer` spends it twice — on
-    // its blend and again on the disc's alpha — which is right for a disc
-    // dissolving into the ground it stands on and wrong for a light: a note
+    // The level scales the COVERAGE, once, and not the blend as well: a note
     // halfway through its attack should lay down half as much of its colour,
     // not a quarter of a darker one.
     //
@@ -3085,10 +2887,8 @@ fn moat_coverage(sd: f32, soft: f32) -> f32 {
     return 1.0 - smoothstep(edge - half, edge + half, sd);
 }
 
-/// How much of the light standing here this node holds off: every RING it draws
-/// dilated by the Gap, and its solid disc at exactly the disc's own edge.
-///
-/// The rings and the core answer differently, on purpose.
+/// How much of the light standing here this node holds off: every RING it
+/// draws, dilated by the Gap.
 ///
 /// A RING — the octave band, the audio ring, a mark's sector — is measured from
 /// its own ANNULUS rather than filled to the node's centre the way
@@ -3099,10 +2899,9 @@ fn moat_coverage(sd: f32, soft: f32) -> f32 {
 /// lattice showing through its middle reads as neither a hole nor a node —
 /// which is why this cannot be `node_clearing` asked for another reach.
 ///
-/// The CORE's disc is a crisp shape the light is laid UNDER rather than one it
-/// stands off, so it takes no gap at all: the light comes up to the disc's edge
-/// and the disc is drawn over it a pass later. A gap there would be a dark ring
-/// between a note's disc and its own halo.
+/// A ring that reaches the centre itself has no such middle, its own annulus
+/// being a disc: the moat then covers what it covers, and the light is a halo
+/// outside the node alone.
 ///
 /// Each term carries its own level, exactly as `node_clearing`'s do: a layer
 /// that is off, refused by the stack, attacking or releasing opens and closes
@@ -3125,13 +2924,6 @@ fn glow_moat(in: VsOut, d: f32, aa: f32, oct: OctRing) -> f32 {
         let ring = annulus_distance(d, u.misc7.z, u.misc7.w);
         cov = max(cov, moat_coverage(ring, soft) * clamp(in.ring, 0.0, 1.0));
     }
-    // The disc, at its own coverage — no dilation, and no `gutter_coverage`
-    // either: what stands here is the shape itself.
-    let radius = max(u.misc3.x, 0.0);
-    let disc = core_disc_fill(radius, u.misc4.x, d, aa)
-        * clamp(in.params.x, 0.0, 1.0)
-        * smoothstep(0.0, CORE_FADE_IN, radius);
-    cov = max(cov, disc);
     let slots = in.marks.x | in.marks.y;
     if slots == 0u || u.misc5.w <= 0.0 {
         return cov;

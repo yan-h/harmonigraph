@@ -1,8 +1,8 @@
 //! The node settings on the Display tab's Lattice page: how a sounding note is
-//! drawn — its core mark, the audio ring and octave band around it, the
-//! melody/bass marks on the outer held notes, and the fade and clearance the
-//! whole node wears. Everything here is a layer of the *played note*, or the
-//! whole of one.
+//! drawn — the audio ring at its centre, the octave band around that, the
+//! melody/bass marks on the outer held notes, and the fade, glow and clearance
+//! the whole node wears. Everything here is a layer of the *played note*, or
+//! the whole of one.
 //!
 //! The pitch gradient and Bloom are NOT here, though a node wears both: they
 //! are color, so they are on the Colors page ([`super::color`]) with the other
@@ -32,59 +32,40 @@ use harmonigraph_scene::{
 /// node's center, and the Ring gap, which is the one number standing every
 /// layer of it off the one inside — and because they are the ones reached for
 /// most.
-/// Filing them after Core, Octaves and the marks would put the most-used
+/// Filing them after Audio ring, Octaves and the marks would put the most-used
 /// controls under the ones reached for least, on the strength of an outward
 /// reading they are not part of.
 ///
 /// **Every layer's size is one bar, and each section below is then what that
-/// layer IS.** The four widths are not four independent numbers — a layer's
+/// layer IS.** The three widths are not three independent numbers — a layer's
 /// inner edge is a sum over everything inside it, so a bar apiece can say how
 /// thick a ring is and never where it lands — and a heading apiece would split
-/// the one question a size on a node is asked, where does this sit, across four
-/// places holding a quarter of the answer each. The Layers bar in Note is the
-/// whole of it ([`StackBar`]), and what is left under each heading is the
+/// the one question a size on a node is asked, where does this sit, across
+/// three places holding a third of the answer each. The Layers bar in Note is
+/// the whole of it ([`StackBar`]), and what is left under each heading is the
 /// reading it carries, the colours it wears and the switches that are its own.
 ///
-/// The layers then run in stack order, from the center out: Core, the audio
-/// ring a Ring gap outside it, the octave band a Ring gap outside that, and the
+/// The layers then run in stack order, from the center out: the audio ring on
+/// the stack's own start, the octave band a Ring gap outside it, and the
 /// melody/bass marks past the band — the same order [`ViewConfig::rings`] lays
 /// them down in, so the column reads down as the node reads outward. Shimmer is
 /// last because it is the sweep the outermost layer carries rather than a layer
 /// of its own.
 pub(super) fn nodes_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBackend) {
     note_section(ui, &mut state.view, params);
-    core_section(ui, &mut state.view);
     audio_section(ui, &mut state.view);
     octaves_section(ui, &mut state.view);
     melody_bass_section(ui, &mut state.view);
     shimmer_section(ui, &mut state.view);
 }
 
-/// Core: the mark at a sounding node's center. One continuous shape, sized by
-/// the innermost handle of the Layers bar (0 = off, like Bloom) and morphed by
-/// Solidity from a soft glow (0) to the classic solid orb (1), painted as one
-/// calm disc that blends the sounding octaves' colors. One bar and no style row:
-/// the paint is not a choice. Independent of the Octaves layer.
-fn core_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
-    section(ui, "Core");
-    ui.add_enabled_ui(view.core_radius > 0.0, |ui| {
-        ValueBar::new(&mut view.core_solidity, 0.0..=1.0, "Solidity")
-            .show(ui)
-            .on_hover_text(
-                "0 = a soft glow, 1 = the classic solid orb; in \
-                 between the disc fades in over its glow and its \
-                 edge crisps",
-            );
-    });
-}
-
 /// Octaves: which octaves of the pitch class are sounding, shown as arcs of a
-/// pitch axis that runs once round the node. Independent of the Core.
+/// pitch axis that runs once round the node. Independent of the audio ring.
 fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     section(ui, "Octaves");
     // Octaves, Center and the fringe are the axis; how thick the ring they are
-    // drawn on is, and where it sits, is the Layers bar up in Note — the third
-    // of its four handles, named MIDI there. The bar names layers by where each
+    // drawn on is, and where it sits, is the Layers bar up in Note — the
+    // middle of its three handles, named MIDI there. The bar names layers by where each
     // one's reading comes FROM, which is what tells the two middle rings apart:
     // the analyzer's spectrum on the inner one, the played notes on this one.
     // This heading names the pitch axis drawn on it instead, that being what
@@ -166,11 +147,11 @@ fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // No size bar under these, and no on/off either: both are the Layers bar's,
     // where 0 is this layer's off position as it is on every other. The band is
     // one WIDTH there rather than a pair of radii, because where it sits is the
-    // stack's answer — a gap out from the audio ring, or from the core where
-    // that ring is off — so the only thing left to say about it is how thick it
-    // is.
+    // stack's answer — a gap out from the audio ring, or the stack's own start
+    // where that ring is off — so the only thing left to say about it is how
+    // thick it is.
     //
-    // No Solidity bar and no Backdrop switch: the glyphs are always the crisp
+    // No solidity control and no Backdrop switch: the glyphs are always the crisp
     // classic shapes, and the silent octaves always stand in behind the
     // sounding ones — that backdrop is what completes the ring, so a lone
     // octave still reads as a whole note. How BRIGHT it stands is the At rest
@@ -214,8 +195,7 @@ fn melody_bass_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
         // The Delay is about a mark that is DRAWN — when it arrives — so it is
         // gated on there being one. The strip's depth is the Layers bar's
         // outermost handle, and 0 is its off position, where `mark_extension`
-        // returns no coverage (the Core section gates its own Solidity on a
-        // radius of 0 the same way). The enclosing block already grays this on
+        // returns no coverage. The enclosing block already grays this on
         // both marks being off, so what it is gated on either way is
         // `marks_draw` — the same predicate `derive_scene` folds the shimmer
         // on, and the one the Shimmer section reads. Written as the depth alone
@@ -225,8 +205,7 @@ fn melody_bass_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
             // How long an end has to be HELD before its mark answers. Here
             // rather than in with the note-wide settings at the head of the
             // pane, because it is about these two marks alone: the octave
-            // sectors they continue and the core answer immediately whatever
-            // this says.
+            // sectors they continue answer immediately whatever this says.
             //
             // Linear, unlike the wide bars that need easing to be draggable
             // at their fine end: one second of travel puts a hundredth of it
@@ -336,11 +315,11 @@ fn shimmer_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     });
 }
 
-/// Audio ring: what the ring between the core and the octave band measures —
-/// one reading of the analyzer's spectrum, or none.
+/// Audio ring: what the ring inside the octave band measures — one reading of
+/// the analyzer's spectrum, or none.
 ///
-/// Second of the layers, which is where it sits in the stack: a Ring gap out
-/// from the Core above it, a Ring gap in from the octave Band below. It is the one
+/// First of the layers, which is where it sits in the stack: reaching the
+/// node's own centre, a Ring gap in from the octave Band below. It is the one
 /// section here that says what a layer MEASURES where the rest only size and
 /// colour what is already there, and the name carries the "ring" so the heading
 /// says which layer that is.
@@ -365,7 +344,7 @@ fn audio_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // read as the layer's own switch when it is nothing of the kind.
     //
     // No Off among the readings, and the Layers bar is why: a width of 0 turns
-    // the ring off, the way it turns the core, the band and the marks off. An
+    // the ring off, the way it turns the band and the marks off. An
     // Off here would be a second switch for this one layer, in a place no other
     // layer keeps one, and the two would then have to be read together to know
     // whether there is a ring.
@@ -519,8 +498,8 @@ fn audio_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
 /// around itself.
 ///
 /// One section rather than a heading apiece, because they are one idea: none
-/// is about the core, the octave glyphs, the audio ring or the melody/bass
-/// marks in particular, and all apply to whichever of those happen to be drawn.
+/// is about the audio ring, the octave glyphs or the melody/bass marks in
+/// particular, and all apply to whichever of those happen to be drawn.
 /// Fade especially — one time for the node rather than one per layer, so a
 /// release reads as a single gesture instead of pieces of the node going dark at
 /// different moments.
@@ -568,12 +547,12 @@ fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBack
              struck note decays.",
         );
     // Every layer's size, in the one bar that can show where each of them
-    // lands: the four widths are one stack read outward from the node's center,
-    // and the picture on the bar is the node's own cross-section (`StackBar`).
-    // A whole-note setting rather than any layer's, which is why it is here and
-    // not split four ways across the headings below — none of the four could be
-    // read without the other three, since a layer's inner edge is a sum over
-    // everything inside it.
+    // lands: one stack read outward from the node's center — where it begins,
+    // and then a width apiece — and the picture on the bar is the node's own
+    // cross-section (`StackBar`). A whole-note setting rather than any layer's,
+    // which is why it is here and not split across the headings below — none of
+    // the four numbers could be read without the other three, since a layer's
+    // inner edge is a sum over everything inside it.
     //
     // Directly above the Ring gap, because the two are one idea: the sizes are
     // the layers and that gap is the padding standing between them, the bar
@@ -583,12 +562,13 @@ fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBack
     StackBar::new(view)
         .show(ui)
         .on_hover_text(
-            "Every layer of a node, from its center out: the core, the audio \
-             ring, the octave band and the melody/bass strip, each named on its \
-             own cell where there is room for it. Drag a handle to set the layer \
-             inside it — 0 removes that layer and the ones outside close up. The \
-             line is the node's edge, which only the marks may cross. \
-             Double-click to restore.",
+            "A node's cross-section, from its center out: the empty middle its \
+             light fills, the audio ring, the octave band and the melody/bass \
+             strip, each named on its own cell where there is room for it. Drag \
+             a handle to set the stretch inside it — 0 removes a layer and the \
+             ones outside close up, and on the middle it seats the whole stack \
+             on the node's center. The line is the node's edge, which only the \
+             marks may cross. Double-click to restore.",
         );
     // A node's two paddings, together and directly under the bar that draws one
     // of them. They are the same question asked on the node's two axes — how
@@ -599,14 +579,14 @@ fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBack
     //
     // Two bars rather than one because the two axes answer differently: the
     // RADIAL one is measured on the Layers bar's own axis, every unit it takes
-    // being a unit the four widths cannot have, and the ANGULAR one costs the
+    // being a unit the three widths cannot have, and the ANGULAR one costs the
     // stack nothing — it cuts slices out of a ring already placed. What a node
     // could not say with one number is a ring standing well off its neighbour
     // while the slices stay tight, or the reverse.
     //
     // Read out as a PERCENTAGE of the node's radius, which is what quad uv 1.0
-    // is (`scene.node_radius`, a quarter of the lattice spacing — the classic
-    // core disc reaches 0.46 of it). That makes the whole stack a budget of
+    // is (`scene.node_radius`, a quarter of the lattice spacing, and the edge
+    // no ring may cross). That makes the whole stack a budget of
     // 100%, which is the picture the Layers bar draws, and it is the same unit
     // the Clearance below reads in. A tenth of a percent is exactly the
     // resolution three decimals of the stored number gives, so the readout
@@ -661,11 +641,11 @@ fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBack
          with no note under it, as a share of the node's radius. Solid to the \
          inner handle, faded out by the outer. 0 draws none.",
     );
-    // The glow, last, and in Note rather than beside the Core or with Bloom on
-    // the Colors page. It is the whole node's, not a layer's: it is the core's
-    // own skirt taken off the disc and grown over the node entire, so a node's
-    // light is laid in the same octave colours its band and its disc are and
-    // reaches this far past its outermost drawn edge.
+    // The glow, last, and in Note rather than in a layer's section or with
+    // Bloom on the Colors page. It is the whole node's, not a layer's: a node's
+    // light is laid in the same octave colours its band is and reaches this far
+    // past its outermost drawn edge. It is also the ONLY light a node has —
+    // every layer of the stack is a crisp shape.
     //
     // Not with Bloom, which it otherwise reads like, because the two are
     // different settings of different things. Bloom is one number over every
@@ -684,7 +664,7 @@ fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBack
         .on_hover_text(
             "How far past its own edge a node's light spreads, as a share of \
              its radius. Neighbouring nodes' light melds where it overlaps. 0 \
-             turns it off, and gives the core its own skirt back.",
+             turns it off, leaving the rings alone.",
         );
     // Grayed rather than hidden while the reach is 0, so the rows keep their
     // place and the numbers they are dialled to stay readable — the same
@@ -717,8 +697,7 @@ fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBack
                  round it — every layer's colour weighted by how lit it is and \
                  how wide the Layers bar made it — so 0% keeps each sector's \
                  colour a distinct arc and 100% averages the node into one \
-                 tint. Half way is the blend the node's own hues are laid at; \
-                 below that the halo separates further than the node does.",
+                 tint.",
             );
         // The moat, beneath the light it holds off, and read out like the two
         // gaps and the Clearance above it: every one of them is a share of the

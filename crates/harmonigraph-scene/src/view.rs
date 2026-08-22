@@ -5,8 +5,9 @@
 use crate::spectral::SpectralReading;
 use crate::style::{Gradient, NoteNames, Pulse, SevensLabel};
 use crate::{
-    Camera, CORE_RADIUS_MAX, GAP_MAX, GLOW_BALLISTICS_MAX, GLOW_GAP_SOFT_MAX, GLOW_REACH_MAX,
-    GLOW_STRENGTH_MAX, MARK_THICKNESS_MAX, MAX_DRAWN_NODES, NODE_RADIUS_FACTOR, RING_WIDTH_MAX,
+    Camera, GAP_MAX, GLOW_BALLISTICS_MAX, GLOW_GAP_SOFT_MAX, GLOW_REACH_MAX,
+    GLOW_STRENGTH_MAX, MARK_THICKNESS_MAX, MAX_DRAWN_NODES, NODE_RADIUS_FACTOR, RING_INNER_MAX,
+    RING_WIDTH_MAX,
 };
 use harmonigraph_core::{coords, Comma, Envelope, LatticePos, Tempered};
 
@@ -335,43 +336,28 @@ pub struct ViewConfig {
     /// [`NoteNames::All`] is the label layer's own answer and carries no
     /// memory at all.
     pub note_names: NoteNames,
-    // How a sounding node's core is painted has no field here: the core is
-    // the steady disc-and-glow, and nothing switches it. The field styles
-    // that stood beside it (Vortex, Checker and Spiral) are gone, and with
-    // them the `node_style` key and the per-node seed that animated them.
-    // Saved blobs still carry that key, naming any of the SEVENTEEN the enum
-    // answered to — those three, the Steady it defaulted to, and the thirteen
-    // trimmed before them that its serde aliases went on loading (Breathe,
-    // Sparks, Wire, Corona, Plasma, Aurora, Marble, Lava, Filament, Stripes,
-    // Rings, Tiles, Pinwheel). Serde ignores unknown keys, so such a blob
-    // loads intact and drops the key on the next save. This is the only
-    // surviving record of that set, which is why it names it in full.
+    // How a sounding node's middle is painted has no field here: what lights
+    // it is the node glow, and nothing switches that glow's paint. The field
+    // styles (Vortex, Checker and Spiral) are gone with the core disc they
+    // painted, and with them the `node_style` key and the per-node seed that
+    // animated them. Saved blobs still carry that key, naming any of the
+    // SEVENTEEN the enum answered to — those three, the Steady it defaulted
+    // to, and the thirteen trimmed before them that its serde aliases went on
+    // loading (Breathe, Sparks, Wire, Corona, Plasma, Aurora, Marble, Lava,
+    // Filament, Stripes, Rings, Tiles, Pinwheel). Serde ignores unknown keys,
+    // so such a blob loads intact and drops the key on the next save. This is
+    // the only surviving record of that set, which is why it names it in full.
     /// The curve the low-to-high pitch gradient follows, as its six knobs
     /// (see [`Gradient`]). Every pitch-colored shape in the scene reads
     /// it through one table, so this is the only place the gradient is set.
     pub pitch_gradient: Gradient,
-    /// The core's solidity, 0..1: a soft glow at 0, morphing continuously
-    /// to the classic solid orb at 1 (the disc fades in over its glow
-    /// skirt and its edge crisps). Inert while the core is off.
-    pub core_solidity: f32,
-    /// The core's radius, in quad UV units (0 = node center, 1 = quad
-    /// edge; the classic disc edge sits at 0.46). Sizes the disc and its
-    /// glow together. **A radius of 0 turns the core off** — the outer
-    /// octave glyphs then carry the note alone.
-    ///
-    /// The one size on the node measured from the CENTER, because it is the
-    /// only layer that starts there: everything outside it is a ring, and a
-    /// ring is sized by how thick it is (see [`rings`](Self::rings)). Widening
-    /// the core therefore slides every ring outward with it rather than eating
-    /// into the innermost one.
-    pub core_radius: f32,
     /// How thick the octave band is — the MIDI ring, in quad UV units, whose
     /// inner edge is wherever the layer inside it ended plus one
     /// [`ring_gap`](Self::ring_gap) (see [`rings`](Self::rings)). Every outer
     /// style fits its glyphs' radial footprint to it, so the band IS the
     /// glyph set's radial extent.
     ///
-    /// **0 turns the octave layer off**, as a radius of 0 turns the core off,
+    /// **0 turns the octave layer off**, as a width of 0 turns any layer off,
     /// and the layers outside it close up over the slot it leaves. That is a
     /// picture worth having rather than a degenerate one: with the band gone
     /// the audio ring and the melody/bass marks are what the node is made of,
@@ -389,6 +375,31 @@ pub struct ViewConfig {
     // and then an opacity under `outer_backdrop_alpha`, and `outer_solidity`);
     // serde ignores unknown keys, so such a blob loads intact and simply
     // drops them on the next save.
+    /// Where the stack BEGINS, in quad UV units: the radius the innermost layer
+    /// left on puts its inner edge on (see [`rings`](Self::rings)), and so the
+    /// size of the empty middle a node carries.
+    ///
+    /// The one bar of the stack that is a POSITION rather than a width, and
+    /// what it sizes is not a layer: nothing is drawn in there. What fills a
+    /// node's middle is its own light ([`glow_reach`](Self::glow_reach)), which
+    /// is laid OVER whatever the node draws rather than taking a slot in the
+    /// stack, so the middle is at once empty and the brightest part of the
+    /// node.
+    ///
+    /// The handle names the radius the innermost ring starts at directly, with
+    /// no [`ring_gap`](Self::ring_gap) in front of it: a gap is padding between
+    /// two DRAWN layers, and there is no layer inside this one to stand off.
+    ///
+    /// 0 seats the stack on the node's own center — the innermost ring reaches
+    /// it and its sectors close into pie wedges rather than reading as an
+    /// annulus. That is the bottom of the bar's travel rather than an off
+    /// switch, this being the one size on the node that switches nothing off,
+    /// and it is a picture worth having: the node as one solid reading.
+    ///
+    /// Widening it pushes every layer outward, and the quad runs out from the
+    /// outside in — one refused layer at a time (see [`Stack::take`]), the same
+    /// way it does when a ring is widened.
+    pub ring_inner: f32,
     /// The node's RADIAL padding, in quad UV units: the gap between one ring of
     /// the stack and the next (see [`rings`](Self::rings)), which is also what
     /// stands a melody/bass mark off the band it continues.
@@ -396,7 +407,7 @@ pub struct ViewConfig {
     /// The other axis is [`octave_gap`](Self::octave_gap), and the two are
     /// separate because they are answers to different questions. This one is
     /// about the STACK: how far apart the annuli read, which is the same
-    /// question the four widths above are asked and is settled against them —
+    /// question the three widths above are asked and is settled against them —
     /// every unit spent here is a unit of quad the layers do not get, so the
     /// gap and the sizes are dialled together on one bar's worth of room. The
     /// angular gap spends nothing: it cuts the slices out of a ring already
@@ -513,7 +524,7 @@ pub struct ViewConfig {
     ///
     /// It does NOT say whether the ring is drawn — that is
     /// [`spectral_ring_width`](Self::spectral_ring_width), the ring's own size,
-    /// exactly as a radius of 0 is what turns the core off. One off switch per
+    /// exactly as a thickness of 0 is what turns the marks off. One off switch per
     /// layer, in the same place on every layer: a selector that also carried an
     /// Off would be a second one for this layer alone, and the two would then
     /// have to agree about what a ring of some width carrying no reading is.
@@ -554,9 +565,9 @@ pub struct ViewConfig {
     /// the two are asked in that order: no width is no ring anywhere, and the
     /// gate never runs.
     ///
-    /// It sits between the core and the band in the stack
-    /// ([`rings`](Self::rings)), so its inner edge is the core's radius plus a
-    /// gap and everything outside it moves when it is dragged. INSIDE the band
+    /// It is the INNERMOST layer of the stack ([`rings`](Self::rings)), so its
+    /// inner edge is where the stack begins ([`ring_inner`](Self::ring_inner))
+    /// and everything outside it moves when it is dragged. INSIDE the band
     /// rather than outside it because of which disagreement between the two
     /// pictures is common: energy at a pitch class with no note held — every
     /// partial above a played chord's roots — happens constantly, and a held
@@ -706,8 +717,8 @@ pub struct ViewConfig {
     // replaced it.
     //
     // A mark rides the OUTER EDGE of that note's octave indicator and
-    // nothing else — it never touches the core, whose color is the note's
-    // own. That also makes it the layer that survives a chord voiced within
+    // nothing else — no layer inside it is repainted. That also makes it the
+    // layer that survives a chord voiced within
     // a single pitch class: every octave of one note lands on the same node,
     // differing only by slot.
     /// Mark the highest held note.
@@ -747,7 +758,7 @@ pub struct ViewConfig {
     /// however far out the stack stands it; a `ring_gap` of 0 closes the
     /// stand-off, and the mark meets its slice.
     ///
-    /// 0 turns the marks off, as a radius of 0 turns the core off. Absolute
+    /// 0 turns the marks off, as a width of 0 turns any layer off. Absolute
     /// rather than a fraction of the band's width, which would move the marks
     /// every time the band is resized.
     pub mark_thickness: f32,
@@ -1021,16 +1032,14 @@ pub struct ViewConfig {
     /// nothing is drawn at all — so the three fields need no toggle of their
     /// own.
     ///
-    /// The glow REPLACES the core's skirt rather than joining it. What it
-    /// draws is exactly that skirt — every sounding octave's hue laid round
-    /// the node by angle, over an exponential falloff — at the soft end of the
-    /// solidity axis and sized to the whole node instead of to the core disc:
-    /// the node's outermost drawn edge plus this reach is both the falloff's
-    /// domain and where its window shuts, so this bar is exactly where the
-    /// light stops. So
-    /// the core's skirt is suppressed wherever this is on (see `core_layer` in
-    /// lattice.wgsl), and only its solid disc is left, as one more crisp shape
-    /// the [`glow_gap`](Self::glow_gap) stands off.
+    /// What it draws is every sounding octave's hue laid round the node by
+    /// angle, over an exponential falloff sized to the whole node: the node's
+    /// outermost drawn edge plus this reach is both the falloff's domain and
+    /// where its window shuts, so this bar is exactly where the light stops.
+    ///
+    /// It is the ONLY light a node has, the rings themselves being crisp
+    /// shapes: a view with this at 0 draws exactly the ink the ring stack
+    /// describes and nothing around it.
     ///
     /// Every node's glow is drawn into a target of its own, with SCREEN
     /// blending, so two neighbours' halos meld like light rather than summing
@@ -1062,10 +1071,9 @@ pub struct ViewConfig {
     /// node's own, because it is subtracted after every node has laid its light
     /// down.
     ///
-    /// Rings only. The core's solid disc is drawn OVER the light rather than a
-    /// gap out from it — a gap there would be a dark ring between a note's disc
-    /// and its own halo — and inside the innermost ring nothing stands the
-    /// light off at all, which is what lights the middle of a node. Each ring
+    /// Rings only, and a node draws nothing else: inside the innermost ring
+    /// nothing stands the light off at all, which is what lights the middle of
+    /// a node whose innermost ring is an annulus. Each ring
     /// carries its own level, so a layer that is off, refused by the stack,
     /// attacking or releasing opens and closes its own moat in step with the
     /// ink it stands off.
@@ -1131,15 +1139,6 @@ pub struct ViewConfig {
     /// This is how far round that average is taken: at 0 each layer's sectors
     /// stay distinct arcs of colour, and at 1 the whole node's ink averages
     /// into one tint. Inert while [`glow_reach`](Self::glow_reach) is 0.
-    ///
-    /// The travel is the SQUARE of the bar, because the lobe's WIDTH is what
-    /// the eye reads and that goes as one over the root of the concentration:
-    /// linear in the concentration, most of the bar sits between arcs nobody
-    /// can tell apart. Half way is `GLOW_LOBE_KAPPA`, the concentration the
-    /// node's own hues are blended at, and the half below it goes tighter than
-    /// that. Where the bottom STOPS is a ripple bound rather than a taste — a
-    /// lobe tight enough to pass a node's own wedges is tight enough to pass a
-    /// sampled fan too, and the two are not tellable apart once they are there.
     pub glow_spread: f32,
     /// How fast a node's light follows the node, in seconds: the time constant
     /// of the exponential its LEVEL and its COLOUR are both carried on — this
@@ -1169,9 +1168,9 @@ pub struct ViewConfig {
 /// Where each layer of a node lands, in quad UV units, read outward from its
 /// center — what [`ViewConfig::rings`] turns the four size bars into.
 ///
-/// The bars are WIDTHS (the core's radius being its width, measured from the
-/// center it starts at), and a ring's inner edge is wherever the last drawn
-/// layer ended plus one [`gap`](Self::gap). That is the whole of what stacking
+/// The bars are WIDTHS, and a ring's inner edge is wherever the last drawn
+/// layer ended plus one [`gap`](Self::gap) — or [`inner`](Self::inner), for the
+/// innermost layer left on. That is the whole of what stacking
 /// buys: widening one layer slides everything outside it out as far as the quad
 /// edge, no bar can be dragged behind its neighbour, and a layer dialled to 0
 /// hands its slot AND its gap back to the ones around it instead of leaving a
@@ -1179,26 +1178,31 @@ pub struct ViewConfig {
 ///
 /// The quad edge is where sliding stops and DROPPING starts: a ring is the
 /// width its bar reads or it is not drawn, so the first layer the stack can no
-/// longer fit whole comes out as an empty pair, and every layer outside it goes
-/// the same way. Widen the core far enough and the node loses the band, then the
-/// audio ring, and ends as the core alone — rather than wearing two hairlines
-/// whose bars read out sizes nothing on screen matches (`stacked`).
+/// longer fit whole comes out as an empty pair. Widen the audio ring far enough
+/// and the node loses the band, ending as that ring alone — rather than wearing
+/// a hairline whose bar reads out a size nothing on screen matches (`stacked`).
 ///
 /// An empty pair is also what makes `outer > inner` the one test for "this ring
 /// draws": there is nothing else to ask, and no second flag that could
 /// disagree with the geometry.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RingStack {
-    /// The core disc's radius, from the node's center; 0 = off.
-    pub core_radius: f32,
+    /// Where the innermost layer left on begins, and so the empty middle a node
+    /// carries (see [`ViewConfig::ring_inner`]). 0 seats the stack on the
+    /// node's own center.
+    ///
+    /// A radius the stack is READ from rather than one of its layers: nothing
+    /// is drawn inside it, so no pair of radii describes it and no `outer >
+    /// inner` test asks whether it is there.
+    pub inner: f32,
     /// The audio ring's inner and outer radius, or `(0.0, 0.0)` when it is off
     /// (see [`ViewConfig::spectral_ring_width`]).
     pub audio: (f32, f32),
     /// The octave band's inner and outer radius, or `(0.0, 0.0)` when it is off
     /// (see [`ViewConfig::band_width`]).
     pub band: (f32, f32),
-    /// The outer edge of the outermost ring DRAWN — the core's radius where
-    /// nothing outside it is on, and 0 on a node with no layers at all.
+    /// The outer edge of the outermost ring DRAWN, and 0 on a node with no
+    /// ring at all.
     ///
     /// What the melody/bass marks stand off, and what a node's billboard is
     /// sized on, so neither has to know which of the rings inside it
@@ -1206,8 +1210,8 @@ pub struct RingStack {
     /// shaping it: each layer's hole is measured from that layer's own radii.
     pub outer: f32,
     /// Where the melody/bass mark strip STARTS: a gap out from
-    /// [`outer`](Self::outer), or the node's center when the stack is empty
-    /// and there is nothing to stand off.
+    /// [`outer`](Self::outer), or [`inner`](Self::inner) when the stack is
+    /// empty and there is nothing to stand off.
     ///
     /// Settled here rather than left to the renderer because that second
     /// clause is [`Stack::take`]'s rule, and a layer deriving its own inner edge
@@ -1232,11 +1236,12 @@ impl RingStack {
     /// audio ring's slot begins, where the octave band's begins, where the
     /// melody/bass strip's begins, and where that strip ENDS.
     ///
-    /// Each is the outer limit of the layer INSIDE it — the first three a
-    /// [`gap`](Self::gap) past where that layer stopped, the last one flush,
-    /// there being no layer after the marks to stand off. So the four run
-    /// core, audio ring, band, marks: one boundary per layer, and moving one
-    /// is that layer's own width changing.
+    /// Each is the outer limit of what is INSIDE it — the middle two a
+    /// [`gap`](Self::gap) past where a layer stopped, the last one flush, there
+    /// being no layer after the marks to stand off, and the first one flush
+    /// too, the empty middle being no layer to stand off either. So the four
+    /// run middle, audio ring, band, marks: one boundary per handle, and moving
+    /// one is that handle's own number changing.
     ///
     /// **A slot a layer WOULD take, where the layer is not drawn**, which is
     /// what makes this different from reading the radii above and the reason
@@ -1250,26 +1255,35 @@ impl RingStack {
     /// for it either — see [`Stack::take`]. The picture and the bar then agree:
     /// the layer is not on the node and its handle is not out on the axis.
     pub fn edges(&self) -> [f32; 4] {
-        let after_audio =
-            if self.audio.1 > self.audio.0 { self.audio.1 } else { self.core_radius };
+        let after_audio = if self.audio.1 > self.audio.0 { self.audio.1 } else { 0.0 };
         [
-            slot_start(self.core_radius, self.gap),
-            slot_start(after_audio, self.gap),
+            self.inner,
+            slot_start(after_audio, self.inner, self.gap),
             self.mark_inner,
             self.mark_inner + self.mark_thickness,
         ]
     }
 }
 
-/// The stack a node's layers are handed out of, innermost first: a cursor at
-/// the outer edge of the last layer DRAWN, and whether the room has run out.
+/// The stack a node's rings are handed out of, innermost first: a start radius
+/// and a cursor at the outer edge of the last layer DRAWN.
 ///
 /// A ring draws at exactly the width its bar reads or it is not drawn at all,
 /// which is why a slot that does not fit is REFUSED rather than clipped to the
 /// room left. Clipping keeps the layer alive at whatever width the stack
 /// happened to leave it — a bar reading 0.19 drawing 0.0008, a hairline at the
 /// node's rim that no setting asked for and nothing on screen explains.
+///
+/// The two ways a layer comes back empty are different questions, and only one
+/// of them is about the room: a layer at width 0 is switched off by its own
+/// BAR and gives its slot up, where a layer REFUSED is holding a width the
+/// room cannot seat. What tells them apart is the width the layer still reads,
+/// not the empty pair they share — see `resized` in the Layers bar, which is
+/// the one caller that has to.
 struct Stack {
+    /// Where the innermost layer DRAWN begins, whichever layer that turns out
+    /// to be (see [`ViewConfig::ring_inner`]).
+    inner: f32,
     cursor: f32,
     /// Set by a refusal, and the reason it is not just a cursor: the two ways
     /// a layer comes back empty are different questions, and only one of them
@@ -1284,11 +1298,11 @@ struct Stack {
     ///
     /// Letting a refusal leave the cursor where it was makes the refused
     /// layer's slot a gift to the one outside it, which reads on screen as the
-    /// stack coming apart in no order at all: widen the core past the audio
-    /// ring's slot and the BAND takes it, so a band that had been gone for a
-    /// quarter of the bar's travel reappears, and the ring's own width bar
-    /// picks up a second off position at the TOP of its travel, where dragging
-    /// it wider is what removes it.
+    /// stack coming apart in no order at all: push the stack's start past the
+    /// audio ring's slot and the BAND takes it, so a band that had been gone
+    /// for a quarter of the bar's travel reappears, and the ring's own width
+    /// bar picks up a second off position at the TOP of its travel, where
+    /// dragging it wider is what removes it.
     full: bool,
 }
 
@@ -1296,15 +1310,15 @@ impl Stack {
     /// The next layer's slot: `width` thick, a `gap` out from the cursor,
     /// which it then advances to its own outer edge.
     ///
-    /// The gap is skipped at a cursor of 0, where there is nothing to stand
-    /// off: with the core off the innermost ring reaches the node's center and
-    /// its sectors close into pie wedges, rather than opening a hole the size
-    /// of a padding around nothing.
+    /// The gap is skipped while nothing has been drawn, where there is nothing
+    /// to stand off: the innermost ring left on seats its inner edge on the
+    /// stack's own start, rather than opening a hole the size of a padding
+    /// around nothing.
     fn take(&mut self, gap: f32, width: f32) -> (f32, f32) {
         if width <= 0.0 || self.full {
             return (0.0, 0.0);
         }
-        let inner = slot_start(self.cursor, gap);
+        let inner = slot_start(self.cursor, self.inner, gap);
         let outer = inner + width;
         if outer > 1.0 {
             self.full = true;
@@ -1316,22 +1330,21 @@ impl Stack {
 }
 
 /// Where the next layer out begins, given the outer edge of the last one
-/// DRAWN: a `gap` past it, or the node's own center when nothing has been
-/// drawn yet.
+/// DRAWN: a `gap` past it, or `inner` — the stack's own start — when nothing
+/// has been drawn yet.
 ///
 /// The second clause is the whole of why this is a function rather than a sum.
-/// With the core off the innermost ring reaches the center and its sectors
-/// close into pie wedges, rather than opening a hole the size of a padding
-/// around nothing — and three places have to agree about that: [`Stack::take`]
-/// handing out a slot, [`ViewConfig::rings`] placing the mark strip, and
-/// [`RingStack::edges`] saying where a layer that is switched OFF would have
-/// started. A second copy of the rule is how a handle comes to sit a gap off a
-/// ring that is not there.
-fn slot_start(cursor: f32, gap: f32) -> f32 {
+/// The innermost ring left on seats on the start with no padding in front of
+/// it, there being no layer inside it to stand off — and three places have to
+/// agree about that: [`Stack::take`] handing out a slot,
+/// [`ViewConfig::rings`] placing the mark strip, and [`RingStack::edges`]
+/// saying where a layer that is switched OFF would have started. A second copy
+/// of the rule is how a handle comes to sit a gap off a ring that is not there.
+fn slot_start(cursor: f32, inner: f32, gap: f32) -> f32 {
     if cursor > 0.0 {
         cursor + gap
     } else {
-        0.0
+        inner
     }
 }
 
@@ -1417,23 +1430,26 @@ impl ViewConfig {
     /// as one that silently is not there.
     pub fn rings(&self) -> RingStack {
         let gap = size(self.ring_gap, GAP_MAX);
-        let core = size(self.core_radius, CORE_RADIUS_MAX);
-        // The cursor is the outer edge of the last layer DRAWN, which is what
-        // makes a ring dialled to 0 cost its gap as well as its slot: nothing
-        // moved the cursor, so the next ring starts where it would have.
-        let mut stack = Stack { cursor: core, full: false };
+        let inner = size(self.ring_inner, RING_INNER_MAX);
+        // The cursor is the outer edge of the last layer DRAWN, and 0 until one
+        // is — which is what makes a ring dialled to 0 cost its gap as well as
+        // its slot: nothing moved the cursor, so the next ring starts where it
+        // would have. The start is carried beside the cursor rather than as its
+        // opening value, because the two answer different questions: what a
+        // layer stands off, and where the stack sits.
+        let mut stack = Stack { inner, cursor: 0.0, full: false };
         let audio = stack.take(gap, size(self.spectral_ring_width, RING_WIDTH_MAX));
         let band = stack.take(gap, size(self.band_width, RING_WIDTH_MAX));
         RingStack {
-            core_radius: core,
+            inner,
             audio,
             band,
             outer: stack.cursor,
             // The strip's own slot, on the stack's terms — a gap out from the
-            // last layer drawn, or the node's center when nothing was. Only
+            // last layer drawn, or the stack's start when nothing was. Only
             // the outer edge is left to the renderer, because that is the one
             // the billboard's margin lets run past the quad.
-            mark_inner: slot_start(stack.cursor, gap),
+            mark_inner: slot_start(stack.cursor, inner, gap),
             mark_thickness: size(self.mark_thickness, MARK_THICKNESS_MAX),
             gap,
         }
@@ -2121,20 +2137,22 @@ impl Default for ViewConfig {
                 // for the same reason.
                 chroma_ramp: 0.0,
             },
-            // Hollow rather than solid: the band's silent slots ghosted in
-            // are what carries the pitch class now, not a filled center.
-            // (The band's own width is set below.)
-            core_solidity: 0.0,
-            core_radius: 0.501_335_3,
             // A narrow octave band, stopping short of the quad edge, with a
             // tight gap everywhere: the octaves read as a ring of distinct
             // marks rather than a solid annulus, and every layer keeps clear
             // space around it. (The backdrop that holds the whole ring's shape
-            // behind them is fixed on.) The stack is core, gap, audio ring,
-            // gap, band, gap, marks; the core above is wide enough now that
-            // the audio ring is dialled thin to still fit ahead of it (see
-            // spectral_ring_width).
+            // behind them is fixed on.) The stack is middle, audio ring, gap,
+            // band, gap, marks — the node's own light fills the middle and the
+            // two rings stand around it (see ring_inner).
             band_width: 0.163_084_63,
+            // The stack seated just past halfway out, so a node reads as a lit
+            // middle with its readings around it: the glow fills the whole of
+            // the space this leaves (see glow_reach), the analyzer's ring is a
+            // thin annulus at its edge, and the octaves stand outside that.
+            // Dialled to 0 the stack seats on the center instead and the audio
+            // ring's wedges close into pie slices, which is the same node read
+            // as one solid measurement.
+            ring_inner: 0.551_335_3,
             // The two gaps are one number here: the radial padding is what puts
             // the band at its outer edge, and the same width cut angularly is
             // the slicing that reads as distinct marks. They are two bars
@@ -2172,11 +2190,11 @@ impl Default for ViewConfig {
             // Narrow, for the just-tuned material this is aimed at — see the
             // field.
             spectral_width: 2.088_490_2,
-            // A thin ring now that the core ahead of it (see core_radius) has
-            // grown to take most of the room the annulus used to hold. It
-            // still carries one wedge per octave, each a level or a window of
-            // spectrum, and the gaps either side still make it a ring rather
-            // than a thick edge on the core.
+            // A thin ring, the middle ahead of it (see ring_inner) holding
+            // most of the room inside the band. It still carries one wedge per
+            // octave, each a level or a window of spectrum, and the gaps either
+            // side still make it a ring rather than a thick edge on the node's
+            // light.
             spectral_ring_width: 0.061_113_536,
             // A narrow wedge — see the field for why a window this size and
             // not the octave that makes the ring continuous. Dialled rather
@@ -2242,16 +2260,16 @@ impl Default for ViewConfig {
             show_perf: false,
             show_perf_detail: false,
             render_scale: 1.0,
-            // A halo at about four fifths strength: the hollow core and the
-            // thin octave marks are quiet shapes, and the bloom is what
-            // gives them presence.
+            // A halo at about four fifths strength: a node's rings are quiet
+            // shapes, and the bloom is what gives them presence.
             bloom_strength: 0.806_154_85,
-            // The node glow off, so a fresh view — and every blob written
-            // before it existed — draws exactly the picture it did without it.
-            // The strength and the moat are dialled ready underneath, so the
-            // reach alone brings the halo in, already standing off the rings
-            // it is laid around.
-            glow_reach: 0.0,
+            // The node glow ON, it being the only light a node has: the rings
+            // are crisp shapes and the middle they stand around (see
+            // ring_inner) is empty ink, so a fresh view with the reach at 0
+            // would be a lattice of hollow annuli. A reach of about a third of
+            // a node past its rim, which is a halo plainly there and well short
+            // of the neighbour it would otherwise reach.
+            glow_reach: 0.35,
             glow_strength: 1.0,
             glow_gap: 0.08,
             // The moat feathered over most of its own width, so the gap and
@@ -2289,8 +2307,8 @@ impl Default for ViewConfig {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FrameParams {
     /// Seconds a note takes to arrive, and — once it is released — to leave,
-    /// for EVERY layer of the node: the pitch class core, the octave glyphs,
-    /// and the melody/bass marks.
+    /// for EVERY layer of the node: the audio ring, the octave glyphs, and the
+    /// melody/bass marks.
     ///
     /// One time per DIRECTION, so the lattice answers the keys the way it
     /// lets go of them; a note that came up quickly and left slowly would
@@ -2301,7 +2319,7 @@ pub struct FrameParams {
     /// One time per LAYER too, so an arrival or a release reads as a single
     /// gesture instead of pieces of the node moving at different rates. The
     /// octave sectors and the melody/bass marks arrive on the same ramp as
-    /// the core they sit on, because a ring and the sector it links back to
+    /// each other, because a mark and the sector it links back to
     /// belong to one note — [`ViewConfig::mark_delay`] moves a ring's ramp
     /// LATER without changing its rate, which is the one thing that may
     /// differ.
