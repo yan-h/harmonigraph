@@ -115,7 +115,8 @@ struct Uniforms {
     misc9: vec4<f32>,
     // The node glow. x: how far past a node's outermost drawn edge its light
     // spreads, in the node's own uv; y: how much light that is; z: the moat the
-    // light is held out of around every crisp shape a node draws, same units.
+    // light is held out of around every crisp shape a node draws, same units;
+    // w unused.
     //
     // ZEROED WHOLE where the glow is off, by the CPU, so `u.misc10.x > 0.0` is
     // the one test anything here makes and no half-on state exists — a moat
@@ -128,9 +129,6 @@ struct Uniforms {
     // own picture — its knockout included — is exactly what it is with the glow
     // off, and the moat is an ABSENCE of light rather than a shape painted in
     // the ground.
-    //
-    // w: how bright the light is at the node's MIDDLE, as a share of the peak
-    // it reaches out at the innermost ring's inner edge; 1 is no dip at all.
     misc10: vec4<f32>,
     // The node glow's second row: what is left of its knobs once the three
     // lengths above have theirs.
@@ -2381,13 +2379,6 @@ fn glow_level(in: VsOut) -> f32 {
     return clamp(in.glow.x, 0.0, 1.0);
 }
 
-/// How bright a node's light is at its own middle, against the peak it reaches
-/// out at the innermost ring's inner edge (`u.misc10.w`): 1 leaves the plain
-/// exponential alone, 0 takes the middle to nothing. See [`glow_layer`].
-fn glow_centre() -> f32 {
-    return clamp(u.misc10.w, 0.0, 1.0);
-}
-
 /// How far the moat's edge is feathered (`u.misc11.x`), in the node's uv — the
 /// same units as the Gap it stands astride, and NOT a share of it.
 ///
@@ -2439,25 +2430,6 @@ fn glow_gap_shape() -> f32 {
 /// is where the average is taken.
 fn glow_spread_kappa() -> f32 {
     return GLOW_LOBE_KAPPA * (1.0 - clamp(u.misc11.y, 0.0, 1.0));
-}
-
-/// Where the light's peak sits: the inner edge of the innermost RING the view
-/// draws — the audio ring's, the octave band's on a view whose ring is off, and
-/// 0 on one that draws neither, where there is no lit middle to shape.
-///
-/// The VIEW's innermost ring rather than this node's. The dip is a SHAPE, and a
-/// node's ring coming and going on the analyzer's gate would otherwise slide
-/// the peak in and out with it — an animation nobody asked for, in the part of
-/// the halo that is meant to hold still.
-fn glow_bowl_edge() -> f32 {
-    let audio = spectral_radii();
-    if audio.y > audio.x {
-        return audio.x;
-    }
-    if u.misc3.z > u.misc3.y {
-        return u.misc3.y;
-    }
-    return 0.0;
 }
 
 /// One layer's angular soft-band width at radius `r`, in the node's uv: the arc
@@ -2790,21 +2762,11 @@ fn glow_layer(in: VsOut, d: f32) -> vec4<f32> {
     // off out there — so the Reach alone says how far the light goes.
     let window = 1.0 - smoothstep(span * 0.5, span, d);
     let rate = mix(GLOW_FALLOFF_TIGHT, GLOW_FALLOFF_FLAT, glow_feather());
-    // The falloff, and then the DIP taken out of its middle. The exponential
-    // alone is hottest at the node's exact centre, which is the one place the
-    // light has nothing of the node's own in front of it — inside the innermost
-    // ring nothing stands it off — so the middle saturates and the node reads
-    // as a lamp rather than as a lit ring.
-    //
-    // So the middle is taken to `glow_centre` of what the plain skirt is worth
-    // there and eased back to the whole of it by the innermost ring's inner
-    // edge: one continuous profile, its peak landing just inside that edge, the
-    // exponential untouched at every radius outside it, and at a Centre of 1
-    // exactly the plain skirt everywhere.
-    let bowl_edge = glow_bowl_edge();
-    let bowl = mix(glow_centre(), 1.0, smoothstep(0.0, bowl_edge, d));
-    let skirt = GLOW_BASE * exp(-rate * d / span) * window
-        * select(1.0, bowl, bowl_edge > 0.0);
+    // The falloff, plain: one exponential from the node's exact centre outward,
+    // with nothing shaping the middle apart from what the node draws over it.
+    // A node's middle gets no treatment of its own — whatever the Reach, the
+    // Feather and the moat do out in the halo, they do at radius 0 too.
+    let skirt = GLOW_BASE * exp(-rate * d / span) * window;
 
     // How much of the strip's own DIRECTION this fragment gets, against the
     // flat tint of its mean. Every seam converges to a cusp at the node's

@@ -1104,11 +1104,6 @@ pub struct ViewConfig {
     /// feathered wash usually wants a lower Strength than the accent it came
     /// from did.
     ///
-    /// It leaves [`glow_centre`](Self::glow_centre) doing its own job — the dip
-    /// is taken out of whatever profile this makes, at the innermost ring's own
-    /// edge — so a node still reads as a lit ring inside a flattened halo, and
-    /// a field with nothing of the node in its middle wants both bars up.
-    ///
     /// Inert while [`glow_reach`](Self::glow_reach) is 0.
     pub glow_feather: f32,
     /// The moat: how far past each RING a node draws its own light is held
@@ -1200,16 +1195,6 @@ pub struct ViewConfig {
     ///
     /// Inert while [`glow_reach`](Self::glow_reach) is 0.
     pub glow_gap_depth: f32,
-    /// How bright a node's light is at its own MIDDLE, as a share of the peak
-    /// it reaches out at the innermost ring's inner edge. 1 is the plain
-    /// exponential, hottest at the exact centre; below it the middle dips and
-    /// the light reads as a lit ring rather than as a lamp.
-    ///
-    /// One continuous profile: the dip eases back to the whole of the skirt by
-    /// that inner edge and the falloff outside it is untouched, so this moves
-    /// the middle of a node and nothing about how far its light reaches.
-    /// Inert while [`glow_reach`](Self::glow_reach) is 0.
-    pub glow_centre: f32,
     /// How widely a node's own ink is averaged into the colour of its light.
     ///
     /// The glow's colour is not a formula naming its sources — it is what the
@@ -2131,7 +2116,6 @@ impl ViewConfig {
         // interval.
         self.glow_gap_depth =
             finite_or(self.glow_gap_depth, fresh.glow_gap_depth).clamp(0.0, 1.0);
-        self.glow_centre = finite_or(self.glow_centre, fresh.glow_centre).clamp(0.0, 1.0);
         self.glow_spread = finite_or(self.glow_spread, fresh.glow_spread).clamp(0.0, 1.0);
         // The light's own pair, in seconds, on the ring's rule: a bar's range,
         // and a poisoned number repaired to the fresh value rather than left
@@ -2420,7 +2404,6 @@ impl Default for ViewConfig {
             // in a dim pool of its own halo reads as shade, where the whole of
             // it taken away reads as a black annulus drawn round the node.
             glow_gap_depth: 0.85,
-            glow_centre: 0.5,
             glow_spread: 0.5,
             // Slow and fluid, which is what the pair is for: a light that
             // arrives inside a third of a second and takes a couple of seconds
