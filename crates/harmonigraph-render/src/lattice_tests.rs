@@ -5982,8 +5982,6 @@ fn the_gap_shape_moves_where_the_moat_gives_light_back_not_how_far_it_reaches() 
 
     // How much light this shape's moat took out of `flush`, and how far from the
     // node the furthest pixel it took any from sits.
-    // How much light this shape's moat took out of `flush`, and how far from the
-    // node the furthest pixel it took any from sits.
     let taken = |shot: &[u8]| -> (i64, f32) {
         let row = SIZE[0] as usize;
         let centre = (SIZE[0] as f32 / 2.0, SIZE[1] as f32 / 2.0);
