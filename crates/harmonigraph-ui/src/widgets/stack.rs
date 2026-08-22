@@ -1112,29 +1112,55 @@ mod tests {
     /// which is what the placement in [`StackBar::show`] is bounded by.
     ///
     /// The middle's cell runs from the bar's own end, the way the bar draws it.
-    fn cells_on(shapes: &[egui::Shape]) -> [Option<(f32, f32)>; 4] {
-        let rings = fresh().rings();
+    fn cells_on(shapes: &[egui::Shape], view: &ViewConfig) -> [Option<(f32, f32)>; 4] {
         let (bar, x_of) = axis_on(shapes);
-        let spans = layer_spans(&rings);
+        let spans = layer_spans(&view.rings());
         std::array::from_fn(|k| {
             let (lo, hi) = spans[k];
             (hi > lo).then(|| (if lo <= 0.0 { bar.left() } else { x_of(lo) }, x_of(hi)))
         })
     }
 
-    /// No name ever covers another layer's cell more than it covers its own.
+    /// No name in `shapes` covers another layer's cell more than it covers its
+    /// own — the claim the bar lives or dies on, asked of one painting of it.
     ///
-    /// This is what the borrowing is bounded by, and it is the claim the bar
-    /// lives or dies on. A name is read against the cell it is lying on, so one
-    /// laid across the octave band names the octave band whatever the stack
-    /// order says — and a name on the WRONG ring is worse than the anonymity
-    /// borrowing was spent to buy, which is the trade this test refuses to make
-    /// (#405).
+    /// A name is read against the cell it is lying on, so one laid across the
+    /// octave band names the octave band whatever the stack order says — and a
+    /// name on the WRONG ring is worse than the anonymity borrowing was spent
+    /// to buy. That is the trade this refuses to make (#405), and it is what
+    /// bounds both directions a name is allowed to borrow in.
     ///
     /// Covering none of either is allowed, and is the ordinary case for a name
     /// hung back over the empty middle: the middle carries no ink, so a name
     /// laid there has taken nothing from anybody. What is refused is a name
     /// that has left its own ring and landed on a neighbour's.
+    fn no_name_lands_on_another_layer(w: f32, shapes: &[egui::Shape], view: &ViewConfig) {
+        let cells = cells_on(shapes, view);
+        let over = |run: &egui::Rect, cell: Option<(f32, f32)>| {
+            cell.map_or(0.0, |(lo, hi)| (run.right().min(hi) - run.left().max(lo)).max(0.0))
+        };
+        for (run, name) in text_boxes(shapes) {
+            let k = NAMES
+                .iter()
+                .position(|n| *n == name)
+                .unwrap_or_else(|| panic!("the bar drew a run that is no layer's name: {name:?}"));
+            let own = over(&run, cells[k]);
+            for (j, cell) in cells.iter().enumerate() {
+                // The middle is drawn and EMPTY, so nothing is taken from it:
+                // it is the one cell a name is free to lie across, and the room
+                // the audio ring's name is found in.
+                let other = if j == 0 { 0.0 } else { over(&run, *cell) };
+                assert!(
+                    j == k || other <= own + 0.5,
+                    "at {w}, {name:?} lies over {other} points of {:?}'s cell and {own} \
+                     of its own — it names the wrong layer",
+                    NAMES[j],
+                );
+            }
+        }
+    }
+
+    /// At a fresh view, at every width a settings column can be dragged to.
     #[test]
     fn a_name_never_covers_another_layers_cell_more_than_its_own() {
         for w in every_column_width() {
@@ -1142,30 +1168,7 @@ mod tests {
             let shapes = shapes(w, |ui| {
                 StackBar::new(&mut view).show(ui);
             });
-            let cells = cells_on(&shapes);
-            let over = |run: &egui::Rect, cell: Option<(f32, f32)>| {
-                cell.map_or(0.0, |(lo, hi)| {
-                    (run.right().min(hi) - run.left().max(lo)).max(0.0)
-                })
-            };
-            for (run, name) in text_boxes(&shapes) {
-                let k = NAMES.iter().position(|n| *n == name).unwrap_or_else(|| {
-                    panic!("the bar drew a run that is no layer's name: {name:?}")
-                });
-                let own = over(&run, cells[k]);
-                for (j, cell) in cells.iter().enumerate() {
-                    // The middle is drawn and EMPTY, so nothing is taken from
-                    // it: it is the one cell a name is free to lie across, and
-                    // the room the audio ring's name is found in.
-                    let other = if j == 0 { 0.0 } else { over(&run, *cell) };
-                    assert!(
-                        j == k || other <= own + 0.5,
-                        "at {w}, {name:?} lies over {other} points of {:?}'s cell and {own} \
-                         of its own — it names the wrong layer",
-                        NAMES[j],
-                    );
-                }
-            }
+            no_name_lands_on_another_layer(w, &shapes, &view);
         }
     }
 
@@ -1212,27 +1215,62 @@ mod tests {
     /// what makes a name that left its stretch still readable: the third name
     /// from the left is the third layer out however far any of them borrowed,
     /// so the row can be read off in one direction like the node it draws.
+    ///
+    /// Read off the bar left to right and NOT in paint order, which is the only
+    /// version of this that can fail: the loop paints innermost first, so paint
+    /// order is the stack's by construction and asking it that way is asking
+    /// nothing. What the eye gets is the x order, and it is the placement that
+    /// decides whether the two agree.
     #[test]
     fn the_names_read_out_in_the_stacks_own_order() {
-        for w in [200.0, W, 600.0] {
+        for w in every_column_width() {
             let mut view = fresh();
             let shapes = shapes(w, |ui| {
                 StackBar::new(&mut view).show(ui);
             });
-            let runs = text_boxes(&shapes);
+            let mut runs = text_boxes(&shapes);
+            runs.sort_by(|a, b| a.0.left().total_cmp(&b.0.left()));
             let order: Vec<usize> = runs
                 .iter()
                 .map(|(_, s)| NAMES.iter().position(|n| n == s).unwrap())
                 .collect();
             assert!(
                 order.windows(2).all(|p| p[0] < p[1]),
-                "at {w}, the names came out in the order {order:?}",
+                "at {w}, the bar reads left to right as {order:?}",
             );
             assert!(
                 runs.windows(2).all(|p| p[0].0.right() <= p[1].0.left() + 0.5),
                 "at {w}, two names overlap: {:?}",
                 runs.iter().map(|(r, s)| (s, r.x_range())).collect::<Vec<_>>(),
             );
+        }
+    }
+
+    /// A layer switched OFF wears no name and holds no room: the bar it would
+    /// have taken goes to the layers outside it, and none of them ends up
+    /// wearing its name over a ring that is still on.
+    ///
+    /// The audio ring is the one to switch off, being the layer the borrowing
+    /// exists for. With it gone the octave band is the first ring on the node,
+    /// and the middle's ink-free room — the room "Audio" was found in — is the
+    /// band's to be named in instead. Nothing else here reaches a bar painted
+    /// with a layer missing, so this is also the only test that runs the name
+    /// loop's `continue` and the `cursor` it deliberately does not advance.
+    #[test]
+    fn an_off_layer_leaves_its_room_to_the_names_outside_it() {
+        let mut view = fresh();
+        view.spectral_ring_width = 0.0;
+        for w in every_column_width() {
+            let mut view = view.clone();
+            let shapes = shapes(w, |ui| {
+                StackBar::new(&mut view).show(ui);
+            });
+            let drawn: Vec<String> = text_boxes(&shapes).into_iter().map(|(_, s)| s).collect();
+            assert!(
+                !drawn.iter().any(|s| s == NAMES[1]),
+                "at {w}, the audio ring is off the node and still named: {drawn:?}",
+            );
+            no_name_lands_on_another_layer(w, &shapes, &view);
         }
     }
 

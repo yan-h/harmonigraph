@@ -1584,6 +1584,44 @@ mod tests {
         );
     }
 
+    /// A note that stops exactly ON the edge still draws, at the floor.
+    ///
+    /// The segment cull is STRICTLY before the edge, and that strictness is the
+    /// whole of why it cannot empty a note: the note filter keeps every note
+    /// whose stop is at or past the edge, and a note's last segment ends on
+    /// that stop, so a cull at `<=` would drop the last segment of a note the
+    /// filter had just kept and take the note off the picture with nothing
+    /// saying why. The note that proves it is the one where the two meet —
+    /// released exactly at the crop, so its every segment ends at or before the
+    /// edge and its span inside the region is zero.
+    ///
+    /// What it draws is the length floor's business: a zero span is what
+    /// `zero_span` is for, and the note comes out at the minimum length rather
+    /// than as a hairline. The cull's job is only to leave it something to
+    /// floor.
+    #[test]
+    fn a_note_that_stops_on_the_edge_still_draws() {
+        let mut state = fresh();
+        state.spectrum_config.orientation = SpectralOrientation::Left;
+        state.spectrum_config.low_midi = 48.0;
+        state.spectrum_config.high_midi = 84.0;
+        state.tracker.handle_event(NoteEvent::on(1.0, 0, 60, 1.0));
+        state.tracker.handle_event(NoteEvent::off(4.0, 0, 60));
+        let roll = state.tracker.roll().clone();
+        // The crop opens exactly where the note closed.
+        state.whole_song =
+            Some(crate::WholeSong { columns: Vec::new(), roll, start: 4.0, span: 10.0 });
+
+        let ins = instances(&state, 8.0);
+        let floored = one(&ins);
+        assert!(
+            (floored.half_extent[1] - min_half_depth_for(PPP)).abs() < 1e-3,
+            "the note on the crop drew {} points of length rather than the floor's {}",
+            floored.half_extent[1],
+            min_half_depth_for(PPP),
+        );
+    }
+
     /// [`note_instances`]' length floor in points, for a test that needs to
     /// recognise a floored extent.
     fn min_half_depth_for(ppp: f32) -> f32 {
