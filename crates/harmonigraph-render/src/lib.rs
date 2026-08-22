@@ -140,9 +140,11 @@ const RENDER_SCALE_RANGE: (f32, f32) = (0.25, 4.0);
 
 /// Entry points a (re)loaded shader must provide. The `_scene` pair is the
 /// two-attachment form the offscreen pass draws through; the bare pair is
-/// the single-attachment one the parity test's reference path uses; and the
+/// the single-attachment one the parity test's reference path uses; the
 /// `glow` three are the node glow's own pass — one billboard, the light, and
-/// the moat that takes light back off around every ring.
+/// the moat that takes light back off around every ring; and the `ink` four
+/// are the strip that light is coloured out of, read and then blurred ahead of
+/// both (see [`InkStrip`]).
 #[cfg(any(test, feature = "hot-reload"))]
 const REQUIRED_ENTRY_POINTS: &[&str] = &[
     "vs_main",
@@ -154,6 +156,10 @@ const REQUIRED_ENTRY_POINTS: &[&str] = &[
     "vs_glow",
     "fs_glow",
     "fs_glow_moat",
+    "vs_ink_strip",
+    "fs_ink_strip",
+    "vs_ink_blur",
+    "fs_ink_blur",
 ];
 
 /// Watches the shader source on disk (dev builds only). The first sighting
@@ -356,7 +362,12 @@ struct Uniforms {
     /// The node glow's two SHARES of something else. x: how far the moat's edge
     /// is feathered, as a fraction of the gap in `misc10.z`
     /// (`Scene::glow_gap_soft`); y: how widely a node's own ink is averaged
-    /// into the colour of its light (`Scene::glow_spread`). z/w unused.
+    /// into the colour of its light (`Scene::glow_spread`).
+    ///
+    /// z: how many rows this frame's ink strip has, which is the instance count
+    /// — the one thing `vs_ink_strip` cannot work out for itself, since it is
+    /// writing that texture rather than reading one. Not a share of anything;
+    /// here because it belongs to the glow and this row had the space. w unused.
     ///
     /// A second row rather than a repack: `misc10` holds the glow's distances
     /// and this holds its fractions, and the two are read by different parts of
@@ -871,6 +882,9 @@ impl LatticeCallback {
         let grid_at = instances.len() as u32;
         drawn(&mut instances, &mut seam_of, &order[split..], true);
         let (glyphs, seams) = place_labels(labels.glyphs, &labels.labels, &seam_of);
+        // The ink strip's height, taken before the instances move into the
+        // callback below: one row per instance, in the order they are drawn in.
+        let strip_rows = instances.len() as f32;
 
         // The grid draws under the nodes.
         let edges = scene
@@ -952,7 +966,7 @@ impl LatticeCallback {
                     [0.0; 4]
                 },
                 misc11: if scene.glow_reach > 0.0 && scene.glow_strength > 0.0 {
-                    [scene.glow_gap_soft, scene.glow_spread, 0.0, 0.0]
+                    [scene.glow_gap_soft, scene.glow_spread, strip_rows, 0.0]
                 } else {
                     [0.0; 4]
                 },
@@ -1037,6 +1051,10 @@ struct LatticeResources {
     /// target of the glow's own (see [`create_glow_pipelines`]).
     glow_pipeline: wgpu::RenderPipeline,
     glow_moat_pipeline: wgpu::RenderPipeline,
+    /// The colour those two draw in, settled ahead of them: the ink read round
+    /// every node, then blurred (see [`create_ink_strip_pipelines`]).
+    ink_strip_pipeline: wgpu::RenderPipeline,
+    ink_blur_pipeline: wgpu::RenderPipeline,
     /// ...and the fullscreen draw that lays that target over the picture,
     /// inside the scene pass. Built against the scene pass's own attachments
     /// and depth, which is what makes it usable mid-pass.
@@ -1045,6 +1063,12 @@ struct LatticeResources {
     composite_layout: wgpu::BindGroupLayout,
     /// One sampled texture + the shared sampler (bloom chain passes).
     filter_layout: wgpu::BindGroupLayout,
+    /// One texture and NO sampler: the ink strip, which is read texel by texel
+    /// (see [`InkStrip`]). Its own layout rather than `filter_layout` because
+    /// the two differ in exactly that — a strip is indexed by node and by
+    /// angle, and a filtered lookup across its rows would blend one node's
+    /// colour into its neighbour's.
+    strip_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     /// The node labels: the same glyph shader the rest of the UI's text
     /// draws through (`crate::text`), built for THIS pass — its format and
@@ -1367,13 +1391,56 @@ struct GlowTarget {
     /// The texture + the shared sampler, as [`create_post_pipeline`]'s filter
     /// layout takes them.
     bind_group: wgpu::BindGroup,
+    /// The colour that light is drawn in, settled once per node per frame.
+    strip: InkStrip,
 }
+
+/// A frame's ink strips: what every node is putting on itself, read round each
+/// of them at [`INK_STRIP_N`] angles and blurred there.
+///
+/// One ROW per instance, in the instance buffer's own order, which is what a
+/// node's `strip_row` indexes. Two textures because the blur cannot read the
+/// target it writes: `raw` is `fs_ink_strip`'s reading, `blurred` is
+/// `fs_ink_blur`'s convolution of it plus, in one extra column, the same
+/// average at no concentration — the mean a node's middle eases toward.
+///
+/// Small: an f16 RGBA texel per angle per node, so a lattice of 400 lit nodes
+/// spends about 400 KB on the pair — a fortieth of the pane's own offscreen at
+/// that size. That is what the light costs in memory to stop costing a whole
+/// reading of the node per lit fragment.
+struct InkStrip {
+    raw_view: wgpu::TextureView,
+    blurred_view: wgpu::TextureView,
+    /// The raw strip, as the blur pass reads it...
+    raw_bind_group: wgpu::BindGroup,
+    /// ...and the blurred one, as the light's own draw does.
+    blurred_bind_group: wgpu::BindGroup,
+    /// How many rows the pair was built for — the instance count of the frame
+    /// that built it, which is what [`Offscreen::ensure_glow`] compares.
+    rows: u32,
+}
+
+/// How many angles a node's ink is read at, and so how wide its strip is.
+/// Mirrors `INK_STRIP_N` in lattice.wgsl, which is where the number is argued;
+/// `the_shaders_ink_strip_is_as_wide_as_the_texture_it_is_drawn_into` is what
+/// keeps the two one.
+const INK_STRIP_N: u32 = 64;
+
+/// What the strip is kept in: an f16 colour per angle, which is what the blur
+/// hands the light. Half floats rather than the target's own 8-bit format
+/// because a strip texel is a normalised colour beside a WEIGHT, and a weight
+/// is a layer's level times its width — small numbers, quantized to nothing by
+/// a byte.
+const INK_STRIP_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
 /// The shared, pane-independent objects an [`Offscreen`] binds against.
 struct OffscreenShared<'a> {
     format: wgpu::TextureFormat,
     composite_layout: &'a wgpu::BindGroupLayout,
     filter_layout: &'a wgpu::BindGroupLayout,
+    /// One texture, unfiltered: what both stages of the ink strip are read
+    /// through (see [`InkStrip`]).
+    strip_layout: &'a wgpu::BindGroupLayout,
     sampler: &'a wgpu::Sampler,
 }
 
@@ -1539,7 +1606,7 @@ impl Offscreen {
         size: [u32; 2],
         screen_size: [u32; 2],
     ) -> Self {
-        let OffscreenShared { format, composite_layout, filter_layout, sampler } = *shared;
+        let OffscreenShared { format, composite_layout, filter_layout, sampler, .. } = *shared;
         let tex = |label, w: u32, h: u32, format, usage| {
             device.create_texture(&wgpu::TextureDescriptor {
                 label: Some(label),
@@ -1620,13 +1687,29 @@ impl Offscreen {
     /// bar crosses 0. Folding the two would mean either rebuilding the glow on
     /// every resize (harmless, but this is the caller's every-frame path) or
     /// keeping it allocated while the feature is off.
-    fn ensure_glow(&mut self, device: &wgpu::Device, shared: &OffscreenShared<'_>, want: bool) {
+    ///
+    /// `rows` is this frame's instance count, and the strip follows it exactly
+    /// rather than growing to a capacity: a row IS an instance index, so a
+    /// texture taller than the frame would hold rows nothing writes, and the
+    /// pair is a few hundred KB at the sizes a lattice reaches. The light
+    /// target beside it is untouched by any of that — it is the pane's own
+    /// pixels — which is why only the strip is rebuilt here.
+    fn ensure_glow(
+        &mut self,
+        device: &wgpu::Device,
+        shared: &OffscreenShared<'_>,
+        want: bool,
+        rows: u32,
+    ) {
         match (want, self.glow.is_some()) {
             (true, false) => {
-                self.glow = Some(GlowTarget::new(device, shared, self.size));
+                self.glow = Some(GlowTarget::new(device, shared, self.size, rows));
             }
             (false, true) => self.glow = None,
             _ => {}
+        }
+        if let Some(glow) = self.glow.as_mut().filter(|g| g.strip.rows != rows) {
+            glow.strip = InkStrip::new(device, shared.strip_layout, rows);
         }
     }
 }
@@ -1637,8 +1720,13 @@ impl GlowTarget {
     /// blit. Unlike the bloom chain there is no fraction to take: nothing here
     /// is blurred, the falloff being an expression the shader evaluates per
     /// pixel, so a smaller target would only cost sharpness at the moat's edge.
-    fn new(device: &wgpu::Device, shared: &OffscreenShared<'_>, size: [u32; 2]) -> Self {
-        let OffscreenShared { format, filter_layout, sampler, .. } = *shared;
+    fn new(
+        device: &wgpu::Device,
+        shared: &OffscreenShared<'_>,
+        size: [u32; 2],
+        rows: u32,
+    ) -> Self {
+        let OffscreenShared { format, filter_layout, strip_layout, sampler, .. } = *shared;
         let view = device
             .create_texture(&wgpu::TextureDescriptor {
                 label: Some("lattice_glow"),
@@ -1670,7 +1758,57 @@ impl GlowTarget {
                 },
             ],
         });
-        GlowTarget { view, bind_group }
+        GlowTarget { view, bind_group, strip: InkStrip::new(device, strip_layout, rows) }
+    }
+}
+
+impl InkStrip {
+    /// The pair, for a frame of `rows` instances. `rows` is floored at one: a
+    /// frame can be all grid and no node, and a texture of zero height is not a
+    /// texture — where a spare row nothing draws into is simply never sampled,
+    /// the light's own draw being over those same instances.
+    fn new(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, rows: u32) -> Self {
+        let tex = |label: &str, width: u32| {
+            device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some(label),
+                    size: wgpu::Extent3d {
+                        width,
+                        height: rows.max(1),
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: INK_STRIP_FORMAT,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                        | wgpu::TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
+                })
+                .create_view(&Default::default())
+        };
+        // One column wider than the reading it blurs: the extra one holds the
+        // row's MEAN, which is the same convolution at no concentration and so
+        // falls out of the same loop (`fs_ink_blur`).
+        let raw_view = tex("lattice_ink_strip_raw", INK_STRIP_N);
+        let blurred_view = tex("lattice_ink_strip", INK_STRIP_N + 1);
+        let bind = |label: &str, view: &wgpu::TextureView| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(label),
+                layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(view),
+                }],
+            })
+        };
+        InkStrip {
+            raw_bind_group: bind("lattice_ink_strip_raw_bind_group", &raw_view),
+            blurred_bind_group: bind("lattice_ink_strip_bind_group", &blurred_view),
+            raw_view,
+            blurred_view,
+            rows,
+        }
     }
 }
 
@@ -1826,14 +1964,19 @@ fn create_glow_pipelines(
     shader_src: &str,
     target_format: wgpu::TextureFormat,
     bind_group_layout: &wgpu::BindGroupLayout,
+    strip_layout: &wgpu::BindGroupLayout,
 ) -> (wgpu::RenderPipeline, wgpu::RenderPipeline) {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("lattice_shader"),
         source: wgpu::ShaderSource::Wgsl(shader_src.into()),
     });
+    // The strip in group 1 for BOTH, though only the light reads it: the moat
+    // is the same billboard over the same instances, so one layout is what
+    // keeps them one draw pair, and a layout naming a binding its shader does
+    // not touch costs nothing.
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("lattice_glow_pipeline_layout"),
-        bind_group_layouts: &[Some(bind_group_layout)],
+        bind_group_layouts: &[Some(bind_group_layout), Some(strip_layout)],
         ..Default::default()
     });
     let screen = wgpu::BlendState {
@@ -1879,6 +2022,90 @@ fn create_glow_pipelines(
         })
     };
     (build("fs_glow", screen), build("fs_glow_moat", GLOW_ERASE))
+}
+
+/// The two passes that settle what colour every node's light is, ahead of the
+/// draws that lay it down: the ink read round each node, then blurred.
+///
+/// **Why a pass at all.** `ink_at` is a function of the NODE and an angle —
+/// no uv, no field, no derivative — so a fragment shader evaluating it was
+/// answering the same question once per lit pixel, and a node's halo is a lot
+/// of pixels. Here it is answered [`INK_STRIP_N`] times per node per frame
+/// whatever the zoom, and the light's own draw reads two texels.
+///
+/// **Why two.** A blur cannot read the target it is writing. The first pass
+/// lays the raw reading down over the instance buffer, one row per node; the
+/// second convolves each row with the Spread bar's lobe. Both are pure
+/// functions of this frame's instances and uniforms, so the draw path stays
+/// stateless and a frame still renders the same picture twice running — which
+/// the offline renderer's determinism test is what holds.
+///
+/// **No blending on either.** Each writes its whole target, and a strip texel
+/// is a colour and a weight rather than something to composite.
+fn create_ink_strip_pipelines(
+    device: &wgpu::Device,
+    shader_src: &str,
+    bind_group_layout: &wgpu::BindGroupLayout,
+    strip_layout: &wgpu::BindGroupLayout,
+) -> (wgpu::RenderPipeline, wgpu::RenderPipeline) {
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("lattice_shader"),
+        source: wgpu::ShaderSource::Wgsl(shader_src.into()),
+    });
+    let build = |label: &str,
+                 entry_points: (&str, &str),
+                 layout: &wgpu::PipelineLayout,
+                 buffers: &[wgpu::VertexBufferLayout<'_>]| {
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(label),
+            layout: Some(layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some(entry_points.0),
+                compilation_options: Default::default(),
+                buffers,
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some(entry_points.1),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: INK_STRIP_FORMAT,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleStrip,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        })
+    };
+    // The reading takes the node instances and nothing else; the blur takes the
+    // reading, so it names the strip's layout as well.
+    let read_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("lattice_ink_strip_pipeline_layout"),
+        bind_group_layouts: &[Some(bind_group_layout)],
+        ..Default::default()
+    });
+    let blur_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("lattice_ink_blur_pipeline_layout"),
+        bind_group_layouts: &[Some(bind_group_layout), Some(strip_layout)],
+        ..Default::default()
+    });
+    (
+        build(
+            "fs_ink_strip",
+            ("vs_ink_strip", "fs_ink_strip"),
+            &read_layout,
+            &[GpuInstance::LAYOUT],
+        ),
+        build("fs_ink_blur", ("vs_ink_blur", "fs_ink_blur"), &blur_layout, &[]),
+    )
 }
 
 /// The draw that lays a finished glow target over the picture, from inside the
@@ -2068,8 +2295,31 @@ impl LatticeResources {
         });
         let (pipeline, edge_pipeline) =
             create_pipelines(device, SHADER_SRC, target_format, &bind_group_layout, true);
-        let (glow_pipeline, glow_moat_pipeline) =
-            create_glow_pipelines(device, SHADER_SRC, target_format, &bind_group_layout);
+        // Unfilterable, because every read of it is a `textureLoad`: a row is a
+        // node and a column is an angle, so there is no axis a filter would be
+        // interpolating along that the shader does not walk itself.
+        let strip_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("lattice_ink_strip_bind_group_layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            }],
+        });
+        let (glow_pipeline, glow_moat_pipeline) = create_glow_pipelines(
+            device,
+            SHADER_SRC,
+            target_format,
+            &bind_group_layout,
+            &strip_layout,
+        );
+        let (ink_strip_pipeline, ink_blur_pipeline) =
+            create_ink_strip_pipelines(device, SHADER_SRC, &bind_group_layout, &strip_layout);
 
         let texture_entry = |binding| wgpu::BindGroupLayoutEntry {
             binding,
@@ -2177,10 +2427,13 @@ impl LatticeResources {
             blur_v_pipeline,
             glow_pipeline,
             glow_moat_pipeline,
+            ink_strip_pipeline,
+            ink_blur_pipeline,
             glow_over_pipeline,
             bind_group_layout,
             composite_layout,
             filter_layout,
+            strip_layout,
             sampler,
             glyph_rim_pipeline,
             glyph_fill_pipeline,
@@ -2246,7 +2499,8 @@ impl LatticeResources {
     /// Fetch (or create) a pane's GPU objects, and when `offscreen_size` is
     /// given, make sure its offscreen target exists at exactly that pixel
     /// size (pane resizes and render-scale changes recreate it), carrying a
-    /// glow target exactly while `glow` asks for one.
+    /// glow target exactly while `glow` asks for one and an ink strip of
+    /// exactly `rows`.
     /// `screen_size` is the pane's native (unscaled) pixel size, which
     /// sizes the bloom chain.
     fn pane_buffers(
@@ -2256,6 +2510,7 @@ impl LatticeResources {
         offscreen_size: Option<[u32; 2]>,
         screen_size: [u32; 2],
         glow: bool,
+        rows: u32,
     ) -> &mut PaneBuffers {
         let layout = &self.bind_group_layout;
         // Taken before the pane is borrowed: the view is a fresh handle onto
@@ -2269,6 +2524,7 @@ impl LatticeResources {
             format: self.target_format,
             composite_layout: &self.composite_layout,
             filter_layout: &self.filter_layout,
+            strip_layout: &self.strip_layout,
             sampler: &self.sampler,
         };
         let pane = self.panes.entry(pane_id).or_insert_with(|| {
@@ -2355,7 +2611,7 @@ impl LatticeResources {
             // above carries no glow, and one kept from last frame may carry the
             // wrong answer. This settles both.
             if let Some(offscreen) = pane.offscreen.as_mut() {
-                offscreen.ensure_glow(device, &shared, glow);
+                offscreen.ensure_glow(device, &shared, glow, rows);
             }
         }
         pane
@@ -2450,11 +2706,23 @@ impl CallbackTrait for LatticeCallback {
                         &source,
                         resources.target_format,
                         &resources.bind_group_layout,
+                        &resources.strip_layout,
+                    );
+                    // ...and the strip the light is coloured out of, on the
+                    // same argument one step further back: an edit to what a
+                    // layer paints is an edit to what the halo is made of.
+                    let (ink_strip_pipeline, ink_blur_pipeline) = create_ink_strip_pipelines(
+                        device,
+                        &source,
+                        &resources.bind_group_layout,
+                        &resources.strip_layout,
                     );
                     resources.pipeline = pipeline;
                     resources.edge_pipeline = edge_pipeline;
                     resources.glow_pipeline = glow_pipeline;
                     resources.glow_moat_pipeline = glow_moat_pipeline;
+                    resources.ink_strip_pipeline = ink_strip_pipeline;
+                    resources.ink_blur_pipeline = ink_blur_pipeline;
                     eprintln!("[harmonigraph-render] shader hot-reloaded");
                 }
                 Err(err) => {
@@ -2502,8 +2770,14 @@ impl CallbackTrait for LatticeCallback {
         let offscreen_size = anything.then_some(size);
 
         let glow = self.glow_draws();
-        let pane =
-            resources.pane_buffers(device, self.pane_id, offscreen_size, screen_size, glow);
+        let pane = resources.pane_buffers(
+            device,
+            self.pane_id,
+            offscreen_size,
+            screen_size,
+            glow,
+            self.instances.len() as u32,
+        );
 
         if self.instances.len() > pane.instance_capacity {
             pane.instance_capacity = self.instances.len().next_power_of_two();
@@ -2622,6 +2896,63 @@ impl CallbackTrait for LatticeCallback {
             // on screen. A lattice can be a frame of grid and labels with every
             // node culled, which is exactly that frame.
             if let Some(glow) = offscreen.glow.as_ref() {
+                // What colour that light is, before any of it is laid down: the
+                // ink read round every node, then blurred (see [`InkStrip`]).
+                // Both are skipped with no instances to read — the light's own
+                // draws are too, so nothing samples what they would leave.
+                if pane.instance_count > 0 {
+                    let mut pass = egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("lattice_ink_strip_pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &glow.strip.raw_view,
+                            depth_slice: None,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                // Cleared although every texel is written — one
+                                // row per instance, one fragment per column.
+                                // A few thousand texels is nothing to clear,
+                                // and it is what makes the pass a function of
+                                // this frame alone rather than of this frame
+                                // and whatever the last one left in the
+                                // texture, which is the property the offline
+                                // renderer's determinism test rests on.
+                                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    });
+                    pass.set_bind_group(0, &pane.bind_group, &[]);
+                    pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
+                    pass.set_pipeline(&resources.ink_strip_pipeline);
+                    pass.draw(0..4, 0..pane.instance_count);
+                    drop(pass);
+
+                    let mut pass = egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("lattice_ink_blur_pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &glow.strip.blurred_view,
+                            depth_slice: None,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    });
+                    pass.set_bind_group(0, &pane.bind_group, &[]);
+                    pass.set_bind_group(1, &glow.strip.raw_bind_group, &[]);
+                    pass.set_pipeline(&resources.ink_blur_pipeline);
+                    pass.draw(0..4, 0..1);
+                }
+
                 let mut pass = egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("lattice_glow_pass"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -2640,6 +2971,7 @@ impl CallbackTrait for LatticeCallback {
                 });
                 if pane.instance_count > 0 {
                     pass.set_bind_group(0, &pane.bind_group, &[]);
+                    pass.set_bind_group(1, &glow.strip.blurred_bind_group, &[]);
                     pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
                     pass.set_pipeline(&resources.glow_pipeline);
                     pass.draw(0..4, 0..pane.instance_count);

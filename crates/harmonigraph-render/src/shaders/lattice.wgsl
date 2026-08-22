@@ -137,7 +137,12 @@ struct Uniforms {
     // x: how far the moat's edge is feathered, as a fraction of the Gap it
     // stands off. y: how widely a node's own ink is averaged into the colour of
     // its light, 0 keeping each layer's sectors distinct and 1 laying one tint
-    // over the whole halo. z/w unused.
+    // over the whole halo.
+    //
+    // z: how many rows the ink strip has this frame — the instance count, which
+    // is what `vs_ink_strip` puts a node's own row at. Not a share of anything,
+    // and here rather than with the lengths above because it belongs to the
+    // glow and this row had the space. w unused.
     //
     // ZEROED WHOLE with misc10, on the same rule and for the same reason: there
     // is one off switch for the glow and it is `u.misc10.x > 0.0`.
@@ -190,19 +195,34 @@ const GLOW_LIMIT: f32 = 0.95;
 // plainly visible, at 2 — the bar's top — the middle saturates and the halo
 // doubles.
 const GLOW_BASE: f32 = 0.8;
-// How many angular samples of a node's own ink the glow's colour is averaged
-// over (`glow_ink`). Constant, so a lit fragment costs the same whatever any
-// setting reads.
+// How many angles a node's own ink is read at — the width of the strip that
+// reading is kept in (`fs_ink_strip`), and the only rate at which anything
+// about the colour of that node's light is resolved.
 //
-// It is also what CAPS how tight that average may be: the taps are evenly
-// spaced around the whole turn, so a lobe narrower than the spacing between two
-// of them falls between the samples and the colour crawls as a node turns.
-// Twelve taps is thirty degrees apart, about the arc of a GLOW_LOBE_KAPPA lobe
-// — so that constant is at once the tightest blend the light is asked for and
-// the sharpest this sampling can carry, which is one number rather than two.
-const GLOW_TAPS: u32 = 12u;
+// Set against the TIGHTEST lobe the blur is ever asked for, GLOW_LOBE_KAPPA,
+// whose angular spread is 1/sqrt(kappa): half a radian, near thirty degrees.
+// One texel is 5.6 degrees, five of them to that spread, and a von Mises at
+// that concentration has nothing left past the eighth harmonic — under a
+// thousandth of its mean, and a millionth by the twelfth — so the blurred
+// strip is resolved several times over.
+//
+// The other half of the headroom is for the ink BEFORE it is blurred: a node's
+// sectors are crisp shapes and this is where they are sampled, so one texel is
+// also the angular width their edges are softened over (`ink_at`). The rate
+// and its prefilter are one number rather than two, which is what stops a wedge
+// narrower than a texel from landing between two of them.
+const INK_STRIP_N: u32 = 64u;
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
+
+// A node's ink read round the node: one ROW per instance, angle across it.
+//
+// Bound TWICE, at the two stages it is written in — the blur pass reads the raw
+// strip `fs_ink_strip` laid down, and the light's own draw reads the blurred
+// one `fs_ink_blur` left behind it. One declaration and two bind groups, the
+// shape being the same both times; which of the two a draw is looking at is the
+// bind group it was recorded with.
+@group(1) @binding(0) var ink_strip: texture_2d<f32>;
 
 // The moat: how far a node holds its light off every ring it draws, in the
 // node's uv — 0 wherever the glow is off, `u.misc10` being zeroed whole there.
@@ -369,6 +389,11 @@ struct VsOut {
     @location(2) params: vec3<f32>,
     @location(3) @interpolate(flat) octaves: vec3<u32>,
     @location(4) @interpolate(flat) cents: f32,
+    // Which ROW of the ink strip is this node's — its index in the instance
+    // buffer, which is what the strip is laid out by (`fs_ink_strip` draws one
+    // row per instance, in order). Carried rather than recomputed because the
+    // fragment stage has no instance index of its own.
+    @location(5) @interpolate(flat) strip_row: f32,
     @location(6) @interpolate(flat) marks: vec2<u32>,
     @location(7) @interpolate(flat) melody_color: vec4<f32>,
     @location(8) @interpolate(flat) bass_color: vec4<f32>,
@@ -396,8 +421,12 @@ struct VsOut {
 };
 
 @vertex
-fn vs_main(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
-    return node_vertex(vertex_index, inst, 0.0);
+fn vs_main(
+    @builtin(vertex_index) vertex_index: u32,
+    @builtin(instance_index) instance_index: u32,
+    inst: Instance,
+) -> VsOut {
+    return node_vertex(vertex_index, instance_index, inst, 0.0);
 }
 
 /// The GLOW's billboard, shared by both of its draws: the same node, on a quad
@@ -412,18 +441,24 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
 /// the glow paints in. The uv is scaled with the quad, so uv 1.0 is the same
 /// world distance either way and nothing inside the node moves.
 @vertex
-fn vs_glow(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
+fn vs_glow(
+    @builtin(vertex_index) vertex_index: u32,
+    @builtin(instance_index) instance_index: u32,
+    inst: Instance,
+) -> VsOut {
     // Twice the Gap, because the moat's feather is CENTRED on where the gap
     // ends (`moat_coverage`) and so stands up to one more gap past it. A bound
     // rather than the exact width, which depends on the fade the fragment stage
     // reads: a loose billboard costs one ring of discarded fragments, a tight
     // one clips the moat square at the quad's corners.
-    return node_vertex(vertex_index, inst, max(max(u.misc10.x, 0.0), 2.0 * glow_gap()));
+    return node_vertex(
+        vertex_index, instance_index, inst, max(max(u.misc10.x, 0.0), 2.0 * glow_gap()),
+    );
 }
 
 /// One node's billboard, with `extra` uv of headroom past what the node itself
 /// needs — 0 for the node draw, the glow's reach for the glow draw.
-fn node_vertex(vertex_index: u32, inst: Instance, extra: f32) -> VsOut {
+fn node_vertex(vertex_index: u32, instance_index: u32, inst: Instance, extra: f32) -> VsOut {
     var corners = array<vec2<f32>, 4>(
         vec2<f32>(-1.0, -1.0),
         vec2<f32>(1.0, -1.0),
@@ -468,6 +503,7 @@ fn node_vertex(vertex_index: u32, inst: Instance, extra: f32) -> VsOut {
     out.params = inst.params;
     out.octaves = inst.octaves;
     out.cents = inst.cents;
+    out.strip_row = f32(instance_index);
     out.marks = inst.marks;
     out.melody_color = inst.melody_color;
     out.bass_color = inst.bass_color;
@@ -1406,12 +1442,19 @@ fn wedge_fraction(edges: vec2<f32>, uv: vec2<f32>) -> f32 {
 // pixel its owning wedge covers, `xyz` the color that wedge paints there. NOT
 // premultiplied — the caller composites it against the octave layer, and a
 // layer picked BY coverage needs the color the coverage belongs to.
-// `uv` is WHERE the ring is read, and `d` its distance from the node's centre:
-// the fragment's own for the node draw, and a point on the ring's own annulus
-// where the glow asks what colour this node is putting down in one direction
-// (`ink_at`). One body for the two, so the light is coloured out of the ring's
-// own reading and its own ramp rather than out of a second mapping.
-fn spectral_ring(in: VsOut, oct: OctRing, uv: vec2<f32>, d: f32, aa: f32) -> vec4<f32> {
+// `uv` is WHERE the ring is read: the fragment's own for the node draw, and a
+// point on the ring's own annulus where the glow asks what colour this node is
+// putting down in one direction (`ink_at`). One body for the two, so the light
+// is coloured out of the ring's own reading and its own ramp rather than out of
+// a second mapping.
+//
+// `band` is that point's RADIAL coverage, held by the caller exactly as
+// [`outer_glyph`]'s is and for the second of the same two reasons. The node
+// draw takes it once for every slot with [`glyph_band`]; the glow reads the
+// annulus at its own middle, where the layer's radial extent is already the
+// WEIGHT it carries, and asking for it twice would count a thin ring's width
+// against itself.
+fn spectral_ring(in: VsOut, oct: OctRing, uv: vec2<f32>, band: f32, aa: f32) -> vec4<f32> {
     let radii = spectral_radii();
     // Off, or an annulus dialled inside out: nothing to draw either way.
     if radii.y <= radii.x {
@@ -1429,7 +1472,6 @@ fn spectral_ring(in: VsOut, oct: OctRing, uv: vec2<f32>, d: f32, aa: f32) -> vec
     // The ring is a narrow annulus in a billboard reaching QUAD_MARGIN, so
     // most fragments are outside it — and the whole slot walk below answers
     // zero for every one of them. The same skip the band's own loop takes.
-    let band = glyph_band(d, radii.x, radii.y, aa);
     if EARLY_OUT && band <= 0.0 {
         return vec4<f32>(0.0);
     }
@@ -2158,7 +2200,9 @@ fn node_ink(in: VsOut, d: f32, aa: f32, field_step: f32, oct: OctRing) -> vec4<f
     // After the shimmer, and deliberately outside it: the sheet belongs to the
     // marks and the slices they point at, and light crossing a measurement
     // would be a brightness nobody asked the analyzer for.
-    let audio = spectral_ring(in, oct, in.uv, d, aa);
+    let audio_radii = spectral_radii();
+    let audio =
+        spectral_ring(in, oct, in.uv, glyph_band(d, audio_radii.x, audio_radii.y, aa), aa);
     glyph_rgb = (audio.rgb * audio.w + glyph_rgb * glyph * (1.0 - audio.w))
         / max(audio.w + glyph * (1.0 - audio.w), 1e-4);
     glyph = audio.w + glyph * (1.0 - audio.w);
@@ -2374,6 +2418,10 @@ fn fs_main_scene(in: VsOut) -> SceneOut {
 // skirt wherever this draws (see there), so the note's light is one thing at one
 // size and not two.
 //
+// The COLOUR is settled before either of them, in a pass of its own: a node's
+// ink is read round the node once per frame and kept as a strip (see The ink
+// strip below), and the two draws here sample it.
+//
 // TWO DRAWS over one instance buffer, into one transparent target, and the
 // second is what makes the whole thing work:
 //
@@ -2423,8 +2471,9 @@ fn glow_gap_soft() -> f32 {
 
 /// How widely a node's own ink is averaged into the colour of its light, as the
 /// concentration that average is taken at (`u.misc11.y`): the bar's bottom is
-/// the tightest lobe GLOW_TAPS can carry, where each layer's sectors stay
-/// distinct, and its top is no concentration at all, one tint over the halo.
+/// GLOW_LOBE_KAPPA, where each layer's sectors stay distinct, and its top is no
+/// concentration at all, one tint over the halo. Read by [`fs_ink_blur`], which
+/// is where the average is taken.
 fn glow_spread_kappa() -> f32 {
     return GLOW_LOBE_KAPPA * (1.0 - clamp(u.misc11.y, 0.0, 1.0));
 }
@@ -2448,9 +2497,25 @@ fn glow_bowl_edge() -> f32 {
     return 0.0;
 }
 
+/// One layer's angular soft-band width at radius `r`, in the node's uv: the arc
+/// one column of the ink strip spans there.
+///
+/// Every edge [`ink_at`] reads is angular — the strip is one radius per layer,
+/// so nothing crosses a RADIAL edge — and the strip resolves angle to
+/// [`INK_STRIP_N`] columns, so this is the width the sampling itself asks for:
+/// a seam softened over its own texel and no wider. That is a prefilter rather
+/// than an anti-alias, and the difference is what it does NOT depend on: the
+/// screen. A node's light is a property of the node, so a wedge must not change
+/// colour as the camera moves toward it — which is exactly what deriving this
+/// from `fwidth` would do, and it is why the glow's stage has no derivative in
+/// it at all.
+fn ink_arc(r: f32) -> f32 {
+    return r * TAU / f32(INK_STRIP_N);
+}
+
 /// The ink a node's DRAWN layers lay down in the direction `angle`: `xyz` every
 /// layer's colour times the weight it carries there, and `w` those weights
-/// summed. Not a colour on its own — [`glow_ink`] is what normalises it.
+/// summed. Not a colour on its own — [`fs_ink_blur`] is what normalises it.
 ///
 /// **A generalised reading of what is ON the node**, and that is the whole
 /// design. The light is not assembled out of a formula naming its sources, so
@@ -2466,7 +2531,7 @@ fn glow_bowl_edge() -> f32 {
 /// Layers bar moves the light toward the band's colours and narrowing the audio
 /// ring takes the analyzer's back out of it, with no knob of its own — the
 /// proportions of the light are the proportions of the ink.
-fn ink_at(in: VsOut, oct: OctRing, angle: f32, aa: f32) -> vec4<f32> {
+fn ink_at(in: VsOut, oct: OctRing, angle: f32) -> vec4<f32> {
     let dir = vec2<f32>(cos(angle), sin(angle));
     var rgb = vec3<f32>(0.0);
     var wsum = 0.0;
@@ -2491,7 +2556,10 @@ fn ink_at(in: VsOut, oct: OctRing, angle: f32, aa: f32) -> vec4<f32> {
     let audio = spectral_radii();
     if audio.y > audio.x && in.ring > 0.0 {
         let mid = 0.5 * (audio.x + audio.y);
-        let ink = spectral_ring(in, oct, dir * mid, mid, aa);
+        // Read at the annulus's own middle and at full radial coverage: the
+        // ring's WIDTH is the weight below, and letting `glyph_band` soften the
+        // reading as well would count a narrow ring against itself twice.
+        let ink = spectral_ring(in, oct, dir * mid, 1.0, ink_arc(mid));
         let w = ink.w * (audio.y - audio.x);
         rgb = rgb + ink.xyz * w;
         wsum = wsum + w;
@@ -2504,12 +2572,14 @@ fn ink_at(in: VsOut, oct: OctRing, angle: f32, aa: f32) -> vec4<f32> {
     let band_in = u.misc3.y;
     let band_out = u.misc3.z;
     if band_out > band_in && in.params.x > 0.0 {
-        let p = dir * (0.5 * (band_in + band_out));
+        let mid = 0.5 * (band_in + band_out);
+        let p = dir * mid;
+        let arc = ink_arc(mid);
         var cov = 0.0;
         var owner = oct.base;
         for (var i = 0u; i < oct_span(); i = i + 1u) {
             let slot = oct.base + i32(i);
-            let shape = outer_glyph(slot, oct, p, 1.0, aa);
+            let shape = outer_glyph(slot, oct, p, 1.0, arc);
             if shape > cov {
                 cov = shape;
                 owner = slot;
@@ -2525,16 +2595,22 @@ fn ink_at(in: VsOut, oct: OctRing, angle: f32, aa: f32) -> vec4<f32> {
 
     // The melody/bass marks, in the strip past the outermost ring. One strip
     // and two ends, so the stronger owns the direction exactly as it owns the
-    // pixel in `node_ink` — and the strip's drawn depth, floors and cap and
-    // all, is what weighs it.
+    // pixel in `node_ink` — and the depth the strip is dialled to, capped at
+    // the quad the way the layer's own is, is what weighs it.
     let mark_thick = u.misc5.w;
     if mark_thick > 0.0 && (in.marks.x | in.marks.y) != 0u {
         let lim = QUAD_MARGIN - 0.02;
         let mark_in = min(u.misc4.y, lim);
-        let mark_out = min(mark_in + max(mark_thick, aa * MARK_RING_MIN_AA), lim);
-        let p = dir * (0.5 * (mark_in + mark_out));
-        let melody = mark_extension(in.marks.x, oct, p, 1.0, aa) * clamp(in.params.y, 0.0, 1.0);
-        let bass = mark_extension(in.marks.y, oct, p, 1.0, aa) * clamp(in.params.z, 0.0, 1.0);
+        // The strip's own floor is a SCREEN width (`MARK_RING_MIN_AA` times the
+        // fragment's soft band), which is nothing the strip has: what the light
+        // reads is the depth the marks are dialled to, and a mark too thin to
+        // draw at this zoom is a mark whose colour is not in the halo either.
+        let mark_out = min(mark_in + mark_thick, lim);
+        let mid = 0.5 * (mark_in + mark_out);
+        let p = dir * mid;
+        let arc = ink_arc(mid);
+        let melody = mark_extension(in.marks.x, oct, p, 1.0, arc) * clamp(in.params.y, 0.0, 1.0);
+        let bass = mark_extension(in.marks.y, oct, p, 1.0, arc) * clamp(in.params.z, 0.0, 1.0);
         let cov = max(melody, bass);
         if cov > 0.0 && mark_out > mark_in {
             let w = cov * (mark_out - mark_in);
@@ -2545,36 +2621,149 @@ fn ink_at(in: VsOut, oct: OctRing, angle: f32, aa: f32) -> vec4<f32> {
     return vec4<f32>(rgb, wsum);
 }
 
-/// The colour of a node's light at a fragment: the ink that node lays down
-/// AROUND the fragment's own direction, averaged under a von Mises lobe of
-/// concentration `kappa`. `xyz` is that mean, `w` how much ink went into it.
+// ---- The ink strip ---------------------------------------------------------
+// A node's ink, read once per node per frame instead of once per lit fragment,
+// and blurred there rather than under every one of them.
+//
+// [`ink_at`] depends on the NODE and an angle and on nothing else about a
+// fragment — no uv, no field, no derivative — so evaluating it per fragment was
+// answering one question a node's worth of pixels over. Two passes settle it
+// instead, both of them pure functions of the frame's own instances and
+// uniforms:
+//
+//  - `fs_ink_strip` lays the raw reading down, one ROW per instance and
+//    [`INK_STRIP_N`] columns across the turn.
+//  - `fs_ink_blur` convolves each row with the von Mises lobe the Spread bar
+//    asks for and normalises it, so what it leaves behind is the finished
+//    colour per angle. Its last column is the same average at no concentration
+//    at all — the mean, which [`glow_ink`] eases the middle of a node toward.
+//
+// The light's own draw then reads two texels. What that buys is exact rather
+// than approximate: the blur is a convolution of the whole turn, so it has no
+// tap count to fall between, and the ripple a fixed set of taps left round
+// every node — one dip per tap, in the light and in nothing else on screen —
+// is gone by construction rather than pushed under a threshold.
+
+/// The strip's raw draw: one node's whole ring of ink, on a quad one row tall.
 ///
-/// The light is the node's ink BLURRED round the node, and this is the blur:
-/// GLOW_TAPS fixed samples evenly spaced over the whole turn, weighted by the
-/// lobe and normalised by the weights the ink itself carried, so the hue is the
-/// ink's hue and how bright the light is stays [`glow_level`]'s answer. Even
-/// spacing rather than a window narrowed with the lobe, so the widest average —
-/// kappa 0, one flat tint — is sampled as evenly as the tightest.
+/// The instance's own vertex stage does everything but the geometry, so what a
+/// node carries into `ink_at` is spelled once and the strip cannot come to
+/// disagree with the billboard about it. What is replaced is the two things a
+/// row is not: where it sits — its own line of the target, `u.misc11.z` rows
+/// tall — and its uv, which carries the ANGLE across the row rather than a
+/// position on a node. Column `i` therefore falls at `(i + 0.5)/N` of a turn,
+/// which is what [`glow_ink`] reads it back at.
+@vertex
+fn vs_ink_strip(
+    @builtin(vertex_index) vertex_index: u32,
+    @builtin(instance_index) instance_index: u32,
+    inst: Instance,
+) -> VsOut {
+    var out = node_vertex(vertex_index, instance_index, inst, 0.0);
+    let corner = vec2<f32>(f32(vertex_index & 1u), f32(vertex_index >> 1u));
+    let rows = max(u.misc11.z, 1.0);
+    let v = (f32(instance_index) + corner.y) / rows;
+    out.clip_pos = vec4<f32>(corner.x * 2.0 - 1.0, 1.0 - 2.0 * v, 0.0, 1.0);
+    out.uv = vec2<f32>(corner.x, 0.0);
+    return out;
+}
+
+@fragment
+fn fs_ink_strip(in: VsOut) -> @location(0) vec4<f32> {
+    return ink_at(in, oct_ring(in.cents), in.uv.x * TAU);
+}
+
+/// The blur pass's quad, over the whole of its target.
+@vertex
+fn vs_ink_blur(@builtin(vertex_index) vertex_index: u32) -> @builtin(position) vec4<f32> {
+    let corner = vec2<f32>(f32(vertex_index & 1u), f32(vertex_index >> 1u));
+    return vec4<f32>(corner.x * 2.0 - 1.0, 1.0 - 2.0 * corner.y, 0.0, 1.0);
+}
+
+/// Each row of the raw strip, convolved with the Spread bar's lobe and
+/// normalised by the weights the ink itself carried — so the hue is the ink's
+/// hue and how bright the light is stays [`glow_level`]'s answer.
 ///
-/// A `w` of 0 is a node drawing NOTHING: every layer off, or every level at
-/// zero. There is no colour to be had there and none is invented — see
-/// [`glow_layer`], which stops rather than lighting a black halo.
-fn glow_ink(in: VsOut, oct: OctRing, angle: f32, kappa: f32, aa: f32) -> vec4<f32> {
+/// The WHOLE turn, every column, rather than a window narrowed with the lobe:
+/// the widest average the bar asks for is no concentration at all, and the
+/// turn is only [`INK_STRIP_N`] texels wide, so there is nothing to save by
+/// stopping early and a `w` that stays positive for a node drawing ink
+/// anywhere to keep by not.
+///
+/// One column PAST the strip is the mean — the same accumulation with the lobe
+/// left flat, which is what `kappa = 0` makes of it, so the two are one loop
+/// rather than a second pass over the same texels.
+@fragment
+fn fs_ink_blur(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
+    let col = i32(pos.x);
+    let row = i32(pos.y);
+    let kappa = select(glow_spread_kappa(), 0.0, col >= i32(INK_STRIP_N));
     var rgb = vec3<f32>(0.0);
     var wsum = 0.0;
-    for (var i = 0u; i < GLOW_TAPS; i = i + 1u) {
-        let off = f32(i) * (TAU / f32(GLOW_TAPS));
+    var lobes = 0.0;
+    for (var i = 0u; i < INK_STRIP_N; i = i + 1u) {
+        let off = (f32(i) - f32(col)) * (TAU / f32(INK_STRIP_N));
         let lobe = exp(kappa * (cos(off) - 1.0));
-        let ink = ink_at(in, oct, angle + off, aa);
+        let ink = textureLoad(ink_strip, vec2<i32>(i32(i), row), 0);
         rgb = rgb + ink.xyz * lobe;
         wsum = wsum + ink.w * lobe;
+        lobes = lobes + lobe;
     }
-    return vec4<f32>(rgb / max(wsum, 1e-5), wsum);
+    // The colour normalised by the ink's own weights, and the weight itself by
+    // the lobe's — the first is a hue, the second is "how much ink is there",
+    // and a sum of sixty-four of them would be neither.
+    return vec4<f32>(rgb / max(wsum, 1e-5), wsum / max(lobes, 1e-5));
+}
+
+/// One column of a node's finished strip, wrapped: [`INK_STRIP_N`] holds the
+/// blur and the column past it the mean (see [`fs_ink_blur`]).
+fn strip_texel(col: i32, row: i32) -> vec4<f32> {
+    let n = i32(INK_STRIP_N);
+    return textureLoad(ink_strip, vec2<i32>(((col % n) + n) % n, row), 0);
+}
+
+/// The colour of a node's light at a fragment: this node's finished strip, read
+/// in the fragment's own direction and eased toward the strip's mean by `mix`.
+/// `xyz` is that colour, `w` how much ink the node lays down anywhere at all.
+///
+/// The blur itself is not here — the strip arrives already blurred, once per
+/// node per frame — so what a lit fragment costs is two texels and a lerp,
+/// whatever any setting reads. Column `i` holds the angle `(i + 0.5)/N` of a
+/// turn, which is where its own fragment sat in [`fs_ink_strip`], so the
+/// interpolation below lands exactly on a column at exactly that angle and the
+/// wrap between the last and the first is one more step of the same walk.
+///
+/// The MIX is the seam argument `core_layer` makes at length, kept: the ink is
+/// laid in angle, so an arc shrinks with the radius and every seam between two
+/// layers' colours would converge to a cusp at the node's middle. The mean is
+/// the same strip at no concentration at all — one flat tint — so easing toward
+/// it as the radius falls holds the seams at the width they have out at the
+/// light's own edge, and only ever loosens them. It is also the one honest
+/// reading of the middle: there is no direction left to have a colour for.
+///
+/// A `w` of 0 is a node drawing NOTHING: every layer off, or every level at
+/// zero. Read off the MEAN, which is the whole turn averaged and so is above
+/// zero for a node putting ink anywhere on itself. There is no colour to be had
+/// there and none is invented — see [`glow_layer`], which stops rather than
+/// lighting a black halo.
+fn glow_ink(in: VsOut, angle: f32, mix_out: f32) -> vec4<f32> {
+    let row = i32(in.strip_row);
+    // The column this angle falls between, in the strip's own coordinate:
+    // column i sits at angle (i + 0.5) * TAU / N.
+    let x = angle / TAU * f32(INK_STRIP_N) - 0.5;
+    let base = floor(x);
+    let lit = mix(
+        strip_texel(i32(base), row),
+        strip_texel(i32(base) + 1, row),
+        x - base,
+    );
+    let mean = textureLoad(ink_strip, vec2<i32>(i32(INK_STRIP_N), row), 0);
+    return vec4<f32>(mix(mean.xyz, lit.xyz, mix_out), mean.w);
 }
 
 /// The node's light at this fragment, premultiplied, exactly as every other
 /// layer here returns its ink.
-fn glow_layer(in: VsOut, d: f32, aa: f32, oct: OctRing) -> vec4<f32> {
+fn glow_layer(in: VsOut, d: f32) -> vec4<f32> {
     let level = glow_level(in);
     let reach = max(u.misc10.x, 0.0);
     let strength = max(u.misc10.y, 0.0);
@@ -2612,14 +2801,15 @@ fn glow_layer(in: VsOut, d: f32, aa: f32, oct: OctRing) -> vec4<f32> {
     let skirt = GLOW_BASE * exp(-3.0 * d / span) * window
         * select(1.0, bowl, bowl_edge > 0.0);
 
-    // The seams between two layers' colours, held to one width from the centre
-    // out, on the argument `core_layer` makes at length: the ink is laid in
-    // ANGLE, so an arc shrinks with the radius and every seam would converge to
-    // a cusp at the node's middle. Loosening the average by (d/span)^2 carries
-    // the arc it has at the light's own edge inward unchanged, and only ever
-    // loosens it. The reference length is the glow's own span, the disc's
-    // radius being nothing this layer draws at.
-    let kappa = glow_spread_kappa() * min(1.0, (d * d) / (span * span));
+    // How much of the strip's own DIRECTION this fragment gets, against the
+    // flat tint of its mean: the seam argument `core_layer` makes at length,
+    // and (d/span)^2 is the same ramp the concentration used to be scaled by.
+    // Every seam converges to a cusp at the node's middle otherwise, the ink
+    // being laid in angle, so an arc shrinks with the radius; easing to the
+    // mean instead carries the arc the seam has at the light's own edge inward
+    // unchanged. The reference length is the glow's own span, the disc's radius
+    // being nothing this layer draws at.
+    let mix_out = min(1.0, (d * d) / (span * span));
 
     // The level scales the COVERAGE, once. `core_layer` spends it twice — on
     // its blend and again on the disc's alpha — which is right for a disc
@@ -2627,19 +2817,18 @@ fn glow_layer(in: VsOut, d: f32, aa: f32, oct: OctRing) -> vec4<f32> {
     // halfway through its attack should lay down half as much of its colour,
     // not a quarter of a darker one.
     //
-    // Ahead of the colour because the colour is the expensive half — GLOW_TAPS
-    // readings of the whole node — and a fragment laying down nothing has no
-    // use for one. Exact rather than a threshold, so it is not an early-out and
-    // needs no EARLY_OUT of its own: a coverage of zero returns the same
-    // nothing either way.
+    // Ahead of the colour because a fragment laying down nothing has no use for
+    // one, cheap as the strip has made it. Exact rather than a threshold, so it
+    // is not an early-out and needs no EARLY_OUT of its own: a coverage of zero
+    // returns the same nothing either way.
     let alpha = clamp(skirt * level * strength, 0.0, 1.0);
     if alpha <= 0.0 {
         return vec4<f32>(0.0);
     }
-    // The colour: this node's own ink, blurred round it under that lobe. Not a
-    // hue assembled out of the voices — see `ink_at`, which is where a layer
-    // states what it is putting on the node and how much of the node that is.
-    let ink = glow_ink(in, oct, atan2(in.uv.y, in.uv.x), kappa, aa);
+    // The colour: this node's own strip, read in this direction. Not a hue
+    // assembled out of the voices — see `ink_at`, which is where a layer states
+    // what it is putting on the node and how much of the node that is.
+    let ink = glow_ink(in, atan2(in.uv.y, in.uv.x), mix_out);
     // A node drawing NOTHING gives off nothing, and the level above does not
     // say so: it is the largest envelope on the node, and a view with every
     // layer dialled off leaves a held note a full envelope with no ink under
@@ -2661,16 +2850,16 @@ fn glow_layer(in: VsOut, d: f32, aa: f32, oct: OctRing) -> vec4<f32> {
 /// this layer has no colour for. What the glow needs is narrower on both counts
 /// — a node doing nothing at all emits no light, and neither does anything past
 /// where its own window has shut.
+/// No derivative anywhere in it, unlike every other fragment entry point here,
+/// and that is the strip's doing: the shapes the light is coloured out of are
+/// read in [`fs_ink_strip`] at the strip's own angular rate, so nothing in this
+/// stage asks how big the node is on screen.
 @fragment
 fn fs_glow(in: VsOut) -> @location(0) vec4<f32> {
-    // The derivative first and in uniform control flow, as everywhere here: the
-    // ink this light is coloured out of is read through the node's own
-    // sector shapes, whose edges are screen-constant.
-    let aa = aa_width(fwidth(in.uv.x));
     if EARLY_OUT && glow_level(in) <= 0.0 {
         discard;
     }
-    return glow_layer(in, length(in.uv), aa, oct_ring(in.cents));
+    return glow_layer(in, length(in.uv));
 }
 
 /// Distance to the annulus between `inner` and `outer`, signed: negative inside

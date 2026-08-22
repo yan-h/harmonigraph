@@ -152,6 +152,30 @@ fn baked_blit_shader_validates() {
     }
 }
 
+/// The ink strip is as wide as the texture it is drawn into.
+///
+/// Two constants, one number: [`INK_STRIP_N`] sizes the texture and every
+/// index into it on the Rust side, and lattice.wgsl's own `INK_STRIP_N` is
+/// what the shader walks, samples and wraps at. Nothing checks them against
+/// each other — the strip is a colour attachment, so no binding size is
+/// validated, and both halves are well-formed at any value.
+///
+/// A one-sided bump is silent and disfigures every node. Raise the shader's
+/// alone and the read pass writes columns past the target's edge, which are
+/// dropped, so the blur averages the ink of a partial turn and calls it the
+/// whole; raise the Rust one alone and the columns past the shader's idea of a
+/// turn are never written, and the light takes its colour from a cleared texel
+/// wherever the fragment's angle lands in them.
+#[test]
+fn the_shaders_ink_strip_is_as_wide_as_the_texture_it_is_drawn_into() {
+    let needle = format!("const INK_STRIP_N: u32 = {INK_STRIP_N}u;");
+    assert!(
+        SHADER_SRC.contains(&needle),
+        "lattice.wgsl must declare `{needle}` to match INK_STRIP_N here ({INK_STRIP_N}); the \
+         strip is allocated that wide and the shader would walk a different turn",
+    );
+}
+
 #[test]
 fn octave_packing_matches_the_documented_layout() {
     let mut levels = [0.0f32; harmonigraph_scene::OCTAVE_SLOTS];
@@ -6205,4 +6229,292 @@ fn widening_a_layer_gives_its_colour_more_of_the_light() {
         share(narrow),
         share(wide),
     );
+}
+
+/// The light carries no ripple the ink it is read from cannot hold.
+///
+/// This is the artefact the strip exists to remove, and it has a name: the
+/// colour used to be averaged at twelve FIXED angles per fragment, so anything
+/// the ink held near that rate came through the average intact, and every node
+/// wore a fan of dark spokes converging on its middle. Nothing in the picture
+/// has twelve-fold symmetry — the wheel is cut into at most eleven — so the
+/// ripple could only be the sampling.
+///
+/// Measured as ANGULAR HARMONICS of the light's brightness round a circle,
+/// because that is what a spoke is: a ripple that goes round the node a whole
+/// number of times. The band under test starts above what a blurred ink can
+/// hold — the tightest lobe the Spread bar reaches is GLOW_LOBE_KAPPA, whose
+/// von Mises coefficients are already under a thousandth of the mean by the
+/// eighth harmonic — so anything found there is the machinery and not the node.
+/// At fbc6cd5 the twelfth carried 12% to 17% of the mean at every radius inside
+/// the node; the bound below is a quarter of that.
+///
+/// A node wearing NOTHING BUT ITS AUDIO RING, which is the case the spokes were
+/// worst in, and the ink is the reason: the ring is cut into a wedge per
+/// octave, each reading the analyzer at its own pitch, which is the sharpest
+/// angular structure a node draws. The Spread is at the bottom of its bar,
+/// where the blur is tightest and a sampled one has the least room to hide.
+#[test]
+fn a_nodes_light_has_no_ripple_the_ink_does_not() {
+    const SIZE: [u32; 2] = [512, 512];
+    // Every radius here is inside the node's own middle, where the light runs
+    // in to the centre with nothing standing it off — which is where the fan
+    // converged, and where the mix toward the strip's mean does its work.
+    const RADII: [f32; 5] = [14.0, 22.0, 30.0, 38.0, 46.0];
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    let at = |reach: f32| -> Scene {
+        // [`ringing_node`]'s fixture with the note taken out of it: a live
+        // analyzer, a partial sounding into one wedge, and no key down, so the
+        // only ink on the node is the ring's and the only light is the glow's.
+        let mut scene =
+            ringing_node(None, Some(harmonigraph_scene::MIDDLE_C_SLOT as f32 * 12.0), PROBE_RANGE);
+        let node = &mut scene.nodes[0];
+        node.activation = 0.0;
+        node.melody_level = 0.0;
+        node.bass_level = 0.0;
+        node.melody_slots = 0;
+        node.bass_slots = 0;
+        node.audio_ring = 1.0;
+        scene.glow_reach = reach;
+        scene.glow_strength = 1.5;
+        scene.glow_gap = 0.08;
+        scene.glow_gap_soft = 0.6;
+        scene.glow_centre = 0.5;
+        scene.glow_spread = 0.0;
+        scene.core_solidity = 0.0;
+        // Big enough that a circle inside the node is hundreds of pixels round,
+        // which is what resolving a ripple at these rates takes.
+        scene.node_radius = 1.6;
+        scene
+    };
+    let off = shooter.shot(&at(0.0));
+    let on = shooter.shot(&at(0.8));
+
+    for radius in RADII {
+        let lit = ring_profile(&on, SIZE, radius);
+        let dark = ring_profile(&off, SIZE, radius);
+        let mean = |p: &[f64]| p.iter().sum::<f64>() / p.len() as f64;
+        // Non-vacuous first: there has to BE light on this circle, or a dark
+        // frame passes every bound below.
+        let (bright, unlit) = (mean(&lit), mean(&dark));
+        assert!(
+            bright > unlit + 4.0,
+            "the fixture puts no light at {radius} px: {bright:.1} against {unlit:.1} unlit",
+        );
+        // The ripple, band by band. Against the mean because that is what a
+        // spoke reads as — a dip against the light around it.
+        for k in 8..=32 {
+            let ripple = harmonic(&lit, k) / bright;
+            assert!(
+                ripple < 0.03,
+                "the light ripples {:.1}% of its own brightness {k} times round the node at \
+                 {radius} px — nothing the node draws is cut that fine, so it is the sampling",
+                ripple * 100.0,
+            );
+        }
+        // ...and the same thing said the plain way: neighbouring samples round
+        // the circle are within a step of each other. Cruder, since 8-bit
+        // rounding is most of what is left in it, and here because a spoke is
+        // something you SEE rather than a coefficient — at fbc6cd5 this reads
+        // 2 to 3 at every radius above.
+        let step = lit.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f64, f64::max);
+        assert!(
+            step < 0.75,
+            "the light steps {step:.2}/255 between neighbouring samples round the node at \
+             {radius} px",
+        );
+    }
+}
+
+/// One row of the ink strip per node, however many nodes a frame has — asked
+/// across a frame that ADDS one, on the pane that drew the frame before it.
+///
+/// A row IS an instance index (`VsOut::strip_row`), so a strip left at the
+/// previous frame's height is a node reading another node's colour, or a row
+/// past the end of the texture. Both are silent: `textureLoad` out of bounds
+/// hands back zeros, which reads as a node drawing nothing, and a node that has
+/// simply stopped glowing looks like a setting rather than a bug.
+///
+/// The same pane through every frame, which is the whole point — a fresh pane
+/// allocates a fresh strip and could not be wrong about this. What is under
+/// test is the resize, so each frame has to find the last one's.
+#[test]
+fn the_ink_strip_has_a_row_for_every_node() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some((device, queue)) = headless_device() else {
+        return;
+    };
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let points = egui::vec2(SIZE[0] as f32, SIZE[1] as f32);
+    let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
+    let mut resources = CallbackResources::default();
+
+    // The fixture's node, copied along a row far enough apart that no node's
+    // own layers reach another's.
+    let scene_of = |n: usize| -> Scene {
+        let mut scene = single_marked_node(0, 0);
+        let node = scene.nodes[0];
+        scene.nodes = (0..n)
+            .map(|i| {
+                let mut nd = node;
+                nd.world_pos = glam::Vec3::new(i as f32 * 1.8 - 1.8, 0.0, 0.0);
+                nd.lattice_pos = harmonigraph_core::LatticePos::new(i as i32, 0, 0);
+                nd
+            })
+            .collect();
+        scene.glow_reach = 0.8;
+        scene.glow_strength = 1.5;
+        scene
+    };
+    let frame = |resources: &mut CallbackResources, n: usize| -> (u32, u32) {
+        let cb = LatticeCallback::from_scene(
+            &scene_of(n),
+            LatticeLabels::default(),
+            points,
+            format,
+            9,
+            None,
+        );
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, resources);
+        queue.submit(bufs.into_iter().chain([encoder.finish()]));
+        let pane = resources
+            .get::<LatticeResources>()
+            .expect("prepare built the resources")
+            .panes
+            .get(&9)
+            .expect("...and this pane's buffers");
+        let strip = &pane
+            .offscreen
+            .as_ref()
+            .expect("the pane drew something")
+            .glow
+            .as_ref()
+            .expect("the view asks for a glow")
+            .strip;
+        (pane.instance_count, strip.rows)
+    };
+    // Up and back down: a strip that only ever grew would pass a rising
+    // sequence while leaving rows no node writes into.
+    for n in [2usize, 3, 5, 4] {
+        let (instances, rows) = frame(&mut resources, n);
+        // The instance count rather than `n`: a node that can paint nothing is
+        // dropped before it reaches the buffer, and the strip follows what is
+        // IN the buffer.
+        assert_eq!(instances, n as u32, "the fixture's {n} nodes must all be drawn");
+        assert_eq!(
+            rows, instances,
+            "a frame of {instances} nodes drew into a strip {rows} rows tall",
+        );
+    }
+}
+
+/// The light of a node ADDED to a pane mid-session is that node's own.
+///
+/// The behavioural half of [`the_ink_strip_has_a_row_for_every_node`], and the
+/// half that says the rows are the right way round: a strip that grew but was
+/// read at the wrong offset would still be one row per node.
+///
+/// Two nodes lit in colours no mixture of the other's could be mistaken for —
+/// [`two_colour_node`]'s two flat ramps, the band's red and the analyzer's
+/// green. The one already on screen wears the band alone and the one arriving
+/// wears the ring alone, so the added node's light is green exactly where the
+/// other's is red.
+#[test]
+fn a_node_added_to_a_pane_lights_in_its_own_colour() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    let scene_of = |arrived: bool| -> Scene {
+        let mut scene = two_colour_node(0.16, 0.16);
+        let node = scene.nodes[0];
+        let band = {
+            let mut node = node;
+            node.audio_ring = 0.0;
+            node.world_pos = glam::Vec3::new(-1.8, 0.0, 0.0);
+            node.lattice_pos = harmonigraph_core::LatticePos::new(-1, 0, 0);
+            node
+        };
+        let ring = {
+            let mut node = node;
+            node.activation = 0.0;
+            node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
+            node.audio_ring = 1.0;
+            node.world_pos = glam::Vec3::new(1.8, 0.0, 0.0);
+            node.lattice_pos = harmonigraph_core::LatticePos::new(1, 0, 0);
+            node
+        };
+        scene.nodes = if arrived { vec![band, ring] } else { vec![band] };
+        scene
+    };
+    let one = shooter.shot(&scene_of(false));
+    let two = shooter.shot(&scene_of(true));
+
+    // What the second frame added, per channel, over the right-hand half of the
+    // picture — where the added node is, and where the first frame has nothing.
+    let mut added = [0i64; 3];
+    let row = SIZE[0] as usize;
+    for i in 0..(SIZE[0] * SIZE[1]) as usize {
+        if i % row < row / 2 {
+            continue;
+        }
+        for (c, sum) in added.iter_mut().enumerate() {
+            *sum += (i64::from(two[i * 4 + c]) - i64::from(one[i * 4 + c])).max(0);
+        }
+    }
+    assert!(added[1] > 0, "the added node lit nothing at all: {added:?}");
+    assert!(
+        added[1] > added[0] * 4,
+        "a node wearing only its audio ring lit {added:?} — that is the BAND's red, which is \
+         the other node's ink and so the other node's row of the strip",
+    );
+}
+
+/// One profile of a shot's brightness round a circle of `radius` about the
+/// frame's centre, sampled bilinearly so the reading follows the circle rather
+/// than the pixel grid.
+///
+/// The step between samples is well under a pixel, which is what the claims
+/// above need: a ripple is measured against the light beside it, and a profile
+/// that skipped pixels would read the grid's own steps as one.
+fn ring_profile(shot: &[u8], size: [u32; 2], radius: f32) -> Vec<f64> {
+    let at = |x: f32, y: f32| -> f64 {
+        let (x0, y0) = (x.floor(), y.floor());
+        let px = |ix: f32, iy: f32| -> f64 {
+            let ix = (ix as i32).clamp(0, size[0] as i32 - 1) as usize;
+            let iy = (iy as i32).clamp(0, size[1] as i32 - 1) as usize;
+            let i = (iy * size[0] as usize + ix) * 4;
+            brightness(&shot[i..i + 3]) as f64 / 3.0
+        };
+        let (fx, fy) = (f64::from(x - x0), f64::from(y - y0));
+        let top = px(x0, y0) + (px(x0 + 1.0, y0) - px(x0, y0)) * fx;
+        let bot = px(x0, y0 + 1.0) + (px(x0 + 1.0, y0 + 1.0) - px(x0, y0 + 1.0)) * fx;
+        top + (bot - top) * fy
+    };
+    let (cx, cy) = (size[0] as f32 / 2.0, size[1] as f32 / 2.0);
+    // Four samples per pixel of circumference, and never so few that a whole
+    // turn is under a reading.
+    let n = ((radius * std::f32::consts::TAU * 4.0) as usize).max(64);
+    (0..n)
+        .map(|i| {
+            let t = i as f32 / n as f32 * std::f32::consts::TAU;
+            at(cx + radius * t.cos(), cy + radius * t.sin())
+        })
+        .collect()
+}
+
+/// The amplitude of the `k`th angular harmonic of a profile — how much of it is
+/// a ripple that goes round the turn exactly `k` times.
+fn harmonic(profile: &[f64], k: usize) -> f64 {
+    let n = profile.len() as f64;
+    let (mut re, mut im) = (0.0, 0.0);
+    for (i, v) in profile.iter().enumerate() {
+        let a = std::f64::consts::TAU * k as f64 * i as f64 / n;
+        re += v * a.cos();
+        im += v * a.sin();
+    }
+    2.0 * (re * re + im * im).sqrt() / n
 }
