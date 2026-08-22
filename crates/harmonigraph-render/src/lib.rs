@@ -276,7 +276,8 @@ struct Uniforms {
     misc4: [f32; 4],
     /// x: which shape a resting marker is (`Scene::dot_shape`) — 0 the disc,
     /// then one index per shape, see `DotShape::shader_index`;
-    /// y unused (a retired slot rather than a repack, like `misc4.y`);
+    /// y: where a plus's arms start to taper, as a share of one arm
+    /// (`Scene::plus_taper_start`) — 1 is a square end. Inert for the disc;
     /// z: the node's ANGULAR padding in quad UV units — the gap between two
     /// neighbouring sectors, wherever sectors are drawn. Its RADIAL counterpart
     /// never arrives: every stand-off that one buys is already spent in the
@@ -846,14 +847,14 @@ impl LatticeCallback {
         // The grid belongs to the home sheet — that is the only sheet that
         // draws one — so its place in the order is between the sheets behind
         // it and the home sheet itself. Under it, a node on a sheet BEHIND
-        // the home one punches its clearing through the home grid, putting
+        // the home one punches its clearing through the home markers, putting
         // a hole in the layer that is supposed to be hiding it.
         //
-        // The home sheet then draws after the grid, so a home node's
-        // clearing cuts the grid lines as well as the sheets behind — the
-        // node sits in a clean gap in the lattice rather than on top of it.
-        // (Drawing the home clearings in a pass of their own ahead of the
-        // grid would spare the lines; the lines are wanted cut.)
+        // The home sheet then draws after the markers, so a home node's
+        // clearing cuts them as well as the sheets behind — the node sits in a
+        // clean gap in the lattice rather than on top of it. (Drawing the home
+        // clearings in a pass of their own ahead of the markers would spare
+        // them; they are wanted cut.)
         //
         // World z is measured from the home sheet, so its whole run sits at
         // sheet depth 0 — behind it is positive, in front negative. Sorting
@@ -1016,7 +1017,7 @@ impl LatticeCallback {
                 misc4: [0.0, scene.mark_inner, 0.0, 0.0],
                 misc5: [
                     scene.dot_shape.shader_index() as f32,
-                    0.0,
+                    scene.plus_taper_start,
                     scene.octave_gap,
                     scene.mark_thickness,
                 ],
@@ -3407,13 +3408,9 @@ impl CallbackTrait for LatticeCallback {
             // and what the light lands on is the ground, the grid and the
             // cleared hole — which is what a node's own light should land on.
             //
-            // What it does cover is the chord BEAMS, which no moat stands off.
-            // They share one buffer with the grid lines, and erasing along a
-            // grid line would cut a dark hairline through the light across the
-            // whole lattice — worse than the wash it prevents. The node LABELS
-            // are stood off, in the glow's own pass: a name at the middle of a
-            // node is where the light is fullest, so there is nothing left of
-            // it otherwise.
+            // The node LABELS are stood off, in the glow's own pass: a name at
+            // the middle of a node is where the light is fullest, so there is
+            // nothing left of it otherwise.
             if let Some(glow) = offscreen.glow.as_ref() {
                 pass.set_pipeline(&resources.glow_over_pipeline);
                 pass.set_bind_group(0, &glow.bind_group, &[]);

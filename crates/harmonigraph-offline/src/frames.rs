@@ -437,21 +437,25 @@ mod tests {
         // the size bar that the band is most of the marker and the shape has
         // the least room to be the shape it claims.
         use harmonigraph_scene::DotShape;
-        let shots: Vec<(DotShape, f32, bool, NoteNames)> = vec![
-            (DotShape::Dot, fresh.dot_size, false, NoteNames::Played),
-            (DotShape::Dot, 0.05, false, NoteNames::Played),
-            (DotShape::Dot, 0.5, false, NoteNames::Played),
-            (DotShape::Dot, fresh.dot_size, true, NoteNames::Past),
-            (DotShape::Dot, fresh.dot_size, false, NoteNames::All),
-            (DotShape::Plus, fresh.dot_size, false, NoteNames::Played),
-            (DotShape::Plus, 0.05, false, NoteNames::Played),
-            (DotShape::Plus, 0.1, false, NoteNames::Played),
-            (DotShape::Plus, 0.35, false, NoteNames::Played),
-            (DotShape::Plus, 0.5, false, NoteNames::Played),
-            (DotShape::Plus, fresh.dot_size, true, NoteNames::Played),
-            (DotShape::Plus, fresh.dot_size, true, NoteNames::Past),
+        let shots: Vec<(DotShape, f32, f32, bool, NoteNames)> = vec![
+            (DotShape::Dot, fresh.dot_size, 0.0, false, NoteNames::Played),
+            (DotShape::Dot, 0.05, 0.0, false, NoteNames::Played),
+            (DotShape::Dot, 0.5, 0.0, false, NoteNames::Played),
+            (DotShape::Dot, fresh.dot_size, 0.0, true, NoteNames::Past),
+            (DotShape::Dot, fresh.dot_size, 0.0, false, NoteNames::All),
+            // The taper, across its whole span at one size: a square end, the
+            // fresh pair, half the arm, and an arm that fades the whole way.
+            (DotShape::Plus, fresh.dot_size, 0.0, false, NoteNames::Played),
+            (DotShape::Plus, fresh.dot_size, fresh.plus_taper, false, NoteNames::Played),
+            (DotShape::Plus, fresh.dot_size, 0.5 * fresh.dot_size, false, NoteNames::Played),
+            (DotShape::Plus, fresh.dot_size, fresh.dot_size, false, NoteNames::Played),
+            // And the ends of the size bar, at the fresh taper, where a
+            // tapering arm has the fewest pixels to do it in.
+            (DotShape::Plus, 0.05, fresh.plus_taper, false, NoteNames::Played),
+            (DotShape::Plus, 0.5, fresh.plus_taper, false, NoteNames::Played),
+            (DotShape::Plus, fresh.dot_size, fresh.plus_taper, true, NoteNames::Past),
         ];
-        for (shape, size, chord, names) in shots {
+        for (shape, size, taper, chord, names) in shots {
             let mut state = SharedState::new(FORMAT);
             state.view.show_labels = true;
             state.view.note_names = names;
@@ -468,6 +472,7 @@ mod tests {
             state.camera.zoom_by(2.5);
             state.view.dot_size = size;
             state.view.dot_shape = shape;
+            state.view.plus_taper = taper;
             let output = context.run_ui(
                 egui::RawInput {
                     screen_rect: Some(screen),
@@ -484,8 +489,9 @@ mod tests {
             let primitives = context.tessellate(output.shapes, PPP);
             let bytes = renderer.render(&primitives, &output.textures_delta, PPP, background);
             let path = dir.join(format!(
-                "dots-{shape:?}-size{:.0}{}-{names:?}.png",
+                "dots-{shape:?}-size{:.0}-taper{:.0}{}-{names:?}.png",
                 size * 100.0,
+                taper * 100.0,
                 if chord { "-chord" } else { "" },
             ));
             image::save_buffer(&path, &bytes, SIZE[0], SIZE[1], image::ExtendedColorType::Rgba8)

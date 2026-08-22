@@ -454,8 +454,8 @@ pub enum DotShape {
     #[default]
     Dot,
     /// A cross of two bars, arms along the screen axes: the position as an
-    /// intersection. It says the same thing a gridline pair used to say at
-    /// the moment they met, without the ink that ran between the meetings.
+    /// intersection. It says what a pair of gridlines says where they cross,
+    /// and nothing between one crossing and the next.
     ///
     /// Louder than a dot at the same size — a cross has corners, and corners
     /// are what the eye finds — so it reads as a lattice being MEASURED where

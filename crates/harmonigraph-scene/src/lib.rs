@@ -757,6 +757,17 @@ pub struct Scene {
     /// because it is a world length, while the shape is one answer the whole
     /// field shares and the shader reads out of a uniform.
     pub dot_shape: DotShape,
+    /// Where a plus's arms stop being solid and start fading out, as a SHARE
+    /// of one arm's length: 1 is a square end, 0 an arm that fades the whole
+    /// way from the crossing to its tip (see [`ViewConfig::plus_taper`], which
+    /// is the same edge measured from the other side and in quad UV).
+    ///
+    /// A share here, where the view keeps a width, because the shader works in
+    /// the arm's own units — uv 1 IS the tip — so it needs the point on that
+    /// axis rather than a length it would have to divide out per fragment.
+    /// Already clamped, and held short of 1 so the fade never collapses to a
+    /// zero-width `smoothstep`. Read only under [`DotShape::Plus`].
+    pub plus_taper_start: f32,
     /// How wide the sevens knockout's fade is, in the uv of a full-size
     /// node (see [`ViewConfig::sevens_gutter_soft`]). View-wide, as the reach
     /// beside it is — what varies node to node is the STRENGTH, which the

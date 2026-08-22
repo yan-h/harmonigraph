@@ -5,9 +5,9 @@
 use crate::spectral::SpectralReading;
 use crate::style::{DotShape, Gradient, NoteNames, Pulse, SevensLabel};
 use crate::{
-    Camera, GAP_MAX, GLOW_BALLISTICS_MAX, GLOW_GAP_SOFT_MAX, GLOW_REACH_MAX,
-    GLOW_STRENGTH_MAX, MARK_THICKNESS_MAX, MAX_DRAWN_NODES, NODE_RADIUS_FACTOR, RING_INNER_MAX,
-    RING_WIDTH_MAX,
+    Camera, DOT_SIZE_MAX, GAP_MAX, GLOW_BALLISTICS_MAX, GLOW_GAP_SOFT_MAX,
+    GLOW_REACH_MAX, GLOW_STRENGTH_MAX, MARK_THICKNESS_MAX, MAX_DRAWN_NODES,
+    NODE_RADIUS_FACTOR, RING_INNER_MAX, RING_WIDTH_MAX,
 };
 use harmonigraph_core::{coords, Comma, Envelope, LatticePos, Tempered};
 
@@ -958,6 +958,26 @@ pub struct ViewConfig {
     /// [`lattice_ground`](Self::lattice_ground), cut with the same soft band,
     /// and drawn at exactly the same positions.
     pub dot_shape: DotShape,
+    /// How far the tapered END of a plus's arm runs, in the same quad UV
+    /// [`dot_size`](Self::dot_size) is in: each arm is solid out to
+    /// `dot_size - plus_taper` and fades to nothing by its tip. 0 is a square
+    /// end; a taper equal to the arm fades the whole of it, from full at the
+    /// crossing to nothing at the tip.
+    ///
+    /// A WIDTH beside the reach rather than a share of it, and paired with
+    /// `dot_size` on one two-handle bar, for the reason every soft edge here
+    /// is a pair: a taper tied to the arm as a fraction would make a longer
+    /// arm always a softer one, and there would be no way to ask for a long
+    /// crisp arm or a short misty one.
+    ///
+    /// The four ends taper and the arms' SIDES do not. What is being softened
+    /// is where the marker STOPS; a cross faded along its sides as well is a
+    /// blurred plus rather than one reaching out of its crossing.
+    ///
+    /// Read only under [`DotShape::Plus`]. A disc has no end to taper, and
+    /// what it would mean there is a soft rim, which is the feather this
+    /// deliberately does not bring back.
+    pub plus_taper: f32,
     /// Meantone mode: lock the major-third tuning to four perfect fifths
     /// (temper out the syntonic comma, 81/80). While on, the third-tuning
     /// value is derived from the fifth (in `begin_frame`) and note names are
@@ -2113,6 +2133,15 @@ impl ViewConfig {
         self.shimmer_width = finite_or(self.shimmer_width, fresh.shimmer_width);
         self.shimmer_intensity = finite_or(self.shimmer_intensity, fresh.shimmer_intensity);
         self.shimmer_softness = finite_or(self.shimmer_softness, fresh.shimmer_softness);
+
+        // The resting marker's pair, held the way every reach-and-fade pair
+        // here is: the fade clamped to its own reach. `derive_dots` clamps the
+        // reach again for the PICTURE, which is a separate job — this is what
+        // keeps the two-handle bar reading out the numbers the blob holds,
+        // since `edge_bar` puts `reach - taper` on the axis and a taper wider
+        // than its arm would show a low end the value does not say.
+        self.dot_size = finite_or(self.dot_size, fresh.dot_size).clamp(0.0, DOT_SIZE_MAX);
+        self.plus_taper = finite_or(self.plus_taper, fresh.plus_taper).clamp(0.0, self.dot_size);
     }
 }
 
@@ -2350,6 +2379,10 @@ impl Default for ViewConfig {
             // A disc: the resting field is a ground for the music to arrive
             // on, and a cross is the more insistent of the two shapes.
             dot_shape: DotShape::Dot,
+            // A little under half the arm, so a fresh plus reads as reaching
+            // out of its crossing rather than as a drawn glyph: the ends
+            // arrive at nothing rather than stopping at something.
+            plus_taper: 0.09,
             meantone: false,
             meantone_auto: true,
             marvel: false,

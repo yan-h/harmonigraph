@@ -450,6 +450,9 @@ fn parity_scene() -> Scene {
         // The disc, for the same reason: the departures are what the shape
         // row's own fixtures are for.
         dot_shape: harmonigraph_scene::DotShape::default(),
+        // Square-ended arms, so the fixture's markers are the shape the
+        // taper is a departure from. Inert here anyway: the shape is a disc.
+        plus_taper_start: 1.0,
         // A blue->red sweep across the whole table, so a glyph's color is a
         // reading of which entry it landed on. Spanned off PITCH_LUT_N rather
         // than a literal: `from_fn` sizes itself from the field, so a literal
@@ -2275,7 +2278,7 @@ fn far_toward(weights: &[f64], size: [u32; 2], toward: f64, cone: f64) -> f64 {
 /// do: a marked node cleared a gap wider than itself all the way round, so a
 /// hole that says "this node is in front of that one" said it about a ring of
 /// empty lattice too. That is visible exactly where the clearing is for — over
-/// the grid lines and the sheets behind — and invisible in the node's own
+/// the resting markers and the sheets behind — and invisible in the node's own
 /// picture, which is why every reading here is off the difference the gutter
 /// makes rather than off the node.
 #[test]
@@ -5890,9 +5893,9 @@ fn the_glow_spread_says_how_separate_a_node_keeps_its_colours() {
 }
 
 /// What the glow is a layer OF is a node, and a lattice drawing none has no
-/// light — grid lines and chord beams included, which are drawn in the same
-/// pass and would glow like nodes if the light were a post-process over the
-/// picture rather than a draw off the node instance buffer.
+/// light — the resting markers included, which are drawn in the same pass and
+/// would glow like nodes if the light were a post-process over the picture
+/// rather than a draw off the node instance buffer.
 ///
 /// Byte-identical rather than nearly so: both of the glow's draws are over the
 /// instance buffer, which is empty, so the target is cleared to transparent and

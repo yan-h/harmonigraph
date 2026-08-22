@@ -564,6 +564,7 @@ pub fn derive_scene(
         octave_layout,
         dots,
         dot_shape: view.dot_shape,
+        plus_taper_start: derive_plus_taper_start(view),
         mark_thickness: rings.mark_thickness,
         // A mark sheet reaches the extension AND the octave slice it extends,
         // so with the mark layer off — no end marked, or no depth to
@@ -642,8 +643,8 @@ fn wrapped_cents(from: harmonigraph_core::PitchClass, to: harmonigraph_core::Pit
 /// back to the notes.
 ///
 /// [`DotShape::Plus`](crate::DotShape::Plus) is that argument at its sharpest:
-/// a cross is exactly what a pair of gridlines drew at the moment they met, so
-/// it keeps every junction the mesh had and still spends no ink getting from
+/// a cross is exactly what a pair of gridlines draws where they meet, so it
+/// keeps every junction a mesh would have and still spends no ink getting from
 /// one junction to the next.
 ///
 /// Off-sheet positions stay unmarked, as they were under the lines. That is
@@ -658,6 +659,35 @@ fn wrapped_cents(from: harmonigraph_core::PitchClass, to: harmonigraph_core::Pit
 /// node on screen and the field disappears whole — which is the mode working
 /// as it reads: names ARE the lattice there, and the dots were only ever
 /// standing in for them.
+/// Closest a taper's start may come to the arm's tip.
+///
+/// The shader reads this as the low end of a `smoothstep`, and a span of zero
+/// width there has no answer — so a square end is a taper that finishes within
+/// a thousandth of the tip rather than exactly at it. At the sizes a marker is
+/// ever drawn at that thousandth is a small fraction of one pixel, and the
+/// screen-constant band the arm's end is cut with is wider than it by two
+/// orders of magnitude, so what it costs the picture is nothing at all.
+const TAPER_START_MAX: f32 = 0.999;
+
+/// Where a plus's arms stop being solid, as a share of one arm's length (see
+/// [`Scene::plus_taper_start`]).
+///
+/// The view keeps the taper as a WIDTH beside the reach, because that is the
+/// pair a two-handle bar sets and the pair that lets a long arm be crisp; the
+/// shader wants the POINT on an axis whose 1 is the tip. This is the one place
+/// that conversion happens.
+pub(crate) fn derive_plus_taper_start(view: &ViewConfig) -> f32 {
+    let reach = view.dot_size.clamp(0.0, DOT_SIZE_MAX);
+    // A reach of 0 draws no markers at all, so this is only ever asked of an
+    // arm that has length — answer the square end rather than dividing by
+    // nothing, and leave the emptiness to `derive_dots`.
+    if reach <= 0.0 {
+        return TAPER_START_MAX;
+    }
+    let taper = view.plus_taper.clamp(0.0, reach);
+    ((reach - taper) / reach).clamp(0.0, TAPER_START_MAX)
+}
+
 pub(crate) fn derive_dots(
     view: &ViewConfig,
     nodes: &[NodeInstance],

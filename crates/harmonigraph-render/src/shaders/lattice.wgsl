@@ -2291,7 +2291,31 @@ fn dot_coverage(uv: vec2<f32>, aa: f32) -> f32 {
     // makes the arms' inner corners as clean as their ends — an approximation
     // rounds them off at exactly the four places the shape is doing its work.
     let sd = length(max(corner, vec2<f32>(0.0))) + min(max(corner.x, corner.y), 0.0);
-    return aa_inside(0.0, sd, aa);
+    // The four ends taper: an arm is solid out to `misc5.y` of its length and
+    // fades to nothing by its tip, the way a line drawn into a node arrives at
+    // nothing rather than stopping at something. `q.x` is the distance along
+    // whichever arm this fragment is on — the same fold that spares the union
+    // spares this a branch, since folding puts every arm on one axis.
+    //
+    // ALPHA rather than width. A cross narrowed to a point is four spikes,
+    // which reads as a drawn glyph; one that fades stops being there, which is
+    // what a marker running out has to say.
+    //
+    // Inside the crossing the two arms' claims meet, and `q.x` is the
+    // Chebyshev distance there — so a fully tapered plus is brightest at the
+    // centre and eases off in every direction at once, with no seam where the
+    // arms overlap.
+    //
+    // The sides do NOT taper. Only the ends are being softened — where the
+    // marker stops — and fading the sides as well would blur the plus rather
+    // than let it reach out of its crossing.
+    //
+    // `derive_plus_taper_start` already holds the start short of the tip; the
+    // guard is here too because a zero-width `smoothstep` has no answer and
+    // this is the one line that would have to give it.
+    let start = min(u.misc5.y, 1.0 - 1e-3);
+    let taper = 1.0 - smoothstep(start, 1.0, q.x);
+    return aa_inside(0.0, sd, aa) * taper;
 }
 
 @vertex

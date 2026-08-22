@@ -15,8 +15,8 @@
 //! rows and columns off is the regularity of the field itself, so what is set
 //! here is one marker's shape and size and there is no third setting for what
 //! runs to its neighbours. The PLUS is where that shows most: a cross is what
-//! two gridlines used to say at the moment they crossed, so choosing it keeps
-//! the junction and still draws nothing between one junction and the next.
+//! two gridlines say where they cross, so choosing it keeps the junction and
+//! still draws nothing between one junction and the next.
 //!
 //! A marker has no SOFTNESS to dial. Both shapes are cut with a ring's edge —
 //! the same screen-constant band the audio ring and the octave band carry — so
@@ -40,10 +40,10 @@
 //! colour control in the panel is for the music — both of those tables are on
 //! the Colors page ([`super::color`]).
 
-use super::section;
+use super::{edge_bar, section};
 use crate::widgets::{choice_row, ValueBar};
 use crate::SharedState;
-use harmonigraph_scene::DotShape;
+use harmonigraph_scene::{DotShape, ViewConfig, DOT_SIZE_MAX};
 
 /// The resting picture, last on the page: the lattice's own structure, under
 /// everything drawn on top of it.
@@ -92,9 +92,9 @@ pub(super) fn dots_pane(ui: &mut egui::Ui, state: &mut SharedState) {
                 DotShape::Plus,
                 "Plus",
                 "A cross of two bars at each position: what a pair of \
-                 gridlines said where they met, without the ink that ran \
-                 between the meetings. Its arms reach exactly as far as a \
-                 dot's edge would, so the bar below sizes either shape",
+                 gridlines says where they cross, without the ink that runs \
+                 between one crossing and the next. Its arms reach as far \
+                 as a dot's edge, so the bar below sizes either shape",
             ),
         ],
     );
@@ -102,14 +102,50 @@ pub(super) fn dots_pane(ui: &mut egui::Ui, state: &mut SharedState) {
     // Inner on the Layers bar are two readings on one axis: a dot that fits
     // inside the middle a node's rings stand around can be read off the two
     // numbers rather than by eye.
-    ValueBar::new(&mut state.view.dot_size, 0.0..=harmonigraph_scene::DOT_SIZE_MAX, "Dot size")
-        .show(ui)
-        .on_hover_text(
-            "How big the marker at each node position is, in the same units \
-             a node's ring radii are dialled in -- a dot's radius, or how \
-             far a plus's arms reach. 0 takes the markers away, and with \
-             them everything a resting lattice draws but the node rings. A \
-             position with a note name over it draws none, so showing every \
-             name leaves no field for this to size",
-        );
+    // One control per shape rather than one shared bar and an inert handle.
+    // A disc has a size and nothing else to say; a plus has an end, and where
+    // that end starts to go is a second number on the same axis. Absent rather
+    // than grayed under the other shape, as the Clear button is under the Show
+    // modes that read no history: a handle that could not move is a handle
+    // asking to be dragged.
+    //
+    // Both write `dot_size` as the reach, so switching shape never resizes the
+    // resting picture -- what the row changes is character, and only character
+    // (`the_shape_reaches_the_scene_and_moves_nothing_else`).
+    match state.view.dot_shape {
+        DotShape::Dot => {
+            ValueBar::new(&mut state.view.dot_size, 0.0..=DOT_SIZE_MAX, "Dot size")
+                .show(ui)
+                .on_hover_text(
+                    "How big the dot at each node position is, in the same \
+                     units a node's ring radii are dialled in. 0 takes the \
+                     dots away, and with them everything a resting lattice \
+                     draws but the node rings. A position with a note name \
+                     over it draws none, so showing every name leaves no \
+                     field for this to size",
+                );
+        }
+        DotShape::Plus => {
+            edge_bar(
+                ui,
+                (&mut state.view.dot_size, &mut state.view.plus_taper),
+                DOT_SIZE_MAX,
+                "Plus arm",
+                {
+                    let fresh = ViewConfig::default();
+                    (fresh.dot_size, fresh.plus_taper)
+                },
+                |v| format!("{v:.2}"),
+            )
+            .on_hover_text(
+                "How far a plus's arms reach and how much of that end fades \
+                 out, in the same units a node's ring radii are dialled in. \
+                 Solid to the inner handle, gone by the outer -- the way a \
+                 line drawn into a node arrives at nothing rather than \
+                 stopping. Close the pair for square ends; open it fully and \
+                 an arm fades the whole way from the crossing. 0 takes the \
+                 markers away",
+            );
+        }
+    }
 }

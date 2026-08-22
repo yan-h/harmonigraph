@@ -202,7 +202,7 @@ fn ground_of(view: &ViewConfig) -> (Vec4, Vec<Vec4>, Vec4) {
 ///
 /// Through the DERIVE and not through the accessor alone, because the accessor
 /// exists precisely because the drawing code is reached by more routes than the
-/// persist door: the scene's ground, every grid line and an idle node's
+/// persist door: the scene's ground, every resting marker and an idle node's
 /// fallback are all resolved from it, and so is the audio ring's table one
 /// crate over. A repair missing from any of them is the same bug.
 #[test]
@@ -216,11 +216,11 @@ fn a_non_finite_ground_still_draws_the_lattice_a_grey() {
             "a ground of {broken} resolves to an L* no colour can be solved for",
         );
         let want = crate::grey_of_lightness(fresh);
-        let (ground, lines, idle) = ground_of(&view);
+        let (ground, dots, idle) = ground_of(&view);
         assert!(drawable(ground), "a ground of {broken} put {ground:?} in the scene");
         assert_eq!(ground, want, "a ground of {broken} is not repaired to the fresh grey");
-        for line in lines {
-            assert_eq!(line, ground, "a ground of {broken} drew a grid line {line:?}");
+        for dot in dots {
+            assert_eq!(dot, ground, "a ground of {broken} drew a marker {dot:?}");
         }
         assert_eq!(idle, ground, "a ground of {broken} left an idle node at {idle:?}");
         // And the ring's table, the accessor's other reader: the two rings sit
@@ -261,15 +261,15 @@ fn a_ground_past_either_end_of_the_bar_is_held_to_the_l_star_axis() {
             want,
             "a ground of {asked} resolves to an L* off the axis",
         );
-        let (ground, lines, idle) = ground_of(&view);
+        let (ground, dots, idle) = ground_of(&view);
         assert!(drawable(ground), "a ground of {asked} put {ground:?} in the scene");
         assert_eq!(
             ground,
             crate::grey_of_lightness(want),
             "a ground of {asked} draws a grey the axis does not name",
         );
-        for line in lines {
-            assert_eq!(line, ground, "a ground of {asked} drew a grid line {line:?}");
+        for dot in dots {
+            assert_eq!(dot, ground, "a ground of {asked} drew a marker {dot:?}");
         }
         assert_eq!(idle, ground, "a ground of {asked} left an idle node at {idle:?}");
     }

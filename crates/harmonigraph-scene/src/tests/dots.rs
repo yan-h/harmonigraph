@@ -177,6 +177,59 @@ fn the_shape_reaches_the_scene_and_moves_nothing_else() {
     }
 }
 
+/// The view keeps the taper as a WIDTH beside the reach, because that is the
+/// pair the two-handle bar sets; the shader needs the POINT on an axis whose 1
+/// is the arm's tip. This pins that conversion, including the two ends where
+/// dividing is the obvious way to get it wrong.
+#[test]
+fn the_taper_reaches_the_scene_as_a_share_of_the_arm() {
+    // (size, taper) -> where the fade starts, as a share of one arm.
+    for (size, taper, want) in [
+        // Half the arm tapered, from either side of the bar.
+        (0.4f32, 0.2f32, 0.5f32),
+        (0.2, 0.1, 0.5),
+        // A square end. Held a thousandth short of the tip rather than AT it,
+        // so the shader's `smoothstep` never gets a span of zero width.
+        (0.2, 0.0, 0.999),
+        // The whole arm, fading from the crossing out.
+        (0.2, 0.2, 0.0),
+        // A taper wider than the arm it ends is the same picture as one
+        // exactly as wide, rather than a negative share or a NaN.
+        (0.2, 0.9, 0.0),
+        (0.2, -1.0, 0.999),
+        // No arm at all: `derive_dots` draws nothing here, so what matters is
+        // that asking costs no division by zero.
+        (0.0, 0.5, 0.999),
+    ] {
+        let view = ViewConfig { dot_size: size, plus_taper: taper, ..dot_view() };
+        let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, &plain_frame(), 0.0);
+        assert!(
+            (scene.plus_taper_start - want).abs() < 1e-5,
+            "a {taper} taper on a {size} arm starts at {}, wanted {want}",
+            scene.plus_taper_start,
+        );
+    }
+}
+
+/// The taper is the PLUS's, and the shape row is what reaches it. A disc has
+/// no end to run out, and the one soft rim it could have is the feather this
+/// deliberately does not bring back — so the pair travels to the renderer
+/// whatever the shape, and it is the shader that spends it on one of them.
+#[test]
+fn a_taper_never_changes_where_a_marker_stands_or_how_far_it_reaches() {
+    let square = ViewConfig { dot_shape: DotShape::Plus, plus_taper: 0.0, ..dot_view() };
+    let faded = ViewConfig { plus_taper: 0.2, ..square };
+    let a = scene_of(&NoteTracker::new(), &Tuning::default(), &square, &plain_frame(), 0.0);
+    let b = scene_of(&NoteTracker::new(), &Tuning::default(), &faded, &plain_frame(), 0.0);
+    assert_ne!(a.plus_taper_start, b.plus_taper_start, "the taper reached the scene");
+    assert_eq!(a.dots.len(), b.dots.len());
+    for (x, y) in a.dots.iter().zip(&b.dots) {
+        assert_eq!(x.pos, y.pos);
+        assert_eq!(x.radius, y.radius, "a taper eats INTO the arm, it never shortens it");
+        assert_eq!(x.color, y.color);
+    }
+}
+
 #[test]
 fn an_unlit_node_carries_the_idle_grey_and_draws_nothing() {
     // An idle node has no mark of its own: the dot standing at its position
