@@ -6,11 +6,13 @@ or scheduled.** Pick whatever's appealing and it can be built later.
 
 Two places a skin reaches, and only one of them is an axis today:
 
-- **Node body** — ONE paint, in `lattice.wgsl`'s `core_layer`: the steady
-  disc and its glow, sized by `core_radius` / `core_solidity` and colored by
-  the octave blend `octave_glow_color` lays around the node. There is no
-  style enum to add a variant to — a second paint means a branch there and a
-  setting to pick it, which is what the retired `NodeStyle` was.
+- **Node body** — a node is its RING STACK and nothing else: the audio ring
+  at its centre, the octave band around that, the melody/bass marks past it,
+  each sized on the Layers bar. What lights the middle of one is the node
+  glow (`lattice.wgsl`'s `glow_layer`), colored by the octave blend
+  `octave_glow_color` lays around the node. There is no style enum to add a
+  variant to — a second paint means a branch there and a setting to pick it,
+  which is what the retired `NodeStyle` was.
 - **Chrome** — grid lines and chord beams live in `fs_edge` /
   `derive_grid` / `derive_edges`. The `Skin` struct
   (`harmonigraph-scene::skin`) owns every color the CHROME draws — panel,
@@ -21,14 +23,14 @@ Two places a skin reaches, and only one of them is an axis today:
   Ground bar, so it is dialable while a picture is being read. The skin's
   part in it is `surface_faint`, the rung a fresh view opens on.
 
-The disc is a camera-facing billboard with a signed-distance mask, so
-new node shapes are cheap: change the coverage math, keep the compositing.
+A node is a camera-facing billboard with signed-distance masks, so new node
+shapes are cheap: change the coverage math, keep the compositing.
 
 ## Node bodies
 
-- **Solid fill** — a matte filled disc, no glow at all. The literal
-  "filled circle instead of empty"; calmest possible look, pitch color at
-  full — a step past what solidity 1 already gives, which keeps its skirt.
+- **Solid fill** — a matte filled disc at the node's centre, no glow at all.
+  The literal "filled circle instead of empty"; calmest possible look, pitch
+  color at full.
 - **Outline-only (rings for everything)** — every note a hollow colored
   ring, stroke weight tracking activation. A clean "wireframe lattice", and
   a view setting rather than anything a note carries in with it.
@@ -92,7 +94,7 @@ is two looks at once — plus a matching node/line choice:
 
 ## Cheapest first steps, if any of this gets picked up
 
-1. **Solid fill** node body — a two-line branch in `core_layer` and a
+1. **Solid fill** node body — a two-line branch in the node's ink and a
    setting to reach it; immediately gives the "filled circles" the backlog
    asked about.
 2. **Filled-dot idle placeholder** — swap the placeholder ring mask for a

@@ -1,11 +1,9 @@
-//! [`StackBar`]: the four layers of a node in one bar — each one a cell as long
-//! as it is thick, named along its own stretch, with a handle apiece to size
-//! it by.
+//! [`StackBar`]: the three layers of a node in one bar — each one a cell as
+//! long as it is thick, named along its own stretch, with a handle apiece to
+//! size it by.
 
 use egui::{CornerRadius, Response, Sense, TextStyle, Ui, Vec2};
-use harmonigraph_scene::{
-    RingStack, ViewConfig, CORE_RADIUS_MAX, MARK_THICKNESS_MAX, RING_WIDTH_MAX,
-};
+use harmonigraph_scene::{RingStack, ViewConfig, MARK_THICKNESS_MAX, RING_WIDTH_MAX};
 
 use super::bar::{
     aimed_at, bar_radius, bar_width, grabbed, grip_over_text, release_grab, track_fill,
@@ -13,17 +11,17 @@ use super::bar::{
 };
 use crate::theme;
 
-/// The top of the bar's axis, in the quad units the four sizes are in: the quad
-/// edge, plus the deepest the melody/bass strip can be laid off it.
+/// The top of the bar's axis, in the quad units the three sizes are in: the
+/// quad edge, plus the deepest the melody/bass strip can be laid off it.
 ///
 /// **Not the billboard's whole reach**, which is what a bar drawing "everywhere
 /// a node draws" would run to and which spends two fifths of itself on room
-/// nothing goes. A ring past the quad edge is refused, so 1.0 is where three of
-/// the four layers stop for good, and the only thing out past it is a strip
+/// nothing goes. A ring past the quad edge is refused, so 1.0 is where both
+/// rings stop for good, and the only thing out past it is a strip
 /// that can be [`MARK_THICKNESS_MAX`] deep. A bar carrying anything past that
 /// carries travel no handle can use, at the price of the length the layers'
-/// names need: a fresh node ends at 0.98, which is three quarters of this axis
-/// and under two thirds of the billboard's.
+/// names need: a fresh node ends well inside the quad, which is three quarters
+/// of this axis and under two thirds of the billboard's.
 ///
 /// What it costs is the corner where the rings are pushed hard against the quad
 /// edge, which leaves the strip starting a gap PAST 1.0 with the last of its
@@ -33,12 +31,12 @@ use crate::theme;
 /// makes, at a number that pays for it.
 const AXIS_TOP: f32 = 1.0 + MARK_THICKNESS_MAX;
 
-/// Closest two of the four thumbs are ever DRAWN, and so the least bar any one
+/// Closest two of the three thumbs are ever DRAWN, and so the least bar any one
 /// of them can be pressed on.
 ///
 /// A layer switched off takes no room, so its boundary stands on the boundary
 /// inside it and a bar that placed both honestly would have two thumbs on one
-/// point — three or four of them on a node dialled most of the way down. Which
+/// point — all three of them on a node dialled most of the way down. Which
 /// of those a press meant is then not a question a position can answer, and the
 /// layer that most needs answering is exactly the one with nothing to grab: an
 /// off layer is switched back on from its own handle or not at all.
@@ -56,7 +54,6 @@ const THUMB_SEP: f32 = HANDLE_W + 1.0;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum Layer {
     #[default]
-    Core,
     Audio,
     Band,
     Mark,
@@ -95,15 +92,14 @@ struct Grab {
 
 /// The stack, innermost first — the order every array here is in, and the
 /// order the bar draws.
-const LAYERS: [Layer; 4] = [Layer::Core, Layer::Audio, Layer::Band, Layer::Mark];
+const LAYERS: [Layer; 3] = [Layer::Audio, Layer::Band, Layer::Mark];
 
 impl Layer {
     fn index(self) -> usize {
         match self {
-            Layer::Core => 0,
-            Layer::Audio => 1,
-            Layer::Band => 2,
-            Layer::Mark => 3,
+            Layer::Audio => 0,
+            Layer::Band => 1,
+            Layer::Mark => 2,
         }
     }
 
@@ -112,7 +108,6 @@ impl Layer {
     /// to disagree about which number a handle owns.
     fn width(self, view: &ViewConfig) -> f32 {
         match self {
-            Layer::Core => view.core_radius,
             Layer::Audio => view.spectral_ring_width,
             Layer::Band => view.band_width,
             Layer::Mark => view.mark_thickness,
@@ -121,7 +116,6 @@ impl Layer {
 
     fn set(self, view: &mut ViewConfig, width: f32) {
         *match self {
-            Layer::Core => &mut view.core_radius,
             Layer::Audio => &mut view.spectral_ring_width,
             Layer::Band => &mut view.band_width,
             Layer::Mark => &mut view.mark_thickness,
@@ -140,8 +134,8 @@ impl Layer {
 /// ring stopping at the quad edge, and a refused layer keeping its width — is
 /// then testable without a pointer.
 ///
-/// **Every one of the four reads only the stack INSIDE it**: the core reads
-/// nothing, a ring its own slot's start, the marks theirs. So a gesture can
+/// **Every one of the three reads only the stack INSIDE it**: the innermost
+/// ring reads nothing, the band its own slot's start, the marks theirs. So a gesture can
 /// never re-read a number it moved itself, and the boundary it is dragging
 /// stays a fixed distance from the width it is writing however far the drag
 /// runs. A formula that read the boundary OUTSIDE the layer would re-measure a
@@ -156,12 +150,13 @@ impl Layer {
 /// **Under a gap of travel a layer that stands one off reads 0 and switches
 /// off**, which is the price of the stack closing up around a layer that is not
 /// there: a width of nothing gives back its slot AND its padding, so the
-/// boundary jumps a gap inward the moment the layer goes. Those three handles
-/// have that gap of dead travel at the bottom rather than a step they could be
+/// boundary jumps a gap inward the moment the layer goes. The band has that gap
+/// of dead travel at the bottom rather than a step it could be
 /// dragged across, and the alternative — sliding the boundary over ground the
 /// picture will not draw it on — is the bar lying about where the layer inside
-/// it ends. The marks stand nobody off and so have no such band: their strip
-/// thins to nothing continuously.
+/// it ends. The innermost ring stands off the node's own centre and the marks
+/// stand nobody off, so neither has such a band: both thin to nothing
+/// continuously.
 fn resized(k: usize, to: f32, rings: &RingStack, current: f32) -> f32 {
     // A layer the stack REFUSED keeps what it is holding. Refusal is the room
     // running out from further in, so there is no cell on screen to move and
@@ -181,16 +176,15 @@ fn resized(k: usize, to: f32, rings: &RingStack, current: f32) -> f32 {
     let (start, pad) = match k {
         0 => (0.0, gap),
         1 => (edges[0], gap),
-        2 => (edges[1], gap),
-        _ => (edges[2], 0.0),
+        _ => (edges[1], 0.0),
     };
     // A ring's own drag stops at the quad edge, so a handle dragged to the end
     // of the axis leaves the widest layer that still FITS rather than one the
     // stack would refuse — which would drop the ring off the node at the top of
     // its own travel, and take every layer outside it along. Refusal is still
-    // reachable, from the inside: widen the core past what the ring needs and
-    // the ring goes, which is the stack running out of room rather than a bar
-    // asking for a size that never made sense.
+    // reachable, from the inside: widen the audio ring past what the band needs
+    // and the band goes, which is the stack running out of room rather than a
+    // bar asking for a size that never made sense.
     //
     // The marks are the one layer with no wall to stop at. They are drawn into
     // the billboard's margin past the quad, which is what the axis's last
@@ -200,28 +194,27 @@ fn resized(k: usize, to: f32, rings: &RingStack, current: f32) -> f32 {
     // rings are already past the quad hands in a `start` above 1, and
     // `f32::clamp` asserts `min <= max` and takes the editor down with it.
     let high = match k {
-        0 => CORE_RADIUS_MAX,
-        3 => MARK_THICKNESS_MAX,
+        2 => MARK_THICKNESS_MAX,
         _ => RING_WIDTH_MAX.min((1.0 - start).max(0.0)),
     };
     (to - pad - start).clamp(0.0, high)
 }
 
-/// Where the four thumbs are DRAWN, and so where the presses that take them
+/// Where the three thumbs are DRAWN, and so where the presses that take them
 /// split: each boundary's own place on the bar, pushed out so that no two stand
 /// closer than `sep` and the innermost stands clear of the bar's end.
 ///
 /// Pushed OUTWARD, so the innermost thumb of a pile is the one telling the
-/// truth and the drift falls on the layers stacked onto it. A pile of all four
-/// is the widest lie this can tell, three separations of a thumb's width
+/// truth and the drift falls on the layers stacked onto it. A pile of all three
+/// is the widest lie this can tell, two separations of a thumb's width
 /// apiece, and it is the state a node with one layer left is genuinely in.
 ///
 /// **The drift can land on a layer that IS drawn**, and the case is worth
-/// naming because it is the one a node dialled down reaches: switch the core,
-/// the audio ring and the band off and the strip is the innermost layer on, so
-/// it starts at the node's center with three off boundaries piled on 0 in front
+/// naming because it is the one a node dialled down reaches: switch the audio
+/// ring and the band off and the strip is the innermost layer on, so
+/// it starts at the node's center with two off boundaries piled on 0 in front
 /// of it. Its own thumb is then pushed past its cell, and the presses over that
-/// cell go to the three layers that are not there. What that buys is the only
+/// cell go to the two layers that are not there. What that buys is the only
 /// thing this bar cannot do without — every layer reachable from its own handle
 /// — and what it costs is a press on the last visible layer taking a layer
 /// inside it. The alternative is a node with one layer left that can never grow
@@ -231,14 +224,14 @@ fn resized(k: usize, to: f32, rings: &RingStack, current: f32) -> f32 {
 /// to nothing at the bottom of the axis is still something to take hold of.
 /// That is the widest the drift ever is at rest — a separation out of the
 /// track, under two hundredths of the axis — and what it buys is the gesture
-/// that turns the core back on.
+/// that turns the innermost ring back on.
 ///
 /// Then pulled back in from the far end, so a stack dragged past the top of the
 /// axis keeps its thumbs on the bar rather than stacking them under the corner
-/// where none can be grabbed. On a row too narrow to seat four thumbs at all
+/// where none can be grabbed. On a row too narrow to seat three thumbs at all
 /// the second pass wins and the innermost run off the near end — well under the
 /// width the panes are held to, and no worse than a bar with no handles.
-fn spread(xs: [f32; 4], (left, right): (f32, f32), sep: f32) -> [f32; 4] {
+fn spread(xs: [f32; 3], (left, right): (f32, f32), sep: f32) -> [f32; 3] {
     let mut out = xs;
     let mut floor = left + sep;
     for x in &mut out {
@@ -260,7 +253,7 @@ fn spread(xs: [f32; 4], (left, right): (f32, f32), sep: f32) -> [f32; 4] {
 /// of bar that means it — its own body, and the gap it stands off by — so
 /// pressing on a ring and dragging is that ring widening. A nearest-thumb rule
 /// would hand the inner half of every layer to the boundary inside it, and a
-/// press on the middle of the audio ring would move the core.
+/// press on the middle of the octave band would move the audio ring.
 ///
 /// The regions follow the thumbs where [`spread`] pushes them, not where the
 /// boundaries are, so a layer whose thumb was pushed off its own cell has a
@@ -275,7 +268,7 @@ fn spread(xs: [f32; 4], (left, right): (f32, f32), sep: f32) -> [f32; 4] {
 /// [`thumb_axis`]), so a layer's stretch is its own cell plus half the gap at
 /// each end of it — the padding a layer keeps splitting between the two layers
 /// it stands between, which is the only division of it that is not a choice.
-fn aimed(x: f32, thumbs: [f32; 4], half_thumb: f32) -> Layer {
+fn aimed(x: f32, thumbs: [f32; 3], half_thumb: f32) -> Layer {
     LAYERS
         .iter()
         .zip(thumbs)
@@ -283,19 +276,14 @@ fn aimed(x: f32, thumbs: [f32; 4], half_thumb: f32) -> Layer {
         .map_or(Layer::Mark, |(layer, _)| *layer)
 }
 
-/// The four layers as the stack DREW them, innermost first: each one's inner
+/// The three layers as the stack DREW them, innermost first: each one's inner
 /// and outer radius, and an empty pair for a layer that is not on the node.
 ///
 /// A layer is the width its handle reads or it is not on the node at all, so an
 /// empty pair is the one test for "this layer is here" and there is no second
 /// flag that could come to disagree with it.
-fn layer_spans(rings: &RingStack) -> [(f32, f32); 4] {
-    [
-        (0.0, rings.core_radius),
-        rings.audio,
-        rings.band,
-        (rings.mark_inner, rings.mark_inner + rings.mark_thickness),
-    ]
+fn layer_spans(rings: &RingStack) -> [(f32, f32); 3] {
+    [rings.audio, rings.band, (rings.mark_inner, rings.mark_inner + rings.mark_thickness)]
 }
 
 /// Where each thumb stands on the axis: the MIDDLE of the gap its layer holds
@@ -320,7 +308,7 @@ fn layer_spans(rings: &RingStack) -> [(f32, f32); 4] {
 /// thumb goes wherever [`spread`] can still find room for it.
 ///
 /// [`RangeBar`]: super::range::RangeBar
-fn thumb_axis(rings: &RingStack) -> [f32; 4] {
+fn thumb_axis(rings: &RingStack) -> [f32; 3] {
     let edges = rings.edges();
     let mut out = edges;
     for (k, (lo, hi)) in layer_spans(rings).into_iter().enumerate() {
@@ -335,7 +323,7 @@ fn thumb_axis(rings: &RingStack) -> [f32; 4] {
 /// own sections, cut to the one word that tells them apart.
 ///
 /// Short because the room a name gets is a layer's own thickness, which at a
-/// fresh view is under a fifth of the axis on three of the four. "Melody /
+/// fresh view is under a fifth of the axis on two of the three. "Melody /
 /// bass" would be off the bar at every pane width, and a name that does not fit
 /// is not drawn at all — so every word here is chosen to be the longest one
 /// that still lands.
@@ -348,14 +336,14 @@ fn thumb_axis(rings: &RingStack) -> [f32; 4] {
 /// Audio and MIDI are one pair, read together. "Octaves" names the pitch axis
 /// drawn on that layer rather than the layer, and is a word too long for the
 /// narrowest stretch on the bar besides.
-const NAMES: [&str; 4] = ["Core", "Audio", "MIDI", "Marks"];
+const NAMES: [&str; 3] = ["Audio", "MIDI", "Marks"];
 
-/// The four sizes of a node's layer stack in one bar, drawn as the node's own
-/// cross-section: the core out from the center, the audio ring, the octave
-/// band and the melody/bass strip, each a cell as long as it is thick and
+/// The three sizes of a node's layer stack in one bar, drawn as the node's own
+/// cross-section: the audio ring out from the center, the octave band and the
+/// melody/bass strip, each a cell as long as it is thick and
 /// carrying its own name, with the Ring gap standing between them as bare track.
 ///
-/// **One control rather than four, because the four are not independent
+/// **One control rather than three, because the three are not independent
 /// numbers.** Each layer's inner edge is a sum over every layer inside it, so a
 /// bar apiece asking for a width can only be read one at a time and none of
 /// them says where its layer lands — the one question a size on a node is
@@ -363,9 +351,9 @@ const NAMES: [&str; 4] = ["Core", "Audio", "MIDI", "Marks"];
 /// reading is: a handle is a layer's outer edge, and pulling it out is that
 /// layer getting thicker.
 ///
-/// **Four handles for four layers**, each standing at the boundary its layer
-/// ends on — the audio ring's inner radius closes the core, the band's closes
-/// the ring, the strip's closes the band, and the strip's own outer edge closes
+/// **Three handles for three layers**, each standing at the boundary its layer
+/// ends on — the band's inner radius closes the audio ring, the strip's closes
+/// the band, and the strip's own outer edge closes
 /// the strip. So each handle sizes the layer INSIDE it and slides everything
 /// outside it along, which is exactly what the stack does on screen
 /// ([`ViewConfig::rings`]).
@@ -384,15 +372,15 @@ const NAMES: [&str; 4] = ["Core", "Audio", "MIDI", "Marks"];
 /// than a hole where the layer was.
 ///
 /// **Each layer is named rather than numbered**, and the bar carries no name of
-/// its own: a row of four widths says how thick each layer is and never which
+/// its own: a row of three widths says how thick each layer is and never which
 /// layer is which, where a name laid along the stretch whose LENGTH is that
-/// width says both at once. So the row leads with "Core" where its neighbours
+/// width says both at once. So the row leads with "Audio" where its neighbours
 /// lead with their own names, in the same place, and what follows it along the
 /// bar is the rest of the node.
 ///
-/// Double-click restores the four sizes a fresh view opens with. It is not
+/// Double-click restores the three sizes a fresh view opens with. It is not
 /// [`ValueBar`]'s type-a-value gesture, for [`RangeBar`]'s reason doubled: a
-/// bar with four values has no single one to type into it.
+/// bar with three values has no single one to type into it.
 ///
 /// [`ValueBar`]: super::value::ValueBar
 /// [`RangeBar`]: super::range::RangeBar
@@ -414,9 +402,9 @@ impl<'a> StackBar<'a> {
         );
         // The axis is inset the way every two-handle bar's is, so a boundary at
         // either limit still seats a whole thumb inside the bar. It matters more
-        // here than on a range: a node with nothing but a core parks three
+        // here than on a range: a node with nothing but an audio ring parks two
         // thumbs at the bottom of the axis, and a fresh view already stands the
-        // outermost at 0.98 of the quad.
+        // outermost close to the quad edge.
         let inset = HANDLE_INSET * scale;
         let track = rect.shrink2(Vec2::new(inset, 0.0));
         let x_of = |v: f32| track.left() + track.width() * (v / AXIS_TOP).clamp(0.0, 1.0);
@@ -476,7 +464,7 @@ impl<'a> StackBar<'a> {
         // seat in at either limit, and a layer whose inner radius is 0 starting
         // a few points along would read as a gap in front of the node's center
         // — a place a node has no room to leave. The layer is the innermost one
-        // ON, which is the core until the core is switched off.
+        // ON, which is the audio ring until the audio ring is switched off.
         let cells = spans.map(|(lo, hi)| {
             let left = if lo <= 0.0 { rect.left() } else { x_of(lo) };
             egui::Rect::from_x_y_ranges(left..=x_of(hi), rect.y_range())
@@ -505,7 +493,7 @@ impl<'a> StackBar<'a> {
                 painter.rect_filled(
                     cell,
                     radius,
-                    if i == 3 && !marked { theme::widget() } else { fill },
+                    if i == 2 && !marked { theme::widget() } else { fill },
                 );
             }
         }
@@ -528,7 +516,7 @@ impl<'a> StackBar<'a> {
         // layers anonymous at every width a settings column is dragged to.
         //
         // The innermost name is held off the bar's end by the inset every other
-        // row in the pane holds its own name by, so the row leads with "Core"
+        // row in the pane holds its own name by, so the row leads with "Audio"
         // where the row above leads with "Fade curve", on the same column of
         // pixels. The rest stand off the thumb that opens their stretch by
         // enough to clear it.
@@ -550,7 +538,7 @@ impl<'a> StackBar<'a> {
                 continue;
             }
             let from = if i == 0 { rect.left() } else { thumbs[i - 1] };
-            let to = if i == 3 { rect.right() } else { thumbs[i] };
+            let to = if i == 2 { rect.right() } else { thumbs[i] };
             let pad = if i == 0 { BAR_TEXT_PAD } else { HANDLE_INSET } * scale;
             let name = painter.layout_no_wrap(NAMES[i].to_owned(), body.clone(), text_color);
             if name.size().x <= (to - from - pad).max(0.0) {
@@ -608,34 +596,39 @@ mod tests {
     /// is dragged, rather than losing it to a gesture nothing answers.
     ///
     /// Refusal is the room running out from further in, so there is no cell to
-    /// move and no boundary to move it to: every one of the four thumbs is
-    /// piled on the last layer that fit. A write there would set a size against
+    /// move and no boundary to move it to: the refused layer's thumb is piled
+    /// on the last layer that fit. A write there would set a size against
     /// a picture that cannot show it — and dragging inward, the natural way to
     /// find out whether a handle is live, sets it to 0 and destroys the width
     /// the layer was keeping for when the room came back.
     #[test]
     fn a_refused_layer_keeps_its_width_when_its_handle_is_dragged() {
         let mut view = fresh();
-        // Far enough out that the audio ring no longer fits, which takes the
-        // band with it: the stack drops from the outside in and stays dropped.
-        view.core_radius = 0.95;
+        // The innermost ring at its own maximum and the padding at its: the
+        // band's slot then starts at the quad edge and there is no room left
+        // for it. A ring is held to RING_WIDTH_MAX, so it takes the gap as well
+        // to run the quad out.
+        view.spectral_ring_width = RING_WIDTH_MAX;
+        view.ring_gap = harmonigraph_scene::GAP_MAX;
         let rings = view.rings();
-        assert!(rings.audio.1 <= rings.audio.0, "the audio ring was meant to be refused here");
-        assert!(rings.band.1 <= rings.band.0, "the band was meant to go with it");
-        for k in [1, 2] {
-            let home = dragged(&view, k, rings.edges()[k] - 0.2);
-            assert_eq!(
-                LAYERS[k].width(&home),
-                LAYERS[k].width(&view),
-                "layer {k} lost the width it was keeping while the stack had no room for it",
-            );
-            let out = dragged(&view, k, rings.edges()[k] + 0.2);
-            assert_eq!(
-                LAYERS[k].width(&out),
-                LAYERS[k].width(&view),
-                "layer {k} was resized by a handle with nothing on screen to move",
-            );
-        }
+        assert!(rings.audio.1 > rings.audio.0, "the audio ring was meant to still fit");
+        assert!(rings.band.1 <= rings.band.0, "the band was meant to be refused here");
+        // The band is the one layer a refusal can reach: it is the only one
+        // with a layer inside it that can eat the room, the marks being drawn
+        // into the billboard's margin rather than refused there.
+        const REFUSED: usize = 1;
+        let home = dragged(&view, REFUSED, rings.edges()[REFUSED] - 0.2);
+        assert_eq!(
+            LAYERS[REFUSED].width(&home),
+            LAYERS[REFUSED].width(&view),
+            "the band lost the width it was keeping while the stack had no room for it",
+        );
+        let out = dragged(&view, REFUSED, rings.edges()[REFUSED] + 0.2);
+        assert_eq!(
+            LAYERS[REFUSED].width(&out),
+            LAYERS[REFUSED].width(&view),
+            "the band was resized by a handle with nothing on screen to move",
+        );
     }
 
     /// A handle dragged to a point on the axis puts its layer's boundary
@@ -647,7 +640,7 @@ mod tests {
         // Each inside what the wall past it allows: a ring's boundary is its
         // own outer edge plus a gap, so the band's cannot pass the quad edge by
         // more than that.
-        for (k, target) in [(0, 0.5), (1, 0.9), (2, 1.0), (3, 1.1)] {
+        for (k, target) in [(0, 0.5), (1, 0.9), (2, 1.1)] {
             let moved = dragged(&view, k, target);
             assert!(
                 (moved.rings().edges()[k] - target).abs() < 1e-5,
@@ -662,22 +655,22 @@ mod tests {
     #[test]
     fn the_layers_outside_a_dragged_one_keep_their_widths() {
         let view = fresh();
-        // As far out as the core can go with every layer outside it still
-        // fitting; past that the stack starts refusing them, which is the next
-        // test.
+        // As far out as the innermost ring can go with every layer outside it
+        // still fitting; past that the stack starts refusing them, which is the
+        // next test.
         let moved = dragged(&view, 0, 0.4);
         for layer in &LAYERS[1..] {
             assert_eq!(
                 layer.width(&moved),
                 layer.width(&view),
-                "{layer:?} lost width to the core being dragged",
+                "{layer:?} lost width to the audio ring being dragged",
             );
         }
         let (before, after) = (view.rings().edges(), moved.rings().edges());
-        for k in 1..4 {
+        for k in 1..3 {
             assert!(
                 (after[k] - before[k] - (after[0] - before[0])).abs() < 1e-5,
-                "layer {k}'s boundary did not slide with the core's",
+                "layer {k}'s boundary did not slide with the audio ring's",
             );
         }
     }
@@ -706,33 +699,33 @@ mod tests {
     #[test]
     fn a_ring_dragged_past_the_quad_edge_stops_at_it() {
         let view = fresh();
-        for k in [1, 2] {
+        for k in [0, 1] {
             let out = dragged(&view, k, AXIS_TOP);
-            let (lo, hi) = if k == 1 { out.rings().audio } else { out.rings().band };
+            let (lo, hi) = if k == 0 { out.rings().audio } else { out.rings().band };
             assert!(hi > lo, "layer {k} dragged to the end of the axis came off the node");
             assert!(hi <= 1.0 + 1e-6, "layer {k} was left reaching {hi}, past the quad edge");
         }
     }
 
-    /// A slot that starts PAST the quad edge leaves the layer no room, rather
+    /// A slot that starts AT the quad edge leaves the layer no room, rather
     /// than a negative ceiling — which is the state `resized` takes its `min`
     /// and `max` in place of a clamp for, `f32::clamp` asserting `min <= max`
     /// and taking the editor down with it from the paint path.
     ///
     /// Reachable from the bars alone, which is what makes it worth a fixture:
-    /// the core at its own maximum and the Ring gap at its puts the audio ring's
-    /// slot at 1.3. The ring is OFF there rather than refused, so the guard
-    /// above does not stand in front of this one.
+    /// the audio ring at its own maximum and the Ring gap at its puts the
+    /// band's slot exactly on the quad edge. The band is OFF here rather than
+    /// refused, so the guard above does not stand in front of this one.
     #[test]
-    fn a_slot_starting_past_the_quad_edge_leaves_no_room() {
+    fn a_slot_starting_at_the_quad_edge_leaves_no_room() {
         let mut view = fresh();
-        view.core_radius = CORE_RADIUS_MAX;
+        view.spectral_ring_width = RING_WIDTH_MAX;
         view.ring_gap = harmonigraph_scene::GAP_MAX;
-        view.spectral_ring_width = 0.0;
+        view.band_width = 0.0;
         let rings = view.rings();
         assert!(
-            rings.edges()[0] > 1.0,
-            "the audio ring's slot was meant to start past the quad edge, not at {}",
+            rings.edges()[0] >= 1.0,
+            "the band's slot was meant to start on the quad edge, not at {}",
             rings.edges()[0],
         );
         assert_eq!(
@@ -747,14 +740,19 @@ mod tests {
     /// the room running out from the inside is a different thing.
     #[test]
     fn a_layer_widened_past_the_room_left_drops_the_ones_outside_it() {
-        let view = fresh();
-        // Far enough out that the band no longer fits, and not so far that the
-        // audio ring inside it goes too — the stack drops from the OUTSIDE in,
-        // one layer at a time.
-        let far = dragged(&view, 0, 0.8);
+        // A padding wide enough that the ring inside can run the quad out: a
+        // ring is held to RING_WIDTH_MAX, so at the fresh gap every layer fits
+        // whatever the bars read.
+        let view = ViewConfig { ring_gap: 0.3, ..fresh() };
+        // Far enough out that the band no longer fits, and the ring inside it
+        // is still drawn at exactly what its own handle asked for.
+        let far = dragged(&view, 0, 0.85);
         let rings = far.rings();
         assert!(rings.band.1 <= rings.band.0, "the band was kept at a width it had no room for");
-        assert_eq!(far.band_width, view.band_width, "the band's own size was written by the core");
+        assert_eq!(
+            far.band_width, view.band_width,
+            "the band's own size was written by the ring inside it",
+        );
         assert!(rings.audio.1 > rings.audio.0, "the audio ring went with it, from further in");
     }
 
@@ -765,7 +763,7 @@ mod tests {
     #[test]
     fn the_marks_reach_their_full_depth_past_the_quad_edge() {
         let view = fresh();
-        let out = dragged(&view, 3, AXIS_TOP);
+        let out = dragged(&view, 2, AXIS_TOP);
         let rings = out.rings();
         assert!(
             rings.mark_inner + rings.mark_thickness > 1.0,
@@ -778,8 +776,8 @@ mod tests {
         );
     }
 
-    /// Every one of the four thumbs can be pressed, on a node with nothing left
-    /// on it at all — the state where all four boundaries stand on one point,
+    /// Every one of the three thumbs can be pressed, on a node with nothing left
+    /// on it at all — the state where all three boundaries stand on one point,
     /// and the state a bar that placed them honestly could never be dragged out
     /// of, no handle on it having any bar of its own to be pressed.
     ///
@@ -789,7 +787,7 @@ mod tests {
     /// pile would test `spread` and `aimed` against each other and say nothing
     /// about whether a node can reach that state or what its thumbs do there.
     #[test]
-    fn a_pile_of_thumbs_still_answers_four_presses() {
+    fn a_pile_of_thumbs_still_answers_three_presses() {
         let mut view = fresh();
         for layer in LAYERS {
             layer.set(&mut view, 0.0);
@@ -797,8 +795,8 @@ mod tests {
         let rings = view.rings();
         assert_eq!(
             thumb_axis(&rings),
-            [0.0; 4],
-            "a node with no layers was meant to pile all four thumbs at its center",
+            [0.0; 3],
+            "a node with no layers was meant to pile all three thumbs at its center",
         );
         let thumbs = spread(
             thumb_axis(&rings).map(|v| axis(v) * W),
@@ -837,13 +835,13 @@ mod tests {
     /// dragging is the ring widening.
     #[test]
     fn a_press_on_a_layer_takes_that_layer() {
-        let thumbs = [40.0, 120.0, 200.0, 260.0];
+        let thumbs = [40.0, 120.0, 200.0];
         for (x, want) in [
-            (10.0, Layer::Core),
-            (45.0, Layer::Audio),
-            (118.0, Layer::Audio),
-            (150.0, Layer::Band),
-            (230.0, Layer::Mark),
+            (10.0, Layer::Audio),
+            (38.0, Layer::Audio),
+            (45.0, Layer::Band),
+            (118.0, Layer::Band),
+            (150.0, Layer::Mark),
             (390.0, Layer::Mark),
         ] {
             assert_eq!(aimed(x, thumbs, HANDLE_W * 0.5), want, "a press at {x} took the wrong layer");
@@ -854,9 +852,9 @@ mod tests {
     /// the innermost of a pile keeps its own place.
     #[test]
     fn spreading_moves_only_the_thumbs_that_would_overlap() {
-        let apart = [40.0, 120.0, 200.0, 260.0];
+        let apart = [40.0, 120.0, 200.0];
         assert_eq!(spread(apart, (0.0, 400.0), THUMB_SEP), apart);
-        let piled = spread([100.0; 4], (0.0, 400.0), THUMB_SEP);
+        let piled = spread([100.0; 3], (0.0, 400.0), THUMB_SEP);
         assert_eq!(piled[0], 100.0, "the innermost thumb of a pile moved");
         for pair in piled.windows(2) {
             assert!(
@@ -871,8 +869,8 @@ mod tests {
     /// where they can still be grabbed.
     #[test]
     fn a_stack_past_the_end_keeps_its_thumbs_on_the_bar() {
-        let out = spread([400.0; 4], (0.0, 400.0), THUMB_SEP);
-        assert!(out[3] <= 400.0 - THUMB_SEP + 1e-5, "the outermost thumb sat off the bar");
+        let out = spread([400.0; 3], (0.0, 400.0), THUMB_SEP);
+        assert!(out[2] <= 400.0 - THUMB_SEP + 1e-5, "the outermost thumb sat off the bar");
         for pair in out.windows(2) {
             assert!(pair[1] - pair[0] >= THUMB_SEP - 1e-5);
         }
@@ -898,18 +896,25 @@ mod tests {
         let rings = fresh().rings();
         let fills = filled_rects(&shapes);
         let (_, x_of) = axis_on(&shapes);
-        for (lo, hi) in [rings.audio, rings.band] {
-            assert!(
-                fills.iter().any(|(r, _)| (r.left() - x_of(lo)).abs() < 0.5
-                    && (r.right() - x_of(hi)).abs() < 0.5),
-                "no cell was drawn for the layer at {lo}..{hi}",
-            );
-        }
-        // Every fill but the track and the four thumbs, which is what the cells
-        // have to be: a run of shading between two of them would be a fifth
-        // thing on a bar that draws four layers.
+        // The innermost cell starts at the BAR's end rather than at the axis's
+        // (`the_cell_at_the_nodes_center_reaches_the_end_of_the_bar`), so it is
+        // read by its outer edge alone here.
+        assert!(
+            fills.iter().any(|(r, _)| (r.right() - x_of(rings.audio.1)).abs() < 0.5),
+            "no cell was drawn for the audio ring, out to {}",
+            rings.audio.1,
+        );
+        let (lo, hi) = rings.band;
+        assert!(
+            fills.iter().any(|(r, _)| (r.left() - x_of(lo)).abs() < 0.5
+                && (r.right() - x_of(hi)).abs() < 0.5),
+            "no cell was drawn for the octave band at {lo}..{hi}",
+        );
+        // Every fill but the track and the three thumbs, which is what the cells
+        // have to be: a run of shading between two of them would be a fourth
+        // thing on a bar that draws three layers.
         let cells = fills.iter().skip(1).filter(|(r, _)| r.width() > HANDLE_W).count();
-        assert_eq!(cells, 4, "the bar drew something over its track besides its four cells");
+        assert_eq!(cells, 3, "the bar drew something over its track besides its three cells");
     }
 
     /// The innermost cell reaches the bar's own end, past the inset the axis
@@ -923,16 +928,16 @@ mod tests {
         });
         let fills = filled_rects(&shapes);
         let (bar, x_of) = axis_on(&shapes);
-        let core = fills
+        let inner = fills
             .iter()
             .skip(1)
-            .find(|(r, _)| (r.right() - x_of(fresh().core_radius)).abs() < 0.5)
-            .expect("no cell was drawn for the core")
+            .find(|(r, _)| (r.right() - x_of(fresh().rings().audio.1)).abs() < 0.5)
+            .expect("no cell was drawn for the innermost layer")
             .0;
         assert!(
-            (core.left() - bar.left()).abs() < 0.5,
-            "the core's cell started at {} where the bar starts at {}",
-            core.left(),
+            (inner.left() - bar.left()).abs() < 0.5,
+            "the innermost cell started at {} where the bar starts at {}",
+            inner.left(),
             bar.left(),
         );
     }
@@ -947,7 +952,7 @@ mod tests {
         assert!(rings.gap > 0.0, "a node with no padding has no gap to stand a thumb in");
         let spans = layer_spans(&rings);
         let thumbs = thumb_axis(&rings);
-        for k in 0..3 {
+        for k in 0..2 {
             assert!(
                 (thumbs[k] - (spans[k].1 + rings.gap * 0.5)).abs() < 1e-6,
                 "layer {k}'s thumb stood at {} rather than half a gap out from {}",
@@ -957,7 +962,7 @@ mod tests {
         }
         // The marks close the stack and stand nobody off, so there is no gap
         // out there to stand in.
-        assert_eq!(thumbs[3], rings.edges()[3], "the outermost thumb left the strip's edge");
+        assert_eq!(thumbs[2], rings.edges()[2], "the outermost thumb left the strip's edge");
     }
 
     /// And a layer that is OFF holds no gap open either, so its thumb is back
@@ -969,8 +974,8 @@ mod tests {
         Layer::Audio.set(&mut view, 0.0);
         let rings = view.rings();
         assert_eq!(
-            thumb_axis(&rings)[1],
-            rings.edges()[1],
+            thumb_axis(&rings)[0],
+            rings.edges()[0],
             "the audio ring's thumb kept half a gap it no longer holds open",
         );
     }
@@ -985,15 +990,15 @@ mod tests {
             StackBar::new(&mut view).show(ui);
         });
         let runs = text_boxes(&shapes);
-        let (core, _) = runs
+        let (inner, _) = runs
             .iter()
             .find(|(_, s)| s == NAMES[0])
-            .unwrap_or_else(|| panic!("the core's cell went unnamed: {runs:?}"));
+            .unwrap_or_else(|| panic!("the innermost cell went unnamed: {runs:?}"));
         let (bar, _) = axis_on(&shapes);
         assert!(
-            (core.left() - (bar.left() + BAR_TEXT_PAD)).abs() < 0.5,
-            "the core's name started at {} rather than {} in from the bar's end",
-            core.left() - bar.left(),
+            (inner.left() - (bar.left() + BAR_TEXT_PAD)).abs() < 0.5,
+            "the innermost name started at {} rather than {} in from the bar's end",
+            inner.left() - bar.left(),
             BAR_TEXT_PAD,
         );
     }
@@ -1020,7 +1025,7 @@ mod tests {
                 .position(|n| *n == name)
                 .unwrap_or_else(|| panic!("the bar drew a run that is no layer's name: {name:?}"));
             let from = if k == 0 { bar.left() } else { thumbs[k - 1] };
-            let to = if k == 3 { bar.right() } else { thumbs[k] };
+            let to = if k == 2 { bar.right() } else { thumbs[k] };
             assert!(
                 run.left() >= from - 0.5 && run.right() <= to + 0.5,
                 "{name:?} was drawn at {:?}, outside the {from}..{to} it names",
@@ -1055,14 +1060,14 @@ mod tests {
         }
     }
 
-    /// And one thumb per layer, four of them, on the boundaries.
+    /// And one thumb per layer, three of them, on the boundaries.
     #[test]
     fn the_bar_draws_a_thumb_for_every_layer() {
         let mut view = fresh();
         let shapes = shapes(W, |ui| {
             StackBar::new(&mut view).show(ui);
         });
-        assert_eq!(handles(&shapes).len(), 4);
+        assert_eq!(handles(&shapes).len(), 3);
     }
 
     /// The bar this width across, laid out in a real context so a pointer can
@@ -1140,7 +1145,6 @@ mod tests {
             before.band_width,
             after.band_width,
         );
-        assert_eq!(after.core_radius, before.core_radius, "the core moved");
         assert_eq!(after.spectral_ring_width, before.spectral_ring_width, "the audio ring moved");
         assert_eq!(after.mark_thickness, before.mark_thickness, "the mark strip moved");
     }
@@ -1172,7 +1176,7 @@ mod tests {
     fn a_second_gesture_on_the_bar_chooses_for_itself() {
         let rings = fresh().rings();
         let band = axis((rings.band.0 + rings.band.1) * 0.5);
-        let core = axis(rings.core_radius * 0.5);
+        let inner = axis(rings.audio.1 * 0.5);
         let mut view = fresh();
         gesture(&mut view, |bar| {
             let at = |x: f32| egui::pos2(bar.left() + bar.width() * x, bar.center().y);
@@ -1184,11 +1188,11 @@ mod tests {
                 vec![egui::Event::PointerMoved(at(band + step))],
                 vec![egui::Event::PointerMoved(at(band + 0.05))],
                 vec![press(at(band + 0.05), false)],
-                // Then one aimed at the core, which is a different layer.
-                vec![egui::Event::PointerMoved(at(core))],
-                vec![egui::Event::PointerMoved(at(core)), press(at(core), true)],
-                vec![egui::Event::PointerMoved(at(core - step))],
-                vec![egui::Event::PointerMoved(at(core - 0.04))],
+                // Then one aimed at the audio ring, a different layer.
+                vec![egui::Event::PointerMoved(at(inner))],
+                vec![egui::Event::PointerMoved(at(inner)), press(at(inner), true)],
+                vec![egui::Event::PointerMoved(at(inner - step))],
+                vec![egui::Event::PointerMoved(at(inner - 0.04))],
             ]
         });
         assert!(
@@ -1197,14 +1201,15 @@ mod tests {
             view.band_width,
         );
         assert!(
-            view.core_radius < fresh().core_radius,
-            "the second gesture did not reach the core, so the first one's grab outlived it: {}",
-            view.core_radius,
+            view.spectral_ring_width < fresh().spectral_ring_width,
+            "the second gesture did not reach the audio ring, so the first one's grab outlived \
+             it: {}",
+            view.spectral_ring_width,
         );
     }
 
-    /// Double-click puts the four sizes back where a fresh view opens them.
-    /// [`ValueBar`]'s type-a-value gesture is no use to a bar holding four
+    /// Double-click puts the three sizes back where a fresh view opens them.
+    /// [`ValueBar`]'s type-a-value gesture is no use to a bar holding three
     /// values, so this is what the gesture is spent on.
     ///
     /// [`ValueBar`]: super::super::value::ValueBar

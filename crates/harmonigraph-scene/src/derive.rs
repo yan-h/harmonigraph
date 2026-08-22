@@ -455,9 +455,9 @@ pub fn derive_scene(
         // EVERY node that DRAWS clears what is behind it, the home sheet
         // included. Leaving the home sheet out is what let the sheets
         // behind it show straight through the gaps in a home node's body —
-        // the core is small and soft and the octave band is a thin annulus,
-        // so "drawn over" covers very little — and neither sheet then read
-        // as being in front of the other.
+        // a node is annuli with gaps between them, so "drawn over" covers
+        // very little — and neither sheet then read as being in front of the
+        // other.
         //
         // The home sheet's clearing cuts the grid lines as well as the
         // sheets behind it — a sounding node sits in a clean gap in the
@@ -538,21 +538,19 @@ pub fn derive_scene(
     let grid = derive_grid(view, window, &nodes, ground);
 
     // Every radius on a node, off the one stack the size bars describe
-    // (`ViewConfig::rings`, which is also where their clamps live): the core is
-    // a plain radius the shader reads, each ring is a width a gap out from
-    // whatever is inside it, and a layer dialled to 0 is off and hands its slot
-    // back. The shader can trust outer > inner on a band that draws at all,
-    // and an empty pair is the one thing that says a ring does not.
+    // (`ViewConfig::rings`, which is also where their clamps live): each ring
+    // is a width a gap out from whatever is inside it — or from the node's own
+    // center, for the innermost one on — and a layer dialled to 0 is off and
+    // hands its slot back. The shader can trust outer > inner on a band that
+    // draws at all, and an empty pair is the one thing that says a ring does
+    // not.
     let rings = view.rings();
-    let core_solidity = view.core_solidity.clamp(0.0, 1.0);
 
     Scene {
         nodes,
         camera,
         now,
         node_radius: view.spacing * NODE_RADIUS_FACTOR,
-        core_radius: rings.core_radius,
-        core_solidity,
         outer_inner: rings.band.0,
         outer_outer: rings.band.1,
         rings_outer: rings.outer,

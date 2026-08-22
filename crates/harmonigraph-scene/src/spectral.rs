@@ -351,9 +351,9 @@ impl SpectralPaint {
     /// field the octave band's own ground does.
     ///
     /// Where the ring sits is [`ViewConfig::rings`]'s answer rather than a
-    /// second reading of the same bars, because the ring's inner edge is a sum
-    /// over the layers INSIDE it: the core's radius, this ring's own gap, and
-    /// whether either is dialled to nothing. That sum belongs in one place, and
+    /// second reading of the same bars: it is the innermost layer of the stack,
+    /// so its inner edge is the node's own centre, and the same one answer is
+    /// what places the band a gap outside it. That sum belongs in one place, and
     /// its clamps are there rather than in `ViewConfig::sanitize` for the
     /// reason every other geometry clamp is — the drawing code is reached by
     /// more routes than the persist door (a take replay, the offline
@@ -885,10 +885,7 @@ mod tests {
             (f32::NAN, 200.0),
             (-3.0, 200.0),
         ] {
-            // Core off: the claim under test is the ring's own clamp, and a
-            // width run all the way to RING_WIDTH_MAX must not be crowded out
-            // by however wide the fresh view's own core happens to be dialled.
-            let view = ViewConfig { core_radius: 0.0, ..ringed(width, range) };
+            let view = ringed(width, range);
             let paint = SpectralPaint::new(&view, Gradient::default());
             assert_eq!(
                 paint.ring_draws(),
@@ -921,26 +918,23 @@ mod tests {
         assert!(!SpectralPaint::silent().ring_draws(), "a silent scene drew a ring");
     }
 
-    /// The ring sits where the STACK puts it: a gap out from the core, and
-    /// moved by every layer inside it rather than by a radius of its own.
+    /// The ring sits where the STACK puts it: at the node's own centre, it
+    /// being the innermost layer, and sized by its own width alone.
     ///
     /// The whole of what the width bars buy, checked at the one place a second
     /// copy of the sum would drift — the audio channel is built from
     /// `ViewConfig` on its own, without the scene the octave band comes out of.
+    /// No gap is spent in front of it: there is no layer inside it to stand
+    /// off, and a padding around nothing is a hole the picture cannot explain.
     #[test]
-    fn the_ring_sits_a_gap_out_from_the_core() {
+    fn the_ring_reaches_the_nodes_centre() {
         let view = ringed(0.25, 200.0);
         let paint = SpectralPaint::new(&view, Gradient::default());
-        assert_eq!(paint.inner, view.core_radius + view.ring_gap);
-        assert_eq!(paint.outer, paint.inner + 0.25);
+        assert_eq!((paint.inner, paint.outer), (0.0, 0.25));
 
-        // The core off, and the ring reaches the node's center: no layer to
-        // stand off, so no gap is spent on one.
-        let bare = SpectralPaint::new(
-            &ViewConfig { core_radius: 0.0, ..view.clone() },
-            Gradient::default(),
-        );
-        assert_eq!((bare.inner, bare.outer), (0.0, 0.25));
+        // And the gap it does not spend is the band's, a gap out from where
+        // this ring ended.
+        assert_eq!(view.rings().band.0, 0.25 + view.ring_gap);
     }
 
     /// BOTH readings fill the same annulus, at the same radii, and are told

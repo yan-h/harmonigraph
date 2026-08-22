@@ -442,12 +442,13 @@ fn every_bar_in_a_settings_pane_is_the_width_of_the_pane() {
 /// names are drawn whichever page is up — that is what the picker is — so they
 /// say nothing about which body was reached. Each needle is a string only its
 /// own page draws: "Name size" would be the natural one for the Lattice page
-/// and is not, the Analyzer's piano-roll group having a bar of that name too.
+/// and is not, the Analyzer's piano-roll group having a bar of that name too,
+/// and "Octave gap" is the Lattice page's own where a bare "Gap" would not be.
 #[test]
 fn the_picker_draws_the_page_it_holds_and_only_that_page() {
     const CASES: [(DisplayPage, &str); 4] = [
         (DisplayPage::Colors, "Bloom"),
-        (DisplayPage::Lattice, "Solidity"),
+        (DisplayPage::Lattice, "Octave gap"),
         (DisplayPage::Analyzer, "Release"),
         (DisplayPage::System, "Render scale"),
     ];

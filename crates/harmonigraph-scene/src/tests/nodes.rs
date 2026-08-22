@@ -1143,7 +1143,7 @@ fn a_lit_octave_indicator_stands_for_the_pitch_it_is_drawn_at() {
 /// moves every layer outside it, and a stack that has walked off the quad edge
 /// draws a node with its outer rings quietly clipped away.
 #[test]
-fn the_fresh_node_stacks_four_visible_layers_inside_the_quad() {
+fn the_fresh_node_stacks_three_visible_layers_inside_the_quad() {
     let view = ViewConfig::default();
     let rings = view.rings();
     // A gap a reader can see, not merely a positive number. A twentieth of the
@@ -1151,11 +1151,12 @@ fn the_fresh_node_stacks_four_visible_layers_inside_the_quad() {
     // whole node is spaced on.
     const CLEAR: f32 = 0.05;
     assert!(rings.gap >= CLEAR, "the layers are spaced by {}, which is not a gap", rings.gap);
-    assert!(rings.core_radius > CLEAR, "the fresh core is off");
+    // The innermost layer reaches the node's own centre — there is nothing
+    // inside it to stand off — and the band is a gap out from where it ended.
     assert_eq!(
         rings.audio,
-        (rings.core_radius + rings.gap, rings.band.0 - rings.gap),
-        "the fresh audio ring does not fill the space between the core and the band",
+        (0.0, rings.band.0 - rings.gap),
+        "the fresh audio ring does not run from the node's centre to the band",
     );
     assert!(rings.audio.1 - rings.audio.0 > CLEAR, "the fresh audio ring is a hairline");
     assert!(rings.band.1 - rings.band.0 > CLEAR, "the fresh octave band is a hairline");
