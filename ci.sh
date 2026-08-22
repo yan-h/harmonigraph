@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Local mirror of .github/workflows/ci.yml: the exact seven gates the cloud CI
-# runs — clippy across all targets with warnings denied, the full test suite,
-# the plugin package check, baseview's own tests, the doc-link check, the
-# harmonigraph-core dependency guard, then the worktree-reclaim lock cases.
+# Local mirror of .github/workflows/ci.yml: clippy across all targets with
+# warnings denied, the full test suite, the plugin package check, baseview's
+# own tests, the doc-link check, the harmonigraph-core dependency guard, then
+# the two script gates — the worktree-reclaim lock cases and the bundle swap.
 # Nothing more, nothing less, on the toolchain pinned by rust-toolchain.toml —
 # so a green run here means a green run there.
 #
@@ -88,5 +88,11 @@ echo "  ok — no dependencies"
 # session's worktree removable, which is why it is a gate and not a habit.
 run .claude/tests/reclaim-locks.sh
 
+# The other gate that guards a script, and for the same reason: its subject is
+# an inode and an ad-hoc signature, both outside the repo, so no cargo test can
+# reach it — and getting it wrong is silent in the worst way, with every step
+# reporting success and the DAW still drawing the previous build.
+run .claude/tests/plugin-swap.sh
+
 echo
-echo "✅ local CI passed (clippy + tests + plugin check + baseview + doc links + harmonigraph-core dep guard + reclaim locks)"
+echo "✅ local CI passed (clippy + tests + plugin check + baseview + doc links + harmonigraph-core dep guard + reclaim locks + plugin swap)"

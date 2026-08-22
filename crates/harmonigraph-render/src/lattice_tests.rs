@@ -551,6 +551,26 @@ impl Shooter {
     }
 
     fn draw(&mut self, scene: &Scene, labels: LatticeLabels) -> Vec<u8> {
+        // A lit node's ink-strip row is read back by IDENTITY, out of a strip
+        // `glow_rows` tall, so a row past the end is not a small error in a
+        // fixture: what an out-of-range `textureLoad` returns is the BACKEND's
+        // choice. Metal clamps, so the node silently reads row 0 and wears
+        // another node's colour while the test goes on passing; a backend that
+        // returns zero instead makes the same test vacuous, passing with the
+        // draw it is about deleted. Either way the fixture measures something
+        // other than what it says, and says nothing when it stops measuring at
+        // all — so the bookkeeping is asserted here, once, for every shot.
+        //
+        // `rows_per_node` is the helper that gets this right; a fixture that
+        // pushes a node by hand has to call it.
+        for (i, node) in scene.nodes.iter().enumerate() {
+            assert!(
+                node.glow.level <= 0.0 || node.glow.row < scene.glow_rows,
+                "node {i} claims ink-strip row {} of a strip {} tall — see `rows_per_node`",
+                node.glow.row,
+                scene.glow_rows,
+            );
+        }
         let size = self.size;
         let vec_size = egui::vec2(size[0] as f32, size[1] as f32);
         let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, vec_size);
@@ -5960,6 +5980,7 @@ fn a_node_under_a_nearer_sheets_node_cuts_nothing_out_of_its_light() {
     far.glow = harmonigraph_scene::GlowStep { level: 0.8, row: 1, mix: 1.0, marked: 0.0 };
     far.color = glam::Vec4::new(0.9, 0.2, 0.2, 1.0);
     both.nodes.push(far);
+    rows_per_node(&mut both);
     // The hidden node names itself, at the middle of the near node where the
     // light is fullest — exactly where an erased name is most legible.
     let name = |node: u32| LatticeLabels {
@@ -6002,6 +6023,7 @@ fn a_node_under_a_nearer_sheets_node_cuts_nothing_out_of_its_light() {
     // test's business. The glow may add nothing to it.
     let mut dark_both = near(0.0);
     dark_both.nodes.push(far);
+    rows_per_node(&mut dark_both);
     let hidden = apart(&shooter.shot(&near(0.0)), &shooter.shot_with(&dark_both, name(1)));
 
     let alone = shooter.shot(&near(0.8));
@@ -6815,6 +6837,156 @@ fn harmonic(profile: &[f64], k: usize) -> f64 {
         im += v * a.sin();
     }
     2.0 * (re * re + im * im).sqrt() / n
+}
+
+/// A node with no light of its own writes into no other node's colour.
+///
+/// `GlowFade` hands a strip row only to a node that has a light. Everything
+/// else is given `GlowStep::default()` — and that default's row is 0, its mix
+/// 1.0. A node with no light is still SHIPPED whenever it draws anything at
+/// all (`paints`: an audio ring is enough), and `fs_ink_strip` draws for every
+/// instance without looking at the level, so such a node settles its own ink
+/// into row 0 at full weight and takes the colour of whichever node actually
+/// owns that row.
+///
+/// Ordinary material reaches this, not a stress test: turn the audio ring on
+/// and every ringing node that is not itself lit — most of them, with the Gate
+/// low — writes over row 0. The node holding row 0 is the first node to have
+/// lit in the session, so what a listener sees is one node's halo wearing the
+/// wrong hue and flickering between wrong hues, since which of the several
+/// writers lands last is the rasteriser's business and not stable frame to
+/// frame.
+///
+/// Two nodes, two layers, one colour each: the lit node draws the RED octave
+/// band and no ring, the unlit one draws the GREEN audio ring and nothing
+/// else. The lit node's halo has to stay red.
+#[test]
+fn a_node_with_no_light_writes_into_no_other_nodes_colour() {
+    const SIZE: [u32; 2] = [256, 256];
+    const WIDTH: f32 = 0.18;
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    // The band red and the ring green, with the LIT node wearing only the
+    // band — so every green pixel of light in the frame came off the other
+    // node's ink rather than out of this one's own ring.
+    let scene = || -> Scene {
+        let mut scene = two_colour_node(WIDTH, WIDTH);
+        scene.nodes[0].audio_ring = 0.0;
+        scene.nodes[0].glow.mix = 1.0;
+        let mut idle = scene.nodes[0];
+        idle.world_pos.x += 1.2;
+        idle.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
+        idle.activation = 0.0;
+        idle.audio_ring = 1.0;
+        // What `GlowFade` hands a node it gave no row to.
+        idle.glow = harmonigraph_scene::GlowStep::default();
+        scene.nodes.push(idle);
+        scene
+    };
+    let unlit = |mut scene: Scene| -> Scene {
+        scene.glow_reach = 0.0;
+        scene
+    };
+
+    let ground = shooter.shot(&unlit(scene()));
+    let light = added_light(&shooter.shot(&scene()), &ground);
+
+    // Non-vacuous first, on the WHOLE halo rather than on its red: the defect
+    // takes the red to nothing, so a red-only check here reports "nothing is
+    // lit" for a frame that is brightly lit in the wrong colour.
+    assert!(
+        light.iter().sum::<i64>() > 64,
+        "the lit node lit nothing at all: {light:?}",
+    );
+    assert!(
+        light[0] > light[1] * 4,
+        "the lit node's halo came out {light:?}: it is drawing the RED band and no ring, so \
+         the green is the idle node's ink settling into the row it was never given",
+    );
+}
+
+/// A light already in its RELEASE survives the pane changing size.
+///
+/// The colour half of a node's light lives only in the ink strip, and a node
+/// whose note fade has run out draws no layer at all — `ink_at` gates the band
+/// on `params.x`, the ring on `in.ring` and the marks on `params.y`/`z`, and
+/// every one of them is 0. That is the designed state, not an edge: a level can
+/// stand above zero on a node whose every layer has gone silent, and such a
+/// node is shipped for exactly that reason. Its halo's colour is therefore
+/// entirely what the strip already HELD.
+///
+/// So the strip is the one thing that must not be dropped underneath it. Any
+/// change to the pane's pixel size rebuilds the offscreen targets, and a strip
+/// rebuilt from nothing hands a releasing node `held = 0` with no ink to seed
+/// from — `glow_layer` reads `ink.w <= 0` and returns nothing, on that frame
+/// and every frame after. The halo does not fade, it disappears.
+///
+/// What that looks like: hold a chord, let go, and while the light is still
+/// running out drag the window's edge, drag the dock separator over the
+/// lattice, or drag the window between a Retina display and an external
+/// monitor — that last one moves `pixels_per_point`, so the pixel size changes
+/// at an unchanged point size. Every lingering halo snaps off in one frame,
+/// while halos on nodes still holding keys are untouched (they have ink of
+/// their own). It reads as a bug in the release rather than in the resize.
+///
+/// Measured against the SAME node one ordinary frame on, so the claim is
+/// "a resize is not different from a frame" rather than a number.
+#[test]
+fn a_light_in_its_release_survives_the_pane_changing_size() {
+    const SIZE: [u32; 2] = [256, 256];
+    const GROWN: [u32; 2] = [256, 260];
+    const WIDTH: f32 = 0.18;
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    // Sounding: the octave band alone, which is what puts a colour in the row.
+    let sounding = || -> Scene {
+        let mut scene = two_colour_node(WIDTH, 0.0);
+        scene.nodes[0].glow.mix = 1.0;
+        scene
+    };
+    // Releasing: the note fade has run out, so the node draws no layer at all
+    // and takes none of this frame's ink — only its light is left, and only
+    // the strip knows what colour it is.
+    let releasing = || -> Scene {
+        let mut scene = two_colour_node(0.0, 0.0);
+        scene.nodes[0].glow.mix = 0.0;
+        scene
+    };
+    let unlit = |mut scene: Scene| -> Scene {
+        scene.glow_reach = 0.0;
+        scene
+    };
+
+    // The two grounds first, each on a pane of its own, so that the carrying
+    // sequence below runs without a shot in the middle of it taking the pane.
+    let ground = shooter.shot(&unlit(releasing()));
+    shooter.size = GROWN;
+    let ground_grown = shooter.shot(&unlit(releasing()));
+    shooter.size = SIZE;
+
+    // A sounding frame to put a colour in the row, then the release.
+    let _ = shooter.shot(&sounding());
+    let kept = added_light(&shooter.shot_again(&releasing()), &ground);
+    // And the same release again, with the pane one pixel wider.
+    shooter.size = GROWN;
+    let resized = added_light(&shooter.shot_again(&releasing()), &ground_grown);
+
+    // Non-vacuous first: the release has to light the halo at all, or the
+    // comparison below is between two nothings.
+    assert!(
+        kept[0] > 64,
+        "a releasing node lit nothing to begin with: {kept:?}",
+    );
+    // The claim. Half is generous — the frame is a little larger, and the
+    // light is stepped once more — where the failure takes it to zero.
+    assert!(
+        resized[0] > kept[0] / 2,
+        "the light went from {kept:?} to {resized:?} when the pane changed size: \
+         a node drawing no ink of its own has only the strip's held colour, and \
+         a strip rebuilt with the offscreen targets hands it none",
+    );
 }
 
 /// A node's light takes its colour from the frame before, not from this frame's

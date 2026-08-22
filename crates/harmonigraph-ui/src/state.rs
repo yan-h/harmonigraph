@@ -716,6 +716,21 @@ impl SharedState {
         }
     }
 
+    /// Put the audio ring back to a standing start — nothing carried, in
+    /// either half.
+    ///
+    /// The two halves are ONE state and are cleared together. Both step
+    /// against the clock and both hold at a step of zero, so anything drawing
+    /// a SETTING rather than a frame of an animation — a probe taking every
+    /// shot at one moment — has to clear both or the shot before is handed
+    /// straight back. Clearing [`ring_fade`](Self::ring_fade) alone leaves the
+    /// new shot's gate reading the previous shot's grid, which is a picture of
+    /// neither.
+    pub fn reset_ring(&mut self) {
+        self.ring_fade = harmonigraph_scene::RingFade::default();
+        self.ring_levels = crate::panes::spectral_fold::RingLevels::default();
+    }
+
     pub fn log(&mut self, line: impl Into<String>) {
         self.console.log(line);
     }

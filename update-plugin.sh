@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 #
-# Rebuild the plugin from the CURRENT checkout (works from a git worktree)
-# and swap the fresh binary into the MAIN checkout's target/bundled/ — the
-# location Bitwig scans — then re-sign ad-hoc (required on Apple Silicon,
-# where an invalid signature makes the dynamic loader refuse the binary).
+# update-plugin.sh — BUILD the current checkout (works from a git worktree) and
+# load the result into the ONE bundle slot Bitwig scans. Build-and-load in a
+# single shot; `load-plugin.sh` is the same swap without the build.
 #
 # Run this after ANY change you want to see in the DAW, then deactivate and
 # reactivate the plugin in Bitwig. Works from the main checkout or any worktree.
@@ -16,81 +15,41 @@
 #      checkout's target/bundled/, so a branch build is invisible there
 #      until its binary is copied over.
 # Plain `cargo build` resolves the *nearest* workspace root (= the branch);
-# we then copy the artifact into the main checkout's bundles explicitly.
+# `load-plugin.sh` then puts that artifact into the shared slot.
+#
+# The SWAP is not here. It is a delicate sequence — sign a staging copy, then
+# write the finished bytes through the live executable's own inode, because
+# `cp` writes through an inode and `codesign` replaces one, and a host mapped
+# to an unlinked file goes on serving the old build with everything reporting
+# success. One copy of that lives in `load-plugin.sh` and this script calls it;
+# a second copy here is what drifted out of step with it once already, and
+# nothing in a build notices when it does.
 set -euo pipefail
 
 PKG="harmonigraph-plugin"
-NAME="Harmonigraph"
-# Cargo names a LIB artifact after the lib target, which is the package name
-# with dashes folded to underscores — so the dylib is libharmonigraph_plugin,
-# not libharmonigraph-plugin. `cargo build -p` below wants $PKG itself, so the
-# two spellings have to be kept apart.
-LIB="${PKG//-/_}"
-
-# Current checkout (where the build output lands) and the main working tree
-# (first entry of `git worktree list`, whose target/bundled/ Bitwig scans).
 HERE="$(git rev-parse --show-toplevel)"
-# `substr($0, 10)` rather than `$2`: awk splits on whitespace, so a checkout
-# under a path with a space in it ("~/My Drive/projects/...", which this repo
-# has lived under) would come back truncated at the space — and a truncated
-# MAIN makes BUNDLED a path that simply is not there, so the copy below goes
-# quiet instead of failing. `.claude/reclaim-worktrees.sh` reads the same
-# record the same way.
-MAIN="$(git worktree list --porcelain | awk '/^worktree /{print substr($0, 10); exit}')"
-BUNDLED="$MAIN/target/bundled"
-DYLIB="$HERE/target/release/lib${LIB}.dylib"
+LOADER="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/load-plugin.sh"
+[ -x "$LOADER" ] || { echo "ERROR: $LOADER not found or not executable" >&2; exit 1; }
 
-echo "Building $PKG (release) from $HERE ..."
-( cd "$HERE" && cargo build --release -p "$PKG" )
-[ -f "$DYLIB" ] || { echo "ERROR: $DYLIB not found after build" >&2; exit 1; }
+# Both packages, and the second is the easy half to skip. The offline renderer
+# draws through harmonigraph-ui and harmonigraph-render — the same crates the
+# editor does — so a change to what any pane looks like is a change to what an
+# mp4 looks like, and a worktree that built only the plugin hands the loader
+# whatever renderer it happens to be holding. `load-plugin.sh` warns when the
+# renderer it installs predates HEAD; building it here is what keeps that
+# warning quiet for the right reason.
+echo "Building $PKG + harmonigraph-offline (release) from $HERE ..."
+( cd "$HERE" && cargo build --release -p "$PKG" -p harmonigraph-offline )
 
-updated=0
-for EXT in clap vst3; do
-  BUNDLE="$BUNDLED/$NAME.$EXT"
-  if [ ! -d "$BUNDLE" ]; then
-    echo "WARNING: $BUNDLE missing — create the bundles once from the main" >&2
-    echo "         checkout: (cd \"$MAIN\" && cargo xtask bundle $PKG --release)" >&2
-    continue
-  fi
-  # Written through the destination's OWN inode, deliberately — see the same copy
-  # in load-plugin.sh. Bitwig's plugin host keeps the library it opened mapped
-  # across a deactivate/activate, so only a change to the bytes behind that inode
-  # reaches a running host; a fresh inode at the same path leaves it on the old
-  # build until Bitwig restarts.
-  cp "$DYLIB" "$BUNDLE/Contents/MacOS/$NAME"
-  codesign --force --sign - "$BUNDLE"
-  codesign --verify --verbose=1 "$BUNDLE"
-  echo "Updated + signed: $BUNDLE"
-  updated=$((updated + 1))
-done
-
-# The offline video renderer, installed where the plugin's "Render video
-# when done" setting looks for it by default. A fixed location beats the
-# plugin trying to guess at a host's working directory or its own bundle
-# path — and it means the renderer always matches the build it shipped
-# with, which matters because they share the take format.
-SUPPORT="$HOME/Library/Application Support/$NAME"
-( cd "$HERE" && cargo build --release -p harmonigraph-offline )
-if [ -f "$HERE/target/release/harmonigraph-offline" ]; then
-  mkdir -p "$SUPPORT"
-  cp "$HERE/target/release/harmonigraph-offline" "$SUPPORT/harmonigraph-offline"
-  echo "Updated renderer:  $SUPPORT/harmonigraph-offline"
-else
-  echo "WARNING: harmonigraph-offline not built; auto-render will not work" >&2
-fi
-
-echo
-if [ "$updated" -gt 0 ]; then
-  # Record which build is now in the shared slot so load-plugin.sh's "<- now"
-  # marker (and any session asking "what's loaded?") reflects this swap too.
-  {
-    echo "worktree=$HERE"
-    echo "branch=$(git -C "$HERE" symbolic-ref --short -q HEAD || git -C "$HERE" rev-parse --short HEAD)"
-    echo "commit=$(git -C "$HERE" rev-parse --short HEAD)"
-    echo "loaded_at=$(date +%s)"
-  } > "$BUNDLED/.loaded"
-  echo "Done ($updated bundle(s)). Deactivate + reactivate the plugin in Bitwig."
-else
-  echo "No bundles updated — see warnings above." >&2
+# The branch this checkout stands on, which is how load-plugin.sh names a
+# build. A detached HEAD has no branch to match, so say so here rather than
+# letting the loader fail on a table lookup that cannot succeed.
+BRANCH="$(git -C "$HERE" symbolic-ref --short -q HEAD || true)"
+if [ -z "$BRANCH" ]; then
+  echo "ERROR: $HERE is on a detached HEAD, which load-plugin.sh matches by" >&2
+  echo "       branch name. Check out a branch, or run:" >&2
+  echo "       $LOADER --list" >&2
   exit 1
 fi
+
+exec "$LOADER" "$BRANCH"

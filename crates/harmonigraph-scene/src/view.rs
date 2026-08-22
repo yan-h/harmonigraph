@@ -551,12 +551,14 @@ pub struct ViewConfig {
     /// this node's — and is a hard threshold because a MIDI note either is that
     /// node or is not.
     ///
-    /// Narrow fresh, at 10¢, because just intonation is what this is for:
+    /// Narrow fresh, at 2.1¢, because just intonation is what this is for:
     /// partials of just-tuned notes land dead on nodes, so a narrow kernel
-    /// draws them crisp and rejects everything between. 12-TET material reads
-    /// softer at that width and wants the bar dragged right — a tempered major
-    /// third's 5th harmonic sits 13.7¢ off the node it belongs to and a
-    /// harmonic seventh 31¢ off.
+    /// draws them crisp and rejects everything between. 12-TET material is
+    /// rejected along with the rest at that width and wants the bar dragged
+    /// right — a tempered major third's 5th harmonic sits 13.7¢ off the node
+    /// it belongs to and a harmonic seventh 31¢ off, both several times the
+    /// fresh kernel wide, so neither reaches its node until the bar is opened
+    /// to the order of the miss.
     pub spectral_width: f32,
     /// How thick the audio ring is, in the same quad UV units as the octave
     /// band's own width ([`band_width`](Self::band_width)) — and **0 turns the
@@ -595,12 +597,18 @@ pub struct ViewConfig {
     /// picture turned, and what is worth looking at is the disagreement
     /// between a node's own pitch and where the energy near it actually sits.
     ///
-    /// Fresh at 200¢, a whole tone across a wedge. Wide enough to hold every
-    /// miss the material makes — a tempered major third's 5th harmonic sits
-    /// 13.7¢ off its node, a harmonic seventh 31¢, and the syntonic comma
-    /// between two just spellings is 21.5¢ — and narrow enough that those are
-    /// a seventh of the wedge apart rather than a fiftieth, which is the
-    /// difference between reading a detuning and taking it on trust.
+    /// Fresh at 10¢, a wedge that is very nearly one pitch: what it shows is
+    /// energy AT the node rather than energy somewhere near it, which is the
+    /// reading that says where a partial actually landed.
+    ///
+    /// Every miss the material makes is wider than that — a tempered major
+    /// third's 5th harmonic sits 13.7¢ off its node, a harmonic seventh 31¢,
+    /// and the syntonic comma between two just spellings is 21.5¢ — so at the
+    /// fresh width a detuned partial falls outside its own wedge and reads as
+    /// that node going quiet rather than as a ring off centre. Seeing WHERE it
+    /// went is what the bar is dragged right for, out to the order of the miss;
+    /// a whole tone across the wedge holds all three at once, at the cost of a
+    /// wedge that answers for a range rather than for a pitch.
     pub spectral_ring_range: f32,
     /// How loud the loudest thing a node's ring shows has to read before that
     /// node draws a ring at all, as a level on the analyzer's own Level window
@@ -636,9 +644,17 @@ pub struct ViewConfig {
     /// there is something loud within a hundred cents of nearly every pitch
     /// class, so the nodes' levels sit close together and the bar tips from
     /// most rings to none over a short stretch of its travel. Measured on a
-    /// sawtooth 24 dB down over the fresh window: the fold rings 601 nodes of
+    /// sawtooth 24 dB down over a 200¢ window: the fold rings 601 nodes of
     /// 1025 at 0.1 and 177 at 0.4, where the spectrum rings all 1025 at both
     /// and none by 0.6.
+    ///
+    /// That contrast is a function of the WINDOW, which is why the width it was
+    /// taken at is named rather than called the fresh one: the fold has no
+    /// window at all and the spectrum's is
+    /// [`spectral_ring_range`](Self::spectral_ring_range), so at the fresh 10¢
+    /// the spectrum spreads ±6.25¢ across a wedge rather than ±100¢ and selects
+    /// very nearly as sharply as the fold. The sentence above is what the two
+    /// readings do as that bar is opened, and the numbers are one point on it.
     pub spectral_ring_gate: f32,
     /// How far the gate DROPS for a bucket already open, as a share of the
     /// Level window — a Schmitt trigger's lower threshold.
@@ -1285,6 +1301,17 @@ struct Stack {
     /// to be (see [`ViewConfig::ring_inner`]).
     inner: f32,
     cursor: f32,
+    /// How far out the stack REACHED, a refusal counting as far as the layer
+    /// it could not seat would have gone.
+    ///
+    /// The cursor answers "what does the next layer stand off?", and stops at
+    /// the last layer DRAWN so that a layer switched off gives its slot back.
+    /// This answers "how far out is the stack spoken for?", which is a
+    /// different question the moment a refusal is in play: the room ran out,
+    /// nothing outside can be seated, and the slot is spent rather than free.
+    /// The mark strip is the one layer that reads this instead of the cursor —
+    /// see [`ViewConfig::rings`].
+    reach: f32,
     /// Set by a refusal, and the reason it is not just a cursor: the two ways
     /// a layer comes back empty are different questions, and only one of them
     /// is about the room.
@@ -1322,9 +1349,22 @@ impl Stack {
         let outer = inner + width;
         if outer > 1.0 {
             self.full = true;
+            // Spent, not free: the reach stands at the node's own edge, which
+            // is where the room ran out. The mark strip then stands off that
+            // rather than dropping into the slot, and it does so at the SAME
+            // radius it had one step earlier, when the layer fitted exactly —
+            // so the strip crosses a refusal without moving at all.
+            //
+            // The edge and not `outer`, which is where the layer would have
+            // ended and is unbounded: `mark_inner` is what the shader sizes
+            // every node's BILLBOARD on, so a strip seated on a refused width
+            // asks for a quad several node radii across, on every node in the
+            // window, to draw marks nobody can see.
+            self.reach = 1.0;
             return (0.0, 0.0);
         }
         self.cursor = outer;
+        self.reach = outer;
         (inner, outer)
     }
 }
@@ -1437,7 +1477,7 @@ impl ViewConfig {
         // would have. The start is carried beside the cursor rather than as its
         // opening value, because the two answer different questions: what a
         // layer stands off, and where the stack sits.
-        let mut stack = Stack { inner, cursor: 0.0, full: false };
+        let mut stack = Stack { inner, cursor: 0.0, reach: 0.0, full: false };
         let audio = stack.take(gap, size(self.spectral_ring_width, RING_WIDTH_MAX));
         let band = stack.take(gap, size(self.band_width, RING_WIDTH_MAX));
         RingStack {
@@ -1445,11 +1485,20 @@ impl ViewConfig {
             audio,
             band,
             outer: stack.cursor,
-            // The strip's own slot, on the stack's terms — a gap out from the
-            // last layer drawn, or the stack's start when nothing was. Only
-            // the outer edge is left to the renderer, because that is the one
-            // the billboard's margin lets run past the quad.
-            mark_inner: slot_start(stack.cursor, inner, gap),
+            // The strip's own slot, on the stack's terms — a gap out from how
+            // far the stack REACHED, or the stack's start when it reached
+            // nowhere. Only the outer edge is left to the renderer, because
+            // that is the one the billboard's margin lets run past the quad.
+            //
+            // The reach and not the cursor, which is the whole of what keeps
+            // the strip travelling the same way as the handle. The marks are
+            // the one layer never refused — their slot is allowed past the
+            // quad — so `Stack::full` cannot stop them the way it stops a
+            // ring, and seating them on the cursor handed them the slot a
+            // refused band had just given up. That is the gift `full` exists
+            // to refuse, arriving by the one door it does not cover: the strip
+            // jumped a fifth of a node INWARD as the Inner handle moved out.
+            mark_inner: slot_start(stack.reach, inner, gap),
             mark_thickness: size(self.mark_thickness, MARK_THICKNESS_MAX),
             gap,
         }

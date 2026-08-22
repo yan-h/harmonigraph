@@ -50,8 +50,9 @@ keep sitting there unused at zero cost.
   before it: a blob's `node_style` is now an ignored unknown field, held by
   `a_persist_blob_naming_a_retired_node_style_still_loads`. The disc they
   painted is gone too: a node is its ring stack read out from an empty middle
-  (`ring_inner`), and what lights that middle is the node glow, in the
-  octave-color blend `octave_glow_color` lays around it.
+  (`ring_inner`), and what lights that middle is the node glow, in the colours
+  the node itself draws — every layer contributing in proportion to the radial
+  width it takes up, through the ink strip.
 - **The piano roll's geometry** (was two entries here: baking settled notes
   into cached meshes, then superseding that with a wgpu callback). **Built.**
   The roll now draws as one instanced quad per note segment through

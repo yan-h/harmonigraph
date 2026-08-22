@@ -422,14 +422,21 @@ mod tests {
             // with the camera, so a zoom applied on top of the last one would
             // compound.
             state.camera = home;
-            // And from a fresh fade, for the same reason one step further on:
+            // And from a fresh ring, for the same reason one step further on:
             // every shot here is taken at ONE clock, so a ring carried over
             // from the shot before would still be standing where that shot's
-            // Gate put it (`RingFade` steps against the clock, so a second
+            // Gate put it (both halves step against the clock, so a second
             // frame at the same moment moves nothing). These are pictures of
-            // settings rather than frames of an animation, and a fresh fade is
+            // settings rather than frames of an animation, and a fresh ring is
             // what the first frame of each of them draws.
-            state.ring_fade = harmonigraph_scene::RingFade::default();
+            //
+            // BOTH halves, which is why it is one call: the carried levels are
+            // the grid the wedges read and the fade is whether the annulus is
+            // there at all. Clearing the fade alone leaves the Fold shots and
+            // the whole Gate sweep drawn over the RAW spectrum's grid — the
+            // one measured first — which reads as the gate admitting far more
+            // than it does, and by more the higher the gate is set.
+            state.reset_ring();
             state.camera.zoom_by(zoom);
             let output = context.run_ui(
                 egui::RawInput {

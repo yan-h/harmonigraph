@@ -145,10 +145,17 @@ success. Check the hosting mode before suspecting the swap.
 
 Release builds land in `<that-worktree>/target/release/libharmonigraph_plugin.dylib`.
 Match the dylib's mtime to the branch's last commit time to identify it, then
-swap it back. To rebuild one without cd'ing into the user's checkout:
+swap it back with `./load-plugin.sh <branch>` — which is the whole recovery,
+and the only recipe here that gets the swap's ORDER right. To rebuild one
+without cd'ing into the user's checkout:
 `cargo build --release -p harmonigraph-plugin --manifest-path <main>/Cargo.toml`,
-then hand-copy the dylib into both bundles and `codesign --force --sign -`
-each, and verify via a distinctive string from that branch's diff.
+then load it the same way and verify via a distinctive string from that
+branch's diff.
+
+Do not hand-copy into the bundles and `codesign --force --sign -` each. That
+order is the failure the next paragraph describes: signing the live bundle
+discards the inode the copy just wrote, so a running host stays on the build
+you were trying to replace while every command reports success.
 
 Do NOT compare shasums against the source dylib to check a swap took:
 `codesign --force` re-signs the bundled binary, so its hash legitimately

@@ -119,9 +119,15 @@ pub const SPECTRAL_GATE_MAX: f32 = 1.0;
 ///
 /// The ceiling is what the band MEANS rather than arithmetic. It is the drop
 /// from the gate to the threshold a bucket already open is held by, so at a
-/// quarter of the window a ring that opened at the fresh 0.4 stays lit down to
-/// 0.15 — most of the way to the floor, and about as far as "this node is still
+/// quarter of the window a ring that opened at the fresh 0.30 stays lit down to
+/// 0.05 — nearly to the floor, and about as far as "this node is still
 /// sounding" can be stretched before it reads as "this node once sounded".
+///
+/// The band is allowed to reach the gate and past it, and what happens there
+/// is [`RingGate::opens`]: the held threshold stops one step of the grid above
+/// silence rather than at it, so a band this wide holds a ring until its bucket
+/// reads nothing at all. Only the gate's own floor gives back the ungated
+/// picture.
 pub const SPECTRAL_HYSTERESIS_MAX: f32 = 0.25;
 
 /// The longest attack or release the ring's reading offers, in seconds.
@@ -502,10 +508,24 @@ impl RingGate {
     /// question about the measurement, and anything else in it makes the Fade
     /// decide when the band applies.
     fn opens(&self, bucket: usize, held: bool) -> bool {
-        // Never below zero, so the floor stays the bar's off position: at a gate
-        // of `SPECTRAL_GATE_MIN` every bucket opens whatever the band says, and
-        // a hysteresis that reached under it could not make that MORE true.
-        let gate = if held { (self.gate - self.hysteresis).max(0.0) } else { self.gate };
+        // The band may not reach silence while the GATE stands above it. A held
+        // threshold of zero is met by an empty bucket, so a band as wide as the
+        // gate would hold every bucket that ever opened for the life of the
+        // session — a latch rather than a trigger, and a lattice that collects
+        // rings instead of showing what is sounding. Floored instead at one
+        // step of the grid, which is a `u8`: a held bucket keeps its ring while
+        // it reads ANYTHING, and gives it back on silence.
+        //
+        // `self.gate.min(..)` and not the step alone, so the bar's own off
+        // position is untouched: at a gate of `SPECTRAL_GATE_MIN` the floor is
+        // zero, silence still opens every bucket, and that picture — the
+        // analyzer's whole reading at once — is the one thing the floor is for.
+        const GRID_STEP: f32 = 1.0 / 255.0;
+        let gate = if held {
+            (self.gate - self.hysteresis).max(self.gate.min(GRID_STEP))
+        } else {
+            self.gate
+        };
         f32::from(self.peaks[bucket]) / 255.0 >= gate
     }
 }
@@ -1206,6 +1226,47 @@ mod tests {
         let gate = gate_of(&view, empty());
         assert!(gate.opens(1000, true), "silence at the gate's floor still rings");
         assert!(gate.opens(1000, false), "and rings whether or not it is held");
+    }
+
+    /// A band that reaches the gate holds a ring until its bucket falls
+    /// silent — it does not hold it for the life of the session.
+    ///
+    /// The trap this is against: subtracting the band from the gate and
+    /// flooring the RESULT at zero makes the held threshold exactly the bar's
+    /// off position whenever the band reaches the gate, and an empty bucket
+    /// meets that. The Schmitt trigger becomes a LATCH — every bucket that
+    /// ever opened stays open through silence — so the lattice fills with
+    /// rings monotonically as a piece plays and never gives one back.
+    ///
+    /// The floor itself is a different question and stays as it is: at a gate
+    /// of [`SPECTRAL_GATE_MIN`] silence rings deliberately, which is
+    /// [`the_band_never_reaches_under_the_gates_floor`]. What must not happen
+    /// is a gate ABOVE its floor behaving like one on it.
+    ///
+    /// Run at gates under the fresh band of 0.0964, which is the stretch of
+    /// the Gate bar a person reaches by dragging it down to see more of the
+    /// reading.
+    #[test]
+    fn a_band_reaching_the_gate_releases_on_silence() {
+        for gate in [0.02, 0.05, 0.09] {
+            let view = gated(gate, SpectralReading::Fold);
+            assert!(
+                view.spectral_ring_hysteresis >= gate,
+                "the test's own band of {} does not reach the gate of {gate}",
+                view.spectral_ring_hysteresis,
+            );
+
+            let mut loud = empty();
+            loud[1000] = 255;
+            assert!(
+                gate_of(&view, loud).opens(1000, false),
+                "a full-scale bucket does not open the gate at {gate}",
+            );
+            assert!(
+                !gate_of(&view, empty()).opens(1000, true),
+                "a bucket held open at a gate of {gate} never releases on silence",
+            );
+        }
     }
 
     /// The band is a question about the GATE and the measurement and nothing

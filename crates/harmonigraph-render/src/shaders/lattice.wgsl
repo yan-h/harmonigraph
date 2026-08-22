@@ -1544,10 +1544,11 @@ fn spectral_ring(in: VsOut, oct: OctRing, uv: vec2<f32>, band: f32, aa: f32) -> 
     return vec4<f32>(spectral_lut_color(spectrum_at(pitch)), cov * in.ring);
 }
 
-// ---- A node's chord color ---------------------------------------------------
-// Every sounding octave's color at once, laid around the node by angle. One
-// blend, and it is what the node's light is painted in and what the ink strip
-// reads the middle of a node at.
+// ---- How tightly a node's octaves pack -------------------------------------
+// A node's light takes its colour from the INK STRIP: every layer the node
+// draws contributes in proportion to the radial width it occupies, silent
+// slices and a silent ring included (`fs_ink_strip`, then `glow_ink`). What is
+// left here is the angular tightness that blend is laid out at.
 
 // The TIGHTEST each octave's angular color lobe is drawn at (a von Mises-like
 // falloff): higher is tighter, more separated arcs. Tuned so neighbouring
@@ -1558,51 +1559,6 @@ fn spectral_ring(in: VsOut, oct: OctRing, uv: vec2<f32>, band: f32, aa: f32) -> 
 // eases to the blend's mean instead; the rim width is 1/sqrt of this, so the
 // two move together).
 const GLOW_LOBE_KAPPA: f32 = 4.0;
-
-// The glow's color when a chord sounds: every sounding octave's hue laid
-// around the halo in the direction of its OWN indicator, so the glow shows
-// ALL the playing notes at once instead of just the loudest voice's single
-// color. Seam-free — each octave's weight is a periodic bump in
-// cos(angle - indicator angle), never an atan2 wrap. A lone sounding octave
-// yields its color uniformly (the single term cancels the angle dependence);
-// with a solo note or nothing sounding it falls back to `fallback`, so a
-// single voice keeps its exact color — the ramp at the NOTE's own pitch,
-// which the lit slot's is not once a note folds onto an outer indicator.
-//
-// `kappa` is how tightly to pack those hues — at most GLOW_LOBE_KAPPA, and
-// less where the caller wants their seams held open. At 0
-// every weight collapses to the octave's own level and the hues average into
-// one color.
-fn octave_glow_color(
-    octaves: vec3<u32>, cents: f32, ring: OctRing, angle: f32, kappa: f32,
-    fallback: vec3<f32>,
-) -> vec3<f32> {
-    var count = 0u;
-    var wsum = 0.0;
-    var csum = vec3<f32>(0.0);
-    for (var i = 0u; i < OCTAVE_SLOTS; i = i + 1u) {
-        let level = octave_level(octaves, i);
-        if level <= 0.0 {
-            continue;
-        }
-        count = count + 1u;
-        let theta = oct_mid(i32(i), ring);
-        let w = level * exp(kappa * (cos(angle - theta) - 1.0));
-        // Slot i is MIDI octave i - 1, whose C is MIDI i*12; fold in this
-        // node's pitch class for the octave's true pitch. Off pitch_lut, so
-        // the glow is laid out of the same colors the indicators around it
-        // wear — the octave band is the MIDI picture whatever the audio ring
-        // inside it is reading.
-        csum = csum + pitch_lut_color(f32(i) * 12.0 + cents / 100.0) * w;
-        wsum = wsum + w;
-    }
-    // A solo note (or none) keeps its exact node color; two or more
-    // sounding octaves spread their hues around the glow.
-    if count < 2u || wsum < 1e-5 {
-        return fallback;
-    }
-    return csum / wsum;
-}
 
 // An unlit node draws no marker, no trail mark and no placeholder of its own.
 // What says a node position is there is the grid: the lines around it stop
@@ -1988,8 +1944,10 @@ fn node_ink(in: VsOut, d: f32, aa: f32, field_step: f32, oct: OctRing) -> vec4<f
     // The slot the STACK gave the strip (u.misc4.y): a padding out from
     // whatever layer the stack ended on — which is the band on a node that
     // draws one and whatever is inside it on a node that does not — and the
-    // node's center on a node with no rings at all, where a padding would
-    // stand off nothing and open a hole the size of itself.
+    // stack's own START on a node with no rings at all, where a padding would
+    // stand off nothing and open a hole the size of itself. That start is the
+    // Inner handle's radius rather than the node's centre, so a node drawing
+    // nothing but its marks still wears them where its rings would have been.
     //
     // Headroom: that edge can be dialed out to 1.0, so the strip lives in the
     // QUAD_MARGIN margin. Cap it inside the billboard (a circle of radius
@@ -2587,6 +2545,21 @@ fn vs_ink_strip(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsO
     let v = (out.strip_row + corner.y) / rows;
     out.clip_pos = vec4<f32>(corner.x * 2.0 - 1.0, 1.0 - 2.0 * v, 0.0, 1.0);
     out.uv = vec2<f32>(corner.x, 0.0);
+    // A node with no light was handed no ROW either, and the two facts are one
+    // fact: `GlowFade` gives a row only to a node that has a light and hands
+    // everything else `GlowStep::default()`, whose row is 0 and whose mix is 1.
+    // Such a node is still SHIPPED whenever it draws anything at all — an audio
+    // ring is enough — so writing its ink here would settle it whole into the
+    // row belonging to whichever node lit first. Collapsed to a point instead,
+    // which rasterises nothing.
+    //
+    // The level is the right test rather than the row, because a row is only
+    // ever ITS OWN while the light is: the frame a light ends the node still
+    // carries its row, ships at a level of exactly 0, and has that row taken
+    // back the same frame — so there is nothing left in it to keep.
+    if inst.glow.x <= 0.0 {
+        out.clip_pos = vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    }
     return out;
 }
 
