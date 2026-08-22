@@ -1,7 +1,7 @@
 //! [`StackBar`]: a node's cross-section in one bar — the empty middle it is
 //! read out from and the three layers stacked around that, each a cell as long
-//! as it is thick, named along its own stretch, with a handle apiece to size
-//! it by.
+//! as it is thick, named against the handle that opens it, with a handle
+//! apiece to size it by.
 
 use egui::{CornerRadius, Response, Sense, TextStyle, Ui, Vec2};
 use harmonigraph_scene::{
@@ -350,11 +350,12 @@ fn thumb_axis(rings: &RingStack) -> [f32; 4] {
 /// What each layer is called on the bar, innermost first: the Lattice page's
 /// own sections, cut to the one word that tells them apart.
 ///
-/// Short because the room a name gets is a layer's own thickness, which at a
-/// fresh view is under a fifth of the axis on three of the four. "Melody /
-/// bass" would be off the bar at every pane width, and a name that does not fit
-/// is not drawn at all — so every word here is chosen to be the longest one
-/// that still lands.
+/// Short because the room a name gets is a layer's own thickness plus whatever
+/// its neighbours have not spent on their own names, and at a fresh view three
+/// of the four layers are under a fifth of the axis. "Melody / bass" would be
+/// off the bar at every pane width, and a name with nowhere clear to go is not
+/// drawn at all — so every word here is chosen to be the longest one that still
+/// lands.
 ///
 /// **MIDI rather than the "Octaves" heading it sits under**, which is the one
 /// place this parts company with the pane, and it says the thing the bar is
@@ -401,10 +402,16 @@ const NAMES: [&str; 4] = ["Inner", "Audio", "MIDI", "Marks"];
 ///
 /// **Each layer is named rather than numbered**, and the bar carries no name of
 /// its own: a row of four numbers says how thick each layer is and never which
-/// layer is which, where a name laid along the stretch whose LENGTH is that
-/// width says both at once. So the row leads with "Inner" where its neighbours
-/// lead with their own names, in the same place, and what follows it along the
-/// bar is the rest of the node.
+/// layer is which, where a name lying on the layer says both at once. So the
+/// row leads with "Inner" where its neighbours lead with their own names, in
+/// the same place, and what follows it along the bar is the rest of the node.
+///
+/// A layer too thin to hold its own name is named against the handle that
+/// OPENS it instead, on whichever side of that handle has room — see the
+/// placement in [`StackBar::show`]. At a fresh view that is three of the four,
+/// so it is the ordinary case here rather than the corner: the length of a name
+/// is then the name's own and says nothing, and it is the picture beside it
+/// that says how thick.
 ///
 /// Double-click restores the four sizes a fresh view opens with. It is not
 /// [`ValueBar`]'s type-a-value gesture, for [`RangeBar`]'s reason doubled: a
@@ -539,13 +546,9 @@ impl<'a> StackBar<'a> {
             egui::Stroke::new(1.0, theme::hairline()),
         );
 
-        // Every layer that is on the node wears its own name, laid along the
-        // STRETCH OF BAR that means it — the same stretch a press there takes
-        // hold of ([`aimed`]): the layer's cell, half the gap at each end of
-        // it, and on the outermost layer the empty room past the stack, which
-        // is the marks' to grow into and the only place their name will fit at
-        // a fresh view. Naming the cell alone would leave the two thinnest
-        // layers anonymous at every width a settings column is dragged to.
+        // Every layer that is on the node wears its own name, laid at the
+        // handle that OPENS it — the inner end of the stretch of bar that means
+        // it, which is the same stretch a press there takes hold of ([`aimed`]).
         //
         // The innermost name is held off the bar's end by the inset every other
         // row in the pane holds its own name by, so the row leads with "Inner"
@@ -553,10 +556,38 @@ impl<'a> StackBar<'a> {
         // pixels. The rest stand off the thumb that opens their stretch by
         // enough to clear it.
         //
-        // A stretch too short for its name goes WITHOUT one rather than eliding
-        // it: an ellipsis costs most of the room a four-letter name needs, and
-        // a layer dialled down to a sliver would spend its whole cell saying
-        // nothing. What the bar always shows is the picture.
+        // **A name whose own stretch is too short for it hangs BACK off that
+        // handle instead**, ending the same pad short of it that a name which
+        // fits starts past it. Only when there is no room behind either does it
+        // spill FORWARD past its own layer, and then only while its middle is
+        // still inside its own stretch.
+        //
+        // Which is a name leaving the stretch it names, and it is worth what it
+        // costs. The room on this bar is not shared out the way the names need
+        // it: a fresh node spends over a third of the axis on the empty middle,
+        // whose name wants a fifth of that, and gives the audio ring a
+        // twentieth, which is under half what "Audio" wants at ANY width a
+        // settings column reaches (#405). Naming only what fits leaves that
+        // ring — the layer most worth naming, being the one with no room to
+        // say what it is — anonymous for good, while the bar carries the length
+        // its name needs a few pixels away.
+        //
+        // **What both borrowings are bounded by is INK, and that bound is the
+        // whole of what keeps them readable.** A name is read against whatever
+        // it is lying on, so one laid across another layer's CELL names that
+        // layer, whatever the order says — the failure is not a name going
+        // missing but a name going to the wrong ring, which is worse than the
+        // anonymity it was spent to buy. So a name reaches back only over bar
+        // with nothing drawn in it, which is the empty middle and the track
+        // between cells; and it spills forward only as far as its own middle,
+        // past which the cell it covers most is no longer its own. Between
+        // those, the names stay in the stack's order and never touch, so the
+        // third name from the left is the third layer out.
+        //
+        // A name with nowhere clear to go goes WITHOUT rather than eliding: an
+        // ellipsis costs most of the room a four-letter name needs, and a layer
+        // dialled down to a sliver would spend its whole cell saying nothing.
+        // What the bar always shows is the picture.
         let text_color = if response.hovered() || response.dragged() {
             theme::text()
         } else {
@@ -565,6 +596,15 @@ impl<'a> StackBar<'a> {
         let thumbs = thumbs_of(&rings);
         let body = TextStyle::Body.resolve(ui.style());
         let mut runs: Vec<(egui::Pos2, std::sync::Arc<egui::Galley>)> = Vec::new();
+        // The right edge of the last name DRAWN, so a name that went without
+        // leaves its room to the next one rather than holding it empty.
+        let mut cursor = rect.left();
+        // And the right edge of the last cell with INK in it — how far back a
+        // name may reach, per the paragraph above. The middle is drawn but
+        // carries none, which is exactly why it is the room the audio ring's
+        // name is found in; the strip carries none either while neither end is
+        // marked, on the same terms the cell loop greys it by.
+        let mut inked = rect.left();
         for (i, (lo, hi)) in spans.into_iter().enumerate() {
             if hi <= lo {
                 continue;
@@ -573,10 +613,36 @@ impl<'a> StackBar<'a> {
             let to = if i == 3 { rect.right() } else { thumbs[i] };
             let pad = if i == 0 { BAR_TEXT_PAD } else { HANDLE_INSET } * scale;
             let name = painter.layout_no_wrap(NAMES[i].to_owned(), body.clone(), text_color);
-            if name.size().x <= (to - from - pad).max(0.0) {
-                let pos = egui::pos2(from + pad, rect.center().y - name.size().y * 0.5);
+            let w = name.size().x;
+            // Past the handle that opens the layer, or past the name before it
+            // where that reaches further — the pad being the room a name keeps
+            // in front of itself, whether what stands there is a thumb or
+            // another name.
+            let ahead = from.max(cursor) + pad;
+            let back = from - pad - w;
+            let placed = if ahead + w <= to {
+                // Inside its own stretch, which is where a name belongs.
+                Some(ahead)
+            } else if back >= cursor.max(inked) + pad {
+                // Behind the handle that opens it, over bar carrying no ink.
+                Some(back)
+            } else if ahead + 0.5 * w <= to {
+                // Forward, while more of the name is still its layer's than
+                // the next one's.
+                Some(ahead)
+            } else {
+                None
+            };
+            if let Some(x) = placed.filter(|x| x + w <= rect.right()) {
+                let pos = egui::pos2(x, rect.center().y - name.size().y * 0.5);
                 painter.galley(pos, name.clone(), text_color);
                 runs.push((pos, name));
+                cursor = x + w;
+            }
+            // After this layer's own name is placed: a name is never held off
+            // the cell it names, only off the cells INSIDE it.
+            if !(i == 0 || (i == 3 && !marked)) {
+                inked = cells[i].right();
             }
         }
 
@@ -1031,62 +1097,229 @@ mod tests {
         );
     }
 
-    /// And every name drawn stays inside the stretch of bar it names — the same
-    /// stretch a press there takes hold of. A name read against the layer
-    /// beside it names the wrong layer, so a stretch too short for its name
-    /// goes without one rather than borrowing room from its neighbour.
-    #[test]
-    fn a_name_never_leaves_the_stretch_it_names() {
-        let mut view = fresh();
-        let shapes = shapes(W, |ui| {
-            StackBar::new(&mut view).show(ui);
-        });
-        let (bar, x_of) = axis_on(&shapes);
-        let thumbs = spread(
-            thumb_axis(&fresh().rings()).map(&x_of),
-            (x_of(0.0), x_of(AXIS_TOP)),
-            THUMB_SEP,
-        );
-        for (run, name) in text_boxes(&shapes) {
+    /// Every width the bar is drawn at, from the narrowest a settings column
+    /// can be dragged to up past the widest anyone opens one to. The name
+    /// placement borrows room from its neighbours, so the widths where it goes
+    /// wrong are not the ones anybody would think to sample: a fresh view
+    /// mislabelled the octave band for the whole band 93..192 while reading
+    /// correctly at 200, 400 and 600 (#405).
+    fn every_column_width() -> impl Iterator<Item = f32> {
+        (80u16..=700).map(f32::from)
+    }
+
+    /// Each layer's CELL at `w`, as an x range on the bar — the cells rather
+    /// than the stretches, because a name is read against what it is lying ON,
+    /// which is what the placement in [`StackBar::show`] is bounded by.
+    ///
+    /// The middle's cell runs from the bar's own end, the way the bar draws it.
+    fn cells_on(shapes: &[egui::Shape], view: &ViewConfig) -> [Option<(f32, f32)>; 4] {
+        let (bar, x_of) = axis_on(shapes);
+        let spans = layer_spans(&view.rings());
+        std::array::from_fn(|k| {
+            let (lo, hi) = spans[k];
+            (hi > lo).then(|| (if lo <= 0.0 { bar.left() } else { x_of(lo) }, x_of(hi)))
+        })
+    }
+
+    /// No name in `shapes` covers another layer's cell more than it covers its
+    /// own — the claim the bar lives or dies on, asked of one painting of it.
+    ///
+    /// A name is read against the cell it is lying on, so one laid across the
+    /// octave band names the octave band whatever the stack order says — and a
+    /// name on the WRONG ring is worse than the anonymity borrowing was spent
+    /// to buy. That is the trade this refuses to make (#405), and it is what
+    /// bounds both directions a name is allowed to borrow in.
+    ///
+    /// Covering none of either is allowed, and is the ordinary case for a name
+    /// hung back over the empty middle: the middle carries no ink, so a name
+    /// laid there has taken nothing from anybody. What is refused is a name
+    /// that has left its own ring and landed on a neighbour's.
+    fn no_name_lands_on_another_layer(w: f32, shapes: &[egui::Shape], view: &ViewConfig) {
+        let cells = cells_on(shapes, view);
+        let over = |run: &egui::Rect, cell: Option<(f32, f32)>| {
+            cell.map_or(0.0, |(lo, hi)| (run.right().min(hi) - run.left().max(lo)).max(0.0))
+        };
+        for (run, name) in text_boxes(shapes) {
             let k = NAMES
                 .iter()
                 .position(|n| *n == name)
                 .unwrap_or_else(|| panic!("the bar drew a run that is no layer's name: {name:?}"));
-            let from = if k == 0 { bar.left() } else { thumbs[k - 1] };
-            let to = if k == 3 { bar.right() } else { thumbs[k] };
+            let own = over(&run, cells[k]);
+            for (j, cell) in cells.iter().enumerate() {
+                // The middle is drawn and EMPTY, so nothing is taken from it:
+                // it is the one cell a name is free to lie across, and the room
+                // the audio ring's name is found in.
+                let other = if j == 0 { 0.0 } else { over(&run, *cell) };
+                assert!(
+                    j == k || other <= own + 0.5,
+                    "at {w}, {name:?} lies over {other} points of {:?}'s cell and {own} \
+                     of its own — it names the wrong layer",
+                    NAMES[j],
+                );
+            }
+        }
+    }
+
+    /// At a fresh view, at every width a settings column can be dragged to.
+    #[test]
+    fn a_name_never_covers_another_layers_cell_more_than_its_own() {
+        for w in every_column_width() {
+            let mut view = fresh();
+            let shapes = shapes(w, |ui| {
+                StackBar::new(&mut view).show(ui);
+            });
+            no_name_lands_on_another_layer(w, &shapes, &view);
+        }
+    }
+
+    /// Where each name drawn is allowed to be: laid against the handle that
+    /// OPENS its layer, on one side of it or the other, and never wholly past
+    /// the layer it names.
+    ///
+    /// A name is allowed to leave its own stretch — that is what lets the audio
+    /// ring be named at all (#405) — but only backwards onto its own near edge,
+    /// or forwards while more of it is still inside the stretch than out. What
+    /// it may never do is float: a run more than its own pad short of where its
+    /// layer begins, or one whose middle is past where the layer ends, names
+    /// the layer beside it instead.
+    #[test]
+    fn a_name_is_laid_against_the_layer_it_names() {
+        for w in every_column_width() {
+            let mut view = fresh();
+            let shapes = shapes(w, |ui| {
+                StackBar::new(&mut view).show(ui);
+            });
+            let (bar, x_of) = axis_on(&shapes);
+            let thumbs = spread(
+                thumb_axis(&fresh().rings()).map(&x_of),
+                (x_of(0.0), x_of(AXIS_TOP)),
+                THUMB_SEP,
+            );
+            for (run, name) in text_boxes(&shapes) {
+                let k = NAMES.iter().position(|n| *n == name).unwrap_or_else(|| {
+                    panic!("the bar drew a run that is no layer's name: {name:?}")
+                });
+                let from = if k == 0 { bar.left() } else { thumbs[k - 1] };
+                let to = if k == 3 { bar.right() } else { thumbs[k] };
+                let pad = if k == 0 { BAR_TEXT_PAD } else { HANDLE_INSET };
+                assert!(
+                    run.right() >= from - pad - 0.5 && run.center().x <= to + 0.5,
+                    "at {w}, {name:?} was drawn at {:?}, off the {from}..{to} it names",
+                    run.x_range(),
+                );
+            }
+        }
+    }
+
+    /// And the names stay in the stack's own order, never touching. That is
+    /// what makes a name that left its stretch still readable: the third name
+    /// from the left is the third layer out however far any of them borrowed,
+    /// so the row can be read off in one direction like the node it draws.
+    ///
+    /// Read off the bar left to right and NOT in paint order, which is the only
+    /// version of this that can fail: the loop paints innermost first, so paint
+    /// order is the stack's by construction and asking it that way is asking
+    /// nothing. What the eye gets is the x order, and it is the placement that
+    /// decides whether the two agree.
+    #[test]
+    fn the_names_read_out_in_the_stacks_own_order() {
+        for w in every_column_width() {
+            let mut view = fresh();
+            let shapes = shapes(w, |ui| {
+                StackBar::new(&mut view).show(ui);
+            });
+            let mut runs = text_boxes(&shapes);
+            runs.sort_by(|a, b| a.0.left().total_cmp(&b.0.left()));
+            let order: Vec<usize> = runs
+                .iter()
+                .map(|(_, s)| NAMES.iter().position(|n| n == s).unwrap())
+                .collect();
             assert!(
-                run.left() >= from - 0.5 && run.right() <= to + 0.5,
-                "{name:?} was drawn at {:?}, outside the {from}..{to} it names",
-                run.x_range(),
+                order.windows(2).all(|p| p[0] < p[1]),
+                "at {w}, the bar reads left to right as {order:?}",
+            );
+            assert!(
+                runs.windows(2).all(|p| p[0].0.right() <= p[1].0.left() + 0.5),
+                "at {w}, two names overlap: {:?}",
+                runs.iter().map(|(r, s)| (s, r.x_range())).collect::<Vec<_>>(),
             );
         }
     }
 
-    /// Every layer on the node is named, well below the width a settings column
-    /// is dragged to. Two things buy that: the names run along a layer's whole
-    /// STRETCH rather than its cell, which is what gives the strip — a few
-    /// points across at a fresh view — the empty bar past the stack to be named
-    /// in; and the axis stops a strip's depth past the quad edge rather than at
-    /// the billboard's reach, which is worth a fifth of the bar to the three
-    /// layers inside it.
+    /// A layer switched OFF wears no name and holds no room: the bar it would
+    /// have taken goes to the layers outside it, and none of them ends up
+    /// wearing its name over a ring that is still on.
     ///
-    /// The borrowing above only reaches a TRAILING layer's empty stretch past
-    /// the whole stack — it does nothing for an interior one, and the fresh
-    /// view's audio ring is now thin enough a cell of its own that Audio does
-    /// not fit even well past any width a settings column would plausibly
-    /// reach. See #405.
+    /// The audio ring is the one to switch off, being the layer the borrowing
+    /// exists for. With it gone the octave band is the first ring on the node,
+    /// and the middle's ink-free room — the room "Audio" was found in — is the
+    /// band's to be named in instead. Nothing else here reaches a bar painted
+    /// with a layer missing, so this is also the only test that runs the name
+    /// loop's `continue` and the `cursor` it deliberately does not advance.
     #[test]
-    #[ignore = "Audio's own cell no longer fits its name at the fresh ring width — see #405"]
-    fn every_layer_on_the_node_is_named() {
+    fn an_off_layer_leaves_its_room_to_the_names_outside_it() {
         let mut view = fresh();
-        let shapes = shapes(200.0, |ui| {
-            StackBar::new(&mut view).show(ui);
-        });
-        let drawn: Vec<String> = text_boxes(&shapes).into_iter().map(|(_, s)| s).collect();
-        for name in NAMES {
-            assert!(drawn.iter().any(|s| s == name), "{name:?} went undrawn: {drawn:?}");
+        view.spectral_ring_width = 0.0;
+        for w in every_column_width() {
+            let mut view = view.clone();
+            let shapes = shapes(w, |ui| {
+                StackBar::new(&mut view).show(ui);
+            });
+            let drawn: Vec<String> = text_boxes(&shapes).into_iter().map(|(_, s)| s).collect();
+            assert!(
+                !drawn.iter().any(|s| s == NAMES[1]),
+                "at {w}, the audio ring is off the node and still named: {drawn:?}",
+            );
+            no_name_lands_on_another_layer(w, &shapes, &view);
         }
     }
+
+    /// Every layer on the node is named from [`ALL_NAMED`] points of column up,
+    /// which is well under the width a settings column is dragged to. Three
+    /// things buy that: the names run along a layer's whole STRETCH rather than
+    /// its cell, which is what gives the strip — a few points across at a fresh
+    /// view — the empty bar past the stack to be named in; the axis stops a
+    /// strip's depth past the quad edge rather than at the billboard's reach,
+    /// which is worth a fifth of the bar to the three layers inside it; and a
+    /// name whose own stretch cannot hold it borrows the ink-free room beside
+    /// it rather than going undrawn.
+    ///
+    /// The first two reach only a TRAILING layer's empty stretch past the whole
+    /// stack, and it is the third that names the audio ring: a twentieth of the
+    /// axis at a fresh view is under half what "Audio" wants at any width a
+    /// settings column reaches (#405).
+    ///
+    /// Swept rather than sampled, and the floor is asserted from BOTH sides, so
+    /// that a placement change has to move the number here rather than quietly
+    /// giving up a name at some width nobody probes. Below the floor the ring's
+    /// name is the one that goes — its borrowed room is the first to run out —
+    /// and what the bar keeps is a correct three, which is
+    /// [`a_name_never_covers_another_layers_cell_more_than_its_own`]'s business.
+    #[test]
+    fn every_layer_on_the_node_is_named() {
+        let named = |w: f32| {
+            let mut view = fresh();
+            let shapes = shapes(w, |ui| {
+                StackBar::new(&mut view).show(ui);
+            });
+            let drawn: Vec<String> = text_boxes(&shapes).into_iter().map(|(_, s)| s).collect();
+            NAMES.iter().filter(|n| drawn.iter().any(|s| s == *n)).count()
+        };
+        for w in every_column_width().filter(|w| *w >= ALL_NAMED) {
+            assert_eq!(named(w), 4, "a layer went unnamed at {w}, past the {ALL_NAMED} floor");
+        }
+        assert!(
+            named(ALL_NAMED - 1.0) < 4,
+            "every layer is named a point below the floor too — {ALL_NAMED} is stale, and \
+             the bar is now doing better than it claims",
+        );
+    }
+
+    /// The narrowest settings column at which all four layers are named.
+    ///
+    /// A measurement of the fresh view's own proportions and the room its four
+    /// names need, not a setting: it moves whenever either does.
+    const ALL_NAMED: f32 = 193.0;
 
     /// And one thumb per layer, four of them, on the boundaries.
     #[test]
