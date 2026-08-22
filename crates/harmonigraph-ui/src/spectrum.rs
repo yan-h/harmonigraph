@@ -317,7 +317,7 @@ impl WholeSong {
     /// analyses the whole `samples` buffer
     /// whatever the render's `--start`/`--end`, so a ten-second window on a
     /// three-minute bounce arrives here with columns spanning the file and a
-    /// bucket cut for ten seconds. Folding those built a texture around 14 000
+    /// bucket cut for ten seconds. Folding those builds a texture around 14 000
     /// texels wide against a limit of 2048 — issue #367, the same
     /// `load_texture` assert as #333/#335, reached from the other axis.
     ///

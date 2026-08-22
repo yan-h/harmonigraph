@@ -87,8 +87,9 @@ pub(crate) const MIN_BUCKET: f64 = crate::AudioSpectrum::FFT_INTERVAL * COLUMNS_
 /// through, and what the offline renderer reports off its own device — it sits
 /// far above both [slab](LIVE_SLAB_CAP) [caps](WHOLE_SONG_SLAB_CAP) and can
 /// never bite. At the 2048 an egui context defaults to when nothing tells it
-/// otherwise — every test in this tree — [`LIVE_SLAB_CAP`] alone puts the
-/// texture at `2 * (1024 + 8)` = 2064 and the upload panics. So this trades
+/// otherwise — a fixture that builds a bare one, which is most of them —
+/// [`LIVE_SLAB_CAP`] alone puts the texture at `2 * (1024 + 8)` = 2064 and the
+/// upload panics. So this trades
 /// time resolution for a texture that fits, on exactly the builds whose
 /// alternative is the crash.
 fn slab_ceiling(max_side: usize, whole: bool) -> usize {
@@ -2042,14 +2043,15 @@ mod tests {
     const EDITOR_MAX_SIDE: usize = 8192;
 
     /// The texture side a context reports when NOTHING tells it otherwise —
-    /// egui's `InputState` default, and what every test in this tree runs at.
+    /// egui's `InputState` default, and what a fixture that builds a bare
+    /// context runs at.
     ///
-    /// No renderer runs here any more: the offline one fills
-    /// `RawInput::max_texture_side` in from its device (issue #368), as the
-    /// editor always did. So this is now the limit of a context nobody paints
-    /// through, kept because it is still the SMALLEST one the arithmetic has to
-    /// survive, and because a suite that only ever asks at 8192 stops asking
-    /// the question [`slab_ceiling`] exists to answer.
+    /// No renderer reports it: both shells fill `RawInput::max_texture_side` in
+    /// from their device. It is the SMALLEST limit the arithmetic has to
+    /// survive all the same, and a suite that only ever asks at 8192 stops
+    /// asking the question [`slab_ceiling`] exists to answer — the ceiling
+    /// cannot bite above the slab caps, so a fixture at a real device's limit
+    /// measures the caps and nothing else.
     const BARE_MAX_SIDE: usize = 2048;
 
     /// The pitch range the ring sweeps hold fixed while they move time.

@@ -97,11 +97,11 @@ impl Renderer {
     /// `None` makes egui report its own 2048 default, and the spectrogram
     /// reads that limit for both axes of the heatmap
     /// (`harmonigraph_ui::spectrogram::Plan`): rows are clamped to it directly
-    /// and slabs through `slab_ceiling`. Left unfilled, a 4K export planned
-    /// against a quarter of the area this device would have taken, and nothing
-    /// on screen or in stderr said so — issue #368. The editor has never had
-    /// that gap: the vendored egui-baseview passes its renderer's limit in, off
-    /// this same wgpu call.
+    /// and slabs through `slab_ceiling`. Left unfilled, a 4K export plans
+    /// against a quarter of the area this device takes, and nothing on screen
+    /// or in stderr says so — issue #368. The editor has no such gap: the
+    /// vendored egui-baseview passes its renderer's limit in, off this same
+    /// wgpu call.
     ///
     /// The DEVICE's number rather than a lower one chosen here, because the
     /// caps that decide what a spectrogram should spend already exist a layer
