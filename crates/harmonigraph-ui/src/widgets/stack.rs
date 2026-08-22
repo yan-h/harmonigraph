@@ -1,7 +1,7 @@
 //! [`StackBar`]: a node's cross-section in one bar — the empty middle it is
 //! read out from and the three layers stacked around that, each a cell as long
-//! as it is thick, named along its own stretch, with a handle apiece to size
-//! it by.
+//! as it is thick, named against the handle that opens it, with a handle
+//! apiece to size it by.
 
 use egui::{CornerRadius, Response, Sense, TextStyle, Ui, Vec2};
 use harmonigraph_scene::{
@@ -402,10 +402,16 @@ const NAMES: [&str; 4] = ["Inner", "Audio", "MIDI", "Marks"];
 ///
 /// **Each layer is named rather than numbered**, and the bar carries no name of
 /// its own: a row of four numbers says how thick each layer is and never which
-/// layer is which, where a name laid along the stretch whose LENGTH is that
-/// width says both at once. So the row leads with "Inner" where its neighbours
-/// lead with their own names, in the same place, and what follows it along the
-/// bar is the rest of the node.
+/// layer is which, where a name lying on the layer says both at once. So the
+/// row leads with "Inner" where its neighbours lead with their own names, in
+/// the same place, and what follows it along the bar is the rest of the node.
+///
+/// A layer too thin to hold its own name is named against the handle that
+/// OPENS it instead, on whichever side of that handle has room — see the
+/// placement in [`StackBar::show`]. At a fresh view that is three of the four,
+/// so it is the ordinary case here rather than the corner: the length of a name
+/// is then the name's own and says nothing, and it is the picture beside it
+/// that says how thick.
 ///
 /// Double-click restores the four sizes a fresh view opens with. It is not
 /// [`ValueBar`]'s type-a-value gesture, for [`RangeBar`]'s reason doubled: a
@@ -1230,30 +1236,52 @@ mod tests {
         }
     }
 
-    /// Every layer on the node is named, well below the width a settings column
-    /// is dragged to. Three things buy that: the names run along a layer's whole
-    /// STRETCH rather than its cell, which is what gives the strip — a few
-    /// points across at a fresh view — the empty bar past the stack to be named
-    /// in; the axis stops a strip's depth past the quad edge rather than at the
-    /// billboard's reach, which is worth a fifth of the bar to the three layers
-    /// inside it; and a name whose own stretch cannot hold it borrows from the
-    /// room beside it rather than going undrawn.
+    /// Every layer on the node is named from [`ALL_NAMED`] points of column up,
+    /// which is well under the width a settings column is dragged to. Three
+    /// things buy that: the names run along a layer's whole STRETCH rather than
+    /// its cell, which is what gives the strip — a few points across at a fresh
+    /// view — the empty bar past the stack to be named in; the axis stops a
+    /// strip's depth past the quad edge rather than at the billboard's reach,
+    /// which is worth a fifth of the bar to the three layers inside it; and a
+    /// name whose own stretch cannot hold it borrows the ink-free room beside
+    /// it rather than going undrawn.
     ///
     /// The first two reach only a TRAILING layer's empty stretch past the whole
     /// stack, and it is the third that names the audio ring: a twentieth of the
     /// axis at a fresh view is under half what "Audio" wants at any width a
     /// settings column reaches (#405).
+    ///
+    /// Swept rather than sampled, and the floor is asserted from BOTH sides, so
+    /// that a placement change has to move the number here rather than quietly
+    /// giving up a name at some width nobody probes. Below the floor the ring's
+    /// name is the one that goes — its borrowed room is the first to run out —
+    /// and what the bar keeps is a correct three, which is
+    /// [`a_name_never_covers_another_layers_cell_more_than_its_own`]'s business.
     #[test]
     fn every_layer_on_the_node_is_named() {
-        let mut view = fresh();
-        let shapes = shapes(200.0, |ui| {
-            StackBar::new(&mut view).show(ui);
-        });
-        let drawn: Vec<String> = text_boxes(&shapes).into_iter().map(|(_, s)| s).collect();
-        for name in NAMES {
-            assert!(drawn.iter().any(|s| s == name), "{name:?} went undrawn: {drawn:?}");
+        let named = |w: f32| {
+            let mut view = fresh();
+            let shapes = shapes(w, |ui| {
+                StackBar::new(&mut view).show(ui);
+            });
+            let drawn: Vec<String> = text_boxes(&shapes).into_iter().map(|(_, s)| s).collect();
+            NAMES.iter().filter(|n| drawn.iter().any(|s| s == *n)).count()
+        };
+        for w in every_column_width().filter(|w| *w >= ALL_NAMED) {
+            assert_eq!(named(w), 4, "a layer went unnamed at {w}, past the {ALL_NAMED} floor");
         }
+        assert!(
+            named(ALL_NAMED - 1.0) < 4,
+            "every layer is named a point below the floor too — {ALL_NAMED} is stale, and \
+             the bar is now doing better than it claims",
+        );
     }
+
+    /// The narrowest settings column at which all four layers are named.
+    ///
+    /// A measurement of the fresh view's own proportions and the room its four
+    /// names need, not a setting: it moves whenever either does.
+    const ALL_NAMED: f32 = 193.0;
 
     /// And one thumb per layer, four of them, on the boundaries.
     #[test]
