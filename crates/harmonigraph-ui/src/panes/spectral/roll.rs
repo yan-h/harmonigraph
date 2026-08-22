@@ -551,10 +551,30 @@ pub(super) fn note_instances(
         let mut segments = note.segments(now).peekable();
         while let Some(((t0, p0), (t1, p1))) = segments.next() {
             let last = segments.peek().is_none();
-            let (t0, t1) = (t0.max(edge), t1.max(edge));
+            // A segment wholly before the region is DROPPED, and the test has
+            // to be made on its own end rather than on the clamped one — a
+            // clamp is what a segment straddling the edge wants and it is the
+            // wrong answer for one behind it, which comes out of the `max` with
+            // both ends on the edge and its PITCH endpoints untouched. That is
+            // a zero-length box across whatever the bend covered, drawn at the
+            // crop, at the pitch midway through a glide the region does not
+            // contain: a detached dot a few points off the ribbon's own end,
+            // wearing the full outline, which is all a box with no length is.
+            //
+            // Reachable both ways round. Whole-song the edge IS the render's
+            // start, so any note that glides and is then held across it has its
+            // glide behind the crop; live the edge trails the window by the ink
+            // overhang, and per-note tuning puts a short segment at the head of
+            // every note ([`RollNote::SETTLE`]), which is the one most likely
+            // to have scrolled past it.
+            //
+            // Strictly before, so this can never empty a note: the note filter
+            // above already refused every note whose stop is behind the edge,
+            // and a note's last segment ends on that stop.
             if t1 < edge {
                 continue;
             }
+            let (t0, t1) = (t0.max(edge), t1.max(edge));
             // Unclamped: `edge` already bounds how far past the region these
             // can reach, and clamping is what squashed the leaving ribbon
             // against the far end rather than letting it slide out.
@@ -1500,6 +1520,67 @@ mod tests {
         assert!(
             brief > 0,
             "no segment is shorter than the floor, so nothing here could have overlapped",
+        );
+    }
+
+    /// A bend that FINISHED before the region begins leaves nothing at the
+    /// edge — the segment carrying it is dropped, not squashed onto the crop.
+    ///
+    /// Clamping such a segment puts both its ends on the edge and leaves its
+    /// pitch endpoints where they were, which draws a box with no length at
+    /// the crop, on the pitch halfway through a glide the region does not
+    /// contain: an outline with nothing inside it, standing a few points off
+    /// the ribbon's own end and belonging to no note the picture shows (#385).
+    ///
+    /// Both layouts reach it, and the note is the same one either way: a C4
+    /// glided to G4 and then held across the edge. Whole-song the edge is the
+    /// render's start; live it trails the window by the ink overhang, which is
+    /// where a per-note tuning's opening segment ends up on any note held long
+    /// enough.
+    #[test]
+    fn a_bend_finished_before_the_region_leaves_nothing_at_its_edge() {
+        let bent = || {
+            let mut state = fresh();
+            state.spectrum_config.orientation = SpectralOrientation::Left;
+            state.spectrum_config.roll_seconds = 10.0;
+            state.spectrum_config.low_midi = 48.0;
+            state.spectrum_config.high_midi = 84.0;
+            state.tracker.handle_event(NoteEvent::on(1.0, 0, 60, 1.0));
+            state.tracker.handle_event(NoteEvent {
+                time: 1.5,
+                channel: 0,
+                note: 60,
+                kind: NoteEventKind::Tuning { semitones: 7.0 },
+            });
+            state
+        };
+
+        // Live: the window is the last 10 s at now = 13, so the glide finished
+        // a second and a half behind the far edge.
+        let live = bent();
+        let ins = instances(&live, 13.0);
+        let held = one(&ins);
+        assert!(
+            held.half_extent[1] > 1.0,
+            "the ribbon left is the glide's own stump, not the held note: {held:?}",
+        );
+
+        // Whole-song: the take is cropped to start at 4.0, well past the bend.
+        let mut song = bent();
+        let roll = song.tracker.roll().clone();
+        song.whole_song =
+            Some(crate::WholeSong { columns: Vec::new(), roll, start: 4.0, span: 10.0 });
+        let ins = instances(&song, 8.0);
+        let held = one(&ins);
+        // The one ribbon is the held stretch, at G4 and not at the C4-to-G4
+        // midpoint the dropped segment would have drawn at.
+        let scale = PitchScale { min_midi: 48.0, max_midi: 84.0, span: 36.0 };
+        let axes = Axes::new(PANE, &song.spectrum_config);
+        let g4 = axes.at(scale.t_of(67.0), 0.5).y;
+        assert!(
+            (held.center[1] - g4).abs() < 1.0,
+            "the ribbon is at {} rather than on G4 at {g4}",
+            held.center[1],
         );
     }
 
