@@ -370,6 +370,10 @@ mod tests {
                 egui::RawInput {
                     screen_rect: Some(screen),
                     time: Some(NOW),
+                    // The device's own limit, as the render loop reports it —
+                    // a probe drawn against a different ceiling from the export
+                    // is a probe of a picture nothing ships.
+                    max_texture_side: Some(renderer.max_texture_side()),
                     ..Default::default()
                 },
                 |ui| {
