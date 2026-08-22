@@ -368,11 +368,14 @@ fn parity_scene() -> Scene {
             // A row per node in the order they are built, settled: the light's
             // own clock is the shell's pass and no shell has run here, so this
             // fixture is the picture with nothing carried — which is exactly
-            // what a still image of the draw paths wants.
+            // what a still image of the draw paths wants. The mark the light
+            // is sized against is settled on this node's own, for the same
+            // reason.
             glow: harmonigraph_scene::GlowStep {
                 level: 1.0,
                 row: i,
                 mix: 1.0,
+                marked: f32::from(i == 0 || i == 2 || i == 4),
             },
             trail: 0.0,
         });
@@ -1383,8 +1386,14 @@ fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
         // The lattice pass draws the ring on every node it ships; the
         // gate is the fold's answer and there is no fold here.
         audio_ring: 1.0,
-        // Lit and settled on the strip's first row: one node, nothing carried.
-        glow: harmonigraph_scene::GlowStep { level: 1.0, row: 0, mix: 1.0 },
+        // Lit and settled on the strip's first row: one node, nothing carried,
+        // and the light sized against whichever ends this fixture is wearing.
+        glow: harmonigraph_scene::GlowStep {
+            level: 1.0,
+            row: 0,
+            mix: 1.0,
+            marked: f32::from((melody_slots | bass_slots) != 0),
+        },
         trail: 0.0,
     }];
     // One node, so one row — the strip follows the scene it is handed.
@@ -5855,7 +5864,7 @@ fn a_node_under_a_nearer_sheets_node_cuts_nothing_out_of_its_light() {
     // Lit, so it has a halo to meld into the near node's — and a name cut
     // out of that halo to show in the meld, if the near node's body did not
     // take the halo off first.
-    far.glow = harmonigraph_scene::GlowStep { level: 0.8, row: 1, mix: 1.0 };
+    far.glow = harmonigraph_scene::GlowStep { level: 0.8, row: 1, mix: 1.0, marked: 0.0 };
     far.color = glam::Vec4::new(0.9, 0.2, 0.2, 1.0);
     both.nodes.push(far);
     // The hidden node names itself, at the middle of the near node where the

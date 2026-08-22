@@ -33,6 +33,14 @@
 //! the level takes it here and the strip takes the same one there, so the two
 //! halves of one light cannot come to run at different speeds.
 //!
+//! A light also has a SIZE, and it is carried here beside the level for the
+//! same reason both of those are: the span the halo is drawn over is the node's
+//! outermost drawn edge plus the Reach, and a mark is the one layer that moves
+//! that edge per node. Left reading the node's own bit, the whole halo stepped
+//! a size smaller the frame the marking voice was pruned — one Fade after the
+//! key came up, with seconds of the light's own release still to run. See
+//! [`GlowStep::marked`].
+//!
 //! ## Rows, and why they are handed out rather than counted
 //!
 //! The strip's rows used to be the instance buffer's own order, which is fine
@@ -126,6 +134,9 @@ pub struct GlowFade {
 struct Lit {
     level: f32,
     row: u32,
+    /// How much of a mark the light still has this node wearing (see
+    /// [`GlowStep::marked`]), on the same pair of times as the level.
+    marked: f32,
     /// The step this node was last seen on (see [`GlowFade::frame`]).
     seen: u64,
 }
@@ -189,11 +200,24 @@ impl GlowFade {
                 .max(node.bass_level)
                 .max(if ringing { node.audio_ring } else { 0.0 })
                 .clamp(0.0, 1.0);
+            // Whether the node is wearing a mark AT ALL, which is what decides
+            // how far its outermost drawn edge — and so its light's whole span
+            // — reaches. `derive_scene` puts the bit here; what is carried is
+            // how much of it the light still has (see [`GlowStep::marked`]).
+            let wears = node.glow.marked;
             node.glow = match self.nodes.get_mut(&node.lattice_pos) {
                 Some(lit) => {
                     lit.seen = self.frame;
                     let mix = if target > lit.level { up } else { down };
                     lit.level += (target - lit.level) * mix;
+                    // Its own direction, not the level's: a mark can leave a
+                    // node whose light is holding steady — the melody moving to
+                    // another note over a held chord — and a mark can arrive on
+                    // one already lit. What it must not do is take the level's
+                    // coefficient the frame the two disagree, which would run
+                    // the size up on the release or down on the attack.
+                    let mark_mix = if wears > lit.marked { up } else { down };
+                    lit.marked += (wears - lit.marked) * mark_mix;
                     // The end of a light, said exactly rather than approached:
                     // a level that only gets small keeps a row and an instance
                     // for the rest of the session. Only where there is nothing
@@ -203,7 +227,7 @@ impl GlowFade {
                     if lit.level < GONE && target <= 0.0 {
                         lit.level = 0.0;
                     }
-                    GlowStep { level: lit.level, row: lit.row, mix }
+                    GlowStep { level: lit.level, row: lit.row, mix, marked: lit.marked }
                 }
                 // A node with no light yet and none arriving is left alone: a
                 // row handed to a target of 0 would be handed straight back.
@@ -217,11 +241,13 @@ impl GlowFade {
                     Some(row) => {
                         self.nodes.insert(
                             node.lattice_pos,
-                            Lit { level: target, row, seen: self.frame },
+                            Lit { level: target, row, marked: wears, seen: self.frame },
                         );
                         // Settled, not faded in: this node's row holds whatever
-                        // the last node to own it left there.
-                        GlowStep { level: target, row, mix: 1.0 }
+                        // the last node to own it left there, and its size is
+                        // the node's own — there is no earlier size to ease a
+                        // light nobody has drawn yet out of.
+                        GlowStep { level: target, row, mix: 1.0, marked: wears }
                     }
                     // Every row is spoken for, so this node has no light at
                     // all — see `MAX_ROWS`.
@@ -394,6 +420,44 @@ mod tests {
             fade.free.contains(&handed_back),
             "row {handed_back} was not handed back: {:?}",
             fade.free,
+        );
+    }
+
+    /// A node's light keeps the SIZE its mark gave it for as long as it keeps
+    /// its brightness, and comes off that size on the Glow release.
+    ///
+    /// The mark is the one layer that moves a node's outermost drawn edge, and
+    /// the light's whole span is that edge plus the Reach. The bit it is read
+    /// from is a STEP — set while the marking voice exists, clear the frame it
+    /// is pruned, which is one note Fade after the key comes up — so a halo
+    /// still near full brightness jumped a size smaller in a single frame,
+    /// seconds before its own release was done. Measured with the note Fade at
+    /// 0, which puts that step on the frame after the key.
+    #[test]
+    fn a_nodes_light_keeps_the_size_its_mark_gave_it() {
+        const TAU: f64 = 0.5;
+        let mut state = lit(0.0, TAU as f32);
+        assert!(state.view.mark_melody, "the fresh view marks the melody end");
+        state.tracker.handle_event(NoteEvent::on(0.0, 0, 60, 1.0));
+        let mut fade = GlowFade::default();
+        let size = |fade: &mut GlowFade, state: &mut SharedState, now: f64| {
+            state.tracker.prune(now, &state.view.envelope(&state.frame_params));
+            let mut scene = scene_at(state, now);
+            let bit = node_at(&scene, LatticePos::ORIGIN).glow.marked;
+            fade.step(&mut scene, &state.view, now);
+            (bit, node_at(&scene, LatticePos::ORIGIN).glow.marked)
+        };
+        let (bit, held) = size(&mut fade, &mut state, 0.0);
+        assert_eq!((bit, held), (1.0, 1.0), "a marked node's light is sized against it");
+
+        state.tracker.handle_event(NoteEvent::off(0.0, 0, 60));
+        let (bit, just_after) = size(&mut fade, &mut state, 0.05);
+        assert_eq!(bit, 0.0, "the node's own bit has to have stepped, or this proves nothing");
+        assert!(just_after > 0.5, "the light's size left with the mark: {just_after}");
+        let (_, one_tau) = size(&mut fade, &mut state, TAU);
+        assert!(
+            (one_tau - just_after / std::f32::consts::E).abs() < 0.05,
+            "the size runs on the light's own release, and left {one_tau} of {just_after}",
         );
     }
 
