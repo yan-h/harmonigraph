@@ -5858,17 +5858,16 @@ fn a_node_under_a_nearer_sheets_node_cuts_nothing_out_of_its_light() {
 /// stand the light off, so it runs all the way in — which is what makes the
 /// glow the note's own light rather than a rim around it.
 ///
-/// The node's exact centre, with the core's solidity dialled to 0 — the fresh
-/// view's own value, and [`parity_scene`] is the departure from it. At 0 no
-/// disc is drawn, so what the pixel carries is the light and only the light. At
-/// a solidity above 0 the disc is drawn over that light, crisp: the moat stands
-/// the glow off exactly the disc's own edge and no wider, so the two shots
-/// would agree there whatever the glow did.
+/// The node's exact centre, on a node whose innermost drawn layer is an
+/// ANNULUS — [`parity_scene`]'s octave band, with the audio ring off. Nothing
+/// is painted inside it, so what the pixel carries is the light and only the
+/// light. (A node whose innermost ring reaches the centre has no such middle:
+/// the moat covers what the ring covers, and the halo is outside the node.)
 ///
 /// Against the glow OFF rather than against a neighbouring pixel, because the
-/// thing that must not happen is the middle going DARK: the glow replaces the
-/// core's skirt (see `core_layer`), and a moat that reached the centre would
-/// take the skirt away and put nothing in its place.
+/// thing that must not happen is the middle going DARK: the light is the only
+/// thing a node draws there, and a moat that reached the centre would take it
+/// away and put nothing in its place.
 #[test]
 fn the_middle_of_a_node_is_where_its_light_is_fullest() {
     const SIZE: [u32; 2] = [256, 256];

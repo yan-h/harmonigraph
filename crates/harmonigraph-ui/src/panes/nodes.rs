@@ -151,7 +151,7 @@ fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // where that ring is off — so the only thing left to say about it is how
     // thick it is.
     //
-    // No Solidity bar and no Backdrop switch: the glyphs are always the crisp
+    // No solidity control and no Backdrop switch: the glyphs are always the crisp
     // classic shapes, and the silent octaves always stand in behind the
     // sounding ones — that backdrop is what completes the ring, so a lone
     // octave still reads as a whole note. How BRIGHT it stands is the At rest
