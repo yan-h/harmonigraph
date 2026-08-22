@@ -141,8 +141,9 @@ const RENDER_SCALE_RANGE: (f32, f32) = (0.25, 4.0);
 /// Entry points a (re)loaded shader must provide. The `_scene` pair is the
 /// two-attachment form the offscreen pass draws through; the bare pair is
 /// the single-attachment one the parity test's reference path uses; the
-/// `glow` three are the node glow's own pass — one billboard, the light, and
-/// the moat that takes light back off around every ring; and the `ink` four
+/// `glow` four are the node glow's own pass — one billboard, the light, the
+/// moat that takes light back off around every ring, and the cover that takes
+/// the light of the sheets behind a node off its body; and the `ink` four
 /// are the strip that light is coloured out of, read and then blurred ahead of
 /// both (see [`InkStrip`]).
 #[cfg(any(test, feature = "hot-reload"))]
@@ -156,6 +157,7 @@ const REQUIRED_ENTRY_POINTS: &[&str] = &[
     "vs_glow",
     "fs_glow",
     "fs_glow_moat",
+    "fs_glow_cover",
     "vs_ink_strip",
     "fs_ink_strip",
     "vs_ink_blur",
@@ -1124,11 +1126,13 @@ struct LatticeResources {
     downsample_pipeline: wgpu::RenderPipeline,
     blur_h_pipeline: wgpu::RenderPipeline,
     blur_v_pipeline: wgpu::RenderPipeline,
-    /// The node glow's own pass: the light, then the moat that takes it back
-    /// off around every ring — two draws over the node instance buffer, into a
-    /// target of the glow's own (see [`create_glow_pipelines`]).
+    /// The node glow's own pass: the light, the moat that takes it back off
+    /// around every ring, and the cover that takes the light of the sheets
+    /// behind a node off its body — three draws over the node instance buffer,
+    /// into a target of the glow's own (see [`create_glow_pipelines`]).
     glow_pipeline: wgpu::RenderPipeline,
     glow_moat_pipeline: wgpu::RenderPipeline,
+    glow_cover_pipeline: wgpu::RenderPipeline,
     /// The colour those two draw in, settled ahead of them: the ink read round
     /// every node, then blurred (see [`create_ink_strip_pipelines`]).
     ink_strip_pipeline: wgpu::RenderPipeline,
@@ -2057,8 +2061,9 @@ fn create_pipelines(
     )
 }
 
-/// The node glow's two pipelines: the light, then the moat, both over the node
-/// instance buffer and both into the glow's own target (see [`GlowTarget`]).
+/// The node glow's three pipelines: the light, the moat, and the cover, all
+/// over the node instance buffer and all into the glow's own target (see
+/// [`GlowTarget`]).
 ///
 /// **The light is SCREEN, not additive.** `src + dst * (1 - src)`,
 /// premultiplied on both channels, is what makes two neighbouring nodes' halos
@@ -2077,20 +2082,32 @@ fn create_pipelines(
 /// label shapes are subtracted the same way and for the same reason
 /// (`glyph_rim_erase_pipeline`), a name being as crisp a thing as a ring.
 ///
-/// **One vertex entry point** (`vs_glow`) for both, because the glow reaches
+/// **The cover writes nothing either**, and erases with what the node itself
+/// PAINTS — its ink and its clearing, `node_paint`'s own alpha. Drawn ahead of
+/// a sheet's light, it takes the light of every sheet behind off the body of
+/// every node on this one, which is what the scene pass does to their ink: a
+/// node sits in a hole cleared to the ground, and the light that reaches that
+/// hole is its own sheet's. Without it a covered node's halo melds into the
+/// light laid over the node covering it, and its erased name — cut out of
+/// that halo and nothing else — reads in the meld as a dimmer name-shaped
+/// patch on the node in front.
+///
+/// **One vertex entry point** (`vs_glow`) for all three, because the glow reaches
 /// past what a node paints: the billboard has to hold the whole halo, and
 /// growing `vs_main`'s quad to match would spend a ring of discarded fragments
 /// per node on every frame for a margin no other layer reads.
 ///
-/// **No depth.** The pass this pair draws into carries none: it is the glow's
-/// own, ahead of the scene's, and light has no geometry to be occluded by.
+/// **No depth.** The pass these draw into carries none: it is the glow's own,
+/// ahead of the scene's, and what occludes light is the draw order — a sheet
+/// at a time, back to front, the cover ahead of each sheet's light (see
+/// `paint`).
 fn create_glow_pipelines(
     device: &wgpu::Device,
     shader_src: &str,
     target_format: wgpu::TextureFormat,
     bind_group_layout: &wgpu::BindGroupLayout,
     strip_layout: &wgpu::BindGroupLayout,
-) -> (wgpu::RenderPipeline, wgpu::RenderPipeline) {
+) -> (wgpu::RenderPipeline, wgpu::RenderPipeline, wgpu::RenderPipeline) {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("lattice_shader"),
         source: wgpu::ShaderSource::Wgsl(shader_src.into()),
@@ -2146,7 +2163,11 @@ fn create_glow_pipelines(
             cache: None,
         })
     };
-    (build("fs_glow", screen), build("fs_glow_moat", GLOW_ERASE))
+    (
+        build("fs_glow", screen),
+        build("fs_glow_moat", GLOW_ERASE),
+        build("fs_glow_cover", GLOW_ERASE),
+    )
 }
 
 /// The two passes that settle what colour every node's light is, ahead of the
@@ -2448,7 +2469,7 @@ impl LatticeResources {
                 count: None,
             }],
         });
-        let (glow_pipeline, glow_moat_pipeline) = create_glow_pipelines(
+        let (glow_pipeline, glow_moat_pipeline, glow_cover_pipeline) = create_glow_pipelines(
             device,
             SHADER_SRC,
             target_format,
@@ -2564,6 +2585,7 @@ impl LatticeResources {
             blur_v_pipeline,
             glow_pipeline,
             glow_moat_pipeline,
+            glow_cover_pipeline,
             ink_strip_pipeline,
             ink_blur_pipeline,
             glow_over_pipeline,
@@ -2839,7 +2861,8 @@ impl CallbackTrait for LatticeCallback {
                     // layers reaches the light around it in the same reload —
                     // they are one shader drawing one node, and reloading half
                     // of it is a halo of the previous build.
-                    let (glow_pipeline, glow_moat_pipeline) = create_glow_pipelines(
+                    let (glow_pipeline, glow_moat_pipeline, glow_cover_pipeline) =
+                        create_glow_pipelines(
                         device,
                         &source,
                         resources.target_format,
@@ -2859,6 +2882,7 @@ impl CallbackTrait for LatticeCallback {
                     resources.edge_pipeline = edge_pipeline;
                     resources.glow_pipeline = glow_pipeline;
                     resources.glow_moat_pipeline = glow_moat_pipeline;
+                    resources.glow_cover_pipeline = glow_cover_pipeline;
                     resources.ink_strip_pipeline = ink_strip_pipeline;
                     resources.ink_blur_pipeline = ink_blur_pipeline;
                     eprintln!("[harmonigraph-render] shader hot-reloaded");
@@ -3126,14 +3150,18 @@ impl CallbackTrait for LatticeCallback {
                     occlusion_query_set: None,
                     multiview_mask: None,
                 });
-                // A SHEET at a time, back to front: the sheet's light, then
-                // the sheet's moats, then the sheet's names. A moat reaches
-                // the light of every node on its own sheet and behind it, and
-                // none of the light of a sheet in front — which is what a
-                // nearer sheet's node covering it means. Over the whole
-                // buffer in one go instead, a home node sitting under a
-                // harmonic seventh cuts its ring and its name into the
-                // seventh's light while showing none of either itself.
+                // A SHEET at a time, back to front: the sheet's cover, then
+                // its light, then its moats, then its names. The cover takes
+                // the light of every sheet behind off each node's body, so
+                // what a node covers in the scene pass it covers in the light
+                // too; a moat then reaches the light of every node on its own
+                // sheet and behind it, and none of the light of a sheet in
+                // front — which is what a nearer sheet's node covering it
+                // means. Over the whole buffer in one go instead, a home node
+                // sitting under a harmonic seventh cuts its ring and its name
+                // into the seventh's light while showing none of either
+                // itself, and its own halo melds into the seventh's with its
+                // name cut out of the meld.
                 //
                 // Within one sheet both erases are commutative and carry no
                 // depth, so all of a sheet's moats go in one draw and all of
@@ -3150,6 +3178,8 @@ impl CallbackTrait for LatticeCallback {
                         pass.set_bind_group(0, &pane.bind_group, &[]);
                         pass.set_bind_group(1, &glow.strip.blurred_bind_group, &[]);
                         pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
+                        pass.set_pipeline(&resources.glow_cover_pipeline);
+                        pass.draw(0..4, start..end);
                         pass.set_pipeline(&resources.glow_pipeline);
                         pass.draw(0..4, start..end);
                         pass.set_pipeline(&resources.glow_moat_pipeline);

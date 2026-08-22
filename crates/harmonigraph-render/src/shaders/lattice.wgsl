@@ -3106,6 +3106,17 @@ fn fs_glow_moat(in: VsOut) -> @location(0) vec4<f32> {
     return vec4<f32>(0.0, 0.0, 0.0, glow_moat(in, d, aa, oct_ring(in.cents)) * depth);
 }
 
+/// The cover draw: what this node's body takes off the light of the sheets
+/// behind it. NOTHING is painted, as with the moat — the pipeline multiplies
+/// the light already in the target by `1 - a` — and the coverage is exactly
+/// the node's own: its ink and its clearing, as `node_paint` composites them
+/// over the lattice. A pixel the node covers in the picture is a pixel whose
+/// light, from here on, is its own sheet's.
+@fragment
+fn fs_glow_cover(in: VsOut) -> @location(0) vec4<f32> {
+    return vec4<f32>(0.0, 0.0, 0.0, node_paint(in).w);
+}
+
 /// What a grid line or chord beam paints; see [`node_paint`] for why the
 /// entry points are two.
 fn edge_paint(in: EdgeVsOut) -> vec4<f32> {

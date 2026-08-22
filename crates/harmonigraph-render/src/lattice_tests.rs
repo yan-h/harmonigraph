@@ -5796,9 +5796,10 @@ fn a_moat_beside_a_lit_node_is_the_frame_with_no_glow_at_all() {
     );
 }
 
-/// A node a nearer sheet's node COVERS holds nothing off that node's light:
-/// neither its rings' moats nor its name. The frame with it is the frame
-/// without it, to the byte, wherever the near node's light lands.
+/// A node a nearer sheet's node COVERS shows nothing of itself in that node's
+/// light: not its rings' moats, not its name, and not its own halo. The frame
+/// with it is the frame without it, to the byte, wherever the near node's
+/// light lands.
 ///
 /// The case is a harmonic seventh over its home node, face on: the seventh's
 /// disc and knockout hide the home node entirely, and the glow pass, laid over
@@ -5810,11 +5811,15 @@ fn a_moat_beside_a_lit_node_is_the_frame_with_no_glow_at_all() {
 /// sheet's moats are cut before the next sheet's light is laid, and the light
 /// in front is whole.
 ///
-/// The hidden node draws no light of its own, so the glow's half is exact: with
-/// no light behind to meld with, what the near sheet lays down is all there is
-/// either way. It is the near node at half its size, so its rings fall inside the
-/// near node's clearing and are covered in the scene pass — to within the
-/// feather at the clearing's edge, measured with the glow off and subtracted.
+/// The hidden node is LIT, which is the harder half. Cutting only a sheet's own
+/// light is not enough: the hidden node's halo would still meld into the light
+/// laid over the node covering it, with its name cut out of the meld, and the
+/// name reads as a dimmer patch on the node in front. The near node's body has
+/// to take the light behind it off first — what `fs_glow_cover` is for.
+///
+/// It is the near node at half its size, so its rings fall inside the near
+/// node's clearing and are covered in the scene pass — to within the feather
+/// at the clearing's edge, measured with the glow off and subtracted.
 #[test]
 fn a_node_under_a_nearer_sheets_node_cuts_nothing_out_of_its_light() {
     const SIZE: [u32; 2] = [256, 256];
@@ -5841,9 +5846,16 @@ fn a_node_under_a_nearer_sheets_node_cuts_nothing_out_of_its_light() {
     let mut far = both.nodes[0];
     far.world_pos.z = -1.0;
     // Smaller, so its ring sits in the near node's lit MIDDLE rather than
-    // under the near node's own moat, where an erase would change nothing.
+    // under the near node's own moat, where an erase would change nothing;
+    // and off centre, so its halo reaches where the near node's light is
+    // PARTIAL — at the middle the light is full, and full light melded with
+    // anything is still full.
     far.scale = 0.5;
-    far.glow = harmonigraph_scene::GlowStep { level: 0.0, row: 1, mix: 0.0 };
+    far.world_pos.x += 0.4;
+    // Lit, so it has a halo to meld into the near node's — and a name cut
+    // out of that halo to show in the meld, if the near node's body did not
+    // take the halo off first.
+    far.glow = harmonigraph_scene::GlowStep { level: 0.8, row: 1, mix: 1.0 };
     far.color = glam::Vec4::new(0.9, 0.2, 0.2, 1.0);
     both.nodes.push(far);
     // The hidden node names itself, at the middle of the near node where the
@@ -5877,32 +5889,34 @@ fn a_node_under_a_nearer_sheets_node_cuts_nothing_out_of_its_light() {
         "the fixture puts the second node BEHIND the first, or it is covering rather than covered",
     );
 
-    let worst = |a: &[u8], b: &[u8]| {
-        a.iter().zip(b).map(|(x, y)| x.abs_diff(*y)).max().unwrap_or(0)
+    // Summed over the frame rather than the worst pixel: a halo melding into
+    // another is a few steps over many pixels, which one pixel's reading
+    // understates and a sum does not.
+    let apart = |a: &[u8], b: &[u8]| {
+        a.iter().zip(b).map(|(x, y)| u64::from(x.abs_diff(*y))).sum::<u64>()
     };
     // What the scene pass alone leaves of the hidden node: the clearing's own
-    // feather over the hidden ring's anti-aliased edge, a few steps at most
-    // and none of this test's business. The glow may add nothing to it.
+    // feather over the hidden ring's anti-aliased edge, and none of this
+    // test's business. The glow may add nothing to it.
     let mut dark_both = near(0.0);
     dark_both.nodes.push(far);
-    let hidden = worst(&shooter.shot(&near(0.0)), &shooter.shot_with(&dark_both, name(1)));
-    assert!(hidden <= 8, "the fixture's near node leaves {hidden}/255 of the far one showing");
+    let hidden = apart(&shooter.shot(&near(0.0)), &shooter.shot_with(&dark_both, name(1)));
 
     let alone = shooter.shot(&near(0.8));
     let covered = shooter.shot_with(&both, name(1));
-    let cut = worst(&alone, &covered);
-    // One step of slack for the composite's resampling of the glow target,
-    // as `a_moat_beside_a_lit_node_is_the_frame_with_no_glow_at_all` allows.
-    assert!(
-        cut <= hidden + 1,
-        "a node hidden under the near sheet cut its light by up to {cut}/255 \
-         against {hidden}/255 with the glow off",
-    );
-    // And the near node's light is there to be cut, or the equality above is
-    // two dark frames agreeing.
+    let cut = apart(&alone, &covered);
+    // The slack is for the composite's resampling of the glow target, which
+    // `a_moat_beside_a_lit_node_is_the_frame_with_no_glow_at_all` allows one
+    // step of: one step on one lit channel in sixty-four. The meld this guards
+    // against is several times that — one step on about a tenth of them.
     let unlit = shooter.shot(&near(0.0));
-    let lit = alone.iter().zip(&unlit).filter(|(a, b)| a != b).count();
-    assert!(lit >= 64, "the near node lit only {lit} pixels");
+    let lit = alone.iter().zip(&unlit).filter(|(a, b)| a != b).count() as u64;
+    assert!(lit >= 64, "the near node lit only {lit} channels");
+    assert!(
+        cut <= hidden + lit / 64,
+        "a node hidden under the near sheet changed the near node's light by {cut} steps \
+         summed over the frame, against {hidden} with the glow off and {lit} lit channels",
+    );
 }
 
 /// The MIDDLE of a node glows. Inside the innermost ring there is nothing to
@@ -6893,3 +6907,4 @@ fn a_wider_gap_fade_takes_the_light_off_over_a_wider_band() {
         "a fade four times the gap left a band of {four} pixels against the gap's own {crisp}",
     );
 }
+
