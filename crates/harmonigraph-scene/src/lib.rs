@@ -51,7 +51,7 @@ pub use spectral::{
     SPECTRAL_BALLISTICS_MAX, SPECTRAL_GATE_MAX, SPECTRAL_GATE_MIN, SPECTRAL_HYSTERESIS_MAX,
     SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN,
 };
-pub use style::{Gradient, NoteNames, Pulse, SevensLabel};
+pub use style::{DotShape, Gradient, NoteNames, Pulse, SevensLabel};
 pub use view::{DrawnWindow, FrameParams, RingStack, ViewConfig};
 
 use glam::{Vec3, Vec4};
@@ -627,16 +627,19 @@ impl NodeInstance {
     }
 }
 
-/// One marker standing at a lattice position: a small dot, drawn under the
-/// nodes, and the whole of what an unplayed lattice draws.
+/// One marker standing at a lattice position: a small dot or cross (see
+/// [`Scene::dot_shape`]), drawn under the nodes, and the whole of what an
+/// unplayed lattice draws.
 #[derive(Clone, Copy, Debug)]
 pub struct DotInstance {
     /// The position's own world center.
     pub pos: Vec3,
-    /// The dot's radius in WORLD units — its edge, which the shader cuts with
-    /// the one screen-constant soft band every ring here is cut with. Already
-    /// resolved from [`ViewConfig::dot_size`]'s quad UV against the scene's
-    /// node radius, so the renderer sizes the billboard off this alone.
+    /// How far the marker reaches, in WORLD units: a dot's radius, or the
+    /// length of a plus's arms. Its edge either way, which the shader cuts
+    /// with the one screen-constant soft band every ring here is cut with.
+    /// Already resolved from [`ViewConfig::dot_size`]'s quad UV against the
+    /// scene's node radius, so the renderer sizes the billboard off this
+    /// alone.
     pub radius: f32,
     pub color: Vec4,
     /// Dot opacity.
@@ -749,6 +752,11 @@ pub struct Scene {
     /// sheet is the ground: a note there floats over the dot field instead of
     /// standing on it.
     pub dots: Vec<DotInstance>,
+    /// Which shape each of them is (see [`ViewConfig::dot_shape`]). View-wide,
+    /// as the radius is not — a dot's size reaches the renderer per instance
+    /// because it is a world length, while the shape is one answer the whole
+    /// field shares and the shader reads out of a uniform.
+    pub dot_shape: DotShape,
     /// How wide the sevens knockout's fade is, in the uv of a full-size
     /// node (see [`ViewConfig::sevens_gutter_soft`]). View-wide, as the reach
     /// beside it is — what varies node to node is the STRENGTH, which the

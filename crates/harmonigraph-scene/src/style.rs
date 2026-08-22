@@ -432,6 +432,49 @@ impl Pulse {
     }
 }
 
+/// What shape stands at a resting lattice position — the marker `derive_dots`
+/// puts at every home-sheet node, and the whole of what an unplayed lattice
+/// draws.
+///
+/// Both shapes are cut with the same screen-constant soft band every ring
+/// here carries, and both are sized by the one
+/// [`dot_size`](crate::ViewConfig::dot_size) bar, so this chooses a CHARACTER
+/// and nothing else: it cannot change how big the resting picture is, how
+/// bright it is, or which positions get one.
+///
+/// Two shapes rather than a knob between them, because a disc and a cross are
+/// not two settings of one thing — the first marks an AREA the position
+/// occupies, the second marks the POINT two axes cross at, and there is
+/// nothing in between worth drawing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum DotShape {
+    /// A filled circle: the position as a place, and the quieter of the two.
+    /// A field of them reads as texture rather than as drawing, which is what
+    /// lets a note arriving be the thing on screen.
+    #[default]
+    Dot,
+    /// A cross of two bars, arms along the screen axes: the position as an
+    /// intersection. It says the same thing a gridline pair used to say at
+    /// the moment they met, without the ink that ran between the meetings.
+    ///
+    /// Louder than a dot at the same size — a cross has corners, and corners
+    /// are what the eye finds — so it reads as a lattice being MEASURED where
+    /// a dot field reads as a lattice being stood on.
+    Plus,
+}
+
+impl DotShape {
+    /// Index the shader reads (`misc5.x` — see `Uniforms` in
+    /// harmonigraph-render), where 0 is the disc and every other value picks
+    /// a shape out of `dot_coverage`.
+    pub fn shader_index(self) -> u32 {
+        match self {
+            DotShape::Dot => 0,
+            DotShape::Plus => 1,
+        }
+    }
+}
+
 /// What text an OFF-SHEET node's label carries — a node on any sevens sheet
 /// but the center one.
 ///

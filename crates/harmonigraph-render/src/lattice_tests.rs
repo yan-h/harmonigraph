@@ -447,6 +447,9 @@ fn parity_scene() -> Scene {
         // setting is a departure from.
         octave_layout: harmonigraph_scene::OctaveLayout::default(),
         dots,
+        // The disc, for the same reason: the departures are what the shape
+        // row's own fixtures are for.
+        dot_shape: harmonigraph_scene::DotShape::default(),
         // A blue->red sweep across the whole table, so a glyph's color is a
         // reading of which entry it landed on. Spanned off PITCH_LUT_N rather
         // than a literal: `from_fn` sizes itself from the field, so a literal

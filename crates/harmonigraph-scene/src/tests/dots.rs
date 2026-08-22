@@ -146,6 +146,37 @@ fn dot_size_sets_how_big_a_resting_dot_is_and_0_takes_it_away() {
     );
 }
 
+/// The shape is view-wide and reaches the renderer through a uniform, so what
+/// is asked here is that it arrives at all and that it changes NOTHING else:
+/// same positions, same reach, same grey. A shape that moved or resized the
+/// field would be a second size bar wearing a row's clothes.
+#[test]
+fn the_shape_reaches_the_scene_and_moves_nothing_else() {
+    let round = scene_of(
+        &NoteTracker::new(),
+        &Tuning::default(),
+        &dot_view(),
+        &plain_frame(),
+        0.0,
+    );
+    let view = ViewConfig { dot_shape: DotShape::Plus, ..dot_view() };
+    let cross = scene_of(&NoteTracker::new(), &Tuning::default(), &view, &plain_frame(), 0.0);
+
+    assert_eq!(round.dot_shape, DotShape::Dot, "the fresh view stands on discs");
+    assert_eq!(cross.dot_shape, DotShape::Plus);
+    assert_eq!(
+        round.dots.len(),
+        cross.dots.len(),
+        "a shape cannot change WHICH positions are marked",
+    );
+    for (a, b) in round.dots.iter().zip(&cross.dots) {
+        assert_eq!(a.pos, b.pos, "nor where they stand");
+        assert_eq!(a.radius, b.radius, "nor how far one reaches");
+        assert_eq!(a.color, b.color, "nor what grey it is");
+        assert_eq!(a.strength, b.strength);
+    }
+}
+
 #[test]
 fn an_unlit_node_carries_the_idle_grey_and_draws_nothing() {
     // An idle node has no mark of its own: the dot standing at its position

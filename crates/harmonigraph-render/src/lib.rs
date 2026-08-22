@@ -274,9 +274,9 @@ struct Uniforms {
     /// like `misc.x`. (The blit pipeline binds only the head of this
     /// buffer, so trailing fields are safe to add here.)
     misc4: [f32; 4],
-    /// x/y unused — x carried how much of a resting dot's radius was its
-    /// feather, from when a dot had a softness of its own to dial rather than
-    /// the rings' edge. Retired in place rather than repacked, like `misc4.y`;
+    /// x: which shape a resting marker is (`Scene::dot_shape`) — 0 the disc,
+    /// then one index per shape, see `DotShape::shader_index`;
+    /// y unused (a retired slot rather than a repack, like `misc4.y`);
     /// z: the node's ANGULAR padding in quad UV units — the gap between two
     /// neighbouring sectors, wherever sectors are drawn. Its RADIAL counterpart
     /// never arrives: every stand-off that one buys is already spent in the
@@ -1014,7 +1014,12 @@ impl LatticeCallback {
                 misc3: [0.0, scene.outer_inner, scene.outer_outer, scene.rings_outer],
                 pitch_lut: std::array::from_fn(|k| scene.pitch_lut[k].to_array()),
                 misc4: [0.0, scene.mark_inner, 0.0, 0.0],
-                misc5: [0.0, 0.0, scene.octave_gap, scene.mark_thickness],
+                misc5: [
+                    scene.dot_shape.shader_index() as f32,
+                    0.0,
+                    scene.octave_gap,
+                    scene.mark_thickness,
+                ],
                 misc6: [0.0, 0.0, scene.sevens_soft, scene.pulse_marks.shader_index() as f32],
                 background: scene.background.to_array(),
                 lattice_ground: scene.lattice_ground.to_array(),

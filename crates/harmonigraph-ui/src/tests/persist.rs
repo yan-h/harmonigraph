@@ -4,7 +4,7 @@
 
 use crate::*;
 use crate::state::UI_PERSIST_VERSION;
-use harmonigraph_scene::{Camera, NoteNames};
+use harmonigraph_scene::{Camera, DotShape, NoteNames};
 use super::probe::fresh;
 
 #[test]
@@ -37,6 +37,7 @@ fn persist_round_trips_camera_and_view() {
     state.view.octave_extra_size = 0.4;
     state.view.octave_extra_blend = 0.5;
     state.view.dot_size = 0.5;
+    state.view.dot_shape = DotShape::Plus;
     // Which nodes are named, and the fresh view keeps the past -- so either
     // other mode is a value a project has to keep, and the one a fresh view
     // would overwrite if it did not.
@@ -72,6 +73,11 @@ fn persist_round_trips_camera_and_view() {
     assert_eq!(restored.view.octave_extra_size, 0.4);
     assert_eq!(restored.view.octave_extra_blend, 0.5);
     assert_eq!(restored.view.dot_size, 0.5);
+    assert_eq!(
+        restored.view.dot_shape,
+        DotShape::Plus,
+        "a non-default marker shape round-trips",
+    );
     assert_eq!(
         restored.view.note_names,
         NoteNames::All,

@@ -563,6 +563,7 @@ pub fn derive_scene(
         spectral: SpectralPaint::silent(),
         octave_layout,
         dots,
+        dot_shape: view.dot_shape,
         mark_thickness: rings.mark_thickness,
         // A mark sheet reaches the extension AND the octave slice it extends,
         // so with the mark layer off — no end marked, or no depth to
@@ -627,9 +628,10 @@ fn wrapped_cents(from: harmonigraph_core::PitchClass, to: harmonigraph_core::Pit
     }
 }
 
-/// The lattice's resting picture: idle positions draw no disc, so a small dot
-/// stands at each one and carries the structure instead. Only the home
-/// (center) sheet gets them.
+/// The lattice's resting picture: idle positions draw no disc, so a small
+/// marker stands at each one and carries the structure instead — a dot or a
+/// cross, per [`ViewConfig::dot_shape`]. Only the home (center) sheet gets
+/// them.
 ///
 /// A dot rather than a line between dots, and the difference is what the
 /// picture claims. Lines drew the INTERVALS — one segment per unit step along
@@ -638,6 +640,11 @@ fn wrapped_cents(from: harmonigraph_core::PitchClass, to: harmonigraph_core::Pit
 /// two of them is left to the eye, which reads the rows and columns off a
 /// regular field anyway, and the ink that used to run between every pair goes
 /// back to the notes.
+///
+/// [`DotShape::Plus`](crate::DotShape::Plus) is that argument at its sharpest:
+/// a cross is exactly what a pair of gridlines drew at the moment they met, so
+/// it keeps every junction the mesh had and still spends no ink getting from
+/// one junction to the next.
 ///
 /// Off-sheet positions stay unmarked, as they were under the lines. That is
 /// the whole of what makes one sheet the ground: a 7-limit note sounding off

@@ -3,7 +3,7 @@
 //! parameters.
 
 use crate::spectral::SpectralReading;
-use crate::style::{Gradient, NoteNames, Pulse, SevensLabel};
+use crate::style::{DotShape, Gradient, NoteNames, Pulse, SevensLabel};
 use crate::{
     Camera, GAP_MAX, GLOW_BALLISTICS_MAX, GLOW_GAP_SOFT_MAX, GLOW_REACH_MAX,
     GLOW_STRENGTH_MAX, MARK_THICKNESS_MAX, MAX_DRAWN_NODES, NODE_RADIUS_FACTOR, RING_INNER_MAX,
@@ -932,10 +932,10 @@ pub struct ViewConfig {
 
     // ---- Home dots -------------------------------------------------------
     // The marker standing at each home-sheet node position (see `derive_dots`),
-    // and the whole of what an unplayed lattice draws. Its SIZE is the whole of
-    // what is set here — the edge is a ring's edge, carrying the shader's one
-    // screen-constant soft band rather than a softness of its own — and its
-    // colour is
+    // and the whole of what an unplayed lattice draws. Its SHAPE and its SIZE
+    // are what is set here — the edge is a ring's edge either way, carrying the
+    // shader's one screen-constant soft band rather than a softness of its
+    // own — and its colour is
     // [`lattice_ground`](Self::lattice_ground), up with the note's own layers,
     // because that one grey is the whole at-rest picture — these dots and both
     // of a node's rings where nothing is lit — and a bar that moved only the
@@ -951,6 +951,13 @@ pub struct ViewConfig {
     /// the uv against the scene's node radius, so nothing downstream carries a
     /// second copy of the convention.
     pub dot_size: f32,
+    /// Which shape stands at each position — a disc or a cross ([`DotShape`]).
+    ///
+    /// A row rather than a bar, and it changes nothing but the character: both
+    /// shapes are sized by [`dot_size`](Self::dot_size), coloured by
+    /// [`lattice_ground`](Self::lattice_ground), cut with the same soft band,
+    /// and drawn at exactly the same positions.
+    pub dot_shape: DotShape,
     /// Meantone mode: lock the major-third tuning to four perfect fifths
     /// (temper out the syntonic comma, 81/80). While on, the third-tuning
     /// value is derived from the fifth (in `begin_frame`) and note names are
@@ -2340,6 +2347,9 @@ impl Default for ViewConfig {
             // at 0.55), so a note arriving covers its own dot rather than
             // growing out of it.
             dot_size: 0.2,
+            // A disc: the resting field is a ground for the music to arrive
+            // on, and a cross is the more insistent of the two shapes.
+            dot_shape: DotShape::Dot,
             meantone: false,
             meantone_auto: true,
             marvel: false,

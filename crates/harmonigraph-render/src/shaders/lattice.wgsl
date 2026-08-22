@@ -2253,6 +2253,47 @@ struct DotVsOut {
 // margin alone.
 const DOT_QUAD_MARGIN: f32 = 1.6;
 
+// Half the thickness of a plus's arms, in the same radii its reach is 1 of.
+//
+// Derived rather than dialled, so the shape row stays a row and the size bar
+// stays the only number a resting marker has. It is a SHARE of the reach, like
+// everything else about a dot, so a plus keeps its proportions across the size
+// bar instead of turning into a square at the top of it and a crosshair at the
+// bottom.
+//
+// A plus this thick carries about 60% of the ink a disc of the same reach does
+// (8t - 4t^2 against pi), which is the margin that keeps the two shapes
+// comparable at one size: heavier and it reads as a blob with dents, lighter
+// and the arms disappear at the sizes the bar actually sits at.
+const PLUS_ARM: f32 = 0.28;
+
+// How much of the marker this fragment is inside, `uv` measured in the
+// marker's own radii and `aa` the soft band both shapes share.
+//
+// One function for the two so the band is provably the same on each: what
+// differs between a disc and a cross is a distance field, and the edge that
+// field is cut at is written once.
+fn dot_coverage(uv: vec2<f32>, aa: f32) -> f32 {
+    if u.misc5.x < 0.5 {
+        // The disc, cut at its radius.
+        return aa_inside(1.0, length(uv), aa);
+    }
+    // The cross, as the union of two bars — but folded into one. Reflecting
+    // into the octant where x >= y maps the upright bar onto the flat one, so
+    // a single box's distance field answers for both and there is no union to
+    // take (and so no seam where two soft edges would cross and the band would
+    // double up on the diagonals).
+    let p = abs(uv);
+    let q = vec2<f32>(max(p.x, p.y), min(p.x, p.y));
+    let corner = vec2<f32>(q.x - 1.0, q.y - PLUS_ARM);
+    // The exact signed distance to that box: outside, the distance to its
+    // nearest point; inside, how far in. Exact rather than approximate is what
+    // makes the arms' inner corners as clean as their ends — an approximation
+    // rounds them off at exactly the four places the shape is doing its work.
+    let sd = length(max(corner, vec2<f32>(0.0))) + min(max(corner.x, corner.y), 0.0);
+    return aa_inside(0.0, sd, aa);
+}
+
 @vertex
 fn vs_dot(@builtin(vertex_index) vertex_index: u32, inst: DotInstance) -> DotVsOut {
     var corners = array<vec2<f32>, 4>(
@@ -3011,10 +3052,7 @@ fn fs_glow_cover(in: VsOut) -> @location(0) vec4<f32> {
 /// What a resting dot paints; see [`node_paint`] for why the entry points are
 /// two.
 fn dot_paint(in: DotVsOut) -> vec4<f32> {
-    // Distance from the centre in the dot's own radii, so the edge is at 1 and
-    // the quad carries DOT_QUAD_MARGIN past it.
-    let d = length(in.uv);
-    // A dot's edge is a RING's edge: `aa_inside` at the radius, carrying the
+    // A marker's edge is a RING's edge: `aa_inside` at the radius, carrying the
     // one screen-constant soft band the octave band and the audio ring are cut
     // with. That is the whole shape — a dot has no softness of its own to dial,
     // so the resting field and the layers that stand on it come to an end the
@@ -3033,7 +3071,7 @@ fn dot_paint(in: DotVsOut) -> vec4<f32> {
     // narrows, and the dot stays a full circle at every size instead of
     // squaring off at the bottom of the bar.
     let aa = min(aa_width(fwidth(in.uv.x)), DOT_QUAD_MARGIN - 1.0);
-    let alpha = in.color.a * aa_inside(1.0, d, aa);
+    let alpha = in.color.a * dot_coverage(in.uv, aa);
     if alpha < 0.01 {
         discard;
     }
