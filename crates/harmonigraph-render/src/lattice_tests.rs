@@ -6732,6 +6732,13 @@ fn two_colour_node(band_width: f32, ring_width: f32) -> Scene {
     // whatever the analyzer reads: what is being measured here is which layer
     // the light took its hue from, not what the grid held.
     paint.lut = [glam::Vec4::new(0.0, 1.0, 0.0, 1.0); harmonigraph_scene::PITCH_LUT_N];
+    // ...and a grid that is LOUD everywhere, which is what makes the wedges
+    // light at all: the halo weighs a wedge by the reading behind it (`ink_at`),
+    // so a silent grid draws a full green ring that gives off nothing. Loud
+    // across the whole axis rather than a partial at one pitch, so every wedge
+    // carries the same weight and the ring's share of the light is its WIDTH,
+    // which is what these claims read.
+    paint.levels.fill(255);
     (paint.inner, paint.outer) = rings.audio;
     paint.range = PROBE_RANGE;
     scene.spectral = paint;
@@ -6897,6 +6904,128 @@ fn a_nodes_light_takes_the_colour_of_whichever_layer_is_drawing() {
     assert!(
         share(ring) < share(both) && share(both) < share(band),
         "a node wearing both lit {both:?}, which is not between {ring:?} and {band:?}",
+    );
+}
+
+/// A slice the node is not sounding puts NO ground in its light.
+///
+/// The octave band is one lit slice among ten ghosts on any note voiced in a
+/// single octave, and a ghost is `Scene::lattice_ground` flat and opaque — so
+/// weighing the band by its INK gave that note a halo ten elevenths grey, with
+/// its own pitch a lobe inside it. The light weighs each slice by its LEVEL
+/// instead (`ink_at`, through `oct_slot_lit`), so the halo is the octave's own
+/// colour and the ghosts are a thing drawn rather than a thing shining.
+///
+/// The ground is set to pure BLUE here, which is a colour the view cannot
+/// actually hold — `grey_of_lightness` is what fills that field in the app —
+/// and that is the point: the pitch ramp is flat red, so a blue channel in the
+/// halo can only have come from the ghosts, and no mixture of the one is
+/// reachable from the other. The ghosts themselves are checked to be on
+/// screen, or the claim is being made about a node that has none.
+#[test]
+fn a_silent_slice_puts_none_of_its_ground_in_the_light() {
+    const SIZE: [u32; 2] = [256, 256];
+    const BAND: f32 = 0.18;
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    // The band alone — the ring dialled to nothing — voiced in ONE octave, so
+    // every other slice on the wheel is a ghost.
+    let one_octave = || -> Scene {
+        let mut scene = two_colour_node(BAND, 0.0);
+        scene.lattice_ground = glam::Vec4::new(0.0, 0.0, 1.0, 1.0);
+        let node = &mut scene.nodes[0];
+        node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
+        node.octaves[harmonigraph_scene::MIDDLE_C_SLOT] = 1.0;
+        scene
+    };
+    let dark = || -> Scene {
+        let mut scene = one_octave();
+        scene.glow_reach = 0.0;
+        scene
+    };
+    let off = shooter.shot(&dark());
+    // Non-vacuous: the ghosts have to be ON the node, or "the light carries
+    // none of them" is a claim about a ring that is not there.
+    let ghosts: i64 = off.chunks(4).map(|px| i64::from(px[2])).sum();
+    let red: i64 = off.chunks(4).map(|px| i64::from(px[0])).sum();
+    assert!(ghosts > red, "the fixture drew no blue ghosts: {ghosts} against {red} of red");
+
+    let lit = added_light(&shooter.shot(&one_octave()), &off);
+    assert!(lit[0] > 0, "the node's one lit octave lit nothing: {lit:?}");
+    // Ten slices of eleven are the ground, so weighing the band by its ink put
+    // an order of magnitude more of that grey in the halo than of the pitch.
+    assert!(
+        lit[0] > lit[2] * 8,
+        "a note voiced in one octave lit {lit:?} — the halo is carrying its ghosts",
+    );
+}
+
+/// A node the audio ring is showing on with NOTHING sounding in it gives off no
+/// light at all.
+///
+/// The ring's colour ramp is pinned to the ground at its silent end, so a wedge
+/// reading nothing is that same grey — and a lattice whose Gate admits every
+/// node is hundreds of those. They are worth DRAWING (the ring says a node is
+/// there) and worth no light, so the analyzer's share of the halo is weighed by
+/// the reading behind each wedge (`ink_at`) and a ring of empty ones sums to
+/// nothing. `glow_layer` stops there rather than lighting a grey halo.
+///
+/// Byte-identical, which is the whole claim: the glow's two draws run over this
+/// node, write nothing into their target, and the composite lays exactly
+/// nothing over the picture. The same fixture with a partial in it is shot
+/// beside it, or "no light" would pass on a ring that never drew.
+#[test]
+fn a_ring_reading_nothing_gives_off_no_light() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    // [`ringing_node`] with no key down and no octave sounding: the band draws
+    // nothing at all and the node's whole picture is the analyzer's.
+    let at = |sounding: Option<f32>, reach: f32| -> Scene {
+        let mut scene = ringing_node(None, sounding, PROBE_RANGE);
+        // The app's ramp rather than the fixture's: its silent end PINNED to
+        // the ground, which is what makes an empty wedge a grey the eye reads
+        // as a ring rather than the black the probe's own ramp starts at
+        // (`harmonigraph_scene::ring_gradient`). The whole point here is a ring
+        // that is on screen and gives off nothing, so a silent end nobody can
+        // see would make the claim vacuous.
+        let ground = scene.lattice_ground;
+        scene.spectral.lut = std::array::from_fn(|k| {
+            let t = k as f32 / (harmonigraph_scene::PITCH_LUT_N - 1) as f32;
+            ground.lerp(glam::Vec4::ONE, t)
+        });
+        let node = &mut scene.nodes[0];
+        node.activation = 0.0;
+        node.melody_level = 0.0;
+        node.bass_level = 0.0;
+        node.melody_slots = 0;
+        node.bass_slots = 0;
+        node.audio_ring = 1.0;
+        scene.glow_reach = reach;
+        scene.glow_strength = 1.5;
+        scene.glow_gap = 0.08;
+        scene
+    };
+    const PARTIAL: f32 = harmonigraph_scene::MIDDLE_C_SLOT as f32 * 12.0;
+    let quiet_off = shooter.shot(&at(None, 0.0));
+    let quiet_on = shooter.shot(&at(None, 0.8));
+    // Non-vacuous: the ring is drawn in both, and a partial in it does light.
+    assert!(total_light(&quiet_off) > 0, "the fixture must draw its audio ring");
+    let loud_off = shooter.shot(&at(Some(PARTIAL), 0.0));
+    let loud_on = shooter.shot(&at(Some(PARTIAL), 0.8));
+    assert!(
+        total_light(&loud_on) > total_light(&loud_off),
+        "a partial sounding into the ring gave off no light: {} against {}",
+        total_light(&loud_on),
+        total_light(&loud_off),
+    );
+    assert!(
+        quiet_on == quiet_off,
+        "a ring reading silence lit {} against {} with the glow off",
+        total_light(&quiet_on),
+        total_light(&quiet_off),
     );
 }
 
@@ -7596,4 +7725,3 @@ fn the_gap_bars_high_handle_alone_says_how_wide_the_moats_band_is() {
         "fading the gap pushed the moat's band out: {faded} pixels against {one} crisp",
     );
 }
-

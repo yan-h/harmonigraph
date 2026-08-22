@@ -1288,21 +1288,20 @@ fn glyph_band(d: f32, inner: f32, outer: f32, aa: f32) -> f32 {
 // presence twice in that second case and bulges the opacity above the straight
 // line through the middle of the fade.
 //
-// Its own function because the GLOW is coloured out of it too: the light is the
-// node's own ink blurred round it (`ink_at`), and a band slice lighting a halo
-// in some second reading of "what colour is this octave" is exactly the drift
-// this file spends its comments on.
+// Its own function because the GLOW is lit out of the same reading: a band
+// slice lighting a halo in some second reading of "what colour is this octave"
+// is exactly the drift this file spends its comments on. What the light takes
+// is [`oct_slot_lit`] below — this without the ghost, since the ghost is a
+// backdrop rather than anything the octave is doing.
 fn oct_slot_ink(in: VsOut, slot: i32) -> vec4<f32> {
     let presence = in.params.x;
-    let level = oct_slot_level(in.octaves, slot);
+    let lit = oct_slot_lit(in, slot);
+    let level = lit.w;
     if level <= 0.0 {
         return vec4<f32>(u.lattice_ground.rgb, presence);
     }
     let ghost_rest = max(presence - level, 0.0);
     let opacity = level + ghost_rest;
-    // Slot s is MIDI octave s - 1, whose C is MIDI 12*s; add this node's pitch
-    // class for the glyph's true pitch.
-    let pitch = oct_slot_pitch(slot, in.cents);
     // A glyph as lit as its node is present is exactly the colour that pitch
     // lights everywhere else, which `ghost_rest` is what holds: it is nothing
     // where `level` reaches `presence`, so a fully lit slot AND a lone note's
@@ -1319,7 +1318,29 @@ fn oct_slot_ink(in: VsOut, slot: i32) -> vec4<f32> {
     // here, the packing's smallest step is 1/255, and `ghost_rest` is never
     // negative, so `opacity >= level`.
     let ground = u.lattice_ground.rgb;
-    return vec4<f32>((pitch_lut_color(pitch) * level + ground * ghost_rest) / opacity, opacity);
+    return vec4<f32>((lit.xyz * level + ground * ghost_rest) / opacity, opacity);
+}
+
+// The LIGHT one slice of the octave band gives off: `xyz` the colour it wears
+// where it is lit, `w` how much of it is — this slot's own level, and nothing
+// of the node's presence.
+//
+// The two readings a slice has, and the whole of what parts them: the GROUND
+// IS NOT A LIGHT. A silent slice is drawn in it ([`oct_slot_ink`], which is
+// this with the ghost laid over it) because the backdrop is what carries the
+// ring's shape around the bright slice — it says a node is there, not that
+// this octave is sounding. So it weighs exactly 0 in [`ink_at`], and the halo
+// round a note voiced in one octave is that octave's colour rather than a
+// tenth of it under nine tenths of grey.
+//
+// The colour of a LIT slice is stated once, here, and the drawn ink is this
+// mixed toward the ground by however much of the node's presence this slot's
+// level does not account for.
+fn oct_slot_lit(in: VsOut, slot: i32) -> vec4<f32> {
+    // Slot s is MIDI octave s - 1, whose C is MIDI 12*s; add this node's pitch
+    // class for the glyph's true pitch.
+    let pitch = oct_slot_pitch(slot, in.cents);
+    return vec4<f32>(pitch_lut_color(pitch), oct_slot_level(in.octaves, slot));
 }
 
 // Coverage (0..1) of the outer glyph for octave slot `s` on the node whose
@@ -1442,6 +1463,10 @@ fn folded() -> bool {
 // the bottom of it to the whole resting picture vanishing into the pane at the
 // panel's own L*.
 //
+// That grey is a thing DRAWN and never a thing lit: the glow weighs each
+// wedge by the reading behind it (`ink_at`), so a ring of empty wedges is on
+// screen without a halo round it.
+//
 // WHICH nodes wear one, and how much of it, is in.ring, decided on the CPU: a
 // node draws its ring when one of its wedges reaches the view's Gate
 // (harmonigraph_scene's RingGate), and a ring comes and goes on the note Fade
@@ -1509,27 +1534,46 @@ fn wedge_fraction(edges: vec2<f32>, uv: vec2<f32>) -> f32 {
     return clamp(0.5 - delta / (2.0 * half), 0.0, 1.0);
 }
 
-// Coverage and color of the audio ring at this fragment: `w` how much of the
-// pixel its owning wedge covers, `xyz` the color that wedge paints there. NOT
-// premultiplied — the caller composites it against the octave layer, and a
-// layer picked BY coverage needs the color the coverage belongs to.
-// `uv` is WHERE the ring is read: the fragment's own for the node draw, and a
-// point on the ring's own annulus where the glow asks what colour this node is
-// putting down in one direction (`ink_at`). One body for the two, so the light
-// is coloured out of the ring's own reading and its own ramp rather than out of
-// a second mapping.
-//
-// `band` is that point's RADIAL coverage, held by the caller exactly as
-// [`outer_glyph`]'s is and for the second of the same two reasons. The node
-// draw takes it once for every slot with [`glyph_band`]; the glow reads the
-// annulus at its own middle, where the layer's radial extent is already the
-// WEIGHT it carries, and asking for it twice would count a thin ring's width
-// against itself.
-fn spectral_ring(in: VsOut, oct: OctRing, uv: vec2<f32>, band: f32, aa: f32) -> vec4<f32> {
+// What the audio ring is doing at one point of it.
+struct RingInk {
+    /// The color the owning wedge paints there. NOT premultiplied — the caller
+    /// composites it against the octave layer, and a layer picked BY coverage
+    /// needs the color the coverage belongs to.
+    color: vec3<f32>,
+    /// How much of the point that wedge covers, the node's own ring presence
+    /// taken out of it.
+    cov: f32,
+    /// The analyzer's own reading in that wedge, 0..1 — how LIT the ring is
+    /// here, which is the quantity its color is a ramp over.
+    ///
+    /// Carried beside the color rather than left implicit in it, because the
+    /// ramp's silent end is the ground (see below) and a colour alone cannot
+    /// say whether a wedge is grey because nothing is sounding there or grey
+    /// because the Ground bar put a lit reading at that L*. [`ink_at`] weighs
+    /// the ring's share of a node's LIGHT by this, so a wedge reading nothing
+    /// lights nothing.
+    level: f32,
+};
+
+/// Coverage, color and level of the audio ring at this fragment.
+///
+/// `uv` is WHERE the ring is read: the fragment's own for the node draw, and a
+/// point on the ring's own annulus where the glow asks what this node is
+/// putting down in one direction (`ink_at`). One body for the two, so the light
+/// is lit out of the ring's own reading and its own ramp rather than out of
+/// a second mapping.
+///
+/// `band` is that point's RADIAL coverage, held by the caller exactly as
+/// [`outer_glyph`]'s is and for the second of the same two reasons. The node
+/// draw takes it once for every slot with [`glyph_band`]; the glow reads the
+/// annulus at its own middle, where the layer's radial extent is already the
+/// WEIGHT it carries, and asking for it twice would count a thin ring's width
+/// against itself.
+fn spectral_ring(in: VsOut, oct: OctRing, uv: vec2<f32>, band: f32, aa: f32) -> RingInk {
     let radii = spectral_radii();
     // Off, or an annulus dialled inside out: nothing to draw either way.
     if radii.y <= radii.x {
-        return vec4<f32>(0.0);
+        return RingInk(vec3<f32>(0.0), 0.0, 0.0);
     }
     // ...and this node's own gate: the layer is on, and nothing this ring would
     // show reaches the level the view asks for — nor has the node been played,
@@ -1538,13 +1582,13 @@ fn spectral_ring(in: VsOut, oct: OctRing, uv: vec2<f32>, band: f32, aa: f32) -> 
     // rediscovered here, since the question is about the node's whole ring and
     // this is one fragment of one wedge of it.
     if in.ring <= 0.0 {
-        return vec4<f32>(0.0);
+        return RingInk(vec3<f32>(0.0), 0.0, 0.0);
     }
     // The ring is a narrow annulus in a billboard reaching QUAD_MARGIN, so
     // most fragments are outside it — and the whole slot walk below answers
     // zero for every one of them. The same skip the band's own loop takes.
     if EARLY_OUT && band <= 0.0 {
-        return vec4<f32>(0.0);
+        return RingInk(vec3<f32>(0.0), 0.0, 0.0);
     }
     // Which wedge owns this pixel, and how much of it. The color is settled
     // AFTER the walk rather than inside it: one fragment is one reading of the
@@ -1564,7 +1608,7 @@ fn spectral_ring(in: VsOut, oct: OctRing, uv: vec2<f32>, band: f32, aa: f32) -> 
         }
     }
     if cov <= 0.0 {
-        return vec4<f32>(0.0);
+        return RingInk(vec3<f32>(0.0), 0.0, 0.0);
     }
     // WHERE in the wedge the grid is read, which is the whole of what the two
     // readings differ by. The fold answers one number for the octave, so every
@@ -1581,14 +1625,20 @@ fn spectral_ring(in: VsOut, oct: OctRing, uv: vec2<f32>, band: f32, aa: f32) -> 
     // a ring on its way in is the octave layer showing through it, where a
     // wedge mixed toward the bed would be a reading of a quieter spectrum. The
     // caller composites by coverage, so this is the one place it belongs.
-    return vec4<f32>(spectral_lut_color(spectrum_at(pitch)), cov * in.ring);
+    //
+    // The reading itself goes out beside the colour it picks, un-scaled by
+    // either: how loud this wedge is and how much of the node's ring is showing
+    // are two questions, and the light asks the first one alone.
+    let level = spectrum_at(pitch);
+    return RingInk(spectral_lut_color(level), cov * in.ring, level);
 }
 
 // ---- How tightly a node's octaves pack -------------------------------------
 // A node's light takes its colour from the INK STRIP: every layer the node
-// draws contributes in proportion to the radial width it occupies, silent
-// slices and a silent ring included (`fs_ink_strip`, then `glow_ink`). What is
-// left here is the angular tightness that blend is laid out at.
+// draws contributes in proportion to the radial width it occupies TIMES how
+// lit it is there, so a silent slice and a silent wedge — both of them the
+// ground exactly — weigh nothing (`ink_at`, `fs_ink_strip`, then `glow_ink`).
+// What is left here is the angular tightness that blend is laid out at.
 
 // The TIGHTEST each octave's angular color lobe is drawn at (a von Mises-like
 // falloff): higher is tighter, more separated arcs. Tuned so neighbouring
@@ -2117,9 +2167,9 @@ fn node_ink(in: VsOut, d: f32, aa: f32, field_step: f32, oct: OctRing) -> vec4<f
     let audio_radii = spectral_radii();
     let audio =
         spectral_ring(in, oct, in.uv, glyph_band(d, audio_radii.x, audio_radii.y, aa), aa);
-    glyph_rgb = (audio.rgb * audio.w + glyph_rgb * glyph * (1.0 - audio.w))
-        / max(audio.w + glyph * (1.0 - audio.w), 1e-4);
-    glyph = audio.w + glyph * (1.0 - audio.w);
+    glyph_rgb = (audio.color * audio.cov + glyph_rgb * glyph * (1.0 - audio.cov))
+        / max(audio.cov + glyph * (1.0 - audio.cov), 1e-4);
+    glyph = audio.cov + glyph * (1.0 - audio.cov);
 
     // Melody/bass marks: each one its own octave's slice, continued into the
     // strip past the band. Their own layer, composited over the glyphs — a
@@ -2496,9 +2546,10 @@ fn ink_arc(r: f32) -> f32 {
     return r * TAU / f32(INK_STRIP_N);
 }
 
-/// The ink a node's DRAWN layers lay down in the direction `angle`: `xyz` every
-/// layer's colour times the weight it carries there, and `w` those weights
-/// summed. Not a colour on its own — [`fs_ink_blur`] is what normalises it.
+/// The light a node's DRAWN layers give off in the direction `angle`: `xyz`
+/// every layer's colour times the weight it carries there, and `w` those
+/// weights summed. Not a colour on its own — [`fs_ink_blur`] is what
+/// normalises it.
 ///
 /// **A generalised reading of what is ON the node**, and that is the whole
 /// design. The light is not assembled out of a formula naming its sources, so
@@ -2508,12 +2559,26 @@ fn ink_arc(r: f32) -> f32 {
 /// picker. It also moves as the picture does — a wedge the analyzer lights, a
 /// slice a key lights, a mark arriving — because it is that picture, read.
 ///
-/// **Each layer's share is how much of the node it occupies**: its level at
-/// this angle times the radial WIDTH the ring stack handed it, which is 0 for a
-/// layer switched off or refused the room. So widening the octave band on the
-/// Layers bar moves the light toward the band's colours and narrowing the audio
-/// ring takes the analyzer's back out of it, with no knob of its own — the
-/// proportions of the light are the proportions of the ink.
+/// **Each layer's share is how much LIGHT it puts on the node**: how lit it is
+/// at this angle times the radial WIDTH the ring stack handed it, which is 0
+/// for a layer switched off or refused the room. So widening the octave band on
+/// the Layers bar moves the light toward the band's colours and narrowing the
+/// audio ring takes the analyzer's back out of it, with no knob of its own.
+///
+/// **What a layer is drawing in the GROUND weighs nothing**, and the two rings
+/// reach that state in the one colour the Ground bar sets: an unlit octave
+/// slice is `u.lattice_ground` exactly, and the spectral ramp's silent end is
+/// pinned onto it. Both are BACKDROP — they carry a ring's shape around the
+/// bright part of it, which is a thing to draw and not a thing to shine — so
+/// the halo round a note voiced in one octave is that octave's own colour
+/// instead of a tenth of it under nine tenths of grey, and a node whose every
+/// layer is resting gives off nothing at all rather than a grey haze (see
+/// [`glow_layer`], which stops on a `w` of 0).
+///
+/// It costs the light a way of saying "there is something here" about a node
+/// nothing is sounding on. That is the LATTICE's job — the markers say where
+/// the positions are and the rings say a node is there — and a halo is what
+/// says something is playing.
 fn ink_at(in: VsOut, oct: OctRing, angle: f32) -> vec4<f32> {
     let dir = vec2<f32>(cos(angle), sin(angle));
     var rgb = vec3<f32>(0.0);
@@ -2529,8 +2594,13 @@ fn ink_at(in: VsOut, oct: OctRing, angle: f32) -> vec4<f32> {
         // ring's WIDTH is the weight below, and letting `glyph_band` soften the
         // reading as well would count a narrow ring against itself twice.
         let ink = spectral_ring(in, oct, dir * mid, 1.0, ink_arc(mid));
-        let w = ink.w * (audio.y - audio.x);
-        rgb = rgb + ink.xyz * w;
+        // The wedge's own reading in the weight, so the analyzer's share of the
+        // light is what it is MEASURING and not merely that a ring is showing:
+        // a wedge with nothing in it is drawn at the ramp's silent end, which
+        // is the ground, and a ring of those is the grey a resting node has no
+        // business shining.
+        let w = ink.cov * ink.level * (audio.y - audio.x);
+        rgb = rgb + ink.color * w;
         wsum = wsum + w;
     }
 
@@ -2555,7 +2625,10 @@ fn ink_at(in: VsOut, oct: OctRing, angle: f32) -> vec4<f32> {
             }
         }
         if cov > 0.0 {
-            let ink = oct_slot_ink(in, owner);
+            // [`oct_slot_lit`] and not the drawn ink: what a slice is lit at is
+            // its own level, where the ink's opacity is the node's PRESENCE —
+            // the ghost included, which is the backdrop and weighs nothing.
+            let ink = oct_slot_lit(in, owner);
             let w = cov * ink.w * (band_out - band_in);
             rgb = rgb + ink.xyz * w;
             wsum = wsum + w;
@@ -2762,10 +2835,11 @@ fn strip_texel(col: i32, row: i32) -> vec4<f32> {
 /// light's own edge, and only ever loosens them. It is also the one honest
 /// reading of the middle: there is no direction left to have a colour for.
 ///
-/// A `w` of 0 is a node drawing NOTHING: every layer off, or every level at
-/// zero. Read off the MEAN, which is the whole turn averaged and so is above
-/// zero for a node putting ink anywhere on itself. There is no colour to be had
-/// there and none is invented — see [`glow_layer`], which stops rather than
+/// A `w` of 0 is a node giving off NOTHING: every layer off, every level at
+/// zero, or every layer resting in the ground, which weighs nothing
+/// ([`ink_at`]). Read off the MEAN, which is the whole turn averaged and so is
+/// above zero for a node lighting any part of itself. There is no colour to be
+/// had there and none is invented — see [`glow_layer`], which stops rather than
 /// lighting a black halo.
 fn glow_ink(in: VsOut, angle: f32, mix_out: f32) -> vec4<f32> {
     let row = i32(in.strip_row);
@@ -2856,11 +2930,12 @@ fn glow_layer(in: VsOut, d: f32) -> vec4<f32> {
     // assembled out of the voices — see `ink_at`, which is where a layer states
     // what it is putting on the node and how much of the node that is.
     let ink = glow_ink(in, atan2(in.uv.y, in.uv.x), mix_out);
-    // A node drawing NOTHING gives off nothing, and the level above does not
+    // A node lighting NOTHING gives off nothing, and the level above does not
     // say so: it is the largest envelope on the node, and a view with every
     // layer dialled off leaves a held note a full envelope with no ink under
-    // it. Lighting that would be a black halo — a colour invented for a node
-    // that has none.
+    // it — as does a node the audio ring is showing on with nothing sounding
+    // anywhere in it, whose every wedge is the ground. Lighting either would be
+    // a black halo, or a grey one: a colour invented for a node that has none.
     if ink.w <= 0.0 {
         return vec4<f32>(0.0);
     }
