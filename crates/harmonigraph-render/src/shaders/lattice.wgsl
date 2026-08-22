@@ -2867,47 +2867,64 @@ fn moat_soft(in: VsOut, aa: f32) -> f32 {
 /// erase is a fixed-width annulus with a short transition at each end — read
 /// against a node's own dark rings, a black ring — where a feather several
 /// times the gap takes the light away over a stretch as broad as the halo's own
-/// falloff, which is a lack of light rather than a shape. What it costs is that
-/// the fade begins inside the ring's own footprint, and that costs nothing:
-/// the ring's ink is drawn over the light there a pass later.
+/// falloff, which is a lack of light rather than a shape. Where that reaches
+/// back past the gap's own width, [`moat_coverage`] is what stops it eating
+/// into the ring: nothing is drawn over the light after this pass.
 fn moat_half(soft: f32) -> f32 {
     return max(0.5 * soft, 0.0005);
 }
 
 /// How much of the light standing `sd` out from a ring's own annulus that ring
 /// holds off: solid across the ring and out to the Gap, feathered over `soft`
-/// CENTRED on where the gap ends, and skewed across that width by the Gap
+/// centred on where the gap ends, and skewed across that width by the Gap
 /// shape.
 ///
-/// Centred, where `gutter_coverage`'s fade ENDS at the reach and is floored at
-/// the footprint, and the two are different jobs. A knockout has to clear its
-/// layer's own ink in full at every width, so its fade can only eat outward. A
-/// moat is held in soft light on BOTH sides of the ring at once — the halo
-/// outside it, and the lit middle of the node inside it — and
-/// `annulus_distance` hands the two of them one `sd`, so a single band centred
-/// on the boundary feathers both, and the light comes off a ring at the same
-/// rate it comes off anything else. That match is the point: the gap and the
-/// glow are one blur or the gap reads as a cut.
+/// Centred, where `gutter_coverage`'s fade ENDS at the reach: a moat is held in
+/// soft light on BOTH sides of the ring at once — the halo outside it, and the
+/// lit middle of the node inside it — and `annulus_distance` hands the two of
+/// them one `sd`, so a single band centred on the boundary feathers both, and
+/// the light comes off a ring at the same rate it comes off anything else. That
+/// match is the point: the gap and the glow are one blur or the gap reads as a
+/// cut.
+///
+/// Centred as far as it CAN be, which is the `max` below: the band's inner end
+/// is floored at the ring's own edge, so the fade never reaches back inside the
+/// footprint of the ring it stands off. Nothing is drawn over the light after
+/// this — the finished target is laid OVER the finished lattice
+/// (`LatticeCallback::paint`), not under the nodes — so coverage short of 1 on
+/// a ring is light left sitting on that ring's ink, which reads as a lit rim on
+/// both of its edges with a clean band between them. It is loudest on a ring
+/// nothing is sounding at, whose ink is the flat Ground grey the residue has
+/// nothing to hide in. The floor binds only where the feather outruns the gap;
+/// at `soft` twice `glow_gap`, which is where the fresh view sits, `edge - half`
+/// is already 0 and this changes nothing.
+///
+/// A moat is then under `gutter_coverage`'s own obligation and for its own
+/// reason — clear the layer's ink in full at every width, because the ink is
+/// not what covers the erase — and the two differ only in which side the
+/// leftover width is spent on.
 ///
 /// WHERE the fade is and HOW the light is spent across it are then two
 /// questions, and the exponent answers the second alone. The ramp is the same
 /// band at every shape: `pow` is 0 at 0 and 1 at 1, so coverage is still
-/// exactly solid inside `edge - half` and exactly nothing outside `edge +
-/// half`. That is what keeps the shape bar out of every bound that has to
+/// exactly solid inside the band's inner end and exactly nothing outside `edge
+/// + half`. That is what keeps the shape bar out of every bound that has to
 /// agree on the moat's extent — `vs_glow`'s billboard and `fs_glow_moat`'s
-/// early-out both size themselves off the gap and the feather, and neither
-/// has to hear about this.
+/// early-out both size themselves off the gap and the feather, and neither has
+/// to hear about this. The floor moves no bound either, for the same reason it
+/// is a floor and not a shift: it only ever pulls the inner end OUT, and the
+/// outer end is where the extent is.
 ///
 /// It is the one place the moat's two sides are treated UNEVENLY, which is
-/// deliberate and not a retreat from the centring above: the band still
-/// straddles the boundary and still softens the node's middle and its halo
-/// together, but a shape below the middle spends most of its width on the far
-/// side, where the light being recovered is the halo's. A ring wants its dark
-/// close and its edge nowhere, and a symmetric ramp cannot give both.
+/// deliberate and not a retreat from the centring above: the band still softens
+/// the node's middle and its halo together, but a shape below the middle spends
+/// most of its width on the far side, where the light being recovered is the
+/// halo's. A ring wants its dark close and its edge nowhere, and a symmetric
+/// ramp cannot give both.
 fn moat_coverage(sd: f32, soft: f32) -> f32 {
     let edge = clearing_edge(glow_gap());
     let half = moat_half(soft);
-    let ramp = smoothstep(edge - half, edge + half, sd);
+    let ramp = smoothstep(max(edge - half, 0.0), edge + half, sd);
     return 1.0 - pow(ramp, glow_gap_shape());
 }
 

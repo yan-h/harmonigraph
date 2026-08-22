@@ -1147,9 +1147,12 @@ pub struct ViewConfig {
     /// The feather stays CENTRED on where the gap ends, so it softens the halo
     /// outside a ring and the lit middle of the node inside it together — one
     /// blur across the whole moat rather than a soft outer edge on a hard
-    /// inner one. Past the gap's own width it reaches back inside the ring's
-    /// footprint, and that costs nothing: the ring's ink is drawn over the
-    /// light there a pass later. At 0 all that is left under it is the
+    /// inner one. Past twice the gap it would reach back inside the ring's
+    /// footprint, and there it is held at the ring's own edge instead
+    /// (`moat_coverage` in lattice.wgsl): the light is laid OVER the finished
+    /// lattice, so a fade that ate into a ring would leave that share of the
+    /// halo sitting on the ring's ink rather than under it. At 0 all that is
+    /// left under it is the
     /// [`sevens_gutter_soft`](Self::sevens_gutter_soft) fade, which is an edge
     /// a couple of screen pixels wide.
     ///
