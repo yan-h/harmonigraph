@@ -2765,10 +2765,26 @@ fn glow_layer(in: VsOut, d: f32) -> vec4<f32> {
     // How much of the strip's own DIRECTION this fragment gets, against the
     // flat tint of its mean. Every seam converges to a cusp at the node's
     // middle otherwise, the ink being laid in angle, so an arc shrinks with the
-    // radius; easing to the mean instead carries the arc the seam has at the
-    // light's own edge inward unchanged. The reference length is the glow's own
-    // span, that being the one length this layer is written against.
-    let mix_out = min(1.0, (d * d) / (span * span));
+    // radius; easing to the mean instead carries the arc the seam has where the
+    // ink ends inward unchanged.
+    //
+    // The reference length is the node's own RIM and NOT the glow's span, which
+    // is the tempting reading of "ease out over the light" and takes the colour
+    // out of the light altogether: the ramp is quadratic and the skirt is an
+    // exponential over the same length, so measuring it against `span` leaves
+    // the light about a fifth directional however far the Reach is dialled —
+    // the halo is then the flat mean nearly everywhere, and the Spread bar,
+    // which is exactly the concentration that mean is NOT taken at, has almost
+    // nothing to move. Against the rim the light is fully the node's own
+    // colours from the ink's outer edge outward, which is all of the halo
+    // proper, and the easing is left doing the one job it is for.
+    //
+    // Floored where the span is and for the same reason: a node drawn down to
+    // almost nothing has almost no rim, and a ramp measured against that is
+    // full direction at every radius it has — which is the cusp back again,
+    // this time on the one node too small to hide it under its own ink.
+    let seam = max(in.glow.z, 0.1);
+    let mix_out = min(1.0, (d * d) / (seam * seam));
 
     // The level scales the COVERAGE, once, and not the blend as well: a note
     // halfway through its attack should lay down half as much of its colour,

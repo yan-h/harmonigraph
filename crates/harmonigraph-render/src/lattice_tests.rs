@@ -5638,6 +5638,151 @@ fn the_glow_reach_says_how_far_a_node_lights_past_its_own_edge() {
     );
 }
 
+/// The widest the colours round one node's halo get from one another: the
+/// annulus `inner..outer` about the frame's centre cut into wedges, each
+/// wedge's mean taken, and the largest distance between any two of them.
+///
+/// A CHROMATICITY — every pixel divided by its own total — because the light
+/// falls off across the annulus and a plain mean would read that falloff as a
+/// colour difference. The question here is whether two directions are lit in
+/// different COLOURS, not in different amounts.
+fn halo_hue_spread(px: &[u8], size: [u32; 2], inner: f32, outer: f32) -> f64 {
+    const BINS: usize = 16;
+    let centre = (size[0] as f32 / 2.0, size[1] as f32 / 2.0);
+    let mut sums = [[0.0f64; 3]; BINS];
+    let mut counts = [0.0f64; BINS];
+    for (i, p) in px.chunks(4).enumerate() {
+        let (x, y) = ((i % size[0] as usize) as f32, (i / size[0] as usize) as f32);
+        let (dx, dy) = (x - centre.0, y - centre.1);
+        let r = (dx * dx + dy * dy).sqrt();
+        if r < inner || r > outer {
+            continue;
+        }
+        let total = f64::from(p[0]) + f64::from(p[1]) + f64::from(p[2]);
+        // Too dark to have a colour at all: the chromaticity of a near-black
+        // pixel is quantization noise, and out at the light's own edge there
+        // are enough of those to drown the reading.
+        if total < 24.0 {
+            continue;
+        }
+        let turn = (dy.atan2(dx).rem_euclid(std::f32::consts::TAU)) / std::f32::consts::TAU;
+        let bin = ((turn * BINS as f32) as usize).min(BINS - 1);
+        for c in 0..3 {
+            sums[bin][c] += f64::from(p[c]) / total;
+        }
+        counts[bin] += 1.0;
+    }
+    let means: Vec<[f64; 3]> = (0..BINS)
+        .filter(|&b| counts[b] > 0.0)
+        .map(|b| [sums[b][0] / counts[b], sums[b][1] / counts[b], sums[b][2] / counts[b]])
+        .collect();
+    let mut worst = 0.0f64;
+    for (i, a) in means.iter().enumerate() {
+        for b in &means[i + 1..] {
+            let d = (a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2);
+            worst = worst.max(d.sqrt());
+        }
+    }
+    worst
+}
+
+/// The Spread bar's whole claim: a node lighting two directions in two colours
+/// keeps them apart at the bottom of the bar and averages them into one tint at
+/// the top.
+///
+/// Measured out in the HALO — an annulus past everything the node draws — and
+/// not over the node, because the ink is drawn over the light there and what
+/// would be read is the node rather than its glow. The two ends of the fixture's
+/// mark are the two colours: gold one way, cyan another, on octave slices that
+/// do not touch.
+///
+/// This is the reading the bar had no test for while it did nearly nothing. The
+/// colour eased toward the strip's flat mean over the light's whole SPAN, and
+/// the skirt is an exponential over that same length, so with any real Reach
+/// dialled in the halo was that mean nearly everywhere — and the mean is the one
+/// average the Spread bar cannot move, being taken at no concentration at all by
+/// definition. Against the node's own rim instead, the bottom of the bar reads
+/// 0.11 here where the span ramp read 0.065, and the bar's travel roughly
+/// doubles.
+#[test]
+fn the_glow_spread_says_how_separate_a_node_keeps_its_colours() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    let beside = slot_beside_middle_c();
+    let at = |spread: f32| -> Scene {
+        let mut scene = single_marked_node(MIDDLE_C, beside);
+        scene.glow_reach = 0.8;
+        scene.glow_strength = 1.5;
+        // No moat: what is being read is the light's own colour, and a hole
+        // punched through the annulus would be read as a dark wedge in it.
+        scene.glow_gap = 0.0;
+        scene.glow_spread = spread;
+        scene
+    };
+    let tight = shooter.shot(&at(0.0));
+    let middle = shooter.shot(&at(0.5));
+    let broad = shooter.shot(&at(1.0));
+
+    // The annulus, sized off the light itself rather than guessed: the farthest
+    // pixel the glow moves is where its window shuts, and the outer half of
+    // that is halo and nothing else.
+    let mut edge = 0.0f32;
+    let mut unlit = at(0.0);
+    unlit.glow_reach = 0.0;
+    let dark = shooter.shot(&unlit);
+    let row = SIZE[0] as usize;
+    for (i, (a, b)) in tight.chunks(4).zip(dark.chunks(4)).enumerate() {
+        if a != b {
+            let (px, py) = ((i % row) as f32, (i / row) as f32);
+            let (dx, dy) = (px - SIZE[0] as f32 / 2.0, py - SIZE[1] as f32 / 2.0);
+            edge = edge.max((dx * dx + dy * dy).sqrt());
+        }
+    }
+    assert!(
+        edge > 16.0,
+        "the fixture's light reached only {edge:.1}px and there is nothing to read",
+    );
+    let (inner, outer) = (edge * 0.6, edge * 0.9);
+
+    let spreads = [
+        halo_hue_spread(&tight, SIZE, inner, outer),
+        halo_hue_spread(&middle, SIZE, inner, outer),
+        halo_hue_spread(&broad, SIZE, inner, outer),
+    ];
+    eprintln!(
+        "halo hue spread over {inner:.0}..{outer:.0}px — tight {:.4}, middle {:.4}, broad {:.4}",
+        spreads[0], spreads[1], spreads[2],
+    );
+    // Non-vacuous first: the bottom of the bar has to draw two colours at all.
+    // The fixture's two marks are 0.36 apart in this reading laid down pure, so
+    // a tenth of that is a halo carrying both of them and not one tint.
+    assert!(
+        spreads[0] > 0.035,
+        "at the bottom of the Spread bar a node lighting two colours drew one: {:.4}",
+        spreads[0],
+    );
+    // And monotone: every step up the bar averages further.
+    assert!(
+        spreads[0] > spreads[1] && spreads[1] > spreads[2],
+        "the Spread bar must average further at every step: {:.4} / {:.4} / {:.4}",
+        spreads[0], spreads[1], spreads[2],
+    );
+    // The top of it is the mean, which has no direction left in it — read as a
+    // RATIO against the bottom rather than as an absolute, because the annulus
+    // is sized off the light's own edge and the node's outer ink reaches a
+    // little way into it. That ink has a direction whatever the bar says, so
+    // the top of the bar has a floor it cannot go under and only the two ends
+    // compared say what the LIGHT did.
+    assert!(
+        spreads[0] > spreads[2] * 3.0,
+        "the top of the bar must be one tint beside the bottom, and it kept \
+         {:.4} against {:.4}",
+        spreads[2], spreads[0],
+    );
+}
+
 /// What the glow is a layer OF is a node, and a lattice drawing none has no
 /// light — grid lines and chord beams included, which are drawn in the same
 /// pass and would glow like nodes if the light were a post-process over the
