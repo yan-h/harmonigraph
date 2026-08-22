@@ -370,8 +370,9 @@ mod tests {
         }
     }
 
-    /// The resting marker field's picture, written to `target/scratch/` — a sweep
-    /// of the Size and the Feather together, which is the pair that decides
+    /// The resting marker field's picture, written to `target/scratch/` — a
+    /// sweep of the three bars that shape a cross: how far its arms reach, how
+    /// thick they are, and how much of each end fades out. Together they decide
     /// whether the lattice at rest is a field of marks or a field of objects.
     ///
     /// A probe: it asserts nothing, the verdict being a look rather than a
@@ -387,18 +388,18 @@ mod tests {
     /// judgement is how far above.
     ///
     /// One shot holds a held chord, and it is the one that answers the
-    /// question the size bar is really for: a node arriving has to COVER its
-    /// own marker rather than grow out of one, which is a comparison between the
-    /// marker's radius and where the node's rings start.
+    /// question the arm bar is really for: a node arriving has to COVER its own
+    /// marker rather than grow out of one, which is a comparison between the
+    /// arm's reach and where the node's rings start.
     ///
-    /// The last two shots are the NAMES, which take a marker off the position
-    /// they stand on (`NodeInstance::is_named`): one under Past with a memory
+    /// Two shots are the NAMES, which take a marker off the position they
+    /// stand on (`NodeInstance::name_level`): one under Past with a memory
     /// behind it, where names and markers share the field, and one under All,
     /// where the names take the whole of it. That pair is the reading the rule
     /// is for, and neither can be judged from a shot with no type in it.
     ///
     /// ```text
-    /// cargo test -p harmonigraph-offline -- --ignored --nocapture resting_dots
+    /// cargo test -p harmonigraph-offline -- --ignored --nocapture resting_markers
     /// ```
     #[test]
     #[ignore = "a probe: writes PNGs and asserts nothing"]
@@ -449,9 +450,6 @@ mod tests {
             (fresh.plus_arm, 0.0, fresh.plus_taper, false, NoteNames::Played),
             (fresh.plus_arm, 0.25, fresh.plus_taper, false, NoteNames::Played),
             (fresh.plus_arm, 0.5, fresh.plus_taper, false, NoteNames::Played),
-            // A long arm at a fresh width, which is the proportion the width
-            // bar exists to make askable.
-            (0.5, fresh.plus_width, fresh.plus_taper, false, NoteNames::Played),
             // The taper, across its whole span: a square end, half the arm,
             // and an arm that fades the whole way from the crossing.
             (fresh.plus_arm, fresh.plus_width, 0.0, false, NoteNames::Played),
