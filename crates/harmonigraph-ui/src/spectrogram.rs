@@ -3048,6 +3048,20 @@ mod tests {
             all.len(),
         );
 
+        // Both ENDS are the window's own, inclusive. A column stamped exactly
+        // at an edge is inside the region the axis draws — `frac` gives it 0
+        // or 1 — so dropping it would shorten the image by a slab at a
+        // boundary that is otherwise the commonest one there is: `--start 0`
+        // puts a column on the near edge whenever the hop divides it.
+        ws.start = 60.0;
+        ws.span = 10.0;
+        let edges: Vec<f64> = ws.drawn_columns(ws.span).map(|c| c.time).collect();
+        assert_eq!(
+            (edges.first().copied(), edges.last().copied()),
+            (Some(60.0), Some(70.0)),
+            "the window's own endpoints were trimmed off it",
+        );
+
         // And the trim moved nothing that was drawn. The slab keys are
         // ABSOLUTE, so the window's slabs are the same slabs at the same times
         // carrying the same bytes — the trimmed grid is a contiguous run of the
