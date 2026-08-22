@@ -91,6 +91,28 @@ impl Renderer {
         Some(Renderer { device, queue, egui, target, view, readback, size, bytes_per_row })
     }
 
+    /// The widest texture this device will take, on either side.
+    ///
+    /// The context has to be TOLD this — `RawInput::max_texture_side` left
+    /// `None` makes egui report its own 2048 default, and the spectrogram
+    /// reads that limit for both axes of the heatmap
+    /// (`harmonigraph_ui::spectrogram::Plan`): rows are clamped to it directly
+    /// and slabs through `slab_ceiling`. Left unfilled, a 4K export planned
+    /// against a quarter of the area this device would have taken, and nothing
+    /// on screen or in stderr said so — issue #368. The editor has never had
+    /// that gap: the vendored egui-baseview passes its renderer's limit in, off
+    /// this same wgpu call.
+    ///
+    /// The DEVICE's number rather than a lower one chosen here, because the
+    /// caps that decide what a spectrogram should spend already exist a layer
+    /// up (`LIVE_SLAB_CAP`, `WHOLE_SONG_SLAB_CAP`, and the pane's own pixel
+    /// count) and are the ones meant to bind. A second, quieter cap in this
+    /// crate would make an offline frame differ from the editor's for a reason
+    /// no pane could report.
+    pub fn max_texture_side(&self) -> usize {
+        self.device.limits().max_texture_dimension_2d as usize
+    }
+
     /// Paint one frame's tessellated shapes and read the result back as
     /// tightly packed RGBA8 (row padding removed).
     pub fn render(
@@ -442,6 +464,10 @@ mod tests {
                 egui::RawInput {
                     screen_rect: Some(screen),
                     time: Some(NOW),
+                    // The device's own limit, as the render loop reports it —
+                    // a probe drawn against a different ceiling from the export
+                    // is a probe of a picture nothing ships.
+                    max_texture_side: Some(renderer.max_texture_side()),
                     ..Default::default()
                 },
                 |ui| {

@@ -297,6 +297,36 @@ impl WholeSong {
         // not the audio); the bounce preview leaves it empty.
         WholeSong { start, span, columns, roll: harmonigraph_core::NoteRoll::default() }
     }
+
+    /// The columns the depth axis can actually draw: those stamped inside
+    /// `[start, start + span]`.
+    ///
+    /// The heatmap's WIDTH comes from the columns the fold is handed, not from
+    /// the span the plan sized its slab against:
+    /// [`Plan::new`](crate::spectrogram::Plan::new) picks `bucket` from the
+    /// window, while the module's `aggregate_slabs` gives every elapsed slab a
+    /// texel between the first column and the last (both private to it, so
+    /// named here rather than linked).
+    /// Those agree only while the columns lie inside the window, and
+    /// [`precompute`](Self::precompute) leaves them free to reach past it: it
+    /// analyses the whole `samples` buffer
+    /// whatever the render's `--start`/`--end`, so a ten-second window on a
+    /// three-minute bounce arrives here with columns spanning the file and a
+    /// bucket cut for ten seconds. Folding those built a texture around 14 000
+    /// texels wide against a limit of 2048 — issue #367, the same
+    /// `load_texture` assert as #333/#335, reached from the other axis.
+    ///
+    /// Trimmed to the window EXACTLY, with no margin either side, and the
+    /// tightness is what `spectrogram::slab_ceiling`'s slabs in hand are
+    /// counted against. Nothing drawn is lost by it: the pane
+    /// maps take time to depth through `TimeAxis::frac`, so a column outside
+    /// `[start, start + span]` has no depth on screen, and the quad samples the
+    /// texture by ABSOLUTE time (`u_drawn` over `t_origin`/`tex_span`), so
+    /// dropping texels off the ends moves none of the ones that remain.
+    pub(crate) fn drawn_columns(&self) -> impl Iterator<Item = &SpectrogramColumn> {
+        let (from, to) = (self.start, self.start + self.span);
+        self.columns.iter().filter(move |c| c.time >= from && c.time <= to)
+    }
 }
 
 impl Default for AudioSpectrum {

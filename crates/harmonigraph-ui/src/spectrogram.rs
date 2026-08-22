@@ -71,31 +71,37 @@ pub(crate) const MIN_BUCKET: f64 = crate::AudioSpectrum::FFT_INTERVAL * COLUMNS_
 /// [`RING_HEADROOM`] slabs past the pane's own count, so its texture is
 /// `2 * (slabs + RING_HEADROOM)` across — over the limit at half the pane
 /// width a row count needs to reach it. The whole-song build owns its texture
-/// outright and spends one texel a slab, plus one slab in hand: the fold keys
+/// outright and spends one texel a slab, plus two slabs in hand: the fold keys
 /// columns by absolute `floor(t / bucket)`, so a stretch of time worth `n`
-/// slabs touches `n + 1` of them whenever the boundaries fall mid-slab.
+/// slabs touches `n + 1` of them whenever the boundaries fall mid-slab, and the
+/// second covers the rounding in `bucket` itself (see the arm below).
+///
+/// It bounds the IMAGE on both paths, which is only true while the whole-song
+/// fold is trimmed to the window it was sized for —
+/// [`WholeSong::drawn_columns`](crate::WholeSong::drawn_columns) is what keeps
+/// the count taken from `window` and the count the fold emits the same number.
 ///
 /// It is the DEVICE's limit that binds here, never the pane's, and which
-/// devices it fires on is the whole of what it costs. At the 8192 an editor
-/// reports (wgpu's own default limit, which egui-baseview passes through) it
-/// sits far above both [slab](LIVE_SLAB_CAP) [caps](WHOLE_SONG_SLAB_CAP) and
-/// can never bite. At the 2048 an egui context defaults to when nothing tells
-/// it otherwise — every test, and the offline renderer, which drives a bare
-/// `egui::Context` — [`LIVE_SLAB_CAP`] alone puts the texture at
-/// `2 * (1024 + 8)` = 2064 and the upload panics. So this trades time
-/// resolution for a texture that fits, on exactly the builds whose alternative
-/// is the crash.
+/// devices it fires on is the whole of what it costs. At the 8192 wgpu's own
+/// default limit gives — what an editor reports, egui-baseview passing it
+/// through, and what the offline renderer reports off its own device — it sits
+/// far above both [slab](LIVE_SLAB_CAP) [caps](WHOLE_SONG_SLAB_CAP) and can
+/// never bite. At the 2048 an egui context defaults to when nothing tells it
+/// otherwise — every test in this tree — [`LIVE_SLAB_CAP`] alone puts the
+/// texture at `2 * (1024 + 8)` = 2064 and the upload panics. So this trades
+/// time resolution for a texture that fits, on exactly the builds whose
+/// alternative is the crash.
 fn slab_ceiling(max_side: usize, whole: bool) -> usize {
     let ceiling = if whole {
-        // The one slab in hand described above — and this arm bounds the PLAN
-        // rather than the image, which on this path are not the same number.
-        // The whole-song build folds every column it is given
-        // ([`aggregate_slabs`] over `WholeSong::columns`) rather than the ones
-        // inside `window`, and gives every elapsed slab a row, so a column set
-        // reaching past the window makes the image wider than any count taken
-        // from the span. Bounding that belongs where the fold is, not here —
-        // issue #367.
-        max_side.saturating_sub(1)
+        // TWO slabs in hand rather than the one the boundary costs. The fold
+        // walks [`WholeSong::drawn_columns`](crate::WholeSong::drawn_columns),
+        // which spans at most `window`, so its keys cover
+        // `floor(window / bucket) + 1` of them at worst — and that quotient is
+        // `target_cols` only up to the rounding of `bucket = window /
+        // target_cols`, which can leave it a hair above the count and cost one
+        // more key. A slab is the cheapest thing here to spend on making the
+        // bound provable instead of exact-arithmetic-dependent.
+        max_side.saturating_sub(2)
     } else {
         // [`RING_HEADROOM`] for the ring's own slabs, and two more for
         // [`ring_capacity`]'s floor — it takes `visible + 2` when the run
@@ -901,10 +907,11 @@ pub(crate) struct PaneView {
     /// The largest image the GPU will take, on EITHER side — what holds the
     /// rows down directly and the slabs through [`slab_ceiling`].
     ///
-    /// Read off the context rather than assumed, because the two contexts this
-    /// pane draws through do not agree: an editor reports its device's limit
-    /// (8192), while a bare `egui::Context` — the offline renderer's, and every
-    /// test's — reports egui's own 2048 default whatever its GPU could take.
+    /// Read off the context rather than assumed, because not every context this
+    /// pane draws through carries the same answer: an editor and the offline
+    /// renderer each report their own device's limit (8192 on wgpu's default
+    /// limits), while a bare `egui::Context` — every test's — reports egui's
+    /// own 2048 default whatever its GPU could take.
     pub(crate) max_side: usize,
     /// The tallest image THIS build makes: [`max_side`](Self::max_side), or the
     /// cut a gesture takes ([`gesture_rows`]).
@@ -1092,8 +1099,13 @@ pub(crate) fn build(
     // instead of re-walking the store.
     let (centers, power) = match whole {
         // Offline whole-song: a fixed column set, already cached after the first
-        // frame — a plain batch aggregate.
-        Some(ws) => aggregate_slabs(ws.columns.iter(), bucket),
+        // frame — a plain batch aggregate, over the columns the depth axis can
+        // draw rather than every column the take holds. That trim is what bounds
+        // the IMAGE (see [`WholeSong::drawn_columns`](crate::WholeSong::drawn_columns)):
+        // `bucket` is cut for the window, so folding a longer take's whole
+        // column set would spend texels on time no pixel shows and hand the GPU
+        // an image several times over its limit.
+        Some(ws) => aggregate_slabs(ws.drawn_columns(), bucket),
         // Live: fold only the new column(s) into the kept slab grid instead of
         // rescanning the whole window every rebuild. `history` and the
         // aggregator are disjoint fields of `spectrum`.
@@ -2030,9 +2042,14 @@ mod tests {
     const EDITOR_MAX_SIDE: usize = 8192;
 
     /// The texture side a context reports when NOTHING tells it otherwise —
-    /// egui's `InputState` default. What the offline renderer runs at (it
-    /// builds a bare context and never fills in `RawInput::max_texture_side`),
-    /// and what every test in this tree runs at.
+    /// egui's `InputState` default, and what every test in this tree runs at.
+    ///
+    /// No renderer runs here any more: the offline one fills
+    /// `RawInput::max_texture_side` in from its device (issue #368), as the
+    /// editor always did. So this is now the limit of a context nobody paints
+    /// through, kept because it is still the SMALLEST one the arithmetic has to
+    /// survive, and because a suite that only ever asks at 8192 stops asking
+    /// the question [`slab_ceiling`] exists to answer.
     const BARE_MAX_SIDE: usize = 2048;
 
     /// The pitch range the ring sweeps hold fixed while they move time.
@@ -2936,6 +2953,114 @@ mod tests {
         assert!(
             600.0 / take.bucket > LIVE_SLAB_CAP as f64,
             "the whole-song build lost its higher cap to a ceiling above it",
+        );
+    }
+
+    /// **A take longer than the render's window must not widen the whole-song
+    /// image past what the GPU takes.**
+    ///
+    /// The sweep above cannot see this: it derives the whole-song width from
+    /// `window / bucket`, and the two numbers part company exactly here.
+    /// `bucket` is cut for the WINDOW ([`Plan::new`]) while the image's width
+    /// comes from the columns the fold walks, and
+    /// [`WholeSong::precompute`](crate::WholeSong::precompute) analyses the
+    /// whole `samples` buffer whatever `--start`/`--end` asked for — so a short
+    /// window on a long bounce arrives with columns spanning the file. Ten
+    /// seconds of a three-minute take folded to some 14 000 texels against a
+    /// 2048 limit: the `load_texture` assert of #333/#335, reached from the
+    /// axis #366 left open (issue #367).
+    ///
+    /// FOLDED rather than counted. The width is a property of
+    /// [`SlabGrid::fold`]'s absolute keying — an empty slab still takes a row,
+    /// so the row count follows the columns' EXTENT and not their number — and
+    /// an arithmetic restatement of that is a restatement of the thing under
+    /// test. It is also what lets the fixture be sparse: columns half a second
+    /// apart reach the same 14 000 texels as the analyzer's own rate for a
+    /// sixtieth of the memory.
+    ///
+    /// The window starts are deliberately off the slab grid, since a window
+    /// whose ends both fall mid-slab is what spends the slabs
+    /// [`slab_ceiling`] holds back.
+    #[test]
+    fn a_take_longer_than_the_render_window_folds_inside_what_the_gpu_takes() {
+        const TAKE: f64 = 180.0;
+        let columns: Vec<_> = (0..=360).map(|i| col(i as f64 * 0.5, &[(1000, 1.0)])).collect();
+        let mut ws = crate::WholeSong {
+            start: 0.0,
+            span: TAKE,
+            columns,
+            roll: harmonigraph_core::NoteRoll::default(),
+        };
+        let plan_for = |max_side: usize, ppp: f32, depth: f32, span: f64| {
+            Plan::new(
+                &PaneView {
+                    ppp,
+                    max_side,
+                    max_rows: max_side,
+                    pitch_len: 1000.0,
+                    depth_len: depth,
+                    window: span,
+                    scale: SWEEP_SCALE,
+                    cfg: SpectrumConfig {
+                        roll_seconds: span as f32,
+                        ..SpectrumConfig::default()
+                    },
+                    whole: true,
+                    coarse: false,
+                },
+                &Columns { first: 0, len: 361, newest: TAKE },
+            )
+        };
+
+        for max_side in [BARE_MAX_SIDE, EDITOR_MAX_SIDE] {
+            for ppp in [1.0f32, 2.0, 3.0] {
+                for depth in [800.0f32, 2000.0, 8000.0] {
+                    for span in [2.5f64, 10.0, 47.0, TAKE] {
+                        for offset in [0.0f64, 0.331, 60.017] {
+                            ws.start = offset.min(TAKE - span);
+                            ws.span = span;
+                            let p = plan_for(max_side, ppp, depth, span);
+                            let (centers, _) = aggregate_slabs(ws.drawn_columns(), p.bucket);
+                            assert!(
+                                centers.len() <= max_side,
+                                "a {span} s window at {} of a {TAKE} s take folds to {} texels, \
+                                 past the {max_side} the GPU takes",
+                                ws.start,
+                                centers.len(),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        // And the untrimmed fold really did overrun, so a sweep that passes is
+        // reading the trim rather than a take that happened to fit.
+        ws.start = 60.0;
+        ws.span = 10.0;
+        let p = plan_for(BARE_MAX_SIDE, 2.0, 800.0, 10.0);
+        let (all, all_power) = aggregate_slabs(ws.columns.iter(), p.bucket);
+        assert!(
+            all.len() > BARE_MAX_SIDE,
+            "the fixture no longer reproduces #367: the whole take folds to {} texels, \
+             inside the {BARE_MAX_SIDE} limit",
+            all.len(),
+        );
+
+        // And the trim moved nothing that was drawn. The slab keys are
+        // ABSOLUTE, so the window's slabs are the same slabs at the same times
+        // carrying the same bytes — the trimmed grid is a contiguous run of the
+        // untrimmed one, which is the whole claim that this costs no picture.
+        let (kept, kept_power) = aggregate_slabs(ws.drawn_columns(), p.bucket);
+        let at = all
+            .iter()
+            .position(|c| (c - kept[0]).abs() < 1e-9)
+            .expect("the window's first slab is one of the take's");
+        assert_eq!(&all[at..at + kept.len()], &kept[..], "the window's slabs moved in time");
+        assert_eq!(
+            &all_power[at * SPECTRUM_BINS..(at + kept.len()) * SPECTRUM_BINS],
+            &kept_power[..],
+            "the window's slabs changed value",
         );
     }
 
