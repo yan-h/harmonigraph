@@ -91,19 +91,55 @@ never finished. Two builds are otherwise indistinguishable from inside the
 DAW, and a look that is judged against the wrong binary costs a whole round
 trip to discover.
 
-**Sessions, when you hand over a build: say what tag it will show.** Not
-"loadable via `./load-plugin.sh <branch>`" alone — name the tag too, so the
-first thing Yan can do is confirm the swap took. It is
-`<branch minus worktree- prefix> @<short sha of your last commit>`; `git log
---oneline -1` gives you the sha. This matters most when you hand over MORE
-THAN ONE build to compare (variants of a look, an A/B of a fix): with several
-near-identical builds in play, "which one am I looking at?" is the whole
-question, and the tag is the only answer that cannot be fooled.
+**Sessions, when you hand over a build: say what tag it will show, and READ
+it out of your dylib.** Not "loadable via `./load-plugin.sh <branch>`" alone —
+name the tag too, so the first thing Yan can do is confirm the swap took. This
+matters most when you hand over MORE THAN ONE build to compare (variants of a
+look, an A/B of a fix): with several near-identical builds in play, "which one
+am I looking at?" is the whole question, and the tag is the only answer that
+cannot be fooled.
 
-The tag names the last COMMIT, not the working tree — a build made with
-uncommitted edits carries the commit it sits on, exactly as
-`load-plugin.sh`'s freshness column does. So commit before you build if you
-want the tag to distinguish your work.
+```
+./load-plugin.sh --tag              # this worktree's build
+./load-plugin.sh --tag <branch>     # some other worktree's
+```
+
+`./load-plugin.sh --list` prints the same thing for every worktree as its
+`overlay` column, and a load prints the tag it just installed. Don't hand-roll
+the `strings` pattern: the literals are laid out end to end in the binary, so
+an unanchored match returns whatever was linked in front of the tag
+(`avgseventh-node-occlusion @39a1325`). `--tag` anchors on the branch name.
+
+**Do NOT derive the tag from a log.** Quoting `git log --oneline -1` is how a
+handover names a commit the binary has never heard of, and it is wrong in the
+ordinary case rather than the exotic one: the session order is edit → build →
+commit → hand over, so the commit lands AFTER the build it is supposed to
+describe and the binary carries its PARENT. Measured on a real handover, the
+dylib was written at 20:06:46 and the commit it was reported as arrived at
+20:07:42 — 56 seconds too late to be in it. An amend or a rebase breaks the
+prediction the other way, leaving a stamped sha that is not an object on the
+branch at all (`--list` says `gone from branch` for that one).
+
+The tag names the COMMIT the build sat on, not the working tree — a build made
+with uncommitted edits carries the commit under it. So commit BEFORE you build
+if you want the tag to distinguish your work; if you build first, the tag is
+still the truth about the binary, and it is the branch HEAD that is ahead.
+
+## A reactivate only reloads if the sandbox process exits
+
+Deactivate + reactivate re-reads the binary only when Bitwig's plug-in host
+PROCESS for Harmonigraph exits on the unload. That is decided by **Settings →
+Plug-ins → "Create a plug-in sandbox for:"**, and the default, `by Vendor`,
+groups every plug-in sharing a `VENDOR` string into ONE process which lives as
+long as ANY of them is loaded. A second plug-in of Yan's in the same project
+therefore holds the old Harmonigraph image in memory and the reactivate is a
+no-op — the DAW keeps drawing the previous build with nothing on screen saying
+so, and only a full Bitwig restart clears it. `by Plug-in` and `Individually`
+each give it a process of its own; `with Bitwig` loads it into the audio
+engine, which unloads nothing.
+
+The symptom is a HUD whose tag does not change after a load that reported
+success. Check the hosting mode before suspecting the swap.
 
 ## Recovering a build someone else's swap evicted
 
@@ -115,9 +151,11 @@ then hand-copy the dylib into both bundles and `codesign --force --sign -`
 each, and verify via a distinctive string from that branch's diff.
 
 Do NOT compare shasums against the source dylib to check a swap took:
-`codesign --force` rewrites the bundled binary's signature in place, so its
-hash legitimately differs from the file just copied (the two bundle binaries
-match each OTHER). Confirm the new code is present instead, e.g.
+`codesign --force` re-signs the bundled binary, so its hash legitimately
+differs from the file just copied (the two bundle binaries match each OTHER).
+Note that `codesign` also does not write through the file it signs — it
+renames a new one into place, which is why `load-plugin.sh` signs a staging
+copy and only then writes the finished bytes across. Confirm the new code is present instead, e.g.
 `strings -a "<bundle>/Contents/MacOS/Harmonigraph" | grep -c "<new symbol>"`
 — WGSL shader edits are embedded via `include_str!`, so a new const or
 comment name greps cleanly.
