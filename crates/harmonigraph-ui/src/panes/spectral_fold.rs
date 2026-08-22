@@ -989,8 +989,14 @@ mod tests {
             "the keys lit nothing, so there is no MIDI picture to leave alone",
         );
 
+        let mut grids = Vec::new();
         for reading in [SpectralReading::Fold, SpectralReading::Spectrum] {
             state.view.spectral_reading = reading;
+            // From a standing start, like `the_two_readings_are_measured_apart`
+            // and for its reason: both scenes are derived at ONE clock, where
+            // the ring's envelope holds rather than steps, so a table left
+            // carrying the previous reading is handed straight back.
+            state.ring_levels = RingLevels::default();
             let both = scene_of(&mut state);
             for (was, now) in midi.nodes.iter().zip(&both.nodes) {
                 let at = was.lattice_pos;
@@ -1009,7 +1015,27 @@ mod tests {
             let loud = both.spectral.levels.iter().filter(|&&level| level > 128).count();
             eprintln!("{reading:?}: {loud} of {SPECTRUM_BINS} buckets over half the Level window");
             assert!(loud > 0, "{reading:?} left nothing in the grid the ring reads");
+            grids.push(both.spectral.levels.clone());
         }
+
+        // And the two arms measured two readings. `loud > 0` above is a
+        // liveness check on each grid and cannot tell one from the other, so
+        // without this the Spectrum arm can hand back the Fold's grid and the
+        // whole loop still passes — which is what the ring's CARRIED levels
+        // do: both scenes are derived at one clock, where the envelope holds
+        // rather than steps, so a reading changed between them is measured
+        // into a table that already holds the last one's answer.
+        //
+        // That the two readings are far apart is
+        // `the_two_readings_are_measured_apart`'s subject, at over a thousand
+        // buckets of this same grid; here it is only asked that they are not
+        // the SAME table twice.
+        let differing =
+            grids[0].iter().zip(grids[1].iter()).filter(|(a, b)| a.abs_diff(**b) > 1).count();
+        assert!(
+            differing > 0,
+            "both readings came back as one grid, so one of the two arms measured the other's",
+        );
     }
 
     /// The ring reads the analyzer RAW: bucket for bucket, its levels are the
