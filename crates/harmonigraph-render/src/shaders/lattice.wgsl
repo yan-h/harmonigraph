@@ -223,9 +223,9 @@ const GLOW_FALLOFF_FLAT: f32 = 0.25;
 //
 // RECIPROCALS, and that is the contract rather than a coincidence: a geometric
 // mix between them puts an exponent of exactly 1 — the plain symmetric ramp,
-// which is what this shipped as — at the bar's own middle. Retuning one end
-// alone slides that neutral point off the middle and every existing view with
-// it, so the pair moves together or not at all.
+// the one shape that spends the fade evenly — at the bar's own middle.
+// Retuning one end alone slides that neutral point off the middle and every
+// view tuned against it with it, so the pair moves together or not at all.
 //
 // Both are strictly ABOVE zero, and TRAIL is the one that could be talked down
 // to it. `pow` is an `exp2(y * log2(x))` on the hardware, so an exponent of 0

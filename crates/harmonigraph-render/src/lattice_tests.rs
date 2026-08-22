@@ -5925,9 +5925,9 @@ fn a_lattice_with_no_node_grows_no_glow() {
 ///
 /// Two claims, and the second is the one that would break something. The
 /// exponent is applied to a ramp that is still 0 at one end of the band and 1
-/// at the other, so the moat's support is the gap and the feather exactly as it
-/// was — which is what lets `vs_glow`'s billboard and `fs_glow_moat`'s early-out
-/// go on sizing themselves off those two alone. A shape that scaled the
+/// at the other, so the moat's support is the gap and the feather and nothing
+/// else — which is what lets `vs_glow`'s billboard and `fs_glow_moat`'s
+/// early-out size themselves off those two alone. A shape that scaled the
 /// feather's own half-width instead would pass the first check and clip square
 /// at the quad's corners at the top of the bar.
 ///
