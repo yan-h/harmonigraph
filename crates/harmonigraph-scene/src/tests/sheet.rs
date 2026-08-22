@@ -215,14 +215,70 @@ fn a_wild_radial_gap_is_clamped_and_the_stack_stops_at_the_ring_that_fits() {
     // drawn nowhere a person can see them. Nothing in the two assertions above
     // moves when the clamp goes — the refused pair is still empty and the stack
     // still stops where the last drawn ring ended.
-    // A tolerance rather than a bare `<=`: the difference is `cursor + gap -
-    // cursor` under the hood, and how far that lands from `gap` itself is a
-    // matter of how large `cursor` grew getting there, not of the clamp.
+    // Measured against the node's own EDGE rather than against `rings_outer`.
+    // A refusal leaves the last drawn ring wherever it happened to stop, while
+    // the strip stands off the room that ran out — the edge — so the two are a
+    // whole refused slot apart by design and the distance between them measures
+    // the refusal rather than the padding. The edge plus one padding is the
+    // real ceiling, and it is the one every billboard pays for.
+    //
+    // A tolerance rather than a bare `<=`, the radius being a sum: how far
+    // `1.0 + gap` lands from itself is a matter of how large the cursor grew
+    // getting there, not of the clamp.
     assert!(
-        scene.mark_inner - scene.rings_outer <= GAP_MAX + f32::EPSILON * 8.0,
-        "the padding reached the picture as {}, past the {GAP_MAX} its bar can produce",
-        scene.mark_inner - scene.rings_outer,
+        scene.mark_inner <= 1.0 + GAP_MAX + f32::EPSILON * 8.0,
+        "the strip reached {}, past the {} a full stack can put it at",
+        scene.mark_inner,
+        1.0 + GAP_MAX,
     );
+}
+
+/// The mark strip only ever moves OUTWARD as the stack's start moves outward.
+///
+/// `Stack::full` exists to stop a refused layer's slot becoming "a gift to the
+/// one outside it" — its own doc says so, and names the reappearing band it was
+/// written against. The strip is seated OUTSIDE `Stack::take`, though, because
+/// its slot is the one allowed to run past the quad, so the flag never reached
+/// it: with the octave band refused for want of room, the cursor stays at the
+/// audio ring's outer edge and the marks seat a gap out from there — in the
+/// slot the band was just refused.
+///
+/// On the Layers bar that is a strip travelling the opposite way to the
+/// pointer: one ten-thousandth more Inner takes the octave band away and drops
+/// the melody/bass marks a fifth of a node INWARD, from outside the quad's
+/// hairline to inside it, where they stay until the handle catches back up.
+///
+/// Swept rather than pinned at the crossing, because where the crossing falls
+/// is a function of every other width in the stack and moves whenever a fresh
+/// default does.
+#[test]
+fn the_mark_strip_never_falls_into_a_refused_layers_slot() {
+    let fresh = ViewConfig::default();
+    let mut previous = f32::NEG_INFINITY;
+    let mut worst: Option<(f32, f32, f32)> = None;
+    for step in 0..=9000 {
+        // The Inner handle's whole travel, at a step fine enough to land either
+        // side of a refusal rather than stepping over it.
+        let ring_inner = step as f32 / 10_000.0;
+        let mark = ViewConfig { ring_inner, ..fresh.clone() }.rings().mark_inner;
+        // The strip's radius sizes every node's billboard, so "outward" must
+        // not become "away": the whole travel stays under the node's edge plus
+        // one padding, refusals included.
+        assert!(
+            mark <= 1.0 + GAP_MAX + f32::EPSILON * 8.0,
+            "the strip reached {mark} at an Inner of {ring_inner}",
+        );
+        if mark < previous - 1e-6 && worst.is_none() {
+            worst = Some((ring_inner, previous, mark));
+        }
+        previous = mark;
+    }
+    if let Some((at, before, after)) = worst {
+        panic!(
+            "the strip fell {} inward when Inner reached {at}: {before} -> {after}",
+            before - after,
+        );
+    }
 }
 
 #[test]

@@ -1285,6 +1285,17 @@ struct Stack {
     /// to be (see [`ViewConfig::ring_inner`]).
     inner: f32,
     cursor: f32,
+    /// How far out the stack REACHED, a refusal counting as far as the layer
+    /// it could not seat would have gone.
+    ///
+    /// The cursor answers "what does the next layer stand off?", and stops at
+    /// the last layer DRAWN so that a layer switched off gives its slot back.
+    /// This answers "how far out is the stack spoken for?", which is a
+    /// different question the moment a refusal is in play: the room ran out,
+    /// nothing outside can be seated, and the slot is spent rather than free.
+    /// The mark strip is the one layer that reads this instead of the cursor —
+    /// see [`ViewConfig::rings`].
+    reach: f32,
     /// Set by a refusal, and the reason it is not just a cursor: the two ways
     /// a layer comes back empty are different questions, and only one of them
     /// is about the room.
@@ -1322,9 +1333,22 @@ impl Stack {
         let outer = inner + width;
         if outer > 1.0 {
             self.full = true;
+            // Spent, not free: the reach stands at the node's own edge, which
+            // is where the room ran out. The mark strip then stands off that
+            // rather than dropping into the slot, and it does so at the SAME
+            // radius it had one step earlier, when the layer fitted exactly —
+            // so the strip crosses a refusal without moving at all.
+            //
+            // The edge and not `outer`, which is where the layer would have
+            // ended and is unbounded: `mark_inner` is what the shader sizes
+            // every node's BILLBOARD on, so a strip seated on a refused width
+            // asks for a quad several node radii across, on every node in the
+            // window, to draw marks nobody can see.
+            self.reach = 1.0;
             return (0.0, 0.0);
         }
         self.cursor = outer;
+        self.reach = outer;
         (inner, outer)
     }
 }
@@ -1437,7 +1461,7 @@ impl ViewConfig {
         // would have. The start is carried beside the cursor rather than as its
         // opening value, because the two answer different questions: what a
         // layer stands off, and where the stack sits.
-        let mut stack = Stack { inner, cursor: 0.0, full: false };
+        let mut stack = Stack { inner, cursor: 0.0, reach: 0.0, full: false };
         let audio = stack.take(gap, size(self.spectral_ring_width, RING_WIDTH_MAX));
         let band = stack.take(gap, size(self.band_width, RING_WIDTH_MAX));
         RingStack {
@@ -1445,11 +1469,20 @@ impl ViewConfig {
             audio,
             band,
             outer: stack.cursor,
-            // The strip's own slot, on the stack's terms — a gap out from the
-            // last layer drawn, or the stack's start when nothing was. Only
-            // the outer edge is left to the renderer, because that is the one
-            // the billboard's margin lets run past the quad.
-            mark_inner: slot_start(stack.cursor, inner, gap),
+            // The strip's own slot, on the stack's terms — a gap out from how
+            // far the stack REACHED, or the stack's start when it reached
+            // nowhere. Only the outer edge is left to the renderer, because
+            // that is the one the billboard's margin lets run past the quad.
+            //
+            // The reach and not the cursor, which is the whole of what keeps
+            // the strip travelling the same way as the handle. The marks are
+            // the one layer never refused — their slot is allowed past the
+            // quad — so `Stack::full` cannot stop them the way it stops a
+            // ring, and seating them on the cursor handed them the slot a
+            // refused band had just given up. That is the gift `full` exists
+            // to refuse, arriving by the one door it does not cover: the strip
+            // jumped a fifth of a node INWARD as the Inner handle moved out.
+            mark_inner: slot_start(stack.reach, inner, gap),
             mark_thickness: size(self.mark_thickness, MARK_THICKNESS_MAX),
             gap,
         }
