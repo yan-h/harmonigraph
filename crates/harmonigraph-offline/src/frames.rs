@@ -396,6 +396,125 @@ mod tests {
         }
     }
 
+    /// What a second sevens sheet does to the light, as two numbers: the light
+    /// at a node's own centre, and the light on the ground between nodes.
+    ///
+    /// The pair is the reading, not either alone. A node is a LAMP while its
+    /// centre is the brighter of the two and a HOLE once the ground passes it,
+    /// and which of those the picture shows flips on `extent_sevens` alone —
+    /// `fs_glow_cover` takes the light of every sheet behind off a node's body,
+    /// and on a flat lattice there is no sheet behind, so the pass is a no-op
+    /// and every node keeps the wash its neighbours lay on it.
+    ///
+    /// Read at a wide Reach because that is the regime the cover erases most
+    /// in: the light a node stands in is then mostly its NEIGHBOURS', which is
+    /// exactly what its own body takes away.
+    ///
+    /// The two sample points are fixed pixels — the C node sits at the middle
+    /// of the pane under this camera in every shot, and (600, 690) is ground
+    /// clear of every node's ink. A camera change moves both.
+    ///
+    /// ```text
+    /// cargo test -p harmonigraph-offline -- --ignored --nocapture sheets_glow
+    /// ```
+    #[test]
+    #[ignore = "a probe: writes PNGs and asserts nothing"]
+    fn the_sheets_glow_draws_a_picture() {
+        use harmonigraph_ui::{draw_pane, Layout, SharedState};
+
+        const SIZE: [u32; 2] = [1200, 1000];
+        const PPP: f32 = 2.0;
+        const NOW: f64 = 1.0;
+
+        let Some(mut renderer) = Renderer::new(SIZE) else {
+            eprintln!("no usable GPU adapter; nothing rendered");
+            return;
+        };
+        let context = egui::Context::default();
+        harmonigraph_ui::theme::apply_theme(&context);
+        context.set_pixels_per_point(PPP);
+
+        let layout = Layout::preset("lattice").expect("the lattice preset");
+        let points = egui::vec2(SIZE[0] as f32 / PPP, SIZE[1] as f32 / PPP);
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, points);
+        let placements = layout.resolve(points);
+        let background = egui::Color32::from_rgb(
+            layout.background.0,
+            layout.background.1,
+            layout.background.2,
+        );
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/scratch");
+        std::fs::create_dir_all(&dir).expect("a scratch directory");
+
+        // extent, sevens_size, gap depth, glow reach, tag
+        let shots: Vec<(i32, f32, f32, f32, &str)> = vec![
+            (0, 1.0, 0.85, 4.0, "flat"),
+            (1, 1.0, 0.85, 4.0, "twosheets"),
+            (1, 1.0, 0.0, 4.0, "twosheets-nomoat"),
+        ];
+        let mut shot_bytes: Vec<(String, Vec<u8>)> = Vec::new();
+        for (extent, size, depth, reach, tag) in shots {
+            let mut state = SharedState::new(FORMAT);
+            state.set_background((24, 25, 29));
+            state.frame_params.fade_time = 0.0;
+            state.view.glow_attack = 0.0;
+            state.view.glow_release = 0.0;
+            state.view.extent_sevens = extent;
+            state.view.sevens_size = size;
+            state.view.glow_gap_depth = depth;
+            state.view.glow_reach = reach;
+            for note in [60u8, 64, 67, 70] {
+                state.tracker.handle_event(harmonigraph_core::NoteEvent::on(0.0, 0, note, 1.0));
+            }
+            state.camera.zoom_by(2.0);
+            let output = context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    time: Some(NOW),
+                    max_texture_side: Some(renderer.max_texture_side()),
+                    ..Default::default()
+                },
+                |ui| {
+                    for (pane, rect) in &placements {
+                        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(*rect));
+                        draw_pane(&mut child, *pane, &mut state, NOW);
+                    }
+                },
+            );
+            let primitives = context.tessellate(output.shapes, PPP);
+            let bytes = renderer.render(&primitives, &output.textures_delta, PPP, background);
+            let path = dir.join(format!("sheets-{tag}.png"));
+            image::save_buffer(&path, &bytes, SIZE[0], SIZE[1], image::ExtendedColorType::Rgba8)
+                .expect("write the png");
+            eprintln!("{}", path.canonicalize().unwrap_or(path.clone()).display());
+            shot_bytes.push((tag.to_string(), bytes));
+        }
+        let luma = |b: &[u8]| -> f64 {
+            let mut sum = 0.0;
+            for px in b.chunks_exact(4) {
+                sum += 0.2126 * px[0] as f64 + 0.7152 * px[1] as f64 + 0.0722 * px[2] as f64;
+            }
+            sum / (b.len() / 4) as f64
+        };
+        for (tag, b) in &shot_bytes {
+            eprintln!("{tag}: mean luma {:.4}", luma(b));
+        }
+        // The C node sits at the middle of the pane in every shot, so its own
+        // centre is one fixed pixel to read the light at — and a ring of
+        // background well outside every node is what it is being read against.
+        let at = |b: &[u8], x: u32, y: u32| {
+            let i = ((y * SIZE[0] + x) * 4) as usize;
+            0.2126 * b[i] as f64 + 0.7152 * b[i + 1] as f64 + 0.0722 * b[i + 2] as f64
+        };
+        for (tag, b) in &shot_bytes {
+            eprintln!(
+                "{tag}: node centre {:.1}, ground between nodes {:.1}",
+                at(b, 600, 500),
+                at(b, 600, 690),
+            );
+        }
+    }
+
     /// The resting marker field's picture, written to `target/scratch/` — a
     /// sweep of the three bars that shape a cross: how far its arms reach, how
     /// thick they are, and how much of each end fades out. Together they decide
