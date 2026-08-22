@@ -191,14 +191,30 @@ impl GlowFade {
         // every drawn node at full on a view whose ring is off.
         let ringing = scene.spectral.ring_draws();
         for node in &mut scene.nodes {
-            // The largest level that puts ink on this node — every layer the
+            // The largest level that puts LIGHT on this node — every layer the
             // light is assembled out of, since a node with a mark or a ring and
             // no key down is a node with something on screen.
+            //
+            // The ring's term is how much of it is showing held to how much is
+            // IN it, which is the one place the two differ: a ring is drawn
+            // wherever the Gate admits the node, and at the Gate's floor that
+            // is every node in the window, silence included. Such a ring is
+            // every wedge at the ramp's silent end, which is the ground, and
+            // the light weighs ink drawn in the ground at nothing (`ink_at` in
+            // lattice.wgsl) — so asking `audio_ring` alone holds a light on at
+            // full brightness over a node with no colour to be, wearing
+            // whatever hue it last had until its strip decays out from under
+            // it. The level and the colour have to ask one question.
+            //
+            // Held rather than multiplied, so a ring fading in does not run
+            // two envelopes into one another; and the node's own `activation`
+            // is taken separately above, so a key down still lights a node in
+            // silence.
             let target = node
                 .activation
                 .max(node.melody_level)
                 .max(node.bass_level)
-                .max(if ringing { node.audio_ring } else { 0.0 })
+                .max(if ringing { node.audio_ring.min(node.ring_peak) } else { 0.0 })
                 .clamp(0.0, 1.0);
             // Whether the node is wearing a mark AT ALL, which is what decides
             // how far its outermost drawn edge — and so its light's whole span
@@ -459,6 +475,48 @@ mod tests {
             (one_tau - just_after / std::f32::consts::E).abs() < 0.05,
             "the size runs on the light's own release, and left {one_tau} of {just_after}",
         );
+    }
+
+    /// A ring that is SHOWING with nothing in it holds no light.
+    ///
+    /// The two are different questions and the light needs the second. A ring
+    /// draws wherever the Gate admits the node, and at the Gate's floor that is
+    /// every node in the window, silence included — the ungated picture, which
+    /// is a setting rather than a fault. Every wedge of such a ring is the
+    /// ramp's silent end, which is the ground, and the light weighs ink drawn
+    /// in the ground at nothing (`ink_at` in lattice.wgsl). So a light held on
+    /// by how much ring is showing is a full-brightness halo over a node with
+    /// no colour to be: it wears whatever hue it last had for as long as the
+    /// node is on screen, and then goes BLACK as its strip decays out from
+    /// under the normalisation that keeps the hue a hue — a dark hole punched
+    /// round the node, over whatever is behind it.
+    ///
+    /// Both halves are checked, because only the pair says the reading is what
+    /// decides: the same node with a partial in its ring is lit.
+    #[test]
+    fn a_ring_showing_with_nothing_in_it_holds_no_light() {
+        let state = lit(0.0, 2.5);
+        // No key anywhere — the node is the analyzer's alone.
+        let ringing = |peak: f32| -> f32 {
+            let mut scene = scene_at(&state, 0.0);
+            // A dialled-in annulus, which is what `ring_draws` asks: without
+            // one the ring layer is off and the term under test is skipped.
+            scene.spectral.inner = 0.2;
+            scene.spectral.outer = 0.4;
+            let node = scene.nodes.first_mut().expect("the window holds a node");
+            assert_eq!(node.activation, 0.0, "the fixture must hold no key");
+            // The Gate's floor exactly: every node wears its whole ring,
+            // whatever is in it.
+            node.audio_ring = 1.0;
+            node.ring_peak = peak;
+            let pos = node.lattice_pos;
+            GlowFade::default().step(&mut scene, &state.view, 0.0);
+            node_at(&scene, pos).glow.level
+        };
+        let heard = ringing(0.8);
+        assert!(heard > 0.0, "a ring with a partial in it gave off no light: {heard}");
+        let silent = ringing(0.0);
+        assert_eq!(silent, 0.0, "a ring reading nothing held a light at {silent}");
     }
 
     /// The light off is the light not stepped: no state, and every node's step

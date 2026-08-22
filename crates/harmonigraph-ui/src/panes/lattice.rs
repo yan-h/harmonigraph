@@ -788,6 +788,7 @@ mod tests {
             // The lattice pass draws the ring on every node it ships; the
             // gate is the fold's answer and there is no fold here.
             audio_ring: 1.0,
+            ring_peak: 1.0,
             // Nothing here draws a glow, and the labels this fixture is for do
             // not read one: an unlit light on the first row.
             glow: harmonigraph_scene::GlowStep::default(),

@@ -603,6 +603,25 @@ pub struct NodeInstance {
     /// fixture — and there the ungated picture is the one that cannot be
     /// mistaken for a bug.
     pub audio_ring: f32,
+    /// The loudest reading anywhere in this node's ring, 0..1 — how LIT the
+    /// ring is, where [`audio_ring`](Self::audio_ring) beside it is how much of
+    /// the ring is SHOWING.
+    ///
+    /// Two questions, and the node's light needs the second one. A ring is
+    /// drawn wherever the Gate admits the node, and at the Gate's floor that is
+    /// every node in the window, silence included — the ungated picture, which
+    /// is a setting rather than a fault. Every wedge of such a ring is the
+    /// ramp's silent end, which is the ground, and the light weighs ink drawn
+    /// in the ground at nothing (`ink_at` in lattice.wgsl). So a light held on
+    /// by `audio_ring` alone is a light with no colour to be, and
+    /// `panes::glow_fade` reads this instead.
+    ///
+    /// Arrives at 1 out of [`derive_scene`] for the same reason `audio_ring`
+    /// does, and is answered by the same pass ([`Scene::wear_audio_rings`]):
+    /// nothing in this crate reads audio, so a scene derived without the
+    /// shell's fold behind it is one where nothing has been measured and
+    /// nothing can be held back.
+    pub ring_peak: f32,
     /// The node's own light, as far as the light is concerned: how bright it
     /// is, which row of the frame's ink strip is this node's, and how much of
     /// this frame's reading the pair of them take (see [`GlowStep`]).
@@ -1007,7 +1026,8 @@ impl Scene {
     /// Decide how much of the audio ring each node wears — [`SpectralPaint::gate`]
     /// against what its wedges reach, carried on `env` by `fade`, and floored by
     /// the node's own envelope — and write it into
-    /// [`NodeInstance::audio_ring`].
+    /// [`NodeInstance::audio_ring`], with what its wedges actually READ beside
+    /// it in [`NodeInstance::ring_peak`].
     ///
     /// Run after the levels are measured in, which is the whole reason it is a
     /// pass of its own rather than part of [`derive_scene`]: nothing in this
@@ -1046,6 +1066,11 @@ impl Scene {
             // the node's disc and its clearing are drawn at, so the ring leaves
             // exactly with the rest of the node rather than a slot at a time.
             node.audio_ring = fade.level(layout, node.cents).max(node.activation);
+            // The gate's own peak, off the same gate the fade is carrying:
+            // how loud this node's ring is, where the line above is how much
+            // of it is showing. The light needs the first (see
+            // [`NodeInstance::ring_peak`]); the drawn ring needs the second.
+            node.ring_peak = gate.peak(layout, node.cents);
         }
     }
 }
