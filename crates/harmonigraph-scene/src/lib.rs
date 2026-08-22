@@ -183,6 +183,51 @@ pub const MARK_THICKNESS_MAX: f32 = 0.3;
 /// place that a second constant would be two numbers saying one thing.
 pub const GAP_MAX: f32 = 0.4;
 
+/// How far past a node's outermost drawn edge its glow may be asked to reach
+/// (see [`ViewConfig::glow_reach`]), in the same quad UV units the layer sizes
+/// above are in.
+///
+/// A ceiling on the BILLBOARD rather than on the look: the glow's draws size
+/// their quad to hold the whole halo (`quad_margin` in lattice.wgsl), so every
+/// step out here is fill rate spent on one more ring of fragments around every
+/// node. One node radius past the rim already reaches well past anything the
+/// layers draw, which is what a halo is for.
+pub const GLOW_REACH_MAX: f32 = 1.0;
+
+/// What the node glow scales its own skirt by
+/// (see [`ViewConfig::glow_strength`]).
+///
+/// Its own ceiling rather than [`ViewConfig::bloom_strength`]'s, because it is
+/// a different light: the bloom's chain thresholds, so its strength acts on the
+/// bright end alone, where this one scales one node's own skirt. Two is where
+/// the travel stops being about the light and starts being about the clamp —
+/// the base (`GLOW_BASE` in lattice.wgsl) is picked so that 1 reads plainly,
+/// which puts the middle of a node at saturation somewhere short of this.
+pub const GLOW_STRENGTH_MAX: f32 = 2.0;
+
+/// The widest feather the glow's moat offers (see
+/// [`ViewConfig::glow_gap_soft`]), in the quad UV units the gap it stands
+/// astride is measured in.
+///
+/// Three [`GAP_MAX`]s, so the fade is free to run several times as wide as the
+/// widest gap under it. That is the whole point of the number: a feather held
+/// inside its own gap can only draw a band with an edge, and what stops the
+/// moat reading as a black ring is a dip broad enough to come off at the rate
+/// the skirt does. Three is where the band is wider than any node's whole ring
+/// stack, past which there is no more shape to soften.
+pub const GLOW_GAP_SOFT_MAX: f32 = 3.0 * GAP_MAX;
+
+/// The longest attack or release the node glow offers, in seconds (see
+/// [`ViewConfig::glow_attack`]).
+///
+/// Longer than the audio ring's own pair ([`SPECTRAL_BALLISTICS_MAX`]) because
+/// it is a different quantity: that one is how fast a measurement moves, and a
+/// third of a second is already a smear, where this is how long a halo hangs
+/// around after the note that lit it. Six seconds is a light that is plainly
+/// still leaving a bar later, which is the far end of the look rather than a
+/// guard rail on it.
+pub const GLOW_BALLISTICS_MAX: f32 = 6.0;
+
 /// Samples in the pitch->color lookup EVERYTHING pitch-colored reads: the
 /// disc, the trail and the piano roll on the CPU, the octave glyphs and their
 /// glow in the shader. The shader mirrors this length, and `harmonigraph-render`
@@ -225,6 +270,51 @@ pub const GAP_MAX: f32 = 0.4;
 /// Do NOT read that error as a mismatch between shapes. It is the difference
 /// between the table and an ideal nothing draws.
 pub const PITCH_LUT_N: usize = 64;
+
+/// One node's state in the glow's own slow filter: what the light is doing at
+/// this node, and where its colour is being kept.
+///
+/// Three numbers rather than one because the light is carried in two places at
+/// once. The LEVEL is stepped on the CPU, where the node's identity lives; the
+/// COLOUR is stepped on the GPU, where the node's ink is read (the ink strip in
+/// harmonigraph-render). What ties them is [`mix`](Self::mix): the same
+/// coefficient carries both, so the two halves of one light can never be
+/// running at different speeds.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GlowStep {
+    /// How lit this node is for the purpose of the light it gives off, carried
+    /// on the Glow attack and release. Its TARGET is the largest level that
+    /// puts ink on the node; this is where that target has got to, so it can be
+    /// above zero on a node whose every layer has gone silent — which is the
+    /// whole of what makes a halo linger.
+    pub level: f32,
+    /// Which row of this frame's ink strip holds this node's colour.
+    ///
+    /// It has to hold STILL while the node keeps glowing: the row is where last
+    /// frame's colour is read back from, so a node handed a different row each
+    /// frame would read a stranger's ink and morph toward that instead. The
+    /// instance list is sorted by depth and culled, so its own order is exactly
+    /// what cannot be used.
+    pub row: u32,
+    /// How much of this frame's reading the two of them take, `1 - exp(-dt/tau)`
+    /// on the attack or the release.
+    ///
+    /// 1 means SETTLE rather than carry, and it is the same statement in both
+    /// halves: on the CPU the level lands on its target outright, and on the
+    /// GPU the row takes the new ink whole. So the first frame of all, a row
+    /// just handed to a node, and a strip that has just been rebuilt all say
+    /// the one thing, and none of them needs a flag of its own.
+    pub mix: f32,
+}
+
+impl Default for GlowStep {
+    /// Unlit, on row 0, settling. A node nothing has stepped is a node with no
+    /// light, and the mix is the value that makes the next step a settle rather
+    /// than a fade up from a colour nobody drew.
+    fn default() -> GlowStep {
+        GlowStep { level: 0.0, row: 0, mix: 1.0 }
+    }
+}
 
 /// One lattice node, ready for instanced rendering.
 #[derive(Clone, Copy, Debug)]
@@ -389,6 +479,20 @@ pub struct NodeInstance {
     /// fixture — and there the ungated picture is the one that cannot be
     /// mistaken for a bug.
     pub audio_ring: f32,
+    /// The node's own light, as far as the light is concerned: how bright it
+    /// is, which row of the frame's ink strip is this node's, and how much of
+    /// this frame's reading the pair of them take (see [`GlowStep`]).
+    ///
+    /// Out of [`derive_scene`] this is the UNCARRIED picture — the level the
+    /// MIDI layers are at, a row per node in the list's own order, and the
+    /// whole of the new reading — for the same reason
+    /// [`audio_ring`](Self::audio_ring) arrives at 1: nothing in this crate
+    /// keeps state between frames, so a scene derived without a pass behind it
+    /// is one where nothing has been carried. The shell's pass
+    /// (`panes::glow_fade` in harmonigraph-ui) is what replaces it with a
+    /// level carried on the Glow attack and release, a row that holds still
+    /// while the node keeps glowing, and the coefficient that carried it.
+    pub glow: GlowStep,
     /// How strongly the music is remembered here (see [`trail`]): 0 where
     /// it has never been, up to 1 where it has.
     ///
@@ -605,6 +709,44 @@ pub struct Scene {
     pub render_scale: f32,
     /// Bloom intensity; 0 disables the whole post-process chain.
     pub bloom_strength: f32,
+    /// How far past a node's outermost drawn edge its own glow is shown, in
+    /// quad UV units; 0 turns the whole glow off (see
+    /// [`ViewConfig::glow_reach`]). Already clamped to [`GLOW_REACH_MAX`].
+    pub glow_reach: f32,
+    /// How much of that glow is added back as light; already clamped to
+    /// [`GLOW_STRENGTH_MAX`]. Inert while [`glow_reach`](Self::glow_reach) is
+    /// 0, which is the pair's one off switch.
+    pub glow_strength: f32,
+    /// The moat: how far the light is held off every ring a node draws, in the
+    /// same quad UV units (see [`ViewConfig::glow_gap`]); already clamped to
+    /// [`GAP_MAX`]. Inert while [`glow_reach`](Self::glow_reach) is 0.
+    pub glow_gap: f32,
+    /// How far the moat's edge is feathered, in the same quad UV units
+    /// [`glow_gap`](Self::glow_gap) is (see [`ViewConfig::glow_gap_soft`]);
+    /// already clamped to [`GLOW_GAP_SOFT_MAX`], which is deliberately several
+    /// times the gap's own ceiling.
+    pub glow_gap_soft: f32,
+    /// How much of the light the moat takes away where it stands (see
+    /// [`ViewConfig::glow_gap_depth`]); already clamped to 0..=1.
+    pub glow_gap_depth: f32,
+    /// How bright the light is at a node's middle against its peak out at the
+    /// innermost ring's inner edge (see [`ViewConfig::glow_centre`]); already
+    /// clamped to 0..=1.
+    pub glow_centre: f32,
+    /// How widely a node's own ink is averaged into the colour of its light
+    /// (see [`ViewConfig::glow_spread`]); already clamped to 0..=1.
+    pub glow_spread: f32,
+    /// How many rows the frame's ink strip has to hold — the ceiling on every
+    /// [`GlowStep::row`] in `nodes`, plus one.
+    ///
+    /// A CAPACITY and not this frame's node count, which is the difference a
+    /// carried light makes: rows are handed out per node and held while that
+    /// node's light lasts, so the tallest row in use has nothing to do with how
+    /// many nodes are drawn. The renderer sizes the strip textures to it.
+    ///
+    /// `nodes.len()` out of [`derive_scene`], where every node has its own row
+    /// in the list's own order (see [`NodeInstance::glow`]).
+    pub glow_rows: u32,
 }
 
 /// How far the shimmer's sheet has travelled, in world units, reduced onto

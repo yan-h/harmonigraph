@@ -5,8 +5,8 @@
 use crate::spectral::SpectralReading;
 use crate::style::{Gradient, Pulse, SevensLabel};
 use crate::{
-    Camera, CORE_RADIUS_MAX, GAP_MAX, MARK_THICKNESS_MAX, MAX_DRAWN_NODES, NODE_RADIUS_FACTOR,
-    RING_WIDTH_MAX,
+    Camera, CORE_RADIUS_MAX, GAP_MAX, GLOW_BALLISTICS_MAX, GLOW_GAP_SOFT_MAX, GLOW_REACH_MAX,
+    GLOW_STRENGTH_MAX, MARK_THICKNESS_MAX, MAX_DRAWN_NODES, NODE_RADIUS_FACTOR, RING_WIDTH_MAX,
 };
 use harmonigraph_core::{coords, Comma, Envelope, LatticePos, Tempered};
 
@@ -1020,6 +1020,145 @@ pub struct ViewConfig {
     /// composite is then exactly the plain scene, so there is deliberately
     /// no separate on/off toggle.
     pub bloom_strength: f32,
+    /// The node glow: how far past a node's outermost drawn edge its own light
+    /// spreads, in the quad UV units the layer sizes are in. 0 turns it off —
+    /// nothing is drawn at all — so the three fields need no toggle of their
+    /// own.
+    ///
+    /// The glow REPLACES the core's skirt rather than joining it. What it
+    /// draws is exactly that skirt — every sounding octave's hue laid round
+    /// the node by angle, over an exponential falloff — at the soft end of the
+    /// solidity axis and sized to the whole node instead of to the core disc:
+    /// the node's outermost drawn edge plus this reach is both the falloff's
+    /// domain and where its window shuts, so this bar is exactly where the
+    /// light stops. So
+    /// the core's skirt is suppressed wherever this is on (see `core_layer` in
+    /// lattice.wgsl), and only its solid disc is left, as one more crisp shape
+    /// the [`glow_gap`](Self::glow_gap) stands off.
+    ///
+    /// Every node's glow is drawn into a target of its own, with SCREEN
+    /// blending, so two neighbours' halos meld like light rather than summing
+    /// to white and neither one's draw order is readable in the overlap. That
+    /// target is then laid over the finished lattice.
+    ///
+    /// Distinct from [`bloom_strength`](Self::bloom_strength) in what it
+    /// measures: the bloom thresholds a finished PICTURE, so only the bright
+    /// end of the gradient blooms and it is one number over every picture the
+    /// plugin draws. This is a layer of the lattice's nodes, drawn from the
+    /// same octave colours their discs are.
+    pub glow_reach: f32,
+    /// How much light the node glow lays down. Inert while
+    /// [`glow_reach`](Self::glow_reach) is 0.
+    pub glow_strength: f32,
+    /// The moat: how far past each RING a node draws its own light is held
+    /// off, in the same quad UV units [`ring_gap`](Self::ring_gap) reads in.
+    ///
+    /// Without it a wide halo washes over the rings, the band and the marks it
+    /// comes off, and the crisp geometry that carries the reading goes soft.
+    ///
+    /// It is an ABSENCE of light and not a shape painted in the ground: the
+    /// glow is assembled in a target of its own, and every node subtracts its
+    /// own rings from all of it before any of it reaches the picture. So
+    /// whatever lies under the gap — the pane, the grid, a sheet behind — comes
+    /// through exactly as it does with the glow off, where a moat knocked out
+    /// in the ground would blot all of it out and read as a dark halo round
+    /// every node. It reaches the NEIGHBOURS' light too, and not only the
+    /// node's own, because it is subtracted after every node has laid its light
+    /// down.
+    ///
+    /// Rings only. The core's solid disc is drawn OVER the light rather than a
+    /// gap out from it — a gap there would be a dark ring between a note's disc
+    /// and its own halo — and inside the innermost ring nothing stands the
+    /// light off at all, which is what lights the middle of a node. Each ring
+    /// carries its own level, so a layer that is off, refused by the stack,
+    /// attacking or releasing opens and closes its own moat in step with the
+    /// ink it stands off.
+    ///
+    /// Inert while [`glow_reach`](Self::glow_reach) is 0: with no light to
+    /// stand off, a moat is a gap in the picture for nothing.
+    pub glow_gap: f32,
+    /// How far the moat's edge is feathered, in the same quad UV units the
+    /// [`glow_gap`](Self::glow_gap) it stands astride is measured in — a WIDTH
+    /// of its own and not a share of that gap.
+    ///
+    /// A share is what made the moat read as a black RING rather than as a lack
+    /// of light: penned inside the gap, the transition is a uniform-width
+    /// annulus with a short edge, and laid against the node's own dark rings
+    /// the eye takes the pair for a painted band. Unpenned, the erase is a
+    /// broad gentle dip whose slope can be matched to the skirt's own — the
+    /// ceiling is [`GLOW_GAP_SOFT_MAX`], several times the gap's, so the
+    /// feather is free to run wider than the thing it feathers.
+    ///
+    /// The feather stays CENTRED on where the gap ends, so it softens the halo
+    /// outside a ring and the lit middle of the node inside it together — one
+    /// blur across the whole moat rather than a soft outer edge on a hard
+    /// inner one. Past the gap's own width it reaches back inside the ring's
+    /// footprint, and that costs nothing: the ring's ink is drawn over the
+    /// light there a pass later. At 0 all that is left under it is the
+    /// [`sevens_gutter_soft`](Self::sevens_gutter_soft) fade, which is an edge
+    /// a couple of screen pixels wide.
+    ///
+    /// Inert while [`glow_reach`](Self::glow_reach) is 0.
+    pub glow_gap_soft: f32,
+    /// How much of the light the moat takes away where it stands, 0..=1 —
+    /// every ring's coverage scaled once by this.
+    ///
+    /// 1 is a hole: a moated pixel is exactly the frame with no glow in it.
+    /// Below it the rings sit in a DIMMER POOL of their own light instead of in
+    /// a void, which is the whole difference between a gap that reads as shade
+    /// and one that reads as ink. It is still an absence at any depth —
+    /// whatever lies under the moat comes through in the share of light this
+    /// leaves, and nothing is ever painted over it.
+    ///
+    /// Inert while [`glow_reach`](Self::glow_reach) is 0.
+    pub glow_gap_depth: f32,
+    /// How bright a node's light is at its own MIDDLE, as a share of the peak
+    /// it reaches out at the innermost ring's inner edge. 1 is the plain
+    /// exponential, hottest at the exact centre; below it the middle dips and
+    /// the light reads as a lit ring rather than as a lamp.
+    ///
+    /// One continuous profile: the dip eases back to the whole of the skirt by
+    /// that inner edge and the falloff outside it is untouched, so this moves
+    /// the middle of a node and nothing about how far its light reaches.
+    /// Inert while [`glow_reach`](Self::glow_reach) is 0.
+    pub glow_centre: f32,
+    /// How widely a node's own ink is averaged into the colour of its light.
+    ///
+    /// The glow's colour is not a formula naming its sources — it is what the
+    /// node is DRAWING, blurred round the node (`ink_at` in lattice.wgsl):
+    /// every layer's colour at each angle, weighted by that layer's level there
+    /// and by the radial width the stack handed it. So a lit band sector, an
+    /// audio wedge and a mark each light the halo in their own colour and in
+    /// the proportion they occupy the node, and widening a layer on the Layers
+    /// bar moves the light toward its colour with no knob of its own.
+    ///
+    /// This is how far round that average is taken: at 0 each layer's sectors
+    /// stay distinct arcs of colour, and at 1 the whole node's ink averages
+    /// into one tint. Inert while [`glow_reach`](Self::glow_reach) is 0.
+    pub glow_spread: f32,
+    /// How fast a node's light follows the node, in seconds: the time constant
+    /// of the exponential its LEVEL and its COLOUR are both carried on — this
+    /// one while the light is coming up, [`glow_release`](Self::glow_release)
+    /// once it is going down.
+    ///
+    /// Its own pair rather than the note Fade every drawn layer rides, because
+    /// the light is not one of those layers. A halo is the slow part of the
+    /// picture; stepped with the marks' and the audio ring's own fast
+    /// envelopes it flickers with them. On a pair of its own a node's light
+    /// LINGERS past the ink that lit it — the node keeps being drawn into the
+    /// ink strip while its level is above nothing at all — and its hue morphs
+    /// toward a new octave's rather than cutting to it.
+    ///
+    /// One pair for both halves, which is what keeps the two from disagreeing:
+    /// the same coefficient `1 - exp(-dt/tau)` carries the level on the CPU and
+    /// the node's own ink on the GPU (`panes::glow_fade` in harmonigraph-ui).
+    /// Inert while [`glow_reach`](Self::glow_reach) is 0 — with no light there
+    /// is nothing to carry.
+    pub glow_attack: f32,
+    /// See [`glow_attack`](Self::glow_attack). The slow half, and the one the
+    /// look is in: what makes a halo read as light rather than as a layer of a
+    /// node is how long it takes to leave.
+    pub glow_release: f32,
 }
 
 /// Where each layer of a node lands, in quad UV units, read outward from its
@@ -1820,6 +1959,43 @@ impl ViewConfig {
         self.lattice_ground =
             finite_or(self.lattice_ground, fresh.lattice_ground).clamp(0.0, 100.0);
 
+        // The node glow's pair. The reach repairs to the fresh value — 0, the
+        // off position — on the same argument the ring's gate does: a number
+        // nobody can read is a reason to draw no halo, never to open one over
+        // the whole lattice out of a corrupt blob. The strength rides with it
+        // and repairs to its own fresh value, being inert while the reach is 0.
+        //
+        // The reach is what the billboard is SIZED on (`quad_margin` in
+        // lattice.wgsl), so a non-finite one is not merely a wrong halo: it is
+        // a NaN quad, and every node's glow vanishes with nothing on screen to
+        // say why. The gap sizes that same quad, the moat standing off the same
+        // rim, so it repairs on the same argument.
+        self.glow_reach =
+            finite_or(self.glow_reach, fresh.glow_reach).clamp(0.0, GLOW_REACH_MAX);
+        self.glow_strength =
+            finite_or(self.glow_strength, fresh.glow_strength).clamp(0.0, GLOW_STRENGTH_MAX);
+        self.glow_gap = finite_or(self.glow_gap, fresh.glow_gap).clamp(0.0, GAP_MAX);
+        // The moat's feather is a WIDTH in the gap's own units, with a ceiling
+        // of its own: it is deliberately free to run wider than the gap it
+        // stands astride, which is what makes the erase a dip rather than a
+        // band (see `glow_gap_soft`).
+        self.glow_gap_soft =
+            finite_or(self.glow_gap_soft, fresh.glow_gap_soft).clamp(0.0, GLOW_GAP_SOFT_MAX);
+        // The four that are SHARES — of the light the moat stands in, of the
+        // light's own peak, of a whole turn — so their range is the unit
+        // interval.
+        self.glow_gap_depth =
+            finite_or(self.glow_gap_depth, fresh.glow_gap_depth).clamp(0.0, 1.0);
+        self.glow_centre = finite_or(self.glow_centre, fresh.glow_centre).clamp(0.0, 1.0);
+        self.glow_spread = finite_or(self.glow_spread, fresh.glow_spread).clamp(0.0, 1.0);
+        // The light's own pair, in seconds, on the ring's rule: a bar's range,
+        // and a poisoned number repaired to the fresh value rather than left
+        // to make a coefficient nothing can carry.
+        self.glow_attack =
+            finite_or(self.glow_attack, fresh.glow_attack).clamp(0.0, GLOW_BALLISTICS_MAX);
+        self.glow_release =
+            finite_or(self.glow_release, fresh.glow_release).clamp(0.0, GLOW_BALLISTICS_MAX);
+
         self.shimmer_speed = finite_or(self.shimmer_speed, fresh.shimmer_speed);
         self.shimmer_width = finite_or(self.shimmer_width, fresh.shimmer_width);
         self.shimmer_intensity = finite_or(self.shimmer_intensity, fresh.shimmer_intensity);
@@ -2067,6 +2243,37 @@ impl Default for ViewConfig {
             // thin octave marks are quiet shapes, and the bloom is what
             // gives them presence.
             bloom_strength: 0.806_154_85,
+            // The node glow off, so a fresh view — and every blob written
+            // before it existed — draws exactly the picture it did without it.
+            // The strength and the moat are dialled ready underneath, so the
+            // reach alone brings the halo in, already standing off the rings
+            // it is laid around.
+            glow_reach: 0.0,
+            glow_strength: 1.0,
+            glow_gap: 0.08,
+            // The moat feathered over most of its own width, so the gap and
+            // the light either side of it read as one blur rather than as a cut
+            // through it; the middle of a node at half its peak, so the light
+            // reads as the node's rings lit rather than as a lamp behind them;
+            // and the colour averaged half way round, which keeps a chord's
+            // hues as arcs while a lone wedge still tints the whole halo.
+            // Twice the gap above it: the feather is a width of its own, and
+            // one that reaches a gap either side of where the gap ends is the
+            // dip the light comes off at rather than the band a share of the
+            // gap could only draw.
+            glow_gap_soft: 0.16,
+            // Most of the light off around a ring, and not all of it: a ring
+            // in a dim pool of its own halo reads as shade, where the whole of
+            // it taken away reads as a black annulus drawn round the node.
+            glow_gap_depth: 0.85,
+            glow_centre: 0.5,
+            glow_spread: 0.5,
+            // Slow and fluid, which is what the pair is for: a light that
+            // arrives inside a third of a second and takes a couple of seconds
+            // to leave, so a halo trails the notes that lit it instead of
+            // stepping with them.
+            glow_attack: 0.3,
+            glow_release: 2.5,
         }
     }
 }

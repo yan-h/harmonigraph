@@ -15,7 +15,8 @@ use crate::params::{seconds, ParamBackend, ParamKey};
 use crate::widgets::{button_row, choice_row, OctaveStrip, StackBar, ValueBar};
 use crate::SharedState;
 use harmonigraph_scene::{
-    Pulse, SpectralReading, ViewConfig, GAP_MAX, MARK_DELAY_MAX, MIN_EXTRA_SIZE, PITCH_CEIL,
+    Pulse, SpectralReading, ViewConfig, GAP_MAX, GLOW_BALLISTICS_MAX, GLOW_GAP_SOFT_MAX,
+    GLOW_REACH_MAX, GLOW_STRENGTH_MAX, MARK_DELAY_MAX, MIN_EXTRA_SIZE, PITCH_CEIL,
     PITCH_FLOOR, SPECTRAL_BALLISTICS_MAX, SPECTRAL_GATE_MAX, SPECTRAL_GATE_MIN,
     SPECTRAL_HYSTERESIS_MAX, SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN,
     SPECTRAL_WIDTH_MAX, SPECTRAL_WIDTH_MIN,
@@ -660,4 +661,122 @@ fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBack
          with no note under it, as a share of the node's radius. Solid to the \
          inner handle, faded out by the outer. 0 draws none.",
     );
+    // The glow, last, and in Note rather than beside the Core or with Bloom on
+    // the Colors page. It is the whole node's, not a layer's: it is the core's
+    // own skirt taken off the disc and grown over the node entire, so a node's
+    // light is laid in the same octave colours its band and its disc are and
+    // reaches this far past its outermost drawn edge.
+    //
+    // Not with Bloom, which it otherwise reads like, because the two are
+    // different settings of different things. Bloom is one number over every
+    // picture the plugin draws and it thresholds, so it is the bright end of
+    // the gradient blowing out — colour, which is why it sits with the table
+    // that makes it. This is a layer of a node, dialled where a node's other
+    // layers are.
+    //
+    // A share of the node's radius, the unit the two gaps and the Clearance
+    // above it read in, and measured from the same place: the reach is a
+    // distance out from the node's edge exactly as the Clearance is.
+    ValueBar::new(&mut view.glow_reach, 0.0..=GLOW_REACH_MAX, "Glow")
+        .decimals(3)
+        .display(|v| format!("{:.0}%", v * 100.0))
+        .show(ui)
+        .on_hover_text(
+            "How far past its own edge a node's light spreads, as a share of \
+             its radius. Neighbouring nodes' light melds where it overlaps. 0 \
+             turns it off, and gives the core its own skirt back.",
+        );
+    // Grayed rather than hidden while the reach is 0, so the rows keep their
+    // place and the numbers they are dialled to stay readable — the same
+    // arrangement the audio ring's own settings use.
+    ui.add_enabled_ui(view.glow_reach > 0.0, |ui| {
+        ValueBar::new(&mut view.glow_strength, 0.0..=GLOW_STRENGTH_MAX, "Glow strength")
+            .show(ui)
+            .on_hover_text("How much light it lays down.");
+        // The two that shape the light itself, between the amount of it and the
+        // moat that holds it off: one says where in the node it is brightest,
+        // the other what colour it comes out. Both read as percentages because
+        // both are SHARES — of the light's own peak, and of a whole turn — and
+        // neither is a distance, which is what keeps them from being read
+        // against the three bars above that are.
+        ValueBar::new(&mut view.glow_centre, 0.0..=1.0, "Glow centre")
+            .display(|v| format!("{:.0}%", v * 100.0))
+            .show(ui)
+            .on_hover_text(
+                "How bright a node's light is at its own middle, against the \
+                 peak it reaches at the inner edge of its innermost ring. 100% \
+                 is hottest dead centre; lower dips the middle, so the node \
+                 reads as a lit ring rather than as a lamp.",
+            );
+        ValueBar::new(&mut view.glow_spread, 0.0..=1.0, "Glow spread")
+            .display(|v| format!("{:.0}%", v * 100.0))
+            .show(ui)
+            .on_hover_text(
+                "How widely a node's own ink is averaged into the colour of \
+                 its light. The glow is what the node is DRAWING, blurred \
+                 round it — every layer's colour weighted by how lit it is and \
+                 how wide the Layers bar made it — so 0% keeps each sector's \
+                 colour a distinct arc and 100% averages the node into one \
+                 tint.",
+            );
+        // The moat, beneath the light it holds off, and read out like the two
+        // gaps and the Clearance above it: every one of them is a share of the
+        // node's radius, so a person comparing them is comparing one unit.
+        ValueBar::new(&mut view.glow_gap, 0.0..=GAP_MAX, "Glow gap")
+            .decimals(3)
+            .display(|v| format!("{:.1}%", v * 100.0))
+            .show(ui)
+            .on_hover_text(
+                "How far the light is held off each ring a node draws — its \
+                 audio ring, its octave band, its marks — as a share of the \
+                 node's radius. A gap is an absence of light, so the grid and \
+                 the sheets behind show through it untouched; the neighbours' \
+                 light is held off too. 0 lets the glow up to every edge.",
+            );
+        // Under the gap it fades, and in the same unit: a WIDTH, free to run
+        // several times the gap it sits astride. Held inside the gap it could
+        // only draw a band with an edge, which against a node's own dark rings
+        // is what the eye reads as a black annulus.
+        ValueBar::new(&mut view.glow_gap_soft, 0.0..=GLOW_GAP_SOFT_MAX, "Glow gap fade")
+            .decimals(3)
+            .display(|v| format!("{:.1}%", v * 100.0))
+            .show(ui)
+            .on_hover_text(
+                "How far the gap's edge is feathered, as a share of the node's \
+                 radius. The fade sits astride the gap's end, so the halo \
+                 outside a ring and the lit middle inside it soften together; \
+                 set it wider than the gap and the light dips away over a broad \
+                 band instead of stopping in one. 0 cuts it in one screen band.",
+            );
+        ValueBar::new(&mut view.glow_gap_depth, 0.0..=1.0, "Glow gap depth")
+            .display(|v| format!("{:.0}%", v * 100.0))
+            .show(ui)
+            .on_hover_text(
+                "How much of the light the gap takes away. 100% is a hole — the \
+                 picture there is exactly what it is with the glow off — and \
+                 lower leaves the rings sitting in a dimmer pool of their own \
+                 light rather than in a void.",
+            );
+        // The light's own clock, last, under everything it shapes. Its own pair
+        // and not the note Fade above, because a halo is the slow part of the
+        // picture: on the layers' envelopes it flickers with the marks and the
+        // audio ring, and both of those are meant to be fast.
+        ValueBar::new(&mut view.glow_attack, 0.0..=GLOW_BALLISTICS_MAX, "Glow attack")
+            .display(ms_readout)
+            .show(ui)
+            .on_hover_text(
+                "How long a node's light takes to come up behind the note that \
+                 lit it. Its colour arrives on the same time, so a chord's hue \
+                 morphs in rather than switching.",
+            );
+        ValueBar::new(&mut view.glow_release, 0.0..=GLOW_BALLISTICS_MAX, "Glow release")
+            .display(ms_readout)
+            .show(ui)
+            .on_hover_text(
+                "How long it takes to leave. A node keeps glowing after every \
+                 layer on it has gone silent, holding the colour it last had, \
+                 which is what makes the light read as light rather than as one \
+                 more layer of the node.",
+            );
+    });
 }

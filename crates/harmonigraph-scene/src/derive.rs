@@ -8,7 +8,7 @@ use crate::octaves::octave_layout;
 use crate::trail::TrailField;
 use crate::view::{DrawnWindow, FrameParams, ViewConfig};
 use crate::{
-    lattice_to_world, EdgeInstance, NodeInstance, Pulse, Scene, SpectralPaint,
+    lattice_to_world, EdgeInstance, GlowStep, NodeInstance, Pulse, Scene, SpectralPaint,
     MARK_DELAY_MAX, NODE_RADIUS_FACTOR, OCTAVE_SLOTS,
 };
 use glam::Vec4;
@@ -511,6 +511,16 @@ pub fn derive_scene(
             // audio channel arrives empty here and `Scene::wear_audio_rings` is
             // what answers this once the shell's fold has filled it.
             audio_ring: 1.0,
+            // The light UNCARRIED: what the MIDI layers say right now, on this
+            // node's own row of a strip one row per node tall, taken whole.
+            // The audio ring is left out of the level for the same reason it
+            // arrives at 1 above — nothing here has measured it — and the
+            // shell's `panes::glow_fade` is what settles both.
+            glow: GlowStep {
+                level: activation.max(melody.level).max(bass.level),
+                row: nodes.len() as u32,
+                mix: 1.0,
+            },
             trail: 0.0,
         });
         node_pcs.push(node_pc);
@@ -524,6 +534,7 @@ pub fn derive_scene(
         field.apply(&mut nodes, &node_pcs, tuning);
     }
 
+    let nodes_len = nodes.len() as u32;
     let grid = derive_grid(view, window, &nodes, ground);
 
     // Every radius on a node, off the one stack the size bars describe
@@ -585,6 +596,21 @@ pub fn derive_scene(
         brightest_pitch: frame.brightest_pitch,
         render_scale: view.render_scale,
         bloom_strength: view.bloom_strength,
+        // Clamped here as well as in `sanitize`, for the shells that never come
+        // through that door: the reach and the gap both size the billboard the
+        // glow's draws use, so a number from outside either bar is a quad they
+        // cannot fill.
+        glow_reach: view.glow_reach.clamp(0.0, crate::GLOW_REACH_MAX),
+        glow_strength: view.glow_strength.clamp(0.0, crate::GLOW_STRENGTH_MAX),
+        glow_gap: view.glow_gap.clamp(0.0, crate::GAP_MAX),
+        glow_gap_soft: view.glow_gap_soft.clamp(0.0, crate::GLOW_GAP_SOFT_MAX),
+        glow_gap_depth: view.glow_gap_depth.clamp(0.0, 1.0),
+        glow_centre: view.glow_centre.clamp(0.0, 1.0),
+        glow_spread: view.glow_spread.clamp(0.0, 1.0),
+        // A row per node, so a scene nothing has carried still reads one strip
+        // row per node — the shell's pass hands out rows of its own and raises
+        // this to their high-water mark.
+        glow_rows: nodes_len,
     }
 }
 

@@ -24,6 +24,9 @@ use crate::SharedState;
 
 pub mod color;
 pub mod display;
+// Not a pane either — the node glow's own clock, run by the Lattice pane over
+// the scene it has just derived.
+pub mod glow_fade;
 pub mod grid;
 pub mod labels;
 pub mod lattice;
