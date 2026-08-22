@@ -5393,13 +5393,18 @@ fn a_label_takes_its_own_nodes_place_in_the_order() {
             // Both silent nodes: nothing has been drawn yet, and two labels
             // at one seam are one uninterrupted draw. They are behind the
             // home sheet, so they are also behind the grid.
-            GlyphSeam { at: 0, start: 0, count: 2, after_grid: false },
+            GlyphSeam { at: 0, start: 0, count: 2, after_grid: false, sheet: 0 },
             // The home sheet's own name, after its disc.
-            GlyphSeam { at: 1, start: 2, count: 1, after_grid: true },
+            GlyphSeam { at: 1, start: 2, count: 1, after_grid: true, sheet: 1 },
             // And the near sheet's, after everything.
-            GlyphSeam { at: 2, start: 3, count: 1, after_grid: true },
+            GlyphSeam { at: 2, start: 3, count: 1, after_grid: true, sheet: 2 },
         ],
         "a label goes after its own node, over the instances that ship",
+    );
+    assert_eq!(
+        call.sheets,
+        vec![0, 1, 2],
+        "three sheets back to front: the silent one ships nothing, the other two one node each",
     );
     assert_eq!(
         call.glyphs.iter().map(|g| g.rect[0]).collect::<Vec<_>>(),
@@ -5472,9 +5477,10 @@ fn a_culled_home_nodes_name_draws_over_the_grid_it_shares_a_seam_with() {
     assert_eq!(call.grid_at, 0, "with one sheet there is nothing to draw before the grid");
     assert_eq!(
         call.seams,
-        vec![GlyphSeam { at: 0, start: 0, count: 1, after_grid: true }],
+        vec![GlyphSeam { at: 0, start: 0, count: 1, after_grid: true, sheet: 0 }],
         "a home node's name draws after the grid even when the cull leaves it on grid_at",
     );
+    assert_eq!(call.sheets, vec![1], "one sheet, ending where the one shipped node does");
 }
 
 /// A label is not in the bloom: the light the bloom adds to a frame is the
@@ -5787,6 +5793,129 @@ fn a_moat_beside_a_lit_node_is_the_frame_with_no_glow_at_all() {
     assert!(
         still_lit >= 64,
         "the moat left {still_lit} lit pixels standing outside it",
+    );
+}
+
+/// A node a nearer sheet's node COVERS shows nothing of itself in that node's
+/// light: not its rings' moats, not its name, and not its own halo. The frame
+/// with it is the frame without it, to the byte, wherever the near node's
+/// light lands.
+///
+/// The case is a harmonic seventh over its home node, face on: the seventh's
+/// disc and knockout hide the home node entirely, and the glow pass, laid over
+/// the finished lattice, is the one place the hidden node can still reach the
+/// picture — by erasing. Over the whole instance buffer in one go, every
+/// node's moat and every node's name cut every node's light, and the hidden
+/// node's ring and name show in the seventh's halo as a dark ring and dark
+/// letters on a node that is not there. A sheet at a time, back to front, a
+/// sheet's moats are cut before the next sheet's light is laid, and the light
+/// in front is whole.
+///
+/// The hidden node is LIT, which is the harder half. Cutting only a sheet's own
+/// light is not enough: the hidden node's halo would still meld into the light
+/// laid over the node covering it, with its name cut out of the meld, and the
+/// name reads as a dimmer patch on the node in front. The near node's body has
+/// to take the light behind it off first — what `fs_glow_cover` is for.
+///
+/// It is the near node at half its size, so its rings fall inside the near
+/// node's clearing and are covered in the scene pass — to within the feather
+/// at the clearing's edge, measured with the glow off and subtracted.
+#[test]
+fn a_node_under_a_nearer_sheets_node_cuts_nothing_out_of_its_light() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    let near = |reach: f32| {
+        let mut scene = single_marked_node(0, 0);
+        scene.camera = harmonigraph_scene::Camera {
+            projection: harmonigraph_scene::Projection::Orthographic,
+            yaw: 0.0,
+            pitch: 0.0,
+            ..Default::default()
+        };
+        scene.glow_reach = reach;
+        scene.glow_strength = 1.5;
+        scene.glow_gap = harmonigraph_scene::GAP_MAX;
+        // A clearing, so the near node's knockout covers the far node's ink
+        // in the scene pass; what is measured is the glow, not the knockout.
+        scene.nodes[0].gutter = 0.4;
+        scene
+    };
+    let mut both = near(0.8);
+    let mut far = both.nodes[0];
+    far.world_pos.z = -1.0;
+    // Smaller, so its ring sits in the near node's lit MIDDLE rather than
+    // under the near node's own moat, where an erase would change nothing;
+    // and off centre, so its halo reaches where the near node's light is
+    // PARTIAL — at the middle the light is full, and full light melded with
+    // anything is still full.
+    far.scale = 0.5;
+    far.world_pos.x += 0.4;
+    // Lit, so it has a halo to meld into the near node's — and a name cut
+    // out of that halo to show in the meld, if the near node's body did not
+    // take the halo off first.
+    far.glow = harmonigraph_scene::GlowStep { level: 0.8, row: 1, mix: 1.0 };
+    far.color = glam::Vec4::new(0.9, 0.2, 0.2, 1.0);
+    both.nodes.push(far);
+    // The hidden node names itself, at the middle of the near node where the
+    // light is fullest — exactly where an erased name is most legible.
+    let name = |node: u32| LatticeLabels {
+        glyphs: vec![GlyphInstance {
+            rect: [112.0, 112.0, 32.0, 32.0],
+            fill: [255, 255, 255, 255],
+            rim: [0, 0, 0, 255],
+            ..crate::text::tests::glyph()
+        }],
+        labels: vec![Label { node, glyphs: 1 }],
+        rings: [TextRing::default(); 2],
+        atlas: Some(crate::text::tests::atlas()),
+        marks: None,
+        slide: SlideAxis::default(),
+    };
+
+    let call = LatticeCallback::from_scene(
+        &both,
+        name(1),
+        egui::vec2(SIZE[0] as f32, SIZE[1] as f32),
+        wgpu::TextureFormat::Rgba8Unorm,
+        0,
+        None,
+    );
+    assert_eq!(call.sheets, vec![1, 2], "two sheets, one node each");
+    assert_eq!(
+        call.instances[0].world_pos[2],
+        -1.0,
+        "the fixture puts the second node BEHIND the first, or it is covering rather than covered",
+    );
+
+    // Summed over the frame rather than the worst pixel: a halo melding into
+    // another is a few steps over many pixels, which one pixel's reading
+    // understates and a sum does not.
+    let apart = |a: &[u8], b: &[u8]| {
+        a.iter().zip(b).map(|(x, y)| u64::from(x.abs_diff(*y))).sum::<u64>()
+    };
+    // What the scene pass alone leaves of the hidden node: the clearing's own
+    // feather over the hidden ring's anti-aliased edge, and none of this
+    // test's business. The glow may add nothing to it.
+    let mut dark_both = near(0.0);
+    dark_both.nodes.push(far);
+    let hidden = apart(&shooter.shot(&near(0.0)), &shooter.shot_with(&dark_both, name(1)));
+
+    let alone = shooter.shot(&near(0.8));
+    let covered = shooter.shot_with(&both, name(1));
+    let cut = apart(&alone, &covered);
+    // The slack is for the composite's resampling of the glow target, which
+    // `a_moat_beside_a_lit_node_is_the_frame_with_no_glow_at_all` allows one
+    // step of: one step on one lit channel in sixty-four. The meld this guards
+    // against is several times that — one step on about a tenth of them.
+    let unlit = shooter.shot(&near(0.0));
+    let lit = alone.iter().zip(&unlit).filter(|(a, b)| a != b).count() as u64;
+    assert!(lit >= 64, "the near node lit only {lit} channels");
+    assert!(
+        cut <= hidden + lit / 64,
+        "a node hidden under the near sheet changed the near node's light by {cut} steps \
+         summed over the frame, against {hidden} with the glow off and {lit} lit channels",
     );
 }
 
@@ -6778,3 +6907,4 @@ fn a_wider_gap_fade_takes_the_light_off_over_a_wider_band() {
         "a fade four times the gap left a band of {four} pixels against the gap's own {crisp}",
     );
 }
+

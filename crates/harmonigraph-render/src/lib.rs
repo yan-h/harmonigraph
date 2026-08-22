@@ -141,8 +141,9 @@ const RENDER_SCALE_RANGE: (f32, f32) = (0.25, 4.0);
 /// Entry points a (re)loaded shader must provide. The `_scene` pair is the
 /// two-attachment form the offscreen pass draws through; the bare pair is
 /// the single-attachment one the parity test's reference path uses; the
-/// `glow` three are the node glow's own pass — one billboard, the light, and
-/// the moat that takes light back off around every ring; and the `ink` four
+/// `glow` four are the node glow's own pass — one billboard, the light, the
+/// moat that takes light back off around every ring, and the cover that takes
+/// the light of the sheets behind a node off its body; and the `ink` four
 /// are the strip that light is coloured out of, read and then blurred ahead of
 /// both (see [`InkStrip`]).
 #[cfg(any(test, feature = "hot-reload"))]
@@ -156,6 +157,7 @@ const REQUIRED_ENTRY_POINTS: &[&str] = &[
     "vs_glow",
     "fs_glow",
     "fs_glow_moat",
+    "fs_glow_cover",
     "vs_ink_strip",
     "fs_ink_strip",
     "vs_ink_blur",
@@ -637,6 +639,11 @@ struct LatticeCallback {
     instances: Vec<GpuInstance>,
     /// Index into `instances` where the grid is drawn (see `from_scene`).
     grid_at: u32,
+    /// Where each sheet's run of `instances` ends, back to front: sheet `k`
+    /// is `sheets[k-1]..sheets[k]` (0 for the first). A sheet every node of
+    /// which was culled is an empty run, kept so a label's `sheet` still
+    /// names one.
+    sheets: Vec<u32>,
     /// Every label's glyphs, in the order the pass draws them, and where each
     /// label falls in the node run (see [`GlyphSeam`]).
     glyphs: Vec<GlyphInstance>,
@@ -684,6 +691,20 @@ struct GlyphSeam {
     /// culled before any home node ships both land on `at == grid_at`, and
     /// they belong on opposite sides of the grid.
     after_grid: bool,
+    /// Which sheet the node this names is on — its run index in the sorted
+    /// order, back to front. The glow pass erases a sheet's names after that
+    /// sheet's light and before the next sheet's, so a name a nearer sheet
+    /// covers never opens a gap in the light laid over it (see
+    /// `Offscreen::glow` in `paint`).
+    sheet: u32,
+}
+
+/// Where one node's label goes: a [`GlyphSeam`] before its glyphs are known.
+#[derive(Clone, Copy, Debug)]
+struct Seam {
+    at: u32,
+    after_grid: bool,
+    sheet: u32,
 }
 
 /// Put every label at its node's place in the draw order: the glyphs
@@ -698,14 +719,14 @@ struct GlyphSeam {
 fn place_labels(
     glyphs: Vec<GlyphInstance>,
     labels: &[Label],
-    seam_of: &[(u32, bool)],
+    seam_of: &[Seam],
 ) -> (Vec<GlyphInstance>, Vec<GlyphSeam>) {
     // Where each label's glyphs sit in what the caller handed over, paired
     // with the seam they are going to. The cursor advances over labels the
     // scene has no node for as much as over the rest: the run lengths are
     // what say which glyphs are whose.
     let mut cursor = 0usize;
-    let mut runs: Vec<((u32, bool), usize, usize)> = Vec::with_capacity(labels.len());
+    let mut runs: Vec<(Seam, usize, usize)> = Vec::with_capacity(labels.len());
     for label in labels {
         let start = cursor;
         let count = label.glyphs as usize;
@@ -718,25 +739,28 @@ fn place_labels(
     // which is the order the nodes are in, and the only thing that decides
     // between two names sharing a pixel. By the side of the grid before the
     // count, so the two labels that share `grid_at` from opposite runs sort
-    // the way they draw rather than by which node came first.
-    runs.sort_by_key(|&((at, after_grid), _, _)| (at, after_grid));
+    // the way they draw rather than by which node came first. The sheet
+    // last, for the same boundary: the last node of one sheet to ship and a
+    // node culled at the head of the next share an `at`, and the nearer
+    // sheet's name draws after.
+    runs.sort_by_key(|&(seam, _, _)| (seam.at, seam.after_grid, seam.sheet));
 
     let mut placed = Vec::with_capacity(glyphs.len());
     let mut seams: Vec<GlyphSeam> = Vec::new();
-    for ((at, after_grid), start, count) in runs {
+    for (Seam { at, after_grid, sheet }, start, count) in runs {
         if count == 0 {
             continue;
         }
         let first = placed.len() as u32;
         placed.extend_from_slice(&glyphs[start..start + count]);
-        // Merged only with a seam on the SAME side of the grid: two labels
-        // at one `at` are one uninterrupted draw, unless the grid goes
-        // between them.
+        // Merged only with a seam on the SAME side of the grid and the same
+        // sheet: two labels at one `at` are one uninterrupted draw, unless
+        // the grid or a sheet's moats go between them.
         match seams.last_mut() {
-            Some(last) if last.at == at && last.after_grid == after_grid => {
+            Some(last) if last.at == at && last.after_grid == after_grid && last.sheet == sheet => {
                 last.count += count as u32
             }
-            _ => seams.push(GlyphSeam { at, start: first, count: count as u32, after_grid }),
+            _ => seams.push(GlyphSeam { at, start: first, count: count as u32, after_grid, sheet }),
         }
     }
     (placed, seams)
@@ -886,27 +910,54 @@ impl LatticeCallback {
         // nothing, and such a node can still carry a label (a hovered idle one
         // draws no disc and is named all the same), so the two part company at
         // the first culled node.
-        let mut seam_of = vec![(0u32, false); scene.nodes.len()];
+        //
+        // And which SHEET it is on, as a run index into the sorted order —
+        // the glow pass works a sheet at a time (see `sheets` below), and a
+        // label's erase goes with its node's sheet exactly as its ink goes
+        // with its node. Runs of one sheet depth are contiguous because that
+        // depth is the sort's first key.
+        let mut sheet_of = vec![0u32; scene.nodes.len()];
+        let mut sheet_count = 0u32;
+        for (k, &(plane, _, i)) in order.iter().enumerate() {
+            if k == 0 || order[k - 1].0 != plane {
+                sheet_count += 1;
+            }
+            sheet_of[i] = sheet_count - 1;
+        }
+        let mut seam_of = vec![Seam { at: 0, after_grid: false, sheet: 0 }; scene.nodes.len()];
+        let mut sheets: Vec<u32> = Vec::with_capacity(sheet_count as usize);
         let drawn = |out: &mut Vec<GpuInstance>,
-                     seam_of: &mut [(u32, bool)],
+                     seam_of: &mut [Seam],
+                     sheets: &mut Vec<u32>,
                      ns: &[(f32, f32, usize)],
                      after_grid: bool| {
             for &(_, _, i) in ns {
                 let node = &scene.nodes[i];
+                let sheet = sheet_of[i];
+                // Every sheet before this node's is complete: close it at
+                // the count shipped so far.
+                while (sheets.len() as u32) < sheet {
+                    sheets.push(out.len() as u32);
+                }
                 let instance = to_gpu(node, node.gutter);
                 if paints(&instance) {
                     out.push(instance);
                 }
-                seam_of[i] = (out.len() as u32, after_grid);
+                seam_of[i] = Seam { at: out.len() as u32, after_grid, sheet };
             }
         };
         let mut instances = Vec::with_capacity(order.len());
-        drawn(&mut instances, &mut seam_of, &order[..split], false);
+        drawn(&mut instances, &mut seam_of, &mut sheets, &order[..split], false);
         // Where the grid is drawn inside that run: after the sheets BEHIND the
         // home one, counted over the kept instances rather than over `split`,
         // which indexes the list before the cull.
         let grid_at = instances.len() as u32;
-        drawn(&mut instances, &mut seam_of, &order[split..], true);
+        drawn(&mut instances, &mut seam_of, &mut sheets, &order[split..], true);
+        // The last sheet ends where the instances do — and so does every
+        // sheet whose nodes were all culled, which still owns its labels.
+        while (sheets.len() as u32) < sheet_count {
+            sheets.push(instances.len() as u32);
+        }
         let (glyphs, seams) = place_labels(labels.glyphs, &labels.labels, &seam_of);
 
         // The grid draws under the nodes.
@@ -924,6 +975,7 @@ impl LatticeCallback {
         LatticeCallback {
             instances,
             grid_at,
+            sheets,
             glyphs,
             seams,
             rings: labels.rings,
@@ -1074,11 +1126,13 @@ struct LatticeResources {
     downsample_pipeline: wgpu::RenderPipeline,
     blur_h_pipeline: wgpu::RenderPipeline,
     blur_v_pipeline: wgpu::RenderPipeline,
-    /// The node glow's own pass: the light, then the moat that takes it back
-    /// off around every ring — two draws over the node instance buffer, into a
-    /// target of the glow's own (see [`create_glow_pipelines`]).
+    /// The node glow's own pass: the light, the moat that takes it back off
+    /// around every ring, and the cover that takes the light of the sheets
+    /// behind a node off its body — three draws over the node instance buffer,
+    /// into a target of the glow's own (see [`create_glow_pipelines`]).
     glow_pipeline: wgpu::RenderPipeline,
     glow_moat_pipeline: wgpu::RenderPipeline,
+    glow_cover_pipeline: wgpu::RenderPipeline,
     /// The colour those two draw in, settled ahead of them: the ink read round
     /// every node, then blurred (see [`create_ink_strip_pipelines`]).
     ink_strip_pipeline: wgpu::RenderPipeline,
@@ -1330,6 +1384,8 @@ struct PaneBuffers {
     /// clearings, and must land under the grid; the rest go over it. See
     /// `LatticeCallback::from_scene`.
     grid_at: u32,
+    /// Where each sheet's run of instances ends (see `LatticeCallback::sheets`).
+    sheets: Vec<u32>,
     edge_buffer: wgpu::Buffer,
     edge_capacity: usize,
     edge_count: u32,
@@ -2005,8 +2061,9 @@ fn create_pipelines(
     )
 }
 
-/// The node glow's two pipelines: the light, then the moat, both over the node
-/// instance buffer and both into the glow's own target (see [`GlowTarget`]).
+/// The node glow's three pipelines: the light, the moat, and the cover, all
+/// over the node instance buffer and all into the glow's own target (see
+/// [`GlowTarget`]).
 ///
 /// **The light is SCREEN, not additive.** `src + dst * (1 - src)`,
 /// premultiplied on both channels, is what makes two neighbouring nodes' halos
@@ -2025,20 +2082,32 @@ fn create_pipelines(
 /// label shapes are subtracted the same way and for the same reason
 /// (`glyph_rim_erase_pipeline`), a name being as crisp a thing as a ring.
 ///
-/// **One vertex entry point** (`vs_glow`) for both, because the glow reaches
+/// **The cover writes nothing either**, and erases with what the node itself
+/// PAINTS — its ink and its clearing, `node_paint`'s own alpha. Drawn ahead of
+/// a sheet's light, it takes the light of every sheet behind off the body of
+/// every node on this one, which is what the scene pass does to their ink: a
+/// node sits in a hole cleared to the ground, and the light that reaches that
+/// hole is its own sheet's. Without it a covered node's halo melds into the
+/// light laid over the node covering it, and its erased name — cut out of
+/// that halo and nothing else — reads in the meld as a dimmer name-shaped
+/// patch on the node in front.
+///
+/// **One vertex entry point** (`vs_glow`) for all three, because the glow reaches
 /// past what a node paints: the billboard has to hold the whole halo, and
 /// growing `vs_main`'s quad to match would spend a ring of discarded fragments
 /// per node on every frame for a margin no other layer reads.
 ///
-/// **No depth.** The pass this pair draws into carries none: it is the glow's
-/// own, ahead of the scene's, and light has no geometry to be occluded by.
+/// **No depth.** The pass these draw into carries none: it is the glow's own,
+/// ahead of the scene's, and what occludes light is the draw order — a sheet
+/// at a time, back to front, the cover ahead of each sheet's light (see
+/// `paint`).
 fn create_glow_pipelines(
     device: &wgpu::Device,
     shader_src: &str,
     target_format: wgpu::TextureFormat,
     bind_group_layout: &wgpu::BindGroupLayout,
     strip_layout: &wgpu::BindGroupLayout,
-) -> (wgpu::RenderPipeline, wgpu::RenderPipeline) {
+) -> (wgpu::RenderPipeline, wgpu::RenderPipeline, wgpu::RenderPipeline) {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("lattice_shader"),
         source: wgpu::ShaderSource::Wgsl(shader_src.into()),
@@ -2094,7 +2163,11 @@ fn create_glow_pipelines(
             cache: None,
         })
     };
-    (build("fs_glow", screen), build("fs_glow_moat", GLOW_ERASE))
+    (
+        build("fs_glow", screen),
+        build("fs_glow_moat", GLOW_ERASE),
+        build("fs_glow_cover", GLOW_ERASE),
+    )
 }
 
 /// The two passes that settle what colour every node's light is, ahead of the
@@ -2396,7 +2469,7 @@ impl LatticeResources {
                 count: None,
             }],
         });
-        let (glow_pipeline, glow_moat_pipeline) = create_glow_pipelines(
+        let (glow_pipeline, glow_moat_pipeline, glow_cover_pipeline) = create_glow_pipelines(
             device,
             SHADER_SRC,
             target_format,
@@ -2512,6 +2585,7 @@ impl LatticeResources {
             blur_v_pipeline,
             glow_pipeline,
             glow_moat_pipeline,
+            glow_cover_pipeline,
             ink_strip_pipeline,
             ink_blur_pipeline,
             glow_over_pipeline,
@@ -2653,6 +2727,7 @@ impl LatticeResources {
                 glyph_capacity: INITIAL_GLYPH_CAPACITY,
                 glyph_count: 0,
                 seams: Vec::new(),
+                sheets: Vec::new(),
                 glyph_uniform_buffer: device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("lattice_glyph_uniforms"),
                     size: std::mem::size_of::<text::TextUniforms>() as u64,
@@ -2786,7 +2861,8 @@ impl CallbackTrait for LatticeCallback {
                     // layers reaches the light around it in the same reload —
                     // they are one shader drawing one node, and reloading half
                     // of it is a halo of the previous build.
-                    let (glow_pipeline, glow_moat_pipeline) = create_glow_pipelines(
+                    let (glow_pipeline, glow_moat_pipeline, glow_cover_pipeline) =
+                        create_glow_pipelines(
                         device,
                         &source,
                         resources.target_format,
@@ -2806,6 +2882,7 @@ impl CallbackTrait for LatticeCallback {
                     resources.edge_pipeline = edge_pipeline;
                     resources.glow_pipeline = glow_pipeline;
                     resources.glow_moat_pipeline = glow_moat_pipeline;
+                    resources.glow_cover_pipeline = glow_cover_pipeline;
                     resources.ink_strip_pipeline = ink_strip_pipeline;
                     resources.ink_blur_pipeline = ink_blur_pipeline;
                     eprintln!("[harmonigraph-render] shader hot-reloaded");
@@ -2877,6 +2954,8 @@ impl CallbackTrait for LatticeCallback {
         }
         pane.instance_count = self.instances.len() as u32;
         pane.grid_at = self.grid_at.min(pane.instance_count);
+        pane.sheets.clear();
+        pane.sheets.extend(self.sheets.iter().map(|&end| end.min(pane.instance_count)));
         if !self.instances.is_empty() {
             queue.write_buffer(
                 &pane.instance_buffer,
@@ -3071,34 +3150,60 @@ impl CallbackTrait for LatticeCallback {
                     occlusion_query_set: None,
                     multiview_mask: None,
                 });
-                if pane.instance_count > 0 {
-                    pass.set_bind_group(0, &pane.bind_group, &[]);
-                    pass.set_bind_group(1, &glow.strip.blurred_bind_group, &[]);
-                    pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
-                    pass.set_pipeline(&resources.glow_pipeline);
-                    pass.draw(0..4, 0..pane.instance_count);
-                    pass.set_pipeline(&resources.glow_moat_pipeline);
-                    pass.draw(0..4, 0..pane.instance_count);
-                }
-                // The names, subtracted the same way the rings are: the light
-                // is laid OVER the finished lattice, and at the middle of a
-                // node it reaches full opacity, so a name with no gap held for
-                // it disappears under its own node's glow.
+                // A SHEET at a time, back to front: the sheet's cover, then
+                // its light, then its moats, then its names. The cover takes
+                // the light of every sheet behind off each node's body, so
+                // what a node covers in the scene pass it covers in the light
+                // too; a moat then reaches the light of every node on its own
+                // sheet and behind it, and none of the light of a sheet in
+                // front — which is what a nearer sheet's node covering it
+                // means. Over the whole buffer in one go instead, a home node
+                // sitting under a harmonic seventh cuts its ring and its name
+                // into the seventh's light while showing none of either
+                // itself, and its own halo melds into the seventh's with its
+                // name cut out of the meld.
                 //
-                // Every glyph in one go, where the scene pass interleaves them
-                // node by node — the erase is commutative and carries no depth,
-                // so the order that matters there means nothing here. What it
-                // costs is that a name a nearer node COVERS still opens its gap,
-                // which lands inside that node's own moat nearly everywhere.
-                if let Some(glyphs) = pane.glyph_bind_group.as_ref().filter(|_| {
-                    pane.glyph_count > 0
-                }) {
+                // Within one sheet both erases are commutative and carry no
+                // depth, so all of a sheet's moats go in one draw and all of
+                // its names in another, in whatever order the scene pass
+                // interleaves them. The names are erased, not drawn: the
+                // light is laid OVER the finished lattice, and at the middle
+                // of a node it reaches full opacity, so a name with no gap
+                // held for it disappears under its own node's glow.
+                let glyphs = pane.glyph_bind_group.as_ref().filter(|_| pane.glyph_count > 0);
+                let mut start = 0u32;
+                let mut seam_i = 0usize;
+                for (sheet, &end) in pane.sheets.iter().enumerate() {
+                    if end > start {
+                        pass.set_bind_group(0, &pane.bind_group, &[]);
+                        pass.set_bind_group(1, &glow.strip.blurred_bind_group, &[]);
+                        pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
+                        pass.set_pipeline(&resources.glow_cover_pipeline);
+                        pass.draw(0..4, start..end);
+                        pass.set_pipeline(&resources.glow_pipeline);
+                        pass.draw(0..4, start..end);
+                        pass.set_pipeline(&resources.glow_moat_pipeline);
+                        pass.draw(0..4, start..end);
+                    }
+                    start = end;
+                    // This sheet's names: the seams are sorted, and a sheet's
+                    // are contiguous in the glyph buffer (`place_labels`
+                    // lays them down in seam order), so they are one range.
+                    let first = seam_i;
+                    while pane.seams.get(seam_i).is_some_and(|s| s.sheet as usize == sheet) {
+                        seam_i += 1;
+                    }
+                    let (Some(glyphs), true) = (glyphs, seam_i > first) else {
+                        continue;
+                    };
+                    let (head, tail) = (&pane.seams[first], &pane.seams[seam_i - 1]);
+                    let range = head.start..tail.start + tail.count;
                     pass.set_bind_group(0, glyphs, &[]);
                     pass.set_vertex_buffer(0, pane.glyph_buffer.slice(..));
                     pass.set_pipeline(&resources.glyph_rim_erase_pipeline);
-                    pass.draw(0..4, 0..pane.glyph_count);
+                    pass.draw(0..4, range.clone());
                     pass.set_pipeline(&resources.glyph_fill_erase_pipeline);
-                    pass.draw(0..4, 0..pane.glyph_count);
+                    pass.draw(0..4, range);
                 }
             }
 
