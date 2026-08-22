@@ -192,7 +192,7 @@ fn frame_controls(ui: &mut egui::Ui, state: &mut SharedState) {
 /// that starts a take.
 ///
 /// Each pane that owns an accumulation already clears its own — Labels' "Clear
-/// trail", the Analyzer's "Clear roll and spectrogram" — and those stay, since
+/// note names", the Analyzer's "Clear roll and spectrogram" — and those stay, since
 /// clearing what one pane draws is a real thing to want while dialing that pane
 /// in. This is for the other moment, when all three are wanted together and
 /// there is only one reason: a take about to be recorded should start on an

@@ -51,7 +51,7 @@ pub use spectral::{
     SPECTRAL_BALLISTICS_MAX, SPECTRAL_GATE_MAX, SPECTRAL_GATE_MIN, SPECTRAL_HYSTERESIS_MAX,
     SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN,
 };
-pub use style::{Gradient, Pulse, SevensLabel};
+pub use style::{Gradient, NoteNames, Pulse, SevensLabel};
 pub use view::{DrawnWindow, FrameParams, RingStack, ViewConfig};
 
 use glam::{Vec3, Vec4};
@@ -513,8 +513,10 @@ pub struct NodeInstance {
     /// level carried on the Glow attack and release, a row that holds still
     /// while the node keeps glowing, and the coefficient that carried it.
     pub glow: GlowStep,
-    /// How strongly the music is remembered here (see [`trail`]): 0 where
-    /// it has never been, up to 1 where it has.
+    /// Whether the music is remembered here (see [`trail`]): 0 where it has
+    /// never been, 1 where it has. A memory never fades, so those are the
+    /// only two values a node carries; the field is an `f32` because the
+    /// label layer scales its own strength by it.
     ///
     /// Read by the LABEL layer alone, which is what makes a memory
     /// unmistakable for a sounding note — the two are not the same kind of
