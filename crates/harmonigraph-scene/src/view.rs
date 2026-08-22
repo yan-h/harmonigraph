@@ -1135,6 +1135,15 @@ pub struct ViewConfig {
     /// This is how far round that average is taken: at 0 each layer's sectors
     /// stay distinct arcs of colour, and at 1 the whole node's ink averages
     /// into one tint. Inert while [`glow_reach`](Self::glow_reach) is 0.
+    ///
+    /// The travel is the SQUARE of the bar, because the lobe's WIDTH is what
+    /// the eye reads and that goes as one over the root of the concentration:
+    /// linear in the concentration, most of the bar sits between arcs nobody
+    /// can tell apart. Half way is `GLOW_LOBE_KAPPA`, the concentration the
+    /// node's own hues are blended at, and the half below it goes tighter than
+    /// that. Where the bottom STOPS is a ripple bound rather than a taste — a
+    /// lobe tight enough to pass a node's own wedges is tight enough to pass a
+    /// sampled fan too, and the two are not tellable apart once they are there.
     pub glow_spread: f32,
     /// How fast a node's light follows the node, in seconds: the time constant
     /// of the exponential its LEVEL and its COLOUR are both carried on — this

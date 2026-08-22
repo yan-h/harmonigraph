@@ -717,7 +717,8 @@ fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBack
                  round it — every layer's colour weighted by how lit it is and \
                  how wide the Layers bar made it — so 0% keeps each sector's \
                  colour a distinct arc and 100% averages the node into one \
-                 tint.",
+                 tint. Half way is the blend the node's own hues are laid at; \
+                 below that the halo separates further than the node does.",
             );
         // The moat, beneath the light it holds off, and read out like the two
         // gaps and the Clearance above it: every one of them is a share of the

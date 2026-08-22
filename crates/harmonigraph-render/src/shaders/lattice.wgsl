@@ -1588,6 +1588,26 @@ fn spectral_ring(in: VsOut, oct: OctRing, uv: vec2<f32>, band: f32, aa: f32) -> 
 // 1/sqrt of this, so the two move together).
 const GLOW_LOBE_KAPPA: f32 = 4.0;
 
+// The TIGHTEST the node glow's own average is ever taken at (`glow_spread_kappa`
+// — the Spread bar's bottom), which is tighter than the core's ceiling above:
+// the core blends a handful of octave hues that are MEANT to melt into one
+// another, where the light is read off sectors — a lit band slice, an audio
+// wedge, a mark — whose whole reading is that they are separate. Four times
+// GLOW_LOBE_KAPPA, so the bar's midpoint lands on it exactly.
+//
+// What caps it is the RIPPLE GUARD and not the strip's own resolution, which is
+// the tempting reading and the loose one: 64 columns would carry a lobe half
+// this width, and `a_nodes_light_has_no_ripple_the_ink_does_not` is what says
+// they must not be asked to. That test watches the harmonics a spoke would ride
+// — 8 and up, where the twelve-fold fan the strip was built to kill used to sit
+// — on the understanding that the tightest lobe has already taken everything
+// there to nothing. A von Mises passes its k-th harmonic at about
+// exp(-k^2 / 2 kappa), so the bound is real and it is this: at 16 the eighth
+// harmonic comes through at a seventh and the twelfth at a hundredth, and at 64
+// the eighth comes through at three fifths and a node's own wedges read as a
+// fan the guard cannot tell from the machinery's.
+const GLOW_SPREAD_KAPPA_MAX: f32 = GLOW_LOBE_KAPPA * 4.0;
+
 // The glow's color when a chord sounds: every sounding octave's hue laid
 // around the halo in the direction of its OWN indicator, so the glow shows
 // ALL the playing notes at once instead of just the loudest voice's single
@@ -2556,11 +2576,23 @@ fn glow_gap_depth() -> f32 {
 
 /// How widely a node's own ink is averaged into the colour of its light, as the
 /// concentration that average is taken at (`u.misc11.y`): the bar's bottom is
-/// GLOW_LOBE_KAPPA, where each layer's sectors stay distinct, and its top is no
-/// concentration at all, one tint over the halo. Read by [`fs_ink_blur`], which
-/// is where the average is taken.
+/// [`GLOW_SPREAD_KAPPA_MAX`], where each layer's sectors stay distinct arcs,
+/// and its top is no concentration at all, one tint over the halo. Read by
+/// [`fs_ink_blur`], which is where the average is taken.
+///
+/// The SQUARE of the bar, which is what makes the two ends both usable. The
+/// lobe's own width goes as `1/sqrt(kappa)`, so a bar linear in the
+/// concentration spends most of its travel between arcs nobody can tell apart
+/// and lands the whole visible change in its last sliver. Squared, the width
+/// goes as `1/(1 - s)` — it doubles at every half step toward the top, which is
+/// an even walk in the thing the eye actually reads.
+///
+/// It also puts GLOW_LOBE_KAPPA, the concentration the node's own hues are
+/// blended at, at exactly the bar's midpoint: half way is the core's look, and
+/// the half below it is tighter than the core can be asked for.
 fn glow_spread_kappa() -> f32 {
-    return GLOW_LOBE_KAPPA * (1.0 - clamp(u.misc11.y, 0.0, 1.0));
+    let s = 1.0 - clamp(u.misc11.y, 0.0, 1.0);
+    return GLOW_SPREAD_KAPPA_MAX * s * s;
 }
 
 /// Where the light's peak sits: the inner edge of the innermost RING the view
@@ -2926,13 +2958,29 @@ fn glow_layer(in: VsOut, d: f32) -> vec4<f32> {
 
     // How much of the strip's own DIRECTION this fragment gets, against the
     // flat tint of its mean: the seam argument `core_layer` makes at length,
-    // and (d/span)^2 is the same ramp the concentration used to be scaled by.
-    // Every seam converges to a cusp at the node's middle otherwise, the ink
-    // being laid in angle, so an arc shrinks with the radius; easing to the
-    // mean instead carries the arc the seam has at the light's own edge inward
-    // unchanged. The reference length is the glow's own span, the disc's radius
-    // being nothing this layer draws at.
-    let mix_out = min(1.0, (d * d) / (span * span));
+    // written against the node's own RIM the way that one is written against
+    // the disc's radius. Every seam converges to a cusp at the node's middle
+    // otherwise, the ink being laid in angle, so an arc shrinks with the
+    // radius; easing to the mean instead carries the arc the seam has where the
+    // ink ends inward unchanged.
+    //
+    // The rim and NOT the glow's whole span, which is the tempting reading of
+    // "ease out over the light" and takes the colour out of the light
+    // altogether: the ramp is quadratic and the skirt is an exponential over
+    // the same length, so measuring it against `span` leaves the light about a
+    // fifth directional however far the Reach is dialled — the halo is then the
+    // flat mean nearly everywhere and the Spread bar, which is exactly the
+    // concentration that mean is NOT taken at, has almost nothing to move.
+    // Against the rim the light is fully the node's own colours from the ink's
+    // outer edge outward, which is all of the halo proper, and the easing is
+    // left doing the one job it is for.
+    //
+    // Floored where the span is and for the same reason: a node drawn down to
+    // almost nothing has almost no rim, and a ramp measured against that is
+    // full direction at every radius it has — which is the cusp back again,
+    // this time on the one node too small to hide it under its own ink.
+    let seam = max(in.glow.z, 0.1);
+    let mix_out = min(1.0, (d * d) / (seam * seam));
 
     // The level scales the COVERAGE, once. `core_layer` spends it twice — on
     // its blend and again on the disc's alpha — which is right for a disc
