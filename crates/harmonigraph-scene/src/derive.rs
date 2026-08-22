@@ -511,6 +511,7 @@ pub fn derive_scene(
             // audio channel arrives empty here and `Scene::wear_audio_rings` is
             // what answers this once the shell's fold has filled it.
             audio_ring: 1.0,
+            ring_peak: 1.0,
             // The light UNCARRIED: what the MIDI layers say right now, on this
             // node's own row of a strip one row per node tall, taken whole.
             // The audio ring is left out of the level for the same reason it

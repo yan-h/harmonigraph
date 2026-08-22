@@ -413,6 +413,10 @@ fn parity_scene() -> Scene {
             // The lattice pass draws the ring on every node it ships; the
             // gate is the fold's answer and there is no fold here.
             audio_ring: 1.0,
+            // Drawn at full and READING full: a fixture with a dialled-in
+            // annulus is the ungated picture, and the light asks this one
+            // (see `NodeInstance::ring_peak`).
+            ring_peak: 1.0,
             // A row per node in the order they are built, settled: the light's
             // own clock is the shell's pass and no shell has run here, so this
             // fixture is the picture with nothing carried — which is exactly
@@ -1462,6 +1466,10 @@ fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
         // The lattice pass draws the ring on every node it ships; the
         // gate is the fold's answer and there is no fold here.
         audio_ring: 1.0,
+        // Drawn at full and READING full: a fixture with a dialled-in
+        // annulus is the ungated picture, and the light asks this one
+        // (see `NodeInstance::ring_peak`).
+        ring_peak: 1.0,
         // Lit and settled on the strip's first row: one node, nothing carried,
         // and the light sized against whichever ends this fixture is wearing.
         glow: harmonigraph_scene::GlowStep {
