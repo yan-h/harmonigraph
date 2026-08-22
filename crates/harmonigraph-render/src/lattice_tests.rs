@@ -551,6 +551,26 @@ impl Shooter {
     }
 
     fn draw(&mut self, scene: &Scene, labels: LatticeLabels) -> Vec<u8> {
+        // A lit node's ink-strip row is read back by IDENTITY, out of a strip
+        // `glow_rows` tall, so a row past the end is not a small error in a
+        // fixture: what an out-of-range `textureLoad` returns is the BACKEND's
+        // choice. Metal clamps, so the node silently reads row 0 and wears
+        // another node's colour while the test goes on passing; a backend that
+        // returns zero instead makes the same test vacuous, passing with the
+        // draw it is about deleted. Either way the fixture measures something
+        // other than what it says, and says nothing when it stops measuring at
+        // all — so the bookkeeping is asserted here, once, for every shot.
+        //
+        // `rows_per_node` is the helper that gets this right; a fixture that
+        // pushes a node by hand has to call it.
+        for (i, node) in scene.nodes.iter().enumerate() {
+            assert!(
+                node.glow.level <= 0.0 || node.glow.row < scene.glow_rows,
+                "node {i} claims ink-strip row {} of a strip {} tall — see `rows_per_node`",
+                node.glow.row,
+                scene.glow_rows,
+            );
+        }
         let size = self.size;
         let vec_size = egui::vec2(size[0] as f32, size[1] as f32);
         let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, vec_size);
@@ -5960,6 +5980,7 @@ fn a_node_under_a_nearer_sheets_node_cuts_nothing_out_of_its_light() {
     far.glow = harmonigraph_scene::GlowStep { level: 0.8, row: 1, mix: 1.0, marked: 0.0 };
     far.color = glam::Vec4::new(0.9, 0.2, 0.2, 1.0);
     both.nodes.push(far);
+    rows_per_node(&mut both);
     // The hidden node names itself, at the middle of the near node where the
     // light is fullest — exactly where an erased name is most legible.
     let name = |node: u32| LatticeLabels {
@@ -6002,6 +6023,7 @@ fn a_node_under_a_nearer_sheets_node_cuts_nothing_out_of_its_light() {
     // test's business. The glow may add nothing to it.
     let mut dark_both = near(0.0);
     dark_both.nodes.push(far);
+    rows_per_node(&mut dark_both);
     let hidden = apart(&shooter.shot(&near(0.0)), &shooter.shot_with(&dark_both, name(1)));
 
     let alone = shooter.shot(&near(0.8));
