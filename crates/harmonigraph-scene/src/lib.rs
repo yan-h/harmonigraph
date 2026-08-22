@@ -780,10 +780,6 @@ pub struct Scene {
     /// How much of the light the moat takes away where it stands (see
     /// [`ViewConfig::glow_gap_depth`]); already clamped to 0..=1.
     pub glow_gap_depth: f32,
-    /// How bright the light is at a node's middle against its peak out at the
-    /// innermost ring's inner edge (see [`ViewConfig::glow_centre`]); already
-    /// clamped to 0..=1.
-    pub glow_centre: f32,
     /// How widely a node's own ink is averaged into the colour of its light
     /// (see [`ViewConfig::glow_spread`]); already clamped to 0..=1.
     pub glow_spread: f32,

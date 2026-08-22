@@ -470,13 +470,12 @@ fn parity_scene() -> Scene {
         // The accent's own falloff, which is what every glow test here that
         // does not say otherwise is measuring.
         glow_feather: 0.0,
-        // The fresh moat and the four shares that shape the light inside it,
+        // The fresh moat and the three shares that shape the light inside it,
         // inert at reach 0 and here to say so.
         glow_gap: 0.08,
         glow_gap_soft: 0.16,
         glow_gap_shape: 0.5,
         glow_gap_depth: 0.85,
-        glow_centre: 0.5,
         glow_spread: 0.5,
         // A row per node, which is what the nodes above are built with.
         glow_rows,
@@ -4271,11 +4270,10 @@ fn the_lights_colour_seams_run_at_one_width_from_its_edge_to_the_centre() {
     scene.node_radius = 1.6;
     scene.glow_reach = 0.8;
     scene.glow_strength = 1.5;
-    // No moat and no dip: both are shapes laid over the light's own profile,
-    // and what is being read here is its colour.
+    // No moat: it is a shape laid over the light's own profile, and what is
+    // being read here is its colour.
     scene.glow_gap = 0.0;
     scene.glow_gap_soft = 0.0;
-    scene.glow_centre = 1.0;
     // Each octave's hue kept as its own arc rather than averaged round the
     // halo, which is the state a seam exists in at all.
     scene.glow_spread = 0.0;
@@ -6525,67 +6523,6 @@ fn added_light(on: &[u8], off: &[u8]) -> [i64; 3] {
     sum
 }
 
-/// The Centre bar dips the MIDDLE of a node's light and leaves the skirt
-/// outside it exactly where it was.
-///
-/// Both halves matter and they are one profile: the dip eases back to the whole
-/// of the exponential by the innermost ring's inner edge, so a node's light can
-/// be taken off its own centre without the halo around it moving — which is the
-/// difference between this bar and the Strength bar beside it.
-///
-/// The core's solidity is 0, as
-/// [`the_middle_of_a_node_is_where_its_light_is_fullest`] has it and for the
-/// same reason: at any solidity above it the disc is drawn over the light,
-/// crisp, and the centre pixel would read the disc.
-#[test]
-fn the_centre_bar_dips_a_nodes_middle_and_leaves_its_skirt() {
-    const SIZE: [u32; 2] = [256, 256];
-    let Some(mut shooter) = Shooter::new(SIZE) else {
-        return;
-    };
-    let at = |reach: f32, centre: f32| -> Scene {
-        let mut scene = single_marked_node(0, 0);
-        scene.glow_reach = reach;
-        scene.glow_strength = 1.5;
-        scene.glow_gap = 0.08;
-        scene.glow_centre = centre;
-        scene
-    };
-    let off = shooter.shot(&at(0.0, 1.0));
-    let full = shooter.shot(&at(0.8, 1.0));
-    let dipped = shooter.shot(&at(0.8, 0.2));
-
-    // Out from the node's centre along one row — the fixture's one node sits at
-    // the world origin, which the camera is pointed at, so that is the frame's
-    // centre too.
-    let row = (SIZE[1] / 2) as usize;
-    let mid = SIZE[0] as usize / 2;
-    let px = |shot: &[u8], x: usize| -> i64 {
-        let i = (row * SIZE[0] as usize + x) * 4;
-        brightness(&shot[i..i + 3])
-    };
-    assert!(
-        px(&dipped, mid) < px(&full, mid),
-        "a Centre of 0.2 left the node's middle at {} against {} at 1.0",
-        px(&dipped, mid),
-        px(&full, mid),
-    );
-    // How far out the two profiles differ at all, and how far the light itself
-    // reaches. The first has to finish well inside the second, or the bar is
-    // dimming the whole halo rather than dipping its middle.
-    let last = |f: &dyn Fn(usize) -> bool| -> usize {
-        (mid..SIZE[0] as usize).filter(|&x| f(x)).max().unwrap_or(0)
-    };
-    let dips_to = last(&|x| px(&full, x) != px(&dipped, x));
-    let lights_to = last(&|x| px(&full, x) != px(&off, x));
-    assert!(dips_to > mid, "a Centre of 0.2 changed no pixel on the row at all");
-    assert!(
-        dips_to + 8 < lights_to,
-        "the dip ran to {dips_to} px where the light reaches {lights_to} px — it is \
-         taking the skirt down with the middle",
-    );
-}
-
 /// The Gap fade bar widens the moat's EDGE — the band of pixels over which the
 /// light comes off a ring — without moving the gap itself.
 ///
@@ -6806,7 +6743,6 @@ fn a_nodes_light_has_no_ripple_the_ink_does_not() {
         // the gap laid over it.
         scene.glow_gap = 0.0;
         scene.glow_gap_soft = 0.0;
-        scene.glow_centre = 0.5;
         scene.glow_spread = 0.0;
         // Big enough that a circle inside the node is hundreds of pixels round,
         // which is what resolving a ripple at these rates takes.

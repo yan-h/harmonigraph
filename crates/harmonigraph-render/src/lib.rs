@@ -353,9 +353,8 @@ struct Uniforms {
     /// The node glow's lengths. x: how far past a node's outermost drawn edge
     /// its light spreads, in quad UV units (`Scene::glow_reach`); y: how much
     /// light (`Scene::glow_strength`); z: the moat the light is held out of
-    /// around every ring a node draws, same units (`Scene::glow_gap`); w: how
-    /// bright that light is at the node's middle against its peak out at the
-    /// innermost ring (`Scene::glow_centre`).
+    /// around every ring a node draws, same units (`Scene::glow_gap`);
+    /// w unused.
     ///
     /// ZEROED WHOLE where the glow does not draw, so `x > 0.0` is the single
     /// test on either side of the boundary — [`LatticeCallback::glow_draws`]
@@ -1046,12 +1045,7 @@ impl LatticeCallback {
                 // it belongs to the glow: it is the moat that light stands
                 // behind, and with no light there is nothing to stand off.
                 misc10: if lights {
-                    [
-                        scene.glow_reach,
-                        scene.glow_strength,
-                        scene.glow_gap,
-                        scene.glow_centre,
-                    ]
+                    [scene.glow_reach, scene.glow_strength, scene.glow_gap, 0.0]
                 } else {
                     [0.0; 4]
                 },
