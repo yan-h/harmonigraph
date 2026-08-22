@@ -32,8 +32,8 @@ fn the_marker_field_is_the_home_sheet_and_only_it() {
     // The resting picture belongs to ONE sheet, and that is the whole of what
     // makes it the ground: a position off it is unmarked at rest, which is
     // also why it is not hoverable. Nothing the music does changes that — an
-    // off-sheet note used to hang from a dashed chain drawn down to home, and
-    // now it simply floats over the field at the size its sheet gives it.
+    // off-sheet note floats over the field at the size its sheet gives it,
+    // with nothing drawn between it and home.
     let view = ViewConfig {
         extent_threes: 1,
         extent_fives: 0,

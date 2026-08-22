@@ -550,11 +550,11 @@ fn names_switched_off_leave_every_marker_standing() {
 
 #[test]
 fn an_off_sheet_note_leaves_the_marker_field_alone() {
-    // A 7-limit note sounding off the home sheet used to hang from a dashed
-    // chain drawn down to it. It does not any more: the sheet it left is
-    // marked and the one it is on is not, and the SIZE it draws at is what
-    // says how far off it has gone. So the field is the same field whether
-    // that note sounds or not.
+    // A 7-limit note sounding off the home sheet hangs from nothing: the
+    // sheet it left is marked and the one it is on is not, and the SIZE it
+    // draws at is what says how far off it has gone. A chain drawn down to
+    // home would be the other answer, and the field is what it costs — so the
+    // field is the same field whether that note sounds or not.
     let view = ViewConfig {
         extent_threes: 0,
         extent_fives: 0,

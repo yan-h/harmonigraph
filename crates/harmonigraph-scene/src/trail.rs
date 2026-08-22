@@ -12,11 +12,11 @@
 //! through the name rather than around it: a named position draws no marker (see
 //! [`NodeInstance::is_named`]), and under
 //! [`NoteNames::Past`] a remembered position is named.
-//! So the rule above holds as written — this module still writes one field —
-//! and what takes the marker away is the label layer, on the same terms it takes
-//! one away from a node that is merely sounding. A memory is still type and
-//! nothing else; what changed is that type now stands where the marker was
-//! instead of over it.
+//! So the rule above holds as written — this module writes one field — and
+//! what takes the marker away is the label layer, on the same terms it takes
+//! one away from a node that is merely sounding. A memory is type and nothing
+//! else, and that type stands WHERE the marker would be rather than over it,
+//! which is the whole of the difference.
 //!
 //! Two consequences worth stating, because they are what keep it subtle:
 //! - Nothing on a visited node ever brightens or animates. The lattice at
