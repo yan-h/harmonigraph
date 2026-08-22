@@ -45,8 +45,8 @@ use harmonigraph_scene::{
 /// the whole of it ([`StackBar`]), and what is left under each heading is the
 /// reading it carries, the colours it wears and the switches that are its own.
 ///
-/// The layers then run in stack order, from the center out: the audio ring at
-/// the node's own centre, the octave band a Ring gap outside it, and the
+/// The layers then run in stack order, from the center out: the audio ring on
+/// the stack's own start, the octave band a Ring gap outside it, and the
 /// melody/bass marks past the band — the same order [`ViewConfig::rings`] lays
 /// them down in, so the column reads down as the node reads outward. Shimmer is
 /// last because it is the sweep the outermost layer carries rather than a layer
@@ -147,7 +147,7 @@ fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // No size bar under these, and no on/off either: both are the Layers bar's,
     // where 0 is this layer's off position as it is on every other. The band is
     // one WIDTH there rather than a pair of radii, because where it sits is the
-    // stack's answer — a gap out from the audio ring, or the node's own centre
+    // stack's answer — a gap out from the audio ring, or the stack's own start
     // where that ring is off — so the only thing left to say about it is how
     // thick it is.
     //
@@ -547,12 +547,12 @@ fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBack
              struck note decays.",
         );
     // Every layer's size, in the one bar that can show where each of them
-    // lands: the four widths are one stack read outward from the node's center,
-    // and the picture on the bar is the node's own cross-section (`StackBar`).
-    // A whole-note setting rather than any layer's, which is why it is here and
-    // not split four ways across the headings below — none of the four could be
-    // read without the other three, since a layer's inner edge is a sum over
-    // everything inside it.
+    // lands: one stack read outward from the node's center — where it begins,
+    // and then a width apiece — and the picture on the bar is the node's own
+    // cross-section (`StackBar`). A whole-note setting rather than any layer's,
+    // which is why it is here and not split across the headings below — none of
+    // the four numbers could be read without the other three, since a layer's
+    // inner edge is a sum over everything inside it.
     //
     // Directly above the Ring gap, because the two are one idea: the sizes are
     // the layers and that gap is the padding standing between them, the bar
@@ -562,12 +562,13 @@ fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBack
     StackBar::new(view)
         .show(ui)
         .on_hover_text(
-            "Every layer of a node, from its center out: the audio ring, the \
-             octave band and the melody/bass strip, each named on its \
-             own cell where there is room for it. Drag a handle to set the layer \
-             inside it — 0 removes that layer and the ones outside close up. The \
-             line is the node's edge, which only the marks may cross. \
-             Double-click to restore.",
+            "A node's cross-section, from its center out: the empty middle its \
+             light fills, the audio ring, the octave band and the melody/bass \
+             strip, each named on its own cell where there is room for it. Drag \
+             a handle to set the stretch inside it — 0 removes a layer and the \
+             ones outside close up, and on the middle it seats the whole stack \
+             on the node's center. The line is the node's edge, which only the \
+             marks may cross. Double-click to restore.",
         );
     // A node's two paddings, together and directly under the bar that draws one
     // of them. They are the same question asked on the node's two axes — how

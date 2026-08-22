@@ -226,13 +226,14 @@ fn a_wild_radial_gap_is_clamped_and_the_stack_stops_at_the_ring_that_fits() {
 }
 
 #[test]
-fn the_rings_stack_outward_from_the_centre() {
+fn the_rings_stack_outward_from_where_the_stack_starts() {
     // The whole of what the width bars mean, at the scene: the innermost ring
-    // reaches the node's own centre and each ring after it starts a gap past
+    // seats on the stack's own start and each ring after it starts a gap past
     // the one inside it, so the band's radii are a SUM rather than a pair of
     // settings, and nothing has to be dragged twice to keep the layers from
     // overlapping.
     let view = ViewConfig {
+        ring_inner: 0.2,
         spectral_ring_width: 0.1,
         band_width: 0.15,
         ring_gap: 0.05,
@@ -245,13 +246,21 @@ fn the_rings_stack_outward_from_the_centre() {
         &plain_frame(),
         0.0,
     );
-    // audio 0..0.1 | gap | band 0.15..0.30
-    assert_eq!((scene.outer_inner, scene.outer_outer), (0.15, 0.3));
-    assert_eq!(scene.rings_outer, 0.3, "the marks stand off the band");
+    // middle 0..0.2 | audio 0.2..0.3 | gap | band 0.35..0.50. To a tolerance,
+    // the radii being sums: 0.2 + 0.1 + 0.05 is not 0.35 in binary.
+    let close =
+        |(a, b): (f32, f32), (c, d): (f32, f32)| (a - c).abs() < 1e-5 && (b - d).abs() < 1e-5;
+    assert!(
+        close((scene.outer_inner, scene.outer_outer), (0.35, 0.5)),
+        "the band is at {}..{}, not a gap out from the audio ring",
+        scene.outer_inner,
+        scene.outer_outer,
+    );
+    assert!((scene.rings_outer - 0.5).abs() < 1e-5, "the marks stand off the band");
 
     // The audio ring off: its slot AND its gap go back to the band, which
-    // slides in to the node's own centre — no layer left to stand off, so no
-    // gap spent standing off one.
+    // slides in to the stack's start — no layer left to stand off, so no gap
+    // spent standing off one.
     let view = ViewConfig { spectral_ring_width: 0.0, ..view };
     let scene = scene_of(
         &NoteTracker::new(),
@@ -260,7 +269,12 @@ fn the_rings_stack_outward_from_the_centre() {
         &plain_frame(),
         0.0,
     );
-    assert_eq!((scene.outer_inner, scene.outer_outer), (0.0, 0.15));
+    assert!(
+        close((scene.outer_inner, scene.outer_outer), (0.2, 0.35)),
+        "the band did not slide in to the stack's start: {}..{}",
+        scene.outer_inner,
+        scene.outer_outer,
+    );
 
     // The band off: an empty pair, which is what says the layer is not drawn,
     // and the marks fall back to standing off the ring that IS the outermost.
@@ -273,7 +287,26 @@ fn the_rings_stack_outward_from_the_centre() {
         0.0,
     );
     assert_eq!((scene.outer_inner, scene.outer_outer), (0.0, 0.0));
-    assert_eq!(scene.rings_outer, 0.1, "the marks kept the band's slot");
+    assert!((scene.rings_outer - 0.3).abs() < 1e-5, "the marks kept the band's slot");
+
+    // And a start of 0 is the stack seated on the node's own centre, which is
+    // the same rule read at the bottom of that bar rather than a case of its
+    // own: the innermost ring reaches the centre and its sectors close into pie
+    // wedges.
+    let view = ViewConfig { ring_inner: 0.0, band_width: 0.15, ..view };
+    let scene = scene_of(
+        &NoteTracker::new(),
+        &Tuning::default(),
+        &view,
+        &plain_frame(),
+        0.0,
+    );
+    assert!(
+        close((scene.outer_inner, scene.outer_outer), (0.15, 0.3)),
+        "a stack seated on the centre put the band at {}..{}",
+        scene.outer_inner,
+        scene.outer_outer,
+    );
 }
 
 /// A ring draws at exactly the width its bar reads, or it is not drawn at all:
@@ -302,13 +335,15 @@ fn a_layer_with_no_room_left_in_the_node_is_not_drawn() {
     // a number that has to be re-found by hand each time a dialled-in look is
     // captured.
     //
-    // The GAP is what makes the corner reachable at all: a ring is held to
-    // RING_WIDTH_MAX, so at the fresh padding every layer fits whatever the
-    // bars read, and it takes a padding dialled well up to run the quad out.
+    // The START is what makes the corner reachable at the fresh padding: a ring
+    // is held to RING_WIDTH_MAX, so a stack seated on the node's centre fits
+    // every layer whatever the bars read, and it takes a stack pushed out — or
+    // a padding dialled well up — to run the quad out.
     let view = ViewConfig {
+        ring_inner: 0.3,
         spectral_ring_width: RING_WIDTH_MAX,
         band_width: 0.163_084_63,
-        ring_gap: 0.3,
+        ring_gap: 0.05,
         octave_gap: 0.05,
         ..ViewConfig::default()
     };
@@ -333,15 +368,23 @@ fn a_layer_with_no_room_left_in_the_node_is_not_drawn() {
     // stack empties from the outside in, so a layer that has gone stays gone as
     // the ring inside it keeps widening. Both bars are open here, so the only
     // way to a `(0, 0)` is a refusal.
-    let fresh = ViewConfig { ring_gap: 0.3, ..ViewConfig::default() };
+    let fresh = ViewConfig { ring_inner: 0.3, ring_gap: 0.05, ..ViewConfig::default() };
     let mut band_gone = None::<f32>;
     for step in 0..=60 {
         let width = step as f32 / 100.0;
         let rings = ViewConfig { spectral_ring_width: width, ..fresh.clone() }.rings();
-        assert_eq!(
+        // Seated on the stack's start at exactly its own width — or the empty
+        // pair at the bottom of its bar, where the layer is switched off rather
+        // than refused and gives its slot back.
+        let seated = if width > 0.0 {
+            (fresh.ring_inner, fresh.ring_inner + width)
+        } else {
+            (0.0, 0.0)
+        };
+        assert!(
+            (rings.audio.0 - seated.0).abs() < 1e-5 && (rings.audio.1 - seated.1).abs() < 1e-5,
+            "a ring of {width} came out at {:?} rather than {seated:?}",
             rings.audio,
-            (0.0, width),
-            "a ring of {width} did not reach the node's centre at its own width",
         );
         let (inner, outer) = rings.band;
         assert!(
@@ -370,17 +413,18 @@ fn a_layer_with_no_room_left_in_the_node_is_not_drawn() {
 /// radius would take the node's whole radial coverage to NaN — the layer, and
 /// every layer measured off it, silently gone while the bars read out numbers.
 ///
-/// All three sizes and BOTH paddings, because `size` guards each of them and
-/// `sanitize` repairs only the audio ring's: any of the other four is a door a
+/// All four sizes and BOTH paddings, because `size` guards each of them and
+/// `sanitize` repairs only the audio ring's: any of the other five is a door a
 /// non-finite reaches the picture through, and each has a different layer to
 /// take down with it.
 #[test]
 fn a_hand_edited_size_reaches_the_scene_as_that_layers_off_position() {
     // Every layer on, at sizes far enough apart to read the whole stack off the
-    // scene: audio 0..0.1 | gap | band 0.15..0.35 | marks. The two paddings are
-    // one number here so a case that moves either is reading against the same
-    // stack.
+    // scene: middle 0..0.1 | audio 0.1..0.2 | gap | band 0.25..0.45 | marks. The
+    // two paddings are one number here so a case that moves either is reading
+    // against the same stack.
     let sound = ViewConfig {
+        ring_inner: 0.1,
         spectral_ring_width: 0.1,
         band_width: 0.2,
         ring_gap: 0.05,
@@ -409,7 +453,7 @@ fn a_hand_edited_size_reaches_the_scene_as_that_layers_off_position() {
     let close =
         |got: [f32; 6], want: [f32; 6]| got.iter().zip(want).all(|(a, b)| (a - b).abs() < 1e-5);
     assert!(
-        close(stack(&sound), [0.15, 0.35, 0.35, 0.05, 0.1, 0.05]),
+        close(stack(&sound), [0.25, 0.45, 0.45, 0.05, 0.1, 0.05]),
         "the sound stack is {:?}, not the one every case below is a departure from",
         stack(&sound),
     );
@@ -417,19 +461,27 @@ fn a_hand_edited_size_reaches_the_scene_as_that_layers_off_position() {
     for wild in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -5.0] {
         for (field, view, want) in [
             (
+                "stack start",
+                ViewConfig { ring_inner: wild, ..sound.clone() },
+                // The whole stack seated on the node's own centre, which is
+                // this bar's own bottom rather than anything being switched
+                // off, and every layer still the width its own bar reads.
+                [0.15, 0.35, 0.35, 0.05, 0.1, 0.05],
+            ),
+            (
                 "audio ring width",
                 ViewConfig { spectral_ring_width: wild, ..sound.clone() },
                 // The ring off, and the band closes over its slot AND its gap
-                // rather than being carried off by it — in to the node's own
-                // centre, there being no layer left to stand off.
-                [0.0, 0.2, 0.2, 0.05, 0.1, 0.05],
+                // rather than being carried off by it — in to the stack's own
+                // start, there being no layer left to stand off.
+                [0.1, 0.3, 0.3, 0.05, 0.1, 0.05],
             ),
             (
                 "band width",
                 ViewConfig { band_width: wild, ..sound.clone() },
                 // The octave layer off — the empty pair — and the marks fall
                 // back to standing off the audio ring.
-                [0.0, 0.0, 0.1, 0.05, 0.1, 0.05],
+                [0.0, 0.0, 0.2, 0.05, 0.1, 0.05],
             ),
             (
                 "ring gap",
@@ -437,20 +489,20 @@ fn a_hand_edited_size_reaches_the_scene_as_that_layers_off_position() {
                 // The stack closes up: every layer meets the one inside it and
                 // the marks seat against the band. The sectors are still cut,
                 // that being the other bar's to say.
-                [0.1, 0.3, 0.3, 0.0, 0.1, 0.05],
+                [0.2, 0.4, 0.4, 0.0, 0.1, 0.05],
             ),
             (
                 "octave gap",
                 ViewConfig { octave_gap: wild, ..sound.clone() },
                 // The sectors close into a solid annulus, and not one radius
                 // moves — the layer is still exactly where the stack put it.
-                [0.15, 0.35, 0.35, 0.05, 0.1, 0.0],
+                [0.25, 0.45, 0.45, 0.05, 0.1, 0.0],
             ),
             (
                 "mark depth",
                 ViewConfig { mark_thickness: wild, ..sound.clone() },
                 // The marks off, and the rings they stand off untouched.
-                [0.15, 0.35, 0.35, 0.05, 0.0, 0.05],
+                [0.25, 0.45, 0.45, 0.05, 0.0, 0.05],
             ),
         ] {
             let got = stack(&view);
@@ -468,6 +520,7 @@ fn the_ring_geometry_is_sanitized_into_the_scene() {
     // own top, and the layer the quad has no room left for is dropped rather
     // than handed to the shader as a radius it would draw off the node.
     let view = ViewConfig {
+        ring_inner: 0.0,
         spectral_ring_width: 0.8,
         band_width: 0.9,
         ..ViewConfig::default()

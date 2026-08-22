@@ -1518,6 +1518,15 @@ const PARTIAL_HALF_CENTS: f32 = 40.0;
 /// pixels apart, and one reading a sector wants the seams pixels wide.
 const PROBE_GAP: f32 = 0.12;
 
+/// Where the probe stacks BEGIN, and it is the node's own centre: a radius read
+/// off one of these pictures is then a width, or a sum of widths and gaps, with
+/// no offset under it. Stated rather than inherited for the same reason every
+/// other size here is — a fresh view stands its stack well out from the centre
+/// (see [`ViewConfig::ring_inner`](harmonigraph_scene::ViewConfig)), and the
+/// probe widths, deliberately wide so a pixel reading can tell one layer's edge
+/// from the next, do not fit in what that leaves.
+const PROBE_INNER: f32 = 0.0;
+
 /// The octave band's width for the probes below, standing in for the fresh
 /// view's own (see [`ViewConfig::band_width`](harmonigraph_scene::ViewConfig))
 /// the same way [`PROBE_GAP`] stands in for the gap: the band is the outermost
@@ -1580,6 +1589,7 @@ fn ringing_node(held: Option<usize>, sounding: Option<f32>, range: f32) -> Scene
     // The probe's stack: the two rings land far enough apart to be measured in
     // pixels, at radii no capture of a dialled-in look moves.
     let rings = harmonigraph_scene::ViewConfig {
+        ring_inner: PROBE_INNER,
         ring_gap: PROBE_GAP,
         spectral_ring_width: PROBE_RING_WIDTH,
         band_width: PROBE_BAND_WIDTH,
@@ -1966,6 +1976,7 @@ fn a_mark_stands_off_the_outermost_ring_the_node_draws() {
     // the fresh view happens to be dialled to.
     let fresh = harmonigraph_scene::ViewConfig::default();
     let rings = harmonigraph_scene::ViewConfig {
+        ring_inner: PROBE_INNER,
         ring_gap: PROBE_GAP,
         spectral_ring_width: PROBE_RING_WIDTH,
         band_width: PROBE_BAND_WIDTH,
@@ -2063,6 +2074,7 @@ fn a_mark_with_no_ring_under_it_reaches_the_nodes_centre() {
     // a strip no deeper than that disc would have nothing left to measure once
     // it reached the centre, which is the very state under test.
     let fresh = harmonigraph_scene::ViewConfig {
+        ring_inner: PROBE_INNER,
         ring_gap: PROBE_GAP,
         spectral_ring_width: 0.0,
         mark_thickness: harmonigraph_scene::MARK_THICKNESS_MAX,
@@ -2149,6 +2161,7 @@ const PROBE_RING_WIDTH: f32 = 0.3;
 fn clearing_rings() -> harmonigraph_scene::RingStack {
     let fresh = harmonigraph_scene::ViewConfig::default();
     harmonigraph_scene::ViewConfig {
+        ring_inner: PROBE_INNER,
         ring_gap: PROBE_GAP,
         spectral_ring_width: PROBE_RING_WIDTH,
         band_width: PROBE_BAND_WIDTH,
@@ -6067,6 +6080,7 @@ fn two_colour_node(band_width: f32, ring_width: f32) -> Scene {
     // the ring's share of the light a reading of the padding rather than of its
     // width.
     let rings = harmonigraph_scene::ViewConfig {
+        ring_inner: PROBE_INNER,
         ring_gap: PROBE_GAP,
         spectral_ring_width: ring_width,
         band_width,

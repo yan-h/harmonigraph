@@ -1134,8 +1134,8 @@ fn a_lit_octave_indicator_stands_for_the_pitch_it_is_drawn_at() {
     );
 }
 
-/// A fresh node's four layers are all THERE, each clear of the last, and the
-/// whole stack fits inside the quad.
+/// A fresh node's middle and its three layers are all THERE, each clear of the
+/// last, and the whole stack fits inside the quad.
 ///
 /// The fresh view's own arithmetic rather than a picture, because that is what
 /// the stack is — and it is worth pinning because the sizes are widths: nothing
@@ -1143,7 +1143,7 @@ fn a_lit_octave_indicator_stands_for_the_pitch_it_is_drawn_at() {
 /// moves every layer outside it, and a stack that has walked off the quad edge
 /// draws a node with its outer rings quietly clipped away.
 #[test]
-fn the_fresh_node_stacks_three_visible_layers_inside_the_quad() {
+fn the_fresh_node_stacks_three_visible_layers_around_its_middle() {
     let view = ViewConfig::default();
     let rings = view.rings();
     // A gap a reader can see, not merely a positive number. A twentieth of the
@@ -1151,12 +1151,16 @@ fn the_fresh_node_stacks_three_visible_layers_inside_the_quad() {
     // whole node is spaced on.
     const CLEAR: f32 = 0.05;
     assert!(rings.gap >= CLEAR, "the layers are spaced by {}, which is not a gap", rings.gap);
-    // The innermost layer reaches the node's own centre — there is nothing
-    // inside it to stand off — and the band is a gap out from where it ended.
+    // A middle to light, rather than a stack seated on the node's centre: the
+    // node glow is what fills it, and a fresh view that started the rings at 0
+    // would have nowhere to put that light but over its own ink.
+    assert!(rings.inner > CLEAR, "the fresh stack starts at {}, on the centre", rings.inner);
+    // The innermost layer seats on that start — there is nothing inside it to
+    // stand off — and the band is a gap out from where it ended.
     assert_eq!(
         rings.audio,
-        (0.0, rings.band.0 - rings.gap),
-        "the fresh audio ring does not run from the node's centre to the band",
+        (rings.inner, rings.band.0 - rings.gap),
+        "the fresh audio ring does not run from the stack's start to the band",
     );
     assert!(rings.audio.1 - rings.audio.0 > CLEAR, "the fresh audio ring is a hairline");
     assert!(rings.band.1 - rings.band.0 > CLEAR, "the fresh octave band is a hairline");

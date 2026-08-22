@@ -149,15 +149,16 @@ pub const SPECTRAL_WIDTH_MIN: f32 = 1.0;
 /// See [`SPECTRAL_WIDTH_MIN`].
 pub const SPECTRAL_WIDTH_MAX: f32 = 50.0;
 
-/// The ends of the four bars that size a node's layers, in quad UV units — the
+/// The ends of the bars that size a node's layers, in quad UV units — the
 /// stack [`ViewConfig::rings`] reads outward from the center, and what it holds
 /// a hand-edited view to.
 ///
-/// Every one of them has 0 for its low end, and 0 is that layer's off position
-/// rather than a hairline of it: one way to turn a layer off, in the same place
-/// on every layer. What the high ends buy is a bar whose useful settings are
-/// spread over its whole travel — the quad is 1 across, so a ring bar reaching
-/// 1 would spend most of itself on stacks that are already off the node's edge.
+/// Every one of them has 0 for its low end, and on a WIDTH 0 is that layer's
+/// off position rather than a hairline of it: one way to turn a layer off, in
+/// the same place on every layer. What the high ends buy is a bar whose useful
+/// settings are spread over its whole travel — the quad is 1 across, so a ring
+/// bar reaching 1 would spend most of itself on stacks that are already off the
+/// node's edge.
 ///
 /// [`RING_WIDTH_MAX`] is the same for the audio ring and the octave band,
 /// because they are read the same way: a wedge whose radial extent is a
@@ -166,6 +167,16 @@ pub const SPECTRAL_WIDTH_MAX: f32 = 50.0;
 pub const RING_WIDTH_MAX: f32 = 0.6;
 /// See [`RING_WIDTH_MAX`].
 pub const MARK_THICKNESS_MAX: f32 = 0.3;
+/// See [`RING_WIDTH_MAX`]. The one bar of the stack that is a POSITION rather
+/// than a width — how far out the innermost layer begins
+/// ([`ViewConfig::ring_inner`]) — which is why its low end is not an off
+/// position: nothing is switched off there, the stack simply seats on the
+/// node's own center.
+///
+/// Short of the quad edge by a tenth, so the top of the bar is a node whose
+/// rings are being refused one at a time rather than one with nowhere at all to
+/// put them.
+pub const RING_INNER_MAX: f32 = 0.9;
 /// See [`RING_WIDTH_MAX`]. The ceiling on BOTH of a node's paddings, which are
 /// a padding rather than a layer and so share one.
 ///
@@ -573,8 +584,9 @@ pub struct Scene {
     pub rings_outer: f32,
     /// Where the melody/bass mark strip starts (see
     /// [`RingStack::mark_inner`]) — a padding out from
-    /// [`rings_outer`](Self::rings_outer), or the node's center on a node with
-    /// no rings at all, where there is nothing for it to stand off.
+    /// [`rings_outer`](Self::rings_outer), or the stack's own start
+    /// ([`ViewConfig::ring_inner`]) on a node with no rings at all, where there
+    /// is nothing for it to stand off.
     ///
     /// Handed over rather than re-derived from `rings_outer + ring_gap`,
     /// because that sum is only right while some ring is there to owe the

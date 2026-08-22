@@ -49,9 +49,9 @@ keep sitting there unused at zero cost.
   surviving as a one-variant enum, the way `OuterStyle` and `CoreStyle` did
   before it: a blob's `node_style` is now an ignored unknown field, held by
   `a_persist_blob_naming_a_retired_node_style_still_loads`. The disc they
-  painted is gone too: a node is its ring stack, and what lights the middle of
-  one is the node glow, in the octave-color blend `octave_glow_color` lays
-  around it.
+  painted is gone too: a node is its ring stack read out from an empty middle
+  (`ring_inner`), and what lights that middle is the node glow, in the
+  octave-color blend `octave_glow_color` lays around it.
 - **The piano roll's geometry** (was two entries here: baking settled notes
   into cached meshes, then superseding that with a wgpu callback). **Built.**
   The roll now draws as one instanced quad per note segment through

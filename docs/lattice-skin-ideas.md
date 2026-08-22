@@ -6,10 +6,11 @@ or scheduled.** Pick whatever's appealing and it can be built later.
 
 Two places a skin reaches, and only one of them is an axis today:
 
-- **Node body** — a node is its RING STACK and nothing else: the audio ring
-  at its centre, the octave band around that, the melody/bass marks past it,
-  each sized on the Layers bar. What lights the middle of one is the node
-  glow (`lattice.wgsl`'s `glow_layer`), colored by the octave blend
+- **Node body** — a node is its RING STACK and nothing else: an empty middle
+  the stack is read out from (`ring_inner`), the audio ring seated on that, the
+  octave band around it, the melody/bass marks past that, each sized on the
+  Layers bar. What lights the middle of one is the node glow
+  (`lattice.wgsl`'s `glow_layer`), colored by the octave blend
   `octave_glow_color` lays around the node. There is no style enum to add a
   variant to — a second paint means a branch there and a setting to pick it,
   which is what the retired `NodeStyle` was.

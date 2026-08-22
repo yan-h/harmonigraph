@@ -352,7 +352,8 @@ impl SpectralPaint {
     ///
     /// Where the ring sits is [`ViewConfig::rings`]'s answer rather than a
     /// second reading of the same bars: it is the innermost layer of the stack,
-    /// so its inner edge is the node's own centre, and the same one answer is
+    /// so its inner edge is wherever the stack starts
+    /// ([`ViewConfig::ring_inner`]), and the same one answer is
     /// what places the band a gap outside it. That sum belongs in one place, and
     /// its clamps are there rather than in `ViewConfig::sanitize` for the
     /// reason every other geometry clamp is — the drawing code is reached by
@@ -859,6 +860,13 @@ mod tests {
             spectral_reading: SpectralReading::Spectrum,
             spectral_ring_width: width,
             spectral_ring_range: range,
+            // The stack seated on the node's own centre, so the ring's radii
+            // are its width and nothing else: what these cases are about is the
+            // width reaching the picture, and a start inherited from a dialled-
+            // in look would put the widest of them off the quad and answer with
+            // a refusal instead. Where the ring seats when the stack does not
+            // start there is `the_ring_seats_on_the_stacks_start`.
+            ring_inner: 0.0,
             ..ViewConfig::default()
         }
     }
@@ -918,7 +926,7 @@ mod tests {
         assert!(!SpectralPaint::silent().ring_draws(), "a silent scene drew a ring");
     }
 
-    /// The ring sits where the STACK puts it: at the node's own centre, it
+    /// The ring sits where the STACK puts it: on the stack's own start, it
     /// being the innermost layer, and sized by its own width alone.
     ///
     /// The whole of what the width bars buy, checked at the one place a second
@@ -927,14 +935,21 @@ mod tests {
     /// No gap is spent in front of it: there is no layer inside it to stand
     /// off, and a padding around nothing is a hole the picture cannot explain.
     #[test]
-    fn the_ring_reaches_the_nodes_centre() {
-        let view = ringed(0.25, 200.0);
+    fn the_ring_seats_on_the_stacks_start() {
+        let view = ViewConfig { ring_inner: 0.2, ..ringed(0.25, 200.0) };
         let paint = SpectralPaint::new(&view, Gradient::default());
-        assert_eq!((paint.inner, paint.outer), (0.0, 0.25));
+        assert_eq!((paint.inner, paint.outer), (0.2, 0.45));
 
         // And the gap it does not spend is the band's, a gap out from where
         // this ring ended.
-        assert_eq!(view.rings().band.0, 0.25 + view.ring_gap);
+        assert_eq!(view.rings().band.0, 0.45 + view.ring_gap);
+
+        // A start of 0 is the stack seated on the node's own centre, where the
+        // ring's wedges close into pie slices. Still no gap in front of it —
+        // the rule is one rule, and the centre is not a special case of it.
+        let view = ringed(0.25, 200.0);
+        let paint = SpectralPaint::new(&view, Gradient::default());
+        assert_eq!((paint.inner, paint.outer), (0.0, 0.25));
     }
 
     /// BOTH readings fill the same annulus, at the same radii, and are told
