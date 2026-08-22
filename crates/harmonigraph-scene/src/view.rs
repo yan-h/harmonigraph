@@ -1049,9 +1049,16 @@ pub struct ViewConfig {
     /// own.
     ///
     /// What it draws is every sounding octave's hue laid round the node by
-    /// angle, over an exponential falloff sized to the whole node: the node's
-    /// outermost drawn edge plus this reach is both the falloff's domain and
-    /// where its window shuts, so this bar is exactly where the light stops.
+    /// angle, over a falloff sized to the whole node: the node's outermost
+    /// drawn edge plus this reach is both the falloff's domain and where its
+    /// window shuts, so this bar is exactly where the light stops.
+    ///
+    /// How far the light goes and how much of that distance is LIT are two
+    /// bars: past about one radius the falloff at rest has nothing left out
+    /// there to see, so a wash wants
+    /// [`glow_feather`](Self::glow_feather) with it. The ceiling
+    /// ([`GLOW_REACH_MAX`]) is sized for that pair — several lattice steps,
+    /// where every node's light overlaps its neighbourhood's.
     ///
     /// It is the ONLY light a node has, the rings themselves being crisp
     /// shapes: a view with this at 0 draws exactly the ink the ring stack
@@ -1071,6 +1078,39 @@ pub struct ViewConfig {
     /// How much light the node glow lays down. Inert while
     /// [`glow_reach`](Self::glow_reach) is 0.
     pub glow_strength: f32,
+    /// Where the light's weight sits inside its own reach, 0..=1: 0 an
+    /// exponential heaped on the node, 1 an even field across it.
+    ///
+    /// The SHAPE knob to [`glow_reach`](Self::glow_reach)'s distance, and the
+    /// two together are what a wash is made of. The falloff at 0 has almost all
+    /// of the light inside the first third of its span, so widening the reach
+    /// alone draws a bigger ACCENT — a hot node with a thin skirt around it,
+    /// however far the skirt is asked to go. Flattening it fills that span in:
+    /// the light is the same from the node out to half its reach and comes off
+    /// over the other half, so the node stops being the brightest thing in its
+    /// own halo, there is no rim anywhere for the eye to catch, and
+    /// neighbouring nodes' light melds into one field instead of into a chain
+    /// of overlapping discs.
+    ///
+    /// Where the light STOPS is not this bar's business at either end: the
+    /// window is the same shape over the same span whatever the feather (see
+    /// `glow_layer` in lattice.wgsl), so the Reach alone says how far the light
+    /// goes and this says how much of that distance is actually lit.
+    ///
+    /// It only ever ADDS light rather than redistributing a fixed amount of it.
+    /// How much light there is belongs to
+    /// [`glow_strength`](Self::glow_strength), and a bar that quietly took the
+    /// peak down as it spread would be two bars fighting over one number — so a
+    /// feathered wash usually wants a lower Strength than the accent it came
+    /// from did.
+    ///
+    /// It leaves [`glow_centre`](Self::glow_centre) doing its own job — the dip
+    /// is taken out of whatever profile this makes, at the innermost ring's own
+    /// edge — so a node still reads as a lit ring inside a flattened halo, and
+    /// a field with nothing of the node in its middle wants both bars up.
+    ///
+    /// Inert while [`glow_reach`](Self::glow_reach) is 0.
+    pub glow_feather: f32,
     /// The moat: how far past each RING a node draws its own light is held
     /// off, in the same quad UV units [`ring_gap`](Self::ring_gap) reads in.
     ///
@@ -2044,6 +2084,7 @@ impl ViewConfig {
             finite_or(self.glow_reach, fresh.glow_reach).clamp(0.0, GLOW_REACH_MAX);
         self.glow_strength =
             finite_or(self.glow_strength, fresh.glow_strength).clamp(0.0, GLOW_STRENGTH_MAX);
+        self.glow_feather = finite_or(self.glow_feather, fresh.glow_feather).clamp(0.0, 1.0);
         self.glow_gap = finite_or(self.glow_gap, fresh.glow_gap).clamp(0.0, GAP_MAX);
         // The moat's feather is a WIDTH in the gap's own units, with a ceiling
         // of its own: it is deliberately free to run wider than the gap it
@@ -2320,6 +2361,9 @@ impl Default for ViewConfig {
             // of the neighbour it would otherwise reach.
             glow_reach: 0.35,
             glow_strength: 1.0,
+            // Flat off: the fresh light is an accent on each node, which is
+            // what the rest of the fresh view is drawn to be read against.
+            glow_feather: 0.0,
             glow_gap: 0.08,
             // The moat feathered over most of its own width, so the gap and
             // the light either side of it read as one blur rather than as a cut

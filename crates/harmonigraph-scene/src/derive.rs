@@ -601,6 +601,7 @@ pub fn derive_scene(
         // cannot fill.
         glow_reach: view.glow_reach.clamp(0.0, crate::GLOW_REACH_MAX),
         glow_strength: view.glow_strength.clamp(0.0, crate::GLOW_STRENGTH_MAX),
+        glow_feather: view.glow_feather.clamp(0.0, 1.0),
         glow_gap: view.glow_gap.clamp(0.0, crate::GAP_MAX),
         glow_gap_soft: view.glow_gap_soft.clamp(0.0, crate::GLOW_GAP_SOFT_MAX),
         glow_gap_depth: view.glow_gap_depth.clamp(0.0, 1.0),
