@@ -244,6 +244,71 @@ fn neither_proportion_moves_a_marker_or_changes_how_far_it_reaches() {
     }
 }
 
+/// The handoff between a name and the marker under it is CONTINUOUS: what the
+/// name gives up, the marker takes, in the same frame.
+///
+/// This is the one place the two claims on a position cross, and a predicate
+/// gets it wrong in a way no still picture shows. Under `Played` a name is
+/// drawn at exactly the node's activation, so the end of a release is a name
+/// too faint to see — and a marker that waits for the name to be gone entirely
+/// stays away through all of it and then arrives at FULL opacity the frame
+/// activation reaches 0. Measured on the fixture below before this was a
+/// level: at an activation of 0.0005 the position held a name at 0.05% and no
+/// marker at all, and one frame later a marker at 1.0. A hole, then a pop, once
+/// per note.
+///
+/// A 2-second fade sampled along it, rather than at the ends, because the ends
+/// are exactly where both spellings agree.
+#[test]
+fn a_marker_takes_back_what_a_names_fade_gives_up() {
+    let view = ViewConfig { note_names: NoteNames::Played, ..plus_view() };
+    let frame = FrameParams { fade_time: 2.0, ..FrameParams::default() };
+    let mut tracker = NoteTracker::new();
+    tracker.handle_event(NoteEvent::on(0.0, 0, 60, 1.0));
+    tracker.handle_event(NoteEvent {
+        time: 4.0,
+        channel: 0,
+        note: 60,
+        kind: harmonigraph_core::NoteEventKind::Off,
+    });
+
+    let mut walk = vec![];
+    for now in [4.0f64, 5.0, 5.8, 5.98, 5.999, 6.0, 6.5] {
+        let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, now);
+        let node = origin_node(&scene);
+        let ground = scene.lattice_ground.w;
+        let standing = scene
+            .pluses
+            .iter()
+            .find(|p| p.pos == node.world_pos)
+            .map_or(0.0, |p| p.strength);
+        // The complement, exactly: the name's level under Played IS the
+        // activation (`label_strength` in harmonigraph-ui), so the two together
+        // are one whole marker's worth of ink at every instant.
+        let want = ground * (1.0 - node.name_level(&view));
+        assert!(
+            (standing - want).abs() < 1e-5,
+            "at {now}s the name stands at {} and the marker at {standing}, wanted {want}",
+            node.name_level(&view),
+        );
+        walk.push(standing);
+    }
+
+    // No step anywhere along it, and in particular not across the frame the
+    // note finally stops sounding — which is the one the predicate jumped on.
+    for pair in walk.windows(2) {
+        assert!(
+            (pair[1] - pair[0]).abs() < 0.55,
+            "the marker jumps through the release rather than fading in: {walk:?}",
+        );
+    }
+    assert!(walk[0] < 1e-5, "a sounding note's own name leaves no marker under it");
+    assert!(
+        (walk[walk.len() - 1] - walk[walk.len() - 2]).abs() < 1e-5,
+        "and silence is where the fade ARRIVES, not where it starts: {walk:?}",
+    );
+}
+
 #[test]
 fn an_unlit_node_carries_the_idle_grey_and_draws_nothing() {
     // An idle node has no mark of its own: the marker standing at its position

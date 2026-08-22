@@ -556,15 +556,22 @@ fn only_the_all_mode_names_a_node_nothing_has_happened_on() {
     assert!(all.len() > 1, "only one node was named: {all:?}");
 }
 
-/// A named position draws no resting marker, measured END TO END: the names come
-/// out of the label pass that really draws them and the markers out of the scene
-/// the same frame was derived from.
+/// A name and the marker under it always add up to ONE mark, measured END TO
+/// END: the names come out of the label pass that really draws them and the
+/// markers out of the scene the same frame was derived from.
 ///
-/// Both read `NodeInstance::is_named`, so this cannot fail while they share it
-/// — which is the point. What it guards is the day one of them stops: the two
-/// live in different crates, one drawing type and one deriving geometry, and a
-/// second spelling of the rule in either is a lattice that puts a marker behind a
-/// name and looks merely smudged rather than wrong.
+/// Both read `NodeInstance::name_level`, so this cannot fail while they share
+/// it — which is the point. What it guards is the day one of them stops: the
+/// two live in different crates, one drawing type and one deriving geometry,
+/// and a second spelling of the rule in either is a lattice that puts a marker
+/// behind a name and looks merely smudged rather than wrong.
+///
+/// A SUM rather than "never both", because the handoff is a fade and the
+/// middle of a fade is both: a name arriving at half strength stands over half
+/// a marker, and it is the total that has to stay put. The strict reading held
+/// only while the rule was a predicate, and it is what a note's release breaks
+/// — see `a_marker_takes_back_what_a_names_fade_gives_up`, which measures the
+/// same crossing from the scene side.
 ///
 /// Swept over all three Show modes and over the Note names switch, because
 /// each pair is a different balance of the two sets — All names everything and
@@ -572,7 +579,7 @@ fn only_the_all_mode_names_a_node_nothing_has_happened_on() {
 /// switch off is the case where the mode says one thing and the picture
 /// another.
 #[test]
-fn no_position_wears_both_a_name_and_a_marker() {
+fn a_name_and_the_marker_under_it_add_up_to_one_mark() {
     for show in [true, false] {
         for names in [
             harmonigraph_scene::NoteNames::All,
@@ -612,15 +619,34 @@ fn no_position_wears_both_a_name_and_a_marker() {
             } else {
                 crate::text::TextBatch::default()
             };
-            let named: Vec<glam::Vec3> = batch
+            let named: Vec<(glam::Vec3, f32)> = batch
                 .labels()
                 .iter()
-                .map(|label| scene.nodes[label.node as usize].world_pos)
+                .map(|label| {
+                    let node = &scene.nodes[label.node as usize];
+                    (node.world_pos, node.name_level(&state.view))
+                })
                 .collect();
-            for pos in &named {
+            let ground = scene.lattice_ground.w;
+            for (pos, level) in &named {
+                let standing = scene
+                    .pluses
+                    .iter()
+                    .find(|marker| marker.pos == *pos)
+                    .map_or(0.0, |marker| marker.strength);
+                let want = ground * (1.0 - level);
+                assert!(
+                    (standing - want).abs() < 1e-5,
+                    "{names:?} (names on: {show}) at {pos:?}: a name at {level} \
+                     over a marker at {standing}, which wanted {want}",
+                );
+            }
+            // The half of it a sum cannot say on its own: a name at full
+            // strength leaves NO instance, rather than one shipped at zero.
+            for (pos, _) in named.iter().filter(|(_, level)| *level >= 1.0) {
                 assert!(
                     !scene.pluses.iter().any(|marker| marker.pos == *pos),
-                    "{names:?} (names on: {show}) drew a name and a marker at {pos:?}",
+                    "{names:?} (names on: {show}) shipped a marker under a whole name at {pos:?}",
                 );
             }
             // And the sweep has to actually reach both sets, or it is passing

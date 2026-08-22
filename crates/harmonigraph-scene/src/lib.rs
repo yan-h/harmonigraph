@@ -595,20 +595,30 @@ impl NodeInstance {
         self.activation > 0.0 || self.on_home || self.trail > 0.0
     }
 
-    /// Whether a NOTE NAME is drawn over this node.
+    /// How much NOTE NAME stands over this node, 0 to 1.
     ///
     /// The label pass's own question (`draw_node_labels` in
-    /// `harmonigraph-ui`), answered HERE because two things now turn on it and
-    /// a second spelling of it is a picture that contradicts itself: the pass
-    /// draws the name, and [`derive_pluses`](derive::derive_pluses) drops the
-    /// resting marker under it. A marker behind a name is the one place in the
-    /// lattice where two markers claim the same position, and the name is the
-    /// better of the two — it says WHICH position, where the marker only says
-    /// that there is one.
+    /// `harmonigraph-ui`), answered HERE because two things turn on it and a
+    /// second spelling of it is a picture that contradicts itself: the pass
+    /// draws the name, and [`derive_pluses`](derive::derive_pluses) clears the
+    /// resting marker out from under it. A marker behind a name is the one
+    /// place in the lattice where two marks claim the same position, and the
+    /// name is the better of the two — it says WHICH position, where the
+    /// marker only says that there is one.
     ///
     /// So the label layer is the one that decides, and this is the whole of
     /// its rule: names on at all, then the node is sounding, hovered, or one
     /// the Show row keeps at rest.
+    ///
+    /// A LEVEL rather than a yes or no, and that is the whole of what keeps
+    /// the handoff continuous. Under [`NoteNames::Played`] a name is drawn at
+    /// exactly the node's `activation` (`label_strength` in `harmonigraph-ui`),
+    /// so a released note spends the end of its fade with a name too faint to
+    /// see. Answered as a predicate, the marker under it stays away for all of
+    /// that and then arrives at full ground opacity the frame activation
+    /// reaches 0 — a hole in the field, and then a cross popping into it, once
+    /// per note. As a level the two cross-fade: what the name gives up, the
+    /// marker takes, and the position carries the same ink throughout.
     ///
     /// The `is_visible` term re-checks what [`Scene::pick`] already enforces,
     /// and `hovered` is picking's alone, so it is a second lock on one door.
@@ -620,18 +630,33 @@ impl NodeInstance {
     /// needs a rect and a projector, which is the label pass's business and
     /// not the scene's. It costs nothing: a name off the pane is a name over a
     /// marker that is off the pane too, and neither is drawn.
-    pub fn is_named(&self, view: &ViewConfig) -> bool {
-        if !view.show_labels {
-            return false;
+    pub fn name_level(&self, view: &ViewConfig) -> f32 {
+        if !view.show_labels || !self.is_visible() {
+            return 0.0;
+        }
+        if self.hovered {
+            return 1.0;
         }
         // Named while nothing is happening on it: every node under All, a
-        // visited one under Past, and nothing at all under Played.
+        // visited one under Past, and nothing at all under Played. A trail is
+        // written whole or not at all (`TrailField::apply`), so Past is a level
+        // only in the sense that 0 and 1 are levels — what actually ramps here
+        // is a sounding note's own fade.
         let resting = match view.note_names {
-            NoteNames::All => true,
-            NoteNames::Past => self.trail > 0.0,
-            NoteNames::Played => false,
+            NoteNames::All => 1.0,
+            NoteNames::Past => self.trail,
+            NoteNames::Played => 0.0,
         };
-        (self.hovered || self.activation > 0.0 || resting) && self.is_visible()
+        self.activation.max(resting).clamp(0.0, 1.0)
+    }
+
+    /// Whether a note name is drawn over this node AT ALL — the gate the label
+    /// pass asks before it lays a glyph out, where the marker under it wants
+    /// [`name_level`](Self::name_level)'s ramp instead.
+    ///
+    /// One spelling still: this IS the level, asked for any at all.
+    pub fn is_named(&self, view: &ViewConfig) -> bool {
+        self.name_level(view) > 0.0
     }
 }
 

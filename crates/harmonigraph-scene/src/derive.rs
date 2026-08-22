@@ -650,13 +650,21 @@ fn wrapped_cents(from: harmonigraph_core::PitchClass, to: harmonigraph_core::Pit
 /// it floats over the marker field rather than standing in it, and the size it
 /// draws at ([`NodeInstance::scale`]) is what says how far off it has gone.
 ///
-/// A NAMED position is unmarked too ([`NodeInstance::is_named`]). Both a marker
-/// and a name say "a position is here", and the name says which one, so the
-/// marker behind it is the weaker of two claims on the same spot and the
+/// A NAMED position is unmarked too ([`NodeInstance::name_level`]). Both a
+/// marker and a name say "a position is here", and the name says which one, so
+/// the marker behind it is the weaker of two claims on the same spot and the
 /// picture is cleaner without it. Under [`NoteNames::All`](crate::NoteNames::All)
 /// that is every node on screen and the field disappears whole — which is the
-/// mode working as it reads: names ARE the lattice there, and the markers were
-/// only ever standing in for them.
+/// mode working as it reads: names ARE the lattice there, and a marker only
+/// ever stands in for one.
+///
+/// The name takes the marker by DEGREE, not by decree: a marker's opacity is
+/// what is left over from the name above it. Under
+/// [`Played`](crate::NoteNames::Played) a name is drawn at the node's own
+/// activation, so a released note's name spends the end of its fade invisible —
+/// and a marker that waited for the name to be gone ENTIRELY would leave the
+/// position empty for that stretch and then pop in at full opacity. The
+/// complement makes the two one crossing surface.
 /// Half an arm's thickness, as a share of the arm's length (see
 /// [`Scene::plus_half_width`]).
 ///
@@ -730,20 +738,35 @@ pub(crate) fn derive_pluses(
         return Vec::new();
     }
     // The lattice at rest, handed in already resolved — the same colour, to
-    // the byte, that a node's rings stand on where nothing is lit. OPAQUE, and
-    // that is what makes the claim true rather than nearly true: `strength` is
-    // the marker's own opacity and the shader premultiplies by it, so a marker
-    // carrying an alpha of its own would land on a blend of the ground and
-    // whatever happened to be behind it, which is a different grey per
-    // background and none of them this one.
+    // the byte, that a node's rings stand on where nothing is lit. OPAQUE at
+    // rest, and that is what makes the claim true rather than nearly true:
+    // `strength` is the marker's own opacity and the shader premultiplies by
+    // it, so a marker carrying a standing alpha of its own would land on a
+    // blend of the ground and whatever happened to be behind it, which is a
+    // different grey per background and none of them this one.
     //
-    // How FAINT the structure is, which an alpha of its own is the other way
-    // to say, is the Ground bar's to say instead — and it says it for the
-    // rings in the same breath, which a per-marker alpha cannot. Dialled to the
-    // panel's own `L*` the whole at-rest picture disappears together.
+    // How FAINT the structure is, which a standing alpha is the other way to
+    // say, is the Ground bar's to say instead — and it says it for the rings in
+    // the same breath, which a per-marker alpha cannot. Dialled to the panel's
+    // own `L*` the whole at-rest picture disappears together.
+    //
+    // The one thing that does move it is the NAME above it, and only while that
+    // name is on its way in or out: a marker gets what the name leaves, so the
+    // two hand the position over without it going empty or being claimed twice
+    // (`name_level`). Fully named is fully gone, and the instance is dropped
+    // rather than shipped at zero — a marker nothing can see is a draw nothing
+    // needs.
     nodes
         .iter()
-        .filter(|n| n.on_home && !n.is_named(view))
-        .map(|n| PlusInstance { pos: n.world_pos, radius, color: ground, strength: ground.w })
+        .filter(|n| n.on_home)
+        .filter_map(|n| {
+            let clear = 1.0 - n.name_level(view);
+            (clear > 0.0).then(|| PlusInstance {
+                pos: n.world_pos,
+                radius,
+                color: ground,
+                strength: ground.w * clear,
+            })
+        })
         .collect()
 }
