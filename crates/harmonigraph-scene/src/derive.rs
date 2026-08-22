@@ -563,7 +563,6 @@ pub fn derive_scene(
         spectral: SpectralPaint::silent(),
         octave_layout,
         dots,
-        dot_feather: view.dot_feather.clamp(0.0, 1.0),
         mark_thickness: rings.mark_thickness,
         // A mark sheet reaches the extension AND the octave slice it extends,
         // so with the mark layer off — no end marked, or no depth to
@@ -628,9 +627,9 @@ fn wrapped_cents(from: harmonigraph_core::PitchClass, to: harmonigraph_core::Pit
     }
 }
 
-/// The lattice's resting picture: idle positions draw no disc, so a small
-/// feathered dot stands at each one and carries the structure instead. Only
-/// the home (center) sheet gets them.
+/// The lattice's resting picture: idle positions draw no disc, so a small dot
+/// stands at each one and carries the structure instead. Only the home
+/// (center) sheet gets them.
 ///
 /// A dot rather than a line between dots, and the difference is what the
 /// picture claims. Lines drew the INTERVALS — one segment per unit step along

@@ -274,9 +274,9 @@ struct Uniforms {
     /// like `misc.x`. (The blit pipeline binds only the head of this
     /// buffer, so trailing fields are safe to add here.)
     misc4: [f32; 4],
-    /// x: how much of a resting dot's radius is its feather, as a fraction
-    /// (`Scene::dot_feather`); y unused (a retired slot rather than a repack,
-    /// like `misc4.y`);
+    /// x/y unused — x carried how much of a resting dot's radius was its
+    /// feather, from when a dot had a softness of its own to dial rather than
+    /// the rings' edge. Retired in place rather than repacked, like `misc4.y`;
     /// z: the node's ANGULAR padding in quad UV units — the gap between two
     /// neighbouring sectors, wherever sectors are drawn. Its RADIAL counterpart
     /// never arrives: every stand-off that one buys is already spent in the
@@ -284,9 +284,8 @@ struct Uniforms {
     /// `mark_inner`, not a sum taken over this;
     /// w: how far a melody/bass mark reaches past the band, same units, where
     /// 0 means no marks (so this slot is NOT free — `mark_extension` reads it,
-    /// and the octave layer gates the marks on it). Every earlier misc slot is
-    /// spoken for, so the dots' knob starts a new one — safe per the note on
-    /// `misc4`.
+    /// and the octave layer gates the marks on it). Safe to have started a new
+    /// slot here, per the note on `misc4`.
     misc5: [f32; 4],
     /// x/y unused — they carried the trail's mark style and strength, from
     /// when a memory was a change to the idle marker rather than a kept note
@@ -565,7 +564,7 @@ fn pack_octaves(levels: &[f32; harmonigraph_scene::OCTAVE_SLOTS]) -> [u32; 3] {
     octaves
 }
 
-/// One dot-pipeline instance: the feathered marker standing at one home-sheet
+/// One dot-pipeline instance: the marker standing at one home-sheet
 /// lattice position.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -1015,7 +1014,7 @@ impl LatticeCallback {
                 misc3: [0.0, scene.outer_inner, scene.outer_outer, scene.rings_outer],
                 pitch_lut: std::array::from_fn(|k| scene.pitch_lut[k].to_array()),
                 misc4: [0.0, scene.mark_inner, 0.0, 0.0],
-                misc5: [scene.dot_feather, 0.0, scene.octave_gap, scene.mark_thickness],
+                misc5: [0.0, 0.0, scene.octave_gap, scene.mark_thickness],
                 misc6: [0.0, 0.0, scene.sevens_soft, scene.pulse_marks.shader_index() as f32],
                 background: scene.background.to_array(),
                 lattice_ground: scene.lattice_ground.to_array(),

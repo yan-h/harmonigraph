@@ -12,15 +12,20 @@
 //! the largest part of that picture.
 //!
 //! Nothing is drawn BETWEEN the positions. What the eye reads the lattice's
-//! rows and columns off is the regularity of the field itself, so the two bars
-//! below the ground are about one dot's shape and there is no third setting for
+//! rows and columns off is the regularity of the field itself, so the one bar
+//! below the ground is about one dot's size and there is no second setting for
 //! what runs to its neighbours.
+//!
+//! A dot has no SOFTNESS to dial either. Its edge is a ring's edge — the same
+//! screen-constant band the audio ring and the octave band are cut with — so
+//! the resting field and the layers that stand on it come to an end the same
+//! way, and the one thing left to say about a dot is how big it is.
 //!
 //! A NAMED position draws no dot
 //! ([`is_named`](harmonigraph_scene::NodeInstance::is_named)), which is why
 //! the Show row on the Labels section reaches this picture: both
 //! markers say "a position is here" and the name says which one, so under
-//! `All` the field is gone entirely and these two bars go quiet. That is not a
+//! `All` the field is gone entirely and the bar below goes quiet. That is not a
 //! setting to add here — it is one picture with two readings of it, and the
 //! place to change which is the row that chooses the names.
 //!
@@ -77,13 +82,5 @@ pub(super) fn dots_pane(ui: &mut egui::Ui, state: &mut SharedState) {
              with them everything a resting lattice draws but the node \
              rings. A position with a note name over it draws no dot, so \
              showing every name leaves no field for this to size",
-        );
-    ValueBar::new(&mut state.view.dot_feather, 0.0..=1.0, "Dot feather")
-        .show(ui)
-        .on_hover_text(
-            "How much of a dot is its soft edge, as a share of its radius. \
-             0 is a hard-edged disc, 1 a dot that falls off from its own \
-             centre -- a position marked rather than an object drawn. A \
-             share rather than a width, so growing a dot keeps its look",
         );
 }

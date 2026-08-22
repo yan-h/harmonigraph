@@ -627,16 +627,16 @@ impl NodeInstance {
     }
 }
 
-/// One marker standing at a lattice position: a feathered dot, drawn under
-/// the nodes, and the whole of what an unplayed lattice draws.
+/// One marker standing at a lattice position: a small dot, drawn under the
+/// nodes, and the whole of what an unplayed lattice draws.
 #[derive(Clone, Copy, Debug)]
 pub struct DotInstance {
     /// The position's own world center.
     pub pos: Vec3,
-    /// Outer radius in WORLD units — where the feather has run all the way
-    /// out and the dot paints nothing. Already resolved from
-    /// [`ViewConfig::dot_size`]'s quad UV against the scene's node radius, so
-    /// the renderer sizes the billboard off this alone.
+    /// The dot's radius in WORLD units — its edge, which the shader cuts with
+    /// the one screen-constant soft band every ring here is cut with. Already
+    /// resolved from [`ViewConfig::dot_size`]'s quad UV against the scene's
+    /// node radius, so the renderer sizes the billboard off this alone.
     pub radius: f32,
     pub color: Vec4,
     /// Dot opacity.
@@ -749,13 +749,6 @@ pub struct Scene {
     /// sheet is the ground: a note there floats over the dot field instead of
     /// standing on it.
     pub dots: Vec<DotInstance>,
-    /// How much of a dot's radius is its soft edge, as a fraction (see
-    /// [`ViewConfig::dot_feather`]), already clamped: 0 is a hard-edged disc
-    /// with only antialiasing on it, 1 a blob that falls off from its own
-    /// centre. View-wide, as the radius is not — a dot's size reaches the
-    /// renderer per instance because it is a world length, and this is a
-    /// SHAPE the whole field shares.
-    pub dot_feather: f32,
     /// How wide the sevens knockout's fade is, in the uv of a full-size
     /// node (see [`ViewConfig::sevens_gutter_soft`]). View-wide, as the reach
     /// beside it is — what varies node to node is the STRENGTH, which the

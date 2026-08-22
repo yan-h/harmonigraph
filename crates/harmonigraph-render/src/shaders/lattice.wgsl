@@ -2228,13 +2228,30 @@ struct DotInstance {
 
 struct DotVsOut {
     @builtin(position) clip_pos: vec4<f32>,
-    // -1..1 across the quad on each axis, so `length(uv)` is the fragment's
-    // distance from the dot's centre as a fraction of its OUTER radius. The
-    // feather is a fraction of that same radius, which is what lets one
-    // uniform shape every dot whatever its size.
+    // Distance from the dot's centre as a fraction of its own radius, per axis:
+    // 1 is the edge and the quad reaches DOT_QUAD_MARGIN past it. Expressed in
+    // the dot's OWN radius rather than in the quad, so one threshold cuts every
+    // dot at its edge whatever size it is drawn at.
     @location(0) uv: vec2<f32>,
     @location(1) color: vec4<f32>,
 };
+
+// How far a dot's billboard reaches past the dot, in the dot's own radii.
+//
+// A margin for the same reason a node's QUAD_MARGIN is one: the edge's soft
+// band is CENTRED on the radius, as every ring's is, so its outer half stands
+// outside the shape and needs quad to stand in. Without it a small dot — where
+// the band is a large share of the radius — gets that half cut flat by the
+// quad, and the dot reads square-shouldered at exactly the size it is hardest
+// to see. Measured off the rendered picture at the bottom of the size bar: a
+// dot of radius 5.6px carried ink out to 8px, so the shape wants 1.4 radii of
+// quad and a margin under that cuts the faint end of the band flat.
+//
+// It is a share of the DOT rather than a length, so the headroom shrinks with
+// the dot while the band, being screen-constant, does not — which is why
+// `dot_paint` also caps the band at what this holds rather than trusting the
+// margin alone.
+const DOT_QUAD_MARGIN: f32 = 1.6;
 
 @vertex
 fn vs_dot(@builtin(vertex_index) vertex_index: u32, inst: DotInstance) -> DotVsOut {
@@ -2248,12 +2265,13 @@ fn vs_dot(@builtin(vertex_index) vertex_index: u32, inst: DotInstance) -> DotVsO
     // Camera-facing, like every other billboard here: a dot is a mark ON the
     // lattice rather than an object standing in it, so it keeps its shape
     // under an orbit instead of foreshortening into an ellipse.
+    let reach = inst.pos_radius.w * DOT_QUAD_MARGIN;
     let world = inst.pos_radius.xyz
-        + (u.cam_right.xyz * corner.x + u.cam_up.xyz * corner.y) * inst.pos_radius.w;
+        + (u.cam_right.xyz * corner.x + u.cam_up.xyz * corner.y) * reach;
 
     var out: DotVsOut;
     out.clip_pos = u.view_proj * vec4<f32>(world, 1.0);
-    out.uv = corner;
+    out.uv = corner * DOT_QUAD_MARGIN;
     out.color = inst.color;
     return out;
 }
@@ -2993,33 +3011,35 @@ fn fs_glow_cover(in: VsOut) -> @location(0) vec4<f32> {
 /// What a resting dot paints; see [`node_paint`] for why the entry points are
 /// two.
 fn dot_paint(in: DotVsOut) -> vec4<f32> {
-    // Distance from the centre as a fraction of the outer radius, so 1 is the
-    // quad's inscribed circle and the corners past it are discarded below.
+    // Distance from the centre in the dot's own radii, so the edge is at 1 and
+    // the quad carries DOT_QUAD_MARGIN past it.
     let d = length(in.uv);
-    // Screen-constant AA, the same softness every other shape here carries.
-    // It is a FLOOR on the falloff rather than a band added outside it, and
-    // that distinction is the dot's shape: `fwidth` of a radial coordinate is
-    // half again as wide on the diagonal as on the axes, so a band added
-    // around the feather pinches the circle at 45° — measurably, about a fifth
-    // of the radius at the fresh setting. As a floor it is inert wherever the
-    // feather is wider than a pixel, which is everywhere but the bar's own
-    // bottom, and there it is the whole of the edge and there is no shape left
-    // for it to distort.
-    let aa = aa_width(fwidth(d));
-    // The falloff runs INWARD from the outer radius: `misc5.x` of the radius is
-    // soft and the rest is solid. At 0 that is a disc with only the AA band on
-    // it; at 1 the falloff starts at the dot's own centre and there is no solid
-    // part at all, which is a soft point of light rather than a shape with an
-    // edge.
-    let width = max(clamp(u.misc5.x, 0.0, 1.0), aa);
-    let cov = 1.0 - smoothstep(1.0 - width, 1.0, d);
-    let alpha = in.color.a * cov;
+    // A dot's edge is a RING's edge: `aa_inside` at the radius, carrying the
+    // one screen-constant soft band the octave band and the audio ring are cut
+    // with. That is the whole shape — a dot has no softness of its own to dial,
+    // so the resting field and the layers that stand on it come to an end the
+    // same way, at every zoom.
+    //
+    // The band's width is taken off `fwidth` of a quad AXIS, which is the
+    // rings' choice too and is load-bearing rather than incidental: the
+    // derivative of the RADIAL coordinate is half again as wide on the diagonal
+    // as on the axes, so a band measured that way pinches the circle at 45° by
+    // about a fifth of its radius. An axis has one derivative everywhere on the
+    // quad, so the band closes evenly all the way round.
+    //
+    // Capped at the margin, which binds only where a dot is a few pixels
+    // across and the band would otherwise want more quad than there is. A dot
+    // that small trades softness it cannot show for a shape it can: the band
+    // narrows, and the dot stays a full circle at every size instead of
+    // squaring off at the bottom of the bar.
+    let aa = min(aa_width(fwidth(in.uv.x)), DOT_QUAD_MARGIN - 1.0);
+    let alpha = in.color.a * aa_inside(1.0, d, aa);
     if alpha < 0.01 {
         discard;
     }
     // Premultiplied, as every draw in this pass is: the dot IS the lattice's
     // ground rather than a brightness of it, so its colour is laid down flat
-    // and only its coverage varies across the feather.
+    // and only its coverage varies across the edge.
     return vec4<f32>(in.color.rgb * alpha, alpha);
 }
 

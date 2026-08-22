@@ -431,18 +431,22 @@ mod tests {
 
         let fresh = harmonigraph_scene::ViewConfig::default();
         use harmonigraph_scene::NoteNames;
-        // Size, feather, whether a chord is held over it, and which names show.
-        let shots: Vec<(f32, f32, bool, NoteNames)> = vec![
-            (fresh.dot_size, fresh.dot_feather, false, NoteNames::Played),
-            (fresh.dot_size, 0.0, false, NoteNames::Played),
-            (fresh.dot_size, 1.0, false, NoteNames::Played),
-            (0.1, fresh.dot_feather, false, NoteNames::Played),
-            (0.5, fresh.dot_feather, false, NoteNames::Played),
-            (fresh.dot_size, fresh.dot_feather, true, NoteNames::Played),
-            (fresh.dot_size, fresh.dot_feather, true, NoteNames::Past),
-            (fresh.dot_size, fresh.dot_feather, false, NoteNames::All),
+        // Size, whether a chord is held over it, and which names show. The
+        // smallest sizes earn their shots: a dot's edge is the rings' band,
+        // which is a fixed number of PIXELS, so it is at the bottom of the
+        // size bar that the band is most of the dot and the shape has the
+        // least room to be a circle.
+        let shots: Vec<(f32, bool, NoteNames)> = vec![
+            (fresh.dot_size, false, NoteNames::Played),
+            (0.05, false, NoteNames::Played),
+            (0.1, false, NoteNames::Played),
+            (0.35, false, NoteNames::Played),
+            (0.5, false, NoteNames::Played),
+            (fresh.dot_size, true, NoteNames::Played),
+            (fresh.dot_size, true, NoteNames::Past),
+            (fresh.dot_size, false, NoteNames::All),
         ];
-        for (size, feather, chord, names) in shots {
+        for (size, chord, names) in shots {
             let mut state = SharedState::new(FORMAT);
             state.view.show_labels = true;
             state.view.note_names = names;
@@ -458,7 +462,6 @@ mod tests {
             }
             state.camera.zoom_by(2.5);
             state.view.dot_size = size;
-            state.view.dot_feather = feather;
             let output = context.run_ui(
                 egui::RawInput {
                     screen_rect: Some(screen),
@@ -475,9 +478,8 @@ mod tests {
             let primitives = context.tessellate(output.shapes, PPP);
             let bytes = renderer.render(&primitives, &output.textures_delta, PPP, background);
             let path = dir.join(format!(
-                "dots-size{:.0}-feather{:.0}{}-{names:?}.png",
+                "dots-size{:.0}{}-{names:?}.png",
                 size * 100.0,
-                feather * 100.0,
                 if chord { "-chord" } else { "" },
             ));
             image::save_buffer(&path, &bytes, SIZE[0], SIZE[1], image::ExtendedColorType::Rgba8)

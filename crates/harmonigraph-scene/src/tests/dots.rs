@@ -147,22 +147,6 @@ fn dot_size_sets_how_big_a_resting_dot_is_and_0_takes_it_away() {
 }
 
 #[test]
-fn the_feather_reaches_the_scene_clamped() {
-    // View-wide rather than per instance, because it is a SHAPE the whole
-    // field shares; clamped here rather than in the shader so a hand-edited
-    // blob draws a dot somebody can see.
-    for (set, want) in [(0.0f32, 0.0f32), (0.4, 0.4), (1.0, 1.0), (5.0, 1.0), (-2.0, 0.0)] {
-        let view = ViewConfig { dot_feather: set, ..dot_view() };
-        let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, &plain_frame(), 0.0);
-        assert_eq!(
-            scene.dot_feather, want,
-            "a feather of {set} reached the scene as {}",
-            scene.dot_feather,
-        );
-    }
-}
-
-#[test]
 fn an_unlit_node_carries_the_idle_grey_and_draws_nothing() {
     // An idle node has no mark of its own: the dot standing at its position
     // is what says the position is there. `color` is what a node with no

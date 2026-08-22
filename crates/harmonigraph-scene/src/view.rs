@@ -932,8 +932,10 @@ pub struct ViewConfig {
 
     // ---- Home dots -------------------------------------------------------
     // The marker standing at each home-sheet node position (see `derive_dots`),
-    // and the whole of what an unplayed lattice draws. Size and feather are its
-    // settings HERE; its colour is
+    // and the whole of what an unplayed lattice draws. Its SIZE is the whole of
+    // what is set here — the edge is a ring's edge, carrying the shader's one
+    // screen-constant soft band rather than a softness of its own — and its
+    // colour is
     // [`lattice_ground`](Self::lattice_ground), up with the note's own layers,
     // because that one grey is the whole at-rest picture — these dots and both
     // of a node's rings where nothing is lit — and a bar that moved only the
@@ -949,19 +951,6 @@ pub struct ViewConfig {
     /// the uv against the scene's node radius, so nothing downstream carries a
     /// second copy of the convention.
     pub dot_size: f32,
-    /// How much of that radius is the dot's soft edge, 0..1. 0 is a hard-edged
-    /// disc — antialiased, but a disc — and 1 falls off from the dot's own
-    /// centre, which is a soft point of light rather than a shape with an edge.
-    ///
-    /// The fresh view sits well up the bar, because the dots are STRUCTURE and
-    /// a hard edge reads as a drawn object: a lattice of crisp discs competes
-    /// with the notes for being the thing on screen, and a lattice of soft ones
-    /// is a ground for them to arrive on.
-    ///
-    /// A FRACTION of the radius rather than a width of its own, so growing a
-    /// dot keeps its look instead of sharpening it — one bar moves size, the
-    /// other moves character, and neither undoes the other.
-    pub dot_feather: f32,
     /// Meantone mode: lock the major-third tuning to four perfect fifths
     /// (temper out the syntonic comma, 81/80). While on, the third-tuning
     /// value is derived from the fifth (in `begin_frame`) and note names are
@@ -2351,9 +2340,6 @@ impl Default for ViewConfig {
             // at 0.55), so a note arriving covers its own dot rather than
             // growing out of it.
             dot_size: 0.2,
-            // Mostly feather. What is wanted is a position marked, not an
-            // object drawn — see the field's own doc.
-            dot_feather: 0.75,
             meantone: false,
             meantone_auto: true,
             marvel: false,

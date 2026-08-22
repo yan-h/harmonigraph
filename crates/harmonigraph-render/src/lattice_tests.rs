@@ -447,7 +447,6 @@ fn parity_scene() -> Scene {
         // setting is a departure from.
         octave_layout: harmonigraph_scene::OctaveLayout::default(),
         dots,
-        dot_feather: 0.75,
         // A blue->red sweep across the whole table, so a glyph's color is a
         // reading of which entry it landed on. Spanned off PITCH_LUT_N rather
         // than a literal: `from_fn` sizes itself from the field, so a literal
