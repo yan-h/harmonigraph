@@ -396,6 +396,101 @@ mod tests {
         }
     }
 
+    /// The standoff against the OCTAVE GAP, written to `target/scratch/`: what
+    /// a node's light does between its slices as the angular padding widens.
+    ///
+    /// A probe: it asserts nothing, the verdict being a look. The share of its
+    /// light a gap keeps is measured instead, and exactly, by
+    /// harmonigraph-render's `the_standoff_follows_the_gaps_between_the_slices`.
+    /// What that number cannot say is the thing this is for — whether a node
+    /// with the field coming through it still reads as one object rather than
+    /// as a ring of unrelated marks.
+    ///
+    /// The reading conditions, which are the expensive part: the Reach up with
+    /// the Strength down, since the light is screen-blended and a wide halo on
+    /// every node of a chord saturates to white at a strength that was right for
+    /// an accent; the light's own clock off, so one frame is the whole picture
+    /// rather than a shot of the ballistics; the DAW's ground rather than the
+    /// preset's near-black; and a zoom that puts one node's slices across a good
+    /// part of the frame.
+    ///
+    /// `PROBE_TAG` names the shots, which is what makes a BEFORE and an AFTER of
+    /// one look: sabotage `slice_gap_distance` in the shader to return `-d`,
+    /// which is the picture with no angular term in it, shoot under one tag,
+    /// restore and shoot under another.
+    ///
+    /// ```text
+    /// cargo test -p harmonigraph-offline -- --ignored --nocapture the_standoff_against
+    /// ```
+    #[test]
+    #[ignore = "a probe: writes PNGs and asserts nothing"]
+    fn the_standoff_against_the_octave_gap() {
+        use harmonigraph_ui::{draw_pane, Layout, SharedState};
+
+        const SIZE: [u32; 2] = [1200, 1000];
+        const PPP: f32 = 2.0;
+        const NOW: f64 = 1.0;
+
+        let Some(mut renderer) = Renderer::new(SIZE) else {
+            eprintln!("no usable GPU adapter; nothing rendered");
+            return;
+        };
+        let context = egui::Context::default();
+        harmonigraph_ui::theme::apply_theme(&context);
+        context.set_pixels_per_point(PPP);
+
+        let layout = Layout::preset("lattice").expect("the lattice preset");
+        let mut state = SharedState::new(FORMAT);
+        state.set_background((24, 25, 29));
+        state.frame_params.fade_time = 0.0;
+        state.view.glow_attack = 0.0;
+        state.view.glow_release = 0.0;
+        state.view.glow_reach = 2.0;
+        state.view.glow_strength = 1.0;
+        for note in [55u8, 60, 64, 67, 71] {
+            state.tracker.handle_event(harmonigraph_core::NoteEvent::on(0.0, 0, note, 1.0));
+        }
+
+        let points = egui::vec2(SIZE[0] as f32 / PPP, SIZE[1] as f32 / PPP);
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, points);
+        let placements = layout.resolve(points);
+        let background = egui::Color32::from_rgb(
+            layout.background.0,
+            layout.background.1,
+            layout.background.2,
+        );
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/scratch");
+        std::fs::create_dir_all(&dir).expect("a scratch directory");
+        let tag = std::env::var("PROBE_TAG").unwrap_or_else(|_| "after".to_string());
+
+        let home = state.camera;
+        for gap in [0.05f32, 0.2, 0.4] {
+            state.camera = home;
+            state.camera.zoom_by(3.5);
+            state.view.octave_gap = gap;
+            let output = context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    time: Some(NOW),
+                    max_texture_side: Some(renderer.max_texture_side()),
+                    ..Default::default()
+                },
+                |ui| {
+                    for (pane, rect) in &placements {
+                        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(*rect));
+                        draw_pane(&mut child, *pane, &mut state, NOW);
+                    }
+                },
+            );
+            let primitives = context.tessellate(output.shapes, PPP);
+            let bytes = renderer.render(&primitives, &output.textures_delta, PPP, background);
+            let path = dir.join(format!("gap{:.0}-{tag}.png", gap * 100.0));
+            image::save_buffer(&path, &bytes, SIZE[0], SIZE[1], image::ExtendedColorType::Rgba8)
+                .expect("write the png");
+            eprintln!("{}", path.canonicalize().unwrap_or(path.clone()).display());
+        }
+    }
+
     /// The resting marker field's picture, written to `target/scratch/` — a
     /// sweep of the three bars that shape a cross: how far its arms reach, how
     /// thick they are, and how much of each end fades out. Together they decide
