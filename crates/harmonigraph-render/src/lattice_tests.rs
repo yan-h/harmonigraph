@@ -4583,11 +4583,16 @@ fn sheets_draw_back_to_front_along_the_sevens_axis() {
 }
 
 /// Every node idle: no note, no marks, no octaves — the state most of a
-/// lattice is in most of the time, and the state in which a node paints
-/// NOTHING. There is no idle marker and no trail mark to draw one; what
-/// says a position is there is the grid's gap around it, which belongs to
-/// the edge pass. So every test below expects these nodes to be culled, and
-/// the fixture exists to make "nothing to draw" easy to ask for.
+/// lattice is in most of the time, and the state in which a NODE paints
+/// nothing. So every test below expects these nodes to be culled, and the
+/// fixture exists to make "nothing to draw" easy to ask for.
+///
+/// A culled node is not a blank frame, and the difference is the trap here:
+/// what says a position is there is the MARKER standing at it, which this
+/// fixture carries (`a_silent_lattice_ships_no_nodes_and_still_draws_its_markers`
+/// pins that it must). Since a marker has a light and a standoff of its own,
+/// an idle shot has content in the glow attachments as well as the scene's.
+/// A test wanting a genuinely bare frame clears `pluses` for itself.
 ///
 /// The AUDIO RING has to be off for that to hold, and it is:
 /// [`parity_scene`] carries a silent [`harmonigraph_scene::SpectralPaint`].
@@ -4777,7 +4782,7 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
     // No all-idle fixture: an idle node paints nothing, so the cull ships
     // none of them and the comparison would be two empty images. What the
     // idle branch does is now pinned by
-    // `a_silent_lattice_ships_no_nodes_and_still_draws_its_grid` instead,
+    // `a_silent_lattice_ships_no_nodes_and_still_draws_its_markers` instead,
     // on the CPU side where the decision actually lives.
     for (name, scene) in [
         ("lit", parity_scene()),
@@ -5167,7 +5172,7 @@ fn a_silent_lattice_ships_no_nodes_and_still_draws_its_markers() {
     let bg = [18u8, 20, 23, 255];
     assert!(
         px.chunks(4).any(|p| p.iter().zip(bg).any(|(&c, b)| c.abs_diff(b) > 4)),
-        "the grid vanished with the nodes",
+        "the markers vanished with the nodes",
     );
 }
 
@@ -5487,16 +5492,16 @@ fn each_thing_that_makes_a_node_sounding_keeps_it_alone() {
     }
 }
 
-/// The grid's place in the draw order is counted over the nodes actually
+/// The markers' place in the draw order is counted over the nodes actually
 /// shipped, not over the ones the scene held.
 ///
 /// `pluses_at` is the seam between the sheets BEHIND the home sheet and the
 /// home sheet itself, and the whole argument for it is in `from_scene`: put
-/// the grid under everything and a node on a sheet behind the home one
-/// punches its clearing through the home grid. Culling breaks the old
+/// the markers under everything and a node on a sheet behind the home one
+/// punches its clearing through the home markers. Culling breaks the old
 /// expression silently, because `split` indexes the list before the cull —
 /// with the sheets behind home mostly idle, `split` runs past the end of the
-/// kept run, `prepare`'s `.min(instance_count)` pins the grid to the very
+/// kept run, `prepare`'s `.min(instance_count)` pins the markers to the very
 /// end, and it draws over every node instead of under the home sheet.
 ///
 /// One lit node behind home and one on it, with an idle node behind home
@@ -5515,10 +5520,10 @@ fn the_marker_seam_counts_the_nodes_that_ship() {
     // `world_pos.z * forward.z` — and the default camera's eye sits at +z, so
     // the sheets behind the home one are the negative side.
     scene.nodes[0].world_pos.z = -2.0;
-    scene.nodes[0].activation = 1.0; // behind home, lit: ships, before the grid
+    scene.nodes[0].activation = 1.0; // behind home, lit: ships, before the markers
     scene.nodes[1].world_pos.z = -1.0; // behind home, idle: culled
     scene.nodes[2].world_pos.z = 0.0;
-    scene.nodes[2].activation = 1.0; // the home sheet: ships, after the grid
+    scene.nodes[2].activation = 1.0; // the home sheet: ships, after the markers
     scene.nodes[2].on_home = true;
 
     let call = LatticeCallback::from_scene(
@@ -5532,7 +5537,7 @@ fn the_marker_seam_counts_the_nodes_that_ship() {
     assert_eq!(call.instances.len(), 2, "the idle node behind home is culled");
     assert_eq!(
         call.pluses_at, 1,
-        "the grid draws after the one sheet-behind node that ships, not after \
+        "the markers draw after the one sheet-behind node that ships, not after \
          the two the scene held",
     );
 }
@@ -5549,11 +5554,12 @@ fn the_marker_seam_counts_the_nodes_that_ship() {
 /// `GPU_TIME_PENDING` exists to make impossible to confuse with a live
 /// reading.
 ///
-/// The scene is built empty here rather than dialled empty, and that is the
-/// honest way round: a silent lattice ships no node already, but its grid
-/// survives every setting the panes offer — the line alpha is a constant now
-/// and the extent bars stop at 1, so no window a user can ask for is without
-/// an adjacent pair. This pins the guard against the day one is.
+/// The scene is built empty here rather than dialled empty, which keeps the
+/// guard independent of which settings happen to reach the state. Two do: a
+/// silent lattice ships no node already, and the marker field under it goes
+/// whole at Arm length 0 (`derive_pluses` returns nothing) or under Note
+/// names All, where a name claims every position. So this is a state a person
+/// can dial into and hold, not only one a fixture can build.
 #[test]
 fn a_lattice_with_nothing_to_draw_reports_no_gpu_time() {
     let Some((device, queue)) = headless_device_with_timestamps() else {
@@ -5895,7 +5901,7 @@ fn a_label_takes_its_own_nodes_place_in_the_order() {
         vec![
             // Both silent nodes: nothing has been drawn yet, and two labels
             // at one seam are one uninterrupted draw. They are behind the
-            // home sheet, so they are also behind the grid.
+            // home sheet, so they are also behind the markers.
             GlyphSeam { at: 0, start: 0, count: 2, after_pluses: false, sheet: 0 },
             // The home sheet's own name, after its disc.
             GlyphSeam { at: 1, start: 2, count: 1, after_pluses: true, sheet: 1 },
@@ -6203,7 +6209,7 @@ fn a_label_adds_no_light_through_the_bloom() {
 /// point its window shuts (`glow_layer`), so what moves when the bar moves is
 /// the edge.
 ///
-/// One centered node on a cleared grid — [`single_marked_node`]'s fixture,
+/// One centered node on a cleared marker field — [`single_marked_node`]'s fixture,
 /// which is the one scene here with a node whose surroundings are empty enough
 /// for "outside the node" to mean anything.
 #[test]
@@ -6266,7 +6272,7 @@ fn the_glow_reach_says_how_far_a_node_lights_past_its_own_edge() {
 /// A light-weighted mean RADIUS, over the pixels the glow changed, rather than
 /// an amount at a chosen distance: what the bar moves is where inside one span
 /// the light sits, and any single annulus reads that as brightness. One
-/// centered node on a cleared grid ([`single_marked_node`]), so the profile
+/// centered node on a cleared marker field ([`single_marked_node`]), so the profile
 /// under the measurement is the falloff and nothing else.
 #[test]
 fn the_glow_feather_fills_a_nodes_reach_in_rather_than_reaching_further() {
@@ -6510,8 +6516,8 @@ fn a_lattice_with_no_node_grows_no_glow() {
     };
     let off = shooter.shot(&at(0.0));
     let on = shooter.shot(&at(0.8));
-    // The grid has to be drawing something, or this passes on a blank frame.
-    assert!(total_light(&off) > 0, "the fixture must draw its grid");
+    // The markers have to be drawing something, or this passes on a blank frame.
+    assert!(total_light(&off) > 0, "the fixture must draw its markers");
     assert_eq!(
         differing_pixels(&on, &off),
         0,
