@@ -4680,6 +4680,21 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         scene.spectral.folded = true;
         scene
     };
+    // The STANDOFF around those same marked nodes, which is `glow_moat`'s own
+    // skip — the same one as `node_clearing`'s, over the same wedges, taken
+    // once the band has held the pixel's light off in full. Two things have
+    // to hold for the skip to be in the comparison at all, and neither is
+    // true of the fixtures above. The reach has to be up: the Gap dials ride
+    // to the GPU only while the light does (`misc11` is zeroed at reach 0),
+    // and at a depth of 0 `node_paint` never asks. And there has to be light
+    // to scale — `keep` is a factor on what the clearing reads back, and a
+    // factor on nothing is nothing whatever the skip does to it. That light
+    // is bound below, a constant at group 1, the same for both pipelines.
+    let standing_off = || {
+        let mut scene = clearing();
+        scene.glow_reach = 0.8;
+        scene
+    };
     // No all-idle fixture: an idle node paints nothing, so the cull ships
     // none of them and the comparison would be two empty images. What the
     // idle branch does is now pinned by
@@ -4691,6 +4706,7 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         ("ringing", ringing()),
         ("folded", folded()),
         ("clearing", clearing()),
+        ("standing off", standing_off()),
     ] {
         let cb = LatticeCallback::from_scene(
             &scene,
@@ -4712,10 +4728,58 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         let build = |src: &str| create_pipelines(&device, src, format, layouts, false);
         let (fast, _) = build(SHADER_SRC);
         let (slow, _) = build(&reference_src);
-        // The stand-in light at group 1: every fixture here holds the reach at
-        // 0, so both pipelines read the same transparent nothing and what they
-        // differ by is the early-outs alone.
-        let light = &res.glow_dummy_bind_group;
+        // The light at group 1: one colour over the whole frame, bound to both
+        // pipelines, so a clearing reads the same thing back whichever is
+        // drawing and what they differ by is the early-outs alone. A constant
+        // rather than the 1x1 stand-in because the standoff is a FACTOR on
+        // this, and a factor on a transparent nothing would leave its skip
+        // outside the comparison (see `standing_off` above). Premultiplied,
+        // as the real target is, and well under opaque so the ground still
+        // shows through it.
+        let light = {
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("parity_light"),
+                size: wgpu::Extent3d { width: SIZE[0], height: SIZE[1], depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            let texel = [96u8, 64, 32, 128];
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &texel.repeat((SIZE[0] * SIZE[1]) as usize),
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(SIZE[0] * 4),
+                    rows_per_image: Some(SIZE[1]),
+                },
+                wgpu::Extent3d { width: SIZE[0], height: SIZE[1], depth_or_array_layers: 1 },
+            );
+            let view = texture.create_view(&Default::default());
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("parity_light_bind_group"),
+                layout: &res.filter_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&res.sampler),
+                    },
+                ],
+            })
+        };
+        let light = &light;
         let pane = res.panes.get(&11).expect("prepare created the pane");
 
         let clear = wgpu::Color { r: 0.07, g: 0.08, b: 0.09, a: 1.0 };
