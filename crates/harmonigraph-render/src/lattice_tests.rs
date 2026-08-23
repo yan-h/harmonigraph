@@ -4686,14 +4686,12 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
     };
     // The STANDOFF around those same marked nodes, which is `glow_standoff`'s own
     // skip — the same one as `node_clearing`'s, over the same wedges, taken
-    // once the band has held the pixel's light off in full. Two things have
-    // to hold for the skip to be in the comparison at all, and neither is
-    // true of the fixtures above. The reach has to be up: the Gap dials ride
-    // to the GPU only while the light does (`misc11` is zeroed at reach 0),
-    // and at a depth of 0 `node_paint` never asks. And there has to be light
-    // to scale — `keep` is a factor on what the clearing reads back, and a
-    // factor on nothing is nothing whatever the skip does to it. That light
-    // is bound below, a constant at group 1, the same for both pipelines.
+    // once the band has held the pixel's light off in full. The REACH is what
+    // puts it in the comparison at all, and no fixture above has one: the Gap
+    // dials ride to the GPU only while the light does (`misc11` is zeroed at
+    // reach 0), and there is no light draw to compare without a glow target
+    // for it to write into. Both are the same switch, which is why one line
+    // buys the fixture.
     let standing_off = || {
         let mut scene = clearing();
         scene.glow_reach = 0.8;
@@ -4779,6 +4777,28 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
                 wgpu::Extent3d { width: SIZE[0], height: SIZE[1], depth_or_array_layers: 1 },
             );
             let view = texture.create_view(&Default::default());
+            // Never written, and RENDER_ATTACHMENT is what lets wgpu zero it:
+            // a coverage of zero is the light kept whole. Full size rather than
+            // 1x1 because `node_paint` clamps its read against the LIGHT's
+            // dimensions, so a smaller layer beside it would be read out of
+            // bounds.
+            let shade = device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some("parity_shade"),
+                    size: wgpu::Extent3d {
+                        width: SIZE[0],
+                        height: SIZE[1],
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: GLOW_SHADE_FORMAT,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING
+                        | wgpu::TextureUsages::RENDER_ATTACHMENT,
+                    view_formats: &[],
+                })
+                .create_view(&Default::default());
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("parity_light_bind_group"),
                 layout: &res.glow_layout,
@@ -4799,6 +4819,14 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
                     wgpu::BindGroupEntry {
                         binding: 2,
                         resource: wgpu::BindingResource::TextureView(&view),
+                    },
+                    // A standoff of nothing, so the light above reaches these
+                    // pipelines whole. What the standoff DOES is compared
+                    // below, in the pass that now writes it; here it would only
+                    // dim the constant this fixture is holding still.
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::TextureView(&shade),
                     },
                 ],
             })
@@ -4836,6 +4864,133 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         assert!(
             differing.is_none(),
             "the {name} scene changed when the early-outs were enabled: byte {:?}",
+            differing.map(|(i, (a, b))| (i, *a, *b)),
+        );
+
+        // The LIGHT's own draw, compared the same way and for the same reason.
+        // Two of its three early-outs are only reachable here: `fs_glow`'s,
+        // which has to weigh the standoff's answer as well as the light's now
+        // that one fragment carries both, and `glow_standoff`'s own skip inside
+        // it. Comparing the node pipelines above no longer sees either — the
+        // standoff moved out of `node_paint` with the field it writes — so
+        // without this the two switches would be compiled over that code and
+        // never once compared.
+        //
+        // The SHADE attachment is what is read back, being the one the standoff
+        // writes: a skip that dropped a band would leave the light beside it
+        // identical and show only here.
+        let Some(glow) = pane.offscreen.as_ref().and_then(|o| o.glow.as_ref()) else {
+            continue;
+        };
+        let glow_draw = |src: &str| {
+            let pipeline = create_glow_pipeline(
+                &device,
+                src,
+                format,
+                &res.bind_group_layout,
+                &res.strip_layout,
+            );
+            let attachment = |label, format| {
+                device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some(label),
+                    size: wgpu::Extent3d {
+                        width: SIZE[0],
+                        height: SIZE[1],
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                        | wgpu::TextureUsages::COPY_SRC,
+                    view_formats: &[],
+                })
+            };
+            let targets = [
+                attachment("parity_glow", format),
+                attachment("parity_glow_max", format),
+                attachment("parity_glow_shade", GLOW_SHADE_FORMAT),
+            ];
+            let views: Vec<_> = targets.iter().map(|t| t.create_view(&Default::default())).collect();
+            let mut encoder = device.create_command_encoder(&Default::default());
+            {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("parity_glow_pass"),
+                    color_attachments: &views
+                        .iter()
+                        .map(|view| {
+                            Some(wgpu::RenderPassColorAttachment {
+                                view,
+                                depth_slice: None,
+                                resolve_target: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                    store: wgpu::StoreOp::Store,
+                                },
+                            })
+                        })
+                        .collect::<Vec<_>>(),
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_pipeline(&pipeline);
+                pass.set_bind_group(0, &pane.bind_group, &[]);
+                pass.set_bind_group(1, &glow.strip.blurred_bind_group, &[]);
+                pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
+                pass.draw(0..4, 0..pane.instance_count);
+            }
+            queue.submit([encoder.finish()]);
+            // Two bytes a texel, and a 256-wide row is 512 — still aligned, so
+            // this is `readback`'s copy with its one assumption changed.
+            let bytes_per_row = SIZE[0] * 2;
+            let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("parity_shade_readback"),
+                size: (bytes_per_row * SIZE[1]) as u64,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            let mut encoder = device.create_command_encoder(&Default::default());
+            encoder.copy_texture_to_buffer(
+                targets[2].as_image_copy(),
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &buffer,
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(bytes_per_row),
+                        rows_per_image: None,
+                    },
+                },
+                wgpu::Extent3d { width: SIZE[0], height: SIZE[1], depth_or_array_layers: 1 },
+            );
+            queue.submit([encoder.finish()]);
+            let slice = buffer.slice(..);
+            slice.map_async(wgpu::MapMode::Read, |r| r.expect("map readback buffer"));
+            device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
+            let bytes = slice.get_mapped_range().to_vec();
+            bytes
+        };
+        let shade_fast = glow_draw(SHADER_SRC);
+        let shade_slow = glow_draw(&reference_src);
+
+        // Vacuous unless the standoff actually wrote a band: every fixture
+        // that reaches here carries a reach and a depth, so a layer of zeroes
+        // means the dials stopped arriving rather than that the skip is sound.
+        assert!(
+            shade_slow.iter().any(|&b| b != 0),
+            "the {name} scene held no light off; the standoff comparison is vacuous",
+        );
+
+        let differing = shade_fast
+            .iter()
+            .zip(&shade_slow)
+            .enumerate()
+            .find(|(_, (&a, &b))| a != b);
+        assert!(
+            differing.is_none(),
+            "the {name} scene's standoff changed when the early-outs were enabled: byte {:?}",
             differing.map(|(i, (a, b))| (i, *a, *b)),
         );
     }
@@ -6634,6 +6789,106 @@ fn the_gap_depth_says_how_much_light_a_ring_stands_off() {
             "at a depth of 0, {name} drew a different frame from the fresh gap",
         );
     }
+}
+
+/// The Gap reaches as far as it says, and the Clearance is not a lid on it.
+///
+/// The standoff is written into a layer of the LIGHT (`fs_glow`), so it dims
+/// the field wherever that field reaches. It used to be a factor on the ground
+/// a node's own clearing painted, which bounded it at the Clearance's reach —
+/// solid inward, where the clearing fills every footprint to the node's centre,
+/// and gone a fraction of a node-radius outward, where the clearing has faded
+/// out. A Gap wider than the Clearance was half a dial: it ate inward and did
+/// nothing outward.
+///
+/// So the probe sits OUTSIDE the clearing altogether — an order of magnitude
+/// further from the ring than the Clearance reaches — and the two claims are
+/// what pin the change. The standoff dims it, which is the light being held off
+/// where no node paints. And dialling the Clearance to nothing does not move
+/// it: what holds the light off there is the Gap alone, so the pixel is
+/// identical with a clearing and with none. Before this the second shot was the
+/// only one either way, both being the undimmed field.
+///
+/// The Clearance is deliberately not 0 in the first shot. A node that clears
+/// nothing is the easy case — there is no lid to prove the standoff has got out
+/// from under. The case worth pinning is a node whose clearing exists, ends,
+/// and does not take the standoff's reach with it.
+#[test]
+fn the_gap_reaches_past_the_clearance_the_node_cuts() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    // A narrow clearing under a wide gap, which is the pair the old shape could
+    // not draw. The fade is left at the full gap, the fresh pairing, so the
+    // probe reads the ramp rather than a band edge.
+    const CLEARANCE: f32 = 0.02;
+    const GAP: f32 = 0.5;
+    let at = |reach: f32, depth: f32, gutter: f32| -> Scene {
+        let mut scene = single_marked_node(0, 0);
+        scene.camera = harmonigraph_scene::Camera {
+            projection: harmonigraph_scene::Projection::Orthographic,
+            yaw: 0.0,
+            pitch: 0.0,
+            ..Default::default()
+        };
+        scene.glow_reach = reach;
+        scene.glow_strength = 1.5;
+        scene.glow_gap = GAP;
+        scene.glow_gap_soft = GAP;
+        scene.glow_gap_depth = depth;
+        scene.nodes[0].gutter = gutter;
+        scene
+    };
+    let row = SIZE[0] as usize;
+    let centre = (SIZE[1] / 2) as usize * row + (SIZE[0] / 2) as usize;
+
+    // The scale, as `the_gap_depth_says_how_much_light_a_ring_stands_off` takes
+    // it: the node's own ink with no clearing and no light, whose outermost lit
+    // pixel along +x is `rings_outer` in the node's uv.
+    let bare = at(0.0, 0.0, 0.0);
+    let plain = shooter.shot(&bare);
+    let inked = |px: &[u8], i: usize| px[i * 4..i * 4 + 4] != [0u8, 0, 0, 255];
+    let band_px = (1..(SIZE[0] / 2) as usize)
+        .rfind(|&x| inked(&plain, centre + x))
+        .expect("the fixture's node must ink something along +x");
+    let per_uv = band_px as f32 / bare.rings_outer;
+
+    // Five times the Clearance out from the ink, and well inside the Gap: no
+    // clearing of this node reaches here at any level, and the standoff still
+    // has most of its own width left to spend.
+    const PAST: f32 = CLEARANCE * 5.0;
+    assert!(PAST < GAP, "the probe has to sit inside the gap it is measuring");
+    let probe = centre + (band_px as f32 + PAST * per_uv).round() as usize;
+    assert!(
+        !inked(&plain, probe),
+        "the probe at {probe} sits on the node's own ink, not outside it",
+    );
+
+    let lit = |px: &[u8], i: usize| brightness(&px[i * 4..i * 4 + 3]);
+    let stood_off = shooter.shot(&at(0.8, 0.85, CLEARANCE));
+    let flat = shooter.shot(&at(0.8, 0.0, CLEARANCE));
+    assert!(
+        lit(&stood_off, probe) < lit(&flat, probe),
+        "outside the clearing the standoff left the pixel at {} against {} with the depth at 0",
+        lit(&stood_off, probe),
+        lit(&flat, probe),
+    );
+    // Non-vacuous: there has to be light out there to hold off.
+    let dark = shooter.shot(&at(0.0, 0.85, CLEARANCE));
+    assert!(
+        lit(&flat, probe) > lit(&dark, probe),
+        "the fixture lights the probe no more than the glow off does; the comparison is vacuous",
+    );
+
+    // ...and it is the Gap's own doing, not the clearing's: take the Clearance
+    // away entirely and the pixel does not move.
+    let clearless = shooter.shot(&at(0.8, 0.85, 0.0));
+    assert_eq!(
+        clearless[probe * 4..probe * 4 + 4],
+        stood_off[probe * 4..probe * 4 + 4],
+        "the standoff outside the clearing changed when the Clearance was dialled off",
+    );
 }
 
 /// How much of the light the standoff takes at one radius, angle by angle, at a
