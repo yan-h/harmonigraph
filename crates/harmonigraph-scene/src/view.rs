@@ -1091,9 +1091,8 @@ pub struct ViewConfig {
     /// ([`GLOW_REACH_MAX`]) is sized for that pair — several lattice steps,
     /// where every node's light overlaps its neighbourhood's.
     ///
-    /// It is the ONLY light a node has, the rings themselves being crisp
-    /// shapes: a view with this at 0 draws exactly the ink the ring stack
-    /// describes and nothing around it.
+    /// It is the ONLY light a node has: a view with this at 0 draws exactly the
+    /// ink the ring stack describes and nothing around it.
     ///
     /// Every node's glow is drawn into a target of its own, with SCREEN
     /// blending, so two neighbours' halos meld like light rather than summing
@@ -1101,7 +1100,9 @@ pub struct ViewConfig {
     /// target is one field across every sheet, laid down UNDER the lattice: the
     /// rings, the markers and the names are all drawn over it, and a node's own
     /// clearing paints the light standing at its pixel rather than bare ground,
-    /// so the middle of a node keeps the light its neighbours put there.
+    /// so the middle of a node keeps the light its neighbours put there. How
+    /// much of that field the node's own INK takes with it is
+    /// [`glow_gap_depth`](Self::glow_gap_depth)'s to say.
     ///
     /// Distinct from [`bloom_strength`](Self::bloom_strength) in what it
     /// measures: the bloom thresholds a finished PICTURE, so only the bright
@@ -1159,7 +1160,8 @@ pub struct ViewConfig {
     /// the light is one field composited under the whole lattice, and a node's
     /// clearing paints that field over the ground at its own pixel
     /// (`node_paint` in lattice.wgsl), so this scales what the clearing paints
-    /// there. Two things follow. The standoff lives only where the clearing
+    /// there — and, by the same factor, the wash of that field over the node's
+    /// own ink. Two things follow. The standoff lives only where the clearing
     /// has coverage, so a node with no Clearance has none and a layer fading
     /// out takes its own standoff with it; and a node dims the light it is
     /// standing on whoever laid it down, its NEIGHBOURS' halos included, since
@@ -1245,6 +1247,15 @@ pub struct ViewConfig {
     /// between a gap that reads as shade and one that reads as ink. 0 is the
     /// picture with no standoff at all, pixel for pixel, which is what makes
     /// this bar the A/B on the whole feature.
+    ///
+    /// It governs ALL the light at a node's pixel, its own ink included and not
+    /// the ground around it alone: below 1 the same light the clearing paints
+    /// washes over the rings themselves, so a silent slice's grey lifts toward
+    /// the colour of the halo it is standing in and the node reads as a shape
+    /// inside its light rather than a silhouette cut out of it. One dial for
+    /// the pair because they are one question — how much of its own light a
+    /// node stands in — and the ink's share is a SCREEN, so a neighbour's halo
+    /// can only ever brighten it (`node_paint`).
     ///
     /// Inert while [`glow_reach`](Self::glow_reach) is 0.
     pub glow_gap_depth: f32,

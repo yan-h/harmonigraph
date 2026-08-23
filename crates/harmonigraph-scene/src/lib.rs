@@ -954,10 +954,10 @@ pub struct Scene {
     /// shuts it (see [`ViewConfig::glow_feather`]); already clamped to 0..=1.
     /// Inert while [`glow_reach`](Self::glow_reach) is 0.
     pub glow_feather: f32,
-    /// The standoff: how far past every ring a node's own clearing dims the
-    /// light standing under it, in the same quad UV units (see
-    /// [`ViewConfig::glow_gap`]); already clamped to [`GLOW_GAP_MAX`]. Inert
-    /// while [`glow_reach`](Self::glow_reach) is 0.
+    /// The standoff: how far past every ring a node dims the light standing at
+    /// its pixel — the ground its clearing paints and its own ink together — in
+    /// the same quad UV units (see [`ViewConfig::glow_gap`]); already clamped to
+    /// [`GLOW_GAP_MAX`]. Inert while [`glow_reach`](Self::glow_reach) is 0.
     pub glow_gap: f32,
     /// How much of that gap is spent fading the light back in, measured back
     /// from its end in the same units (see [`ViewConfig::glow_gap_soft`]);

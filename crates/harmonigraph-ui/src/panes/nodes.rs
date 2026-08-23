@@ -777,11 +777,12 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
              ring, its octave band, its marks — as a share of the node's \
              radius. Dark to the inner handle, faded back in by the outer; drag \
              the inner to the left edge to fade the whole gap, which is what \
-             keeps a wide gap from reading as a black ring. The node's own ink \
-             is untouched at any setting, and so is the picture outside its \
-             Clearance — the gap is the light the node's clearing paints, so it \
-             reaches exactly as far as that clearing does. Both handles at 0 \
-             lets the glow up to every edge. Double-click to restore.",
+             keeps a wide gap from reading as a black ring. The picture outside \
+             the node's Clearance is untouched at any setting — the gap is a \
+             factor on the light that clearing carries, so it reaches exactly \
+             as far as the clearing does, over the node's own ink as much as \
+             over the ground. Both handles at 0 lets the glow up to every edge. \
+             Double-click to restore.",
         );
         // The curve the fade runs on, directly under the bar that sets its
         // width, on the Reach/Feather arrangement above: a bar saying how far
@@ -811,11 +812,14 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
             .display(|v| format!("{:.0}%", v * 100.0))
             .show(ui)
             .on_hover_text(
-                "How much of the light the gap takes away. 100% clears to the \
-                 bare ground — where the gap is solid, the picture is exactly \
-                 what it is with the glow off — and lower leaves the rings \
-                 sitting in a dimmer pool of their own light rather than in a \
-                 void. 0% is the picture with no gap at all.",
+                "How much of the light the gap takes away, on the ground and \
+                 on the rings alike. 100% clears to the bare ground — where \
+                 the gap is solid, the picture is exactly what it is with the \
+                 glow off, ink and all — and lower leaves the rings sitting in \
+                 a dimmer pool of their own light rather than in a void, with \
+                 that light washing over the rings themselves. 0% is the \
+                 picture with no gap at all: the halo runs over ring and \
+                 ground together.",
             );
         // The light's own clock, last, under everything it shapes. Its own pair
         // and not the note Fade in Note, because a halo is the slow part of the
