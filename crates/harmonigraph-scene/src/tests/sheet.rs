@@ -646,7 +646,7 @@ fn every_sounding_node_clears_what_is_behind_it_the_home_sheet_included() {
     // show straight through the gaps in a home node's body (thin gapped
     // annuli cover very little) and neither sheet
     // reads as being in front. Which layer the clearing is DRAWN in differs
-    // — the home sheet's goes ahead of the grid, see the renderer — but
+    // — the home sheet's goes ahead of the markers, see the renderer — but
     // that is not this layer's business.
     let view = ViewConfig { extent_sevens: 1, sevens_gutter: 0.2, ..plain_view() };
     let scene = scene_of(&held(60), &Tuning::default(), &view, &plain_frame(), 0.0);
@@ -679,10 +679,10 @@ fn every_sounding_node_clears_what_is_behind_it_the_home_sheet_included() {
 }
 
 #[test]
-fn a_flat_lattice_still_clears_its_grid() {
+fn a_flat_lattice_still_clears_its_markers() {
     // With the sevenths extent at 0 there is no sheet behind anything, but
-    // the clearing is not only an inter-sheet device: it cuts the grid
-    // lines, so a sounding node sits in a clean gap in the lattice rather
+    // the clearing is not only an inter-sheet device: it cuts the marker
+    // field, so a sounding node sits in a clean gap in the lattice rather
     // than on top of it. That reading is wanted at any depth, so the home
     // sheet clears on a flat lattice exactly as it does on a deep one.
     // Gating it on the extent would make the look reachable only by growing

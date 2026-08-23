@@ -197,10 +197,9 @@ fn a_marker_stands_at_every_home_position_and_nowhere_else() {
 
 #[test]
 fn nothing_is_drawn_between_two_positions() {
-    // The claim the lines used to make and no longer do. A marker stands ON a
-    // node, so every one of them is at a position the window holds — and a
-    // mark at the midpoint of two of them would be an interval drawn, which
-    // is exactly what a mesh says and a field does not.
+    // A marker stands ON a node, so every one of them is at a position the
+    // window holds — and a mark at the midpoint of two of them would be an
+    // interval drawn, which is exactly what a mesh says and a field does not.
     let scene =
         scene_of(&NoteTracker::new(), &Tuning::default(), &plus_view(), &plain_frame(), 0.0);
     for marker in &scene.pluses {
