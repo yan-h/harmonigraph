@@ -689,8 +689,8 @@ type BloomStep<'a> = (&'a wgpu::RenderPipeline, &'a wgpu::BindGroup, &'a wgpu::T
 ///
 /// A label sits immediately after the node it names, so the nodes drawn
 /// after it — everything nearer — cover it exactly as they cover each other.
-/// Labels sharing a seam are one entry, since they are one uninterrupted
-/// draw.
+/// Labels sharing a seam on one sheet are one entry, since they are one
+/// uninterrupted draw.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct GlyphSeam {
     at: u32,
@@ -703,6 +703,12 @@ struct GlyphSeam {
     /// culled before any home node ships both land on `at == pluses_at`, and
     /// they belong on opposite sides of the marker run.
     after_pluses: bool,
+    /// Which sheet the node this names is on — its run index in the sorted
+    /// order, back to front. The one tie `at` and the side of the markers
+    /// leave: the last node of one sheet to ship and a node culled at the
+    /// head of the next share an `at`, and the nearer sheet's name draws
+    /// after, as its own draw rather than merged into the other's.
+    sheet: u32,
 }
 
 /// Where one node's label goes: a [`GlyphSeam`] before its glyphs are known.
@@ -710,6 +716,7 @@ struct GlyphSeam {
 struct Seam {
     at: u32,
     after_pluses: bool,
+    sheet: u32,
 }
 
 /// Put every label at its node's place in the draw order: the glyphs
@@ -744,25 +751,40 @@ fn place_labels(
     // which is the order the nodes are in, and the only thing that decides
     // between two names sharing a pixel. By the side of the markers before the
     // count, so the two labels that share `pluses_at` from opposite runs sort
-    // the way they draw rather than by which node came first.
-    runs.sort_by_key(|&(seam, _, _)| (seam.at, seam.after_pluses));
+    // the way they draw rather than by which node came first. The sheet
+    // last, for the same boundary: the last node of one sheet to ship and a
+    // node culled at the head of the next share an `at`, and the nearer
+    // sheet's name draws after. Without it the fallback is the scene's node
+    // order, which is lattice order and does not turn with the camera.
+    runs.sort_by_key(|&(seam, _, _)| (seam.at, seam.after_pluses, seam.sheet));
 
     let mut placed = Vec::with_capacity(glyphs.len());
     let mut seams: Vec<GlyphSeam> = Vec::new();
-    for (Seam { at, after_pluses }, start, count) in runs {
+    for (Seam { at, after_pluses, sheet }, start, count) in runs {
         if count == 0 {
             continue;
         }
         let first = placed.len() as u32;
         placed.extend_from_slice(&glyphs[start..start + count]);
-        // Merged only with a seam on the SAME side of the markers: two labels
-        // at one `at` are one uninterrupted draw unless the markers go between
-        // them.
+        // Merged only with a seam on the SAME side of the markers and the
+        // same sheet: two labels at one `at` are one uninterrupted draw,
+        // unless the markers go between them or they are at different
+        // depths — two names from different sheets overlapping is the nearer
+        // one sitting on the other, which takes its rim drawn over the other's
+        // fill (see `label` in `paint`).
         match seams.last_mut() {
-            Some(last) if last.at == at && last.after_pluses == after_pluses => {
+            Some(last)
+                if last.at == at && last.after_pluses == after_pluses && last.sheet == sheet =>
+            {
                 last.count += count as u32
             }
-            _ => seams.push(GlyphSeam { at, start: first, count: count as u32, after_pluses }),
+            _ => seams.push(GlyphSeam {
+                at,
+                start: first,
+                count: count as u32,
+                after_pluses,
+                sheet,
+            }),
         }
     }
     (placed, seams)
@@ -912,7 +934,20 @@ impl LatticeCallback {
         // nothing, and such a node can still carry a label (a hovered idle one
         // draws no disc and is named all the same), so the two part company at
         // the first culled node.
-        let mut seam_of = vec![Seam { at: 0, after_pluses: false }; scene.nodes.len()];
+        //
+        // And which SHEET it is on, as a run index into the sorted order:
+        // what tells two labels apart when the cull leaves them on one seam
+        // (see `place_labels`). Runs of one sheet depth are contiguous because
+        // that depth is the sort's first key.
+        let mut sheet_of = vec![0u32; scene.nodes.len()];
+        let mut sheet_count = 0u32;
+        for (k, &(plane, _, i)) in order.iter().enumerate() {
+            if k == 0 || order[k - 1].0 != plane {
+                sheet_count += 1;
+            }
+            sheet_of[i] = sheet_count - 1;
+        }
+        let mut seam_of = vec![Seam { at: 0, after_pluses: false, sheet: 0 }; scene.nodes.len()];
         let drawn = |out: &mut Vec<GpuInstance>,
                      seam_of: &mut [Seam],
                      ns: &[(f32, f32, usize)],
@@ -923,7 +958,7 @@ impl LatticeCallback {
                 if paints(&instance) {
                     out.push(instance);
                 }
-                seam_of[i] = Seam { at: out.len() as u32, after_pluses };
+                seam_of[i] = Seam { at: out.len() as u32, after_pluses, sheet: sheet_of[i] };
             }
         };
         let mut instances = Vec::with_capacity(order.len());
