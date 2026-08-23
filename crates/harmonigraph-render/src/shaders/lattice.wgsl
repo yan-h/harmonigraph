@@ -1964,9 +1964,8 @@ fn annulus_distance(d: f32, inner: f32, outer: f32) -> f32 {
 ///
 /// The ANGULAR half of a ring's footprint, where [`annulus_distance`] is the
 /// radial one; [`glow_standoff`] intersects the two with a `max`. One walk
-/// answers it for every layer at once, because one number cuts every angular
-/// slice on the node ([`slice_gap_half`]) and the octave band, the audio ring
-/// and a mark's sides all take their edges off the same boundaries.
+/// answers it for every layer at once, since one number cuts every angular
+/// slice on the node (see [`slice_gap_half`]).
 ///
 /// Measured to the boundary RAYS rather than to each slice in turn, which is
 /// what keeps it one walk instead of `span` distance fields: the gaps are
