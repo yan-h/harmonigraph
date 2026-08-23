@@ -791,11 +791,12 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
              ring, its octave band, its marks — as a share of the node's \
              radius. Dark to the inner handle, faded back in by the outer; drag \
              the inner to the left edge to fade the whole gap, which is what \
-             keeps a wide gap from reading as a black ring. The node's own ink \
-             is untouched at any setting — what the ink wears is the Wash bar \
-             below — and so is the picture outside the node's Clearance, the \
-             gap being a factor on the light that clearing paints. Both handles \
-             at 0 lets the glow up to every edge. Double-click to restore.",
+             keeps a wide gap from reading as a black ring. It holds off the \
+             light wherever that light reaches, a neighbour's halo as much as \
+             the node's own, and however little the node's Clearance covers. \
+             The node's own ink is untouched at any setting — what the ink \
+             wears is the Wash bar below. Both handles at 0 lets the glow up to \
+             every edge. Double-click to restore.",
         );
         // The curve the fade runs on, directly under the bar that sets its
         // width, on the Reach/Feather arrangement above: a bar saying how far
