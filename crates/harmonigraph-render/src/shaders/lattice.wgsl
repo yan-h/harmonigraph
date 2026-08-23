@@ -557,8 +557,8 @@ struct VsOut {
     @location(14) @interpolate(flat) ring: f32,
     // The node's light: x how bright it is, y how much of this frame's ink its
     // row takes (see Instance::glow), z the rim the LIGHT is drawn against in
-    // this node's uv (`glow_rim`). Read by the glow's three stages and by
-    // nothing else on the node.
+    // this node's uv (`glow_rim`). Read by the ink strip and the light's own
+    // draw, and by nothing else on the node.
     //
     // The rim rides here rather than in a location of its own because there is
     // no location left: a vertex stage may hand on sixteen, and `rim` beside it

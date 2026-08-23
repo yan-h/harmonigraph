@@ -2012,7 +2012,6 @@ struct SceneLayouts<'a> {
 /// bloom reads (see [`Offscreen::nodes_view`]). The parity test builds
 /// single-attachment depthless variants that draw straight into the egui
 /// pass, as its reference.
-///
 fn create_pipeline(
     device: &wgpu::Device,
     shader_src: &str,

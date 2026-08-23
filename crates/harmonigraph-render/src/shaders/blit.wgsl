@@ -9,7 +9,7 @@
 //   fs_blur_h/v   separable 9-tap Gaussian over the quarter-res texture
 //   fs_composite  scene + bloom * strength, premultiplied over the pane
 //   fs_bloom_add  bloom * strength alone, over a picture already in the pass
-//   fs_glow_over  the lattice's node glow, over a picture already in the pass
+//   fs_glow_over  the lattice's node glow, at the bottom of the scene pass
 //
 // The bloom chain runs at fractions of the pane's SCREEN size, not the
 // (possibly supersampled) scene size, so the halo's screen width does not

@@ -6126,7 +6126,7 @@ fn the_glow_blend_says_how_separate_a_node_keeps_its_colours() {
 /// would glow like nodes if the light were a post-process over the picture
 /// rather than a draw off the node instance buffer.
 ///
-/// Byte-identical rather than nearly so: both of the glow's draws are over the
+/// Byte-identical rather than nearly so: every draw of the glow's is over the
 /// instance buffer, which is empty, so the target is cleared to transparent and
 /// nothing writes to it, and the composite lays exactly nothing over the
 /// picture.
@@ -6539,7 +6539,6 @@ fn a_node_wearing_only_an_audio_ring_glows() {
 /// passes the first, and `a + b` passes it too while blowing a chord's middle
 /// out to white. Screen is strictly under the sum wherever both sides are lit,
 /// which is the discriminator this measures.
-///
 #[test]
 fn two_nodes_light_melds_rather_than_summing() {
     const SIZE: [u32; 2] = [256, 256];
@@ -6919,8 +6918,8 @@ fn a_slice_part_way_out_carries_that_much_of_the_light() {
 /// the reading behind each wedge (`ink_at`) and a ring of empty ones sums to
 /// nothing. `glow_layer` stops there rather than lighting a grey halo.
 ///
-/// Byte-identical, which is the whole claim: the glow's two draws run over this
-/// node, write nothing into their target, and the composite lays exactly
+/// Byte-identical, which is the whole claim: the light's draw runs over this
+/// node, writes nothing into its target, and the composite lays exactly
 /// nothing over the picture. The same fixture with a partial in it is shot
 /// beside it, or "no light" would pass on a ring that never drew.
 #[test]
