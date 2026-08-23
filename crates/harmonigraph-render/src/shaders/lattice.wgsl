@@ -477,13 +477,12 @@ fn wash_over(ink: vec3<f32>, alpha: f32, light: vec3<f32>) -> vec3<f32> {
 
 // How brightly a resting marker lights the position it stands at
 // (`u.misc13.y`): the pool it sits in, where the cross itself is drawn in the
-// lattice's ground. 0 is a marker that is ink and nothing else.
+// marker's own ink. 0 is a marker that is ink and nothing else.
 //
-// A second bar rather than the ground's other half, and the split is the whole
-// point of it: the ground is what the UNLIT ring structure is drawn in too, and
-// a light behind the nodes reads best with that structure dark — so one number
-// could not both sink the rings behind the light and keep the resting positions
-// visible. This answers the second question alone.
+// Its own bar and not a share of that ink, because the two are read at
+// different distances: ink is a shape AT the position, and a pool is a presence
+// around it that carries. A picture too dark to find a cross in can still be
+// dialled to say where the cross is.
 fn marker_light() -> f32 {
     return clamp(u.misc13.y, 0.0, 1.0);
 }
@@ -2815,7 +2814,7 @@ struct PlusInstance {
     // xyz: the position's world center, w: the length of one arm in world
     // units, crossing to tip.
     @location(0) pos_radius: vec4<f32>,
-    // rgb: the lattice's ground, a: this marker's opacity.
+    // rgb: the marker's own ink, a: this marker's opacity.
     @location(1) color: vec4<f32>,
 };
 
@@ -3614,9 +3613,9 @@ fn plus_paint(in: PlusVsOut) -> vec4<f32> {
     if alpha < 0.01 {
         discard;
     }
-    // Premultiplied, as every draw in this pass is: the marker IS the
-    // lattice's ground rather than a brightness of it, so its colour is laid
-    // down flat and only its coverage varies across the edge.
+    // Premultiplied, as every draw in this pass is: the marker IS its own ink
+    // rather than a brightness of it, so its colour is laid down flat and only
+    // its coverage varies across the edge.
     let ink = in.color.rgb * alpha;
     // The WASH, on the same bar and out of the same field a node's ink takes it
     // from (`wash_over`). A marker is ink laid over ground the light is already

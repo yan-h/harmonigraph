@@ -605,10 +605,10 @@ struct GpuPlus {
     /// where its ends taper, are the same for the whole field and ride in
     /// `misc5.x` and `misc5.y`.
     pos_radius: [f32; 4],
-    /// rgb: the lattice's ground, a: the marker's opacity. Both come off one
-    /// resolve of `Scene::lattice_ground`, so a marker at rest is that grey
-    /// exactly; the alpha is under one otherwise, the name fading in over it
-    /// (`NodeInstance::name_level`).
+    /// rgb: the marker's own ink, a: its opacity. Both come off one resolve of
+    /// `ViewConfig::marker_ink`, so a marker at rest is that grey exactly; the
+    /// alpha is under one otherwise, a name or the note itself claiming the
+    /// position over it (`derive_pluses`).
     color: [f32; 4],
 }
 
