@@ -411,24 +411,22 @@ fn a_marker_takes_back_what_a_names_fade_gives_up() {
     );
 }
 
-/// A sounding note claims the position it stands on, names or no names.
+/// The cross disappears if and only if a NAME is standing over it — so with the
+/// Note names switched off, a sounding note leaves every marker where it is.
 ///
-/// A marker's cross writes a standoff into the light (`plus_standoff` in
-/// lattice.wgsl), and the middle of a node is the one place the picture keeps
-/// free of one: inside the innermost ring nothing stands the light off, which
-/// is what lights the middle of a node whose innermost ring is an annulus
-/// ([`ViewConfig::glow_gap`]). A marker standing at the node's own centre cuts
-/// a cross-shaped bite out of that node's halo — measured at the fresh glow
-/// bars as a dark plus in every lit node, and gone when the standoff is.
+/// A note reaches the marker through the name rather than beside it, and it
+/// does so under every Show mode: `name_level` is `activation.max(resting)`, so
+/// a sounding note is named at its own activation even under `Played`, where
+/// nothing rests. That is what makes the rule one term — asking the note a
+/// second time in `derive_pluses` would change this case alone, the one where
+/// there is no name to be present, and would read the rule backwards.
 ///
-/// Switching the Note names OFF is the whole of what reaches it, and is why
-/// this holds nothing about the fresh picture: under every Show mode a name
-/// already covers a sounding note, so there the two claims agree and the
-/// handoff is the one [`a_marker_takes_back_what_a_names_fade_gives_up`]
-/// measures. It is asked of whichever claims the position harder rather than
-/// of the two multiplied, which is what keeps that agreement exact.
+/// What the note's light does to the SHADOW under that standing cross is a
+/// separate term and a separate claim
+/// ([`a_markers_shadow_is_closed_by_the_light_over_it_not_by_its_notes_fade`]):
+/// the cross stands here, and it does not bite the halo it stands in.
 #[test]
-fn a_sounding_note_takes_the_marker_under_it_with_the_names_off() {
+fn a_sounding_note_leaves_its_marker_standing_with_the_names_off() {
     let view = ViewConfig { show_labels: false, ..plus_view() };
     let frame = FrameParams { fade_time: 2.0, ..FrameParams::default() };
     let mut tracker = NoteTracker::new();
@@ -440,7 +438,10 @@ fn a_sounding_note_takes_the_marker_under_it_with_the_names_off() {
         kind: harmonigraph_core::NoteEventKind::Off,
     });
 
-    let mut walk = vec![];
+    // Held, mid-release and long past it: the note moves through its whole
+    // range while the marker does not move at all.
+    let resting = pluses_of(&view)[0].strength;
+    assert!(resting > 0.0, "the fixture must draw markers at all");
     for now in [4.0f64, 5.0, 5.8, 5.999, 6.0, 6.5] {
         let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, now);
         let node = origin_node(&scene);
@@ -450,28 +451,19 @@ fn a_sounding_note_takes_the_marker_under_it_with_the_names_off() {
             .find(|p| p.pos == node.world_pos)
             .map_or(0.0, |p| p.strength);
         assert!(
-            (standing - (1.0 - node.activation)).abs() < 1e-5,
-            "at {now}s the note stands at {} and the marker at {standing}",
+            (standing - resting).abs() < 1e-5,
+            "at {now}s the note stands at {} and moved the marker to {standing} from {resting}",
             node.activation,
-        );
-        walk.push(standing);
-    }
-    assert!(walk[0] < 1e-5, "a marker stands in the middle of a sounding node's halo");
-    for pair in walk.windows(2) {
-        assert!(
-            (pair[1] - pair[0]).abs() < 0.55,
-            "the marker jumps back in rather than fading: {walk:?}",
         );
     }
 
-    // Every home position keeps its marker but the ones the note is sounding
-    // at, which under a 12-TET tuning is every spelling of its pitch class
-    // rather than the one it was struck as.
+    // And it took none of the field either, which is the same rule counted
+    // rather than measured.
     let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, 4.0);
     let home = scene.nodes.iter().filter(|n| n.on_home).count();
     let lit = scene.nodes.iter().filter(|n| n.on_home && n.activation > 0.0).count();
-    assert!(lit > 0 && lit < home, "the fixture must light some of the field and not all of it");
-    assert_eq!(scene.pluses.len(), home - lit, "the note took a marker it is not sounding at");
+    assert!(lit > 0, "the fixture must light some of the field, or it proves nothing");
+    assert_eq!(scene.pluses.len(), home, "a sounding note took a marker with no name to take it");
 }
 
 #[test]
@@ -830,4 +822,137 @@ fn an_off_sheet_note_leaves_the_marker_field_alone() {
         "and it is the home sheet's: {:?}",
         scene.pluses[0],
     );
+}
+
+/// A node lit by something that is not a key keeps its cross, and stops casting
+/// a shadow with it.
+///
+/// The two halves are one decision seen from each side. A marker's ink answers
+/// to what is DRAWN at the position, and an analyzer ring is light a node
+/// WEARS rather than a claim on the position under it — so the cross stands,
+/// and stands WHOLE: a ring moves the ink by nothing, which is measured here
+/// against a resting neighbour rather than against a number.
+/// Its shadow answers to the light instead, and the middle of a node is the one
+/// place the picture keeps free of a standoff: inside the innermost ring
+/// nothing holds the light off, which is what lights the centre of a node whose
+/// innermost ring is an annulus ([`ViewConfig::glow_gap`]). A cross standing
+/// there would cut a plus-shaped bite out of the node's own halo, and it is
+/// reachable with no MIDI in the picture at all — every ringing node wearing a
+/// dark cross, permanently, under the default Show mode.
+///
+/// [`Scene::shade_markers`] is asked for it rather than `derive_scene`, because
+/// the level it closes against is not measured until two passes later: the
+/// audio ring is folded in behind the derivation and the light is carried on a
+/// clock of its own. A carried level is what this hands it, which is what the
+/// pass takes and the only thing a scene-side fixture could not reach before.
+#[test]
+fn a_node_lit_by_no_key_keeps_its_cross_and_casts_no_shadow() {
+    let view = ViewConfig { show_labels: false, ..plus_view() };
+    let mut scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, &plain_frame(), 0.0);
+    let lit = origin_node(&scene).lattice_pos;
+    let dark = scene
+        .nodes
+        .iter()
+        .find(|n| n.on_home && n.lattice_pos != lit)
+        .expect("the window must hold a second home position")
+        .lattice_pos;
+
+    // Nothing is playing, so every marker is whole on both terms before the
+    // light arrives — which is what makes the difference below the light's.
+    for plus in &scene.pluses {
+        assert!(plus.strength > 0.0, "an unplayed field draws its markers: {plus:?}");
+        assert!(
+            (plus.shade - plus.strength).abs() < 1e-5,
+            "and with no light over them their shadows are their ink's: {plus:?}",
+        );
+    }
+
+    // What a ring's carried light looks like by the time the marker field is
+    // asked: a node fully lit with an activation of 0 under it.
+    for node in &mut scene.nodes {
+        if node.lattice_pos == lit {
+            node.glow.level = 1.0;
+        }
+    }
+    assert!(
+        origin_node(&scene).activation < 1e-5,
+        "the fixture must light the node without a key, or it proves nothing",
+    );
+    scene.shade_markers();
+
+    let at = |pos: LatticePos| {
+        *scene.pluses.iter().find(|p| p.lattice_pos == pos).expect("every home position keeps one")
+    };
+    let (lit, dark) = (at(lit), at(dark));
+    // The ink claim in full, and measured against the FIELD rather than against
+    // a number: a ring moves a marker by nothing at all, so the cross over a lit
+    // node is the one every resting position is wearing. A ring claiming the ink
+    // even slightly is the failure this catches, and reading it off the
+    // neighbour is what makes it a claim about the ring rather than about
+    // whatever `marker_ink` happens to be dialled to.
+    assert!(
+        (lit.strength - dark.strength).abs() < 1e-5,
+        "a ring dimmed the cross over the node it lit: {lit:?} against {dark:?}",
+    );
+    assert!(lit.strength > 0.0, "and the field has to be drawing markers at all: {lit:?}");
+    assert!(lit.shade < 1e-5, "a ringing node cut a hole in its own halo: {lit:?}");
+    assert!(
+        (dark.shade - dark.strength).abs() < 1e-5,
+        "an unlit position's marker is untouched by a neighbour being lit: {dark:?}",
+    );
+}
+
+/// A marker's shadow is closed by the LIGHT and not by the note's own fade, so
+/// it stays shut through a release the light outlives.
+///
+/// The two clocks are different lengths on purpose: `Voice::activation` reaches
+/// exactly 0 at the Fade, and the light is a first-order lag on the Glow
+/// release running well past it. Between the two a marker's ink is fully back —
+/// that is the handoff the names make, and it is correct — while the halo it
+/// stands in is still most of its brightest. Closing the shadow on activation
+/// would snap a cross-shaped bite into that halo the frame the note's number
+/// hit zero and hold it for the rest of the decay.
+///
+/// A SHARE of the ink rather than a switch, which is what keeps the two ends
+/// honest: half a light standing over a marker takes half its shadow, so the
+/// bite never arrives or leaves in one frame at any speed the light can move.
+#[test]
+fn a_markers_shadow_is_closed_by_the_light_over_it_not_by_its_notes_fade() {
+    let view = ViewConfig { show_labels: false, ..plus_view() };
+    let frame = FrameParams { fade_time: 2.0, ..FrameParams::default() };
+    let mut tracker = NoteTracker::new();
+    tracker.handle_event(NoteEvent::on(0.0, 0, 60, 1.0));
+    tracker.handle_event(NoteEvent {
+        time: 4.0,
+        channel: 0,
+        note: 60,
+        kind: harmonigraph_core::NoteEventKind::Off,
+    });
+
+    // Past the Fade, where the note's own number is spent and the light's is
+    // not: the ink is back at full and the shadow is the thing under test.
+    let mut scene = scene_of(&tracker, &Tuning::default(), &view, &frame, 7.0);
+    let lit = origin_node(&scene).lattice_pos;
+    assert!(origin_node(&scene).activation < 1e-5, "the note's own fade must be over by here");
+    let whole = scene
+        .pluses
+        .iter()
+        .find(|p| p.lattice_pos == lit)
+        .expect("a position no note is sounding at keeps its marker")
+        .strength;
+    assert!(whole > 0.0, "and it is back at full ink, which is what makes the bite visible");
+
+    for (level, want) in [(1.0f32, 0.0f32), (0.5, 0.5), (0.0, 1.0)] {
+        for node in &mut scene.nodes {
+            if node.lattice_pos == lit {
+                node.glow.level = level;
+            }
+        }
+        scene.shade_markers();
+        let shade = scene.pluses.iter().find(|p| p.lattice_pos == lit).unwrap().shade;
+        assert!(
+            (shade - whole * want).abs() < 1e-5,
+            "a light of {level} over a marker of {whole} left {shade} of its shadow",
+        );
+    }
 }

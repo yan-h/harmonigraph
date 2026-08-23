@@ -6,6 +6,31 @@
 use super::*;
 use crate::gpu_harness::{headless_device, readback, render_to_texture};
 
+/// One marker for the fixtures below, casting the whole of the shadow its ink
+/// is worth.
+///
+/// `PlusInstance::shade` is the term `Scene::shade_markers` spends against the
+/// light standing over a marker, and none of these fixtures run that pass — a
+/// scene assembled by hand has whatever light it was given. Full here so the
+/// standoff is the ink's, which is what every measurement below is taken
+/// against; `lattice_pos` is the join that pass uses and nothing in the render
+/// path reads it, so the position these say is `pos`.
+fn one_marker(
+    pos: glam::Vec3,
+    radius: f32,
+    color: glam::Vec4,
+    strength: f32,
+) -> harmonigraph_scene::PlusInstance {
+    harmonigraph_scene::PlusInstance {
+        lattice_pos: harmonigraph_core::LatticePos::ORIGIN,
+        pos,
+        radius,
+        color,
+        strength,
+        shade: strength,
+    }
+}
+
 #[test]
 fn baked_shader_validates() {
     validate_wgsl(SHADER_SRC)
@@ -467,18 +492,8 @@ fn parity_scene() -> Scene {
     // exercised both where the nodes composite over it and where it stands
     // alone. Different radii, because the size is per instance.
     let pluses = vec![
-        harmonigraph_scene::PlusInstance {
-            pos: Vec3::new(-1.8, -0.6, -0.3),
-            radius: 0.22,
-            color: Vec4::new(0.16, 0.17, 0.20, 1.0),
-            strength: 0.55,
-        },
-        harmonigraph_scene::PlusInstance {
-            pos: Vec3::new(0.0, 0.0, 0.0),
-            radius: 0.13,
-            color: Vec4::new(0.16, 0.17, 0.20, 1.0),
-            strength: 0.4,
-        },
+        one_marker(Vec3::new(-1.8, -0.6, -0.3), 0.22, Vec4::new(0.16, 0.17, 0.20, 1.0), 0.55),
+        one_marker(Vec3::new(0.0, 0.0, 0.0), 0.13, Vec4::new(0.16, 0.17, 0.20, 1.0), 0.4),
     ];
     let glow_rows = nodes.len() as u32;
     Scene {
@@ -2784,6 +2799,13 @@ fn a_node_wearing_only_an_audio_ring_clears_around_it() {
         quiet.instances.is_empty(),
         "a node with no note and no ring still shipped, carrying a reach that would \
          clear a hole around ink nobody draws",
+    );
+    // Its knockout goes with it. That half ships off a list of its own and so
+    // could be culled apart from the ink it belongs to, which would put a hole
+    // in the marker field around a node drawing nothing.
+    assert!(
+        quiet.clearings.is_empty(),
+        "a node the cull dropped still shipped the hole it would have cleared",
     );
 }
 
@@ -5184,15 +5206,15 @@ fn a_silent_lattice_ships_no_nodes_and_still_draws_its_markers() {
 fn lone_marker_scene(half_width: f32, taper_start: f32) -> Scene {
     let mut scene = idle_scene();
     scene.nodes.clear();
-    scene.pluses = vec![harmonigraph_scene::PlusInstance {
-        pos: glam::Vec3::ZERO,
+    scene.pluses = vec![one_marker(
+        glam::Vec3::ZERO,
         // Big enough that the screen-constant soft band is a thin rim on it
         // rather than a share of the area — the band is the error term in
         // every ratio below, and a small marker is mostly band.
-        radius: 0.5,
-        color: glam::Vec4::ONE,
-        strength: 1.0,
-    }];
+        0.5,
+        glam::Vec4::ONE,
+        1.0,
+    )];
     scene.plus_half_width = half_width;
     scene.plus_taper_start = taper_start;
     scene
@@ -6636,12 +6658,7 @@ fn the_gap_dims_the_markers_pool() {
         // standoff it casts and clear of the ink it draws.
         scene.pluses = [(2.4f32, 0.0f32), (-2.4, 0.0), (0.0, 2.4), (0.0, -2.4)]
             .into_iter()
-            .map(|(x, y)| harmonigraph_scene::PlusInstance {
-                pos: glam::Vec3::new(x, y, 0.0),
-                radius: 0.5,
-                color: scene.lattice_ground,
-                strength: 1.0,
-            })
+            .map(|(x, y)| one_marker(glam::Vec3::new(x, y, 0.0), 0.5, scene.lattice_ground, 1.0))
             .collect();
         scene
     };
@@ -6791,12 +6808,7 @@ fn shadowed_markers(depth: f32, gap: f32, taper_start: f32) -> Scene {
     // nothing to it and the shadow measured would be the node's.
     scene.pluses = [(2.6f32, 0.0f32), (-2.6, 0.0), (0.0, 2.6), (0.0, -2.6)]
         .into_iter()
-        .map(|(x, y)| harmonigraph_scene::PlusInstance {
-            pos: glam::Vec3::new(x, y, 0.0),
-            radius: 0.4,
-            color: scene.lattice_ground,
-            strength: 1.0,
-        })
+        .map(|(x, y)| one_marker(glam::Vec3::new(x, y, 0.0), 0.4, scene.lattice_ground, 1.0))
         .collect();
     scene
 }
@@ -6870,6 +6882,87 @@ fn a_marker_holds_a_nodes_halo_off_its_own_cross() {
         dimmed > 200,
         "a full Gap depth darkened {dimmed} of the {} pixels the markers' ink never reaches",
         ground.len(),
+    );
+}
+
+/// A node lit under its own cross keeps the halo there: the shadow closes and
+/// the ink does not.
+///
+/// The middle of a node is the one place the picture keeps free of a standoff —
+/// `glow_standoff` measures every ring from its own annulus, so the light runs
+/// in to the centre — and a marker standing at that centre is the one thing
+/// that can write one there. The bite is real and this measures it both ways:
+/// the same frame with the marker's shadow open darkens hundreds of pixels of
+/// the node's own halo, and with it closed darkens none.
+///
+/// `PlusInstance::shade` is what is moved between the two shots and nothing
+/// else — same ink, same arm, same Gap — so the ground is one set for both and
+/// the difference cannot be the marker's footprint moving. Which node is lit is
+/// not asked either: what closes the term is `Scene::shade_markers`, and the
+/// claim here is only that the shader spends it.
+#[test]
+fn a_lit_node_keeps_the_halo_under_its_own_cross() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    // One marker at the node's own centre, in a frame whose only light is that
+    // node's (`shadowed_markers` pins `marker_light` to 0).
+    let at = |shade: f32, depth: f32| -> Scene {
+        let mut scene = shadowed_markers(depth, 0.8, 1.0);
+        scene.pluses = vec![harmonigraph_scene::PlusInstance {
+            lattice_pos: harmonigraph_core::LatticePos::ORIGIN,
+            pos: glam::Vec3::ZERO,
+            radius: 0.5,
+            color: scene.lattice_ground,
+            strength: 1.0,
+            shade,
+        }];
+        scene
+    };
+    let bare = |shooter: &mut Shooter, depth: f32| {
+        shooter.shot(&{
+            let mut s = at(0.0, depth);
+            s.pluses.clear();
+            s
+        })
+    };
+
+    // The ink's own footprint, read where a marker writes ink and no standoff,
+    // and excluded from every count below: what is being measured is light the
+    // cross took off the picture around it, not the cross itself.
+    let flat_bare = bare(&mut shooter, 0.0);
+    let flat = shooter.shot(&at(1.0, 0.0));
+    let ground: Vec<usize> = (0..flat.len())
+        .step_by(4)
+        .filter(|&i| flat[i..i + 4] == flat_bare[i..i + 4])
+        .collect();
+    assert!(
+        ground.len() > 1000,
+        "the fixture must leave halo for a bite to land in, not {}",
+        ground.len(),
+    );
+
+    let deep_bare = bare(&mut shooter, 1.0);
+    let biting = shooter.shot(&at(1.0, 1.0));
+    let closed = shooter.shot(&at(0.0, 1.0));
+    let dimmed = |frame: &[u8]| {
+        ground
+            .iter()
+            .filter(|&&i| brightness(&frame[i..i + 3]) < brightness(&deep_bare[i..i + 3]))
+            .count()
+    };
+    assert!(
+        dimmed(&biting) > 200,
+        "an open shadow bit {} of the {} halo pixels around the cross — with none there is \
+         nothing for the closed shot to prove",
+        dimmed(&biting),
+        ground.len(),
+    );
+    assert_eq!(
+        dimmed(&closed),
+        0,
+        "a closed shadow still took light off the halo the node lit under its own cross",
     );
 }
 
@@ -6965,12 +7058,7 @@ fn lone_shadowed_marker(arm: f32, gap: f32, depth: f32) -> Scene {
     scene.nodes.clear();
     scene.marker_light = 0.9;
     scene.marker_span = LONE_SPAN;
-    scene.pluses = vec![harmonigraph_scene::PlusInstance {
-        pos: glam::Vec3::ZERO,
-        radius: arm,
-        color: scene.lattice_ground,
-        strength: 1.0,
-    }];
+    scene.pluses = vec![one_marker(glam::Vec3::ZERO, arm, scene.lattice_ground, 1.0)];
     scene
 }
 
@@ -8478,12 +8566,8 @@ fn a_resting_marker_wears_the_wash_it_stands_in() {
         scene.glow_feather = 1.0;
         scene.glow_wash = wash;
         if marker {
-            scene.pluses = vec![harmonigraph_scene::PlusInstance {
-                pos: glam::Vec3::new(3.0, 0.0, 0.0),
-                radius: 0.8,
-                color: scene.lattice_ground,
-                strength: 1.0,
-            }];
+            scene.pluses =
+                vec![one_marker(glam::Vec3::new(3.0, 0.0, 0.0), 0.8, scene.lattice_ground, 1.0)];
         }
         scene
     };
@@ -9828,5 +9912,181 @@ fn the_meld_reaches_the_light_a_node_paints_over_its_own_body() {
         brightness(&b) < brightness(&m),
         "the Meld did not reach what the node paints: its middle is {b:?} at 0 and {m:?} at \
          1, so this pixel took the screen either way while the ground around it did not",
+    );
+}
+
+
+/// A node the analyzer lit, with no key down, keeps the cross under it.
+///
+/// The cross goes when a NAME stands over it and at no other time
+/// (`derive_pluses`), and a node ringing under no key has no name to put there.
+/// What used to take it anyway was the node's own knockout, drawn over the
+/// markers because it drew after them: the Gate hands rings out freely, so
+/// every node the analyzer reached lost the mark of the position it stands on
+/// and kept the marker's standoff, a cross-shaped hole in the light with
+/// nothing standing in it.
+///
+/// Measured against the SAME node with the Clearance dialled off, which is the
+/// one setting where the hole was never painted — so the claim is that the
+/// Clearance no longer decides this, rather than that some ink survives.
+#[test]
+fn a_node_lit_by_no_key_keeps_the_cross_under_it() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut gpu) = Shooter::new(SIZE) else {
+        return;
+    };
+    // Silent but ringing: the Gate's own gift, and the case the knockout used
+    // to swallow. The light is on so there is something for a clearing to
+    // knock out and something for the marker's ink to be washed by.
+    let build = |gutter: f32, marker: bool| -> Scene {
+        let mut scene = clearing_node(0, 1.0, true, gutter);
+        scene.background = glam::Vec4::new(0.05, 0.05, 0.07, 1.0);
+        scene.glow_reach = 3.0;
+        scene.glow_strength = 2.0;
+        scene.glow_feather = 1.0;
+        scene.marker_light = 0.0;
+        let node = &mut scene.nodes[0];
+        node.activation = 0.0;
+        node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
+        node.glow.level = 1.0;
+        scene.pluses = if marker {
+            vec![one_marker(
+                glam::Vec3::ZERO,
+                0.35,
+                glam::Vec4::new(0.6, 0.6, 0.6, 1.0),
+                1.0,
+            )]
+        } else {
+            Vec::new()
+        };
+        scene
+    };
+    // What the cross covers, read where no clearing is painted at all.
+    let mut inked = |gutter: f32| -> Vec<usize> {
+        let with = gpu.shot(&build(gutter, true));
+        let without = gpu.shot(&build(gutter, false));
+        (0..with.len())
+            .step_by(4)
+            .filter(|&i| with[i..i + 4] != without[i..i + 4])
+            .collect()
+    };
+    let bare = inked(0.0);
+    assert!(
+        bare.len() > 50,
+        "the fixture draws no cross to lose: {} pixels",
+        bare.len(),
+    );
+    for gutter in [0.2f32, 0.5, 1.0] {
+        let cut = inked(gutter);
+        assert!(
+            cut.len() >= bare.len(),
+            "at a Clearance of {gutter} the ringing node took {} of the {} pixels its \
+             cross covers with the Clearance off",
+            bare.len() - cut.len(),
+            bare.len(),
+        );
+    }
+}
+
+/// Drawing a home node's knockout as a separate pass paints the picture the one
+/// draw it was split out of painted.
+///
+/// The split is a premultiplied over factored in two — `ground*g` at alpha `g`,
+/// then the ink at alpha `a`, against the `ink + ground*g*(1-a)` at alpha
+/// `a + g*(1-a)` a single draw writes — so it owes the same picture rather than
+/// a similar one, and the markers it makes room for are what it is spent on.
+///
+/// What it does NOT owe is the same bytes: an 8-bit target rounds once per
+/// composite, so a fragment written in two steps lands within a step or two of
+/// one written in one. That is the whole of the difference measured here, and
+/// the bound is what says so — a term dropped or double-counted moves a pixel
+/// by far more than the target can round it by.
+///
+/// The reference is the same node one hair off the home sheet, which draws
+/// WHOLE because only the home sheet is split. Under an orthographic camera
+/// looking down the sevens axis that hair moves nothing on screen: the
+/// billboard is built on `cam_right`/`cam_up`, both perpendicular to it, and
+/// the depth test is `Always`. The pair with no clearing at all checks that,
+/// and it is not decoration — under the fixture's own perspective camera the
+/// hair is a change of SIZE, and the test measured 2256 px of it.
+#[test]
+fn splitting_a_clearing_off_its_node_paints_the_same_picture() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut gpu) = Shooter::new(SIZE) else {
+        return;
+    };
+    let build = |z: f32, gutter: f32| -> Scene {
+        let mut scene = clearing_node(0, 1.0, true, gutter);
+        scene.camera = harmonigraph_scene::Camera {
+            projection: harmonigraph_scene::Projection::Orthographic,
+            yaw: 0.0,
+            pitch: 0.0,
+            ..Default::default()
+        };
+        scene.background = glam::Vec4::new(0.05, 0.05, 0.07, 1.0);
+        scene.glow_reach = 3.0;
+        scene.glow_strength = 2.0;
+        scene.glow_feather = 1.0;
+        // A WIDE fade on the hole, which is where the split has anything to get
+        // wrong: at full coverage a clearing repaints the ground it already
+        // stands on, so only the band where it is partial can tell one
+        // application from two. The fixture's own default is a hard edge.
+        scene.sevens_soft = 0.3;
+        // Nothing between the halves, so the only thing under test is whether
+        // the two of them add up.
+        scene.pluses.clear();
+        // Something BEHIND for the hole to hide, without which the clearing is
+        // invisible and this measures nothing: it repaints the ground it is
+        // already standing on, so painting it twice is a no-op and a term
+        // counted twice would pass. The sheet behind is what the hole is for.
+        // Bigger, so its rings land out in the fade the hole ends with. A
+        // behind node the same size as this one hides entirely under it, and
+        // then the clearing has nothing to cover in the band where its coverage
+        // is partial — which is the only band where painting it twice differs
+        // from painting it once.
+        let mut behind = scene.nodes[0];
+        behind.world_pos.z = -0.6;
+        behind.scale = 2.5;
+        behind.on_home = false;
+        behind.gutter = 0.0;
+        scene.nodes.push(behind);
+        let node = &mut scene.nodes[0];
+        node.world_pos.z = z;
+        // The size a home node draws at, kept while the depth moves: a sheet
+        // off home is drawn smaller, and this is measuring the split rather
+        // than the sevens layer.
+        node.scale = 1.0;
+        scene
+    };
+    let worst = |a: &[u8], b: &[u8]| -> i32 {
+        (0..a.len())
+            .map(|i| (a[i] as i32 - b[i] as i32).abs())
+            .max()
+            .unwrap_or(0)
+    };
+    let split = gpu.shot(&build(0.0, CLEAR_REACH));
+    let whole = gpu.shot(&build(0.001, CLEAR_REACH));
+
+    // The depth hair on its own, with no clearing for either to draw.
+    let flat_home = gpu.shot(&build(0.0, 0.0));
+    let flat_off = gpu.shot(&build(0.001, 0.0));
+    assert_eq!(
+        worst(&flat_home, &flat_off),
+        0,
+        "the reference is not the same node: the depth hair moved the picture on its own",
+    );
+    // Non-vacuous: the node has to be painting a clearing for the split to have
+    // anything to be exact about.
+    let cleared = (0..split.len())
+        .step_by(4)
+        .filter(|&i| split[i..i + 4] != flat_home[i..i + 4])
+        .count();
+    assert!(cleared > 100, "the fixture clears only {cleared} pixels; nothing is under test");
+
+    assert!(
+        worst(&split, &whole) <= 2,
+        "the split moved a channel by {} over the {cleared} pixels it clears, which is more \
+         than laying one fragment down in two steps can round it by",
+        worst(&split, &whole),
     );
 }

@@ -540,7 +540,25 @@ struct GpuInstance {
     /// the same reason: it is the light's SIZE, and a size that stepped when
     /// the marking voice was pruned snapped a halo still at full brightness.
     glow: [f32; 4],
+    /// Which half of the node this instance draws: [`PAINT_WHOLE`] for both,
+    /// [`PAINT_INK`] or [`PAINT_CLEARING`] for one. See `Instance::paint` in
+    /// lattice.wgsl for what the split buys and why it comes out the same
+    /// picture.
+    paint: f32,
 }
+
+/// What [`GpuInstance::paint`] can say, mirroring lattice.wgsl's constants of
+/// the same names. Every sheet but the home one draws WHOLE; a home node is
+/// split in two so the resting markers can be drawn between its halves.
+///
+/// The clearing half rides a buffer of its own rather than extra entries in the
+/// instance list, and that is what keeps the split to the scene pass: the glow,
+/// the ink strip and the cull all walk the instance buffer whole, and a node
+/// appearing twice in it would light twice and write its strip row twice. None
+/// of them read this field.
+const PAINT_WHOLE: f32 = 0.0;
+const PAINT_INK: f32 = 1.0;
+const PAINT_CLEARING: f32 = 2.0;
 
 impl GpuInstance {
     const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
@@ -561,7 +579,7 @@ impl GpuInstance {
             0 => Float32x3, 1 => Float32x4, 2 => Float32x3, 3 => Uint32x3,
             4 => Float32, 6 => Uint32x2,
             7 => Float32x4, 8 => Float32x4, 10 => Float32x2, 11 => Float32,
-            12 => Float32x4
+            12 => Float32x4, 13 => Float32
         ],
     };
 }
@@ -610,6 +628,11 @@ struct GpuPlus {
     /// alpha is under one otherwise, a name or the note itself claiming the
     /// position over it (`derive_pluses`).
     color: [f32; 4],
+    /// How much of this marker's shadow stands (`PlusInstance::shade`). Its own
+    /// attribute rather than a share of `color.a`, because the two part company
+    /// over any node lit by something that does not claim the position: the ink
+    /// answers to what is drawn there, the shadow to what is lit there.
+    shade: f32,
 }
 
 impl GpuPlus {
@@ -617,7 +640,7 @@ impl GpuPlus {
         array_stride: std::mem::size_of::<GpuPlus>() as u64,
         step_mode: wgpu::VertexStepMode::Instance,
         attributes: &wgpu::vertex_attr_array![
-            0 => Float32x4, 1 => Float32x4
+            0 => Float32x4, 1 => Float32x4, 2 => Float32
         ],
     };
 }
@@ -690,6 +713,9 @@ struct LatticeCallback {
     instances: Vec<GpuInstance>,
     /// Index into `instances` where the markers are drawn (see `from_scene`).
     pluses_at: u32,
+    /// The home sheet's knockouts, drawn at `pluses_at` and ahead of the
+    /// markers there (see [`PAINT_CLEARING`]).
+    clearings: Vec<GpuInstance>,
     /// Every label's glyphs, in the order the pass draws them, and where each
     /// label falls in the node run (see [`GlyphSeam`]).
     glyphs: Vec<GlyphInstance>,
@@ -888,11 +914,15 @@ impl LatticeCallback {
         // the home one punches its clearing through the home markers, putting
         // a hole in the layer that is supposed to be hiding it.
         //
-        // The home sheet then draws after the markers, so a home node's
-        // clearing cuts them as well as the sheets behind — the node sits in a
-        // clean gap in the lattice rather than on top of it. (Drawing the home
-        // clearings in a pass of their own ahead of the markers would spare
-        // them; they are wanted cut.)
+        // The home sheet then draws after the markers, and its own CLEARINGS
+        // ahead of them: a home node is drawn twice so the knockout can hide
+        // the sheets behind the node without taking the cross the node stands
+        // on with them (`GpuInstance::paint`). A cross goes when a NAME stands
+        // over it and at no other time (`derive_pluses`), and a node wearing an
+        // audio ring has no name to put there — so a clearing that cut the
+        // markers took the mark of the position off every node the Gate lit,
+        // leaving the marker's own standoff behind in the light with nothing
+        // standing in it.
         //
         // World z is measured from the home sheet, so its whole run sits at
         // sheet depth 0 — behind it is positive, in front negative. Sorting
@@ -910,11 +940,20 @@ impl LatticeCallback {
                 sevens: [n.scale, gutter],
                 ring: n.audio_ring,
                 glow: [n.glow.level, n.glow.row as f32, n.glow.mix, n.glow.marked],
+                paint: PAINT_WHOLE,
         };
 
         let split = order
             .iter()
             .position(|&(plane, _, _)| plane <= 0.0)
+            .unwrap_or(order.len());
+        // And where it ENDS: the sheets in front are the negative half of the
+        // same axis, so the home run is exactly the nodes at a depth of 0. A
+        // sheet in FRONT keeps its clearing whole — hiding the markers is the
+        // ordinary occlusion every sheet does to the one behind it.
+        let home_end = order
+            .iter()
+            .position(|&(plane, _, _)| plane < 0.0)
             .unwrap_or(order.len());
         // A node that can paint nothing is not shipped at all. The shader
         // already discards it per fragment, but the billboard is deliberately
@@ -985,23 +1024,39 @@ impl LatticeCallback {
         let drawn = |out: &mut Vec<GpuInstance>,
                      seam_of: &mut [Seam],
                      ns: &[(f32, f32, usize)],
-                     after_pluses: bool| {
+                     after_pluses: bool,
+                     paint: f32| {
             for &(_, _, i) in ns {
                 let node = &scene.nodes[i];
                 let instance = to_gpu(node, node.gutter);
                 if paints(&instance) {
-                    out.push(instance);
+                    out.push(GpuInstance { paint, ..instance });
                 }
                 seam_of[i] = Seam { at: out.len() as u32, after_pluses, sheet: sheet_of[i] };
             }
         };
         let mut instances = Vec::with_capacity(order.len());
-        drawn(&mut instances, &mut seam_of, &order[..split], false);
+        drawn(&mut instances, &mut seam_of, &order[..split], false, PAINT_WHOLE);
         // Where the markers are drawn inside that run: after the sheets BEHIND
         // the home one, counted over the kept instances rather than `split`,
         // which indexes the list before the cull.
         let pluses_at = instances.len() as u32;
-        drawn(&mut instances, &mut seam_of, &order[split..], true);
+        drawn(&mut instances, &mut seam_of, &order[split..home_end], true, PAINT_INK);
+        drawn(&mut instances, &mut seam_of, &order[home_end..], true, PAINT_WHOLE);
+        // The home sheet's knockouts, drawn at that same seam and ahead of the
+        // markers there. The same cull as their ink's, since the two are one
+        // node — a node that paints nothing clears nothing either, every
+        // layer's hole being scaled by the level that paints it
+        // (`node_clearing`) — and in the same order, so what a nearer home node
+        // hides of a farther one's hole it hides here too.
+        let clearings: Vec<GpuInstance> = order[split..home_end]
+            .iter()
+            .map(|&(_, _, i)| &scene.nodes[i])
+            .filter(|node| node.gutter > 0.0)
+            .map(|node| to_gpu(node, node.gutter))
+            .filter(paints)
+            .map(|instance| GpuInstance { paint: PAINT_CLEARING, ..instance })
+            .collect();
         let (glyphs, seams) = place_labels(labels.glyphs, &labels.labels, &seam_of);
 
         // The markers draw under the nodes.
@@ -1011,12 +1066,14 @@ impl LatticeCallback {
             .map(|d| GpuPlus {
                 pos_radius: [d.pos.x, d.pos.y, d.pos.z, d.radius],
                 color: [d.color.x, d.color.y, d.color.z, d.strength],
+                shade: d.shade,
             })
             .collect();
 
         LatticeCallback {
             instances,
             pluses_at,
+            clearings,
             glyphs,
             seams,
             rings: labels.rings,
@@ -1452,10 +1509,16 @@ struct PaneBuffers {
     instance_capacity: usize,
     instance_count: u32,
     /// Where the markers are drawn inside the node run: instances before this
-    /// are the sheets behind the home one plus the home sheet's own
-    /// clearings, and must land under the markers; the rest go over them. See
-    /// `LatticeCallback::from_scene`.
+    /// are the sheets behind the home one and must land under the markers; the
+    /// rest go over them. The home sheet's own knockouts are drawn there too,
+    /// off `clearing_buffer`. See `LatticeCallback::from_scene`.
     pluses_at: u32,
+    /// The home sheet's knockouts, drawn at `pluses_at` ahead of the markers.
+    /// A buffer of its own rather than more entries in the instance list, so
+    /// the glow, the strip and the cull go on seeing each node exactly once.
+    clearing_buffer: wgpu::Buffer,
+    clearing_capacity: usize,
+    clearing_count: u32,
     plus_buffer: wgpu::Buffer,
     plus_capacity: usize,
     plus_count: u32,
@@ -3025,6 +3088,13 @@ impl LatticeResources {
                 ),
                 instance_capacity: INITIAL_INSTANCE_CAPACITY,
                 instance_count: 0,
+                clearing_buffer: create_vertex_buffer::<GpuInstance>(
+                    device,
+                    "lattice_clearings",
+                    INITIAL_INSTANCE_CAPACITY,
+                ),
+                clearing_capacity: INITIAL_INSTANCE_CAPACITY,
+                clearing_count: 0,
                 plus_buffer: create_vertex_buffer::<GpuPlus>(
                     device,
                     "lattice_pluses",
@@ -3290,6 +3360,23 @@ impl CallbackTrait for LatticeCallback {
                 &pane.instance_buffer,
                 0,
                 bytemuck::cast_slice(&self.instances),
+            );
+        }
+
+        if self.clearings.len() > pane.clearing_capacity {
+            pane.clearing_capacity = self.clearings.len().next_power_of_two();
+            pane.clearing_buffer = create_vertex_buffer::<GpuInstance>(
+                device,
+                "lattice_clearings",
+                pane.clearing_capacity,
+            );
+        }
+        pane.clearing_count = self.clearings.len() as u32;
+        if !self.clearings.is_empty() {
+            queue.write_buffer(
+                &pane.clearing_buffer,
+                0,
+                bytemuck::cast_slice(&self.clearings),
             );
         }
 
@@ -3610,10 +3697,10 @@ impl CallbackTrait for LatticeCallback {
             // NOT under everything. Under everything, a node on a sheet
             // behind the home one punches its clearing through the marker
             // field, which puts a hole in the layer it is supposed to be
-            // hidden by. `pluses_at` is where that seam falls; the home
-            // sheet's own clearings are the tail of the first run, ahead of
-            // the markers, so they can hide the sheets behind without eating
-            // the markers they sit on.
+            // hidden by. `pluses_at` is where that seam falls, and the home
+            // sheet's own knockouts are drawn there ahead of them
+            // (`GpuInstance::paint`), so they hide the sheets behind without
+            // eating the markers they sit on.
             let nodes = |pass: &mut wgpu::RenderPass<'_>, range: std::ops::Range<u32>| {
                 if range.is_empty() {
                     return;
@@ -3625,6 +3712,18 @@ impl CallbackTrait for LatticeCallback {
                 pass.draw(0..4, range);
             };
             let pluses = |pass: &mut wgpu::RenderPass<'_>| {
+                // The home sheet's knockouts first, so the hole they cut hides
+                // the sheets behind without taking the markers standing in it
+                // (`PAINT_CLEARING`). Same pipeline and same bind groups as the
+                // nodes: this IS those nodes, drawn for one of the two things
+                // they paint.
+                if pane.clearing_count > 0 {
+                    pass.set_pipeline(&resources.pipeline);
+                    pass.set_bind_group(0, &pane.bind_group, &[]);
+                    pass.set_bind_group(1, light, &[]);
+                    pass.set_vertex_buffer(0, pane.clearing_buffer.slice(..));
+                    pass.draw(0..4, 0..pane.clearing_count);
+                }
                 if pane.plus_count == 0 {
                     return;
                 }

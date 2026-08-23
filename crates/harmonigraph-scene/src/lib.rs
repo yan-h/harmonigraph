@@ -519,9 +519,14 @@ pub struct NodeInstance {
     ///
     /// A WIDTH and not a decision: whether a node clears, and how strongly, is
     /// per LAYER and settled in the shader, each layer's hole scaled by the
-    /// level that paints it. Gating this on the note instead is what left a
-    /// node wearing an audio ring with no key down — which the Gate hands out
-    /// freely — drawing that ring over an uncut marker.
+    /// level that paints it. Gating this on the note instead would leave a node
+    /// wearing an audio ring with no key down — which the Gate hands out freely
+    /// — drawing that ring over the sheets behind it with no hole to sit in.
+    ///
+    /// The hole is over the SHEETS and not over the resting field: a marker
+    /// standing where a node stands is drawn between the two halves of that
+    /// node (`GpuInstance::paint` in harmonigraph-render), so no clearing takes
+    /// a cross.
     pub gutter: f32,
     /// Signed cents from the home-sheet node this one shares a LETTER and an
     /// accidental with: `(threes - 2*(sevens - center), fives, center)`,
@@ -791,6 +796,10 @@ impl NodeInstance {
 /// nodes, and the whole of what an unplayed lattice draws.
 #[derive(Clone, Copy, Debug)]
 pub struct PlusInstance {
+    /// Which lattice position this marker stands at, so the passes BEHIND
+    /// `derive_scene` can find the node under it ([`Scene::shade_markers`]).
+    /// Never uploaded — [`pos`](Self::pos) is what the GPU is given.
+    pub lattice_pos: LatticePos,
     /// The position's own world center.
     pub pos: Vec3,
     /// How far the marker reaches, in WORLD units: the length of one arm,
@@ -805,6 +814,32 @@ pub struct PlusInstance {
     pub color: Vec4,
     /// The marker's opacity.
     pub strength: f32,
+    /// How much of this marker's SHADOW stands, 0..=1 — what
+    /// [`strength`](Self::strength) is to its ink and its pool, for the
+    /// standoff its cross writes into the light (`plus_standoff` in
+    /// lattice.wgsl).
+    ///
+    /// Its own number because the ink and the shadow answer to different
+    /// things. The ink is claimed by what is DRAWN at the position — a name
+    /// over it, or the note itself — and a node lit by anything else keeps its
+    /// cross whole, an analyzer ring being light a node WEARS rather than a
+    /// claim on the position under it. The shadow answers to the light instead,
+    /// whatever raised it: a node's middle is the one place the picture keeps
+    /// free of a standoff ([`glow_standoff`](crate::ViewConfig::glow_gap) is
+    /// measured from each ring's own annulus, so the light runs in to the
+    /// centre) and a cross standing there cuts the node's own halo whether a
+    /// key, a mark or a ring is what lit it.
+    ///
+    /// Never above `strength`: ink that is not there casts nothing. That is
+    /// also what keeps [`derive_pluses`](derive::derive_pluses) free to drop a
+    /// fully-claimed marker outright, rather than ship one whose shadow
+    /// outlives its cross.
+    ///
+    /// Closed against the CARRIED light, which is not known at derive time —
+    /// the audio ring is folded in behind it and the level outlives a note's
+    /// own activation — so [`Scene::shade_markers`] is what settles this and
+    /// what `derive_scene` leaves here is the MIDI layers' answer alone.
+    pub shade: f32,
 }
 
 /// Everything the renderer needs for one frame.
@@ -1166,6 +1201,38 @@ impl Scene {
             // of it is showing. The light needs the first (see
             // [`NodeInstance::ring_peak`]); the drawn ring needs the second.
             node.ring_peak = gate.peak(layout, node.cents);
+        }
+    }
+
+    /// Close each marker's shadow against the light standing over it
+    /// ([`PlusInstance::shade`]), which is the last thing about a marker that
+    /// `derive_scene` cannot answer: the level it is closed against carries the
+    /// audio ring in and outlives a note's own activation, and both arrive
+    /// behind the derivation (`panes::glow_fade` in harmonigraph-ui, which is
+    /// the pass this must follow — its own caller runs the two in order).
+    ///
+    /// What closes is this marker's shadow against the node it STANDS UNDER,
+    /// which is the whole of the rule and not a shorthand for it: a marker goes
+    /// on holding a neighbour's spill off its cross exactly as before. The
+    /// light a cross may not cut is the light of the node it is standing in the
+    /// middle of.
+    ///
+    /// Idempotent, and safe to skip: a scene nothing calls this on draws the
+    /// shadow the MIDI layers asked for, which is what a key down alone would
+    /// have said.
+    pub fn shade_markers(&mut self) {
+        let nodes = &self.nodes;
+        // Both lists are in node order and the markers are a subset of the
+        // nodes (`derive_pluses` filters and keeps the order), so the two walk
+        // together in one pass rather than a lookup per marker.
+        let mut at = 0usize;
+        for plus in &mut self.pluses {
+            while nodes.get(at).is_some_and(|n| n.lattice_pos != plus.lattice_pos) {
+                at += 1;
+            }
+            let Some(node) = nodes.get(at) else { break };
+            plus.shade = plus.strength * (1.0 - node.glow.level.clamp(0.0, 1.0));
+            at += 1;
         }
     }
 }

@@ -795,31 +795,49 @@ pub(crate) fn derive_pluses(
     // person can see; an alpha reads against whatever is behind, which here is
     // sometimes a halo.
     //
-    // What does move it is the position being CLAIMED — by the name above it,
-    // or by the note itself — and only while that claim is on its way in or
-    // out: a marker gets what the claim leaves, so the two hand the position
-    // over without it going empty or being held twice (`name_level`). Fully
-    // claimed is fully gone, and the instance is dropped rather than shipped at
-    // zero — a marker nothing can see is a draw nothing needs.
+    // What does move it is a NAME standing over the position, and only while
+    // that name is on its way in or out: a marker gets what the name leaves, so
+    // the two hand the position over without it going empty or being held twice
+    // (`name_level`). Fully named is fully gone, and the instance is dropped
+    // rather than shipped at zero — a marker nothing can see is a draw nothing
+    // needs.
     //
-    // WHICHEVER claims it harder rather than the two multiplied, which is what
-    // keeps the pair exact where they agree: under `Played` a name is drawn at
-    // the node's own activation, and a product would spend one handoff twice.
-    // The note's own claim is what the names leave uncovered when they are
-    // switched off, and it is needed there because a marker standing at a lit
-    // node's centre writes a standoff into the one place the picture keeps free
-    // of one (`plus_standoff` in lattice.wgsl,
-    // [`ViewConfig::glow_gap`](crate::ViewConfig::glow_gap)).
+    // A name and NOTHING else, which is the whole rule: the cross disappears if
+    // and only if a name is present. A note reaches it through the name rather
+    // than beside it, and does so under every Show mode — `name_level` is
+    // `activation.max(resting)`, so a sounding note is named at its own
+    // activation even under `Played`, where nothing rests. Asking the note a
+    // second time here would therefore change one case only, the one where
+    // there are no names to be present: with the Note names switched off a
+    // sounding note would take a marker that no name is taking, which is the
+    // rule read backwards.
+    //
+    // So an analyzer ring moves this by nothing, having no name to put over a
+    // position. The light's own quarrel with a cross — the standoff one writes
+    // into a lit node's middle — is settled on the marker's other term instead
+    // ([`PlusInstance::shade`](crate::PlusInstance::shade)), which is closed
+    // against every layer and is what keeps a returning cross from biting a
+    // halo the note's own fade has outlived.
     nodes
         .iter()
         .filter(|n| n.on_home)
         .filter_map(|n| {
-            let clear = 1.0 - n.name_level(view).max(n.activation);
-            (clear > 0.0).then(|| PlusInstance {
-                pos: n.world_pos,
-                radius,
-                color: ink,
-                strength: ink.w * clear,
+            let clear = 1.0 - n.name_level(view);
+            (clear > 0.0).then(|| {
+                let strength = ink.w * clear;
+                PlusInstance {
+                    lattice_pos: n.lattice_pos,
+                    pos: n.world_pos,
+                    radius,
+                    color: ink,
+                    strength,
+                    // The MIDI layers' light, which is the whole of what has
+                    // been measured this far into the frame (see
+                    // `NodeInstance::glow`). `Scene::shade_markers` settles it
+                    // against the carried level once the fold and the glow's
+                    // own clock have run.
+                    shade: strength * (1.0 - n.glow.level.clamp(0.0, 1.0)),
+                }
             })
         })
         .collect()
