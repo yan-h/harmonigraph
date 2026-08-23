@@ -1026,6 +1026,18 @@ pub struct Scene {
     /// per instance (it is a world length too) and the pool's draw needs the
     /// span before it knows which marker it is drawing.
     pub marker_span: f32,
+    /// One quad-uv length of the home sheet, as a world length
+    /// (`marker_world`): what converts the marker field between the units its
+    /// own draws are in and the units every glow bar is dialled in.
+    ///
+    /// The markers' light draw needs both. A billboard is sized in WORLD and
+    /// the arm it is sized around arrives per instance as a world length, while
+    /// the Gap that same draw stands the light off by is quad uv, being a
+    /// node's bar — so one of the two has to be converted, and the conversion
+    /// is a property of the scene rather than of any marker. Handing it over
+    /// once is what keeps the shader from carrying a second copy of the uv rule
+    /// (see [`Scene::node_radius`], which is the same rule for a node).
+    pub marker_unit: f32,
     /// How widely a node's own ink is averaged into the colour of its light
     /// (see [`ViewConfig::glow_blend`]); already clamped to 0..=1.
     pub glow_blend: f32,

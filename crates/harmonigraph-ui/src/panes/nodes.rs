@@ -788,8 +788,9 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
             |v| format!("{:.1}%", v * 100.0),
         )
         .on_hover_text(
-            "How far the light is held off each ring a node draws — its audio \
-             ring, its octave band, its marks — as a share of the node's \
+            "How far the light is held off everything drawn in it — a node's \
+             audio ring, octave band and marks, and the cross standing at each \
+             resting position — as a share of the node's \
              radius. Dark to the inner handle, faded back in by the outer; drag \
              the inner to the left edge to fade the whole gap, which is what \
              keeps a wide gap from reading as a black ring. It holds off the \
@@ -874,9 +875,11 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                  to take the resting markers with it. This is the pool alone, \
                  so the two are free of each other. It is the same light the \
                  notes give off: it melds with their halos instead of summing, \
-                 the Feather shapes it and the Strength scales it, and a node's \
-                 Gap dims it where it stands, so the resting field parts around \
-                 a sounding note. How much of its own pool the cross wears is \
+                 the Feather shapes it and the Strength scales it, and the Gap \
+                 holds it off ink the way it holds a note's light off its \
+                 rings: the resting field parts around a sounding note, and \
+                 each cross stands in a dark moat of its own. How much of its \
+                 own pool the cross wears is \
                  the Wash above — low leaves it a silhouette standing in the \
                  light, high melts it in. It does not take the Reach: there is \
                  a marker at every position and they all light at once, so \

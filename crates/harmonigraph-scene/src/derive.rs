@@ -619,6 +619,7 @@ pub fn derive_scene(
         glow_wash: view.glow_wash.clamp(0.0, 1.0),
         marker_light: view.marker_light.clamp(0.0, 1.0),
         marker_span: derive_marker_span(view),
+        marker_unit: marker_world(view, 1.0),
         glow_blend: view.glow_blend.clamp(0.0, 1.0),
         // A row per node, so a scene nothing has carried still reads one strip
         // row per node — the shell's pass hands out rows of its own and raises

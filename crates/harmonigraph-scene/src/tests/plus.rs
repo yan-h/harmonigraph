@@ -55,6 +55,55 @@ fn span_of(view: &ViewConfig) -> f32 {
     scene_of(&NoteTracker::new(), &Tuning::default(), view, &plain_frame(), 0.0).marker_span
 }
 
+fn unit_of(view: &ViewConfig) -> f32 {
+    scene_of(&NoteTracker::new(), &Tuning::default(), view, &plain_frame(), 0.0).marker_unit
+}
+
+/// `marker_unit` converts the marker field between the world its draws are in
+/// and the quad uv its bars are dialled in — an arm and a pool both read back as
+/// the number the bar behind them holds.
+///
+/// The shader's own reason for wanting it: the markers' light draw is handed
+/// world lengths (a billboard, and an arm per instance) and holds that light off
+/// by the Gap, which is a node's bar and so in uv. One of the two has to be
+/// converted, and the conversion is the SCENE's rather than any marker's —
+/// carrying it over is what keeps `lattice.wgsl` from spelling the uv rule a
+/// second time for one more layer.
+///
+/// Read against the bars rather than against a formula, which is the whole
+/// point: a unit that disagreed with them would leave the marker's shadow drawn
+/// at a different Gap than every node's, on one bar.
+#[test]
+fn the_marker_unit_is_what_reads_a_markers_world_back_as_its_bars() {
+    let view = ViewConfig { plus_arm: 0.2, marker_reach: 0.3, ..plus_view() };
+    let unit = unit_of(&view);
+    assert!(unit > 0.0, "the field must have a unit to be measured in");
+    let arm = pluses_of(&view)[0].radius;
+    assert!(
+        (arm / unit - 0.2).abs() < 1e-4,
+        "an arm of 0.2 read back as {}",
+        arm / unit,
+    );
+    assert!(
+        (span_of(&view) / unit - 0.5).abs() < 1e-4,
+        "an arm of 0.2 and a reach of 0.3 spanned {}",
+        span_of(&view) / unit,
+    );
+    // The spacing is the one view bar under it, and it scales the field whole:
+    // both lengths move with the unit, so the bars read the same at either.
+    let wide = ViewConfig { spacing: view.spacing * 3.0, ..view.clone() };
+    assert!(
+        (unit_of(&wide) - unit * 3.0).abs() < 1e-4,
+        "trebling the spacing moved the unit to {}",
+        unit_of(&wide),
+    );
+    assert!(
+        (pluses_of(&wide)[0].radius / unit_of(&wide) - 0.2).abs() < 1e-4,
+        "a wider lattice read its own arm back as {}",
+        pluses_of(&wide)[0].radius / unit_of(&wide),
+    );
+}
+
 /// A marker's pool spans its own ARM plus the Marker reach, and takes nothing
 /// from the node Reach beside it.
 ///

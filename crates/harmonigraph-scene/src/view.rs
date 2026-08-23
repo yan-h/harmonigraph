@@ -1203,15 +1203,22 @@ pub struct ViewConfig {
     /// under its own Clearance — a node that clears nothing still stands its
     /// rings off.
     ///
-    /// Rings only, and a node draws nothing else: inside the innermost ring
-    /// nothing stands the light off at all, which is what lights the middle of
-    /// a node whose innermost ring is an annulus. Each ring carries its own
+    /// On a node it is its RINGS, and a node draws nothing else: inside the
+    /// innermost ring nothing stands the light off at all, which is what lights
+    /// the middle of a node whose innermost ring is an annulus. Each ring
+    /// carries its own
     /// level, so a layer that is off, refused by the stack, attacking or
     /// releasing opens and closes its own standoff in step with the ink it
     /// stands off. And a ring is its SLICES rather than a closed annulus, so
     /// the light comes back between them as well as either side of them: past
     /// an [`octave_gap`](Self::octave_gap) of twice this, a gap between two
     /// slices is wide enough to keep all of its own light.
+    ///
+    /// A resting MARKER's cross stands the light off on this same bar, out to
+    /// the arm's solid length (`plus_standoff` in lattice.wgsl). It is ink
+    /// standing in the light exactly as a ring is, so a lattice whose sounding
+    /// notes are dark-rimmed and whose resting field is not would be two
+    /// pictures laid over each other; sharing the bar is what makes it one.
     ///
     /// The ceiling is [`GLOW_GAP_MAX`], a whole radius where the two paddings
     /// stop at [`GAP_MAX`]: what stops a standoff reading as a black RING

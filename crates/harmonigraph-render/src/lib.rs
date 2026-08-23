@@ -404,7 +404,10 @@ struct Uniforms {
     /// lights the position it stands at (`Scene::marker_light`); z: how far that
     /// light reaches from the marker's crossing, in WORLD units
     /// (`Scene::marker_span`) — a length where every other dial here is a share,
-    /// because the pool's billboard is sized to it. w unused.
+    /// because the pool's billboard is sized to it; w: one quad uv as a world
+    /// length on the markers' sheet (`Scene::marker_unit`), which is what the
+    /// pool's draw converts between its own world lengths and the uv the Gap it
+    /// stands the light off by is dialled in.
     ///
     /// The marker's light rides beside the wash because the two are the pair
     /// that decides what a resting position looks like — one lays a pool down,
@@ -1092,7 +1095,12 @@ impl LatticeCallback {
                     [0.0; 4]
                 },
                 misc13: if lights {
-                    [scene.glow_wash, scene.marker_light, scene.marker_span, 0.0]
+                    [
+                        scene.glow_wash,
+                        scene.marker_light,
+                        scene.marker_span,
+                        scene.marker_unit,
+                    ]
                 } else {
                     [0.0; 4]
                 },
@@ -3495,13 +3503,14 @@ impl CallbackTrait for LatticeCallback {
                     pass.set_pipeline(&resources.glow_pipeline);
                     pass.draw(0..4, 0..pane.instance_count);
                 }
-                // The resting markers' own light, into the same three
-                // attachments: a pool at every home position, melding with the
-                // node halos above rather than summing with them. It draws in
-                // the same pass because it is the same field — one light, laid
-                // down under the whole lattice, and a marker's pool arriving in
-                // a pass of its own would be a second layer for the composite
-                // and every clearing to read.
+                // The resting markers, into the same three attachments: a pool
+                // at every home position melding with the node halos above
+                // rather than summing with them, and the standoff each cross
+                // holds that light off by. It draws in the same pass because it
+                // is the same field — one light with one shadow cut into it,
+                // laid down under the whole lattice, and a marker arriving in a
+                // pass of its own would be a second layer for the composite and
+                // every clearing to read.
                 //
                 // Order-free like the node draw beside it, on the same
                 // guarantee: both blends are commutative, so nothing decides

@@ -542,6 +542,10 @@ fn parity_scene() -> Scene {
         glow_wash: 0.15,
         marker_light: 0.10,
         marker_span: 0.5,
+        // `node_radius` above through the uv rule both fields are in
+        // (`marker_world`), so the span and the arms below read as the quad uv
+        // every glow bar is dialled in.
+        marker_unit: 0.34 * 1.8,
         glow_blend: 0.5,
         // A row per node, which is what the nodes above are built with.
         glow_rows,
@@ -6496,15 +6500,22 @@ fn a_resting_marker_lights_its_own_position() {
     assert_eq!(dimmed, 0, "a pool took light off the ground it landed on");
 }
 
-/// A node's Gap dims a marker's pool where it stands: the resting field parts
-/// around a sounding note.
+/// The Gap dims a marker's pool where it stands: the resting field parts around
+/// what is drawn in it.
 ///
 /// It costs the marker's light no code of its own, and that is what is being
 /// held here. The standoff is a layer written beside the light and applied once
 /// where the light meets the picture (`fs_glow_over` in blit.wgsl), so it lands
-/// on whatever is in that field — and a marker's pool is now in it. A pool that
+/// on whatever is in that field — and a marker's pool is in it. A pool that
 /// escaped the standoff would mean the markers had been written somewhere the
 /// composite does not read.
+///
+/// WHOSE standoff is not separated, and cannot be from one bar: the node's
+/// reaches these markers and each marker's own reaches its own pool
+/// ([`plus_standoff`] in lattice.wgsl). Either alone keeps the guard, which is
+/// about where the pool was WRITTEN rather than about what stands over it —
+/// `a_marker_holds_a_nodes_halo_off_its_own_cross` is where a marker's own
+/// standoff is measured, on a fixture that separates it from the node's.
 ///
 /// Measured as the DIFFERENCE the markers make, at one Gap depth against
 /// another. The node's own light changes with the depth too, so neither shot
@@ -6514,7 +6525,7 @@ fn a_resting_marker_lights_its_own_position() {
 /// slack is because the pools reach past the standoff's own bite, and what
 /// would fail this is a pool the standoff never touched.
 #[test]
-fn a_nodes_gap_dims_the_markers_pool() {
+fn the_gap_dims_the_markers_pool() {
     const SIZE: [u32; 2] = [256, 256];
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
@@ -6659,6 +6670,200 @@ fn a_markers_pool_does_not_take_the_reach() {
         differing_pixels(&near, &far),
         0,
         "twenty times the Reach moved a marker's pool",
+    );
+}
+
+/// The lattice a marker's shadow is measured on: one node lighting the whole
+/// pane, and four markers standing in that light with none of their own.
+///
+/// `marker_light` at 0 throughout, which is what makes every one of these a
+/// claim about the SHADOW: the only light in the frame is the node's, so a
+/// pixel the markers darken is a pixel where a marker held a node's halo off —
+/// the melded field, and not a pool the marker laid down itself.
+fn shadowed_markers(depth: f32, gap: f32, taper_start: f32) -> Scene {
+    let mut scene = single_marked_node(0, 0);
+    scene.camera = harmonigraph_scene::Camera {
+        projection: harmonigraph_scene::Projection::Orthographic,
+        yaw: 0.0,
+        pitch: 0.0,
+        ..Default::default()
+    };
+    // A halo across the whole pane, so every marker has light to hold off
+    // wherever it stands.
+    scene.glow_reach = 4.0;
+    scene.glow_strength = 2.0;
+    scene.glow_feather = 1.0;
+    scene.glow_gap = gap;
+    scene.glow_gap_soft = gap;
+    scene.glow_gap_depth = depth;
+    scene.marker_light = 0.0;
+    scene.plus_taper_start = taper_start;
+    // Four markers out where the node's halo still reaches and its own standoff
+    // does not. The distance is the fixture's one delicate number: the shade
+    // layer is a `max`, so a marker standing inside the node's own standoff adds
+    // nothing to it and the shadow measured would be the node's.
+    scene.pluses = [(2.6f32, 0.0f32), (-2.6, 0.0), (0.0, 2.6), (0.0, -2.6)]
+        .into_iter()
+        .map(|(x, y)| harmonigraph_scene::PlusInstance {
+            pos: glam::Vec3::new(x, y, 0.0),
+            radius: 0.4,
+            color: scene.lattice_ground,
+            strength: 1.0,
+        })
+        .collect();
+    scene
+}
+
+/// Which pixels of `ground` the markers DARKEN, against the same frame with no
+/// marker in it.
+///
+/// `ground` is the set the markers' ink never reaches, taken from the pair at a
+/// depth of 0 where a marker writes ink and nothing else. It is the ink's own
+/// footprint that is being excluded and the footprint does not move with the
+/// depth, so one reading of it answers for every shot here.
+fn shadowed_ground(shooter: &mut Shooter, gap: f32, taper_start: f32) -> (Vec<usize>, usize) {
+    let flat_bare = shooter.shot(&{
+        let mut s = shadowed_markers(0.0, gap, taper_start);
+        s.pluses.clear();
+        s
+    });
+    let flat = shooter.shot(&shadowed_markers(0.0, gap, taper_start));
+    let ground: Vec<usize> = (0..flat.len())
+        .step_by(4)
+        .filter(|&i| flat[i..i + 4] == flat_bare[i..i + 4])
+        .collect();
+    let deep_bare = shooter.shot(&{
+        let mut s = shadowed_markers(1.0, gap, taper_start);
+        s.pluses.clear();
+        s
+    });
+    let deep = shooter.shot(&shadowed_markers(1.0, gap, taper_start));
+    let dimmed = ground
+        .iter()
+        .filter(|&&i| brightness(&deep[i..i + 3]) < brightness(&deep_bare[i..i + 3]))
+        .count();
+    // The pair at a depth of 0 is the other half of every claim below: with the
+    // Gap shut a marker writes no standoff at all, and nothing else in the light
+    // can subtract.
+    let flat_dimmed = ground
+        .iter()
+        .filter(|&&i| brightness(&flat[i..i + 3]) < brightness(&flat_bare[i..i + 3]))
+        .count();
+    assert_eq!(flat_dimmed, 0, "a marker took light off the ground at a Gap depth of 0");
+    (ground, dimmed)
+}
+
+/// A marker holds a NODE's halo off its cross, on the Gap bars the node's own
+/// rings are held off by.
+///
+/// The whole claim of the feature, and the reason the standoff rides in the
+/// light's draw rather than on the marker: what a marker stands off is the
+/// melded field, which here is somebody else's light entirely — the markers
+/// carry none of their own in this fixture. A shadow that only ever reached a
+/// marker's own pool would mean the third attachment had been written somewhere
+/// the composite does not read for the rest of the lattice.
+///
+/// The pair at a depth of 0 is asserted inside [`shadowed_ground`]: with the
+/// Gap shut nothing here subtracts, which is what says the darkening measured
+/// is the standoff and not the marker draw finding some other way to take light
+/// off the picture.
+#[test]
+fn a_marker_holds_a_nodes_halo_off_its_own_cross() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    let (ground, dimmed) = shadowed_ground(&mut shooter, 0.8, 1.0);
+    assert!(
+        ground.len() > 1000,
+        "the fixture must leave ground for the shadow to land on, not {}",
+        ground.len(),
+    );
+    assert!(
+        dimmed > 200,
+        "a full Gap depth darkened {dimmed} of the {} pixels the markers' ink never reaches",
+        ground.len(),
+    );
+}
+
+/// The Gap's WIDTH says how far a marker's shadow reaches, on the same bar it
+/// says it to a node's rings.
+///
+/// The depth alone would be a shadow of one size that could be dialled darker,
+/// which is not what the bar means anywhere else in the picture. A superset is
+/// what says the width stretches one shape rather than deepening it: every
+/// pixel a narrow Gap darkens, a wide one darkens too.
+///
+/// On the markers' OWN pool, with no node in the frame — the only fixture where
+/// the Gap moves nothing but the marker's shadow. A node's standoff widens on
+/// the same bar and its layer is a `max`, so with one in frame a wider Gap
+/// takes pixels off this count by covering them itself, and the superset would
+/// be measuring which of two shadows won rather than how far this one reaches.
+/// The pool is identical across every shot here, the Gap bars feeding the shade
+/// alone, so one unshadowed frame answers for all of them.
+#[test]
+fn a_markers_shadow_reaches_as_far_as_the_gap_does() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    let at = |depth: f32, gap: f32| -> Scene {
+        let mut scene = shadowed_markers(depth, gap, 1.0);
+        scene.nodes.clear();
+        scene.marker_light = 0.6;
+        // A pool wider than the widest shadow measured, so what bounds the
+        // count is how far the Gap reaches and not where the light runs out.
+        scene.marker_span = 1.6;
+        scene
+    };
+    let lit = shooter.shot(&at(0.0, 0.3));
+    let dark = |shooter: &mut Shooter, gap: f32| -> std::collections::BTreeSet<usize> {
+        let deep = shooter.shot(&at(1.0, gap));
+        (0..deep.len())
+            .step_by(4)
+            .filter(|&i| brightness(&deep[i..i + 3]) < brightness(&lit[i..i + 3]))
+            .collect()
+    };
+    assert!(total_light(&lit) > 0, "the fixture must light its markers");
+    let narrow = dark(&mut shooter, 0.15);
+    let wide = dark(&mut shooter, 1.2);
+    assert!(!narrow.is_empty(), "the narrow Gap must cast a shadow at all");
+    assert!(
+        wide.len() > narrow.len() * 2,
+        "widening the Gap from 0.15 to 1.2 shadowed {} against {}",
+        wide.len(),
+        narrow.len(),
+    );
+    let missed = narrow.difference(&wide).count();
+    assert_eq!(missed, 0, "the wider Gap left {missed} of the narrow shadow's pixels lit");
+}
+
+/// A marker's shadow is cast by the ink it HAS: the arm out to where its taper
+/// starts, and no shadow at all for the faint end past that.
+///
+/// The taper is what a marker's arms end with, so it is what decides how much
+/// arm there is to hold light off. Read as a SHAPE — the solid length shortens
+/// — rather than as a factor on the coverage, which is the tempting reading and
+/// fails at the one place that matters: the taper is 0 at the tip by
+/// construction, so a coverage scaled by it leaves every fragment OUTSIDE an
+/// arm reading the ink it stands off as absent, and a square-ended marker casts
+/// no shadow anywhere. That both ends of this bar shadow something is what
+/// holds that; the superset is what says the bar moves the shape.
+#[test]
+fn a_markers_shadow_is_cast_by_the_arm_that_has_ink() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    let (_, square) = shadowed_ground(&mut shooter, 0.5, 1.0);
+    let (_, tapered) = shadowed_ground(&mut shooter, 0.5, 0.25);
+    assert!(
+        tapered > 0,
+        "an arm tapering from a quarter of its length cast no shadow at all",
+    );
+    assert!(
+        square > tapered,
+        "a square-ended marker shadowed {square} against the tapered one's {tapered}",
     );
 }
 
