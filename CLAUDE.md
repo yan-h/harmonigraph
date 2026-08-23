@@ -79,10 +79,10 @@ the main repo root, so it silently builds main. The bundle looks fresh and
 contains none of the branch's changes. `load-plugin.sh` and
 `update-plugin.sh` exist to sidestep this.
 
-## House style: hand-formatted, comments in the present tense
+## House style: hand-formatted; comments present-tense and at their own site
 
-Two conventions here are invisible to the build — nothing fails when you
-break either, and both are easy to break by reflex.
+Three conventions here are invisible to the build — nothing fails when you
+break any of them, and all three are easy to break by reflex.
 
 **Never run `cargo fmt`.** There is no `rustfmt.toml`, and the tree has
 never been through rustfmt, so rustfmt's idea of this code and the code
@@ -140,12 +140,47 @@ in the exception; it is now the ordinary rot case, because no code reads an
 old blob differently. State what the value is and why, not which build wrote
 it.
 
-This matters more here than in most repos: comments are over 40% of the
-non-blank lines under `crates/` — doc comments alone are nearly 30% —
-and the codebase is heavily rationale-driven, so a comment is often the only
-carrier of why the code is weird, and it acts as a tripwire against
-plausible-but-wrong "simplifications". New PRs keep regenerating the pattern,
-so this is a habit to maintain rather than a one-time cleanup.
+**A comment states the constraint at its own site; it does not narrate the
+code around it.** This is the rule about ALTITUDE, and it is where the
+upkeep actually goes: measured over the thirty PRs ending at #437, about
+half of every changed line was a comment line and a quarter to a third of
+hunks changed nothing BUT comments — and almost none of that churn was
+rationale. It was prose mirroring the rest of the system from where it sat:
+a doc comment listing the glow's passes ("the light, the moat that takes
+light back off, and the cover that..."), rewritten every time a pass came or
+went; vocabulary name-checks (moat→standoff, grid→markers,
+`grid_at`→`pluses_at`) that cost one edit in code and one per prose
+mention; a test's doc comment re-describing the fixture that sits directly
+under it. A mirror has to be repainted every time the thing it reflects
+moves, and a rename of one word in the picture is paid for at every
+sentence that uses it. Concretely:
+
+- Say what THIS value, branch or pass is constrained to and why. If the
+  relationship to another site is the constraint, state it in a line and
+  link the site (`see X`) — a link does not restate X, so it survives X
+  changing; an inventory of X does not.
+- Never describe what is ABSENT ("with no moat", "the moat is off here on
+  purpose"). Such a comment has a half-life of one PR: the moment the thing
+  is deleted, the sentence about its absence is the rot.
+- A test's doc comment is the CLAIM — what the measurement shows and why
+  that is the thing to measure. The fixture is the code below it; don't
+  narrate it.
+- A config field's doc carries units, range and what the endpoints mean.
+  How the shader or the pane consumes the value belongs at the consumer.
+
+What this does NOT license is cutting rationale. The codebase is heavily
+rationale-driven — a comment is often the only carrier of why the code is
+weird, and it is the tripwire against a plausible-but-wrong "simplification"
+by a reader with no memory of the decision, which here is almost every
+reader. Those comments rarely rot, because a constraint does not move when a
+neighbour is renamed. The density of the tree (over 40% of the non-blank
+lines under `crates/` are comments, doc comments alone nearly 30%) is a COST
+this rule exists to stop growing, not a norm to match; a new comment earns
+its place by stating a constraint, not by reaching the surrounding average.
+Both comment rules are habits to maintain rather than a one-time cleanup —
+new PRs regenerate both patterns — and neither is a mandate for a
+whole-tree rewrite, which is unreviewable for the same reason `cargo fmt`
+is banned.
 
 ## Backwards compatibility is not a constraint
 
