@@ -799,13 +799,13 @@ fn offscreen_composite_matches_direct_draw() {
     // depthless pipelines, straight into the target pass.
     let res: &LatticeResources = resources.get().expect("prepare created resources");
     let layouts =
-        SceneLayouts { uniforms: &res.bind_group_layout, glow: &res.glow_layout };
+        SceneLayouts { uniforms: &res.bind_group_layout, strip: &res.strip_layout };
     let (node_pipeline, plus_pipeline) =
         create_pipelines(&device, SHADER_SRC, format, layouts, false);
-    // The stand-in light at group 1: this path has no glow pass to composite,
-    // and the fixture asks for none (`parity_scene` holds the reach at 0), so
-    // the offscreen path is reading the same transparent nothing.
-    let light = &res.glow_dummy_bind_group;
+    // The stand-in strip at group 1: this path runs no strip passes, and the
+    // fixture asks for no light (`parity_scene` holds the reach at 0), so the
+    // offscreen path is reading the same transparent nothing.
+    let light = &res.strip_dummy_bind_group;
     let pane = res.panes.get(&7).expect("prepare created the pane");
     let direct_tex = render_to_texture(&device, &queue, SIZE, format, clear, |pass| {
         // The markers sit at the home sheet's depth, so they are drawn INSIDE
@@ -4834,102 +4834,20 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
 
         let res: &LatticeResources = resources.get().expect("prepare created resources");
         let layouts =
-            SceneLayouts { uniforms: &res.bind_group_layout, glow: &res.glow_layout };
+            SceneLayouts { uniforms: &res.bind_group_layout, strip: &res.strip_layout };
         let build = |src: &str| create_pipelines(&device, src, format, layouts, false);
         let (fast, _) = build(SHADER_SRC);
         let (slow, _) = build(&reference_src);
-        // The light at group 1: one colour over the whole frame, bound to both
-        // pipelines, so a clearing reads the same thing back whichever is
-        // drawing and what they differ by is the early-outs alone. A constant
-        // rather than the 1x1 stand-in because `node_paint` reads its ground
-        // and its Wash OUT of this, and a transparent nothing leaves both terms
-        // at zero on either pipeline — which takes the whole of what a clearing
-        // does with the light out of the comparison. Premultiplied, as the real
-        // target is, and well under opaque so the ground still shows through it.
-        let light = {
-            let texture = device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("parity_light"),
-                size: wgpu::Extent3d { width: SIZE[0], height: SIZE[1], depth_or_array_layers: 1 },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                view_formats: &[],
-            });
-            let texel = [96u8, 64, 32, 128];
-            queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                &texel.repeat((SIZE[0] * SIZE[1]) as usize),
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(SIZE[0] * 4),
-                    rows_per_image: Some(SIZE[1]),
-                },
-                wgpu::Extent3d { width: SIZE[0], height: SIZE[1], depth_or_array_layers: 1 },
-            );
-            let view = texture.create_view(&Default::default());
-            // Never written, and RENDER_ATTACHMENT is what lets wgpu zero it:
-            // a coverage of zero is the light kept whole. Full size rather than
-            // 1x1 because `node_paint` clamps its read against the LIGHT's
-            // dimensions, so a smaller layer beside it would be read out of
-            // bounds.
-            let shade = device
-                .create_texture(&wgpu::TextureDescriptor {
-                    label: Some("parity_shade"),
-                    size: wgpu::Extent3d {
-                        width: SIZE[0],
-                        height: SIZE[1],
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format: GLOW_SHADE_FORMAT,
-                    usage: wgpu::TextureUsages::TEXTURE_BINDING
-                        | wgpu::TextureUsages::RENDER_ATTACHMENT,
-                    view_formats: &[],
-                })
-                .create_view(&Default::default());
-            device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("parity_light_bind_group"),
-                layout: &res.glow_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(&view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::Sampler(&res.sampler),
-                    },
-                    // The one texture at both of the light's slots, so the
-                    // Meld mixes a colour with itself and hands back that
-                    // colour at every setting: what this fixture holds still
-                    // is the light a clearing reads, and the bar is not what
-                    // it is comparing.
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: wgpu::BindingResource::TextureView(&view),
-                    },
-                    // A standoff of nothing, so the light above reaches these
-                    // pipelines whole. What the standoff DOES is compared
-                    // below, in the pass that now writes it; here it would only
-                    // dim the constant this fixture is holding still.
-                    wgpu::BindGroupEntry {
-                        binding: 3,
-                        resource: wgpu::BindingResource::TextureView(&shade),
-                    },
-                ],
-            })
-        };
-        let light = &light;
+        // The strip at group 1: the pane's own wherever the fixture lights the
+        // glow, so the light and its colour path run under both pipelines, and
+        // the stand-in where it holds the reach at 0. One binding for both
+        // pipelines, so what the two draws differ by is the early-outs alone.
         let pane = res.panes.get(&11).expect("prepare created the pane");
+        let light = pane
+            .offscreen
+            .as_ref()
+            .and_then(|o| o.glow.as_ref())
+            .map_or(&res.strip_dummy_bind_group, |s| &s.blurred_bind_group);
 
         let clear = wgpu::Color { r: 0.07, g: 0.08, b: 0.09, a: 1.0 };
         let draw = |pipeline: &wgpu::RenderPipeline| {
@@ -4963,181 +4881,6 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
             "the {name} scene changed when the early-outs were enabled: byte {:?}",
             differing.map(|(i, (a, b))| (i, *a, *b)),
         );
-
-        // The LIGHT's own draw, compared the same way and for the same reason.
-        // Three of its early-outs are only reachable here: `fs_glow`'s own,
-        // which weighs the standoff's answer as well as the light's now that
-        // one fragment carries both; `glow_standoff`'s skip inside it; and
-        // `slice_gap_distance`'s. `node_paint` reaches none of them — it reads
-        // the standoff back off a texture rather than computing it — so without
-        // this the three would be compiled over that code and never once
-        // compared.
-        //
-        // The SHADE attachment is what is read back, being the one the standoff
-        // writes: a skip that dropped a band would leave the light beside it
-        // identical and show only here.
-        let Some(glow) = pane.offscreen.as_ref().and_then(|o| o.glow.as_ref()) else {
-            continue;
-        };
-        let glow_draw = |src: &str,
-                         entries: (&str, &str),
-                         buffers: wgpu::VertexBufferLayout<'static>,
-                         buffer: &wgpu::Buffer,
-                         count: u32| {
-            let pipeline = create_glow_pipeline(
-                &device,
-                src,
-                format,
-                &res.bind_group_layout,
-                &res.strip_layout,
-                entries,
-                buffers,
-            );
-            let attachment = |label, format| {
-                device.create_texture(&wgpu::TextureDescriptor {
-                    label: Some(label),
-                    size: wgpu::Extent3d {
-                        width: SIZE[0],
-                        height: SIZE[1],
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format,
-                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                        | wgpu::TextureUsages::COPY_SRC,
-                    view_formats: &[],
-                })
-            };
-            let targets = [
-                attachment("parity_glow", format),
-                attachment("parity_glow_max", format),
-                attachment("parity_glow_shade", GLOW_SHADE_FORMAT),
-            ];
-            let views: Vec<_> = targets.iter().map(|t| t.create_view(&Default::default())).collect();
-            let mut encoder = device.create_command_encoder(&Default::default());
-            {
-                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("parity_glow_pass"),
-                    color_attachments: &views
-                        .iter()
-                        .map(|view| {
-                            Some(wgpu::RenderPassColorAttachment {
-                                view,
-                                depth_slice: None,
-                                resolve_target: None,
-                                ops: wgpu::Operations {
-                                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                                    store: wgpu::StoreOp::Store,
-                                },
-                            })
-                        })
-                        .collect::<Vec<_>>(),
-                    depth_stencil_attachment: None,
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                    multiview_mask: None,
-                });
-                pass.set_pipeline(&pipeline);
-                pass.set_bind_group(0, &pane.bind_group, &[]);
-                pass.set_bind_group(1, &glow.strip.blurred_bind_group, &[]);
-                pass.set_vertex_buffer(0, buffer.slice(..));
-                pass.draw(0..4, 0..count);
-            }
-            queue.submit([encoder.finish()]);
-            // BOTH quantities the pass writes, because a skip can drop either
-            // one alone: an early-out that went on the light's answer where it
-            // should go on both leaves the standoff's layer untouched, and one
-            // that went on the standoff's leaves the LIGHT's. The `max`-blended
-            // light is left out of the readback and not out of the comparison —
-            // one fragment emits it and the screened attachment together, so a
-            // dropped fragment shows in this one.
-            //
-            // `readback`'s copy with its one assumption widened: a 256-wide row
-            // is 1024 bytes of light or 512 of coverage, and both are aligned.
-            let read = |target: &wgpu::Texture, bytes: u32| {
-                let bytes_per_row = SIZE[0] * bytes;
-                let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("parity_glow_readback"),
-                    size: (bytes_per_row * SIZE[1]) as u64,
-                    usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-                    mapped_at_creation: false,
-                });
-                let mut encoder = device.create_command_encoder(&Default::default());
-                encoder.copy_texture_to_buffer(
-                    target.as_image_copy(),
-                    wgpu::TexelCopyBufferInfo {
-                        buffer: &buffer,
-                        layout: wgpu::TexelCopyBufferLayout {
-                            offset: 0,
-                            bytes_per_row: Some(bytes_per_row),
-                            rows_per_image: None,
-                        },
-                    },
-                    wgpu::Extent3d { width: SIZE[0], height: SIZE[1], depth_or_array_layers: 1 },
-                );
-                queue.submit([encoder.finish()]);
-                let slice = buffer.slice(..);
-                slice.map_async(wgpu::MapMode::Read, |r| r.expect("map readback buffer"));
-                device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
-                slice.get_mapped_range().to_vec()
-            };
-            (read(&targets[0], 4), read(&targets[2], 2))
-        };
-        // BOTH draws that write the glow's three attachments. The marker's is a
-        // pipeline of its own off the same shader, with an early-out of its own
-        // (`fs_plus_glow`) weighing a standoff and a pool that a node's never
-        // sees — so without this the switch is compiled on the markers and
-        // never once compared, which is the whole claim this test makes.
-        for (pass_name, entries, buffers, buffer, count) in [
-            (
-                "node",
-                ("vs_glow", "fs_glow"),
-                GpuInstance::LAYOUT,
-                &pane.instance_buffer,
-                pane.instance_count,
-            ),
-            (
-                "marker",
-                ("vs_plus_glow", "fs_plus_glow"),
-                GpuPlus::LAYOUT,
-                &pane.plus_buffer,
-                pane.plus_count,
-            ),
-        ] {
-            assert!(count > 0, "the {name} scene ships no {pass_name} to compare");
-            let (light_fast, shade_fast) =
-                glow_draw(SHADER_SRC, entries, buffers.clone(), buffer, count);
-            let (light_slow, shade_slow) =
-                glow_draw(&reference_src, entries, buffers, buffer, count);
-
-            // Vacuous unless the pass actually wrote each of them: every fixture
-            // that reaches here carries a reach and a depth, so a layer of zeroes
-            // means the dials stopped arriving rather than that the skips are sound.
-            assert!(
-                shade_slow.iter().any(|&b| b != 0),
-                "the {name} scene's {pass_name} held no light off; \
-                 the standoff comparison is vacuous",
-            );
-            assert!(
-                light_slow.iter().any(|&b| b != 0),
-                "the {name} scene's {pass_name} lit nothing; the light comparison is vacuous",
-            );
-
-            for (layer, fast, slow) in
-                [("light", &light_fast, &light_slow), ("standoff", &shade_fast, &shade_slow)]
-            {
-                let differing =
-                    fast.iter().zip(slow.iter()).enumerate().find(|(_, (a, b))| a != b);
-                assert!(
-                    differing.is_none(),
-                    "the {name} scene's {pass_name} {layer} changed when the early-outs \
-                     were enabled: byte {:?}",
-                    differing.map(|(i, (a, b))| (i, *a, *b)),
-                );
-            }
-        }
     }
 }
 
@@ -9361,8 +9104,7 @@ fn the_ink_strip_has_a_row_for_every_node() {
             .expect("the pane drew something")
             .glow
             .as_ref()
-            .expect("the view asks for a glow")
-            .strip;
+            .expect("the view asks for a glow");
         (pane.instance_count, strip.rows)
     };
     // Up and back down: a strip that only ever grew would pass a rising

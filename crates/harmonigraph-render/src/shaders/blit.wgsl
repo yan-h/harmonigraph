@@ -9,7 +9,6 @@
 //   fs_blur_h/v   separable 9-tap Gaussian over the quarter-res texture
 //   fs_composite  scene + bloom * strength, premultiplied over the pane
 //   fs_bloom_add  bloom * strength alone, over a picture already in the pass
-//   fs_glow_over  the lattice's node glow, at the bottom of the scene pass
 //
 // The bloom chain runs at fractions of the pane's SCREEN size, not the
 // (possibly supersampled) scene size, so the halo's screen width does not
@@ -25,18 +24,6 @@
 // Composite-only bindings (declared module-wide; pipelines whose entry
 // points don't reference them omit them from their layout).
 @group(0) @binding(2) var bloom_tex: texture_2d<f32>;
-// The glow target's max-blended half, at the composite-only slot above: no
-// entry point reads both, so the two share a binding and the pipeline layout
-// for each stays the length its own pass needs. An entry point that ever wanted
-// both would fail to compile, loudly, at pipeline creation.
-@group(0) @binding(2) var glow_max_tex: texture_2d<f32>;
-// The standoff cut into that light, at the composite-only uniform's slot and on
-// the same rule: `fs_composite` reads `bu` there and `fs_glow_over` reads this,
-// and no entry point wants both — this pass takes the scene uniforms at a group
-// of its own (`gu`) precisely because its group 0 is the glow target's. What it
-// holds is coverage in x; see lattice.wgsl's `glow_shade_tex`, which is the
-// same layer read from the other side.
-@group(0) @binding(3) var glow_shade_tex: texture_2d<f32>;
 // Head of the scene pass's Uniforms buffer (same binding, shorter view):
 // only misc2.w (bloom strength; 0 = off) is read here.
 struct BlitUniforms {
@@ -47,15 +34,6 @@ struct BlitUniforms {
     misc2: vec4<f32>,
 };
 @group(0) @binding(3) var<uniform> bu: BlitUniforms;
-// The same head again, at a group of its own, for `fs_glow_over`: its group 0
-// is the glow target's two textures, which is a different bind group from the
-// composite's, so the one buffer is reached through two slots rather than the
-// two passes being made to share a layout that fits neither.
-//
-// It reads misc.z, how much two nodes' overlapping light adds up. That this
-// pass can see only the HEAD of the scene's uniforms is why that dial lives up
-// there rather than among the glow's own rows.
-@group(1) @binding(0) var<uniform> gu: BlitUniforms;
 // The strength on its own, for a caller with no scene uniforms to take the
 // head of — the roll, which draws its notes straight into the egui pass and
 // wants only the halo laid over them. Its own binding rather than a second
@@ -154,51 +132,4 @@ fn fs_composite(in: BlitOut) -> @location(0) vec4<f32> {
 fn fs_bloom_add(in: BlitOut) -> @location(0) vec4<f32> {
     let bloom = textureSample(scene_tex, scene_samp, in.uv);
     return vec4<f32>(bloom.rgb * add.strength.x, 0.0);
-}
-
-// The lattice's node glow, laid down at the BOTTOM of the scene pass, before
-// any node, marker or label (`crate::LatticeCallback::prepare`). `scene_tex` is
-// the glow's own target here: light where the nodes put it, cleared to
-// transparent everywhere else, so this is a plain premultiplied-over blit and
-// every decision about the shape was taken in lattice.wgsl.
-//
-// TWO of them, mixed by the Meld bar: the light screened and the light taken at
-// its brightest, which is a dial between blends that could not be one blend
-// (`create_glow_pipeline`). The node pipelines mix the same pair the same way,
-// `node_paint` reading this target back for what its clearing paints.
-//
-// TWO attachments, because the pass it draws into carries two. The second is
-// the picture without the LABELS, which the bloom's bright pass reads — and the
-// glow belongs in it: it is light the nodes emit, so it blooms exactly as the
-// rest of the node does. Once, from here; nothing else writes it, so there is
-// no path by which the same light reaches the threshold twice.
-struct GlowOverOut {
-    @location(0) color: vec4<f32>,
-    @location(1) nodes: vec4<f32>,
-};
-
-@fragment
-fn fs_glow_over(in: BlitOut) -> GlowOverOut {
-    let screened = textureSample(scene_tex, scene_samp, in.uv);
-    let brightest = textureSample(glow_max_tex, scene_samp, in.uv);
-    // A mix of two premultiplied colours is premultiplied, so what reaches the
-    // pass below is the same kind of value either end of the bar hands it.
-    let melded = mix(brightest, screened, clamp(gu.misc.z, 0.0, 1.0));
-    // The STANDOFF, applied here and nowhere earlier: the light's own target
-    // holds the field whole, and every reader of it takes this same multiply.
-    // The other reader is lattice.wgsl's `node_paint`, which is what a node's
-    // clearing repaints its ground from — so the two must agree exactly, on the
-    // same terms the Meld above is mixed identically in both.
-    //
-    // One factor on premultiplied light takes the colour and the coverage
-    // together: a shade of 1 leaves nothing, which is that pixel with no glow
-    // in it at all, and a shade of 0 is the light untouched.
-    //
-    // This is also where a node's dark pool stops blooming. The second
-    // attachment is what the bright pass reads, so the light reaching the
-    // threshold is the light AFTER the standoff rather than before it, and a
-    // pool cannot be filled back in by the halo of the ring standing in it.
-    let shade = clamp(textureSample(glow_shade_tex, scene_samp, in.uv).x, 0.0, 1.0);
-    let light = melded * (1.0 - shade);
-    return GlowOverOut(light, light);
 }
