@@ -7185,6 +7185,135 @@ fn a_ring_wears_the_wash_inside_its_own_dark_pool() {
     );
 }
 
+/// A RESTING MARKER wears the wash, out of the same field and off the same bar
+/// a node's ink takes it from.
+///
+/// The marker field is drawn over ground the light is already under, so with no
+/// wash a marker inside a halo is the one thing in the picture that gets darker
+/// the more light stands at it — flat ground laid over lit ground — and the
+/// lattice reads as a field of holes punched exactly where the light is
+/// brightest. That is what the bar closes here.
+///
+/// Three claims, on the marker's own pixels:
+///
+/// - A wash of 1 lifts more than half of them. That claim is also what makes
+///   the fixture honest — nothing lifts where no light reaches, so a marker
+///   parked outside the halo fails here rather than passing vacuously.
+/// - Nothing is ever dimmed, the wash being a screen (`wash_over`).
+/// - A wash of 0 holds them where they are, against a full wash on the same
+///   light moving them twenty times as far.
+///
+/// That last one is a bound of ONE BYTE rather than an equality, and the bound
+/// follows from how the set below is chosen rather than from tuning: membership
+/// is 8-bit equality with the marker's own colour, so a member can sit a half
+/// byte short of opaque and let that much of the light through. The scale it is
+/// read against is the shot beside it — ink that took the light at a wash of 0
+/// would move by the light's own size, which is what the full wash measures.
+///
+/// The pixels are found by DIFFING the field in and out of the scene rather
+/// than off the geometry, so a marker the node happened to cover leaves the set
+/// empty instead of quietly handing these claims to the node — and then
+/// narrowed to the ones the marker covers in FULL. What shows through its
+/// antialiased rim is the ground's share of the light, which is the Gap bars'
+/// answer and not this bar's.
+#[test]
+fn a_resting_marker_wears_the_wash_it_stands_in() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    // The lit node at the origin, and one marker beside it. uv 1 is 1.8 node
+    // radii (`node_vertex`), so this node's outermost ring at uv 0.795 reaches
+    // 1.57 world units and the marker's near tip stands at 2.2 — clear of the
+    // ink, and inside a reach dialled to carry light well past it. The feather
+    // is at the top of its bar so what stands out there is an even field
+    // rather than the skirt of a falloff heaped on the node.
+    let at = |reach: f32, wash: f32, marker: bool| -> Scene {
+        let mut scene = single_marked_node(0, 0);
+        scene.camera = harmonigraph_scene::Camera {
+            projection: harmonigraph_scene::Projection::Orthographic,
+            yaw: 0.0,
+            pitch: 0.0,
+            ..Default::default()
+        };
+        scene.glow_reach = reach;
+        scene.glow_strength = 1.5;
+        scene.glow_feather = 1.0;
+        scene.glow_wash = wash;
+        if marker {
+            scene.pluses = vec![harmonigraph_scene::PlusInstance {
+                pos: glam::Vec3::new(3.0, 0.0, 0.0),
+                radius: 0.8,
+                color: scene.lattice_ground,
+                strength: 1.0,
+            }];
+        }
+        scene
+    };
+    let bare = shooter.shot(&at(0.0, 0.0, false));
+    let off = shooter.shot(&at(0.0, 0.0, true));
+    let drawn: Vec<usize> = (0..bare.len())
+        .step_by(4)
+        .filter(|&i| bare[i..i + 4] == [0u8, 0, 0, 255] && off[i..i + 4] != bare[i..i + 4])
+        .collect();
+    // The marker's colour, read off the picture rather than converted by hand:
+    // it is laid down flat and premultiplied over a black frame, so a pixel it
+    // covers COMPLETELY carries that colour exactly and every other one carries
+    // a fraction of it. The brightest value in the set is therefore the colour
+    // itself, and the pixels holding it are the ones with nothing showing
+    // through.
+    let full: [u8; 3] =
+        std::array::from_fn(|c| drawn.iter().map(|&i| off[i + c]).max().unwrap_or(0));
+    let marker: Vec<usize> =
+        drawn.into_iter().filter(|&i| off[i..i + 3] == full).collect();
+    assert!(
+        marker.len() > 300,
+        "the marker covers {} pixels the node had not already covered",
+        marker.len(),
+    );
+
+    let dry = shooter.shot(&at(1.6, 0.0, true));
+    let worn = shooter.shot(&at(1.6, 1.0, true));
+    let lifted = marker
+        .iter()
+        .filter(|&&i| brightness(&worn[i..i + 3]) > brightness(&off[i..i + 3]))
+        .count();
+    assert!(
+        lifted * 2 > marker.len(),
+        "a full wash lifted {lifted} of the marker's {} pixels: the marker is not wearing the \
+         light it stands in",
+        marker.len(),
+    );
+    let dimmed =
+        marker.iter().filter(|&&i| (0..3).any(|c| worn[i + c] < off[i + c])).count();
+    assert_eq!(
+        dimmed,
+        0,
+        "the wash took light off {dimmed} of the marker's {} pixels",
+        marker.len(),
+    );
+    // The furthest any one channel of the marker moves between two shots, which
+    // is what both halves of the last claim are read in.
+    let spread = |a: &[u8], b: &[u8]| {
+        marker
+            .iter()
+            .map(|&i| (0..3).map(|c| a[i + c].abs_diff(b[i + c])).max().unwrap())
+            .max()
+            .unwrap()
+    };
+    let by_glow = spread(&dry, &off);
+    let by_wash = spread(&worn, &off);
+    assert!(
+        by_wash > 20,
+        "the fixture's wash moves the marker by {by_wash}; there is nothing here to hold off",
+    );
+    assert!(
+        by_glow <= 1,
+        "with the wash at 0 the glow moved the marker by {by_glow} against the wash's own \
+         {by_wash}: the light is reaching the marker's ink on a bar that says it should not",
+    );
+}
+
 /// A node wearing NOTHING BUT AN AUDIO RING glows.
 ///
 /// Two halves, and each is a thing the first cut of this got wrong. The LEVEL

@@ -859,7 +859,10 @@ pub struct Scene {
     /// [`derive_pluses`](derive::derive_pluses)): one cross per visible
     /// HOME-sheet position, each carrying
     /// [`lattice_ground`](Self::lattice_ground) as its colour — so a marker IS
-    /// that grey rather than a brightness of it.
+    /// that grey rather than a brightness of it. What the light standing at one
+    /// then makes of that grey is the Wash bar's
+    /// ([`ViewConfig::glow_wash`](crate::ViewConfig::glow_wash)), on the terms
+    /// it answers for a node's ink.
     ///
     /// Off-sheet positions get none, and that is the whole of what says which
     /// sheet is the ground: a note there floats over the marker field instead

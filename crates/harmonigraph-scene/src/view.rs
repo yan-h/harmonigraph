@@ -1283,9 +1283,17 @@ pub struct ViewConfig {
     ///
     /// Inert while [`glow_reach`](Self::glow_reach) is 0.
     pub glow_gap_depth: f32,
-    /// How much of the light standing at a node's pixel washes over the node's
-    /// own INK, 0..=1 — the rings, the marks and the glyphs it draws, as
-    /// against the ground around them.
+    /// How much of the light standing at a pixel washes over the lattice's own
+    /// INK there, 0..=1 — a node's rings, marks and glyphs, and the resting
+    /// markers ([`plus_arm`](Self::plus_arm)) between them, as against the
+    /// ground around them all.
+    ///
+    /// A MARKER wants it for the reason a silent ring does, and wants it more:
+    /// it is flat ground drawn over ground the light is already under, so at 0
+    /// the resting field inside a halo reads as holes punched in the light at
+    /// exactly the places the light is brightest. It takes the field with no
+    /// standoff between — the Gap bars shape what a node's CLEARING paints, and
+    /// a marker paints none.
     ///
     /// The ink's share of the field, and the counterpart to
     /// [`glow_gap_depth`](Self::glow_gap_depth), which says the same thing of
