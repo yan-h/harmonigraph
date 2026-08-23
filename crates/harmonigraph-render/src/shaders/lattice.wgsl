@@ -470,6 +470,19 @@ fn wash_over(ink: vec3<f32>, alpha: f32, light: vec3<f32>) -> vec3<f32> {
     return w * alpha + ink * (1.0 - w);
 }
 
+// How brightly a resting marker lights the position it stands at
+// (`u.misc13.y`): the pool it sits in, where the cross itself is drawn in the
+// lattice's ground. 0 is a marker that is ink and nothing else.
+//
+// A second bar rather than the ground's other half, and the split is the whole
+// point of it: the ground is what the UNLIT ring structure is drawn in too, and
+// a light behind the nodes reads best with that structure dark — so one number
+// could not both sink the rings behind the light and keep the resting positions
+// visible. This answers the second question alone.
+fn marker_light() -> f32 {
+    return clamp(u.misc13.y, 0.0, 1.0);
+}
+
 // How far the MIDI layers reach, in the node's uv: the octave band's outer edge,
 // and 0 on a node whose band is dialled off. A disc about the node's center, so
 // this one radius says everything about where the layer reaches — which is what
@@ -3610,4 +3623,117 @@ fn fs_plus(in: PlusVsOut) -> @location(0) vec4<f32> {
 fn fs_plus_scene(in: PlusVsOut) -> SceneOut {
     let paint = plus_paint(in);
     return SceneOut(paint, paint);
+}
+
+// ---- The markers' own light -------------------------------------------------
+// A pool under every resting marker, written into the same target a node's halo
+// is and under the same two blends, so the resting field is made of the same
+// light the notes are rather than of a second kind standing beside it.
+
+// How far a marker's pool reaches past its crossing, in ARMS.
+//
+// A constant, and NOT the Reach — which is the tempting reading, the Reach being
+// where every other light in this picture stops. What makes it wrong is how many
+// emitters there are: the Reach is the distance ONE sounding node's light is
+// given, and how few nodes sound at once is what bounds where it lands. There is
+// a marker at every lattice position and all of them emit always, so pools each
+// reaching the Reach's several lattice steps screen together into one flat field
+// across the pane — fog, and the exact opposite of the structure the markers are
+// drawn for.
+//
+// Measured against the MARKER instead, which is the same rule the node's own
+// span follows one rung down: a node's light is its own rim plus the Reach, and
+// this is the marker's own rim times a constant. It grows with the arm bar, so a
+// bigger cross stands in a bigger pool and the two stay one shape.
+//
+// The quad is exactly this wide, with nothing to spare and none needed: the
+// window shuts AT the span, so the fragment where the light reaches zero is the
+// one on the quad's own edge. Along the diagonals the corner is further out
+// still.
+const MARKER_LIGHT_SPAN: f32 = 2.5;
+
+struct PlusGlowVsOut {
+    @builtin(position) clip_pos: vec4<f32>,
+    // Distance from the crossing as a fraction of one ARM, per axis — the
+    // reading `vs_plus` hands its own fragment stage, on a quad grown to hold
+    // the pool instead of the cross.
+    @location(0) uv: vec2<f32>,
+    // The marker's opacity, which the pool takes with the ink: a position whose
+    // NAME is fading in hands both over together (`derive_pluses`), so the light
+    // does not outlive the cross that stands in it.
+    @location(1) @interpolate(flat) strength: f32,
+};
+
+@vertex
+fn vs_plus_glow(@builtin(vertex_index) vertex_index: u32, inst: PlusInstance) -> PlusGlowVsOut {
+    var corners = array<vec2<f32>, 4>(
+        vec2<f32>(-1.0, -1.0),
+        vec2<f32>(1.0, -1.0),
+        vec2<f32>(-1.0, 1.0),
+        vec2<f32>(1.0, 1.0),
+    );
+    let corner = corners[vertex_index];
+    // Camera-facing on the same plane as the marker itself (`vs_plus`), so the
+    // pool sits square on the cross under any orbit.
+    let reach = inst.pos_radius.w * MARKER_LIGHT_SPAN;
+    let world = inst.pos_radius.xyz
+        + (u.cam_right.xyz * corner.x + u.cam_up.xyz * corner.y) * reach;
+
+    var out: PlusGlowVsOut;
+    out.clip_pos = u.view_proj * vec4<f32>(world, 1.0);
+    out.uv = corner * MARKER_LIGHT_SPAN;
+    out.strength = inst.color.a;
+    return out;
+}
+
+/// One marker's light at a fragment, premultiplied — `glow_layer`'s falloff with
+/// the node's part taken out of it.
+///
+/// The SHAPE is shared deliberately, term for term: the same window shutting the
+/// light at the span, the same exponential under it, the same Feather choosing
+/// how flat that exponential is, and the same Strength over the whole thing.
+/// What a light looks like is one answer in this picture, and a marker's pool
+/// asking it separately would be a second kind of light rather than less of the
+/// one there is.
+///
+/// What it does NOT share is the node's COLOUR path. A node's halo is the ink
+/// the node is drawing, read round it and blurred (`glow_ink`); a marker draws
+/// one flat grey and there is no direction in it to read. The pool is NEUTRAL
+/// white, which is the same hue that grey has — none, the ground carrying none
+/// by construction — and taking the colour off the ink instead would put back
+/// exactly the coupling this bar exists to break: a ground dialled to black
+/// would emit black, and the marker would go dark with the structure again.
+fn plus_glow_layer(in: PlusGlowVsOut) -> vec4<f32> {
+    let d = length(in.uv);
+    // The window, as `glow_layer` spells it: full to half the span, shut by the
+    // end of it. Exactly 0 at the span, which is what lets the quad stop there.
+    let window = 1.0 - smoothstep(MARKER_LIGHT_SPAN * 0.5, MARKER_LIGHT_SPAN, d);
+    let rate = mix(GLOW_FALLOFF_TIGHT, GLOW_FALLOFF_FLAT, glow_feather());
+    let skirt = GLOW_BASE * exp(-rate * d / MARKER_LIGHT_SPAN) * window;
+    let alpha = clamp(
+        skirt * marker_light() * in.strength * max(u.misc10.y, 0.0),
+        0.0,
+        1.0,
+    );
+    return vec4<f32>(vec3<f32>(alpha), alpha);
+}
+
+@fragment
+fn fs_plus_glow(in: PlusGlowVsOut) -> GlowOut {
+    let light = plus_glow_layer(in);
+    // A marker holds NO light off: the standoff is what a node's rings do to the
+    // field around them, and a marker has no rings — it is a mark ON the ground
+    // the light is laid under, not a layer standing in it. Writing 0 is the
+    // `max` blend's identity, so this draw leaves the standoff exactly as the
+    // nodes wrote it.
+    //
+    // Which is also why the discard is safe here where `fs_glow` can only take
+    // it under a test: there, a node with no light of its own may still be
+    // standing a neighbour's off, and dropping the fragment would drop that
+    // write too. Here the third attachment is 0 whatever happens, so a fragment
+    // with no light has nothing left to say.
+    if light.a <= 0.0 {
+        discard;
+    }
+    return GlowOut(light, light, vec4<f32>(0.0));
 }

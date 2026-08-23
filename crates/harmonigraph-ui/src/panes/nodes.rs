@@ -857,6 +857,31 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                  and far enough up it inverts, the ink brighter than the \
                  ground around it.",
             );
+        // The resting field's own light, under the Wash that decides how much
+        // of it the cross wears. Here rather than beside the marker's arm bars
+        // because it is a light and not a shape: it is written into the same
+        // target a node's halo is, it dies with the Reach above, and what it is
+        // dialled against is everything in this section.
+        ValueBar::new(&mut view.marker_light, 0.0..=1.0, "Marker light")
+            .display(|v| format!("{:.0}%", v * 100.0))
+            .show(ui)
+            .on_hover_text(
+                "How brightly a resting marker lights the position it stands \
+                 at. The cross itself is drawn in the lattice Ground, and that \
+                 same Ground is what the unlit rings are drawn in — so dialling \
+                 the structure dark to let the light behind the nodes read used \
+                 to take the resting markers with it. This is the pool alone, \
+                 so the two are free of each other. It is the same light the \
+                 notes give off: it melds with their halos instead of summing, \
+                 the Feather shapes it and the Strength scales it, and a node's \
+                 Gap dims it where it stands, so the resting field parts around \
+                 a sounding note. How much of its own pool the cross wears is \
+                 the Wash above — low leaves it a silhouette standing in the \
+                 light, high melts it in. It does not take the Reach: there is \
+                 a marker at every position and they all light at once, so \
+                 pools that wide screen into fog. They are sized to the marker, \
+                 and grow with its arm.",
+            );
         // The light's own clock, last, under everything it shapes. Its own pair
         // and not the note Fade in Note, because a halo is the slow part of the
         // picture: on the layers' envelopes it flickers with the marks and the

@@ -1340,6 +1340,47 @@ pub struct ViewConfig {
     ///
     /// Inert while [`glow_reach`](Self::glow_reach) is 0.
     pub glow_wash: f32,
+    /// How brightly a resting MARKER lights the position it stands at, 0..=1 —
+    /// the pool it sits in, as against the cross itself, which is
+    /// [`lattice_ground`](Self::lattice_ground)'s to say.
+    ///
+    /// A marker with this at 0 is ink and nothing else, and its whole
+    /// brightness is the ground's. That is one number doing two jobs the
+    /// moment the glow is on: the ground is also what the unlit ring
+    /// structure is drawn in, and a light behind the nodes is read best with
+    /// that structure dialled dark — so the resting marker field went dark
+    /// with it and the lattice lost the positions no note is sounding on.
+    /// Here the pool answers the second question on its own, and the ground
+    /// is free to go as dark as the light wants it.
+    ///
+    /// NEUTRAL, and white rather than the marker's own grey: the ground
+    /// carries no hue by construction, so a pool of the same hue is a pool of
+    /// none, and taking the colour from the ink instead would put the coupling
+    /// back — a ground dialled to black would emit black.
+    ///
+    /// The same LIGHT the nodes give off, and not a second kind of one: it is
+    /// written into the same target under the same two blends, so it melds with
+    /// a node's halo rather than summing with it; it is shaped by
+    /// [`glow_feather`](Self::glow_feather) and scaled by
+    /// [`glow_strength`](Self::glow_strength) like any other light in the
+    /// picture; a node's standoff dims it where it stands, so the resting field
+    /// parts around a sounding note; and the marker's own ink then wears it
+    /// through [`glow_wash`](Self::glow_wash), which is the bar that decides
+    /// whether the cross reads as a silhouette in its pool or melts into it.
+    ///
+    /// What it does NOT take is [`glow_reach`](Self::glow_reach). The Reach is
+    /// the distance one SOUNDING node's light is given, and how few nodes sound
+    /// is what bounds where it lands; every marker emits at once and there is
+    /// one per lattice position, so pools each reaching the Reach's several
+    /// steps screen together into a flat field across the pane — fog, and the
+    /// opposite of the structure the markers are for. The pool is measured
+    /// against the MARKER instead (`MARKER_LIGHT_SPAN` in lattice.wgsl), so it
+    /// grows with [`plus_arm`](Self::plus_arm) and a bigger cross stands in a
+    /// bigger pool.
+    ///
+    /// Inert while [`glow_reach`](Self::glow_reach) is 0, the light having no
+    /// target to be written into at all.
+    pub marker_light: f32,
     /// How widely a node's own ink is averaged into the colour of its light.
     ///
     /// The glow's colour is not a formula naming its sources — it is what the
@@ -2268,6 +2309,7 @@ impl ViewConfig {
         self.glow_gap_depth =
             finite_or(self.glow_gap_depth, fresh.glow_gap_depth).clamp(0.0, 1.0);
         self.glow_wash = finite_or(self.glow_wash, fresh.glow_wash).clamp(0.0, 1.0);
+        self.marker_light = finite_or(self.marker_light, fresh.marker_light).clamp(0.0, 1.0);
         self.glow_blend = finite_or(self.glow_blend, fresh.glow_blend).clamp(0.0, 1.0);
         // The light's own pair, in seconds, on the ring's rule: a bar's range,
         // and a poisoned number repaired to the fresh value rather than left
@@ -2590,6 +2632,14 @@ impl Default for ViewConfig {
             // light its gap does not take, which is what a single coupled dial
             // draws and a place for either bar to be moved from.
             glow_wash: 0.15,
+            // The resting field's own light. Low, and the reason is what the
+            // bar is for: a pool per lattice position is a hundred pools where
+            // a chord is three, so the level that reads as a lit position here
+            // is well under the one a node wants. Enough to say the marker
+            // stands in light rather than on a flat ground, and short of the
+            // fresh ground's own brightness, which is still what draws the
+            // cross.
+            marker_light: 0.10,
             // The colour averaged half way round, which keeps a chord's hues
             // as arcs while a lone wedge still tints the whole halo.
             glow_blend: 0.5,

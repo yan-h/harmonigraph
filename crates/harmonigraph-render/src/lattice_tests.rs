@@ -540,6 +540,7 @@ fn parity_scene() -> Scene {
         glow_gap_shape: 0.5,
         glow_gap_depth: 0.85,
         glow_wash: 0.15,
+        marker_light: 0.10,
         glow_blend: 0.5,
         // A row per node, which is what the nodes above are built with.
         glow_rows,
@@ -4903,6 +4904,8 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
                 format,
                 &res.bind_group_layout,
                 &res.strip_layout,
+                ("vs_glow", "fs_glow"),
+                GpuInstance::LAYOUT,
             );
             let attachment = |label, format| {
                 device.create_texture(&wgpu::TextureDescriptor {
@@ -6393,15 +6396,20 @@ fn the_glow_blend_says_how_separate_a_node_keeps_its_colours() {
     );
 }
 
-/// What the glow is a layer OF is a node, and a lattice drawing none has no
-/// light — the resting markers included, which are drawn in the same pass and
-/// would glow like nodes if the light were a post-process over the picture
-/// rather than a draw off the node instance buffer.
+/// What the NODES' glow is a layer of is a node, and a lattice drawing none has
+/// none of it — with the markers' own light dialled off, the glow's target is
+/// cleared and nothing writes to it, and the composite lays exactly nothing over
+/// the picture.
 ///
-/// Byte-identical rather than nearly so: every draw of the glow's is over the
-/// instance buffer, which is empty, so the target is cleared to transparent and
-/// nothing writes to it, and the composite lays exactly nothing over the
-/// picture.
+/// The guard is against the light ever becoming a POST-PROCESS over the finished
+/// picture. One of those would find the markers' ink and bloom it here whatever
+/// any bar said; a draw off an instance buffer cannot, and `marker_light` at 0
+/// is what makes the marker draw say nothing while its buffer is full.
+/// `a_resting_marker_lights_its_own_position` is the same fixture with that bar
+/// up, and is where the markers' own light is measured.
+///
+/// Byte-identical rather than nearly so, which is what a cleared target and a
+/// draw discarding every fragment are worth together.
 #[test]
 fn a_lattice_with_no_node_grows_no_glow() {
     const SIZE: [u32; 2] = [256, 256];
@@ -6413,6 +6421,7 @@ fn a_lattice_with_no_node_grows_no_glow() {
         scene.nodes.clear();
         scene.glow_reach = reach;
         scene.glow_strength = 1.5;
+        scene.marker_light = 0.0;
         scene
     };
     let off = shooter.shot(&at(0.0));
@@ -6423,6 +6432,180 @@ fn a_lattice_with_no_node_grows_no_glow() {
         differing_pixels(&on, &off),
         0,
         "the glow lit something no node drew",
+    );
+}
+
+/// A resting marker lights the position it stands at: what `marker_light` lays
+/// down, on a lattice with no node sounding anywhere in it.
+///
+/// The at-rest picture is the whole of what the bar is for. The cross is drawn
+/// in the lattice's ground and so is every unlit ring, so dialling that ground
+/// dark — which is what a light standing behind the nodes wants — took the
+/// resting positions with it and left the lattice with nothing to say where a
+/// note is not. The pool answers for them on its own.
+///
+/// Measured OUTSIDE the crosses, on the pixels their ink never reaches: what
+/// the bar adds is light AROUND a marker, and what the cross itself then wears
+/// of that light is the Wash's (`a_resting_marker_wears_the_wash_it_stands_in`).
+///
+/// That none of those pixels DIMS is the other half of the claim, and it is the
+/// blends' to keep: the light is written under a screen and a max, neither of
+/// which can subtract, so a pool can only ever brighten the ground it lands on.
+#[test]
+fn a_resting_marker_lights_its_own_position() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    let at = |light: f32, markers: bool| -> Scene {
+        let mut scene = parity_scene();
+        scene.nodes.clear();
+        if !markers {
+            scene.pluses.clear();
+        }
+        scene.glow_reach = 0.8;
+        scene.glow_strength = 1.5;
+        scene.marker_light = light;
+        scene
+    };
+    let bare = shooter.shot(&at(0.0, false));
+    let off = shooter.shot(&at(0.0, true));
+    let on = shooter.shot(&at(0.6, true));
+    assert!(total_light(&off) > 0, "the fixture must draw its markers");
+    // The ground the crosses do not reach: every pixel the marker draw leaves
+    // exactly as the empty frame had it. The pool is what arrives THERE, so
+    // reading it here is reading the light and not the ink over it.
+    let ground: Vec<usize> = (0..bare.len())
+        .step_by(4)
+        .filter(|&i| off[i..i + 4] == bare[i..i + 4])
+        .collect();
+    let lit = ground
+        .iter()
+        .filter(|&&i| brightness(&on[i..i + 3]) > brightness(&off[i..i + 3]))
+        .count();
+    assert!(
+        lit > 200,
+        "the markers' light reached {lit} of the {} pixels their ink does not",
+        ground.len(),
+    );
+    let dimmed = ground
+        .iter()
+        .filter(|&&i| brightness(&on[i..i + 3]) < brightness(&off[i..i + 3]))
+        .count();
+    assert_eq!(dimmed, 0, "a pool took light off the ground it landed on");
+}
+
+/// A node's Gap dims a marker's pool where it stands: the resting field parts
+/// around a sounding note.
+///
+/// It costs the marker's light no code of its own, and that is what is being
+/// held here. The standoff is a layer written beside the light and applied once
+/// where the light meets the picture (`fs_glow_over` in blit.wgsl), so it lands
+/// on whatever is in that field — and a marker's pool is now in it. A pool that
+/// escaped the standoff would mean the markers had been written somewhere the
+/// composite does not read.
+///
+/// Measured as the DIFFERENCE the markers make, at one Gap depth against
+/// another. The node's own light changes with the depth too, so neither shot
+/// says anything on its own; what cancels is the node, since the pair at each
+/// depth differs in the markers' bar alone. A full depth leaves an eighth of
+/// that difference standing, against the bound of a half asserted here — the
+/// slack is because the pools reach past the standoff's own bite, and what
+/// would fail this is a pool the standoff never touched.
+#[test]
+fn a_nodes_gap_dims_the_markers_pool() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    let at = |depth: f32, light: f32| -> Scene {
+        let mut scene = single_marked_node(0, 0);
+        scene.camera = harmonigraph_scene::Camera {
+            projection: harmonigraph_scene::Projection::Orthographic,
+            yaw: 0.0,
+            pitch: 0.0,
+            ..Default::default()
+        };
+        scene.glow_reach = 1.6;
+        scene.glow_strength = 1.5;
+        scene.glow_feather = 1.0;
+        scene.glow_gap = 1.2;
+        scene.glow_gap_soft = 1.2;
+        scene.glow_gap_depth = depth;
+        scene.marker_light = light;
+        // Four markers around the node, close enough to stand inside the
+        // standoff it casts and clear of the ink it draws.
+        scene.pluses = [(2.4f32, 0.0f32), (-2.4, 0.0), (0.0, 2.4), (0.0, -2.4)]
+            .into_iter()
+            .map(|(x, y)| harmonigraph_scene::PlusInstance {
+                pos: glam::Vec3::new(x, y, 0.0),
+                radius: 0.5,
+                color: scene.lattice_ground,
+                strength: 1.0,
+            })
+            .collect();
+        scene
+    };
+    // What the markers add, at each depth: the node is identical inside a pair,
+    // so every difference is the markers' light and the standoff over it.
+    let added = |shooter: &mut Shooter, depth: f32| -> i64 {
+        let off = shooter.shot(&at(depth, 0.0));
+        let on = shooter.shot(&at(depth, 0.6));
+        total_light(&on) - total_light(&off)
+    };
+    let open = added(&mut shooter, 0.0);
+    let held = added(&mut shooter, 1.0);
+    assert!(open > 0, "the markers must light something with the gap open");
+    assert!(
+        held < open / 2,
+        "a full Gap left more than half the markers' light standing: \
+         {held} against {open}",
+    );
+}
+
+/// A marker's pool is measured against the MARKER and not the Reach: the two
+/// ends of the Reach bar draw one picture, to the byte, on a lattice whose only
+/// light is the markers'.
+///
+/// The Reach is the distance ONE sounding node's light is given, and how few
+/// nodes sound at once is what bounds where it lands. There is a marker at every
+/// lattice position and all of them light at once, so pools each carrying the
+/// Reach's several lattice steps screen together into one flat field across the
+/// pane — fog, and the opposite of the structure the markers are drawn for.
+///
+/// Held here because it is the one term a reader would expect to be shared and
+/// the sharing costs nothing at the site: `plus_glow_layer` takes the Feather
+/// and the Strength off the same bars the nodes' light does, and stops exactly
+/// at the span.
+#[test]
+fn a_markers_pool_does_not_take_the_reach() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    let at = |reach: f32| -> Scene {
+        let mut scene = parity_scene();
+        scene.nodes.clear();
+        scene.glow_reach = reach;
+        scene.glow_strength = 1.5;
+        scene.marker_light = 0.6;
+        scene
+    };
+    let near = shooter.shot(&at(0.4));
+    let far = shooter.shot(&at(harmonigraph_scene::GLOW_REACH_MAX));
+    // The fixture has to be lighting something, or two dark frames agree.
+    assert!(
+        total_light(&near) > total_light(&shooter.shot(&{
+            let mut s = at(0.4);
+            s.marker_light = 0.0;
+            s
+        })),
+        "the fixture must light its markers",
+    );
+    assert_eq!(
+        differing_pixels(&near, &far),
+        0,
+        "twenty times the Reach moved a marker's pool",
     );
 }
 

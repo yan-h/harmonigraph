@@ -996,6 +996,12 @@ pub struct Scene {
     /// [`glow_gap_depth`](Self::glow_gap_depth), and the two are independent:
     /// this reads the field RAW, so the Gap bars move it not at all.
     pub glow_wash: f32,
+    /// How brightly a resting marker lights the position it stands at (see
+    /// [`ViewConfig::marker_light`]); already clamped to 0..=1.
+    ///
+    /// A light like any other here — same target, same blends, same Feather and
+    /// Strength — measured against the marker's own arm rather than the Reach.
+    pub marker_light: f32,
     /// How widely a node's own ink is averaged into the colour of its light
     /// (see [`ViewConfig::glow_blend`]); already clamped to 0..=1.
     pub glow_blend: f32,

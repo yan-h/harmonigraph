@@ -141,9 +141,10 @@ const RENDER_SCALE_RANGE: (f32, f32) = (0.25, 4.0);
 /// Entry points a (re)loaded shader must provide. The `_scene` pair is the
 /// two-attachment form the offscreen pass draws through; the bare pair is
 /// the single-attachment one the parity test's reference path uses; the
-/// `glow` two are the node glow's own pass — one billboard and the light it
-/// lays down; and the `ink` four are the strip that light is coloured out of,
-/// read and then blurred ahead of it (see [`InkStrip`]).
+/// `glow` four are the glow's own pass — a billboard and the light it lays
+/// down, once for the nodes and once for the resting markers; and the `ink`
+/// four are the strip the nodes' light is coloured out of, read and then
+/// blurred ahead of it (see [`InkStrip`]).
 #[cfg(any(test, feature = "hot-reload"))]
 const REQUIRED_ENTRY_POINTS: &[&str] = &[
     "vs_main",
@@ -154,6 +155,8 @@ const REQUIRED_ENTRY_POINTS: &[&str] = &[
     "fs_plus_scene",
     "vs_glow",
     "fs_glow",
+    "vs_plus_glow",
+    "fs_plus_glow",
     "vs_ink_strip",
     "fs_ink_strip",
     "vs_ink_blur",
@@ -397,7 +400,13 @@ struct Uniforms {
     misc12: [f32; 4],
     /// The WASH. x: how much of the light standing at a node's pixel washes
     /// over the node's own INK (`Scene::glow_wash`), where `misc11.w` above is
-    /// the GROUND's share of that same field. y/z/w unused.
+    /// the GROUND's share of that same field. y: how brightly a resting marker
+    /// lights the position it stands at (`Scene::marker_light`). z/w unused.
+    ///
+    /// The marker's light rides beside the wash because the two are the pair
+    /// that decides what a resting position looks like — one lays a pool down,
+    /// the other says how much of it the cross wears — and neither is a term of
+    /// the standoff above.
     ///
     /// A row of its own because it is not a term of the standoff, close as it
     /// reads to the depth: the Gap bars shape what the clearing paints, and
@@ -1079,7 +1088,11 @@ impl LatticeCallback {
                 } else {
                     [0.0; 4]
                 },
-                misc13: if lights { [scene.glow_wash, 0.0, 0.0, 0.0] } else { [0.0; 4] },
+                misc13: if lights {
+                    [scene.glow_wash, scene.marker_light, 0.0, 0.0]
+                } else {
+                    [0.0; 4]
+                },
                 spectral_lut: std::array::from_fn(|k| scene.spectral.lut[k].to_array()),
                 // Zeroed rather than packed when the ring is off: `u.spectrum`
                 // is read only through `spectral_ring`, which draws nothing off
@@ -1160,6 +1173,10 @@ struct LatticeResources {
     /// The node glow's own pass: one draw over the node instance buffer, into
     /// a target of the glow's own (see [`create_glow_pipeline`]).
     glow_pipeline: wgpu::RenderPipeline,
+    /// The resting markers' light, into that same target and under the same
+    /// blends — the other half of what the glow pass draws
+    /// (see [`create_glow_pipelines`]).
+    plus_glow_pipeline: wgpu::RenderPipeline,
     /// The colour it draws in, settled ahead of it: the ink read round every
     /// node, then blurred (see [`create_ink_strip_pipelines`]).
     ink_strip_pipeline: wgpu::RenderPipeline,
@@ -2216,6 +2233,44 @@ fn create_pipelines(
     )
 }
 
+/// Both pipelines that write the glow's target, from one source: the nodes'
+/// light and the resting markers'.
+///
+/// They travel together for the reason the scene's pair does — one pass, one set
+/// of attachments, so a pipeline built for it is built for both — and for one
+/// more of their own: they are the same light. A marker's pool is `glow_layer`'s
+/// falloff with the node's part taken out (`plus_glow_layer` in lattice.wgsl),
+/// and building them apart is how the two would come to disagree about what
+/// light in this picture looks like.
+fn create_glow_pipelines(
+    device: &wgpu::Device,
+    shader_src: &str,
+    target_format: wgpu::TextureFormat,
+    bind_group_layout: &wgpu::BindGroupLayout,
+    strip_layout: &wgpu::BindGroupLayout,
+) -> (wgpu::RenderPipeline, wgpu::RenderPipeline) {
+    (
+        create_glow_pipeline(
+            device,
+            shader_src,
+            target_format,
+            bind_group_layout,
+            strip_layout,
+            ("vs_glow", "fs_glow"),
+            GpuInstance::LAYOUT,
+        ),
+        create_glow_pipeline(
+            device,
+            shader_src,
+            target_format,
+            bind_group_layout,
+            strip_layout,
+            ("vs_plus_glow", "fs_plus_glow"),
+            GpuPlus::LAYOUT,
+        ),
+    )
+}
+
 /// The node glow's one pipeline: the light, over the node instance buffer and
 /// into the glow's own target (see [`GlowTarget`]).
 ///
@@ -2258,17 +2313,29 @@ fn create_pipelines(
 ///
 /// **No depth.** The pass this draws into carries none: it is the glow's own,
 /// ahead of the scene's, and a screen blend has no order to defend.
+///
+/// **Two pipelines, one target state.** The nodes' light and the resting
+/// markers' are the same light — same three attachments, same three blends —
+/// and differ only in what they are drawn over: one instance buffer of nodes,
+/// one of markers. `entries` and `buffers` are the whole of that difference,
+/// which is what keeps a marker's pool from being a second kind of light by
+/// drifting a blend.
 fn create_glow_pipeline(
     device: &wgpu::Device,
     shader_src: &str,
     target_format: wgpu::TextureFormat,
     bind_group_layout: &wgpu::BindGroupLayout,
     strip_layout: &wgpu::BindGroupLayout,
+    entries: (&str, &str),
+    buffers: wgpu::VertexBufferLayout<'static>,
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("lattice_shader"),
         source: wgpu::ShaderSource::Wgsl(shader_src.into()),
     });
+    // One layout for both, though only the node's light reads the strip: a
+    // pipeline may declare a binding its shader never touches, and a second
+    // layout differing in nothing else is a second thing to keep in step.
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("lattice_glow_pipeline_layout"),
         bind_group_layouts: &[Some(bind_group_layout), Some(strip_layout)],
@@ -2293,17 +2360,17 @@ fn create_glow_pipeline(
     };
     let brightest = wgpu::BlendState { color: MAX_COMPONENT, alpha: MAX_COMPONENT };
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("fs_glow"),
+        label: Some(entries.1),
         layout: Some(&layout),
         vertex: wgpu::VertexState {
             module: &shader,
-            entry_point: Some("vs_glow"),
+            entry_point: Some(entries.0),
             compilation_options: Default::default(),
-            buffers: &[GpuInstance::LAYOUT],
+            buffers: &[buffers],
         },
         fragment: Some(wgpu::FragmentState {
             module: &shader,
-            entry_point: Some("fs_glow"),
+            entry_point: Some(entries.1),
             compilation_options: Default::default(),
             targets: &[
                 Some(wgpu::ColorTargetState {
@@ -2687,7 +2754,7 @@ impl LatticeResources {
                 count: None,
             }],
         });
-        let glow_pipeline = create_glow_pipeline(
+        let (glow_pipeline, plus_glow_pipeline) = create_glow_pipelines(
             device,
             SHADER_SRC,
             target_format,
@@ -2820,6 +2887,7 @@ impl LatticeResources {
             blur_h_pipeline,
             blur_v_pipeline,
             glow_pipeline,
+            plus_glow_pipeline,
             ink_strip_pipeline,
             ink_blur_pipeline,
             glow_over_pipeline,
@@ -3115,7 +3183,7 @@ impl CallbackTrait for LatticeCallback {
                     // layers reaches the light around it in the same reload —
                     // they are one shader drawing one node, and reloading half
                     // of it is a halo of the previous build.
-                    let glow_pipeline = create_glow_pipeline(
+                    let (glow_pipeline, plus_glow_pipeline) = create_glow_pipelines(
                         device,
                         &source,
                         resources.target_format,
@@ -3134,6 +3202,7 @@ impl CallbackTrait for LatticeCallback {
                     resources.pipeline = pipeline;
                     resources.plus_pipeline = plus_pipeline;
                     resources.glow_pipeline = glow_pipeline;
+                    resources.plus_glow_pipeline = plus_glow_pipeline;
                     resources.ink_strip_pipeline = ink_strip_pipeline;
                     resources.ink_blur_pipeline = ink_blur_pipeline;
                     eprintln!("[harmonigraph-render] shader hot-reloaded");
@@ -3422,6 +3491,29 @@ impl CallbackTrait for LatticeCallback {
                     pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
                     pass.set_pipeline(&resources.glow_pipeline);
                     pass.draw(0..4, 0..pane.instance_count);
+                }
+                // The resting markers' own light, into the same three
+                // attachments: a pool at every home position, melding with the
+                // node halos above rather than summing with them. It draws in
+                // the same pass because it is the same field — one light, laid
+                // down under the whole lattice, and a marker's pool arriving in
+                // a pass of its own would be a second layer for the composite
+                // and every clearing to read.
+                //
+                // Order-free like the node draw beside it, on the same
+                // guarantee: both blends are commutative, so nothing decides
+                // which of a marker and a node reaches a pixel first.
+                //
+                // Both groups set here rather than left over from the draw
+                // above, which is skipped whenever every node is culled — a
+                // resting lattice being exactly that frame, and the one this
+                // draw exists for.
+                if pane.plus_count > 0 {
+                    pass.set_bind_group(0, &pane.bind_group, &[]);
+                    pass.set_bind_group(1, &glow.strip.blurred_bind_group, &[]);
+                    pass.set_vertex_buffer(0, pane.plus_buffer.slice(..));
+                    pass.set_pipeline(&resources.plus_glow_pipeline);
+                    pass.draw(0..4, 0..pane.plus_count);
                 }
             }
 
