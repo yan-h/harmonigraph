@@ -1170,10 +1170,9 @@ struct LatticeResources {
     glow_over_pipeline: wgpu::RenderPipeline,
     bind_group_layout: wgpu::BindGroupLayout,
     composite_layout: wgpu::BindGroupLayout,
-    /// One sampled texture + the shared sampler (bloom chain passes, and the
-    /// glow target wherever it is read — by the fullscreen composite that lays
-    /// it down, and at group 1 of the node and marker pipelines, whose
-    /// clearings sample it).
+    /// One sampled texture + the shared sampler: the bloom chain's passes, which
+    /// have exactly one to bind. Every reader of the glow target takes
+    /// [`glow_layout`](Self::glow_layout) instead, that target being a pair.
     filter_layout: wgpu::BindGroupLayout,
     /// The glow target's TWO textures plus the shared sampler: the light
     /// screen-blended and the same light max-blended, which the Meld bar mixes
@@ -1508,8 +1507,9 @@ struct Offscreen {
 }
 
 /// Where a frame's node light is assembled before any of it reaches the
-/// picture: one transparent premultiplied colour texture at the scene's own
-/// size, plus the bind group the composite samples it through.
+/// picture: two transparent premultiplied colour textures at the scene's own
+/// size — the same light under each of the pass's two blends — plus the bind
+/// group its readers take both through.
 ///
 /// A target of its own, rather than the glow drawn straight into the scene
 /// pass, because a node has to sample the finished light to paint its own
@@ -1520,8 +1520,8 @@ struct Offscreen {
 ///
 /// Created and dropped as the Reach bar crosses 0, independently of the resize
 /// that rebuilds everything around it: the two changes have nothing to do with
-/// each other, and a target left allocated at reach 0 is a third of the pane's
-/// offscreen memory held for a feature that is off.
+/// each other, and a target left allocated at reach 0 is two scene-sized
+/// textures held for a feature that is off.
 struct GlowTarget {
     view: wgpu::TextureView,
     /// The same light, blended with MAX instead of screen: an overlap here is
@@ -3233,10 +3233,10 @@ impl CallbackTrait for LatticeCallback {
             // pass, which composites it at its bottom and samples it per node.
             //
             // One draw over the whole instance buffer, every sheet at once:
-            // the light is screen-blended, so neighbouring halos meld and
-            // nothing in the target is subtractive. There is therefore nothing
-            // for a per-sheet walk to decide — what hides a node's halo is the
-            // scene pass drawing a nearer node over it.
+            // both blends the pass writes are commutative and neither
+            // subtracts, so there is nothing for a per-sheet walk to decide —
+            // what hides a node's halo is the scene pass drawing a nearer node
+            // over it.
             //
             // Encoded whenever the target exists, nodes or none: the pass
             // CLEARS it, and a frame that skipped it would composite whatever
