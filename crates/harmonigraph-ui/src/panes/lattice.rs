@@ -136,7 +136,7 @@ pub(crate) fn draw_lattice(
     // to say, not the selector's, and with no ring the pass does not so much
     // as look at the spectrum (`spectral_ring_draws`). A
     // post-pass and not a branch inside the derivation, because the picture
-    // around the ring — the geometry, the wheel, the grid, the camera, and the
+    // around the ring — the geometry, the wheel, the markers, the camera, and the
     // whole of what the keys light — is the same answer either way, and a
     // reading that reached into `derive_scene` would be a second path through
     // all of it.

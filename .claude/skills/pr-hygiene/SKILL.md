@@ -9,8 +9,8 @@ Nothing mechanical blocks a merge here: GitHub Actions is disabled on the
 repo and branch protection is not available on this plan, so `ci.sh` via
 the `.githooks/pre-push` hook is the only automatic gate, and it checks
 clippy, the tests, the plugin package check, baseview's own tests, the rustdoc
-doc links, the `harmonigraph-core` dependency guard and the worktree-reclaim
-lock cases — not judgement. `ci.sh`'s own header is the list to copy when this
+doc links, the `harmonigraph-core` dependency guard, the worktree-reclaim
+lock cases and the bundle swap — not judgement. `ci.sh`'s own header is the list to copy when this
 one looks stale. Review is therefore a habit, in two
 halves, and each half catches a class the other cannot.
 
