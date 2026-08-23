@@ -406,13 +406,13 @@ mod tests {
     /// with the field coming through it still reads as one object rather than
     /// as a ring of unrelated marks.
     ///
-    /// The reading conditions, which are the expensive part: the Reach up with
-    /// the Strength down, since the light is screen-blended and a wide halo on
-    /// every node of a chord saturates to white at a strength that was right for
-    /// an accent; the light's own clock off, so one frame is the whole picture
-    /// rather than a shot of the ballistics; the DAW's ground rather than the
-    /// preset's near-black; and a zoom that puts one node's slices across a good
-    /// part of the frame.
+    /// The reading conditions, which are the expensive part: the Reach up at a
+    /// Strength that does NOT climb with it, since the light is screen-blended
+    /// and a wide halo on every node of a chord saturates to white at a strength
+    /// that was right for an accent; the light's own clock off, so one frame is
+    /// the whole picture rather than a shot of the ballistics; the DAW's ground
+    /// rather than the preset's near-black; and a zoom that puts one node's
+    /// slices across a good part of the frame.
     ///
     /// `PROBE_TAG` names the shots, which is what makes a BEFORE and an AFTER of
     /// one look: sabotage `slice_gap_distance` in the shader to return `-d`,
