@@ -1543,8 +1543,8 @@ struct GlowTarget {
     /// A third attachment and not a channel of either light above, because it
     /// takes a blend neither of them does — `max` over a coverage, where those
     /// two are a screen and a max over premultiplied colour, and a blend state
-    /// is per target. [`GLOW_SHADE_FORMAT`] is what keeps the cost of that to a
-    /// quarter of one of them.
+    /// is per target. [`GLOW_SHADE_FORMAT`] is what keeps the cost of that to
+    /// half of one of them.
     shade_view: wgpu::TextureView,
     /// All three textures + the shared sampler, as
     /// [`LatticeResources::glow_layout`] takes them.
@@ -1611,12 +1611,15 @@ const INK_STRIP_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 /// What the standoff layer is kept in: ONE half-float channel, being one
 /// coverage in 0..=1 and nothing else (see [`GlowTarget::shade_view`]).
 ///
-/// A quarter of what either light beside it costs, which is the point — the
-/// glow's target is already the larger part of a pane's offscreen memory and a
-/// coverage has no colour to carry. Half floats and not a byte because the
-/// layer is MULTIPLIED into premultiplied light rather than composited over it:
-/// a coverage quantized to 1/255 puts visible steps across a wide soft band,
-/// where the light's own falloff has none.
+/// Two bytes a texel against the four either light beside it takes, the target
+/// format being a surface one (BGRA in the plugin, RGBA in the offline
+/// renderer). Halving it is the point — the glow's target is already the larger
+/// part of a pane's offscreen memory and a coverage has no colour to carry.
+///
+/// Half floats and not a byte because the layer is MULTIPLIED into premultiplied
+/// light rather than composited over it: a coverage quantized to 1/255 puts
+/// visible steps across a wide soft band, where the light's own falloff has
+/// none.
 const GLOW_SHADE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R16Float;
 
 /// The shared, pane-independent objects an [`Offscreen`] binds against.
