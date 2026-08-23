@@ -529,12 +529,13 @@ fn parity_scene() -> Scene {
         // The accent's own falloff, which is what every glow test here that
         // does not say otherwise is measuring.
         glow_feather: 0.0,
-        // The fresh standoff and the three shares that shape the light inside
-        // it, inert at reach 0 and here to say so.
+        // The fresh standoff and the shares that shape the light inside it and
+        // over the node's own ink, inert at reach 0 and here to say so.
         glow_gap: 0.16,
         glow_gap_soft: 0.16,
         glow_gap_shape: 0.5,
         glow_gap_depth: 0.85,
+        glow_wash: 0.15,
         glow_blend: 0.5,
         // A row per node, which is what the nodes above are built with.
         glow_rows,
@@ -6235,6 +6236,11 @@ fn a_lattice_with_no_node_grows_no_glow() {
 /// never take from one, so a far sheet's red halo cannot pull the green out of
 /// a white name in front of it.
 ///
+/// It rests on the fixture's fresh WASH, that being what puts any light on a
+/// node's ink at all: at a wash of 0 the near node's ink is untouchable and
+/// there is nothing here to measure. The count of pixels the hidden node
+/// brightens is asserted for that reason, and says so when it is 0.
+///
 /// That set is found rather than described, and found on the GROUND rather than
 /// on the light, which reaches the ink too: a pixel the node paints opaquely is
 /// a pixel no ground shows through, so it is the pixel that does not move when
@@ -6447,10 +6453,11 @@ fn the_middle_of_a_node_is_where_its_light_is_fullest() {
 /// otherwise at nearly its fullest, the falloff being measured from the node's
 /// centre.
 ///
-/// The GROUND half of the bar, and its other half is
-/// [`a_ring_wears_the_light_it_does_not_stand_off`]: the same factor scales the
-/// wash over the node's own ink, so a probe on the ink answers for that half
-/// and this one cannot.
+/// The GROUND is the whole of what this bar moves, a node's own ink being the
+/// Wash bar's — [`a_ring_wears_the_wash_inside_its_own_dark_pool`] holds that
+/// boundary from the other side. So the probe sits outside the ink on purpose,
+/// and not merely for want of light there: a probe ON the ink would read
+/// nothing this bar does at any setting.
 ///
 /// TWO claims, and the second is what makes the bar an A/B rather than a
 /// restyle. The depth takes light: the probe is darker at the fresh 85% than
@@ -6574,38 +6581,57 @@ fn the_gap_depth_says_how_much_light_a_ring_stands_off() {
     }
 }
 
-/// A ring WEARS the light it does not stand off: the Gap depth governs all the
-/// light standing at a node's pixel, its own ink included, not the ground
-/// around it alone.
+/// A ring WEARS THE WASH inside a pool the Gap depth has cleared to the bare
+/// ground: the two are one field asked for twice, and the answers are free of
+/// each other.
 ///
-/// The pair the bar's two ends are: at 1 the ring's ink is exactly what it is
-/// with the glow off, byte for byte — a clean ring in a dark pool — and at 0
-/// the same light that runs over the ground runs over the ring as well, so the
-/// node is a shape inside its light rather than a silhouette cut out of it.
-/// Byte-identical rather than nearly so at the top, since the standoff is solid
-/// across a ring's own annulus at the layer's full level and a factor of 0 on
-/// the light is no light: nothing is left to round.
+/// The look the bar exists for. On one coupled dial a dark pool and a tinted
+/// ring are mutually exclusive — the light the ink would wear is exactly the
+/// light the standoff takes — so the first two claims below are measured at a
+/// DEPTH OF 1, where the ground around the ring is the frame with no glow in it
+/// at all and there is nothing left of the pool's light to tint anything with.
 ///
-/// The bottom is measured as a LIFT and never a loss, which is the wash's own
+/// Three claims, and the third is the decoupling itself:
+///
+/// - A wash of 0 leaves the ink byte for byte what it is with the glow off,
+///   whatever light is standing at it. Byte-identical rather than nearly so
+///   because a factor of 0 on the light is no light: nothing is left to round.
+/// - A wash of 1 lifts it, and lifts more than half of it.
+/// - Moving the DEPTH moves the ink not at all, the wash reading the field
+///   before the standoff's factor reaches it. A wash carried on the standoff's
+///   remainder instead cannot say this at all, and that is the reason there is
+///   a second bar.
+///
+/// Every lift is measured as a lift and never a loss, which is the wash's own
 /// arithmetic (`node_paint`): the ink takes the light as a screen, so every
 /// channel it moves it moves up.
 ///
 /// [`the_gap_depth_says_how_much_light_a_ring_stands_off`]'s fixture, whose
-/// probe is the other half of this one — that pixel is outside the node's ink
-/// and these are inside it, and the one bar answers for both.
+/// probe is the other side of this boundary — that pixel is outside the node's
+/// ink and these are inside it, and neither bar answers for both.
 ///
 /// The ink is found on the GROUND, as in
 /// [`a_node_under_a_nearer_sheets_node_cuts_nothing_out_of_its_light`]: a pixel
 /// the node paints opaquely is the pixel that does not move when the ground
-/// does, and the light cannot be asked instead when the light is the thing
-/// under test.
+/// does.
+///
+/// That set is not exact, and the third claim is stated to survive it: a pixel
+/// the node paints at an alpha a hair under 1 carries a SUB-LSB sliver of
+/// ground, black and white agree over it because the sliver rounds away, and
+/// the depth still moves it — ten of this fixture's pixels, by one byte. No
+/// probe can sort those out, since which of them round is decided by whatever
+/// the wash leaves under them, so the claim is a BOUND and not an equality,
+/// and it is calibrated against the wash's own effect in the same shots rather
+/// than against a number written here. One byte where the wash itself moves it
+/// by tens of them is the antialiasing; anything like the wash's own size is
+/// the coupling.
 #[test]
-fn a_ring_wears_the_light_it_does_not_stand_off() {
+fn a_ring_wears_the_wash_inside_its_own_dark_pool() {
     const SIZE: [u32; 2] = [256, 256];
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
     };
-    let at = |reach: f32, depth: f32| -> Scene {
+    let at = |reach: f32, depth: f32, wash: f32| -> Scene {
         let mut scene = single_marked_node(0, 0);
         scene.camera = harmonigraph_scene::Camera {
             projection: harmonigraph_scene::Projection::Orthographic,
@@ -6619,11 +6645,12 @@ fn a_ring_wears_the_light_it_does_not_stand_off() {
         // The fade the whole width of the gap, which is the fresh pair.
         scene.glow_gap_soft = 0.16;
         scene.glow_gap_depth = depth;
+        scene.glow_wash = wash;
         scene.nodes[0].gutter = 0.16;
         scene
     };
     let mut on_ground = |bg: glam::Vec4| {
-        let mut scene = at(0.0, 1.0);
+        let mut scene = at(0.0, 1.0, 0.0);
         scene.background = bg;
         shooter.shot(&scene)
     };
@@ -6638,14 +6665,15 @@ fn a_ring_wears_the_light_it_does_not_stand_off() {
         .collect();
     assert!(ink.len() > 500, "the node painted {} opaque pixels", ink.len());
 
-    let off = shooter.shot(&at(0.0, 1.0));
-    let held = shooter.shot(&at(0.8, 1.0));
-    let worn = shooter.shot(&at(0.8, 0.0));
-    let moved = ink.iter().filter(|&&i| held[i..i + 4] != off[i..i + 4]).count();
+    let off = shooter.shot(&at(0.0, 1.0, 1.0));
+    let dry = shooter.shot(&at(0.8, 1.0, 0.0));
+    let worn = shooter.shot(&at(0.8, 1.0, 1.0));
+    let open = shooter.shot(&at(0.8, 0.0, 1.0));
+    let moved = ink.iter().filter(|&&i| dry[i..i + 4] != off[i..i + 4]).count();
     assert_eq!(
         moved,
         0,
-        "at a depth of 1 the glow reached {moved} of the ring's {} opaque pixels",
+        "with no wash the glow reached {moved} of the ring's {} opaque pixels",
         ink.len(),
     );
     let lifted = ink
@@ -6654,7 +6682,8 @@ fn a_ring_wears_the_light_it_does_not_stand_off() {
         .count();
     assert!(
         lifted * 2 > ink.len(),
-        "at a depth of 0 the glow lifted {lifted} of the ring's {} opaque pixels",
+        "inside a pool cleared to the bare ground, a full wash lifted {lifted} of the ring's {} \
+         opaque pixels",
         ink.len(),
     );
     let dimmed =
@@ -6664,6 +6693,25 @@ fn a_ring_wears_the_light_it_does_not_stand_off() {
         0,
         "the wash took light off {dimmed} of the ring's {} opaque pixels",
         ink.len(),
+    );
+    // The furthest any one channel of the ink moves between two shots, which is
+    // what both halves of the last claim are read in.
+    let spread = |a: &[u8], b: &[u8]| {
+        ink.iter()
+            .map(|&i| (0..3).map(|c| a[i + c].abs_diff(b[i + c])).max().unwrap())
+            .max()
+            .unwrap()
+    };
+    let by_wash = spread(&worn, &dry);
+    let by_depth = spread(&worn, &open);
+    assert!(
+        by_wash > 20,
+        "the fixture's wash moves the ink by {by_wash}; there is nothing here to be free of",
+    );
+    assert!(
+        by_depth <= 1,
+        "dropping the depth moved the ink by {by_depth} against the wash's own {by_wash}: the \
+         wash is reading the standoff's remainder rather than the field",
     );
 }
 

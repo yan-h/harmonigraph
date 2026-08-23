@@ -777,12 +777,11 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
              ring, its octave band, its marks — as a share of the node's \
              radius. Dark to the inner handle, faded back in by the outer; drag \
              the inner to the left edge to fade the whole gap, which is what \
-             keeps a wide gap from reading as a black ring. The picture outside \
-             the node's Clearance is untouched at any setting — the gap is a \
-             factor on the light that clearing carries, so it reaches exactly \
-             as far as the clearing does, over the node's own ink as much as \
-             over the ground. Both handles at 0 lets the glow up to every edge. \
-             Double-click to restore.",
+             keeps a wide gap from reading as a black ring. The node's own ink \
+             is untouched at any setting — what the ink wears is the Wash bar \
+             below — and so is the picture outside the node's Clearance, the \
+             gap being a factor on the light that clearing paints. Both handles \
+             at 0 lets the glow up to every edge. Double-click to restore.",
         );
         // The curve the fade runs on, directly under the bar that sets its
         // width, on the Reach/Feather arrangement above: a bar saying how far
@@ -812,14 +811,34 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
             .display(|v| format!("{:.0}%", v * 100.0))
             .show(ui)
             .on_hover_text(
-                "How much of the light the gap takes away, on the ground and \
-                 on the rings alike. 100% clears to the bare ground — where \
-                 the gap is solid, the picture is exactly what it is with the \
-                 glow off, ink and all — and lower leaves the rings sitting in \
-                 a dimmer pool of their own light rather than in a void, with \
-                 that light washing over the rings themselves. 0% is the \
-                 picture with no gap at all: the halo runs over ring and \
-                 ground together.",
+                "How much of the light the gap takes away, on the ground the \
+                 node's Clearance paints. 100% clears to the bare ground — \
+                 where the gap is solid, the ground is exactly what it is \
+                 with the glow off — and lower leaves the rings sitting in a \
+                 dimmer pool of their own light rather than in a void. 0% is \
+                 the picture with no gap at all. What the rings themselves \
+                 wear of that light is the Wash below, which this does not \
+                 touch.",
+            );
+        // The ink's own share of the same field, under the bar that says the
+        // ground's: the pair is one question asked twice, and the answers are
+        // free of each other on purpose — a dark pool with a tinted ring in it
+        // is a picture no single coupled dial can name.
+        ValueBar::new(&mut view.glow_wash, 0.0..=1.0, "Wash")
+            .display(|v| format!("{:.0}%", v * 100.0))
+            .show(ui)
+            .on_hover_text(
+                "How much of the light a node stands in washes over the node's \
+                 own ink — the rings, marks and glyphs it paints, the note \
+                 names on top being drawn clean whatever this says. 0% draws \
+                 the ink exactly as it is with the glow off; higher lifts a \
+                 silent slice's grey toward the colour of the halo around it, \
+                 so the node reads as a shape inside its light rather than a \
+                 silhouette cut out of it. It reads the light before the gap \
+                 takes any, so it is free of the depth above — a full depth \
+                 with a wash on it is a ring standing in a dark pool and still \
+                 wearing the halo's colour — and far enough up it inverts, the \
+                 ink brighter than the ground around it.",
             );
         // The light's own clock, last, under everything it shapes. Its own pair
         // and not the note Fade in Note, because a halo is the slow part of the

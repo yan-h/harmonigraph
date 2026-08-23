@@ -366,8 +366,8 @@ struct Uniforms {
     /// much of that is spent fading the light back in (`Scene::glow_gap_soft`);
     /// z: how the fade is skewed across that width (`Scene::glow_gap_shape`);
     /// w: how much of the light it takes where it stands
-    /// (`Scene::glow_gap_depth`) — off the ground the clearing paints and off
-    /// the node's own ink alike, the two being one factor apart.
+    /// (`Scene::glow_gap_depth`), off the ground the clearing paints — what the
+    /// node's own ink takes of that same field is `misc13` below.
     ///
     /// A row of its own rather than four slots scattered over the two beside
     /// it, because the four are one control: the Gap bar's two handles, the
@@ -387,6 +387,17 @@ struct Uniforms {
     /// dialled, and this is how tall a texture the renderer allocated. Zeroed
     /// whole with them, on the same rule.
     misc12: [f32; 4],
+    /// The WASH. x: how much of the light standing at a node's pixel washes
+    /// over the node's own INK (`Scene::glow_wash`), where `misc11.w` above is
+    /// the GROUND's share of that same field. y/z/w unused.
+    ///
+    /// Not one of the three slots going begging on the standoff's row, close as
+    /// it sits to the depth beside it, because it is not a term of the
+    /// standoff: the Gap bars shape what the clearing paints, and this reads
+    /// the field raw. A reader finding it among them would be right to assume
+    /// the coupling this bar exists to break. Zeroed whole with `misc10`, on
+    /// the same rule — a wash with no light to lay down is a factor on nothing.
+    misc13: [f32; 4],
     /// The FREQUENCY colour scheme's ramp — the analyzer's own gradient
     /// (`SpectrumConfig::spectrogram_gradient`) through `pitch_ramp_lut`, the
     /// same gradient the spectrogram's cells and the Spiral pane's segments
@@ -1061,6 +1072,7 @@ impl LatticeCallback {
                 } else {
                     [0.0; 4]
                 },
+                misc13: if lights { [scene.glow_wash, 0.0, 0.0, 0.0] } else { [0.0; 4] },
                 spectral_lut: std::array::from_fn(|k| scene.spectral.lut[k].to_array()),
                 // Zeroed rather than packed when the ring is off: `u.spectrum`
                 // is read only through `spectral_ring`, which draws nothing off
@@ -1989,7 +2001,8 @@ impl InkStrip {
 /// The two bind group layouts a scene pipeline draws through: the pane's
 /// uniforms at group 0, and the finished light at group 1 — the target a node
 /// samples to paint the light over the ground rather than the ground bare, and
-/// to wash its own ink with the share of it the standoff leaves (`node_paint`).
+/// to wash its own ink with the share of it the Wash bar asks for
+/// (`node_paint`).
 ///
 /// Both the node and the marker pipeline take the pair though only the node's
 /// shader touches the light: they are one pass over one pane, so one layout is
@@ -2137,7 +2150,7 @@ fn create_pipelines(
 /// time: nothing written here is subtractive, so there is nothing for the order
 /// to decide. What occludes a node's halo is the scene pass, which draws every
 /// node over the finished light — its SHAPE, at least: what the node's own ink
-/// then takes of the light under it is the standoff's to say (`node_paint`).
+/// then takes of the light under it is the Wash bar's to say (`node_paint`).
 ///
 /// **Its own vertex entry point** (`vs_glow`), because the glow reaches past
 /// what a node paints: the billboard has to hold the whole halo, and growing
@@ -3274,8 +3287,8 @@ impl CallbackTrait for LatticeCallback {
             // exactly where it is most wanted and the feature comes out as a
             // ring of haze round a hole. The node samples this same target
             // instead (`node_paint`), painting the light standing at its own
-            // pixel over that ground and washing its own ink with what the
-            // standoff leaves, so a node's middle keeps the light while a
+            // pixel over that ground and washing its own ink with the share
+            // its Wash bar asks for, so a node's middle keeps the light while a
             // nearer node still hides the SHAPE of what is behind it — a
             // covered node's halo is in the field like everyone else's, and
             // being light and nothing else it can only brighten what stands

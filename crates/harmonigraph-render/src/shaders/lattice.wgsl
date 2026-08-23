@@ -136,13 +136,14 @@ struct Uniforms {
     // skewed across its own width (see `standoff_coverage`), 0 giving the light
     // back closest to the ring and 1 holding the ring dark to the end of it;
     // w: how much of the light it takes where it stands, 1 clearing to the bare
-    // ground and leaving the ink clean.
+    // ground. What the node's own INK takes of that same field is `misc13`, on
+    // a bar of its own.
     //
     // Read by `node_paint` alone: the standoff is a term of the node's own
     // CLEARING — the light is one field under the whole lattice, and what the
-    // clearing paints is that field scaled by this, as is the wash the node's
-    // own ink takes over it — so nothing is ever erased out of the light target
-    // and a node dims only what its own clearing covers.
+    // clearing paints is that field scaled by this — so nothing is ever erased
+    // out of the light target and a node dims only what its own clearing
+    // covers.
     //
     // ZEROED WHOLE with misc10, on the same rule and for the same reason:
     // there is one off switch for the glow and it is `u.misc10.x > 0.0`.
@@ -158,6 +159,16 @@ struct Uniforms {
     // dialled, and this is how tall a texture the renderer allocated. Zeroed
     // whole with them, on the same rule.
     misc12: vec4<f32>,
+    // The WASH. x: how much of the light standing at a node's pixel washes over
+    // the node's own INK (`glow_wash`), where `misc11.w` is the GROUND's share
+    // of that same field. y/z/w unused.
+    //
+    // Not one of the three slots free on the standoff's row, close as it sits
+    // to the depth beside it: the Gap bars shape what the clearing paints, and
+    // this reads the field raw, so a dial found among them would read as a term
+    // of the standoff — which is the coupling this bar exists to break. Zeroed
+    // whole with misc10, on the same rule.
+    misc13: vec4<f32>,
     // The FREQUENCY color scheme's ramp: the analyzer's own gradient, the
     // table the spectrogram's cells and the Spiral pane's segments are read
     // off. Indexed by a LEVEL, where pitch_lut above is indexed by a pitch —
@@ -328,17 +339,28 @@ fn glow_gap_shape() -> f32 {
 }
 
 // How much of the light the standoff takes away where it stands (`u.misc11.w`):
-// 1 clears to the bare ground and leaves the ink clean, and below it the rings
-// sit in a dimmer pool of their own light and take some of it on themselves.
+// 1 clears to the bare ground, and below it the rings sit in a dimmer pool of
+// their own light.
 //
-// A share of the LIGHT and not of the picture — every term it scales in
-// `node_paint` is light: the field the node's clearing paints over the ground,
-// and the wash of that same field over the node's own ink. So at 1 a node is
-// exactly what it is with the glow off, ink and footprint both, and at 0 the
-// clearing paints the field untouched and the halo runs over the rings as
-// well, which is the picture with no standoff in it at all.
+// A share of the LIGHT and not of the picture — it scales what the node's
+// clearing paints, and the node's own ink is `glow_wash`'s business. At 0 the
+// clearing paints the field untouched, which is the picture with no standoff in
+// it at all.
 fn glow_gap_depth() -> f32 {
     return clamp(u.misc11.w, 0.0, 1.0);
+}
+
+// How much of the light standing at a node's pixel washes over the node's own
+// INK (`u.misc13.x`): 0 is ink drawn exactly as the ring stack describes it,
+// and 1 is the whole field laid over it.
+//
+// The GROUND's share of that same field is `glow_gap_depth` above, and the two
+// are independent by construction — this reads the field RAW, before the
+// standoff's factor — so a ring can stand in a pool cleared to the bare ground
+// and still wear the colour of the halo around it. One coupled dial cannot say
+// that, which is the whole reason this is a second one.
+fn glow_wash() -> f32 {
+    return clamp(u.misc13.x, 0.0, 1.0);
 }
 
 // How far the MIDI layers reach, in the node's uv: the octave band's outer edge,
@@ -1944,11 +1966,10 @@ fn annulus_distance(d: f32, inner: f32, outer: f32) -> f32 {
 /// handles together, and a step cut across a wide soft light crawls as the
 /// camera moves where a band does not. The CLEARANCE's fade is the right floor
 /// for it because the clearing is what CARRIES the standoff — it is a factor on
-/// the light the clearing brings to the pixel, the wash over the node's own ink
-/// included — so the two die together and the standoff is never the sharper of
-/// the pair. A Clearance with no fade of its own ends in a step whatever this
-/// says, and the standoff inside it ending in the same step is one edge rather
-/// than two.
+/// the light the clearing paints — so the two die together and the standoff is
+/// never the sharper of the pair. A Clearance with no fade of its own ends in a
+/// step whatever this says, and the standoff inside it ending in the same step
+/// is one edge rather than two.
 ///
 /// A width `in.soft` and not one `aa`, which is what the node's shape edges are
 /// taken over: every other length in the clearing is read against `in.soft`
@@ -2543,38 +2564,50 @@ fn node_paint(in: VsOut) -> vec4<f32> {
     }
     let lit = light * keep;
     let ground = lit.rgb + u.background.rgb * (1.0 - lit.a);
-    // The WASH: that same light over the node's own INK, so the depth governs
-    // ALL the light standing at a node's pixel and not the ground's share of it
-    // alone. At 1 a ring sits in a dark pool with clean ink; at 0 the halo runs
-    // over ring and ground alike and the node is a shape inside its own light
-    // rather than a silhouette cut out of it. One dial for the pair, because
-    // they are one question: how much of its own light a node stands in.
+    // The WASH: the same field over the node's own INK, on a bar of its own. At
+    // 0 the ink is exactly what it is with the glow off, byte for byte; at 1 the
+    // whole field runs over it and the node melts into its own light; between
+    // them a silent slice's grey lifts toward the colour of the halo it stands
+    // in, so the node reads as a shape inside its light rather than a silhouette
+    // cut out of it.
+    //
+    // The RAW `light` and NOT the `keep`-scaled `lit` the ground below takes,
+    // which is the whole difference a second bar makes: with the standoff's
+    // remainder here, a depth of 1 would leave nothing to wash with, and the
+    // dark pool and the tint could never be asked for together. What that costs
+    // is that the two can be dialled into an INVERSION — ink brighter than the
+    // ground it stands on, the standoff having cleared that ground bare — which
+    // is a picture worth being able to ask for rather than one to stumble into,
+    // and the fresh wash is the tint the fresh depth alone would have left.
     //
     // A SCREEN, where the ground under it takes an over, and the difference is
     // what a NEIGHBOUR's light is allowed to do here. The field is melded, so
-    // the `lit` at a node's ink carries every sheet's halo; an over
-    // (`ink * (1 - lit.a)`) lets a saturated halo from behind take the ink's
+    // the light at a node's ink carries every sheet's halo; an over
+    // (`ink * (1 - light.a)`) lets a saturated halo from behind take the ink's
     // other channels DOWN — a white name under a red one comes out red — which
     // is a node losing its colour to something it stands in front of.
-    // `lit + ink * (1 - lit)` per channel can only brighten, whatever reaches
-    // the pixel. The ground keeps the over: that is `fs_glow_over`'s own blend
+    // `w + ink * (1 - w)` per channel can only brighten, whatever reaches the
+    // pixel. The ground keeps the over: that is `fs_glow_over`'s own blend
     // state, and the ground a clearing paints has to be the ground it meets at
     // the clearing's edge.
     //
-    // Premultiplied, so the light's own term carries `active_alpha`: the ground
-    // below already lays `lit` down over its `(1 - active_alpha)`, and between
-    // the two the light lands exactly ONCE across the fragment — a second
-    // helping over the cleared ground would step against the open ground beside
-    // it.
+    // Premultiplied, so the ink's own term carries `active_alpha`: this is the
+    // screen of the ink over `w`, scaled by the coverage the ink has, and the
+    // ground below fills the `(1 - active_alpha)` it leaves. Each share of the
+    // fragment takes its own light exactly once, and the two shares are allowed
+    // to differ — that is what the two bars are. Where they do, the node's own
+    // antialiased edge cross-fades between them, which is a gradient across a
+    // pixel rather than a step.
     //
     // What this does NOT give a node is a way to hold off a NEIGHBOUR's light:
-    // the field is one layer, so at a low depth a near node's ink is tinted by a
-    // far sheet's halo as well as by its own, light reaching through the node
-    // from behind it. Interleaving the sheets per sheet is the only answer to
-    // that and is the thing this design exists to not do; a node's own halo is
-    // the maximum at its own pixel, the falloff being measured from its centre,
-    // so the far share is small unless a lit node sits directly behind.
-    let washed = lit.rgb * active_alpha + active_rgb * (1.0 - lit.rgb);
+    // the field is one layer, so a washed node's ink is tinted by a far sheet's
+    // halo as well as by its own, light reaching through the node from behind
+    // it. Interleaving the sheets per sheet is the only answer to that and is
+    // the thing this design exists to not do; a node's own halo is the maximum
+    // at its own pixel, the falloff being measured from its centre, so the far
+    // share is small unless a lit node sits directly behind.
+    let w = light.rgb * glow_wash();
+    let washed = w * active_alpha + active_rgb * (1.0 - w);
     let with_ground = washed + ground * gutter_cov * (1.0 - active_alpha);
     return vec4<f32>(with_ground, final_alpha);
 }
@@ -2752,9 +2785,9 @@ fn fs_main_scene(in: VsOut) -> SceneOut {
 // finished light: a ring, a mark and a name are drawn whole there, with nothing
 // to be stood off. See `LatticeCallback::prepare` for the order, and
 // `node_paint` for the two things that read this target back, both of them the
-// node's own and both scaled by the standoff: the clearing, which paints the
-// light over the ground instead of the ground bare, and the wash, which is the
-// share of it the node's own ink takes.
+// node's own and each on its own bar: the clearing, which paints the light over
+// the ground instead of the ground bare and scales it by the standoff, and the
+// wash, which is the share of the raw field the node's own ink takes.
 
 /// How lit this node is, for the purpose of the light it gives off — carried on
 /// the glow's own attack and release, and handed over per instance.
