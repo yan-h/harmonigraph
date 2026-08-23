@@ -4969,8 +4969,7 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
             let slice = buffer.slice(..);
             slice.map_async(wgpu::MapMode::Read, |r| r.expect("map readback buffer"));
             device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
-            let bytes = slice.get_mapped_range().to_vec();
-            bytes
+            slice.get_mapped_range().to_vec()
         };
         let shade_fast = glow_draw(SHADER_SRC);
         let shade_slow = glow_draw(&reference_src);
@@ -6858,7 +6857,7 @@ fn the_gap_reaches_past_the_clearance_the_node_cuts() {
     // clearing of this node reaches here at any level, and the standoff still
     // has most of its own width left to spend.
     const PAST: f32 = CLEARANCE * 5.0;
-    assert!(PAST < GAP, "the probe has to sit inside the gap it is measuring");
+    const { assert!(PAST < GAP, "the probe has to sit inside the gap it is measuring") };
     let probe = centre + (band_px as f32 + PAST * per_uv).round() as usize;
     assert!(
         !inked(&plain, probe),
