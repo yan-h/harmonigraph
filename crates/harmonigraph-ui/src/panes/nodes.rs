@@ -160,7 +160,7 @@ fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // sounding ones — that backdrop is what completes the ring, so a lone
     // octave still reads as a whole note. How BRIGHT it stands is the At rest
     // section's Ground bar at the foot of the page, which is not this layer's
-    // to own: the audio ring's silence and the grid's lines are the same grey.
+    // to own: the audio ring reads its own silence in that same grey.
     //
     // No Shimmer row either: the glyphs are what says which octaves sound, and
     // a sheet laid over that reading costs it — so the sweep belongs to the
@@ -869,12 +869,12 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
             .show(ui)
             .on_hover_text(
                 "How brightly a resting marker lights the position it stands \
-                 at. The cross itself is drawn in the lattice Ground, and that \
-                 same Ground is what the unlit rings are drawn in — so dialling \
-                 the structure dark to let the light behind the nodes read used \
-                 to take the resting markers with it. This is the pool alone, \
-                 so the two are free of each other. It is the same light the \
-                 notes give off: it melds with their halos instead of summing, \
+                 at — the pool around the cross, the cross itself being the \
+                 Marker ink bar's on the At rest section. The two are the \
+                 marker's two ways of being found in a dark picture and they \
+                 read differently: ink is a shape at the position, light is a \
+                 presence around it that carries at a distance. It is the same \
+                 light the notes give off: it melds with their halos instead of summing, \
                  the Feather shapes it and the Strength scales it, and the Gap \
                  holds it off ink the way it holds a note's light off its \
                  rings: the resting field parts around a sounding note, and \

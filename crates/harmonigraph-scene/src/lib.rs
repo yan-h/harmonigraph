@@ -837,9 +837,9 @@ pub struct Scene {
     /// annulus is a per-fragment test, and the shader is where the fragments
     /// are.
     pub octave_gap: f32,
-    /// The lattice at rest — its markers, and both of a node's rings where
-    /// nothing is lit — already resolved from
-    /// [`ViewConfig::lattice_ground`]'s `L*` to the neutral grey it names.
+    /// A NODE at rest — both of its rings where nothing is lit — already
+    /// resolved from [`ViewConfig::lattice_ground`]'s `L*` to the neutral grey
+    /// it names.
     ///
     /// A COLOUR here and an `L*` in the view, because the two ends want
     /// different things: the bar is a brightness a person reads and drags, and
@@ -851,12 +851,13 @@ pub struct Scene {
     /// aimed at the skin.
     ///
     /// Read by the OCTAVE band, which is what a silent slice draws and what a
-    /// sounding one's pitch is painted over as the note fades. The lattice's
-    /// two other at-rest surfaces carry the same grey without reading this
-    /// field, because neither reaches the shader as a uniform: every
-    /// [`pluses`](Self::pluses) instance carries it as its own colour, and the
-    /// audio ring carries it as the `t` = 0 end of its table. Three copies of
-    /// one resolve, not three answers.
+    /// sounding one's pitch is painted over as the note fades. The audio ring
+    /// carries the same grey without reading this field, because it does not
+    /// reach the shader as a uniform: it is the `t` = 0 end of its table. Two
+    /// copies of one resolve, not two answers.
+    ///
+    /// The markers are NOT on this — see [`pluses`](Self::pluses), which
+    /// carries its own resolve of [`ViewConfig::marker_ink`].
     pub lattice_ground: Vec4,
     /// The lattice's AUDIO channel: what the analyzer measured, where the
     /// ring that draws it sits, and the ramp every audio-lit element on the
@@ -882,9 +883,12 @@ pub struct Scene {
     /// The lattice's resting markers (see
     /// [`derive_pluses`](derive::derive_pluses)): one cross per visible
     /// HOME-sheet position, each carrying
-    /// [`lattice_ground`](Self::lattice_ground) as its colour — so a marker IS
-    /// that grey rather than a brightness of it. What the light standing at one
-    /// then makes of that grey is the Wash bar's
+    /// [`ViewConfig::marker_ink`](crate::ViewConfig::marker_ink)'s grey as its
+    /// colour — so a marker IS that grey rather than a brightness of it. A bar
+    /// of its own and not [`lattice_ground`](Self::lattice_ground): the field
+    /// says where the positions are, which is worth keeping legible at any
+    /// brightness a node's empty rings are dialled to. What the light standing
+    /// at one then makes of that grey is the Wash bar's
     /// ([`ViewConfig::glow_wash`](crate::ViewConfig::glow_wash)), on the terms
     /// it answers for a node's ink.
     ///

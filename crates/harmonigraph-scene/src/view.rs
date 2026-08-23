@@ -434,42 +434,68 @@ pub struct ViewConfig {
     /// 0 closes the ring round: the sectors become a solid annulus, and a
     /// backdrop is what still says an octave is silent.
     pub octave_gap: f32,
-    /// The whole lattice AT REST, as an `L*` 0..100 — one neutral grey under
-    /// the three surfaces that draw where nothing is sounding:
+    /// A node's RINGS where nothing is sounding, as an `L*` 0..100 — one
+    /// neutral grey under both of the surfaces the node itself draws empty:
     ///
-    /// - the **markers** standing at the home sheet's node positions, every one
-    ///   of them ([`derive_pluses`](crate::derive::derive_pluses));
     /// - the **audio ring** wherever it reads silence, which its ramp is
     ///   re-anchored to open on ([`ring_gradient`](crate::ring_gradient));
     /// - the **MIDI ring**'s octave slices that are not sounding, which ARE
     ///   this colour, with a sounding octave's pitch painted over them.
     ///
-    /// One number under all three, like [`octave_gap`](Self::octave_gap) above
-    /// it, and for the same reason: they are one picture read together — two annuli
-    /// a gap apart, standing over the cross that marks the position — so a
-    /// ground that differed between them says the three are different KINDS of
-    /// thing when the only thing they have in common is being empty. Each
-    /// deriving its own ground instead — the audio ring off the analyzer's
-    /// gradient (whose dark end carries that gradient's own hue), the MIDI ring
-    /// off the note's colour whitened and laid on at a fixed opacity, the markers
-    /// off the CHROME's hairline at another — lands three near-greys a hair
-    /// apart in tint, and no bar can dial three routes onto one value.
+    /// One number under both, like [`octave_gap`](Self::octave_gap) above it,
+    /// and for the same reason: they are one picture read together — two annuli
+    /// a gap apart on a single node — so a ground that differed between them
+    /// says the two are different KINDS of thing when the only thing they have
+    /// in common is being empty. Each deriving its own ground instead — the
+    /// audio ring off the analyzer's gradient (whose dark end carries that
+    /// gradient's own hue), the MIDI ring off the note's colour whitened and
+    /// laid on at a fixed opacity — lands two near-greys a hair apart in tint,
+    /// and no bar can dial two routes onto one value.
     ///
-    /// **Neutral**, because the ground is what they have in common rather than
-    /// a colour any of them owns: it carries no hue, and each surface's light
+    /// The lattice's third at-rest surface, the markers standing at the
+    /// positions, is on [`marker_ink`](Self::marker_ink) below and is free of
+    /// this: it is not part of a node, and what it is dialled against is the
+    /// light behind the nodes rather than the ring a gap away.
+    ///
+    /// **Neutral**, because the ground is what the two have in common rather
+    /// than a colour either owns: it carries no hue, and each surface's light
     /// is added over it.
     ///
     /// Stated in `L*` because that is the axis the ask is on: perceived
     /// brightness, the same units [`Gradient::lightness`](crate::Gradient) is
     /// authored in, so a ground and a gradient can be compared by their
-    /// numbers. There is no off position and it needs none — each layer has its
-    /// own ([`plus_arm`](Self::plus_arm) for the markers, a width for
-    /// each ring). What the bottom of the bar reaches is black, which against
-    /// this skin's panel reads as holes punched through the lattice; a little
-    /// above it, at the panel's own `L*` (8.8 on the fresh skin), the whole
-    /// resting picture vanishes into the pane together and only sounding notes
-    /// draw.
+    /// numbers. There is no off position and it needs none — each ring has a
+    /// width. What the bottom of the bar reaches is black, which against this
+    /// skin's panel reads as holes punched through the lattice; a little above
+    /// it, at the panel's own `L*` (8.8 on the fresh skin), a quiet node
+    /// vanishes into the pane and only sounding ones draw.
     pub lattice_ground: f32,
+    /// The resting MARKERS, as an `L*` 0..100 on the same axis as
+    /// [`lattice_ground`](Self::lattice_ground) above: the neutral grey every
+    /// cross standing at a home-sheet position is drawn in
+    /// ([`derive_pluses`](crate::derive::derive_pluses)).
+    ///
+    /// A bar of its own rather than a share of the ground, so the two are read
+    /// against each other by their numbers and set independently: equal numbers
+    /// are one grey under the whole resting picture, and every other pairing is
+    /// reachable from there. What wants the freedom is a picture with the glow
+    /// in it — a ground dialled down far enough for the light behind the notes
+    /// to read takes the whole resting field with it, and the field is what
+    /// says where the positions ARE. That structure is the thing a person
+    /// navigates by, and it has nothing to do with how loud an empty ring
+    /// should look.
+    ///
+    /// Absolute, not an offset. An offset would keep one master brightness for
+    /// the resting picture, which is exactly the coupling this bar exists to
+    /// cut: dragging the ground would still move the markers, just by a
+    /// remembered amount.
+    ///
+    /// **Neutral**, for [`lattice_ground`](Self::lattice_ground)'s reason —
+    /// hue in this picture is the music's. The marker's own LIGHT is
+    /// [`marker_light`](Self::marker_light), a separate thing entirely: this is
+    /// the ink, that is what the ink stands in. There is no off position and
+    /// none is needed — [`plus_arm`](Self::plus_arm) at 0 takes the field away.
+    pub marker_ink: f32,
     /// How many octaves one turn of a node covers at FULL SIZE (see
     /// [`octaves`](crate::octaves)), 1..=11 — not how many it draws, which is
     /// this plus twice [`octave_extras`](Self::octave_extras). Each is exactly
@@ -940,10 +966,11 @@ pub struct ViewConfig {
     // soft band rather than a softness of its own.
     //
     // Its colour is not here either. That is
-    // [`lattice_ground`](Self::lattice_ground), up with the note's own layers,
-    // because that one grey is the whole at-rest picture — these markers and
-    // both of a node's rings where nothing is lit — and a bar that moved only
-    // the markers would take the lattice apart.
+    // [`marker_ink`](Self::marker_ink), up with the ground it is dialled
+    // against, because the two are one question — how bright the lattice is
+    // where nothing sounds — asked of the markers and of a node's unlit rings,
+    // and a brightness read against the wrong neighbour is read against
+    // nothing.
     /// How far one arm reaches, crossing to tip, in the quad UV a node's ring
     /// radii are dialled in ([`RING_INNER_MAX`] and the widths around it) — so
     /// a marker and the middle a node's rings stand around are two readings on
@@ -1350,21 +1377,19 @@ pub struct ViewConfig {
     pub glow_wash: f32,
     /// How brightly a resting MARKER lights the position it stands at, 0..=1 —
     /// the pool it sits in, as against the cross itself, which is
-    /// [`lattice_ground`](Self::lattice_ground)'s to say.
+    /// [`marker_ink`](Self::marker_ink)'s to say.
     ///
     /// A marker with this at 0 is ink and nothing else, and its whole
-    /// brightness is the ground's. That is one number doing two jobs the
-    /// moment the glow is on: the ground is also what the unlit ring
-    /// structure is drawn in, and a light behind the nodes is read best with
-    /// that structure dialled dark — so the resting marker field went dark
-    /// with it and the lattice lost the positions no note is sounding on.
-    /// Here the pool answers the second question on its own, and the ground
-    /// is free to go as dark as the light wants it.
+    /// brightness is that bar's. The two are the marker's two ways of being
+    /// visible in a dark picture and they read differently: ink is a shape at
+    /// the position, light is a presence around it, and a field of pools with
+    /// the glow's Feather wide is structure at a distance that no brightness of
+    /// ink gives.
     ///
-    /// NEUTRAL, and white rather than the marker's own grey: the ground
-    /// carries no hue by construction, so a pool of the same hue is a pool of
-    /// none, and taking the colour from the ink instead would put the coupling
-    /// back — a ground dialled to black would emit black.
+    /// NEUTRAL, and white rather than the marker's own grey: the ink carries no
+    /// hue by construction, so a pool of the same hue is a pool of none, and
+    /// taking the colour from the ink instead would couple the two — ink
+    /// dialled to black would emit black.
     ///
     /// The same LIGHT the nodes give off, and not a second kind of one: it is
     /// written into the same target under the same two blends, so it melds with
@@ -1807,6 +1832,26 @@ impl ViewConfig {
     pub fn lattice_ground_lightness(&self) -> f32 {
         if self.lattice_ground.is_finite() {
             self.lattice_ground.clamp(0.0, 100.0)
+        } else {
+            DEFAULT_RING_GROUND
+        }
+    }
+
+    /// [`marker_ink`](Self::marker_ink) as an `L*` the colour path can actually
+    /// solve for: on the axis, and a real number.
+    ///
+    /// Its own function rather than the one above with a field swapped in,
+    /// because the two numbers are independent and a repair that read the wrong
+    /// one would be silent — the markers and the rings open on one grey, so a
+    /// fresh view draws the same picture either way and only a moved bar tells
+    /// them apart. The reason the repair exists at all is
+    /// [`lattice_ground_lightness`](Self::lattice_ground_lightness)'s: a NaN
+    /// walks through a `clamp` untouched into a Newton solve that answers with
+    /// whatever its guard parks on, and the drawing code is reached by more
+    /// routes than the persist door.
+    pub fn marker_ink_lightness(&self) -> f32 {
+        if self.marker_ink.is_finite() {
+            self.marker_ink.clamp(0.0, 100.0)
         } else {
             DEFAULT_RING_GROUND
         }
@@ -2301,6 +2346,11 @@ impl ViewConfig {
         // what keeps the bar's readout and the grey on screen the same value.
         self.lattice_ground =
             finite_or(self.lattice_ground, fresh.lattice_ground).clamp(0.0, 100.0);
+        // The markers' own grey, on the same axis and repaired for the same
+        // reason: it is solved for a neutral by the same Newton solve, and it
+        // reaches no gradient, so a broken one costs the resting field and
+        // nothing else.
+        self.marker_ink = finite_or(self.marker_ink, fresh.marker_ink).clamp(0.0, 100.0);
 
         // The node glow's pair. The reach repairs to the fresh value — 0, the
         // off position — on the same argument the ring's gate does: a number
@@ -2386,11 +2436,12 @@ fn finite_or(value: f32, fallback: f32) -> f32 {
     }
 }
 
-/// The `L*` a fresh [`ViewConfig::lattice_ground`] opens on, named because
-/// [`ViewConfig::lattice_ground_lightness`] needs it without building a whole
-/// fresh view to read one field off. Named, and not a second value: the
-/// `Default` below is written in terms of it, the way it is written in terms of
-/// `octaves::DEFAULT_COUNT`.
+/// The `L*` a fresh [`ViewConfig::lattice_ground`] opens on — and a fresh
+/// [`ViewConfig::marker_ink`] with it, so the resting picture opens as ONE grey
+/// and the two bars start as a pair to be moved apart. Named because both
+/// `_lightness` accessors need it without building a whole fresh view to read
+/// one field off. Named, and not a second value: the `Default` below is written
+/// in terms of it, the way it is written in terms of `octaves::DEFAULT_COUNT`.
 ///
 /// Which grey this is, and why that rung, is at
 /// [`skin::surface_faint_color`](crate::skin::surface_faint_color).
@@ -2519,6 +2570,12 @@ impl Default for ViewConfig {
             // the skin, so retuning that rung and leaving this behind is a test
             // failure rather than a drift.
             lattice_ground: DEFAULT_RING_GROUND,
+            // The same rung, so the fresh lattice is one grey at rest and the
+            // pair reads as a pair. Where they part is a picture a person dials
+            // for — the glow on, the ground down, the markers held up to keep
+            // the positions legible — and there is no fresh look that guesses
+            // it, because it depends on how much light is behind the notes.
+            marker_ink: DEFAULT_RING_GROUND,
             // Five octaves to the turn with middle C straight up — C1..C5 in
             // the DAW's numbering, the register a keyboard part lives in, at
             // 72 degrees an octave, with a two-octave fringe either end (see
