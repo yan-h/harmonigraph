@@ -754,7 +754,27 @@ impl NodeInstance {
             NoteNames::Past => self.trail,
             NoteNames::Played => 0.0,
         };
-        self.activation.max(resting).clamp(0.0, 1.0)
+        // A name on its way to being KEPT settles on the level its record takes
+        // over at rather than easing out and being popped back: `trail` is not
+        // written until the frame the release finishes, so through the release
+        // there is nothing to settle onto and the level has to be reserved
+        // ahead of the record. Reserved on the way OUT alone, where a record
+        // can actually land, and under the one mode that keeps one.
+        //
+        // Here rather than in the label pass alone, because the marker under
+        // the name is this level's complement (`derive_pluses`): a reserve one
+        // side only is a full name standing over a nearly-full marker for the
+        // whole of a release, and then the marker going out in a single frame.
+        let reserved = if view.note_names == NoteNames::Past
+            && self.on_home
+            && self.departing
+            && self.activation > 0.0
+        {
+            1.0
+        } else {
+            0.0
+        };
+        self.activation.max(resting).max(reserved).clamp(0.0, 1.0)
     }
 
     /// Whether a note name is drawn over this node AT ALL — the gate the label

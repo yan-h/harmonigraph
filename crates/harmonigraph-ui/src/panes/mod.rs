@@ -448,10 +448,9 @@ pub(super) fn param_range_bar(
 }
 
 /// One bar for a soft edge: how far it REACHES past whatever it surrounds, and
-/// how much of that reach it spends FADING out. Four settings are this shape —
-/// the lattice's node clearance, the resting marker's arm and the taper on its
-/// ends, the piano roll's note outline, and the lead a sounding note carries
-/// over the now-line.
+/// how much of that reach it spends FADING out. Every setting shaped like that
+/// pair takes this bar, so the two handles are one drag apart and the fade can
+/// never outrun the edge it belongs to.
 ///
 /// The lead is the one whose axis is not in points, and it is worth saying that
 /// this bar does not care: it is handed two numbers and a far end, and what

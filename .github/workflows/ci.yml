@@ -53,3 +53,8 @@ jobs:
       # its inputs are a pid, its argv and the spare pool's sockets. See ci.sh.
       - name: Worktree reclaim lock cases
         run: .claude/tests/reclaim-locks.sh
+      # The other gate no cargo test can reach: its subject is an inode and an
+      # ad-hoc signature, and its failure is silent — the DAW goes on drawing
+      # the previous build. See ci.sh.
+      - name: Bundle swap
+        run: .claude/tests/plugin-swap.sh

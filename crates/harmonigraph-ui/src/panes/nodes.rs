@@ -878,7 +878,7 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                  the Feather shapes it and the Strength scales it, and the Gap \
                  holds it off ink the way it holds a note's light off its \
                  rings: the resting field parts around a sounding note, and \
-                 each cross stands in a dark moat of its own. How much of its \
+                 each cross stands in a dark standoff of its own. How much of its \
                  own pool the cross wears is \
                  the Wash above — low leaves it a silhouette standing in the \
                  light, high melts it in. It does not take the Reach: there is \

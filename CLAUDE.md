@@ -129,6 +129,9 @@ with them most of what used to live here. What is left:
 - `DISPLAY_OVERSAMPLE` in `editor.rs`, which carries an explicit
   `HISTORICAL NOTE`: it exists to stop someone tightening the constant on
   reasoning that no longer holds.
+- `GESTURE_MAGNIFY` in `harmonigraph-ui`'s `spectrogram.rs`, the second
+  `HISTORICAL NOTE` and the same shape as the first: it records a value that
+  was tried and reverted, so that the revert is not quietly re-done.
 
 There the history *is* the current constraint, and flattening it destroys
 real information. Runtime "old" and "no longer" — a previously-held voice,

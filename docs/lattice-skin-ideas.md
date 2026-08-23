@@ -19,10 +19,12 @@ Two places a skin reaches, and only one of them is an axis today:
   `fs_plus` / `derive_pluses`; nothing is drawn between two positions. The
   `Skin` struct (`harmonigraph-scene::skin`) owns every color the CHROME
   draws — panel, well, hairline, accent — but not what the LATTICE draws at
-  rest. The markers, the audio ring where it reads silence, the octave
-  band's unsounding slices and an unplayed node all stand on one view
-  setting instead, `ViewConfig::lattice_ground`: a neutral `L*` resolved per
-  frame off the Ground bar, so it is dialable while a picture is being read.
+  rest. The audio ring where it reads silence, the octave band's unsounding
+  slices and an unplayed node all stand on one view setting instead,
+  `ViewConfig::lattice_ground`: a neutral `L*` resolved per frame off the
+  Ground bar, so it is dialable while a picture is being read. The markers
+  stand on `ViewConfig::marker_ink`, an `L*` of their own on the same axis,
+  so the resting field is free of the node's unlit rings.
   The skin's part in it is `surface_faint`, the rung a fresh view opens on.
 
 A node is a camera-facing billboard with signed-distance masks, so new node
@@ -90,14 +92,15 @@ which is most of what they cost:
   field with only its draw SIZE saying how far off it has gone. The narrowest
   of these to bring back, and the only one that was answering a question.
 - **Accent-tinted ground** — a desaturated hue over the field instead of the
-  neutral grey. Not a skin swap: the markers' color is
-  `ViewConfig::lattice_ground`, an `L*` with no hue axis at all, so it means
-  giving that setting a chroma and a hue of its own. It also reaches further
-  than the markers — the audio ring's silent end and the band's unsounding
-  slices stand on that same number, and
-  `the_markers_the_ring_and_an_idle_node_are_one_grey` says they must — so
-  what is really on offer is "tint the lattice AT REST", all three surfaces
-  together.
+  neutral grey. Not a skin swap: both numbers the resting picture stands on
+  are an `L*` with no hue axis at all, so it means giving them a chroma and a
+  hue of their own. It reaches two settings rather than one — the markers
+  take `ViewConfig::marker_ink`, while the audio ring's silent end and the
+  band's unsounding slices stand on `lattice_ground`
+  (`the_ring_and_an_idle_node_are_one_grey`), and the two open equal
+  (`a_fresh_lattice_rests_in_one_grey`) without being held equal. So "tint
+  the lattice AT REST" is two edits, and keeping the surfaces together
+  through them is part of what the idea costs.
 
 ## Whole-look skins (coordinated palettes)
 
