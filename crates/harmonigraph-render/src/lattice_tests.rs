@@ -6,6 +6,31 @@
 use super::*;
 use crate::gpu_harness::{headless_device, readback, render_to_texture};
 
+/// One marker for the fixtures below, casting the whole of the shadow its ink
+/// is worth.
+///
+/// `PlusInstance::shade` is the term `Scene::shade_markers` spends against the
+/// light standing over a marker, and none of these fixtures run that pass — a
+/// scene assembled by hand has whatever light it was given. Full here so the
+/// standoff is the ink's, which is what every measurement below is taken
+/// against; `lattice_pos` is the join that pass uses and nothing in the render
+/// path reads it, so the position these say is `pos`.
+fn one_marker(
+    pos: glam::Vec3,
+    radius: f32,
+    color: glam::Vec4,
+    strength: f32,
+) -> harmonigraph_scene::PlusInstance {
+    harmonigraph_scene::PlusInstance {
+        lattice_pos: harmonigraph_core::LatticePos::ORIGIN,
+        pos,
+        radius,
+        color,
+        strength,
+        shade: strength,
+    }
+}
+
 #[test]
 fn baked_shader_validates() {
     validate_wgsl(SHADER_SRC)
@@ -467,18 +492,8 @@ fn parity_scene() -> Scene {
     // exercised both where the nodes composite over it and where it stands
     // alone. Different radii, because the size is per instance.
     let pluses = vec![
-        harmonigraph_scene::PlusInstance {
-            pos: Vec3::new(-1.8, -0.6, -0.3),
-            radius: 0.22,
-            color: Vec4::new(0.16, 0.17, 0.20, 1.0),
-            strength: 0.55,
-        },
-        harmonigraph_scene::PlusInstance {
-            pos: Vec3::new(0.0, 0.0, 0.0),
-            radius: 0.13,
-            color: Vec4::new(0.16, 0.17, 0.20, 1.0),
-            strength: 0.4,
-        },
+        one_marker(Vec3::new(-1.8, -0.6, -0.3), 0.22, Vec4::new(0.16, 0.17, 0.20, 1.0), 0.55),
+        one_marker(Vec3::new(0.0, 0.0, 0.0), 0.13, Vec4::new(0.16, 0.17, 0.20, 1.0), 0.4),
     ];
     let glow_rows = nodes.len() as u32;
     Scene {
@@ -5184,15 +5199,15 @@ fn a_silent_lattice_ships_no_nodes_and_still_draws_its_markers() {
 fn lone_marker_scene(half_width: f32, taper_start: f32) -> Scene {
     let mut scene = idle_scene();
     scene.nodes.clear();
-    scene.pluses = vec![harmonigraph_scene::PlusInstance {
-        pos: glam::Vec3::ZERO,
+    scene.pluses = vec![one_marker(
+        glam::Vec3::ZERO,
         // Big enough that the screen-constant soft band is a thin rim on it
         // rather than a share of the area — the band is the error term in
         // every ratio below, and a small marker is mostly band.
-        radius: 0.5,
-        color: glam::Vec4::ONE,
-        strength: 1.0,
-    }];
+        0.5,
+        glam::Vec4::ONE,
+        1.0,
+    )];
     scene.plus_half_width = half_width;
     scene.plus_taper_start = taper_start;
     scene
@@ -6636,12 +6651,7 @@ fn the_gap_dims_the_markers_pool() {
         // standoff it casts and clear of the ink it draws.
         scene.pluses = [(2.4f32, 0.0f32), (-2.4, 0.0), (0.0, 2.4), (0.0, -2.4)]
             .into_iter()
-            .map(|(x, y)| harmonigraph_scene::PlusInstance {
-                pos: glam::Vec3::new(x, y, 0.0),
-                radius: 0.5,
-                color: scene.lattice_ground,
-                strength: 1.0,
-            })
+            .map(|(x, y)| one_marker(glam::Vec3::new(x, y, 0.0), 0.5, scene.lattice_ground, 1.0))
             .collect();
         scene
     };
@@ -6791,12 +6801,7 @@ fn shadowed_markers(depth: f32, gap: f32, taper_start: f32) -> Scene {
     // nothing to it and the shadow measured would be the node's.
     scene.pluses = [(2.6f32, 0.0f32), (-2.6, 0.0), (0.0, 2.6), (0.0, -2.6)]
         .into_iter()
-        .map(|(x, y)| harmonigraph_scene::PlusInstance {
-            pos: glam::Vec3::new(x, y, 0.0),
-            radius: 0.4,
-            color: scene.lattice_ground,
-            strength: 1.0,
-        })
+        .map(|(x, y)| one_marker(glam::Vec3::new(x, y, 0.0), 0.4, scene.lattice_ground, 1.0))
         .collect();
     scene
 }
@@ -6870,6 +6875,87 @@ fn a_marker_holds_a_nodes_halo_off_its_own_cross() {
         dimmed > 200,
         "a full Gap depth darkened {dimmed} of the {} pixels the markers' ink never reaches",
         ground.len(),
+    );
+}
+
+/// A node lit under its own cross keeps the halo there: the shadow closes and
+/// the ink does not.
+///
+/// The middle of a node is the one place the picture keeps free of a standoff —
+/// `glow_standoff` measures every ring from its own annulus, so the light runs
+/// in to the centre — and a marker standing at that centre is the one thing
+/// that can write one there. The bite is real and this measures it both ways:
+/// the same frame with the marker's shadow open darkens hundreds of pixels of
+/// the node's own halo, and with it closed darkens none.
+///
+/// `PlusInstance::shade` is what is moved between the two shots and nothing
+/// else — same ink, same arm, same Gap — so the ground is one set for both and
+/// the difference cannot be the marker's footprint moving. Which node is lit is
+/// not asked either: what closes the term is `Scene::shade_markers`, and the
+/// claim here is only that the shader spends it.
+#[test]
+fn a_lit_node_keeps_the_halo_under_its_own_cross() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    // One marker at the node's own centre, in a frame whose only light is that
+    // node's (`shadowed_markers` pins `marker_light` to 0).
+    let at = |shade: f32, depth: f32| -> Scene {
+        let mut scene = shadowed_markers(depth, 0.8, 1.0);
+        scene.pluses = vec![harmonigraph_scene::PlusInstance {
+            lattice_pos: harmonigraph_core::LatticePos::ORIGIN,
+            pos: glam::Vec3::ZERO,
+            radius: 0.5,
+            color: scene.lattice_ground,
+            strength: 1.0,
+            shade,
+        }];
+        scene
+    };
+    let bare = |shooter: &mut Shooter, depth: f32| {
+        shooter.shot(&{
+            let mut s = at(0.0, depth);
+            s.pluses.clear();
+            s
+        })
+    };
+
+    // The ink's own footprint, read where a marker writes ink and no standoff,
+    // and excluded from every count below: what is being measured is light the
+    // cross took off the picture around it, not the cross itself.
+    let flat_bare = bare(&mut shooter, 0.0);
+    let flat = shooter.shot(&at(1.0, 0.0));
+    let ground: Vec<usize> = (0..flat.len())
+        .step_by(4)
+        .filter(|&i| flat[i..i + 4] == flat_bare[i..i + 4])
+        .collect();
+    assert!(
+        ground.len() > 1000,
+        "the fixture must leave halo for a bite to land in, not {}",
+        ground.len(),
+    );
+
+    let deep_bare = bare(&mut shooter, 1.0);
+    let biting = shooter.shot(&at(1.0, 1.0));
+    let closed = shooter.shot(&at(0.0, 1.0));
+    let dimmed = |frame: &[u8]| {
+        ground
+            .iter()
+            .filter(|&&i| brightness(&frame[i..i + 3]) < brightness(&deep_bare[i..i + 3]))
+            .count()
+    };
+    assert!(
+        dimmed(&biting) > 200,
+        "an open shadow bit {} of the {} halo pixels around the cross — with none there is \
+         nothing for the closed shot to prove",
+        dimmed(&biting),
+        ground.len(),
+    );
+    assert_eq!(
+        dimmed(&closed),
+        0,
+        "a closed shadow still took light off the halo the node lit under its own cross",
     );
 }
 
@@ -6965,12 +7051,7 @@ fn lone_shadowed_marker(arm: f32, gap: f32, depth: f32) -> Scene {
     scene.nodes.clear();
     scene.marker_light = 0.9;
     scene.marker_span = LONE_SPAN;
-    scene.pluses = vec![harmonigraph_scene::PlusInstance {
-        pos: glam::Vec3::ZERO,
-        radius: arm,
-        color: scene.lattice_ground,
-        strength: 1.0,
-    }];
+    scene.pluses = vec![one_marker(glam::Vec3::ZERO, arm, scene.lattice_ground, 1.0)];
     scene
 }
 
@@ -8478,12 +8559,8 @@ fn a_resting_marker_wears_the_wash_it_stands_in() {
         scene.glow_feather = 1.0;
         scene.glow_wash = wash;
         if marker {
-            scene.pluses = vec![harmonigraph_scene::PlusInstance {
-                pos: glam::Vec3::new(3.0, 0.0, 0.0),
-                radius: 0.8,
-                color: scene.lattice_ground,
-                strength: 1.0,
-            }];
+            scene.pluses =
+                vec![one_marker(glam::Vec3::new(3.0, 0.0, 0.0), 0.8, scene.lattice_ground, 1.0)];
         }
         scene
     };

@@ -2821,6 +2821,9 @@ struct PlusInstance {
     @location(0) pos_radius: vec4<f32>,
     // rgb: the marker's own ink, a: this marker's opacity.
     @location(1) color: vec4<f32>,
+    // How much of this marker's shadow stands, which the ink pass does not read
+    // and `plus_standoff` does.
+    @location(2) shade: f32,
 };
 
 struct PlusVsOut {
@@ -3707,11 +3710,15 @@ struct PlusGlowVsOut {
     // cross out from. Carried per instance because the arm is, one bar setting
     // every marker's or not.
     @location(1) @interpolate(flat) arm: f32,
-    // The marker's opacity, which the pool and the standoff both take with the
-    // ink: a position whose NAME is fading in hands all three over together
-    // (`derive_pluses`), so neither the light nor the shadow outlives the cross
-    // standing in it.
+    // The marker's opacity, which the pool takes with the ink: a position whose
+    // NAME is fading in hands the two over together (`derive_pluses`), so the
+    // light does not outlive the cross standing in it.
     @location(2) @interpolate(flat) strength: f32,
+    // What [`plus_standoff`] closes on, which is the opacity above spent
+    // against the light standing over this marker (`PlusInstance::shade`). It
+    // never exceeds `strength`, so the cross outliving its own shadow is the
+    // only way round the two can come apart.
+    @location(3) @interpolate(flat) shade: f32,
 };
 
 @vertex
@@ -3752,6 +3759,7 @@ fn vs_plus_glow(@builtin(vertex_index) vertex_index: u32, inst: PlusInstance) ->
     out.uv = corner * margin;
     out.arm = arm;
     out.strength = inst.color.a;
+    out.shade = inst.shade;
     return out;
 }
 
@@ -3822,9 +3830,14 @@ fn plus_glow_layer(in: PlusGlowVsOut) -> vec4<f32> {
 /// every fragment outside an arm reads the ink it stands off as absent and a
 /// square-ended marker gets no shadow at all.
 ///
-/// The marker's own strength closes it, exactly as each of [`glow_standoff`]'s
-/// terms is closed by its layer's level: a position fading in has no ink yet
-/// and holds nothing off.
+/// Closed by [`PlusGlowVsOut::shade`] and not by the opacity, which is the one
+/// place a marker's shadow and its ink part company: a position fading in has
+/// no ink yet and holds nothing off, and a node LIT under its own cross holds
+/// nothing off either — the middle of a node is the one place the picture keeps
+/// free of a standoff ([`glow_standoff`] measures every ring from its own
+/// annulus so the light runs in to the centre), and a cross may not be what
+/// writes one there. A neighbour's spill is still held off: what the term is
+/// closed against is the node this marker stands under.
 fn plus_standoff(in: PlusGlowVsOut) -> f32 {
     // An arm of 0 draws no markers (`derive_pluses`). The marker draw is left
     // to say so by its own quad collapsing; this one's does not, the Gap
@@ -3847,7 +3860,7 @@ fn plus_standoff(in: PlusGlowVsOut) -> f32 {
     // carries for a node: markers stand on the home sheet alone
     // (`derive_pluses`), and the home sheet has no scale of its own.
     let soft = standoff_soft(u.misc6.z);
-    return standoff_coverage(sd, soft) * clamp(in.strength, 0.0, 1.0);
+    return standoff_coverage(sd, soft) * clamp(in.shade, 0.0, 1.0);
 }
 
 /// How much of the light standing here this marker holds off, as

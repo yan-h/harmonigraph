@@ -147,6 +147,11 @@ pub(crate) fn draw_lattice(
     // doing. Per surface, because what this hands out is rows of that surface's
     // own ink strip.
     super::glow_fade::apply(&mut scene, state, surface, now);
+    // And the markers' shadows against that light, which is why this is behind
+    // both passes above rather than inside the derivation: a cross may not cut
+    // the halo of the node it stands in the middle of, and what a node is
+    // lighting the picture with is the line above's answer.
+    scene.shade_markers();
     // The ground the sevens knockout clears to. Only the shell knows what
     // this pass is composited over -- the fill the docked pane just painted
     // here, the render layout's own background offline -- so it is carried in

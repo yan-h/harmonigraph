@@ -806,20 +806,35 @@ pub(crate) fn derive_pluses(
     // keeps the pair exact where they agree: under `Played` a name is drawn at
     // the node's own activation, and a product would spend one handoff twice.
     // The note's own claim is what the names leave uncovered when they are
-    // switched off, and it is needed there because a marker standing at a lit
-    // node's centre writes a standoff into the one place the picture keeps free
-    // of one (`plus_standoff` in lattice.wgsl,
-    // [`ViewConfig::glow_gap`](crate::ViewConfig::glow_gap)).
+    // switched off.
+    //
+    // Those two and nothing else, because the question the ink asks is what is
+    // DRAWN at the position rather than what lights it: an analyzer ring is
+    // light a node wears, so a node ringing under no key keeps its cross whole.
+    // The light's own quarrel with a cross — the standoff one writes into a lit
+    // node's middle — is settled on the marker's other term instead
+    // ([`PlusInstance::shade`](crate::PlusInstance::shade)), which is closed
+    // against every layer rather than against these two.
     nodes
         .iter()
         .filter(|n| n.on_home)
         .filter_map(|n| {
             let clear = 1.0 - n.name_level(view).max(n.activation);
-            (clear > 0.0).then(|| PlusInstance {
-                pos: n.world_pos,
-                radius,
-                color: ink,
-                strength: ink.w * clear,
+            (clear > 0.0).then(|| {
+                let strength = ink.w * clear;
+                PlusInstance {
+                    lattice_pos: n.lattice_pos,
+                    pos: n.world_pos,
+                    radius,
+                    color: ink,
+                    strength,
+                    // The MIDI layers' light, which is the whole of what has
+                    // been measured this far into the frame (see
+                    // `NodeInstance::glow`). `Scene::shade_markers` settles it
+                    // against the carried level once the fold and the glow's
+                    // own clock have run.
+                    shade: strength * (1.0 - n.glow.level.clamp(0.0, 1.0)),
+                }
             })
         })
         .collect()
