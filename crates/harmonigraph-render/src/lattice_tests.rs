@@ -4732,6 +4732,20 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         scene.octave_gap = 0.0;
         scene
     };
+    // A marker's standoff reaching PAST its own pool, which is the only way
+    // `fs_plus_glow`'s early-out decides anything: inside the pool the light
+    // keeps every fragment on its own, and a fragment the standoff holds and
+    // the light does not exists only out here. Every fixture above sizes the
+    // marker's pool wider than its Gap, so without this the switch is compiled
+    // on the markers and never once taken — a relaxation dropping the
+    // standoff's term from it passes them all.
+    let marker_standoff = || {
+        let mut scene = standing_off();
+        scene.glow_gap = 1.0;
+        scene.glow_gap_soft = 1.0;
+        scene.marker_light = 0.5;
+        scene
+    };
     // No all-idle fixture: an idle node paints nothing, so the cull ships
     // none of them and the comparison would be two empty images. What the
     // idle branch does is now pinned by
@@ -4745,6 +4759,7 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         ("clearing", clearing()),
         ("standing off", standing_off()),
         ("standing off a closed ring", closed_ring()),
+        ("a marker standing off past its pool", marker_standoff()),
     ] {
         let cb = LatticeCallback::from_scene(
             &scene,
@@ -4907,15 +4922,19 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         let Some(glow) = pane.offscreen.as_ref().and_then(|o| o.glow.as_ref()) else {
             continue;
         };
-        let glow_draw = |src: &str| {
+        let glow_draw = |src: &str,
+                         entries: (&str, &str),
+                         buffers: wgpu::VertexBufferLayout<'static>,
+                         buffer: &wgpu::Buffer,
+                         count: u32| {
             let pipeline = create_glow_pipeline(
                 &device,
                 src,
                 format,
                 &res.bind_group_layout,
                 &res.strip_layout,
-                ("vs_glow", "fs_glow"),
-                GpuInstance::LAYOUT,
+                entries,
+                buffers,
             );
             let attachment = |label, format| {
                 device.create_texture(&wgpu::TextureDescriptor {
@@ -4966,8 +4985,8 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
                 pass.set_pipeline(&pipeline);
                 pass.set_bind_group(0, &pane.bind_group, &[]);
                 pass.set_bind_group(1, &glow.strip.blurred_bind_group, &[]);
-                pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
-                pass.draw(0..4, 0..pane.instance_count);
+                pass.set_vertex_buffer(0, buffer.slice(..));
+                pass.draw(0..4, 0..count);
             }
             queue.submit([encoder.finish()]);
             // BOTH quantities the pass writes, because a skip can drop either
@@ -5009,31 +5028,58 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
             };
             (read(&targets[0], 4), read(&targets[2], 2))
         };
-        let (light_fast, shade_fast) = glow_draw(SHADER_SRC);
-        let (light_slow, shade_slow) = glow_draw(&reference_src);
+        // BOTH draws that write the glow's three attachments. The marker's is a
+        // pipeline of its own off the same shader, with an early-out of its own
+        // (`fs_plus_glow`) weighing a standoff and a pool that a node's never
+        // sees — so without this the switch is compiled on the markers and
+        // never once compared, which is the whole claim this test makes.
+        for (pass_name, entries, buffers, buffer, count) in [
+            (
+                "node",
+                ("vs_glow", "fs_glow"),
+                GpuInstance::LAYOUT,
+                &pane.instance_buffer,
+                pane.instance_count,
+            ),
+            (
+                "marker",
+                ("vs_plus_glow", "fs_plus_glow"),
+                GpuPlus::LAYOUT,
+                &pane.plus_buffer,
+                pane.plus_count,
+            ),
+        ] {
+            assert!(count > 0, "the {name} scene ships no {pass_name} to compare");
+            let (light_fast, shade_fast) =
+                glow_draw(SHADER_SRC, entries, buffers.clone(), buffer, count);
+            let (light_slow, shade_slow) =
+                glow_draw(&reference_src, entries, buffers, buffer, count);
 
-        // Vacuous unless the pass actually wrote each of them: every fixture
-        // that reaches here carries a reach and a depth, so a layer of zeroes
-        // means the dials stopped arriving rather than that the skips are sound.
-        assert!(
-            shade_slow.iter().any(|&b| b != 0),
-            "the {name} scene held no light off; the standoff comparison is vacuous",
-        );
-        assert!(
-            light_slow.iter().any(|&b| b != 0),
-            "the {name} scene lit nothing; the light comparison is vacuous",
-        );
-
-        for (layer, fast, slow) in
-            [("light", &light_fast, &light_slow), ("standoff", &shade_fast, &shade_slow)]
-        {
-            let differing = fast.iter().zip(slow.iter()).enumerate().find(|(_, (a, b))| a != b);
+            // Vacuous unless the pass actually wrote each of them: every fixture
+            // that reaches here carries a reach and a depth, so a layer of zeroes
+            // means the dials stopped arriving rather than that the skips are sound.
             assert!(
-                differing.is_none(),
-                "the {name} scene's {layer} changed when the early-outs were enabled: \
-                 byte {:?}",
-                differing.map(|(i, (a, b))| (i, *a, *b)),
+                shade_slow.iter().any(|&b| b != 0),
+                "the {name} scene's {pass_name} held no light off; \
+                 the standoff comparison is vacuous",
             );
+            assert!(
+                light_slow.iter().any(|&b| b != 0),
+                "the {name} scene's {pass_name} lit nothing; the light comparison is vacuous",
+            );
+
+            for (layer, fast, slow) in
+                [("light", &light_fast, &light_slow), ("standoff", &shade_fast, &shade_slow)]
+            {
+                let differing =
+                    fast.iter().zip(slow.iter()).enumerate().find(|(_, (a, b))| a != b);
+                assert!(
+                    differing.is_none(),
+                    "the {name} scene's {pass_name} {layer} changed when the early-outs \
+                     were enabled: byte {:?}",
+                    differing.map(|(i, (a, b))| (i, *a, *b)),
+                );
+            }
         }
     }
 }
