@@ -210,23 +210,25 @@ fn the_feather_bars_preview_is_the_skirt_the_shader_draws() {
              is a change to both",
         );
     }
-    // Asked of the function a NODE's light is drawn by, which is the one the
-    // preview mirrors. `plus_glow_layer` carries the same three lines term for
-    // term, so the whole file answers a needle either copy satisfies — and the
-    // node's own skirt can then drift out from under the preview with the bar
-    // still claiming to draw it.
-    let body = wgsl_fn_body("glow_layer");
-    for needle in [
-        "let rate = mix(GLOW_FALLOFF_TIGHT, GLOW_FALLOFF_FLAT, glow_feather());",
-        "let window = 1.0 - smoothstep(span * 0.5, span, d);",
-        "let skirt = GLOW_BASE * exp(-rate * d / span) * window;",
-    ] {
-        assert!(
-            body.contains(needle),
-            "`fn glow_layer` must contain `{needle}`: harmonigraph_scene::glow_skirt mirrors the \
-             skirt line for line to draw the Feather bar's preview, so a change to either \
-             is a change to both",
-        );
+    // Asked of EACH function that spends them, not of the file. A node's light
+    // and a marker's pool carry the same three lines term for term, so a needle
+    // put to the whole file is answered by whichever copy still has it, and the
+    // other is free to drift — the preview then draws a curve one of the two
+    // does not, with nothing on screen showing it.
+    for shape in ["glow_layer", "plus_glow_layer"] {
+        let body = wgsl_fn_body(shape);
+        for needle in [
+            "let rate = mix(GLOW_FALLOFF_TIGHT, GLOW_FALLOFF_FLAT, glow_feather());",
+            "let window = 1.0 - smoothstep(span * 0.5, span, d);",
+            "let skirt = GLOW_BASE * exp(-rate * d / span) * window;",
+        ] {
+            assert!(
+                body.contains(needle),
+                "`fn {shape}` must contain `{needle}`: harmonigraph_scene::glow_skirt mirrors \
+                 the skirt line for line to draw the Feather bar's preview, and both lights \
+                 run on that one shape, so a change to any of the three is a change to all",
+            );
+        }
     }
 }
 
