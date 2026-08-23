@@ -6890,6 +6890,130 @@ fn the_gap_reaches_past_the_clearance_the_node_cuts() {
     );
 }
 
+/// The Gap reaches light this node never lit — a NEIGHBOUR's halo, out past
+/// where its own light has shut.
+///
+/// The standoff is written per node into a layer of the light (`fs_glow`), one
+/// quad per node, so what bounds it is that node's own billboard. The billboard
+/// is sized to hold the LIGHT — the lit rim plus the Reach — and the Gap is a
+/// length of its own with a ceiling of its own (`GLOW_GAP_MAX` against
+/// `GLOW_REACH_MAX`), so a Gap dialled past the Reach asks for a standoff out
+/// where this node draws no fragment at all. What an unheld bound looks like is
+/// not a wrong value but a DISCONTINUITY: the fade stops dead partway down its
+/// ramp, on a line that is straight and screen-aligned — `node_vertex` builds
+/// the quad from `cam_right`/`cam_up` — so it slides around every node as the
+/// camera turns while the lattice under it does not.
+///
+/// Hence a probe past `QUAD_MARGIN`, the floor the billboard takes at this
+/// Reach, and inside `rings_outer + GAP`, where the standoff's own fade still
+/// has most of its depth left. The light there is worth measuring only because
+/// it is somebody else's: a node's own light shuts at its rim plus the Reach,
+/// which is always inside its own quad, so the far side of the bound is lit by
+/// the neighbour alone — the same split `fs_glow`'s early-out turns on, where
+/// a node with no light of its own still stands its rings off a neighbour's.
+#[test]
+fn the_gap_reaches_light_the_nodes_own_never_lit() {
+    // Wide enough for both nodes and a multiple of 64, so the readback's rows
+    // stay aligned.
+    const SIZE: [u32; 2] = [1408, 320];
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    // The widest Gap the bar has against the fresh Reach — the pair that puts
+    // the standoff outside the quad the light alone would size.
+    const GAP: f32 = harmonigraph_scene::GLOW_GAP_MAX;
+    const REACH: f32 = 0.35;
+    // Where the neighbour stands, and where the light is read, both in the
+    // probed node's uv. The probe is past `QUAD_MARGIN` (1.6) and inside the
+    // fixture's `rings_outer + GAP`.
+    const APART: f32 = 2.25;
+    const PROBE: f32 = 1.65;
+
+    // One node, and every bar of the standoff open but the depth.
+    let alone = |reach: f32, depth: f32| -> Scene {
+        let mut scene = single_marked_node(0, 0);
+        scene.camera = harmonigraph_scene::Camera {
+            projection: harmonigraph_scene::Projection::Orthographic,
+            yaw: 0.0,
+            pitch: 0.0,
+            ..Default::default()
+        };
+        scene.glow_reach = reach;
+        scene.glow_strength = 2.0;
+        // An even field, so the light is still worth something out at the bound
+        // rather than an exponential's tail.
+        scene.glow_feather = 1.0;
+        scene.glow_gap = GAP;
+        scene.glow_gap_soft = GAP;
+        // The fade held longest, which is what leaves a measurable share of the
+        // standoff this far out.
+        scene.glow_gap_shape = 1.0;
+        scene.glow_gap_depth = depth;
+        scene.nodes[0].gutter = 0.0;
+        scene
+    };
+    // ...and the neighbour that lights it. Dialled almost off, so every term of
+    // its OWN standoff — each one scaled by the level of the layer it stands off
+    // — is worth nothing at the probe, while its light rides the glow's own
+    // clock at full.
+    let with_neighbour = |reach: f32, depth: f32| -> Scene {
+        let mut scene = alone(reach, depth);
+        let mut lamp = scene.nodes[0].clone();
+        lamp.world_pos = glam::Vec3::new(APART * scene.node_radius * 1.8, 0.0, 0.0);
+        lamp.activation = 0.02;
+        lamp.audio_ring = 0.0;
+        lamp.ring_peak = 0.0;
+        lamp.glow.row = 1;
+        lamp.glow.marked = 0.0;
+        scene.nodes.push(lamp);
+        scene.glow_rows = scene.nodes.len() as u32;
+        scene
+    };
+
+    let row = SIZE[0] as usize;
+    let centre = (SIZE[1] / 2) as usize * row + (SIZE[0] / 2) as usize;
+    // The scale, taken off ONE node so the outermost ink along +x is this node's
+    // own rings and not the neighbour's: that pixel is `rings_outer` in its uv.
+    let solo = alone(0.0, 0.0);
+    let plain = shooter.shot(&solo);
+    let inked = |px: &[u8], i: usize| px[i * 4..i * 4 + 4] != [0u8, 0, 0, 255];
+    let band_px = (1..(SIZE[0] / 2) as usize)
+        .rfind(|&x| inked(&plain, centre + x))
+        .expect("the fixture's node must ink something along +x");
+    let per_uv = band_px as f32 / solo.rings_outer;
+    let probe = centre + (PROBE * per_uv).round() as usize;
+    assert!(
+        !inked(&plain, probe),
+        "the probe at {probe} sits on the node's own ink, not outside it",
+    );
+
+    let lit = |px: &[u8], i: usize| brightness(&px[i * 4..i * 4 + 3]);
+    let flat = shooter.shot(&with_neighbour(REACH, 0.0));
+    let gapped = shooter.shot(&with_neighbour(REACH, 1.0));
+    // The light at the probe is the NEIGHBOUR's: take the neighbour away and
+    // this node's own light does not reach, so what the standoff is holding off
+    // out here was never this node's to lay down.
+    let lonely = shooter.shot(&alone(REACH, 0.0));
+    assert!(
+        lit(&lonely, probe) < lit(&flat, probe) / 4,
+        "the probe is lit by the node's own light ({} against {} with a neighbour), so it \
+         measures nothing about a neighbour's",
+        lit(&lonely, probe),
+        lit(&flat, probe),
+    );
+
+    // And the Gap holds it off. A tenth is far under the share the bars ask for
+    // here and far over what the neighbour's own hundredth of a standoff can
+    // account for, so the threshold is the bound and not the arithmetic.
+    assert!(
+        lit(&gapped, probe) * 10 < lit(&flat, probe) * 9,
+        "the Gap left a neighbour's light at {} against {} with the depth at 0, so the \
+         standoff stopped at this node's own billboard",
+        lit(&gapped, probe),
+        lit(&flat, probe),
+    );
+}
+
 /// How much of the light the standoff takes at one radius, angle by angle, at a
 /// closed Octave gap and at the widest one — the two rings of shares every claim
 /// about the standoff following the slices is stated on.

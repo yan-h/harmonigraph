@@ -633,10 +633,20 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
     return node_vertex(vertex_index, inst, 0.0, false);
 }
 
-/// The GLOW's billboard: the same node, on a quad grown to hold its light —
-/// `glow_layer` shuts the window at the light's own rim ([`glow_rim`]) plus the
-/// Reach, so the Reach is the whole of what has to finish inside the quad. The
-/// margin below is that with room to spare.
+/// The GLOW's billboard: the same node, on a quad grown to hold everything this
+/// pass writes. Two lengths reach past the node, and the quad is sized to the
+/// larger — `glow_layer` shuts the window at the light's own rim ([`glow_rim`])
+/// plus the Reach, and [`glow_shade`] stands the light off every ring out to the
+/// Gap. The margin below is that with room to spare.
+///
+/// The GAP is in it because the standoff is answered for the LIGHT AT A PIXEL
+/// rather than for this node's own light: a node holds its rings off a
+/// neighbour's halo out where its own light has shut, which is the whole reason
+/// [`fs_glow`] cannot leave on `glow_level` alone. The two ceilings are
+/// independent, so a Gap dialled past the Reach reaches past a quad sized to the
+/// Reach, and what a bound cuts there is a fade partway down its ramp — a step
+/// on a straight line, and a screen-aligned one, the quad being built from
+/// `cam_right`/`cam_up`.
 ///
 /// A second entry point rather than a wider `vs_main`, because the margin is
 /// what every fragment of the node draw is measured against: growing that quad
@@ -645,13 +655,14 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
 /// world distance either way and nothing inside the node moves.
 @vertex
 fn vs_glow(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
-    return node_vertex(vertex_index, inst, max(u.misc10.x, 0.0), true);
+    return node_vertex(vertex_index, inst, max(max(u.misc10.x, 0.0), glow_gap()), true);
 }
 
 /// One node's billboard, with `extra` uv of headroom past what the node itself
-/// needs — 0 for the node draw, the glow's reach for the glow draw. `light`
-/// says which of the two rims sizes the quad ([`glow_rim`]); both are handed on
-/// either way, since the fragment stages of one draw never read the other's.
+/// needs — 0 for the node draw, and for the glow draw whichever of the Reach and
+/// the Gap reaches further (see [`vs_glow`]). `light` says which of the two rims
+/// sizes the quad ([`glow_rim`]); both are handed on either way, since the
+/// fragment stages of one draw never read the other's.
 fn node_vertex(vertex_index: u32, inst: Instance, extra: f32, light: bool) -> VsOut {
     var corners = array<vec2<f32>, 4>(
         vec2<f32>(-1.0, -1.0),
@@ -2123,11 +2134,12 @@ fn standoff_coverage(sd: f32, soft: f32) -> f32 {
 /// draws, dilated by the Gap.
 ///
 /// Answered in the LIGHT's own draw ([`fs_glow`]) and written to a layer beside
-/// it, so what a node holds off is held off wherever its light reaches. The
-/// node's own quad is the bound on that, and it is the right one for free: the
-/// standoff only ever scales light, so it can never need to reach further than
-/// the light it is scaling, and [`node_vertex`] sizes the glow's billboard to
-/// hold exactly that.
+/// it, so what a node holds off is held off wherever the light reaches — its
+/// NEIGHBOURS' as much as its own, that being what the melded field holds. The
+/// node's own quad is the bound on that, and it is a bound that has to be sized
+/// for: the light a node stands off is not its own, so its own light's span says
+/// nothing about how far this has to reach. What does is the Gap, and
+/// [`vs_glow`] grows the billboard by it.
 ///
 /// A RING — the octave band, the audio ring, a mark's sector — is measured from
 /// its own ANNULUS rather than filled to the node's centre the way
