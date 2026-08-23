@@ -6675,6 +6675,23 @@ fn the_standoff_follows_the_gaps_between_the_slices() {
             pitch: 0.0,
             ..Default::default()
         };
+        // The fresh wheel's own FRINGE, which `OctaveLayout::default` leaves
+        // off: with no extras every slice is one width and the walk reads a
+        // uniform ladder, which a boundary table built by arithmetic rather
+        // than read out of the uniform would satisfy just as well.
+        //
+        // What no wheel can pin is the DIRECTION the walk takes that table in.
+        // `octave_layout` mirrors the fringe, so the bounds satisfy
+        // `b[k] + b[span-k] = TAU` at every setting, and a min over all of them
+        // is the same answer whichever way round the fragment's angle is
+        // measured. That is a property of the wheel, not a hole in this fixture.
+        scene.octave_layout = harmonigraph_scene::octave_layout(
+            harmonigraph_scene::DEFAULT_COUNT,
+            harmonigraph_scene::DEFAULT_CENTER,
+            2,
+            harmonigraph_scene::DEFAULT_EXTRA_SIZE,
+            harmonigraph_scene::DEFAULT_EXTRA_BLEND,
+        );
         scene.octave_gap = octave_gap;
         scene.glow_reach = reach;
         scene.glow_strength = 1.5;
