@@ -1231,8 +1231,8 @@ pub struct ViewConfig {
     /// rings off.
     ///
     /// On a node it is its RINGS, and a node draws nothing else: inside the
-    /// innermost ring nothing stands the light off at all, which is what lights
-    /// the middle of a node whose innermost ring is an annulus. Each ring
+    /// innermost ring the node stands nothing off, which is what lights the
+    /// middle of a node whose innermost ring is an annulus. Each ring
     /// carries its own
     /// level, so a layer that is off, refused by the stack, attacking or
     /// releasing opens and closes its own standoff in step with the ink it
@@ -1246,14 +1246,18 @@ pub struct ViewConfig {
     /// standing in the light exactly as a ring is, so a lattice whose sounding
     /// notes are dark-rimmed and whose resting field is not would be two
     /// pictures laid over each other; sharing the bar is what makes it one.
+    /// RESTING, and that is what keeps the middle above lit: a note claims the
+    /// position it sounds at for as long as it lasts (`derive_pluses`), so
+    /// there is no cross inside a lit node to cut one out of its own halo.
     ///
     /// The ceiling is [`GLOW_GAP_MAX`], a whole radius where the two paddings
     /// stop at [`GAP_MAX`]: what stops a standoff reading as a black RING
     /// rather than as a lack of light is a dip broad enough to come off at the
     /// rate the skirt does, and that is a gap a good deal wider than any
     /// padding. Nothing in the picture bounds it short of that: it is the
-    /// node's own billboard that has to hold the answer, and `vs_glow` in
-    /// lattice.wgsl grows the quad by this so that it does.
+    /// emitter's own billboard that has to hold the answer, and every vertex
+    /// shader the light draws through in lattice.wgsl grows its quad by this so
+    /// that it does.
     ///
     /// Inert while [`glow_reach`](Self::glow_reach) is 0: with no light to
     /// stand off, a standoff is a dark ring painted for nothing.
