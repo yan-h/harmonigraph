@@ -16,7 +16,11 @@ struct Uniforms {
     //    phase a band a fiftieth of a world unit wide. A second spelling of
     //    the same clock is how a later pattern would clock on the wrong one.
     // y: base node radius (world units),
-    // z: unused,
+    // z: how much two nodes' overlapping light adds up (`glow_meld`), 1
+    //    screening the halos together and 0 leaving an overlap as bright as
+    //    the brighter node alone. Away from the glow's own rows because
+    //    blit.wgsl's composite mixes the same two blends and sees only the
+    //    head of this buffer.
     // w: unused — it carried the node style, the paint of a disc at the
     //    node's centre, from when that disc had more than one. A retired
     //    slot rather than a repack, which would renumber the ones around it
@@ -296,6 +300,17 @@ const INK_STRIP_N: u32 = 64u;
 // any filtering would be a blur nobody asked for. It also takes no
 // derivative, which is what keeps it out of the early-out parity test's way.
 @group(1) @binding(0) var glow_tex: texture_2d<f32>;
+
+// The same light, blended with MAX rather than screened: an overlap here is
+// exactly as bright as the brighter of the nodes making it. What a node's
+// clearing actually reads is the two mixed by `glow_meld`, since a blend is
+// fixed-function and a dial between two of them can only be had after both
+// are written (`create_glow_pipeline` in harmonigraph-render).
+//
+// A slot of its own rather than the shared one above: this is read alongside
+// `glow_tex` and not instead of it, which is exactly the case that trick does
+// not cover.
+@group(1) @binding(2) var glow_max_tex: texture_2d<f32>;
 
 // The standoff: how far a node's clearing holds the light off every ring it
 // draws, in the node's uv — 0 wherever the glow is off, `u.misc11` being zeroed
@@ -2579,12 +2594,11 @@ fn node_paint(in: VsOut) -> vec4<f32> {
     // the same target the composite laid down puts the light back, so a node's
     // clearing hides what is BEHIND it and nothing of the light in front of it.
     //
-    // A premultiplied over, `glow_tex` being premultiplied: `fs_glow` is
-    // screen-blended premultiplied light, so its alpha is how much of the pixel
-    // the light claims and its colour already carries that weight. At reach 0,
-    // and on the single-attachment path that has no glow pass at all, the
-    // binding is a transparent 1x1 texture, so this is the bare ground again
-    // with no branch to take.
+    // A premultiplied over, the light being premultiplied: its alpha is how
+    // much of the pixel the light claims and its colour already carries that
+    // weight. At reach 0, and on the single-attachment path that has no glow
+    // pass at all, both bindings are a transparent 1x1 texture, so this is the
+    // bare ground again with no branch to take.
     //
     // The coordinate is clamped into the texture rather than trusted to the
     // backend's out-of-bounds rule: WGSL lets a load past the edge answer
@@ -2592,7 +2606,10 @@ fn node_paint(in: VsOut) -> vec4<f32> {
     // would clear every node to black. On the real target the clamp is a no-op,
     // the target being the attachment's own size.
     let edge = vec2<i32>(textureDimensions(glow_tex)) - vec2<i32>(1, 1);
-    let light = textureLoad(glow_tex, min(vec2<i32>(in.clip_pos.xy), edge), 0);
+    // The SAME mix the composite laid down (`glow_light`), which is what keeps
+    // the clearing from painting a brighter light than the picture it stands
+    // in — that difference would read as a halo drawn round every node.
+    let light = glow_light(min(vec2<i32>(in.clip_pos.xy), edge), glow_meld());
     // The STANDOFF, which is where the Gap bars land: the light this node
     // clears to is dimmed around every ring it draws (`glow_standoff`), so a ring
     // stands in a pool that brightens outward instead of on the flat maximum of
@@ -2875,6 +2892,30 @@ fn fs_main_scene(in: VsOut) -> SceneOut {
 /// frame's instances and nothing else.
 fn glow_level(in: VsOut) -> f32 {
     return clamp(in.glow.x, 0.0, 1.0);
+}
+
+/// How much two nodes' overlapping light adds up (`u.misc.z`): 1 the halos
+/// screened together, 0 an overlap exactly as bright as the brighter node
+/// alone. See [`glow_light`], which is the only place it is spent.
+fn glow_meld() -> f32 {
+    return clamp(u.misc.z, 0.0, 1.0);
+}
+
+/// The finished light at a pixel of the glow's target: the two blends the
+/// light was written under, mixed by the Meld bar.
+///
+/// Both readers of the target take it through here — the node's own clearing
+/// and the composite that lays the light down (blit.wgsl's `fs_glow_over`) —
+/// because a clearing painting a different mix from the picture it stands in
+/// is a halo drawn round every node.
+///
+/// A mix of two premultiplied colours, so the result is premultiplied too, and
+/// the max is bounded above by the screen at every texel: neither end can put
+/// more light in a pixel than the screen already had.
+fn glow_light(coord: vec2<i32>, meld: f32) -> vec4<f32> {
+    let screened = textureLoad(glow_tex, coord, 0);
+    let brightest = textureLoad(glow_max_tex, coord, 0);
+    return mix(brightest, screened, meld);
 }
 
 /// How flat the light's falloff is across its own span (`u.misc10.z`): 0 the
@@ -3304,9 +3345,18 @@ fn glow_layer(in: VsOut, d: f32) -> vec4<f32> {
     return vec4<f32>(ink.xyz * alpha, alpha);
 }
 
-/// The light draw. One attachment and no depth: this is a pass of its own ahead
-/// of the scene's, so every node's halo melds into one layer before any node is
-/// drawn over it, and no sheet's light is legible as having come first.
+/// The light a fragment emits, written once to each of the pass's two
+/// attachments. ONE value: what differs between them is the blend they are
+/// written under, which is fixed-function state and not something a fragment
+/// can vary (see `create_glow_pipeline`).
+struct GlowOut {
+    @location(0) screened: vec4<f32>,
+    @location(1) brightest: vec4<f32>,
+};
+
+/// The light draw, and no depth in it: this is a pass of its own ahead of the
+/// scene's, so every node's halo melds into one layer before any node is drawn
+/// over it, and no sheet's light is legible as having come first.
 ///
 /// Its own early-out rather than `node_geom`'s, and this is the reason it does
 /// not share that function: `paint_reach` bounds what a node PAINTS, which the
@@ -3314,16 +3364,18 @@ fn glow_layer(in: VsOut, d: f32) -> vec4<f32> {
 /// this layer has no colour for. What the glow needs is narrower on both counts
 /// — a node doing nothing at all emits no light, and neither does anything past
 /// where its own window has shut.
+///
 /// No derivative anywhere in it, unlike every other fragment entry point here,
 /// and that is the strip's doing: the shapes the light is coloured out of are
 /// read in [`fs_ink_strip`] at the strip's own angular rate, so nothing in this
 /// stage asks how big the node is on screen.
 @fragment
-fn fs_glow(in: VsOut) -> @location(0) vec4<f32> {
+fn fs_glow(in: VsOut) -> GlowOut {
     if EARLY_OUT && glow_level(in) <= 0.0 {
         discard;
     }
-    return glow_layer(in, length(in.uv));
+    let light = glow_layer(in, length(in.uv));
+    return GlowOut(light, light);
 }
 
 /// What a resting marker paints; see [`node_paint`] for why the entry points

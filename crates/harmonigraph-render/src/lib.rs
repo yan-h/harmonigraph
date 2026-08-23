@@ -237,7 +237,15 @@ struct Uniforms {
     /// position honestly. Retired rather than refilled WITH the clock: two
     /// spellings of the same time in the same buffer is how a later pattern
     /// picks the one that stair-steps.
-    /// y: base node radius (world units); z unused;
+    /// y: base node radius (world units);
+    /// z: how much two nodes' overlapping light adds up (`Scene::glow_meld`),
+    /// 1 screening the halos together and 0 leaving an overlap as bright as
+    /// the brighter node alone. HERE rather than with the glow's own rows
+    /// because blit.wgsl's composite reads it too, and that pass sees only the
+    /// head of this buffer (`BlitUniforms`) — a dial two shader modules both
+    /// need has to live in the part both can address. Written raw rather than
+    /// zeroed with `misc10`: it is a factor on a field that is itself absent
+    /// where the glow is off, so there is nothing for a zero to switch off.
     /// w unused — it carried the node style, the paint of a disc at the node's
     /// centre, from when that disc had more than one. A retired slot rather
     /// than a repack, which would renumber the ones around it for nothing.
@@ -1005,7 +1013,7 @@ impl LatticeCallback {
                 view_proj: view_proj.to_cols_array(),
                 cam_right: right.extend(0.0).to_array(),
                 cam_up: up.extend(0.0).to_array(),
-                misc: [0.0, scene.node_radius, 0.0, 0.0],
+                misc: [0.0, scene.node_radius, scene.glow_meld, 0.0],
                 misc2: [
                     scene.darkest_pitch,
                     scene.brightest_pitch,
@@ -1162,12 +1170,21 @@ struct LatticeResources {
     glow_over_pipeline: wgpu::RenderPipeline,
     bind_group_layout: wgpu::BindGroupLayout,
     composite_layout: wgpu::BindGroupLayout,
-    /// One sampled texture + the shared sampler (bloom chain passes, and the
-    /// glow target wherever it is read — by the fullscreen composite that lays
-    /// it down, and at group 1 of the node and marker pipelines, whose
-    /// clearings sample it).
+    /// One sampled texture + the shared sampler: the bloom chain's passes, which
+    /// have exactly one to bind. Every reader of the glow target takes
+    /// [`glow_layout`](Self::glow_layout) instead, that target being a pair.
     filter_layout: wgpu::BindGroupLayout,
-    /// A 1x1 transparent texture in [`filter_layout`](Self::filter_layout),
+    /// The glow target's TWO textures plus the shared sampler: the light
+    /// screen-blended and the same light max-blended, which the Meld bar mixes
+    /// between (see [`create_glow_pipeline`]).
+    ///
+    /// Its own layout rather than [`filter_layout`](Self::filter_layout)
+    /// because it holds a second texture, and every other user of that one —
+    /// the whole bloom chain — has exactly one to bind. Taken at group 0 by
+    /// the composite that lays the light down and at group 1 by the node and
+    /// marker pipelines, whose clearings read the same mix.
+    glow_layout: wgpu::BindGroupLayout,
+    /// A 1x1 transparent texture in [`glow_layout`](Self::glow_layout),
     /// standing in for the glow target at group 1 wherever there is not one.
     ///
     /// Two places there is not, and neither is an error state: the Reach bar at
@@ -1490,8 +1507,9 @@ struct Offscreen {
 }
 
 /// Where a frame's node light is assembled before any of it reaches the
-/// picture: one transparent premultiplied colour texture at the scene's own
-/// size, plus the bind group the composite samples it through.
+/// picture: two transparent premultiplied colour textures at the scene's own
+/// size — the same light under each of the pass's two blends — plus the bind
+/// group its readers take both through.
 ///
 /// A target of its own, rather than the glow drawn straight into the scene
 /// pass, because a node has to sample the finished light to paint its own
@@ -1502,12 +1520,25 @@ struct Offscreen {
 ///
 /// Created and dropped as the Reach bar crosses 0, independently of the resize
 /// that rebuilds everything around it: the two changes have nothing to do with
-/// each other, and a target left allocated at reach 0 is a third of the pane's
-/// offscreen memory held for a feature that is off.
+/// each other, and a target left allocated at reach 0 is two scene-sized
+/// textures held for a feature that is off.
 struct GlowTarget {
     view: wgpu::TextureView,
-    /// The texture + the shared sampler, as [`create_post_pipeline`]'s filter
-    /// layout takes them.
+    /// The same light, blended with MAX instead of screen: an overlap here is
+    /// exactly as bright as the brighter of the nodes making it. Its own
+    /// attachment because a blend is fixed-function and per-target, so the two
+    /// answers can only be had by writing both and mixing after — which is
+    /// what the Meld bar dials (`node_paint` in lattice.wgsl, and blit.wgsl's
+    /// `fs_glow_over`).
+    ///
+    /// The cost is one more scene-sized texture while the glow is on. What it
+    /// buys is both ends of the bar being EXACT rather than approached: at 1
+    /// the picture is the screen blend to the texel, at 0 it is the max blend,
+    /// and a pixel one node lights alone is identical at every setting because
+    /// the two blends agree wherever only one node writes.
+    max_view: wgpu::TextureView,
+    /// Both textures + the shared sampler, as
+    /// [`LatticeResources::glow_layout`] takes them.
     bind_group: wgpu::BindGroup,
     /// The colour that light is drawn in, settled once per node per frame.
     strip: InkStrip,
@@ -1573,6 +1604,9 @@ struct OffscreenShared<'a> {
     format: wgpu::TextureFormat,
     composite_layout: &'a wgpu::BindGroupLayout,
     filter_layout: &'a wgpu::BindGroupLayout,
+    /// Both of the glow target's textures plus the sampler; see
+    /// [`LatticeResources::glow_layout`].
+    glow_layout: &'a wgpu::BindGroupLayout,
     /// One texture, unfiltered: what both stages of the ink strip are read
     /// through (see [`InkStrip`]).
     strip_layout: &'a wgpu::BindGroupLayout,
@@ -1883,27 +1917,33 @@ impl GlowTarget {
         size: [u32; 2],
         rows: u32,
     ) -> Self {
-        let OffscreenShared { format, filter_layout, strip_layout, sampler, .. } = *shared;
-        let view = device
-            .create_texture(&wgpu::TextureDescriptor {
-                label: Some("lattice_glow"),
-                size: wgpu::Extent3d {
-                    width: size[0],
-                    height: size[1],
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
-            })
-            .create_view(&Default::default());
+        let OffscreenShared { format, glow_layout, strip_layout, sampler, .. } = *shared;
+        // Both attachments at the same size and format: they are one light
+        // written under two blends, and the mix between them is per-texel.
+        let attachment = |label| {
+            device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some(label),
+                    size: wgpu::Extent3d {
+                        width: size[0],
+                        height: size[1],
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                        | wgpu::TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
+                })
+                .create_view(&Default::default())
+        };
+        let view = attachment("lattice_glow");
+        let max_view = attachment("lattice_glow_max");
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("lattice_glow_bind_group"),
-            layout: filter_layout,
+            layout: glow_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -1913,9 +1953,13 @@ impl GlowTarget {
                     binding: 1,
                     resource: wgpu::BindingResource::Sampler(sampler),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&max_view),
+                },
             ],
         });
-        GlowTarget { view, bind_group, strip: InkStrip::new(device, strip_layout, rows) }
+        GlowTarget { view, max_view, bind_group, strip: InkStrip::new(device, strip_layout, rows) }
     }
 }
 
@@ -2137,13 +2181,31 @@ fn create_pipelines(
 /// The node glow's one pipeline: the light, over the node instance buffer and
 /// into the glow's own target (see [`GlowTarget`]).
 ///
-/// **SCREEN, not additive.** `src + dst * (1 - src)`, premultiplied on both
+/// **TWO attachments, one draw: the same light under both blends.** A blend is
+/// fixed-function and per-target, so a dial between two of them can only be had
+/// by writing both and mixing after — which is what the Meld bar is
+/// (`Scene::glow_meld`), mixed at every reader of this target.
+///
+/// **Attachment 0 is SCREEN**: `src + dst * (1 - src)`, premultiplied on both
 /// channels, is what makes two neighbouring nodes' halos MELD: an overlap is
 /// brighter than either alone, it is bounded by white however many nodes reach
 /// the same pixel, and the operation is commutative, so nothing about the order
 /// inside the draw is readable in the picture. Adding instead blows a chord's
 /// middle out to white and makes the count of overlapping nodes, rather than
 /// any note, the brightest thing on screen.
+///
+/// **Attachment 1 is MAX**, which is the same guarantee taken all the way: an
+/// overlap is exactly as bright as the brighter of the nodes lighting it, so
+/// the count of them cannot be read off the picture at all. It is what the
+/// screen alone cannot give at a flat Feather, where a falloff is still near
+/// its peak halfway to a neighbour and screening two of those puts more light
+/// in the GAP between two nodes than either node has of its own.
+///
+/// Both are commutative and neither subtracts, so the pair keeps every promise
+/// one made: no draw order is readable in either, and a max of premultiplied
+/// colour is premultiplied still — each channel is bounded by the alpha of the
+/// same fragment, so it is bounded by the largest alpha of any of them.
+/// Factors of One on both, min/max ignoring them wherever they are honoured.
 ///
 /// **One draw over every instance**, sheets and all, rather than a sheet at a
 /// time: nothing written here is subtractive, so there is nothing for the order
@@ -2186,6 +2248,12 @@ fn create_glow_pipeline(
             operation: wgpu::BlendOperation::Add,
         },
     };
+    const MAX_COMPONENT: wgpu::BlendComponent = wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::One,
+        dst_factor: wgpu::BlendFactor::One,
+        operation: wgpu::BlendOperation::Max,
+    };
+    let brightest = wgpu::BlendState { color: MAX_COMPONENT, alpha: MAX_COMPONENT };
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("fs_glow"),
         layout: Some(&layout),
@@ -2199,11 +2267,18 @@ fn create_glow_pipeline(
             module: &shader,
             entry_point: Some("fs_glow"),
             compilation_options: Default::default(),
-            targets: &[Some(wgpu::ColorTargetState {
-                format: target_format,
-                blend: Some(screen),
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
+            targets: &[
+                Some(wgpu::ColorTargetState {
+                    format: target_format,
+                    blend: Some(screen),
+                    write_mask: wgpu::ColorWrites::ALL,
+                }),
+                Some(wgpu::ColorTargetState {
+                    format: target_format,
+                    blend: Some(brightest),
+                    write_mask: wgpu::ColorWrites::ALL,
+                }),
+            ],
         }),
         primitive: wgpu::PrimitiveState {
             topology: wgpu::PrimitiveTopology::TriangleStrip,
@@ -2327,15 +2402,20 @@ fn create_ink_strip_pipelines(
 fn create_glow_over_pipeline(
     device: &wgpu::Device,
     target_format: wgpu::TextureFormat,
-    bind_group_layout: &wgpu::BindGroupLayout,
+    glow_layout: &wgpu::BindGroupLayout,
+    uniform_layout: &wgpu::BindGroupLayout,
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("blit_shader"),
         source: wgpu::ShaderSource::Wgsl(BLIT_SRC.into()),
     });
+    // The scene's uniforms at a group of ITS OWN, group 0 being the two
+    // textures: this pass mixes them by the Meld bar, and the buffer that dial
+    // sits in is the one every other stage of the scene reads (`gu` in
+    // blit.wgsl).
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("lattice_glow_over_pipeline_layout"),
-        bind_group_layouts: &[Some(bind_group_layout)],
+        bind_group_layouts: &[Some(glow_layout), Some(uniform_layout)],
         ..Default::default()
     });
     let target = wgpu::ColorTargetState {
@@ -2511,6 +2591,15 @@ impl LatticeResources {
             label: Some("lattice_filter_bind_group_layout"),
             entries: &[texture_entry(0), sampler_entry(1)],
         });
+        // The glow target's pair, screened and max-blended, which every reader
+        // of the light mixes between (see `create_glow_pipeline`). The sampler
+        // sits between them at 1 rather than after them: the light is read with
+        // `textureLoad` and the slot is the filter layout's shape kept, so the
+        // one binding both layouts share means the same thing in both.
+        let glow_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("lattice_glow_bind_group_layout"),
+            entries: &[texture_entry(0), sampler_entry(1), texture_entry(2)],
+        });
         // Ahead of the scene pipelines because they take it at group 1: a
         // node paints the finished light over the ground and washes its own ink
         // with it, which means sampling the glow target the pass has just
@@ -2519,7 +2608,7 @@ impl LatticeResources {
             device,
             SHADER_SRC,
             target_format,
-            SceneLayouts { uniforms: &bind_group_layout, glow: &filter_layout },
+            SceneLayouts { uniforms: &bind_group_layout, glow: &glow_layout },
             true,
         );
         // Unfilterable, because every read of it is a `textureLoad`: a row is a
@@ -2565,7 +2654,7 @@ impl LatticeResources {
             Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
         );
         let glow_over_pipeline =
-            create_glow_over_pipeline(device, target_format, &filter_layout);
+            create_glow_over_pipeline(device, target_format, &glow_layout, &bind_group_layout);
         let filter = |entry| create_post_pipeline(device, entry, target_format, &filter_layout, None);
         let bright_pipeline = filter("fs_bright");
         let downsample_pipeline = filter("fs_blit");
@@ -2626,7 +2715,7 @@ impl LatticeResources {
             .create_view(&Default::default());
         let glow_dummy_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("lattice_glow_dummy_bind_group"),
-            layout: &filter_layout,
+            layout: &glow_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -2635,6 +2724,13 @@ impl LatticeResources {
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+                // The same 1x1 transparent texel for both blends: mixing two
+                // lots of nothing is nothing at every setting of the Meld bar,
+                // which is why there is still no branch here.
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&glow_dummy),
                 },
             ],
         });
@@ -2654,6 +2750,7 @@ impl LatticeResources {
             bind_group_layout,
             composite_layout,
             filter_layout,
+            glow_layout,
             glow_dummy_bind_group,
             strip_layout,
             sampler,
@@ -2744,6 +2841,7 @@ impl LatticeResources {
             format: self.target_format,
             composite_layout: &self.composite_layout,
             filter_layout: &self.filter_layout,
+            glow_layout: &self.glow_layout,
             strip_layout: &self.strip_layout,
             sampler: &self.sampler,
         };
@@ -2933,7 +3031,7 @@ impl CallbackTrait for LatticeCallback {
                         resources.target_format,
                         SceneLayouts {
                             uniforms: &resources.bind_group_layout,
-                            glow: &resources.filter_layout,
+                            glow: &resources.glow_layout,
                         },
                         true,
                     );
@@ -3135,10 +3233,10 @@ impl CallbackTrait for LatticeCallback {
             // pass, which composites it at its bottom and samples it per node.
             //
             // One draw over the whole instance buffer, every sheet at once:
-            // the light is screen-blended, so neighbouring halos meld and
-            // nothing in the target is subtractive. There is therefore nothing
-            // for a per-sheet walk to decide — what hides a node's halo is the
-            // scene pass drawing a nearer node over it.
+            // both blends the pass writes are commutative and neither
+            // subtracts, so there is nothing for a per-sheet walk to decide —
+            // what hides a node's halo is the scene pass drawing a nearer node
+            // over it.
             //
             // Encoded whenever the target exists, nodes or none: the pass
             // CLEARS it, and a frame that skipped it would composite whatever
@@ -3207,27 +3305,37 @@ impl CallbackTrait for LatticeCallback {
                     pass.draw(0..4, 0..pane.instance_count);
                 }
 
-                let mut pass = egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("lattice_glow_pass"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &glow.view,
+                // The same light under two blends (`create_glow_pipeline`):
+                // screened, and taken at its brightest. Both clear to
+                // transparent, which is the identity for either — a screen
+                // over nothing and a max against nothing are both the source.
+                let light_attachment = |view| {
+                    Some(wgpu::RenderPassColorAttachment {
+                        view,
                         depth_slice: None,
                         resolve_target: None,
                         ops: wgpu::Operations {
                             load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                             store: wgpu::StoreOp::Store,
                         },
-                    })],
+                    })
+                };
+                let mut pass = egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("lattice_glow_pass"),
+                    color_attachments: &[
+                        light_attachment(&glow.view),
+                        light_attachment(&glow.max_view),
+                    ],
                     depth_stencil_attachment: None,
                     timestamp_writes: None,
                     occlusion_query_set: None,
                     multiview_mask: None,
                 });
                 // Every node at once, in whatever order the instance buffer
-                // holds them. A screen blend is commutative and nothing here
-                // subtracts, so this target is one melded field of light with
-                // no depth in it at all — which is what makes it safe to lay
-                // under every sheet as a single layer.
+                // holds them. Both blends are commutative and neither
+                // subtracts, so this target is one field of light with no depth
+                // in it at all — which is what makes it safe to lay under every
+                // sheet as a single layer.
                 if pane.instance_count > 0 {
                     pass.set_bind_group(0, &pane.bind_group, &[]);
                     pass.set_bind_group(1, &glow.strip.blurred_bind_group, &[]);
@@ -3299,6 +3407,7 @@ impl CallbackTrait for LatticeCallback {
             if let Some(glow) = offscreen.glow.as_ref() {
                 pass.set_pipeline(&resources.glow_over_pipeline);
                 pass.set_bind_group(0, &glow.bind_group, &[]);
+                pass.set_bind_group(1, &pane.bind_group, &[]);
                 pass.draw(0..4, 0..1);
             }
 

@@ -1141,6 +1141,31 @@ pub struct ViewConfig {
     ///
     /// Inert while [`glow_reach`](Self::glow_reach) is 0.
     pub glow_feather: f32,
+    /// How much two nodes' overlapping light adds up, 0..=1: 1 screens the
+    /// halos together, 0 leaves an overlap exactly as bright as the brighter
+    /// of the nodes lighting it.
+    ///
+    /// It moves NO light of its own — a pixel one node lights alone is
+    /// identical at every setting — so what it dials is the overlap and
+    /// nothing else.
+    ///
+    /// The bar exists because a screen is monotone in how many nodes reach a
+    /// pixel, and past about 0.75 of
+    /// [`glow_feather`](Self::glow_feather) that inverts the picture: a
+    /// flattened falloff is still near its peak halfway to a neighbour, so the
+    /// GAP between two nodes comes out brighter than either node's own halo,
+    /// and three or more overlapping wash out to white. Lowering the Strength
+    /// makes that worse rather than better — a screen is nearly additive down
+    /// there and only saturates near 1 — so at a wide feather this is the one
+    /// bar that reaches it.
+    ///
+    /// A pixel's light is `mix(max, screen, meld)` over the two blends the
+    /// glow pass writes at once (`create_glow_pipeline` in
+    /// harmonigraph-render), which is what makes both ends exact rather than
+    /// approached.
+    ///
+    /// Inert while [`glow_reach`](Self::glow_reach) is 0.
+    pub glow_meld: f32,
     /// The standoff: how far past each RING a node draws its clearing dims the
     /// light standing under it, in the same quad UV units
     /// [`ring_gap`](Self::ring_gap) reads in — the far end of the gap, where
@@ -2196,6 +2221,7 @@ impl ViewConfig {
         self.glow_strength =
             finite_or(self.glow_strength, fresh.glow_strength).clamp(0.0, GLOW_STRENGTH_MAX);
         self.glow_feather = finite_or(self.glow_feather, fresh.glow_feather).clamp(0.0, 1.0);
+        self.glow_meld = finite_or(self.glow_meld, fresh.glow_meld).clamp(0.0, 1.0);
         // The standoff and its fade, one control over two numbers on the
         // Clearance pair's terms above: the fade is measured back from the
         // gap's end, so one wider than the gap is a low end off the bottom of
@@ -2510,6 +2536,12 @@ impl Default for ViewConfig {
             // Flat off: the fresh light is an accent on each node, which is
             // what the rest of the fresh view is drawn to be read against.
             glow_feather: 0.0,
+            // Melded whole, which is the light two overlapping halos have
+            // always made. It costs nothing at the fresh feather — an accent
+            // has almost nothing left out where a neighbour's begins — and
+            // what it keeps is that this bar restyles no view until it is
+            // touched. The setting that wants lowering is a wide feather.
+            glow_meld: 1.0,
             // A standoff a sixth of a radius past every ring and faded over the
             // whole of it — the Gap bar's low handle at 0 — so the gap and the
             // light either side of it read as one blur rather than as a cut

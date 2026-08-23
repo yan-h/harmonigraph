@@ -669,10 +669,9 @@ fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBack
 /// makes it. This is a layer of a node, dialled where a node's other layers
 /// are.
 ///
-/// The bars run in the order the questions do. The light itself first — Reach,
-/// Strength, and the Feather that says how the one is spent over the other —
-/// then its colour, then the Gap that holds it off the rings with the two bars
-/// that shape the gap, and last its own clock. Everything under Reach greys
+/// The bars run in the order the questions do: what the light IS before what
+/// colour it is, both before what holds it off the rings, and its own clock
+/// last. Everything under Reach greys
 /// while Reach is 0 rather than hiding, so the rows keep their place and the
 /// numbers they are dialled to stay readable — the arrangement the audio
 /// ring's own settings use.
@@ -727,6 +726,24 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                  overlapping halos read as one amorphous field rather than as \
                  a light per node. It adds light rather than moving it, so a \
                  wash usually wants a lower Strength than the accent did.",
+            );
+        // Directly under the Feather, which is the setting that makes it
+        // matter: a flattened falloff is still near its peak halfway to a
+        // neighbour, so it is the one place a melded overlap outshines the
+        // nodes making it. Below rather than above, the reading order being
+        // how far / how spread / and then what happens where two of them meet.
+        ValueBar::new(&mut view.glow_meld, 0.0..=1.0, "Meld")
+            .display(|v| format!("{:.0}%", v * 100.0))
+            .show(ui)
+            .on_hover_text(
+                "How much two nodes' light adds up where their halos overlap. \
+                 100% melds them like light, which past about a 75% Feather \
+                 makes the gap between two nodes brighter than either node and \
+                 washes a chord's middle out to white. 0% leaves an overlap \
+                 exactly as bright as the brighter node lighting it, so a flat \
+                 field stays flat. A node lighting a pixel on its own looks \
+                 the same at every setting — this moves no light, only what \
+                 happens where two lots of it meet.",
             );
         // What colour the light comes out, between the amount of it and the
         // standoff that holds it off. "Color blend" and not "Spread": under this
