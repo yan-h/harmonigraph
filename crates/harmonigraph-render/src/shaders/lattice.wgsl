@@ -1958,6 +1958,65 @@ fn annulus_distance(d: f32, inner: f32, outer: f32) -> f32 {
     return abs(d - 0.5 * (inner + outer)) - 0.5 * (outer - inner);
 }
 
+/// Distance to the nearest SLICE across the gaps that cut every ring on the
+/// node, signed: negative inside a slice, and out in a gap the distance to the
+/// nearer slice's own edge.
+///
+/// The ANGULAR half of a ring's footprint, where [`annulus_distance`] is the
+/// radial one; [`glow_standoff`] intersects the two with a `max`. One walk
+/// answers it for every layer at once, since one number cuts every angular
+/// slice on the node (see [`slice_gap_half`]).
+///
+/// Measured to the boundary RAYS rather than to each slice in turn, which is
+/// what keeps it one walk instead of `span` distance fields: the gaps are
+/// straight bands of constant thickness laid along those rays, so what a
+/// fragment stands out of the ink is half the gap less its distance to the
+/// nearest of them, and inside a slice that same difference is how deep in it
+/// stands. A slice the gap has EATEN WHOLE needs no case of its own — every
+/// point of one is within half a gap of an edge that cuts it, so the walk
+/// answers "no ink" unprompted, which is the clear hub `outer_glyph` leaves
+/// around the node's centre.
+fn slice_gap_distance(uv: vec2<f32>, d: f32, oct: OctRing) -> f32 {
+    let gap_half = slice_gap_half();
+    // No gap is no cut: the slices meet edge to edge and every ring is a solid
+    // annulus, which is the ring's own radial distance and nothing else. `-d`
+    // is at or below every answer the walk can give — no ray stands further
+    // off a fragment than the node's centre does — so the `max` at the caller
+    // keeps that distance exactly.
+    if EARLY_OUT && gap_half <= 0.0 {
+        return -d;
+    }
+    // The centre is where every boundary meets, so it is inside the gaps at
+    // every angle and has no angle of its own to take.
+    if d <= 0.0 {
+        return gap_half;
+    }
+    // The fragment's angle in the walk the boundary table is written in —
+    // clockwise from the ring's seam — brought onto one turn, which is what
+    // keeps the differences below under one and the wrap exact.
+    let walk = oct.seam - atan2(uv.y, uv.x);
+    let a = walk - TAU * floor(walk / TAU);
+    // Boundary `span` is boundary 0 a turn on (`oct_bound`), so the walk stops
+    // one short of the table's end and the wrap is what closes the ring.
+    var near = TAU;
+    for (var j = 0u; j < oct_span(); j = j + 1u) {
+        let delta = abs(a - oct_bound(j));
+        near = min(near, min(delta, TAU - delta));
+    }
+    // A ray past a quarter turn cuts nothing here. `outer_glyph` takes each gap
+    // only on the side its own edge runs to, so a fragment BEHIND an edge is ink
+    // however close that edge's own line passes on its way through the centre —
+    // and a slice wider than a half turn has a middle made of exactly those
+    // fragments, which is the wedge `oct_arc_coverage` carries a union branch
+    // for. `-d` hands the answer back to the ring's own radial distance, which
+    // is what stands the light off ink no edge cuts.
+    if near >= TAU * 0.25 {
+        return -d;
+    }
+    // Off the nearest ray, perpendicular.
+    return gap_half - d * sin(near);
+}
+
 /// How wide the standoff's fade is, in the node's uv: the Gap bar's own fade,
 /// under the view's Clearance fade.
 ///
@@ -2035,25 +2094,35 @@ fn standoff_coverage(sd: f32, soft: f32) -> f32 {
 /// being a disc: the standoff then covers what it covers, and the light is a
 /// halo outside the node alone.
 ///
+/// It is measured ACROSS the ring as well as along it: a ring is slices with
+/// gaps between them, not a closed annulus, so every term is that annulus
+/// intersected with [`slice_gap_distance`]. Without it a node stands the light
+/// off the whole turn at every gap width — a dark ring under a set of slices
+/// that may be nowhere near each other — and the gaps the picture is drawn with
+/// would be the one length on the node the light cannot see.
+///
 /// Each term carries its own level, exactly as [`node_clearing`]'s do: a layer
 /// that is off, refused by the stack, attacking or releasing opens and closes
 /// its own standoff in step with the ink it stands off, and a layer nobody is
 /// drawing holds nothing off.
 fn glow_standoff(in: VsOut, d: f32, oct: OctRing) -> f32 {
     let soft = standoff_soft(in);
+    // The one angular length on the node, taken once for every term below.
+    let gap = slice_gap_distance(in.uv, d, oct);
     var cov = 0.0;
-    // The octave band, on the node's own envelope, as the annulus it is drawn
-    // in: its slices, the gaps between them and the glyphs inside them all live
-    // between these two radii, so this is the whole layer's footprint.
+    // The octave band, on the node's own envelope, between the two radii its
+    // slices and the glyphs inside them are drawn in — every slice of it, since
+    // a silent one is the backdrop and the backdrop is drawn at the node's
+    // presence.
     if u.misc3.z > u.misc3.y {
-        let ring = annulus_distance(d, u.misc3.y, u.misc3.z);
+        let ring = max(annulus_distance(d, u.misc3.y, u.misc3.z), gap);
         cov = standoff_coverage(ring, soft) * clamp(in.params.x, 0.0, 1.0);
     }
     // The audio ring, on ITS own: the view's Gate answered per node and carried
     // on the note Fade. A node nobody played wears one whenever the spectrum
     // reaches that gate, and this is the term that stands the light off it.
     if u.misc7.w > u.misc7.z {
-        let ring = annulus_distance(d, u.misc7.z, u.misc7.w);
+        let ring = max(annulus_distance(d, u.misc7.z, u.misc7.w), gap);
         cov = max(cov, standoff_coverage(ring, soft) * clamp(in.ring, 0.0, 1.0));
     }
     let slots = in.marks.x | in.marks.y;
@@ -2085,11 +2154,12 @@ fn glow_standoff(in: VsOut, d: f32, oct: OctRing) -> f32 {
         if level > 0.0 {
             // The mark is an annular SECTOR, which is the pie `sector_distance`
             // measures intersected with everything past the strip's inner edge
-            // — a max of the two distances, the way an intersection of fields
-            // always is. Filled to the centre instead, one mark would put the
-            // node's whole middle in shadow.
+            // and with the gap its own sides are cut back by — a max of the
+            // three distances, the way an intersection of fields always is.
+            // Filled to the centre instead, one mark would put the node's whole
+            // middle in shadow.
             let pie = sector_distance(in.uv, oct_sector(s, oct), strip_out);
-            let sd = max(pie, strip_in - d);
+            let sd = max(max(pie, strip_in - d), gap);
             cov = max(cov, standoff_coverage(sd, soft) * clamp(level, 0.0, 1.0));
         }
     }

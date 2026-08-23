@@ -4696,6 +4696,16 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         scene.glow_reach = 0.8;
         scene
     };
+    // ...and that standoff with the ring CLOSED, which is `slice_gap_distance`'s
+    // own skip: with the slices meeting edge to edge there is no gap to walk
+    // the boundaries of, and the ring's plain radial distance has to be the
+    // answer on both pipelines. Every fixture above carries a gap, so without
+    // this the branch is compiled and never once decides anything.
+    let closed_ring = || {
+        let mut scene = standing_off();
+        scene.octave_gap = 0.0;
+        scene
+    };
     // No all-idle fixture: an idle node paints nothing, so the cull ships
     // none of them and the comparison would be two empty images. What the
     // idle branch does is now pinned by
@@ -4708,6 +4718,7 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         ("folded", folded()),
         ("clearing", clearing()),
         ("standing off", standing_off()),
+        ("standing off a closed ring", closed_ring()),
     ] {
         let cb = LatticeCallback::from_scene(
             &scene,
@@ -6611,6 +6622,422 @@ fn the_gap_depth_says_how_much_light_a_ring_stands_off() {
             "at a depth of 0, {name} drew a different frame from the fresh gap",
         );
     }
+}
+
+/// How much of the light the standoff takes at one radius, angle by angle, at a
+/// closed Octave gap and at the widest one — the two rings of shares every claim
+/// about the standoff following the slices is stated on.
+///
+/// The share is `(lit - stood off) / lit` at a Gap depth of 1, which is the
+/// standoff's own coverage and nothing else. Three things have to hold for that,
+/// and the fixtures below carry all three: the clearing the standoff rides is
+/// radial, so it contributes one constant factor around the turn; the light's
+/// own falloff is radial too (`glow_layer`), so the only thing varying with
+/// angle is what is being measured; and the ground is black, so a pixel's
+/// brightness IS its light and the division is exact rather than nearly so.
+///
+/// `ink_uv` is where the fixture's own ink ends in the node's uv, and `past` how
+/// far outside it to read. The scale between the two is taken from a calibration
+/// shot rather than assumed: the ink is found at a CLOSED gap, which is the
+/// widest it is ever drawn, and that same shot is what proves the probe ring
+/// clears it at every angle.
+///
+/// A ratio between the two rings at ONE pixel is the strongest reading it
+/// supports, and the reason is the pixel grid: the ring lands on integer pixels
+/// so its radius wobbles by up to half of one, which the fade's slope turns into
+/// a couple of hundredths of share. Two shots at one pixel share that wobble
+/// exactly, so a ratio has none of it; a claim made across angles has to carry a
+/// budget for it.
+fn standoff_share_rings(
+    shooter: &mut Shooter,
+    size: [u32; 2],
+    at: &dyn Fn(f32, f32, f32) -> Scene,
+    ink_uv: f32,
+    past: f32,
+    angles: usize,
+) -> (Vec<f64>, Vec<f64>) {
+    let row = size[0] as usize;
+    // The node projects to the frame's exact middle, which is a CORNER of the
+    // pixel grid on an even frame and not the middle of any pixel: every radius
+    // here is taken from there and floored into the pixel that holds it, so the
+    // probe ring is centred on the node rather than half a pixel off it.
+    let cx = 0.5 * size[0] as f32;
+    let cy = 0.5 * size[1] as f32;
+    let centre = (size[1] / 2) as usize * row + (size[0] / 2) as usize;
+
+    let mut bare = at(0.0, 0.0, 0.0);
+    bare.nodes[0].gutter = 0.0;
+    let plain = shooter.shot(&bare);
+    let inked = |px: &[u8], i: usize| px[i * 4..i * 4 + 4] != [0u8, 0, 0, 255];
+    let ink_px = (1..(size[0] / 2) as usize)
+        .rfind(|&x| inked(&plain, centre + x))
+        .expect("the fixture's node must ink something along +x");
+    assert!(ink_px > 20, "the node inked only {ink_px}px of radius; there is nothing to read");
+    let probe_px = ink_px as f32 * (1.0 + past / ink_uv);
+    let probe = |k: usize| -> usize {
+        let a = std::f32::consts::TAU * k as f32 / angles as f32;
+        // The framebuffer's rows run down where the node's own uv runs up.
+        let y = (cy - probe_px * a.sin()).floor() as usize;
+        y * row + (cx + probe_px * a.cos()).floor() as usize
+    };
+    for k in 0..angles {
+        assert!(
+            !inked(&plain, probe(k)),
+            "the probe ring crosses the node's own ink {k} steps round",
+        );
+    }
+
+    let lit = |px: &[u8], i: usize| brightness(&px[i * 4..i * 4 + 3]);
+    let mut shares = |octave_gap: f32| -> Vec<f64> {
+        let flat = shooter.shot(&at(octave_gap, 0.8, 0.0));
+        let stood = shooter.shot(&at(octave_gap, 0.8, 1.0));
+        (0..angles)
+            .map(|k| {
+                let i = probe(k);
+                let light = lit(&flat, i);
+                assert!(
+                    light > 60,
+                    "the fixture lit the probe {k} steps round to only {light}: there is \
+                     too little light there to measure a share of",
+                );
+                (light - lit(&stood, i)) as f64 / light as f64
+            })
+            .collect()
+    };
+    (shares(0.0), shares(harmonigraph_scene::GAP_MAX))
+}
+
+/// A node stands its light off the ink its rings DRAW, and a ring is slices
+/// with gaps between them rather than a closed annulus.
+///
+/// What this measures is the SHARE of the light one pixel loses to the standoff
+/// — `(lit - stood off) / lit` at a depth of 1 — taken at one radius half a Gap
+/// outside the band, all the way round the node. That share is the standoff's
+/// own coverage and nothing else: the clearing carrying it is a disc
+/// (`node_clearing` reads the band as a rim), the light's falloff is radial
+/// (`glow_layer`), and whatever the light's colour does around the turn divides
+/// out of a ratio taken per pixel.
+///
+/// TWO claims, and the second is what keeps the first from being a restyle.
+/// Against a CLOSED ring's share at the same pixel, a wide Octave gap keeps
+/// nearly all of its light in the middle of a gap — where the nearest ink is
+/// half a gap away, further off than the Gap reaches — and loses all of the
+/// same share as the closed ring over the middle of a slice, the ink there
+/// being no further off than the annulus itself. And with the gap closed the
+/// share is FLAT around the turn, which is the picture an angular term must not
+/// be able to touch: a dark band no setting on the node asked for.
+///
+/// Per pixel is what makes the tolerance on that flatness a tight one. The
+/// probe ring lands on integer pixels, so its radius wobbles by up to half of
+/// one, which on the fade's own slope is a couple of hundredths of the share —
+/// hence a budget rather than an equality, and the ratio in the first claim,
+/// which compares two shots at ONE pixel and so has no wobble in it at all.
+///
+/// [`the_gap_depth_says_how_much_light_a_ring_stands_off`]'s fixture and its
+/// probe radius, with no fade on the clearing so the probe sits in solid
+/// coverage and the share is the standoff's whole answer.
+#[test]
+fn the_standoff_follows_the_gaps_between_the_slices() {
+    // A big frame for a small measurement: the Gap's fade is 0.16 of a node's
+    // uv, so at 256 it spans some seven pixels and half of one of those is a
+    // twentieth of the share below. The node is drawn at the same size in uv
+    // whatever the frame, so the pixels are what buys the resolution.
+    const SIZE: [u32; 2] = [1024, 1024];
+    const GAP: f32 = 0.16;
+    // Enough of them that one lands near the middle of a gap and one near the
+    // middle of a slice, at every wheel the view can be dialled to.
+    const ANGLES: usize = 360;
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    let at = |octave_gap: f32, reach: f32, depth: f32| -> Scene {
+        let mut scene = single_marked_node(0, 0);
+        scene.camera = harmonigraph_scene::Camera {
+            projection: harmonigraph_scene::Projection::Orthographic,
+            yaw: 0.0,
+            pitch: 0.0,
+            ..Default::default()
+        };
+        // The fresh wheel's own FRINGE, which `OctaveLayout::default` leaves
+        // off: with no extras every slice is one width and the walk reads a
+        // uniform ladder, which a boundary table built by arithmetic rather
+        // than read out of the uniform would satisfy just as well.
+        //
+        // What no wheel can pin is the DIRECTION the walk takes that table in.
+        // `octave_layout` mirrors the fringe, so the bounds satisfy
+        // `b[k] + b[span-k] = TAU` at every setting, and a min over all of them
+        // is the same answer whichever way round the fragment's angle is
+        // measured. That is a property of the wheel, not a hole in this fixture.
+        scene.octave_layout = harmonigraph_scene::octave_layout(
+            harmonigraph_scene::DEFAULT_COUNT,
+            harmonigraph_scene::DEFAULT_CENTER,
+            2,
+            harmonigraph_scene::DEFAULT_EXTRA_SIZE,
+            harmonigraph_scene::DEFAULT_EXTRA_BLEND,
+        );
+        scene.octave_gap = octave_gap;
+        scene.glow_reach = reach;
+        scene.glow_strength = 1.5;
+        scene.glow_gap = GAP;
+        // The fade the whole width of the gap, which is the fresh pair.
+        scene.glow_gap_soft = GAP;
+        scene.glow_gap_depth = depth;
+        scene.nodes[0].gutter = GAP;
+        scene.sevens_soft = 0.0;
+        scene
+    };
+    // The band's own outer edge is where this fixture's ink ends, and the Scene
+    // names it.
+    let ink_uv = at(0.0, 0.0, 0.0).rings_outer;
+    let (closed, wide) =
+        standoff_share_rings(&mut shooter, SIZE, &at, ink_uv, 0.5 * GAP, ANGLES);
+
+    // The closed ring first, which is both the reference for the wide gap below
+    // and a claim of its own.
+    let mean = closed.iter().sum::<f64>() / ANGLES as f64;
+    let drift = closed.iter().fold(0.0f64, |w, s| w.max((s - mean).abs()));
+    assert!(
+        mean > 0.15,
+        "a closed ring took only {mean:.3} of the light at the probe; there is no \
+         standoff here to find a gap in",
+    );
+    assert!(
+        drift <= 0.05,
+        "a closed ring's standoff swung by {drift:.3} around the turn, off a mean of \
+         {mean:.3}: it is not standing the light off evenly the whole way round",
+    );
+
+    // And the wide gap, against that same pixel's share.
+    let ratio: Vec<f64> = wide.iter().zip(&closed).map(|(w, c)| w / c).collect();
+    let emptiest = ratio.iter().fold(f64::MAX, |m, r| m.min(*r));
+    let deepest = ratio.iter().fold(f64::MIN, |m, r| m.max(*r));
+    assert!(
+        emptiest < 0.15,
+        "the widest Octave gap still took {emptiest:.3} of the closed ring's share at \
+         its emptiest angle: the standoff is not following the slices",
+    );
+    assert!(
+        deepest > 0.85,
+        "over a slice the widest Octave gap took only {deepest:.3} of the closed ring's \
+         share: the standoff is following something narrower than the ink",
+    );
+}
+
+/// A slice PAST A HALF TURN is ink all the way in to the node's centre down its
+/// own middle, and the standoff follows it there.
+///
+/// The wheel hands one out at the bottom of its own bar: an octave count of 1
+/// with the fresh two extras either side leaves the middle slice 259 degrees
+/// (`octave_layout`). `outer_glyph` cuts each gap only on the side its edge runs
+/// to, so down the middle of a slice that wide NO edge cuts anything, however
+/// close the edges' own lines pass on their way through the centre — which is
+/// why `oct_arc_coverage` carries a union branch for exactly this wedge.
+///
+/// A standoff measuring the distance to the nearest boundary RAY has to say the
+/// same, and the reading that asks only "how far is the nearest ray" says the
+/// opposite: near the centre every ray is close, so it calls the widest slice's
+/// middle a gap and hands the light back exactly where the ink is.
+///
+/// Measured inside HALF the Octave gap, which is where the two readings can
+/// disagree at all — further out than that, half a gap is spent before the
+/// nearest ray is reached and both call it ink. The reading is the MAXIMUM
+/// share around the turn, against a closed ring's share at the same pixel:
+/// somewhere on that circle is the wide slice's middle, ink in both pictures, so
+/// the two have to stand the light off there by the same amount. A per-pixel
+/// ratio is also what makes the probe ring's half-pixel wobble cancel — where
+/// the two shots agree on the shape, they agree whatever radius the pixel
+/// landed at.
+///
+/// The AUDIO RING carries it, alone: the octave band is dialled off, so this is
+/// also the only test that reaches `glow_standoff`'s ring term at all
+/// (`parity_scene` is silent, and a silent ring has no radii to stand off).
+#[test]
+fn a_slice_past_a_half_turn_is_stood_off_down_its_middle() {
+    const SIZE: [u32; 2] = [1024, 1024];
+    // Small against the ring's own radius, so the probe sits well inside half
+    // the Octave gap with the fade still spending most of itself there.
+    const GAP: f32 = 0.05;
+    const RING_OUTER: f32 = 0.15;
+    const PAST: f32 = 0.01;
+    const ANGLES: usize = 360;
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    let at = |octave_gap: f32, reach: f32, depth: f32| -> Scene {
+        let mut scene = single_marked_node(0, 0);
+        scene.camera = harmonigraph_scene::Camera {
+            projection: harmonigraph_scene::Projection::Orthographic,
+            yaw: 0.0,
+            pitch: 0.0,
+            ..Default::default()
+        };
+        // One slice past a half turn, which is the whole fixture: the count at
+        // its floor with the fresh fringe either side.
+        scene.octave_layout = harmonigraph_scene::octave_layout(
+            harmonigraph_scene::MIN_COUNT,
+            harmonigraph_scene::DEFAULT_CENTER,
+            2,
+            harmonigraph_scene::DEFAULT_EXTRA_SIZE,
+            harmonigraph_scene::DEFAULT_EXTRA_BLEND,
+        );
+        // The band off, so the ring is the only thing standing light off and
+        // the only term the share below can be reading.
+        scene.outer_inner = 0.0;
+        scene.outer_outer = 0.0;
+        // ...and the ring reaching the node's centre, which is what puts its
+        // own footprint where the two readings differ.
+        scene.spectral.inner = 0.0;
+        scene.spectral.outer = RING_OUTER;
+        scene.spectral.lut = std::array::from_fn(|k| {
+            let t = k as f32 / (harmonigraph_scene::PITCH_LUT_N - 1) as f32;
+            glam::Vec4::new(t, 0.6 * t, 1.0 - t, 1.0)
+        });
+        // Loud and FLAT, so every wedge reads the same: the ring lights the
+        // halo by what it is measuring, and a comb would put the light's own
+        // pattern into the share.
+        scene.spectral.levels = Box::new([220; harmonigraph_scene::SPECTRAL_BUCKETS]);
+        scene.octave_gap = octave_gap;
+        scene.glow_reach = reach;
+        scene.glow_strength = 1.5;
+        scene.glow_gap = GAP;
+        scene.glow_gap_soft = GAP;
+        scene.glow_gap_depth = depth;
+        scene.nodes[0].gutter = 0.16;
+        scene.sevens_soft = 0.0;
+        scene
+    };
+    // Inside half the widest gap, which is the only radius at which the two
+    // readings can differ at all.
+    const {
+        assert!(
+            RING_OUTER + PAST < 0.5 * harmonigraph_scene::GAP_MAX,
+            "the probe sits outside half an Octave gap, where every reading agrees",
+        )
+    };
+    let (closed, wide) =
+        standoff_share_rings(&mut shooter, SIZE, &at, RING_OUTER, PAST, ANGLES);
+
+    let least = closed.iter().fold(f64::MAX, |m, s| m.min(*s));
+    assert!(
+        least > 0.3,
+        "a closed ring took only {least:.3} of the light somewhere on the probe ring; \
+         there is no standoff there to compare a wide gap against",
+    );
+
+    let ratio: Vec<f64> = wide.iter().zip(&closed).map(|(w, c)| w / c).collect();
+    let deepest = ratio.iter().fold(f64::MIN, |m, r| m.max(*r));
+    let emptiest = ratio.iter().fold(f64::MAX, |m, r| m.min(*r));
+    assert!(
+        deepest > 0.85,
+        "down the middle of a 259-degree slice the widest Octave gap took only \
+         {deepest:.3} of the closed ring's share: the standoff is reading ink as gap \
+         where no edge cuts",
+    );
+    // Non-vacuous the other way: the narrow slices really are eaten at this
+    // radius, so the ring the ratio is taken over is not simply solid.
+    assert!(
+        emptiest < 0.15,
+        "every angle kept {emptiest:.3} or more of the closed ring's share; the wide \
+         gap is not opening anywhere and the claim above is vacuous",
+    );
+}
+
+/// A MARK's standoff stops where the gap cuts the mark's own sides.
+///
+/// The wedge a mark is drawn in is not the wedge its slot owns: `outer_glyph`
+/// takes half an Octave gap off each of its sides, exactly as it does for the
+/// slices of a ring. `sector_distance` measures the slot's wedge, so a standoff
+/// reading it alone stands the light off from the BOUNDARY — half a gap wider
+/// than the ink, on both sides of every mark.
+///
+/// The measurement that separates the two is the middle of a gap between two
+/// marks: the nearest ink there is half an Octave gap away, and at the widest
+/// gap that is 0.2 against a Gap of 0.16, so the light has to be fully back.
+/// Read off the boundary the two wedges share, which is where the un-eroded
+/// wedge puts its own edge and so reads as a distance of nothing.
+///
+/// Every slot marked, and the band and the ring both dialled off: the strip is
+/// then a full ring of wedges cut by the one gap, which is what lets the same
+/// probe ring read it, and the marks are the only term `glow_standoff` has.
+#[test]
+fn a_marks_standoff_stops_where_the_gap_cuts_its_sides() {
+    const SIZE: [u32; 2] = [1024, 1024];
+    const GAP: f32 = 0.16;
+    const STRIP_IN: f32 = 0.5;
+    const STRIP_THICK: f32 = 0.12;
+    const ANGLES: usize = 360;
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    let at = |octave_gap: f32, reach: f32, depth: f32| -> Scene {
+        // Every slot the wheel can show, so the strip closes into a ring.
+        let mut scene = single_marked_node((1 << harmonigraph_scene::OCTAVE_SLOTS) - 1, 0);
+        scene.camera = harmonigraph_scene::Camera {
+            projection: harmonigraph_scene::Projection::Orthographic,
+            yaw: 0.0,
+            pitch: 0.0,
+            ..Default::default()
+        };
+        scene.octave_layout = harmonigraph_scene::octave_layout(
+            harmonigraph_scene::DEFAULT_COUNT,
+            harmonigraph_scene::DEFAULT_CENTER,
+            2,
+            harmonigraph_scene::DEFAULT_EXTRA_SIZE,
+            harmonigraph_scene::DEFAULT_EXTRA_BLEND,
+        );
+        // The band and the ring off, so the marks are the only thing standing
+        // any light off and the only term the share can be reading.
+        scene.outer_inner = 0.0;
+        scene.outer_outer = 0.0;
+        scene.mark_inner = STRIP_IN;
+        scene.mark_thickness = STRIP_THICK;
+        scene.octave_gap = octave_gap;
+        scene.glow_reach = reach;
+        scene.glow_strength = 1.5;
+        scene.glow_gap = GAP;
+        scene.glow_gap_soft = GAP;
+        scene.glow_gap_depth = depth;
+        scene.nodes[0].gutter = GAP;
+        scene.sevens_soft = 0.0;
+        scene
+    };
+    // Half an Octave gap has to outreach the Gap, or the light is held off in
+    // the middle of a gap whatever the sides do.
+    const {
+        assert!(
+            0.5 * harmonigraph_scene::GAP_MAX > GAP,
+            "the widest gap is too narrow for its middle to be clear of the ink",
+        )
+    };
+    let (closed, wide) = standoff_share_rings(
+        &mut shooter,
+        SIZE,
+        &at,
+        STRIP_IN + STRIP_THICK,
+        0.5 * GAP,
+        ANGLES,
+    );
+
+    let least = closed.iter().fold(f64::MAX, |m, s| m.min(*s));
+    assert!(
+        least > 0.3,
+        "a closed strip took only {least:.3} of the light somewhere on the probe ring; \
+         there is no standoff there for a gap to open",
+    );
+    let ratio: Vec<f64> = wide.iter().zip(&closed).map(|(w, c)| w / c).collect();
+    let emptiest = ratio.iter().fold(f64::MAX, |m, r| m.min(*r));
+    let deepest = ratio.iter().fold(f64::MIN, |m, r| m.max(*r));
+    assert!(
+        emptiest < 0.15,
+        "between two marks the widest Octave gap still took {emptiest:.3} of the closed \
+         strip's share: the standoff is measuring the slot's wedge rather than the ink \
+         drawn in it",
+    );
+    assert!(
+        deepest > 0.85,
+        "over a mark the widest Octave gap took only {deepest:.3} of the closed strip's \
+         share: the standoff is following something narrower than the mark",
+    );
 }
 
 /// A ring WEARS THE WASH inside a pool the Gap depth has cleared to the bare

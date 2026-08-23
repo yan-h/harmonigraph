@@ -1171,7 +1171,10 @@ pub struct ViewConfig {
     /// a node whose innermost ring is an annulus. Each ring carries its own
     /// level, so a layer that is off, refused by the stack, attacking or
     /// releasing opens and closes its own standoff in step with the ink it
-    /// stands off.
+    /// stands off. And a ring is its SLICES rather than a closed annulus, so
+    /// the light comes back between them as well as either side of them: past
+    /// an [`octave_gap`](Self::octave_gap) of twice this, a gap between two
+    /// slices is wide enough to keep all of its own light.
     ///
     /// The ceiling is [`GLOW_GAP_MAX`], a whole radius where the two paddings
     /// stop at [`GAP_MAX`]: what stops a standoff reading as a black RING
