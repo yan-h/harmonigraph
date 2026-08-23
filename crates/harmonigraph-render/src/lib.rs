@@ -2799,9 +2799,11 @@ impl LatticeResources {
                 // A standoff of nothing, which is the light kept WHOLE — the
                 // only answer that pairs with a light of nothing, since a pool
                 // dimmed out of a field that has no light in it is a dark ring
-                // over the bare ground. Its own format rather than a third view
-                // of the texel above: the layout names the format the real
-                // attachment carries (see `GLOW_SHADE_FORMAT`).
+                // over the bare ground. What has to hold is that x reads 0, and
+                // a zero-initialized texel of any float format does that: the
+                // layout entry names a SAMPLE TYPE and not a format, so binding
+                // `GLOW_SHADE_FORMAT` here buys a stand-in shaped like the
+                // attachment it stands in for and nothing the validator checks.
                 wgpu::BindGroupEntry {
                     binding: 3,
                     resource: wgpu::BindingResource::TextureView(&glow_shade_dummy),
