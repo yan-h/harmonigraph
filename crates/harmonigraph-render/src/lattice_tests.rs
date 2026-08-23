@@ -4695,6 +4695,19 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
     let standing_off = || {
         let mut scene = clearing();
         scene.glow_reach = 0.8;
+        // One node with INK and no light of its own, which is the other half of
+        // `fs_glow`'s early-out: it weighs the standoff's answer as well as the
+        // light's, and a fixture whose every node is lit decides it on the
+        // light's alone — a relaxation that dropped the standoff's term would
+        // then discard this node's band and nothing here would see it. Shipped
+        // for its ink (`paints`), it draws its own layers and stands the light
+        // off them while emitting none.
+        let mut dark = scene.nodes[0].clone();
+        dark.glow.level = 0.0;
+        dark.glow.row = scene.glow_rows;
+        dark.world_pos.x -= 0.9;
+        scene.glow_rows += 1;
+        scene.nodes.push(dark);
         scene
     };
     // ...and that standoff with the ring CLOSED, which is `slice_gap_distance`'s
@@ -4868,13 +4881,13 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         );
 
         // The LIGHT's own draw, compared the same way and for the same reason.
-        // Two of its three early-outs are only reachable here: `fs_glow`'s,
-        // which has to weigh the standoff's answer as well as the light's now
-        // that one fragment carries both, and `glow_standoff`'s own skip inside
-        // it. Comparing the node pipelines above no longer sees either — the
-        // standoff moved out of `node_paint` with the field it writes — so
-        // without this the two switches would be compiled over that code and
-        // never once compared.
+        // Three of its early-outs are only reachable here: `fs_glow`'s own,
+        // which weighs the standoff's answer as well as the light's now that
+        // one fragment carries both; `glow_standoff`'s skip inside it; and
+        // `slice_gap_distance`'s. `node_paint` reaches none of them — it reads
+        // the standoff back off a texture rather than computing it — so without
+        // this the three would be compiled over that code and never once
+        // compared.
         //
         // The SHADE attachment is what is read back, being the one the standoff
         // writes: a skip that dropped a band would leave the light beside it
@@ -4943,55 +4956,71 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
                 pass.draw(0..4, 0..pane.instance_count);
             }
             queue.submit([encoder.finish()]);
-            // Two bytes a texel, and a 256-wide row is 512 — still aligned, so
-            // this is `readback`'s copy with its one assumption changed.
-            let bytes_per_row = SIZE[0] * 2;
-            let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("parity_shade_readback"),
-                size: (bytes_per_row * SIZE[1]) as u64,
-                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-                mapped_at_creation: false,
-            });
-            let mut encoder = device.create_command_encoder(&Default::default());
-            encoder.copy_texture_to_buffer(
-                targets[2].as_image_copy(),
-                wgpu::TexelCopyBufferInfo {
-                    buffer: &buffer,
-                    layout: wgpu::TexelCopyBufferLayout {
-                        offset: 0,
-                        bytes_per_row: Some(bytes_per_row),
-                        rows_per_image: None,
+            // BOTH quantities the pass writes, because a skip can drop either
+            // one alone: an early-out that went on the light's answer where it
+            // should go on both leaves the standoff's layer untouched, and one
+            // that went on the standoff's leaves the LIGHT's. The `max`-blended
+            // light is left out of the readback and not out of the comparison —
+            // one fragment emits it and the screened attachment together, so a
+            // dropped fragment shows in this one.
+            //
+            // `readback`'s copy with its one assumption widened: a 256-wide row
+            // is 1024 bytes of light or 512 of coverage, and both are aligned.
+            let read = |target: &wgpu::Texture, bytes: u32| {
+                let bytes_per_row = SIZE[0] * bytes;
+                let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("parity_glow_readback"),
+                    size: (bytes_per_row * SIZE[1]) as u64,
+                    usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                    mapped_at_creation: false,
+                });
+                let mut encoder = device.create_command_encoder(&Default::default());
+                encoder.copy_texture_to_buffer(
+                    target.as_image_copy(),
+                    wgpu::TexelCopyBufferInfo {
+                        buffer: &buffer,
+                        layout: wgpu::TexelCopyBufferLayout {
+                            offset: 0,
+                            bytes_per_row: Some(bytes_per_row),
+                            rows_per_image: None,
+                        },
                     },
-                },
-                wgpu::Extent3d { width: SIZE[0], height: SIZE[1], depth_or_array_layers: 1 },
-            );
-            queue.submit([encoder.finish()]);
-            let slice = buffer.slice(..);
-            slice.map_async(wgpu::MapMode::Read, |r| r.expect("map readback buffer"));
-            device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
-            slice.get_mapped_range().to_vec()
+                    wgpu::Extent3d { width: SIZE[0], height: SIZE[1], depth_or_array_layers: 1 },
+                );
+                queue.submit([encoder.finish()]);
+                let slice = buffer.slice(..);
+                slice.map_async(wgpu::MapMode::Read, |r| r.expect("map readback buffer"));
+                device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
+                slice.get_mapped_range().to_vec()
+            };
+            (read(&targets[0], 4), read(&targets[2], 2))
         };
-        let shade_fast = glow_draw(SHADER_SRC);
-        let shade_slow = glow_draw(&reference_src);
+        let (light_fast, shade_fast) = glow_draw(SHADER_SRC);
+        let (light_slow, shade_slow) = glow_draw(&reference_src);
 
-        // Vacuous unless the standoff actually wrote a band: every fixture
+        // Vacuous unless the pass actually wrote each of them: every fixture
         // that reaches here carries a reach and a depth, so a layer of zeroes
-        // means the dials stopped arriving rather than that the skip is sound.
+        // means the dials stopped arriving rather than that the skips are sound.
         assert!(
             shade_slow.iter().any(|&b| b != 0),
             "the {name} scene held no light off; the standoff comparison is vacuous",
         );
-
-        let differing = shade_fast
-            .iter()
-            .zip(&shade_slow)
-            .enumerate()
-            .find(|(_, (&a, &b))| a != b);
         assert!(
-            differing.is_none(),
-            "the {name} scene's standoff changed when the early-outs were enabled: byte {:?}",
-            differing.map(|(i, (a, b))| (i, *a, *b)),
+            light_slow.iter().any(|&b| b != 0),
+            "the {name} scene lit nothing; the light comparison is vacuous",
         );
+
+        for (layer, fast, slow) in
+            [("light", &light_fast, &light_slow), ("standoff", &shade_fast, &shade_slow)]
+        {
+            let differing = fast.iter().zip(slow.iter()).enumerate().find(|(_, (a, b))| a != b);
+            assert!(
+                differing.is_none(),
+                "the {name} scene's {layer} changed when the early-outs were enabled: \
+                 byte {:?}",
+                differing.map(|(i, (a, b))| (i, *a, *b)),
+            );
+        }
     }
 }
 
