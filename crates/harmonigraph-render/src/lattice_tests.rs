@@ -8388,3 +8388,79 @@ fn the_meld_leaves_a_node_lighting_a_pixel_alone_untouched() {
         "the fixture's node lit nothing, so holding its light still says nothing",
     );
 }
+
+/// The Meld reaches what a NODE paints, not just the ground between nodes.
+///
+/// A node's clearing paints the light standing at its own pixel rather than
+/// bare ground, reading the glow target back through `node_paint` — so it mixes
+/// the same pair the composite does, and has to mix it the same way. A clearing
+/// left on the screen while the ground around it took the max is a node sitting
+/// on a plateau with a step at its Clearance, which is a halo drawn round every
+/// node: the one failure the light being ONE field under the whole lattice
+/// exists to prevent.
+///
+/// The probe is the brightest pixel of a ONE-node frame — the middle of that
+/// node, where its own light is fullest and its ink is what the pass wrote
+/// (`the_middle_of_a_node_is_where_its_light_is_fullest`). Bare ground is what
+/// `the_meld_says_how_much_two_nodes_overlapping_light_adds_up` measures, and
+/// bare ground is written by the composite alone: probing it says nothing about
+/// this path. A second node then lights that same pixel from outside, which is
+/// what gives the mix two lots of light to combine there.
+#[test]
+fn the_meld_reaches_the_light_a_node_paints_over_its_own_body() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    // A reach wide enough that each node stands INSIDE its neighbour's light
+    // rather than merely touching it at the midpoint: the pixel under test is
+    // on a node's own body, so the other node's halo has to reach that far in
+    // for there to be two lots of light to mix there at all.
+    let scene_of = |xs: &[f32], meld: f32| -> Scene {
+        let mut scene = single_marked_node(0, 0);
+        let node = scene.nodes[0];
+        scene.nodes = xs
+            .iter()
+            .enumerate()
+            .map(|(i, x)| {
+                let mut n = node;
+                n.world_pos = glam::Vec3::new(*x, 0.0, 0.0);
+                n.lattice_pos = harmonigraph_core::LatticePos::new(i as i32, 0, 0);
+                n
+            })
+            .collect();
+        rows_per_node(&mut scene);
+        scene.glow_reach = 3.0;
+        scene.glow_strength = 1.0;
+        scene.glow_feather = 1.0;
+        scene.glow_meld = meld;
+        scene
+    };
+    const APART: f32 = 1.8;
+    let lone = shooter.shot(&scene_of(&[-APART], 1.0));
+    let melded = shooter.shot(&scene_of(&[-APART, APART], 1.0));
+    let brightest = shooter.shot(&scene_of(&[-APART, APART], 0.0));
+
+    let at = |shot: &[u8], i: usize| -> [u8; 3] { std::array::from_fn(|c| shot[i * 4 + c]) };
+    // The one node's own middle: the brightest pixel of the frame it is alone
+    // in. Found rather than named, so the probe follows the camera.
+    let probe = (0..(SIZE[0] * SIZE[1]) as usize)
+        .max_by_key(|&i| brightness(&at(&lone, i)))
+        .expect("a non-empty frame");
+    let (l, m, b) = (at(&lone, probe), at(&melded, probe), at(&brightest, probe));
+    assert!(
+        brightness(&l) > 24,
+        "the probe {l:?} is not on the node the frame was searched for",
+    );
+    // The neighbour has to be lighting this pixel for the mix to have anything
+    // to do here: without that, both blends see one contribution and agree.
+    assert!(
+        brightness(&m) > brightness(&l),
+        "the second node did not reach the first node's own middle: {m:?} against {l:?}",
+    );
+    assert!(
+        brightness(&b) < brightness(&m),
+        "the Meld did not reach what the node paints: its middle is {b:?} at 0 and {m:?} at \
+         1, so this pixel took the screen either way while the ground around it did not",
+    );
+}
