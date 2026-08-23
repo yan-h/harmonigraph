@@ -2894,8 +2894,6 @@ fn glow_level(in: VsOut) -> f32 {
     return clamp(in.glow.x, 0.0, 1.0);
 }
 
-/// How flat the light's falloff is across its own span (`u.misc10.z`): 0 the
-/// exponential heaped on the node, 1 an even field across it.
 /// How much two nodes' overlapping light adds up (`u.misc.z`): 1 the halos
 /// screened together, 0 an overlap exactly as bright as the brighter node
 /// alone. See [`glow_light`], which is the only place it is spent.
@@ -2920,6 +2918,8 @@ fn glow_light(coord: vec2<i32>, meld: f32) -> vec4<f32> {
     return mix(brightest, screened, meld);
 }
 
+/// How flat the light's falloff is across its own span (`u.misc10.z`): 0 the
+/// exponential heaped on the node, 1 an even field across it.
 fn glow_feather() -> f32 {
     return clamp(u.misc10.z, 0.0, 1.0);
 }
@@ -3345,20 +3345,6 @@ fn glow_layer(in: VsOut, d: f32) -> vec4<f32> {
     return vec4<f32>(ink.xyz * alpha, alpha);
 }
 
-/// The light draw. One attachment and no depth: this is a pass of its own ahead
-/// of the scene's, so every node's halo melds into one layer before any node is
-/// drawn over it, and no sheet's light is legible as having come first.
-///
-/// Its own early-out rather than `node_geom`'s, and this is the reason it does
-/// not share that function: `paint_reach` bounds what a node PAINTS, which the
-/// glow reaches past by the whole Reach, and the idle branch keeps fragments
-/// this layer has no colour for. What the glow needs is narrower on both counts
-/// — a node doing nothing at all emits no light, and neither does anything past
-/// where its own window has shut.
-/// No derivative anywhere in it, unlike every other fragment entry point here,
-/// and that is the strip's doing: the shapes the light is coloured out of are
-/// read in [`fs_ink_strip`] at the strip's own angular rate, so nothing in this
-/// stage asks how big the node is on screen.
 /// The light a fragment emits, written once to each of the pass's two
 /// attachments. ONE value: what differs between them is the blend they are
 /// written under, which is fixed-function state and not something a fragment
@@ -3368,6 +3354,21 @@ struct GlowOut {
     @location(1) brightest: vec4<f32>,
 };
 
+/// The light draw, and no depth in it: this is a pass of its own ahead of the
+/// scene's, so every node's halo melds into one layer before any node is drawn
+/// over it, and no sheet's light is legible as having come first.
+///
+/// Its own early-out rather than `node_geom`'s, and this is the reason it does
+/// not share that function: `paint_reach` bounds what a node PAINTS, which the
+/// glow reaches past by the whole Reach, and the idle branch keeps fragments
+/// this layer has no colour for. What the glow needs is narrower on both counts
+/// — a node doing nothing at all emits no light, and neither does anything past
+/// where its own window has shut.
+///
+/// No derivative anywhere in it, unlike every other fragment entry point here,
+/// and that is the strip's doing: the shapes the light is coloured out of are
+/// read in [`fs_ink_strip`] at the strip's own angular rate, so nothing in this
+/// stage asks how big the node is on screen.
 @fragment
 fn fs_glow(in: VsOut) -> GlowOut {
     if EARLY_OUT && glow_level(in) <= 0.0 {
