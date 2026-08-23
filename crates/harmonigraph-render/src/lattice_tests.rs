@@ -1505,6 +1505,11 @@ fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
     // Fill a good share of the frame, so the measurements below are
     // about the mark's design rather than about pixel quantization.
     scene.node_radius = 1.1;
+    // The one uv both fields are in (`marker_world`): a marker's unit IS the
+    // node's radius through this factor, so a scene that sets one and not the
+    // other is a scene `derive_scene` cannot build — and every Gap in it is two
+    // different world distances, one for a ring and one for a cross.
+    scene.marker_unit = scene.node_radius * 1.8;
     scene
 }
 
@@ -6867,6 +6872,113 @@ fn a_markers_shadow_is_cast_by_the_arm_that_has_ink() {
     );
 }
 
+/// A lone square-ended marker at the origin, lit by its own pool, with the Gap
+/// dialled to `gap` and the standoff switched by `depth`.
+///
+/// No node in the frame: what is measured below is the distance a marker's own
+/// shadow reaches past its own ink, and a node's standoff shares the shade
+/// layer through a `max` that would answer for it wherever the two overlap.
+fn lone_shadowed_marker(arm: f32, gap: f32, depth: f32) -> Scene {
+    let mut scene = shadowed_markers(depth, gap, 1.0);
+    scene.nodes.clear();
+    scene.marker_light = 0.9;
+    scene.marker_span = LONE_SPAN;
+    scene.pluses = vec![harmonigraph_scene::PlusInstance {
+        pos: glam::Vec3::ZERO,
+        radius: arm,
+        color: scene.lattice_ground,
+        strength: 1.0,
+    }];
+    scene
+}
+
+/// The pool [`lone_shadowed_marker`] lights, in world units. Wider than any shadow
+/// measured through it, so what bounds a reading is where the standoff runs out
+/// and not where the light does — and it is the calibration below, so it also
+/// has to sit well inside the frame.
+const LONE_SPAN: f32 = 3.0;
+
+/// One Gap is ONE distance: what a marker's shadow reaches past the ink casting
+/// it is a world length off the bar, not a share of the cross.
+///
+/// This is the whole of what sharing the node's Gap bar buys, and it is a claim
+/// no relative measurement can hold. The standoff is taken in the LIGHT's uv,
+/// where the box's half-extents carry the arm; taking it in the ARM's instead —
+/// the reading `plus_coverage` twenty lines away invites, half-extents of
+/// `misc5.y` and `misc5.x` with the distance divided by the arm — leaves every
+/// other shadow test here passing, each being monotone in the Gap, a superset,
+/// or a comparison between two arms of one length. What it changes is that each
+/// marker's shadow scales with its own cross, so the lattice's Gap is as many
+/// distances as there are marker sizes; only a frame holding two different arms
+/// can see it, and only against a world ruler.
+///
+/// The ruler is the pool's own edge: `plus_glow_layer`'s window shuts exactly
+/// at the span, so the outermost lit pixel stands at [`LONE_SPAN`] world and
+/// every length below is read through that. The shadow's own edge is a
+/// threshold on a decay (`standoff_coverage` never reaches zero), which is why
+/// the claim is a DIFFERENCE between two arms under one threshold rather than
+/// either arm's reach against the Gap.
+#[test]
+fn one_gap_is_one_distance_whatever_the_cross_it_stands_off() {
+    const SIZE: [u32; 2] = [256, 256];
+    const GAP: f32 = 0.5;
+    const SHORT: f32 = 0.35;
+    const LONG: f32 = 0.9;
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    let row = SIZE[1] as usize / 2;
+    let mid = SIZE[0] as usize / 2;
+    let at = |buf: &[u8], x: usize| -> i64 {
+        let i = (row * SIZE[0] as usize + x) * 4;
+        brightness(&buf[i..i + 3])
+    };
+    // The outermost column on the centre row where `hot` reads darker than
+    // `cold`, walking out from the marker's own centre.
+    let edge = |hot: &[u8], cold: &[u8]| -> usize {
+        let mut out = mid;
+        for x in mid..SIZE[0] as usize {
+            if at(hot, x) < at(cold, x) {
+                out = x;
+            }
+        }
+        out
+    };
+
+    // The ruler: the pool's edge against a frame with no marker in it.
+    let bare = shooter.shot(&{
+        let mut s = lone_shadowed_marker(SHORT, GAP, 0.0);
+        s.pluses.clear();
+        s
+    });
+    let flat_short = shooter.shot(&lone_shadowed_marker(SHORT, GAP, 0.0));
+    let pool = edge(&bare, &flat_short);
+    assert!(
+        pool > mid + 20 && pool < SIZE[0] as usize - 2,
+        "the pool's edge has to stand inside the frame to be a ruler, not at {pool}",
+    );
+    let per_world = (pool - mid) as f32 / LONE_SPAN;
+
+    let flat_long = shooter.shot(&lone_shadowed_marker(LONG, GAP, 0.0));
+    let short_reach = edge(&shooter.shot(&lone_shadowed_marker(SHORT, GAP, 1.0)), &flat_short);
+    let long_reach = edge(&shooter.shot(&lone_shadowed_marker(LONG, GAP, 1.0)), &flat_long);
+    assert!(
+        long_reach > short_reach && short_reach > mid,
+        "both arms must cast a shadow, the longer one further: {short_reach} and {long_reach}",
+    );
+
+    // What the longer cross buys is its own extra ink and nothing else: the Gap
+    // past the ink is one distance, so the two shadows differ by exactly the
+    // two arms' difference.
+    let grew = (long_reach - short_reach) as f32 / per_world;
+    let want = LONG - SHORT;
+    assert!(
+        (grew - want).abs() < 0.12,
+        "an arm {} longer pushed its shadow {grew:.2} further ({short_reach}px to {long_reach}px \
+         at {per_world:.1}px per world) — the Gap is being read as a share of the ink",
+        want,
+    );
+}
 /// A node a nearer sheet's node COVERS cuts nothing out of it: not a ring, not
 /// its name, and not a shadow anywhere in the near node's halo. What a hidden
 /// node may do is BRIGHTEN, and that is the whole of what it may do.
