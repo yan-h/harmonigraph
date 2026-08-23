@@ -138,9 +138,11 @@ pub fn well_color() -> Vec4 {
 }
 
 /// The active skin's `surface_faint`: the grey a subtly raised surface of the
-/// chrome sits at, and the rung [`ViewConfig::lattice_ground`](crate::ViewConfig)
-/// opens on — what the whole lattice is drawn in at rest: its markers, and both of
-/// a node's rings where nothing is lit.
+/// chrome sits at, and the rung both of the lattice's at-rest bars open on —
+/// [`ViewConfig::lattice_ground`](crate::ViewConfig) for a node's two rings
+/// where nothing is lit, and [`ViewConfig::marker_ink`](crate::ViewConfig) for
+/// the markers standing between the nodes. Equal there, and free to be dialled
+/// apart.
 ///
 /// Which rung of the ladder is the whole of what that default is, and the
 /// ladder is short: [`well_color`] — the ground the lattice is composited

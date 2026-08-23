@@ -166,10 +166,15 @@ fn drawable(c: glam::Vec4) -> bool {
     c.to_array().iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v))
 }
 
-/// The lattice's ground, as a scene draws it: the field itself, every resting
-/// marker's colour, and what an unplayed node falls back to — three copies of
-/// one resolve ([`Scene::lattice_ground`]), which is why a single poisoned
-/// number can be asked about all three at once.
+/// The greys a scene draws its resting picture in: the node's ground, every
+/// resting marker's colour, and what an unplayed node falls back to.
+///
+/// Two resolves, not three — the markers are off
+/// [`ViewConfig::marker_ink`](crate::ViewConfig::marker_ink) and the other two
+/// off [`Scene::lattice_ground`] — so the sweeps below poison BOTH bars and
+/// check each answer against its own. Poisoning one alone proves nothing here:
+/// both repair to the same fresh `L*`, so a marker reading the wrong field
+/// would still come out the right colour.
 fn ground_of(view: &ViewConfig) -> (Vec4, Vec<Vec4>, Vec4) {
     let scene = scene_of(&NoteTracker::new(), &Tuning::default(), view, &plain_frame(), 0.0);
     let lines: Vec<Vec4> = scene.pluses.iter().map(|d| d.color).collect();
@@ -203,39 +208,67 @@ fn ground_of(view: &ViewConfig) -> (Vec4, Vec<Vec4>, Vec4) {
 /// Through the DERIVE and not through the accessor alone, because the accessor
 /// exists precisely because the drawing code is reached by more routes than the
 /// persist door: the scene's ground, every resting marker and an idle node's
-/// fallback are all resolved from it, and so is the audio ring's table one
-/// crate over. A repair missing from any of them is the same bug.
+/// fallback are all resolved through one of the two, and so is the audio ring's
+/// table one crate over. A repair missing from any of them is the same bug.
+///
+/// Both bars, one at a time, with the other parked at a grey well away from the
+/// fresh `L*` — see [`ground_of`] for why poisoning them together would prove
+/// nothing.
 #[test]
 fn a_non_finite_ground_still_draws_the_lattice_a_grey() {
     let fresh = ViewConfig::default().lattice_ground;
+    let fresh_grey = crate::grey_of_lightness(fresh);
+    let parked = crate::grey_of_lightness(PARKED);
     for broken in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
-        let view = ViewConfig { lattice_ground: broken, ..plain_view() };
+        let rings = ViewConfig { lattice_ground: broken, marker_ink: PARKED, ..plain_view() };
         assert_eq!(
-            view.lattice_ground_lightness(),
+            rings.lattice_ground_lightness(),
             fresh,
             "a ground of {broken} resolves to an L* no colour can be solved for",
         );
-        let want = crate::grey_of_lightness(fresh);
-        let (ground, pluses, idle) = ground_of(&view);
+        let (ground, pluses, idle) = ground_of(&rings);
         assert!(drawable(ground), "a ground of {broken} put {ground:?} in the scene");
-        assert_eq!(ground, want, "a ground of {broken} is not repaired to the fresh grey");
-        for marker in pluses {
-            assert_eq!(marker, ground, "a ground of {broken} drew a marker {marker:?}");
-        }
+        assert_eq!(ground, fresh_grey, "a ground of {broken} is not repaired to the fresh grey");
         assert_eq!(idle, ground, "a ground of {broken} left an idle node at {idle:?}");
-        // And the ring's table, the accessor's other reader: the two rings sit
-        // a gap apart on one node, so a ground repaired for one of them and not
-        // the other is two grounds — which is the whole reason the repair is a
-        // function rather than a clamp at each site.
-        let silent = crate::SpectralPaint::new(&view, Gradient::default()).lut[0];
+        for marker in pluses {
+            assert_eq!(marker, parked, "a ground of {broken} drew a marker {marker:?}");
+        }
+        // And the ring's table, the ground accessor's other reader: the two
+        // rings sit a gap apart on one node, so a ground repaired for one of
+        // them and not the other is two grounds — which is the whole reason the
+        // repair is a function rather than a clamp at each site.
+        let silent = crate::SpectralPaint::new(&rings, Gradient::default()).lut[0];
         let step = (silent.truncate() - ground.truncate()).abs().max_element();
         assert!(
             step * 255.0 < 0.5,
             "at a ground of {broken} the audio ring's silence is {silent:?} \
              against the lattice's {ground:?}",
         );
+
+        let markers = ViewConfig { lattice_ground: PARKED, marker_ink: broken, ..plain_view() };
+        assert_eq!(
+            markers.marker_ink_lightness(),
+            fresh,
+            "a marker ink of {broken} resolves to an L* no colour can be solved for",
+        );
+        let (ground, pluses, idle) = ground_of(&markers);
+        assert_eq!(ground, parked, "a marker ink of {broken} moved the rings to {ground:?}");
+        assert_eq!(idle, ground, "a marker ink of {broken} left an idle node at {idle:?}");
+        for marker in pluses {
+            assert!(drawable(marker), "a marker ink of {broken} drew a marker {marker:?}");
+            assert_eq!(
+                marker, fresh_grey,
+                "a marker ink of {broken} is not repaired to the fresh grey",
+            );
+        }
     }
 }
+
+/// A grey to park one of the two at-rest bars at while the other is swept: far
+/// from the fresh `L*` both repair to, and from either end of the axis, so a
+/// surface reading the wrong bar draws a visibly wrong colour rather than the
+/// right one by coincidence.
+const PARKED: f32 = 64.0;
 
 /// A ground past either end of the bar is held to the `L*` axis rather than
 /// carried off it.
@@ -252,10 +285,34 @@ fn a_non_finite_ground_still_draws_the_lattice_a_grey() {
 /// accessor is therefore asked directly as well: it is what a THIRD reader
 /// would get, and the reason it holds the axis itself rather than trusting
 /// whatever it is handed to.
+///
+/// The markers' bar is the same claim on the same axis, swept the same way with
+/// the ground parked, and the surfaces are checked against each other's value
+/// as well as their own: an off-axis number on one bar must not reach the other
+/// bar's picture at any setting.
 #[test]
 fn a_ground_past_either_end_of_the_bar_is_held_to_the_l_star_axis() {
+    let parked = crate::grey_of_lightness(PARKED);
     for (asked, want) in [(-50.0f32, 0.0f32), (0.0, 0.0), (20.0, 20.0), (500.0, 100.0)] {
-        let view = ViewConfig { lattice_ground: asked, ..plain_view() };
+        let markers = ViewConfig { lattice_ground: PARKED, marker_ink: asked, ..plain_view() };
+        assert_eq!(
+            markers.marker_ink_lightness(),
+            want,
+            "a marker ink of {asked} resolves to an L* off the axis",
+        );
+        let (ground, pluses, idle) = ground_of(&markers);
+        assert_eq!(ground, parked, "a marker ink of {asked} moved the rings to {ground:?}");
+        assert_eq!(idle, ground, "a marker ink of {asked} left an idle node at {idle:?}");
+        for marker in pluses {
+            assert!(drawable(marker), "a marker ink of {asked} put {marker:?} in the scene");
+            assert_eq!(
+                marker,
+                crate::grey_of_lightness(want),
+                "a marker ink of {asked} draws a grey the axis does not name",
+            );
+        }
+
+        let view = ViewConfig { lattice_ground: asked, marker_ink: PARKED, ..plain_view() };
         assert_eq!(
             view.lattice_ground_lightness(),
             want,
@@ -269,14 +326,14 @@ fn a_ground_past_either_end_of_the_bar_is_held_to_the_l_star_axis() {
             "a ground of {asked} draws a grey the axis does not name",
         );
         for marker in pluses {
-            assert_eq!(marker, ground, "a ground of {asked} drew a marker {marker:?}");
+            assert_eq!(marker, parked, "a ground of {asked} drew a marker {marker:?}");
         }
         assert_eq!(idle, ground, "a ground of {asked} left an idle node at {idle:?}");
     }
 }
 
-/// A ground that is PRESENT and unusable is repaired at the blob's door, so
-/// the number the Ground bar reads back is the grey on screen.
+/// An at-rest brightness that is PRESENT and unusable is repaired at the blob's
+/// door, so the number a bar reads back is the grey on screen.
 ///
 /// The accessor above keeps the picture drawable whatever the field holds,
 /// which is exactly why this is a separate claim: with the repair only there,
@@ -284,6 +341,10 @@ fn a_ground_past_either_end_of_the_bar_is_held_to_the_l_star_axis() {
 /// the file kept it — a value read out one way and drawn another, which is a
 /// bug at any compat policy. [`ViewConfig::sanitize`] is what makes the two the
 /// same number.
+///
+/// Both bars, because the door is one function and a field added to the struct
+/// without a line in it is repaired nowhere — which the picture cannot report,
+/// the accessor having already made it drawable.
 #[test]
 fn a_broken_ground_reads_back_as_the_grey_it_draws() {
     let fresh = ViewConfig::default().lattice_ground;
@@ -295,13 +356,17 @@ fn a_broken_ground_reads_back_as_the_grey_it_draws() {
         (500.0, 100.0),
     ];
     for (broken, want) in broken_grounds {
-        let mut view = ViewConfig { lattice_ground: broken, ..plain_view() };
+        let mut view = ViewConfig { lattice_ground: broken, marker_ink: broken, ..plain_view() };
         view.sanitize();
         assert_eq!(
             view.lattice_ground, want,
             "the blob's door left a ground of {broken} as it was",
         );
-        let (ground, ..) = ground_of(&view);
+        assert_eq!(
+            view.marker_ink, want,
+            "the blob's door left a marker ink of {broken} as it was",
+        );
+        let (ground, pluses, ..) = ground_of(&view);
         assert!(drawable(ground), "a repaired ground of {broken} still draws {ground:?}");
         assert_eq!(
             ground,
@@ -309,13 +374,27 @@ fn a_broken_ground_reads_back_as_the_grey_it_draws() {
             "the bar reads L* {} and the lattice draws {ground:?}",
             view.lattice_ground,
         );
+        for marker in pluses {
+            assert!(drawable(marker), "a repaired marker ink of {broken} still draws {marker:?}");
+            assert_eq!(
+                marker,
+                crate::grey_of_lightness(view.marker_ink),
+                "the bar reads L* {} and a marker draws {marker:?}",
+                view.marker_ink,
+            );
+        }
         // Nothing left for the drawing side to repair: a sanitized view is one
-        // the accessor passes straight through, so the bar's number and the
+        // the accessors pass straight through, so a bar's number and the
         // picture's cannot come apart later.
         assert_eq!(
             view.lattice_ground_lightness(),
             view.lattice_ground,
             "a sanitized ground is still being moved on the way to the picture",
+        );
+        assert_eq!(
+            view.marker_ink_lightness(),
+            view.marker_ink,
+            "a sanitized marker ink is still being moved on the way to the picture",
         );
     }
 }

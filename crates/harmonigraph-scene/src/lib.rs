@@ -211,6 +211,26 @@ pub const GAP_MAX: f32 = 0.4;
 /// the fresh view draws is a fifth of the way along it.
 pub const PLUS_SIZE_MAX: f32 = 0.9;
 
+/// How far past a marker's own arm its pool may be asked to reach (see
+/// [`ViewConfig::marker_reach`]), in the same quad UV units
+/// [`GLOW_REACH_MAX`] below is in — so the two bars' numbers can be read
+/// against each other.
+///
+/// HALF the node ceiling, and the difference is how many emitters there are.
+/// Eight is where a NODE's light stops being a halo and becomes a field, which
+/// is a picture worth asking for when three notes are sounding; every lattice
+/// position carries a marker and all of them light at once, so the same eight
+/// here is not a field but a flat wash with the structure gone out of it.
+///
+/// The same number also buys much less here, and that is the trap in reading
+/// the two bars against each other: a neighbouring position is 2.22 uv away —
+/// one uv is 0.45 of a lattice step (`marker_world`) — and a marker's pool
+/// starts at its own crossing where a node's starts at a rim already about a uv
+/// out. Four spans a shade under two lattice steps, which puts a pool over the
+/// first ring of neighbours in every direction: as far as the top of a bar
+/// needs to reach when everything past it is one grey.
+pub const MARKER_REACH_MAX: f32 = 4.0;
+
 /// How far past a node's outermost drawn edge its glow may be asked to reach
 /// (see [`ViewConfig::glow_reach`]), in the same quad UV units the layer sizes
 /// above are in.
@@ -822,9 +842,9 @@ pub struct Scene {
     /// annulus is a per-fragment test, and the shader is where the fragments
     /// are.
     pub octave_gap: f32,
-    /// The lattice at rest — its markers, and both of a node's rings where
-    /// nothing is lit — already resolved from
-    /// [`ViewConfig::lattice_ground`]'s `L*` to the neutral grey it names.
+    /// A NODE at rest — both of its rings where nothing is lit — already
+    /// resolved from [`ViewConfig::lattice_ground`]'s `L*` to the neutral grey
+    /// it names.
     ///
     /// A COLOUR here and an `L*` in the view, because the two ends want
     /// different things: the bar is a brightness a person reads and drags, and
@@ -836,12 +856,13 @@ pub struct Scene {
     /// aimed at the skin.
     ///
     /// Read by the OCTAVE band, which is what a silent slice draws and what a
-    /// sounding one's pitch is painted over as the note fades. The lattice's
-    /// two other at-rest surfaces carry the same grey without reading this
-    /// field, because neither reaches the shader as a uniform: every
-    /// [`pluses`](Self::pluses) instance carries it as its own colour, and the
-    /// audio ring carries it as the `t` = 0 end of its table. Three copies of
-    /// one resolve, not three answers.
+    /// sounding one's pitch is painted over as the note fades. The audio ring
+    /// carries the same grey without reading this field, because it does not
+    /// reach the shader as a uniform: it is the `t` = 0 end of its table. Two
+    /// copies of one resolve, not two answers.
+    ///
+    /// The markers are NOT on this — see [`pluses`](Self::pluses), which
+    /// carries its own resolve of [`ViewConfig::marker_ink`].
     pub lattice_ground: Vec4,
     /// The lattice's AUDIO channel: what the analyzer measured, where the
     /// ring that draws it sits, and the ramp every audio-lit element on the
@@ -867,9 +888,12 @@ pub struct Scene {
     /// The lattice's resting markers (see
     /// [`derive_pluses`](derive::derive_pluses)): one cross per visible
     /// HOME-sheet position, each carrying
-    /// [`lattice_ground`](Self::lattice_ground) as its colour — so a marker IS
-    /// that grey rather than a brightness of it. What the light standing at one
-    /// then makes of that grey is the Wash bar's
+    /// [`ViewConfig::marker_ink`](crate::ViewConfig::marker_ink)'s grey as its
+    /// colour — so a marker IS that grey rather than a brightness of it. A bar
+    /// of its own and not [`lattice_ground`](Self::lattice_ground): the field
+    /// says where the positions are, which is worth keeping legible at any
+    /// brightness a node's empty rings are dialled to. What the light standing
+    /// at one then makes of that grey is the Wash bar's
     /// ([`ViewConfig::glow_wash`](crate::ViewConfig::glow_wash)), on the terms
     /// it answers for a node's ink.
     ///
@@ -996,6 +1020,33 @@ pub struct Scene {
     /// [`glow_gap_depth`](Self::glow_gap_depth), and the two are independent:
     /// this reads the field RAW, so the Gap bars move it not at all.
     pub glow_wash: f32,
+    /// How brightly a resting marker lights the position it stands at (see
+    /// [`ViewConfig::marker_light`]); already clamped to 0..=1.
+    ///
+    /// A light like any other here — same target, same blends, same Feather and
+    /// Strength — measured against the marker's own arm rather than the Reach.
+    pub marker_light: f32,
+    /// How far a resting marker's light reaches from its crossing, in WORLD
+    /// units — its own arm plus [`ViewConfig::marker_reach`], resolved once for
+    /// the whole field (`derive_marker_span`).
+    ///
+    /// A world length where the bars behind it are quad uv, because it is what
+    /// the light's own billboard is sized to: the marker draw carries the arm
+    /// per instance (it is a world length too) and the pool's draw needs the
+    /// span before it knows which marker it is drawing.
+    pub marker_span: f32,
+    /// One quad-uv length of the home sheet, as a world length
+    /// (`marker_world`): what converts the marker field between the units its
+    /// own draws are in and the units every glow bar is dialled in.
+    ///
+    /// The markers' light draw needs both. A billboard is sized in WORLD and
+    /// the arm it is sized around arrives per instance as a world length, while
+    /// the Gap that same draw stands the light off by is quad uv, being a
+    /// node's bar — so one of the two has to be converted, and the conversion
+    /// is a property of the scene rather than of any marker. Handing it over
+    /// once is what keeps the shader from carrying a second copy of the uv rule
+    /// (see [`Scene::node_radius`], which is the same rule for a node).
+    pub marker_unit: f32,
     /// How widely a node's own ink is averaged into the colour of its light
     /// (see [`ViewConfig::glow_blend`]); already clamped to 0..=1.
     pub glow_blend: f32,

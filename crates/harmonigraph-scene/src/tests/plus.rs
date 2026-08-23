@@ -51,6 +51,109 @@ fn pluses_of_with(view: &ViewConfig, tracker: &NoteTracker) -> Vec<PlusInstance>
     scene_of(tracker, &Tuning::default(), view, &plain_frame(), 0.0).pluses
 }
 
+fn span_of(view: &ViewConfig) -> f32 {
+    scene_of(&NoteTracker::new(), &Tuning::default(), view, &plain_frame(), 0.0).marker_span
+}
+
+fn unit_of(view: &ViewConfig) -> f32 {
+    scene_of(&NoteTracker::new(), &Tuning::default(), view, &plain_frame(), 0.0).marker_unit
+}
+
+/// `marker_unit` converts the marker field between the world its draws are in
+/// and the quad uv its bars are dialled in — an arm and a pool both read back as
+/// the number the bar behind them holds.
+///
+/// The shader's own reason for wanting it: the markers' light draw is handed
+/// world lengths (a billboard, and an arm per instance) and holds that light off
+/// by the Gap, which is a node's bar and so in uv. One of the two has to be
+/// converted, and the conversion is the SCENE's rather than any marker's —
+/// carrying it over is what keeps `lattice.wgsl` from spelling the uv rule a
+/// second time for one more layer.
+///
+/// Read against the bars rather than against a formula, which is the whole
+/// point: a unit that disagreed with them would leave the marker's shadow drawn
+/// at a different Gap than every node's, on one bar.
+#[test]
+fn the_marker_unit_is_what_reads_a_markers_world_back_as_its_bars() {
+    let view = ViewConfig { plus_arm: 0.2, marker_reach: 0.3, ..plus_view() };
+    let unit = unit_of(&view);
+    assert!(unit > 0.0, "the field must have a unit to be measured in");
+    let arm = pluses_of(&view)[0].radius;
+    assert!(
+        (arm / unit - 0.2).abs() < 1e-4,
+        "an arm of 0.2 read back as {}",
+        arm / unit,
+    );
+    assert!(
+        (span_of(&view) / unit - 0.5).abs() < 1e-4,
+        "an arm of 0.2 and a reach of 0.3 spanned {}",
+        span_of(&view) / unit,
+    );
+    // The spacing is the one view bar under it, and it scales the field whole:
+    // both lengths move with the unit, so the bars read the same at either.
+    let wide = ViewConfig { spacing: view.spacing * 3.0, ..view.clone() };
+    assert!(
+        (unit_of(&wide) - unit * 3.0).abs() < 1e-4,
+        "trebling the spacing moved the unit to {}",
+        unit_of(&wide),
+    );
+    assert!(
+        (pluses_of(&wide)[0].radius / unit_of(&wide) - 0.2).abs() < 1e-4,
+        "a wider lattice read its own arm back as {}",
+        pluses_of(&wide)[0].radius / unit_of(&wide),
+    );
+}
+
+/// A marker's pool spans its own ARM plus the Marker reach, and takes nothing
+/// from the node Reach beside it.
+///
+/// The shape is the node's own one rung down — a node's light spans its
+/// outermost drawn edge plus the Reach — so a reach of 0 is a pool the size of
+/// the cross rather than no pool, and what turns the light off is its level.
+///
+/// The independence is the half worth pinning. The two distances are spent on
+/// wildly different numbers of lights: a few nodes sound at once, and every
+/// lattice position carries a marker that lights always, so the reach that
+/// turns a node's halo into a field turns the marker field into one flat wash.
+/// Sharing one bar between them is the change this test exists to fail.
+#[test]
+fn a_markers_pool_spans_its_arm_plus_its_own_reach() {
+    let at = |arm: f32, marker: f32, glow: f32| -> f32 {
+        span_of(&ViewConfig {
+            plus_arm: arm,
+            marker_reach: marker,
+            glow_reach: glow,
+            ..plus_view()
+        })
+    };
+    // One arm's world length, read off the marker itself rather than converted
+    // here: the same number the instance carries, so the sums below are in the
+    // units the pool is actually drawn in.
+    let arm = pluses_of(&ViewConfig { plus_arm: 0.2, ..plus_view() })[0].radius;
+    assert!(arm > 0.0, "the fixture must draw a marker to measure an arm by");
+    assert!(
+        (at(0.2, 0.0, 1.0) - arm).abs() < 1e-4,
+        "a reach of 0 must span the arm exactly: {} against {arm}",
+        at(0.2, 0.0, 1.0),
+    );
+    assert!(
+        (at(0.2, 0.2, 1.0) - arm * 2.0).abs() < 1e-4,
+        "an arm's worth of reach must double the span: {} against {}",
+        at(0.2, 0.2, 1.0),
+        arm * 2.0,
+    );
+    for glow in [0.0, GLOW_REACH_MAX] {
+        assert!(
+            (at(0.2, 0.3, glow) - at(0.2, 0.3, 1.0)).abs() < 1e-6,
+            "the node Reach at {glow} moved a marker's pool",
+        );
+    }
+    assert!(
+        (at(0.2, MARKER_REACH_MAX * 2.0, 1.0) - at(0.2, MARKER_REACH_MAX, 1.0)).abs() < 1e-6,
+        "a reach past the ceiling must clamp to it",
+    );
+}
+
 #[test]
 fn a_marker_stands_at_every_home_position_and_nowhere_else() {
     // The marker field IS the lattice's resting picture, so "one per home
@@ -309,6 +412,69 @@ fn a_marker_takes_back_what_a_names_fade_gives_up() {
     );
 }
 
+/// A sounding note claims the position it stands on, names or no names.
+///
+/// A marker's cross writes a standoff into the light (`plus_standoff` in
+/// lattice.wgsl), and the middle of a node is the one place the picture keeps
+/// free of one: inside the innermost ring nothing stands the light off, which
+/// is what lights the middle of a node whose innermost ring is an annulus
+/// ([`ViewConfig::glow_gap`]). A marker standing at the node's own centre cuts
+/// a cross-shaped bite out of that node's halo — measured at the fresh glow
+/// bars as a dark plus in every lit node, and gone when the standoff is.
+///
+/// Switching the Note names OFF is the whole of what reaches it, and is why
+/// this holds nothing about the fresh picture: under every Show mode a name
+/// already covers a sounding note, so there the two claims agree and the
+/// handoff is the one [`a_marker_takes_back_what_a_names_fade_gives_up`]
+/// measures. It is asked of whichever claims the position harder rather than
+/// of the two multiplied, which is what keeps that agreement exact.
+#[test]
+fn a_sounding_note_takes_the_marker_under_it_with_the_names_off() {
+    let view = ViewConfig { show_labels: false, ..plus_view() };
+    let frame = FrameParams { fade_time: 2.0, ..FrameParams::default() };
+    let mut tracker = NoteTracker::new();
+    tracker.handle_event(NoteEvent::on(0.0, 0, 60, 1.0));
+    tracker.handle_event(NoteEvent {
+        time: 4.0,
+        channel: 0,
+        note: 60,
+        kind: harmonigraph_core::NoteEventKind::Off,
+    });
+
+    let mut walk = vec![];
+    for now in [4.0f64, 5.0, 5.8, 5.999, 6.0, 6.5] {
+        let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, now);
+        let node = origin_node(&scene);
+        let standing = scene
+            .pluses
+            .iter()
+            .find(|p| p.pos == node.world_pos)
+            .map_or(0.0, |p| p.strength);
+        assert!(
+            (standing - (1.0 - node.activation)).abs() < 1e-5,
+            "at {now}s the note stands at {} and the marker at {standing}",
+            node.activation,
+        );
+        walk.push(standing);
+    }
+    assert!(walk[0] < 1e-5, "a marker stands in the middle of a sounding node's halo");
+    for pair in walk.windows(2) {
+        assert!(
+            (pair[1] - pair[0]).abs() < 0.55,
+            "the marker jumps back in rather than fading: {walk:?}",
+        );
+    }
+
+    // Every home position keeps its marker but the ones the note is sounding
+    // at, which under a 12-TET tuning is every spelling of its pitch class
+    // rather than the one it was struck as.
+    let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, 4.0);
+    let home = scene.nodes.iter().filter(|n| n.on_home).count();
+    let lit = scene.nodes.iter().filter(|n| n.on_home && n.activation > 0.0).count();
+    assert!(lit > 0 && lit < home, "the fixture must light some of the field and not all of it");
+    assert_eq!(scene.pluses.len(), home - lit, "the note took a marker it is not sounding at");
+}
+
 #[test]
 fn an_unlit_node_carries_the_idle_grey_and_draws_nothing() {
     // An idle node has no mark of its own: the marker standing at its position
@@ -345,44 +511,46 @@ fn an_unlit_node_carries_the_idle_grey_and_draws_nothing() {
 }
 
 #[test]
-fn a_resting_marker_is_the_lattices_own_ground() {
-    // The markers and the rings are one resting picture, so a marker at rest IS
-    // the ground the rings stand on — not a grey near it. Held at three
-    // settings of the bar, because one would pass against a marker that had
-    // simply been re-pinned to some fixed grey.
+fn a_resting_marker_is_the_grey_its_own_bar_names() {
+    // A marker at rest IS the grey the Marker ink bar names — not a grey near
+    // it, and not a brightness of one. Held at three settings, because one
+    // would pass against a marker that had simply been re-pinned to some fixed
+    // grey.
     //
     // The OPACITY is half the claim and the easier half to lose: `strength`
     // premultiplies the colour, so a marker carrying an alpha of its own lands
-    // on a blend of the ground and whatever is behind it — a different grey
-    // per background, and none of them this one. A mark drawn at a chrome
-    // opacity is that alternative, and it is why such a mark and the rings
-    // can only ever nearly agree.
-    for ground in [0.0f32, 20.0, 64.0] {
-        let view = ViewConfig { lattice_ground: ground, ..plus_view() };
+    // on a blend of that grey and whatever is behind it — a different colour
+    // per background, and none of them the one asked for. A mark drawn at a
+    // chrome opacity is that alternative, and it is why such a mark and a bar's
+    // number can only ever nearly agree.
+    for ink in [0.0f32, 20.0, 64.0] {
+        let view = ViewConfig { marker_ink: ink, ..plus_view() };
         let pluses = pluses_of(&view);
         let resting = pluses.first().expect("the home sheet draws a resting marker field");
         assert_eq!(
             resting.color,
-            crate::grey_of_lightness(ground),
-            "at Ground {ground} a resting marker is not the grey the bar names",
+            crate::grey_of_lightness(ink),
+            "at Marker ink {ink} a resting marker is not the grey the bar names",
         );
         assert_eq!(
             resting.strength, 1.0,
-            "at Ground {ground} a resting marker carries an alpha, so what it \
-             draws is a blend rather than the ground",
+            "at Marker ink {ink} a resting marker carries an alpha, so what it \
+             draws is a blend rather than the grey",
         );
     }
 }
 
-/// The three at-rest surfaces measured against EACH OTHER, through one derive:
-/// a marker, the audio ring's silent end, and what an unplayed node falls back to
+/// The node's two at-rest surfaces measured against EACH OTHER, through one
+/// derive: the audio ring's silent end and what an unplayed node falls back to
 /// are one colour.
 ///
-/// The whole ask, and the one test that fails if any of the three is re-pinned
-/// to a grey of its own — which is the shape the bug takes, each surface aimed
-/// at the others by hand and landing a hair off.
+/// The one test that fails if either is re-pinned to a grey of its own — which
+/// is the shape the bug takes, each surface aimed at the other by hand and
+/// landing a hair off. The markers are deliberately NOT in it; see
+/// [`the_two_at_rest_bars_move_nothing_of_each_others`] for the claim that
+/// replaces their membership.
 #[test]
-fn the_markers_the_ring_and_an_idle_node_are_one_grey() {
+fn the_ring_and_an_idle_node_are_one_grey() {
     for ground in [8.0f32, 20.0, 45.0] {
         let view = ViewConfig { lattice_ground: ground, ..plus_view() };
         let scene = scene_of(
@@ -392,20 +560,102 @@ fn the_markers_the_ring_and_an_idle_node_are_one_grey() {
             &plain_frame(),
             0.0,
         );
-        let marker = scene.pluses.first().expect("the home sheet draws a resting marker field");
         let idle = scene
             .nodes
             .iter()
             .find(|n| n.activation == 0.0)
             .expect("nothing is playing");
         let ring = crate::SpectralPaint::new(&view, crate::Gradient::default()).lut[0];
-        for (what, got) in
-            [("a marker", marker.color), ("an idle node", idle.color), ("the audio ring", ring)]
-        {
+        for (what, got) in [("an idle node", idle.color), ("the audio ring", ring)] {
             let step = (got.truncate() - scene.lattice_ground.truncate()).abs().max_element();
             assert!(
                 step * 255.0 < 0.5,
                 "at Ground {ground} {what} draws {got:?} against the ground's {:?}",
+                scene.lattice_ground,
+            );
+        }
+    }
+}
+
+/// A FRESH lattice draws its whole resting picture in one grey: the two at-rest
+/// bars open on the same `L*`, so nothing about a fresh install says the
+/// markers and the rings are dialled separately.
+///
+/// The pair is what a person is meant to compare, and a fresh view that opened
+/// them apart would be the panel arguing for a split before anyone asked for
+/// one. It is also the difference between a second bar and a changed picture —
+/// retuning one fresh value and not the other is exactly the drift this
+/// catches, and it is invisible in every other test here, all of which set both
+/// bars.
+#[test]
+fn a_fresh_lattice_rests_in_one_grey() {
+    let fresh = ViewConfig::default();
+    assert_eq!(
+        fresh.marker_ink, fresh.lattice_ground,
+        "a fresh lattice opens with its markers and its unlit rings on two greys",
+    );
+    let scene = scene_of(
+        &NoteTracker::new(),
+        &Tuning::default(),
+        &ViewConfig { extent_threes: 2, extent_fives: 2, ..fresh },
+        &plain_frame(),
+        0.0,
+    );
+    let marker = scene.pluses.first().expect("the home sheet draws a resting marker field");
+    assert_eq!(
+        marker.color, scene.lattice_ground,
+        "the fresh bars agree and the picture still draws two greys",
+    );
+}
+
+/// The markers and the node's unlit rings are dialled by two bars, and neither
+/// bar reaches the other's picture.
+///
+/// Both directions, because the coupling can survive in either one and each is
+/// invisible from the other side: markers still riding the Ground is the state
+/// the second bar was added to leave, and a node's rings drifting with the
+/// Marker ink is what a single shared resolve handed to the wrong consumer
+/// looks like.
+///
+/// Every pair of two settings, so a picture that simply averaged the two would
+/// fail: at (0, 64) the markers must be black against a light ring and at
+/// (64, 0) the reverse, which no coupled value can do.
+#[test]
+fn the_two_at_rest_bars_move_nothing_of_each_others() {
+    for ground in [0.0f32, 64.0] {
+        for ink in [0.0f32, 64.0] {
+            let view = ViewConfig { lattice_ground: ground, marker_ink: ink, ..plus_view() };
+            let scene = scene_of(
+                &NoteTracker::new(),
+                &Tuning::default(),
+                &view,
+                &plain_frame(),
+                0.0,
+            );
+            let marker =
+                scene.pluses.first().expect("the home sheet draws a resting marker field");
+            assert_eq!(
+                marker.color,
+                crate::grey_of_lightness(ink),
+                "at Ground {ground} / Marker ink {ink} a marker draws {:?}",
+                marker.color,
+            );
+            assert_eq!(
+                scene.lattice_ground,
+                crate::grey_of_lightness(ground),
+                "at Ground {ground} / Marker ink {ink} the rings stand on {:?}",
+                scene.lattice_ground,
+            );
+            // The audio ring's table, the ground's reader one crate away and
+            // the one a marker's bar could reach by mistake: it is baked from
+            // the Ground alone, so an ink bar wired into `SpectralPaint` would
+            // show up here and nowhere else.
+            let silent = crate::SpectralPaint::new(&view, crate::Gradient::default()).lut[0];
+            let step = (silent.truncate() - scene.lattice_ground.truncate()).abs().max_element();
+            assert!(
+                step * 255.0 < 0.5,
+                "at Ground {ground} / Marker ink {ink} the audio ring's silence is \
+                 {silent:?} against the ground's {:?}",
                 scene.lattice_ground,
             );
         }

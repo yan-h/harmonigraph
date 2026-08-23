@@ -179,15 +179,19 @@ pub fn derive_scene(
     // recompute each node's pitch class to do it.
     let mut node_pcs = Vec::with_capacity(window.count());
     let center = view.center();
-    // The lattice AT REST, resolved once for the frame: what the resting markers
-    // draw in, what both of a node's rings stand on where nothing is lit, and
-    // the neutral an unplayed node falls back to. One resolve rather than
-    // three, so the three cannot answer differently.
+    // The NODE at rest, resolved once for the frame: what both of a node's
+    // rings stand on where nothing is lit, and the neutral an unplayed node
+    // falls back to. One resolve rather than two, so the two cannot answer
+    // differently.
     let ground = crate::grey_of_lightness(view.lattice_ground_lightness());
+    // The MARKERS at rest, off a bar of their own — the resting field is not
+    // part of a node, and what it is dialled against is the light behind the
+    // nodes rather than the ring a gap away.
+    let marker_ground = crate::grey_of_lightness(view.marker_ink_lightness());
     // Read by nothing that draws while a node stays unplayed -- an idle node
-    // paints no pixel -- so this is a fallback rather than a look. The ground
-    // rather than an arbitrary grey so that a node arriving or leaving crosses
-    // no seam against the marker standing under it.
+    // paints no pixel -- so this is a fallback rather than a look. The rings'
+    // ground rather than an arbitrary grey so that a node arriving or leaving
+    // crosses no seam against the ring it is fading into.
     let node_idle = ground;
     let live_extremes = held_extremes(tracker, view.mark_melody, view.mark_bass);
     let mark_delay = view.mark_delay.clamp(0.0, MARK_DELAY_MAX) as f64;
@@ -537,7 +541,7 @@ pub fn derive_scene(
     }
 
     let nodes_len = nodes.len() as u32;
-    let pluses = derive_pluses(view, &nodes, ground);
+    let pluses = derive_pluses(view, &nodes, marker_ground);
 
     // Every radius on a node, off the one stack the size bars describe
     // (`ViewConfig::rings`, which is also where their clamps live): each ring
@@ -617,6 +621,9 @@ pub fn derive_scene(
         glow_gap_shape: view.glow_gap_shape.clamp(0.0, 1.0),
         glow_gap_depth: view.glow_gap_depth.clamp(0.0, 1.0),
         glow_wash: view.glow_wash.clamp(0.0, 1.0),
+        marker_light: view.marker_light.clamp(0.0, 1.0),
+        marker_span: derive_marker_span(view),
+        marker_unit: marker_world(view, 1.0),
         glow_blend: view.glow_blend.clamp(0.0, 1.0),
         // A row per node, so a scene nothing has carried still reads one strip
         // row per node — the shell's pass hands out rows of its own and raises
@@ -695,6 +702,36 @@ pub(crate) fn derive_plus_taper_start(view: &ViewConfig) -> f32 {
     ((reach - taper) / reach).clamp(0.0, TAPER_START_MAX)
 }
 
+/// One quad-uv length of the home sheet, as a world length.
+///
+/// uv 1 is 1.8 node radii out (`node_vertex` in lattice.wgsl), so the bars a
+/// marker is dialled on — the same units every ring radius on a node is in —
+/// resolve here, once, rather than the shader carrying a second copy of the
+/// convention for one more layer. The home sheet has no scale of its own, which
+/// is the sheet every marker stands on ([`derive_pluses`]).
+fn marker_world(view: &ViewConfig, uv: f32) -> f32 {
+    view.spacing * NODE_RADIUS_FACTOR * 1.8 * uv
+}
+
+/// How far a resting marker's light reaches from its crossing, in world units:
+/// the marker's own arm plus [`ViewConfig::marker_reach`].
+///
+/// The node's own rule one rung down — a node's light spans its outermost drawn
+/// edge plus the Reach — so a marker's pool is measured against the marker and
+/// the bar says only how far PAST it the light goes.
+///
+/// Resolved here rather than in the shader because both halves are view bars in
+/// quad uv and every marker shares them: one number for the whole field, which
+/// is what lets the light's own draw size its billboard without knowing what a
+/// marker is.
+pub(crate) fn derive_marker_span(view: &ViewConfig) -> f32 {
+    marker_world(
+        view,
+        view.plus_arm.clamp(0.0, PLUS_SIZE_MAX)
+            + view.marker_reach.clamp(0.0, crate::MARKER_REACH_MAX),
+    )
+}
+
 /// The lattice's resting picture: idle positions draw no disc, so a small
 /// cross stands at each one and carries the structure instead. Only the home
 /// (center) sheet gets them.
@@ -735,48 +772,54 @@ pub(crate) fn derive_plus_taper_start(view: &ViewConfig) -> f32 {
 pub(crate) fn derive_pluses(
     view: &ViewConfig,
     nodes: &[NodeInstance],
-    ground: Vec4,
+    ink: Vec4,
 ) -> Vec<PlusInstance> {
-    // uv 1 is 1.8 node radii out (`node_vertex` in lattice.wgsl), so the bar's
-    // quad-uv reading — the units every ring radius on a node is dialled in —
-    // resolves to a world length here, once, rather than the shader carrying a
-    // second copy of the convention for one more layer.
-    let radius = view.spacing * NODE_RADIUS_FACTOR * 1.8 * view.plus_arm.clamp(0.0, PLUS_SIZE_MAX);
+    let radius = marker_world(view, view.plus_arm.clamp(0.0, PLUS_SIZE_MAX));
     // 0 takes the markers away, and with them everything a resting lattice
     // draws but the node rings. Skipping the instances is the same picture the
     // shader would discard to, one draw earlier.
     if radius <= 0.0 {
         return Vec::new();
     }
-    // The lattice at rest, handed in already resolved — the same colour, to
-    // the byte, that a node's rings stand on where nothing is lit. OPAQUE at
-    // rest, and that is what makes the claim true rather than nearly true:
-    // `strength` is the marker's own opacity and the shader premultiplies by
-    // it, so a marker carrying a standing alpha of its own would land on a
-    // blend of the ground and whatever happened to be behind it, which is a
-    // different grey per background and none of them this one.
+    // The markers' own grey, handed in already resolved from the Marker ink
+    // bar (`ViewConfig::marker_ink_lightness`). OPAQUE, and that is what makes
+    // the bar's number the grey on screen rather than nearly it: `strength` is
+    // the marker's own opacity and the shader premultiplies by it, so a marker
+    // carrying a standing alpha of its own would land on a blend of that grey
+    // and whatever happened to be behind it — a different colour per
+    // background, and none of them the one asked for.
     //
-    // How FAINT the structure is, which a standing alpha is the other way to
-    // say, is the Ground bar's to say instead — and it says it for the rings in
-    // the same breath, which a per-marker alpha cannot. Dialled to the panel's
-    // own `L*` the whole at-rest picture disappears together.
+    // How FAINT the field is, which a standing alpha is the other way to say,
+    // is that bar's to say instead. A brightness reads against the pane and
+    // against the ground the node rings stand on, both of which are colours a
+    // person can see; an alpha reads against whatever is behind, which here is
+    // sometimes a halo.
     //
-    // The one thing that does move it is the NAME above it, and only while that
-    // name is on its way in or out: a marker gets what the name leaves, so the
-    // two hand the position over without it going empty or being claimed twice
-    // (`name_level`). Fully named is fully gone, and the instance is dropped
-    // rather than shipped at zero — a marker nothing can see is a draw nothing
-    // needs.
+    // What does move it is the position being CLAIMED — by the name above it,
+    // or by the note itself — and only while that claim is on its way in or
+    // out: a marker gets what the claim leaves, so the two hand the position
+    // over without it going empty or being held twice (`name_level`). Fully
+    // claimed is fully gone, and the instance is dropped rather than shipped at
+    // zero — a marker nothing can see is a draw nothing needs.
+    //
+    // WHICHEVER claims it harder rather than the two multiplied, which is what
+    // keeps the pair exact where they agree: under `Played` a name is drawn at
+    // the node's own activation, and a product would spend one handoff twice.
+    // The note's own claim is what the names leave uncovered when they are
+    // switched off, and it is needed there because a marker standing at a lit
+    // node's centre writes a standoff into the one place the picture keeps free
+    // of one (`plus_standoff` in lattice.wgsl,
+    // [`ViewConfig::glow_gap`](crate::ViewConfig::glow_gap)).
     nodes
         .iter()
         .filter(|n| n.on_home)
         .filter_map(|n| {
-            let clear = 1.0 - n.name_level(view);
+            let clear = 1.0 - n.name_level(view).max(n.activation);
             (clear > 0.0).then(|| PlusInstance {
                 pos: n.world_pos,
                 radius,
-                color: ground,
-                strength: ground.w * clear,
+                color: ink,
+                strength: ink.w * clear,
             })
         })
         .collect()

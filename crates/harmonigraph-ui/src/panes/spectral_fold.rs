@@ -366,8 +366,8 @@ impl Fold {
 /// lightness — onto the lattice's own ground
 /// ([`ViewConfig::lattice_ground`](harmonigraph_scene::ViewConfig)), so that
 /// what the ring paints is the light the spectrogram, the spectrum curve and
-/// the Spiral pane would paint it, opening on the grey the rest of the lattice
-/// rests in rather than on the analyzer's black.
+/// the Spiral pane would paint it, opening on the grey a node's own rings rest
+/// in rather than on the analyzer's black.
 ///
 /// Nothing here touches a NODE. The MIDI picture is `derive_scene`'s answer
 /// untouched — the bodies, the octave band, the marks, the trail, the camera —
