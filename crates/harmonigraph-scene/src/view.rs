@@ -1181,15 +1181,15 @@ pub struct ViewConfig {
     /// outward is what the eye reads as the ring being the source of the
     /// light.
     ///
-    /// It is a term of the node's own CLEARING and not a hole in the light:
-    /// the light is one field composited under the whole lattice, and a node's
-    /// clearing paints that field over the ground at its own pixel
-    /// (`node_paint` in lattice.wgsl), so this scales what the clearing paints
-    /// there. Two things follow. The standoff lives only where the clearing
-    /// has coverage, so a node with no Clearance has none and a layer fading
-    /// out takes its own standoff with it; and a node dims the light it is
-    /// standing on whoever laid it down, its NEIGHBOURS' halos included, since
-    /// what it samples is the melded field.
+    /// It is a shape in the LIGHT and not a shape on a node: the light is one
+    /// field composited under the whole lattice, and the standoff is a second
+    /// field cut into it, written in the light's own draw and read back
+    /// wherever that light reaches the picture (`fs_glow` in lattice.wgsl).
+    /// Two things follow. A node dims the light it stands in whoever laid it
+    /// down, its NEIGHBOURS' halos included, that being what the melded field
+    /// holds; and it dims that light wherever the light reaches, not only
+    /// under its own Clearance — a node that clears nothing still stands its
+    /// rings off.
     ///
     /// Rings only, and a node draws nothing else: inside the innermost ring
     /// nothing stands the light off at all, which is what lights the middle of
@@ -1205,10 +1205,9 @@ pub struct ViewConfig {
     /// stop at [`GAP_MAX`]: what stops a standoff reading as a black RING
     /// rather than as a lack of light is a dip broad enough to come off at the
     /// rate the skirt does, and that is a gap a good deal wider than any
-    /// padding. What bounds it in the picture is the CLEARANCE, which is the
-    /// surface it is painted on: a gap reaching past
-    /// [`sevens_gutter`](Self::sevens_gutter) is cut off where the clearing's
-    /// own coverage runs out, and cut off smoothly, that coverage being a fade.
+    /// padding. Nothing in the picture bounds it short of that: it is the
+    /// node's own billboard that has to hold the answer, and `vs_glow` in
+    /// lattice.wgsl grows the quad by this so that it does.
     ///
     /// Inert while [`glow_reach`](Self::glow_reach) is 0: with no light to
     /// stand off, a standoff is a dark ring painted for nothing.

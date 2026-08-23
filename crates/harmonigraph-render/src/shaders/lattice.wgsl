@@ -335,9 +335,8 @@ const INK_STRIP_N: u32 = 64u;
 // the Meld.
 @group(1) @binding(3) var glow_shade_tex: texture_2d<f32>;
 
-// The standoff: how far a node's clearing holds the light off every ring it
-// draws, in the node's uv — 0 wherever the glow is off, `u.misc11` being zeroed
-// whole there.
+// The standoff: how far a node holds the light off every ring it draws, in the
+// node's uv — 0 wherever the glow is off, `u.misc11` being zeroed whole there.
 //
 // A share of the node's radius, like the two gaps it sits with in the view, so
 // it shrinks with a node off the home sheet. That is the right unit for it:

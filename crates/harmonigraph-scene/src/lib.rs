@@ -959,8 +959,8 @@ pub struct Scene {
     /// (see [`ViewConfig::glow_meld`]); already clamped to 0..=1. Inert while
     /// [`glow_reach`](Self::glow_reach) is 0.
     pub glow_meld: f32,
-    /// The standoff: how far past every ring a node dims the light its own
-    /// clearing paints, in the same quad UV units (see [`ViewConfig::glow_gap`]);
+    /// The standoff: how far past every ring a node dims the light standing
+    /// there, in the same quad UV units (see [`ViewConfig::glow_gap`]);
     /// already clamped to [`GLOW_GAP_MAX`]. Inert while
     /// [`glow_reach`](Self::glow_reach) is 0.
     pub glow_gap: f32,
