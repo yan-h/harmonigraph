@@ -669,10 +669,9 @@ fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBack
 /// makes it. This is a layer of a node, dialled where a node's other layers
 /// are.
 ///
-/// The bars run in the order the questions do. The light itself first — Reach,
-/// Strength, and the Feather that says how the one is spent over the other —
-/// then its colour, then the Gap that holds it off the rings with the two bars
-/// that shape the gap, and last its own clock. Everything under Reach greys
+/// The bars run in the order the questions do: what the light IS before what
+/// colour it is, both before what holds it off the rings, and its own clock
+/// last. Everything under Reach greys
 /// while Reach is 0 rather than hiding, so the rows keep their place and the
 /// numbers they are dialled to stay readable — the arrangement the audio
 /// ring's own settings use.
