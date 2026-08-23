@@ -4744,11 +4744,11 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         // The light at group 1: one colour over the whole frame, bound to both
         // pipelines, so a clearing reads the same thing back whichever is
         // drawing and what they differ by is the early-outs alone. A constant
-        // rather than the 1x1 stand-in because the standoff is a FACTOR on
-        // this, and a factor on a transparent nothing would leave its skip
-        // outside the comparison (see `standing_off` above). Premultiplied,
-        // as the real target is, and well under opaque so the ground still
-        // shows through it.
+        // rather than the 1x1 stand-in because `node_paint` reads its ground
+        // and its Wash OUT of this, and a transparent nothing leaves both terms
+        // at zero on either pipeline — which takes the whole of what a clearing
+        // does with the light out of the comparison. Premultiplied, as the real
+        // target is, and well under opaque so the ground still shows through it.
         let light = {
             let texture = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("parity_light"),
