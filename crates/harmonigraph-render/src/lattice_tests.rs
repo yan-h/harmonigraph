@@ -4702,7 +4702,7 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         // then discard this node's band and nothing here would see it. Shipped
         // for its ink (`paints`), it draws its own layers and stands the light
         // off them while emitting none.
-        let mut dark = scene.nodes[0].clone();
+        let mut dark = scene.nodes[0];
         dark.glow.level = 0.0;
         dark.glow.row = scene.glow_rows;
         dark.world_pos.x -= 0.9;
@@ -6988,7 +6988,7 @@ fn the_gap_reaches_light_the_nodes_own_never_lit() {
     // clock at full.
     let with_neighbour = |reach: f32, depth: f32| -> Scene {
         let mut scene = alone(reach, depth);
-        let mut lamp = scene.nodes[0].clone();
+        let mut lamp = scene.nodes[0];
         lamp.world_pos = glam::Vec3::new(APART * scene.node_radius * 1.8, 0.0, 0.0);
         lamp.activation = 0.02;
         lamp.audio_ring = 0.0;
