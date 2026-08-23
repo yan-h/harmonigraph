@@ -1237,8 +1237,10 @@ pub struct ViewConfig {
     /// How much of the light the standoff takes away where it stands, 0..=1 —
     /// every ring's coverage scaled once by this.
     ///
-    /// 1 is a hole: a stood-off pixel is cleared to the bare ground, exactly
-    /// the frame with no glow in it. Below it the rings sit in a DIMMER POOL
+    /// 1 is a hole: where the standoff is solid, a pixel is cleared to the bare
+    /// ground, exactly the frame with no glow in it, and across its fade — and
+    /// the Clearance's, which it is floored at — to a blend of the two. Below
+    /// it the rings sit in a DIMMER POOL
     /// of their own light instead of in a void, which is the whole difference
     /// between a gap that reads as shade and one that reads as ink. 0 is the
     /// picture with no standoff at all, pixel for pixel, which is what makes

@@ -812,10 +812,10 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
             .show(ui)
             .on_hover_text(
                 "How much of the light the gap takes away. 100% clears to the \
-                 bare ground — the picture there is exactly what it is with the \
-                 glow off — and lower leaves the rings sitting in a dimmer pool \
-                 of their own light rather than in a void. 0% is the picture \
-                 with no gap at all.",
+                 bare ground — where the gap is solid, the picture is exactly \
+                 what it is with the glow off — and lower leaves the rings \
+                 sitting in a dimmer pool of their own light rather than in a \
+                 void. 0% is the picture with no gap at all.",
             );
         // The light's own clock, last, under everything it shapes. Its own pair
         // and not the note Fade in Note, because a halo is the slow part of the

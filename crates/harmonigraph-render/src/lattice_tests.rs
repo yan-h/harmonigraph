@@ -6517,6 +6517,27 @@ fn the_gap_depth_says_how_much_light_a_ring_stands_off() {
         .count();
     assert_eq!(brighter, 0, "the standoff brightened {brighter} pixels");
 
+    // The bar's top is the bare ground: where the standoff is solid, a depth of
+    // 1 leaves the pixel exactly what it is with the glow off — not nearly,
+    // since the clearing at full coverage replaces what is under it and a
+    // factor of 0 on the light is no light. BOTH fades are taken off for this
+    // pair of shots: the standoff's, and the clearing's it is floored at,
+    // which at the fresh width runs nearly the whole gutter — so the probe
+    // sits in a solid band rather than on either ramp.
+    let solid = |reach: f32| {
+        let mut scene = at(reach, 0.16, 1.0);
+        scene.glow_gap_soft = 0.0;
+        scene.sevens_soft = 0.0;
+        scene
+    };
+    let bare_ground = shooter.shot(&solid(0.8));
+    let no_glow = shooter.shot(&solid(0.0));
+    assert_eq!(
+        bare_ground[probe * 4..probe * 4 + 4],
+        no_glow[probe * 4..probe * 4 + 4],
+        "at a depth of 1 the stood-off pixel is not the frame with no glow in it",
+    );
+
     // And the depth is the whole switch: at 0 the Gap and its curve reach the
     // picture nowhere.
     for (name, gap) in [("no gap", 0.0), ("a wide gap", 0.5)] {
