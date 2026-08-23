@@ -732,7 +732,7 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                  wash usually wants a lower Strength than the accent did.",
             );
         // What colour the light comes out, between the amount of it and the
-        // moat that holds it off. "Color blend" and not "Spread": under this
+        // standoff that holds it off. "Color blend" and not "Spread": under this
         // heading, beside a Reach and a Feather that are both about distance,
         // a "spread" reads as how far the light goes, and this moves no light
         // at all. It reads as a percentage because it is a SHARE — of a whole
@@ -748,7 +748,7 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                  sector's colour a distinct arc and 100% averages the node \
                  into one tint.",
             );
-        // The moat, beneath the light it holds off: ONE bar for how far the
+        // The standoff, beneath the light it holds off: ONE bar for how far the
         // light is held off each ring and how much of that is spent fading it
         // back in, on exactly the terms the Clearance bar in Note is one —
         // solid to the inner handle, gone by the outer, the fade the distance
@@ -777,10 +777,11 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
              ring, its octave band, its marks — as a share of the node's \
              radius. Dark to the inner handle, faded back in by the outer; drag \
              the inner to the left edge to fade the whole gap, which is what \
-             keeps a wide gap from reading as a black ring. A gap is an \
-             absence of light, so the grid and the sheets behind show through \
-             it untouched; the neighbours' light is held off too. Both handles \
-             at 0 lets the glow up to every edge. Double-click to restore.",
+             keeps a wide gap from reading as a black ring. The node's own ink \
+             is untouched at any setting, and so is the picture outside its \
+             Clearance — the gap is the light the node's clearing paints, so it \
+             reaches exactly as far as that clearing does. Both handles at 0 \
+             lets the glow up to every edge. Double-click to restore.",
         );
         // The curve the fade runs on, directly under the bar that sets its
         // width, on the Reach/Feather arrangement above: a bar saying how far
@@ -790,7 +791,7 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
         // back across the fade, from the ring's edge at the left to the halo at
         // the right.
         ValueBar::new(&mut view.glow_gap_shape, 0.0..=1.0, "Gap curve")
-            .curve(harmonigraph_scene::moat_recovery)
+            .curve(harmonigraph_scene::standoff_recovery)
             .display(|v| format!("{:.0}%", v * 100.0))
             .show(ui)
             .on_hover_text(
@@ -802,18 +803,19 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                  rest away over a long tail, so the dark hugs the ring and has \
                  no edge anywhere; higher holds the ring dark and lets the \
                  light back over the last of the fade. It moves no boundary — \
-                 the Gap's handles still say where the moat is. Dial it with \
-                 the depth below: a tail is the faint end of the fade, so a \
-                 shallow depth loses it and a full one turns it into a void.",
+                 the Gap's handles still say where the standoff is. Dial it \
+                 with the depth below: a tail is the faint end of the fade, so \
+                 a shallow depth loses it and a full one turns it into a void.",
             );
         ValueBar::new(&mut view.glow_gap_depth, 0.0..=1.0, "Gap depth")
             .display(|v| format!("{:.0}%", v * 100.0))
             .show(ui)
             .on_hover_text(
-                "How much of the light the gap takes away. 100% is a hole — the \
-                 picture there is exactly what it is with the glow off — and \
-                 lower leaves the rings sitting in a dimmer pool of their own \
-                 light rather than in a void.",
+                "How much of the light the gap takes away. 100% clears to the \
+                 bare ground — where the gap is solid, the picture is exactly \
+                 what it is with the glow off — and lower leaves the rings \
+                 sitting in a dimmer pool of their own light rather than in a \
+                 void. 0% is the picture with no gap at all.",
             );
         // The light's own clock, last, under everything it shapes. Its own pair
         // and not the note Fade in Note, because a halo is the slow part of the

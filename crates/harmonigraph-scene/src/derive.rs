@@ -598,15 +598,18 @@ pub fn derive_scene(
         render_scale: view.render_scale,
         bloom_strength: view.bloom_strength,
         // Clamped here as well as in `sanitize`, for the shells that never come
-        // through that door: the reach and the gap both size the billboard the
-        // glow's draws use, so a number from outside either bar is a quad they
-        // cannot fill.
+        // through that door: the reach sizes the billboard the glow's draw
+        // uses, so a number from outside the bar is a quad it cannot fill.
         glow_reach: view.glow_reach.clamp(0.0, crate::GLOW_REACH_MAX),
         glow_strength: view.glow_strength.clamp(0.0, crate::GLOW_STRENGTH_MAX),
         glow_feather: view.glow_feather.clamp(0.0, 1.0),
+        // The standoff on the same footing, a bar's range rather than a
+        // billboard's: it is painted inside the clearing's own quad, so an
+        // absurd gap is a shape nothing can show rather than a quad nothing
+        // can fill.
         glow_gap: view.glow_gap.clamp(0.0, crate::GLOW_GAP_MAX),
         // To the axis rather than to the gap, as `sevens_soft` above is: a fade
-        // wider than its gap draws as one exactly as wide (`moat_coverage`
+        // wider than its gap draws as one exactly as wide (`standoff_coverage`
         // floors it at the ring's edge), and `sanitize` is where the stored
         // pair is held to the shape the bar can show.
         glow_gap_soft: view.glow_gap_soft.clamp(0.0, crate::GLOW_GAP_MAX),

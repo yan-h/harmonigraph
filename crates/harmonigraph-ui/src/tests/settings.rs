@@ -193,18 +193,18 @@ fn the_shape_bars_preview_is_the_curve_the_notes_run_on() {
 
     // The Glow section's two, in the order the section lays them: the Feather
     // drawing the light's falloff at the fresh feather, then the Gap curve
-    // drawing the moat's recovery at the fresh curve. Each against the scene's
-    // own function of the view's own field, so a bar handed the other's curve,
-    // or its own curve of the wrong field, is caught here and nowhere else —
-    // the widget draws whatever it is handed. Each line's own ends calibrate
-    // its box as the Fade curve's did, the two running opposite ways: the
-    // light starts full and ends at nothing, the recovery the reverse, so the
-    // lower of the two ends is the floor whichever end it is.
+    // drawing the standoff's recovery at the fresh curve. Each against the
+    // scene's own function of the view's own field, so a bar handed the other's
+    // curve, or its own curve of the wrong field, is caught here and nowhere
+    // else — the widget draws whatever it is handed. Each line's own ends
+    // calibrate its box as the Fade curve's did, the two running opposite ways:
+    // the light starts full and ends at nothing, the recovery the reverse, so
+    // the lower of the two ends is the floor whichever end it is.
     let view = harmonigraph_scene::ViewConfig::default();
     type Curve = fn(f32, f32) -> f32;
     let curves: [(&str, f32, Curve); 2] = [
         ("Feather", view.glow_feather, harmonigraph_scene::glow_skirt),
-        ("Gap curve", view.glow_gap_shape, harmonigraph_scene::moat_recovery),
+        ("Gap curve", view.glow_gap_shape, harmonigraph_scene::standoff_recovery),
     ];
     for ((name, value, curve), points) in curves.into_iter().zip(&paths[1..]) {
         let (first, last) = (points[0], points[points.len() - 1]);
