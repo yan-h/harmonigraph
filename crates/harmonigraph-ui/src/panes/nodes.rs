@@ -843,17 +843,19 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
             .display(|v| format!("{:.0}%", v * 100.0))
             .show(ui)
             .on_hover_text(
-                "How much of the light a node stands in washes over the node's \
-                 own ink — the rings, marks and glyphs it paints, the note \
-                 names on top being drawn clean whatever this says. 0% draws \
-                 the ink exactly as it is with the glow off; higher lifts a \
-                 silent slice's grey toward the colour of the halo around it, \
-                 so the node reads as a shape inside its light rather than a \
-                 silhouette cut out of it. It reads the light before the gap \
-                 takes any, so it is free of the depth above — a full depth \
-                 with a wash on it is a ring standing in a dark pool and still \
-                 wearing the halo's colour — and far enough up it inverts, the \
-                 ink brighter than the ground around it.",
+                "How much of the light washes over the lattice's own ink — a \
+                 node's rings, marks and glyphs, and the resting markers \
+                 standing in the same light, the note names on top being drawn \
+                 clean whatever this says. 0% draws the ink exactly as it is \
+                 with the glow off; higher lifts a silent slice's grey toward \
+                 the colour of the halo around it, so the node reads as a \
+                 shape inside its light rather than a silhouette cut out of \
+                 it, and a marker inside a halo stops reading as a hole in it. \
+                 It reads the light before the gap takes any, so it is free of \
+                 the depth above — a full depth with a wash on it is a ring \
+                 standing in a dark pool and still wearing the halo's colour — \
+                 and far enough up it inverts, the ink brighter than the \
+                 ground around it.",
             );
         // The light's own clock, last, under everything it shapes. Its own pair
         // and not the note Fade in Note, because a halo is the slow part of the

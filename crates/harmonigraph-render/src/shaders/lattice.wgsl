@@ -424,9 +424,11 @@ fn glow_gap_depth() -> f32 {
     return clamp(u.misc11.w, 0.0, 1.0);
 }
 
-// How much of the light standing at a node's pixel washes over the node's own
-// INK (`u.misc13.x`): 0 is ink drawn exactly as the ring stack describes it,
-// and 1 is the whole field laid over it.
+// How much of the light standing at a pixel washes over the lattice's own INK
+// there (`u.misc13.x`): 0 is ink drawn exactly as it is with the glow off, and
+// 1 is the whole field laid over it. Every layer that draws ink over the light
+// — a node's rings, marks and glyphs, and the resting markers between them —
+// takes its share through `wash_over` below.
 //
 // The GROUND's share of that same field is `glow_gap_depth` above, and the two
 // are independent by construction — this reads the field RAW, before the
@@ -435,6 +437,37 @@ fn glow_gap_depth() -> f32 {
 // that, which is the whole reason this is a second one.
 fn glow_wash() -> f32 {
     return clamp(u.misc13.x, 0.0, 1.0);
+}
+
+// The Wash bar's share of `light`, laid over ink already premultiplied by
+// `alpha`. Every piece of the lattice's ink takes the light through here — a
+// node's rings, marks and glyphs (`node_paint`) and a resting marker
+// (`plus_paint`) — so one bar means one operation and not two that agree.
+//
+// A SCREEN, where the ground under the ink takes an over, and the difference is
+// what a NEIGHBOUR's light is allowed to do. The field is melded, so the light
+// at a piece of ink carries every sheet's halo; an over (`ink * (1 - light.a)`)
+// lets a saturated halo from behind take the ink's other channels DOWN — a
+// white name under a red one comes out red — which is ink losing its colour to
+// something it stands in front of. `w + ink * (1 - w)` per channel can only
+// brighten, whatever reaches the pixel. The ground keeps the over: that is
+// `fs_glow_over`'s own blend state, and the ground a clearing paints has to be
+// the ground it meets at the clearing's edge.
+//
+// Premultiplied, so the ink's own term carries `alpha`: this is the screen of
+// the ink over `w`, scaled by the coverage the ink has, and whoever fills the
+// `(1 - alpha)` it leaves takes its own light separately.
+//
+// What this does NOT give ink is a way to hold off a NEIGHBOUR's light: the
+// field is one layer, so washed ink is tinted by a far sheet's halo as well as
+// by its own, light reaching through it from behind. Interleaving the sheets is
+// the only answer to that and is the thing this design exists to not do; a
+// node's own halo is the maximum at its own pixel, the falloff being measured
+// from its centre, so the far share is small unless a lit node sits directly
+// behind.
+fn wash_over(ink: vec3<f32>, alpha: f32, light: vec3<f32>) -> vec3<f32> {
+    let w = light * glow_wash();
+    return w * alpha + ink * (1.0 - w);
 }
 
 // How far the MIDI layers reach, in the node's uv: the octave band's outer edge,
@@ -2686,17 +2719,8 @@ fn node_paint(in: VsOut) -> vec4<f32> {
     //
     // A premultiplied over, the light being premultiplied: its alpha is how
     // much of the pixel the light claims and its colour already carries that
-    // weight. At reach 0, and on the single-attachment path that has no glow
-    // pass at all, both bindings are a transparent 1x1 texture, so this is the
-    // bare ground again with no branch to take.
-    //
-    // The coordinate is clamped into the texture rather than trusted to the
-    // backend's out-of-bounds rule: WGSL lets a load past the edge answer
-    // (0,0,0,1) as readily as zero, and an alpha of 1 from the 1x1 stand-in
-    // would clear every node to black. On the real target the clamp is a no-op,
-    // the target being the attachment's own size.
-    let edge = vec2<i32>(textureDimensions(glow_tex)) - vec2<i32>(1, 1);
-    let coord = min(vec2<i32>(in.clip_pos.xy), edge);
+    // weight.
+    let coord = light_coord(in.clip_pos.xy);
     // The SAME mix the composite laid down (`glow_light`), which is what keeps
     // the clearing from painting a brighter light than the picture it stands
     // in — that difference would read as a halo drawn round every node.
@@ -2747,34 +2771,13 @@ fn node_paint(in: VsOut) -> vec4<f32> {
     // is a picture worth being able to ask for rather than one to stumble into,
     // and the fresh wash is the tint the fresh depth alone would have left.
     //
-    // A SCREEN, where the ground under it takes an over, and the difference is
-    // what a NEIGHBOUR's light is allowed to do here. The field is melded, so
-    // the light at a node's ink carries every sheet's halo; an over
-    // (`ink * (1 - light.a)`) lets a saturated halo from behind take the ink's
-    // other channels DOWN — a white name under a red one comes out red — which
-    // is a node losing its colour to something it stands in front of.
-    // `w + ink * (1 - w)` per channel can only brighten, whatever reaches the
-    // pixel. The ground keeps the over: that is `fs_glow_over`'s own blend
-    // state, and the ground a clearing paints has to be the ground it meets at
-    // the clearing's edge.
-    //
-    // Premultiplied, so the ink's own term carries `active_alpha`: this is the
-    // screen of the ink over `w`, scaled by the coverage the ink has, and the
-    // ground below fills the `(1 - active_alpha)` it leaves. Each share of the
-    // fragment takes its own light exactly once, and the two shares are allowed
-    // to differ — that is what the two bars are. Where they do, the node's own
-    // antialiased edge cross-fades between them, which is a gradient across a
-    // pixel rather than a step.
-    //
-    // What this does NOT give a node is a way to hold off a NEIGHBOUR's light:
-    // the field is one layer, so a washed node's ink is tinted by a far sheet's
-    // halo as well as by its own, light reaching through the node from behind
-    // it. Interleaving the sheets per sheet is the only answer to that and is
-    // the thing this design exists to not do; a node's own halo is the maximum
-    // at its own pixel, the falloff being measured from its centre, so the far
-    // share is small unless a lit node sits directly behind.
-    let w = light.rgb * glow_wash();
-    let washed = w * active_alpha + active_rgb * (1.0 - w);
+    // The ground below fills the `(1 - active_alpha)` the ink leaves and takes
+    // its own share of the light on the way (`lit`), so each share of the
+    // fragment is lit exactly once and the two are allowed to differ — that is
+    // what the two bars are. Where they do, the node's own antialiased edge
+    // cross-fades between them, which is a gradient across a pixel rather than
+    // a step.
+    let washed = wash_over(active_rgb, active_alpha, light.rgb);
     let with_ground = washed + ground * gutter_cov * (1.0 - active_alpha);
     return vec4<f32>(with_ground, final_alpha);
 }
@@ -2985,10 +2988,10 @@ fn glow_meld() -> f32 {
 /// The finished light at a pixel of the glow's target: the two blends the
 /// light was written under, mixed by the Meld bar.
 ///
-/// Both readers of the target take it through here — the node's own clearing
-/// and the composite that lays the light down (blit.wgsl's `fs_glow_over`) —
-/// because a clearing painting a different mix from the picture it stands in
-/// is a halo drawn round every node.
+/// Every reader of the target takes it through here — the draws that read it
+/// back (at [`light_coord`]) and the composite that lays it down (blit.wgsl's
+/// `fs_glow_over`) — because ink painting a different mix from the picture it
+/// stands in is a halo drawn round every node.
 ///
 /// A mix of two premultiplied colours, so the result is premultiplied too, and
 /// the max is bounded above by the screen at every texel: neither end can put
@@ -2997,6 +3000,28 @@ fn glow_light(coord: vec2<i32>, meld: f32) -> vec4<f32> {
     let screened = textureLoad(glow_tex, coord, 0);
     let brightest = textureLoad(glow_max_tex, coord, 0);
     return mix(brightest, screened, meld);
+}
+
+/// Where in the glow's target one fragment of the scene pass stands: the pixel
+/// under it, clamped into the texture.
+///
+/// Shared by the draws that read the target back rather than write it — a
+/// node's clearing, its ink and the shade over both (`node_paint`), and a
+/// resting marker's ink (`plus_paint`). The COORDINATE and not the light,
+/// because the layers written beside it are read at the same pixel and one
+/// clamp answers for all of them.
+///
+/// Clamped rather than trusted to the backend's out-of-bounds rule: WGSL lets a
+/// load past the edge answer (0,0,0,1) as readily as zero, and an alpha of 1
+/// from the 1x1 stand-in would clear every node to black. On the real target it
+/// is a no-op, the target being the attachment's own size.
+///
+/// At reach 0, and on the single-attachment path that has no glow pass at all,
+/// every one of those bindings IS that 1x1 texture and it holds nothing, so
+/// each reader gets no light and no shade with no branch to take.
+fn light_coord(frag_pos: vec2<f32>) -> vec2<i32> {
+    let edge = vec2<i32>(textureDimensions(glow_tex)) - vec2<i32>(1, 1);
+    return min(vec2<i32>(frag_pos), edge);
 }
 
 /// How flat the light's falloff is across its own span (`u.misc10.z`): 0 the
@@ -3560,7 +3585,20 @@ fn plus_paint(in: PlusVsOut) -> vec4<f32> {
     // Premultiplied, as every draw in this pass is: the marker IS the
     // lattice's ground rather than a brightness of it, so its colour is laid
     // down flat and only its coverage varies across the edge.
-    return vec4<f32>(in.color.rgb * alpha, alpha);
+    let ink = in.color.rgb * alpha;
+    // The WASH, on the same bar and out of the same field a node's ink takes it
+    // from (`wash_over`). A marker is ink laid over ground the light is already
+    // under, so at a wash of 0 a marker inside a halo comes out DARKER than the
+    // ground to either side of it — the resting field reading as holes punched
+    // in the light exactly where the light is brightest. What the bar says of a
+    // node's rings it says here, and a lattice whose structure sits inside the
+    // light is the whole of what it buys.
+    //
+    // The RAW light, as a node's ink takes it: the shade layer beside it is the
+    // GROUND's share of the field and the Gap bars' answer, and a wash that read
+    // the remainder could not be asked for alongside a dark pool at all.
+    let light = glow_light(light_coord(in.clip_pos.xy), glow_meld());
+    return vec4<f32>(wash_over(ink, alpha, light.rgb), alpha);
 }
 
 @fragment
