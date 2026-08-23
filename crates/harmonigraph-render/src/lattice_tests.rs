@@ -6252,7 +6252,9 @@ fn a_lattice_with_no_node_grows_no_glow() {
 /// be asking for the hole this design exists to not have.
 ///
 /// The hidden node is LIT and NAMED, both at the middle of the near node where
-/// the light is fullest and an escaped name would be most legible.
+/// the light is fullest and an escaped name would be most legible. The name is
+/// measured on its OWN footprint and not on the ink: a glyph lands in the empty
+/// middle the rings stand around, so no opaque pixel can carry that claim.
 #[test]
 fn a_node_under_a_nearer_sheets_node_cuts_nothing_out_of_its_light() {
     const SIZE: [u32; 2] = [256, 256];
@@ -6274,19 +6276,25 @@ fn a_node_under_a_nearer_sheets_node_cuts_nothing_out_of_its_light() {
         scene.nodes[0].gutter = 0.4;
         scene
     };
-    let mut both = near(0.8);
-    let mut far = both.nodes[0];
-    far.world_pos.z = -1.0;
-    // Smaller and off centre, so the whole of what it draws falls inside the
-    // near node's clearing while its halo reaches where the near node's light
-    // is PARTIAL — at the middle the light is full, and full light melded with
-    // anything is still full.
-    far.scale = 0.5;
-    far.world_pos.x += 0.4;
-    far.glow = harmonigraph_scene::GlowStep { level: 0.8, row: 1, mix: 1.0, marked: 0.0 };
-    far.color = glam::Vec4::new(0.9, 0.2, 0.2, 1.0);
-    both.nodes.push(far);
-    rows_per_node(&mut both);
+    let covering = |wash: f32| -> Scene {
+        let mut both = near(0.8);
+        both.glow_wash = wash;
+        let mut far = both.nodes[0];
+        far.world_pos.z = -1.0;
+        // Smaller and off centre, so the whole of what it draws falls inside
+        // the near node's clearing while its halo reaches where the near node's
+        // light is PARTIAL — at the middle the light is full, and full light
+        // melded with anything is still full.
+        far.scale = 0.5;
+        far.world_pos.x += 0.4;
+        far.glow = harmonigraph_scene::GlowStep { level: 0.8, row: 1, mix: 1.0, marked: 0.0 };
+        far.color = glam::Vec4::new(0.9, 0.2, 0.2, 1.0);
+        both.nodes.push(far);
+        rows_per_node(&mut both);
+        both
+    };
+    let fresh_wash = single_marked_node(0, 0).glow_wash;
+    let both = covering(fresh_wash);
     // The hidden node names itself, at the middle of the near node.
     let name = |node: u32| LatticeLabels {
         glyphs: vec![GlyphInstance {
@@ -6361,6 +6369,31 @@ fn a_node_under_a_nearer_sheets_node_cuts_nothing_out_of_its_light() {
         0,
         "a node hidden behind the near one darkened {dimmed} of its {} opaque pixels",
         ink.len(),
+    );
+    // The NAME's own claim, which the ink set cannot carry at all: a glyph sits
+    // in the node's empty MIDDLE, where the rings stand around nothing and
+    // there is no opaque ink to move. So it is measured over the pixels a name
+    // actually covers, found by giving the same glyph to the NEAR node — whose
+    // name is drawn — and read against a shot of the same two nodes with nobody
+    // named. Both carry the hidden node's halo, so what differs between them is
+    // the name and only the name.
+    let unnamed = shooter.shot(&covering(fresh_wash));
+    let named_near = shooter.shot_with(&covering(fresh_wash), name(0));
+    let glyph: Vec<usize> = (0..unnamed.len())
+        .step_by(4)
+        .filter(|&i| named_near[i..i + 4] != unnamed[i..i + 4])
+        .collect();
+    assert!(
+        glyph.len() > 500,
+        "the fixture's name covers {} pixels; there is no name here to escape",
+        glyph.len(),
+    );
+    let escaped = glyph.iter().filter(|&&i| covered[i..i + 4] != unnamed[i..i + 4]).count();
+    assert_eq!(
+        escaped,
+        0,
+        "a hidden node's name reached {escaped} of the {} pixels it would cover were it drawn",
+        glyph.len(),
     );
 }
 
