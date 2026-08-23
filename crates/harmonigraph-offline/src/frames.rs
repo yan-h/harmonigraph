@@ -443,7 +443,6 @@ mod tests {
         state.frame_params.fade_time = 0.0;
         state.view.glow_attack = 0.0;
         state.view.glow_release = 0.0;
-        state.view.glow_reach = 4.0;
         state.view.glow_strength = 0.6;
         for note in [55u8, 60, 64, 67, 71] {
             state.tracker.handle_event(harmonigraph_core::NoteEvent::on(0.0, 0, note, 1.0));
@@ -461,17 +460,26 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("a scratch directory");
 
         let fresh = harmonigraph_scene::ViewConfig::default();
-        let shots: Vec<(f32, f32)> = vec![
-            (fresh.sevens_gutter, fresh.glow_gap),
-            (0.02, fresh.glow_gap),
-            (0.02, 0.5),
-            (0.02, 1.0),
-            (fresh.sevens_gutter, 1.0),
+        // A wide Reach for the column and the row, so the pool has a field to
+        // be cut out of; and one shot at the FRESH Reach with the Gap at its
+        // ceiling, which is the pairing where the standoff outruns the light
+        // that carries it. That one is a shape the node's own billboard has to
+        // be grown to hold (`vs_glow` in lattice.wgsl), so it is where a bound
+        // left unheld would show — as a straight screen-aligned edge across
+        // the pool rather than a pool that fades out.
+        let shots: Vec<(f32, f32, f32)> = vec![
+            (fresh.sevens_gutter, fresh.glow_gap, 4.0),
+            (0.02, fresh.glow_gap, 4.0),
+            (0.02, 0.5, 4.0),
+            (0.02, 1.0, 4.0),
+            (fresh.sevens_gutter, 1.0, 4.0),
+            (fresh.sevens_gutter, 1.0, fresh.glow_reach),
         ];
         let home = state.camera;
-        for (clearance, gap) in shots {
+        for (clearance, gap, reach) in shots {
             state.camera = home;
             state.camera.zoom_by(2.5);
+            state.view.glow_reach = reach;
             state.view.sevens_gutter = clearance;
             // The fade the whole width of each, which is the fresh pairing for
             // both bars: what is varying here is the reach and not the ramp.
@@ -495,9 +503,10 @@ mod tests {
             let primitives = context.tessellate(output.shapes, PPP);
             let bytes = renderer.render(&primitives, &output.textures_delta, PPP, background);
             let path = dir.join(format!(
-                "standoff-clearance{:.0}-gap{:.0}.png",
+                "standoff-clearance{:.0}-gap{:.0}-reach{:.0}.png",
                 clearance * 1000.0,
                 gap * 100.0,
+                reach * 100.0,
             ));
             image::save_buffer(&path, &bytes, SIZE[0], SIZE[1], image::ExtendedColorType::Rgba8)
                 .expect("write the png");
