@@ -837,7 +837,9 @@ fn an_off_sheet_note_leaves_the_marker_field_alone() {
 ///
 /// The two halves are one decision seen from each side. A marker's ink answers
 /// to what is DRAWN at the position, and an analyzer ring is light a node
-/// WEARS rather than a claim on the position under it — so the cross stands.
+/// WEARS rather than a claim on the position under it — so the cross stands,
+/// and stands WHOLE: a ring moves the ink by nothing, which is measured here
+/// against a resting neighbour rather than against a number.
 /// Its shadow answers to the light instead, and the middle of a node is the one
 /// place the picture keeps free of a standoff: inside the innermost ring
 /// nothing holds the light off, which is what lights the centre of a node whose
@@ -889,9 +891,19 @@ fn a_node_lit_by_no_key_keeps_its_cross_and_casts_no_shadow() {
     let at = |pos: LatticePos| {
         *scene.pluses.iter().find(|p| p.lattice_pos == pos).expect("every home position keeps one")
     };
-    assert!(at(lit).strength > 0.0, "a ringing node kept its cross: {:?}", at(lit));
-    assert!(at(lit).shade < 1e-5, "and cut no hole in its own halo: {:?}", at(lit));
-    let dark = at(dark);
+    let (lit, dark) = (at(lit), at(dark));
+    // The ink claim in full, and measured against the FIELD rather than against
+    // a number: a ring moves a marker by nothing at all, so the cross over a lit
+    // node is the one every resting position is wearing. A ring claiming the ink
+    // even slightly is the failure this catches, and reading it off the
+    // neighbour is what makes it a claim about the ring rather than about
+    // whatever `marker_ink` happens to be dialled to.
+    assert!(
+        (lit.strength - dark.strength).abs() < 1e-5,
+        "a ring dimmed the cross over the node it lit: {lit:?} against {dark:?}",
+    );
+    assert!(lit.strength > 0.0, "and the field has to be drawing markers at all: {lit:?}");
+    assert!(lit.shade < 1e-5, "a ringing node cut a hole in its own halo: {lit:?}");
     assert!(
         (dark.shade - dark.strength).abs() < 1e-5,
         "an unlit position's marker is untouched by a neighbour being lit: {dark:?}",
