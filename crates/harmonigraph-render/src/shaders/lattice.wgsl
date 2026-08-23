@@ -1973,10 +1973,10 @@ fn annulus_distance(d: f32, inner: f32, outer: f32) -> f32 {
 /// straight bands of constant thickness laid along those rays, so what a
 /// fragment stands out of the ink is half the gap less its distance to the
 /// nearest of them, and inside a slice that same difference is how deep in it
-/// stands. A slice the gap has EATEN WHOLE needs no case of its own — near the
-/// node's centre a constant thickness spans the whole wedge, and every point
-/// there is within half a gap of a boundary, so the walk answers "no ink",
-/// which is the clear hub `outer_glyph` draws.
+/// stands. A slice the gap has EATEN WHOLE needs no case of its own — every
+/// point of one is within half a gap of an edge that cuts it, so the walk
+/// answers "no ink" unprompted, which is the clear hub `outer_glyph` leaves
+/// around the node's centre.
 fn slice_gap_distance(uv: vec2<f32>, d: f32, oct: OctRing) -> f32 {
     let gap_half = slice_gap_half();
     // No gap is no cut: the slices meet edge to edge and every ring is a solid
@@ -2004,10 +2004,18 @@ fn slice_gap_distance(uv: vec2<f32>, d: f32, oct: OctRing) -> f32 {
         let delta = abs(a - oct_bound(j));
         near = min(near, min(delta, TAU - delta));
     }
-    // Off that ray, perpendicular. Past a quarter turn its nearest point is its
-    // own apex at the node's centre, which is what the clamp gives: the sine is
-    // 1 there and the distance is the fragment's own radius.
-    return gap_half - d * sin(min(near, TAU * 0.25));
+    // A ray past a quarter turn cuts nothing here. `outer_glyph` takes each gap
+    // only on the side its own edge runs to, so a fragment BEHIND an edge is ink
+    // however close that edge's own line passes on its way through the centre —
+    // and a slice wider than a half turn has a middle made of exactly those
+    // fragments, which is the wedge `oct_arc_coverage` carries a union branch
+    // for. `-d` hands the answer back to the ring's own radial distance, which
+    // is what stands the light off ink no edge cuts.
+    if near >= TAU * 0.25 {
+        return -d;
+    }
+    // Off the nearest ray, perpendicular.
+    return gap_half - d * sin(near);
 }
 
 /// How wide the standoff's fade is, in the node's uv: the Gap bar's own fade,
