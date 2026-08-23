@@ -6908,10 +6908,12 @@ fn a_slice_past_a_half_turn_is_stood_off_down_its_middle() {
     };
     // Inside half the widest gap, which is the only radius at which the two
     // readings can differ at all.
-    assert!(
-        RING_OUTER + PAST < 0.5 * harmonigraph_scene::GAP_MAX,
-        "the probe sits outside half an Octave gap, where every reading agrees",
-    );
+    const {
+        assert!(
+            RING_OUTER + PAST < 0.5 * harmonigraph_scene::GAP_MAX,
+            "the probe sits outside half an Octave gap, where every reading agrees",
+        )
+    };
     let (closed, wide) =
         standoff_share_rings(&mut shooter, SIZE, &at, RING_OUTER, PAST, ANGLES);
 
@@ -7001,10 +7003,12 @@ fn a_marks_standoff_stops_where_the_gap_cuts_its_sides() {
     };
     // Half an Octave gap has to outreach the Gap, or the light is held off in
     // the middle of a gap whatever the sides do.
-    assert!(
-        0.5 * harmonigraph_scene::GAP_MAX > GAP,
-        "the widest gap is too narrow for its middle to be clear of the ink",
-    );
+    const {
+        assert!(
+            0.5 * harmonigraph_scene::GAP_MAX > GAP,
+            "the widest gap is too narrow for its middle to be clear of the ink",
+        )
+    };
     let (closed, wide) = standoff_share_rings(
         &mut shooter,
         SIZE,
