@@ -229,29 +229,67 @@ const GLOW_BASE: f32 = 0.8;
 // difference between a light on a node and a field the node sits in.
 const GLOW_FALLOFF_TIGHT: f32 = 3.0;
 const GLOW_FALLOFF_FLAT: f32 = 0.25;
-// The two ends of the Gap curve bar, as the exponent the standoff's own ramp is
-// raised to across the Gap bar's fade (`standoff_coverage`). Mirrored in
+// The two ends of the Gap curve bar, as the exponent the standoff's decay is
+// taken over across the Gap bar's fade (`standoff_coverage`). Mirrored in
 // harmonigraph-scene on the Feather pair's terms above.
 //
-// TRAIL is the shadow: the light starts coming back almost at the ring and
-// then creeps up to full over the rest of the band, so the dark hugs the ring
-// and the recovery has no edge in it anywhere. HOLD is the band: the ring
-// stays fully dark most of the way out and the light arrives over the last of
-// it, which is a defined annulus with a soft outer edge.
+// TRAIL is the shadow: a plain exponential in the distance out from the ring,
+// steepest where it meets the ink and shallower every step after, so the dark
+// hugs the ring and the recovery has no edge in it anywhere. HOLD is the band:
+// a super-exponential that holds the light off nearly whole most of the way
+// out and gives it back over the last of the width, which is a defined
+// annulus with a soft outer edge.
 //
-// RECIPROCALS, and that is the contract rather than a coincidence: a geometric
-// mix between them puts an exponent of exactly 1 — the plain symmetric ramp,
-// the one shape that spends the fade evenly — at the bar's own middle.
+// A FACTOR OF FOUR, and the number worth knowing is the one in the middle: a
+// geometric mix between them puts an exponent of exactly 2 at the bar's own
+// middle, which is the shape that spends the fade most evenly — the one whose
+// steepest point sits inside the band rather than at either end of it.
 // Retuning one end alone slides that neutral point off the middle and every
 // view tuned against it with it, so the pair moves together or not at all.
 //
-// Both are strictly ABOVE zero, and TRAIL is the one that could be talked down
-// to it. `pow` is an `exp2(y * log2(x))` on the hardware, so an exponent of 0
-// against the ramp's own 0 at the solid end of the band is `0 * -inf` — a NaN
+// Both are at or ABOVE one, and TRAIL is the one that could be talked down.
+// `pow` is an `exp2(y * log2(x))` on the hardware, so an exponent of 0 against
+// the distance's own 0 at the solid end of the band is `0 * -inf` — a NaN
 // coverage, and a NaN scaling the light a node clears to is a node whose
-// clearing is gone with nothing on screen to say why.
-const GAP_SHAPE_TRAIL: f32 = 0.25;
+// clearing is gone with nothing on screen to say why. Under one the decay is
+// vertical where it leaves the ring, which spends the standoff in a width the
+// Gap bar cannot show and reads as the hard edge this shape exists to avoid.
+const GAP_SHAPE_TRAIL: f32 = 1.0;
 const GAP_SHAPE_HOLD: f32 = 4.0;
+// How far down `standoff_coverage` is carried by the outer end of the Gap's
+// fade, as the exponent of the decay there: four e-folds, so the outer handle
+// stands at a fiftieth of the standoff and the rest of it is spent inside the
+// band.
+//
+// The coverage under that handle is a DECAY and not a ramp that lands on zero,
+// which is what the number is for: a ramp with a finite SUPPORT ends at a
+// circle of one radius, and a closed contour is the shape the eye picks out of
+// a smooth field best, however gently the ramp meets it — see `glow_layer`,
+// where every other length in the light is an exponential and so has no such
+// radius to find.
+//
+// Four rather than the `ln(255)` that would put the handle under one code
+// value of the target. A decay steep enough to be invisible at the handle is
+// steep enough to spend the whole standoff in the first fifth of the band,
+// which is the abrupt shadow this is here to not draw. What is left standing
+// at the handle instead is a fiftieth, under the Gap depth, on a curve still
+// falling — a gradient rather than an edge at any width.
+const GAP_TAIL: f32 = 4.0;
+// The darkest the standoff is allowed to leave the light, as the factor it
+// keeps.
+//
+// A floor and not a clamp on the depth, because the factor is spent
+// GEOMETRICALLY (`glow_shade`): the fade is a number of e-folds from here up to
+// the light whole, and zero has no number of e-folds under it.
+//
+// A 1024th and not a 255th, so that the bar's top is still exactly the bare
+// ground: the light is premultiplied and the target is 8-bit, so a factor under
+// half a code value of the brightest light there can be rounds the whole pool
+// to the frame with no glow in it — which is what the Gap depth's top says it
+// is, and is asserted byte for byte
+// (`the_gap_depth_says_how_much_light_a_ring_stands_off`). A 255th leaves that
+// true only for a light dimmer than half of full.
+const GAP_KEEP_FLOOR: f32 = 0.0009765625;
 // How many angles a node's own ink is read at — the width of the strip that
 // reading is kept in (`fs_ink_strip`), and the only rate at which anything
 // about the colour of that node's light is resolved.
@@ -2090,43 +2128,51 @@ fn standoff_soft(in: VsOut) -> f32 {
 }
 
 /// How much of the light standing `sd` out from a ring's own annulus that ring
-/// holds off: solid across the ring and out to `gap - soft`, the light given
-/// back over the rest of the Gap and fully back at its end, skewed across that
-/// fade by the Gap curve.
+/// holds off: solid across the ring and out to `gap - soft`, then a decay whose
+/// rate the Gap curve sets, spending [`GAP_TAIL`] e-folds by the Gap's own end
+/// and going on falling past it.
 ///
-/// [`gutter_coverage`]'s shape exactly — solid to the inner handle, gone by the
-/// outer, the fade floored at the footprint's own edge — because the Gap bar
-/// IS the Clearance bar, and a pair that read one way on one of them and
-/// another way on the other would be one picture with two rulers. The floor is
-/// what keeps a fade wider than its gap (which the view never stores, and a
-/// hand-edited scene can) from starting inside the ring, so the ring's own
-/// footprint is stood off in full at every pair of handles; it is also what
-/// keeps the `clamp` range from inverting, which WGSL leaves undefined, and
-/// the same job [`clearing_edge`]'s floor does for [`gutter_coverage`].
+/// A DECAY and not [`gutter_coverage`]'s ramp, which is the one place the Gap
+/// bar and the Clearance bar part company, and it is the difference between
+/// what the two are laid over. A clearing is cut into the picture, where its
+/// outer end is met by whatever the neighbouring pixel already held; the
+/// standoff is laid over the light, whose every other length is an exponential
+/// (see [`glow_layer`]) and which is therefore smooth for as far as it goes. A
+/// ramp landing on nothing at one radius puts a closed contour in that field
+/// — the one edge in the whole of the light — and a circle is what the eye
+/// finds in a smooth field however gently the ramp meets it. What the Gap bar's
+/// two handles say is unchanged all the same: solid to the inner one, and back
+/// to a fiftieth of the standoff by the outer.
+///
+/// The floor on `inner` is what keeps a fade wider than its gap (which the view
+/// never stores, and a hand-edited scene can) from starting inside the ring, so
+/// the ring's own footprint is stood off in full at every pair of handles; it
+/// is also what keeps the `clamp` range from inverting, which WGSL leaves
+/// undefined, and the same job [`clearing_edge`]'s floor does for
+/// [`gutter_coverage`].
 ///
 /// Both SIDES of a ring at once — the halo outside it and the lit middle of the
 /// node inside it — because [`annulus_distance`] hands the two of them one
-/// `sd`, so one band feathers both and the light comes off a ring at the same
+/// `sd`, so one decay feathers both and the light comes off a ring at the same
 /// rate it comes off anything else. That match is the point: the gap and the
 /// glow are one blur or the gap reads as a cut.
 ///
 /// WHERE the fade is and HOW the light is spent across it are then two
-/// questions, and the exponent answers the second alone. The ramp is the same
-/// band at every curve: `pow` is 0 at 0 and 1 at 1, so coverage is still
-/// exactly solid inside `inner` and exactly nothing outside `edge`. The curve
-/// therefore moves no boundary — the Gap bar's two handles still say where the
-/// standoff is solid to and where the light is fully back.
+/// questions, and the exponent answers the second alone. Every curve is the
+/// same decay over the same width: `pow` is 0 at 0, so the coverage is still
+/// exactly solid inside `inner`, and [`GAP_TAIL`] is what it has spent by
+/// `edge` whatever the exponent. The curve therefore moves no handle.
 ///
 /// It is the one place the standoff's two sides are treated UNEVENLY, which is
-/// deliberate: the band still softens the node's middle and its halo
-/// together, but a curve below the middle spends most of its width on the far
-/// side, where the light being recovered is the halo's. A ring wants its dark
-/// close and its edge nowhere, and a symmetric ramp cannot give both.
+/// deliberate: the decay still softens the node's middle and its halo together,
+/// but a curve below the middle spends most of its width on the far side, where
+/// the light being recovered is the halo's. A ring wants its dark close and its
+/// edge nowhere, and a symmetric ramp cannot give both.
 fn standoff_coverage(sd: f32, soft: f32) -> f32 {
     let edge = clearing_edge(glow_gap());
     let inner = clamp(edge - soft, 0.0, edge - 0.001);
-    let ramp = smoothstep(inner, edge, sd);
-    return 1.0 - pow(ramp, glow_gap_shape());
+    let u = max(sd - inner, 0.0) / (edge - inner);
+    return exp(-GAP_TAIL * pow(u, glow_gap_shape()));
 }
 
 /// How much of the light standing here this node holds off: every RING it
@@ -3403,6 +3449,25 @@ struct GlowOut {
 /// How much of the light standing here this node's rings hold off, as
 /// [`glow_shade_tex`] carries it: [`glow_standoff`] under the Gap depth.
 ///
+/// The depth is spent GEOMETRICALLY — a coverage of `c` keeps `(1 - depth)` to
+/// the power `c`, so the Gap depth is a number of stops and the coverage says
+/// what share of them a pixel takes. A factor `1 - depth * c` is the tempting
+/// reading and is the wrong domain: sight answers ratios, so a factor walked
+/// evenly in VALUE spends most of what can be SEEN of it in the first fraction
+/// of its width — at a depth of 0.85, half the visible swing is gone by a fifth
+/// of the way out, and what is left over the remaining four fifths is under the
+/// eye's own threshold. The pool then reads as a dark ring hugging the ink with
+/// an edge on it, whatever width the Gap is dialled to.
+///
+/// The ends are unmoved by that: `pow` is 1 at 0 and `1 - depth` at 1, so a
+/// pixel the standoff misses keeps the light whole and one it covers is the
+/// depth's own floor. [`GAP_KEEP_FLOOR`] is what stands under that floor, a
+/// depth of 1 having no ratio to walk.
+///
+/// Both blend as they did: the mapping is the same for every node, and monotone
+/// in the coverage, so a `max` over what each node holds off is still a `max`
+/// over the shade they write.
+///
 /// Its own function so the exit a depth of 0 buys is stated once. It is EXACT
 /// rather than an approximation, which is what lets it stand outside
 /// `EARLY_OUT`: a depth of 0 keeps every scrap of the light by definition, and
@@ -3414,7 +3479,8 @@ fn glow_shade(in: VsOut, d: f32) -> f32 {
     if depth <= 0.0 {
         return 0.0;
     }
-    return depth * clamp(glow_standoff(in, d, oct_ring(in.cents)), 0.0, 1.0);
+    let cov = clamp(glow_standoff(in, d, oct_ring(in.cents)), 0.0, 1.0);
+    return 1.0 - pow(max(1.0 - depth, GAP_KEEP_FLOOR), cov);
 }
 
 /// The light draw, and the standoff cut into it. No depth in it: this is a pass

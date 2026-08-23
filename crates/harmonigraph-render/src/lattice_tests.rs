@@ -210,9 +210,10 @@ fn the_gap_curve_bars_preview_is_the_ramp_the_shader_runs() {
     let needles = [
         format!("const GAP_SHAPE_TRAIL: f32 = {:?};", harmonigraph_scene::GAP_SHAPE_TRAIL),
         format!("const GAP_SHAPE_HOLD: f32 = {:?};", harmonigraph_scene::GAP_SHAPE_HOLD),
+        format!("const GAP_TAIL: f32 = {:?};", harmonigraph_scene::GAP_TAIL),
         "return GAP_SHAPE_TRAIL * pow(GAP_SHAPE_HOLD / GAP_SHAPE_TRAIL, t);".to_owned(),
-        "let ramp = smoothstep(inner, edge, sd);".to_owned(),
-        "return 1.0 - pow(ramp, glow_gap_shape());".to_owned(),
+        "let u = max(sd - inner, 0.0) / (edge - inner);".to_owned(),
+        "return exp(-GAP_TAIL * pow(u, glow_gap_shape()));".to_owned(),
     ];
     for needle in &needles {
         assert!(
@@ -6817,6 +6818,199 @@ fn the_gap_depth_says_how_much_light_a_ring_stands_off() {
             "at a depth of 0, {name} drew a different frame from the fresh gap",
         );
     }
+}
+
+/// The standoff has no radius at which it stops: it is still taking light a
+/// tenth of a Gap PAST the Gap bar's outer handle, and less of it further out
+/// again.
+///
+/// The claim the picture rests on. A fade that lands on nothing at one distance
+/// puts a closed contour into a field that has no other — every length in the
+/// light is an exponential (`glow_layer`) — and a circle is what the eye finds
+/// in a smooth field however gently the ramp meets it. What that reads as is a
+/// dark disc with a rim on it rather than a shadow, and it is exactly what a
+/// strong glow shows: the halo out there is flat enough to have no gradient of
+/// its own for the fade's own end to hide in.
+///
+/// TWO annuli, both outside the handle, and the second is what makes it a decay
+/// rather than an overhang: a fade that merely reached further would pass the
+/// first and could still be a band with a wider edge. Annuli and not pixels
+/// because what is out there is a few code values on an 8-bit target — the
+/// tail is under the quantum long before it is under the arithmetic — and a
+/// ring of pixels is what carries a fraction of one.
+///
+/// At the depth's top and the curve's bottom, which is where the tail has the
+/// most to show: the depth sets how many e-folds the fade spends
+/// (`glow_shade`), and the curve's bottom is the plain exponential. The shape
+/// is the same at every setting; what changes is whether a byte can hold it.
+#[test]
+fn the_standoff_reaches_past_the_gap_it_is_dialled_to() {
+    const SIZE: [u32; 2] = [256, 256];
+    const GAP: f32 = 0.34;
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    let at = |depth: f32| -> Scene {
+        let mut scene = single_marked_node(0, 0);
+        scene.camera = harmonigraph_scene::Camera {
+            projection: harmonigraph_scene::Projection::Orthographic,
+            yaw: 0.0,
+            pitch: 0.0,
+            ..Default::default()
+        };
+        scene.glow_reach = 2.5;
+        scene.glow_strength = 2.0;
+        scene.glow_gap = GAP;
+        scene.glow_gap_soft = GAP;
+        scene.glow_gap_shape = 0.0;
+        scene.glow_gap_depth = depth;
+        scene.nodes[0].gutter = 0.0;
+        scene
+    };
+    let row = SIZE[0] as usize;
+    let (cx, cy) = ((SIZE[0] / 2) as usize, (SIZE[1] / 2) as usize);
+    let centre = cy * row + cx;
+
+    // The scale, as `the_gap_depth_says_how_much_light_a_ring_stands_off` takes
+    // it: the outermost pixel the node inks along +x is the band's outer edge,
+    // which is `rings_outer` in the node's own uv.
+    let bare = at(0.0);
+    let plain = shooter.shot(&{
+        let mut scene = at(0.0);
+        scene.glow_reach = 0.0;
+        scene
+    });
+    let inked = |px: &[u8], i: usize| px[i * 4..i * 4 + 4] != [0u8, 0, 0, 255];
+    let band_px = (1..(SIZE[0] / 2) as usize)
+        .rfind(|&x| inked(&plain, centre + x))
+        .expect("the fixture's node must ink something along +x");
+    let gap_px = band_px as f32 * GAP / bare.rings_outer;
+
+    let flat = shooter.shot(&at(0.0));
+    let stood_off = shooter.shot(&at(1.0));
+    // What the standoff took per lit pixel, over the ring of pixels standing
+    // between `from` and `to` Gaps out from the band's own edge.
+    let took = |from: f32, to: f32| -> (f64, usize) {
+        let (mut sum, mut n) = (0i64, 0usize);
+        for y in 0..SIZE[1] as usize {
+            for x in 0..SIZE[0] as usize {
+                let i = y * row + x;
+                let dx = x as f32 - cx as f32;
+                let dy = y as f32 - cy as f32;
+                let g = ((dx * dx + dy * dy).sqrt() - band_px as f32) / gap_px;
+                if g < from || g >= to || inked(&plain, i) {
+                    continue;
+                }
+                sum += brightness(&flat[i * 4..i * 4 + 3])
+                    - brightness(&stood_off[i * 4..i * 4 + 3]);
+                n += 1;
+            }
+        }
+        (sum as f64 / n.max(1) as f64, n)
+    };
+
+    let (near, near_n) = took(1.1, 1.35);
+    let (far, far_n) = took(1.35, 1.6);
+    assert!(near_n > 200 && far_n > 200, "the annuli hold {near_n} and {far_n} pixels to read");
+    assert!(
+        near > 0.5,
+        "the standoff stopped at the Gap's own handle: a tenth of a Gap past it, it took \
+         {near:.2} of a code value per pixel",
+    );
+    assert!(
+        far > 0.0 && far < near,
+        "the standoff took {far:.2} per pixel out at a Gap and a half against {near:.2} just \
+         past one, which is a wider band rather than a decay",
+    );
+}
+
+/// The Gap depth is a number of STOPS, spent geometrically across the fade, and
+/// not a share of the light taken off in proportion.
+///
+/// What that buys is the whole of why the fade is worth spending on: sight
+/// answers ratios, so a factor walked evenly in VALUE spends most of what can
+/// be SEEN of it in the first fraction of its width, and the pool then reads as
+/// a dark ring hugging the ink with an edge on it whatever the Gap is dialled
+/// to. See `glow_shade`, which is the one line this pins.
+///
+/// Measured as a SQUARE, which is what makes it an identity rather than a
+/// direction: keeping a quarter of the light is keeping a half of it twice, so
+/// at every pixel of the halo the shot at the depth that leaves a quarter is
+/// the shot at the depth that leaves a half, squared — against the unstood-off
+/// light as the unit. A linear factor gets that wrong in the middle of the fade
+/// and right at both of its ends, so the probes are taken across the fade
+/// rather than at one radius.
+///
+/// On the black ground every shot here is taken against: the light is
+/// premultiplied, so a pixel outside the node's ink IS the light times what the
+/// standoff keeps of it, and the ratio of two shots is the ratio of two keeps
+/// with the colour divided out.
+#[test]
+fn the_gap_depth_is_spent_in_stops_and_not_in_proportion() {
+    const SIZE: [u32; 2] = [256, 256];
+    const GAP: f32 = 0.34;
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    let at = |depth: f32| -> Scene {
+        let mut scene = single_marked_node(0, 0);
+        scene.camera = harmonigraph_scene::Camera {
+            projection: harmonigraph_scene::Projection::Orthographic,
+            yaw: 0.0,
+            pitch: 0.0,
+            ..Default::default()
+        };
+        scene.glow_reach = 1.6;
+        scene.glow_strength = 1.5;
+        scene.glow_gap = GAP;
+        scene.glow_gap_soft = GAP;
+        scene.glow_gap_depth = depth;
+        scene.nodes[0].gutter = 0.0;
+        scene
+    };
+    let row = SIZE[0] as usize;
+    let centre = (SIZE[1] / 2) as usize * row + (SIZE[0] / 2) as usize;
+    let bare = at(0.0);
+    let plain = shooter.shot(&{
+        let mut scene = at(0.0);
+        scene.glow_reach = 0.0;
+        scene
+    });
+    let inked = |px: &[u8], i: usize| px[i * 4..i * 4 + 4] != [0u8, 0, 0, 255];
+    let band_px = (1..(SIZE[0] / 2) as usize)
+        .rfind(|&x| inked(&plain, centre + x))
+        .expect("the fixture's node must ink something along +x");
+
+    let whole = shooter.shot(&at(0.0));
+    let half = shooter.shot(&at(0.5));
+    let quarter = shooter.shot(&at(0.75));
+    let lit = |px: &[u8], i: usize| brightness(&px[i * 4..i * 4 + 3]) as f64;
+
+    // Across the fade rather than at one radius: a proportional factor agrees
+    // with this at both ends of the band and differs most in the middle of it.
+    let mut checked = 0;
+    for step in 1..=8 {
+        let p = 0.15 + 0.1 * step as f32;
+        let probe = centre + (band_px as f32 * (1.0 + p * GAP / bare.rings_outer)).round() as usize;
+        if inked(&plain, probe) {
+            continue;
+        }
+        let (l0, l1, l2) = (lit(&whole, probe), lit(&half, probe), lit(&quarter, probe));
+        // Under a tenth of the unstood-off light there is not enough left in
+        // the byte to square anything with.
+        if l0 < 76.0 {
+            continue;
+        }
+        let want = (l1 / l0) * (l1 / l0);
+        let got = l2 / l0;
+        assert!(
+            (got - want).abs() < 0.035,
+            "{p} of a Gap out the depth that leaves a quarter kept {got:.3} of the light \
+             where the depth that leaves a half, squared, is {want:.3}",
+        );
+        checked += 1;
+    }
+    assert!(checked >= 4, "only {checked} probes had light to read; the test proves nothing");
 }
 
 /// The Gap reaches as far as it says, and the Clearance is not a lid on it.
