@@ -183,19 +183,47 @@ fn the_shaders_ink_strip_is_as_wide_as_the_texture_it_is_drawn_into() {
 /// held to the shader's text: the two rates the bar mixes between and the two
 /// lines that spend them. A preview that drifted from the picture would be
 /// worse than none, and nothing on screen would show the drift.
+/// One WGSL function's text, from its `fn` line to the start of the next. What
+/// a needle asked of the whole file cannot say is WHICH copy answered it, and
+/// the skirt is spelled twice on purpose — once for a node's light and once
+/// for a marker's.
+fn wgsl_fn_body(name: &str) -> &'static str {
+    let open = format!("\nfn {name}(");
+    let at = SHADER_SRC
+        .find(&open)
+        .unwrap_or_else(|| panic!("lattice.wgsl has no `fn {name}`"));
+    let rest = &SHADER_SRC[at + 1..];
+    &rest[..rest[1..].find("\nfn ").map_or(rest.len(), |end| end + 1)]
+}
+
 #[test]
 fn the_feather_bars_preview_is_the_skirt_the_shader_draws() {
-    let needles = [
+    // Declared at the top of the shader, so these are the whole file's to hold.
+    for needle in [
         format!("const GLOW_FALLOFF_TIGHT: f32 = {:?};", harmonigraph_scene::GLOW_FALLOFF_TIGHT),
         format!("const GLOW_FALLOFF_FLAT: f32 = {:?};", harmonigraph_scene::GLOW_FALLOFF_FLAT),
-        "let rate = mix(GLOW_FALLOFF_TIGHT, GLOW_FALLOFF_FLAT, glow_feather());".to_owned(),
-        "let window = 1.0 - smoothstep(span * 0.5, span, d);".to_owned(),
-        "let skirt = GLOW_BASE * exp(-rate * d / span) * window;".to_owned(),
-    ];
-    for needle in &needles {
+    ] {
         assert!(
-            SHADER_SRC.contains(needle),
+            SHADER_SRC.contains(&needle),
             "lattice.wgsl must contain `{needle}`: harmonigraph_scene::glow_skirt mirrors the \
+             skirt line for line to draw the Feather bar's preview, so a change to either \
+             is a change to both",
+        );
+    }
+    // Asked of the function a NODE's light is drawn by, which is the one the
+    // preview mirrors. `plus_glow_layer` carries the same three lines term for
+    // term, so the whole file answers a needle either copy satisfies — and the
+    // node's own skirt can then drift out from under the preview with the bar
+    // still claiming to draw it.
+    let body = wgsl_fn_body("glow_layer");
+    for needle in [
+        "let rate = mix(GLOW_FALLOFF_TIGHT, GLOW_FALLOFF_FLAT, glow_feather());",
+        "let window = 1.0 - smoothstep(span * 0.5, span, d);",
+        "let skirt = GLOW_BASE * exp(-rate * d / span) * window;",
+    ] {
+        assert!(
+            body.contains(needle),
+            "`fn glow_layer` must contain `{needle}`: harmonigraph_scene::glow_skirt mirrors the \
              skirt line for line to draw the Feather bar's preview, so a change to either \
              is a change to both",
         );
