@@ -407,17 +407,15 @@ mod tests {
     /// loose in the field with the lattice showing through it.
     ///
     /// The pairs are the two halves of the question. Down the CLEARANCE column
-    /// the hole shrinks under a fixed Gap, which is the case the standoff used
-    /// to be bounded by; across the GAP row the pool grows under a fixed hole,
-    /// which is what the bar now buys. The fresh pair is shot first as the
-    /// reference: at a Clearance wider than the Gap the two shapes are nearly
-    /// the old picture, so a frame that looks wrong THERE is a regression
-    /// rather than the new reach.
+    /// the hole shrinks under a fixed Gap, which is the reach a standoff carried
+    /// by the clearing would be bounded by; across the GAP row the pool grows
+    /// under a fixed hole, which is what the bar buys past that bound. The fresh
+    /// pair is shot first as the reference, being the one pairing where the two
+    /// shapes are close enough that a frame looking wrong is a regression rather
+    /// than the reach under test.
     ///
     /// Reading conditions as [`the_node_glow_draws_a_picture`] sets them, and
-    /// for the same reasons: the default tuning, the far camera, the light's own
-    /// clock off, the skin's panel as the ground, and a Strength that does not
-    /// climb with the Reach.
+    /// for the same reasons.
     ///
     /// ```text
     /// cargo test -p harmonigraph-offline -- --ignored --nocapture standoff_clearance
