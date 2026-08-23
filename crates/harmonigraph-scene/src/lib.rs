@@ -211,6 +211,21 @@ pub const GAP_MAX: f32 = 0.4;
 /// the fresh view draws is a fifth of the way along it.
 pub const PLUS_SIZE_MAX: f32 = 0.9;
 
+/// How far past a marker's own arm its pool may be asked to reach (see
+/// [`ViewConfig::marker_reach`]), in the same quad UV units
+/// [`GLOW_REACH_MAX`] below is in — so the two bars' numbers can be read
+/// against each other.
+///
+/// HALF the node ceiling, and the difference is how many emitters there are. A
+/// uv of about one covers the gap to a neighbour, so eight is where a node's
+/// light stops being a halo and becomes a field — which is a picture worth
+/// asking for when three notes are sounding. Every lattice position carries a
+/// marker and all of them light at once, so the same eight here is not a field
+/// but a flat wash with the structure gone out of it. Four still lets a pool
+/// cross several neighbours, which is as far as the top of a bar needs to reach
+/// when everything past it is one grey.
+pub const MARKER_REACH_MAX: f32 = 4.0;
+
 /// How far past a node's outermost drawn edge its glow may be asked to reach
 /// (see [`ViewConfig::glow_reach`]), in the same quad UV units the layer sizes
 /// above are in.
@@ -1002,6 +1017,15 @@ pub struct Scene {
     /// A light like any other here — same target, same blends, same Feather and
     /// Strength — measured against the marker's own arm rather than the Reach.
     pub marker_light: f32,
+    /// How far a resting marker's light reaches from its crossing, in WORLD
+    /// units — its own arm plus [`ViewConfig::marker_reach`], resolved once for
+    /// the whole field (`derive_marker_span`).
+    ///
+    /// A world length where the bars behind it are quad uv, because it is what
+    /// the light's own billboard is sized to: the marker draw carries the arm
+    /// per instance (it is a world length too) and the pool's draw needs the
+    /// span before it knows which marker it is drawing.
+    pub marker_span: f32,
     /// How widely a node's own ink is averaged into the colour of its light
     /// (see [`ViewConfig::glow_blend`]); already clamped to 0..=1.
     pub glow_blend: f32,

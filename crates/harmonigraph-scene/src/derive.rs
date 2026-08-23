@@ -618,6 +618,7 @@ pub fn derive_scene(
         glow_gap_depth: view.glow_gap_depth.clamp(0.0, 1.0),
         glow_wash: view.glow_wash.clamp(0.0, 1.0),
         marker_light: view.marker_light.clamp(0.0, 1.0),
+        marker_span: derive_marker_span(view),
         glow_blend: view.glow_blend.clamp(0.0, 1.0),
         // A row per node, so a scene nothing has carried still reads one strip
         // row per node — the shell's pass hands out rows of its own and raises
@@ -732,17 +733,43 @@ pub(crate) fn derive_plus_taper_start(view: &ViewConfig) -> f32 {
 /// activation, so a released note's name spends the end of its fade invisible —
 /// and a marker that waited for the name to be gone ENTIRELY would leave the
 /// position empty for that stretch and then pop in at full opacity. The
+/// One quad-uv length of the home sheet, as a world length.
+///
+/// uv 1 is 1.8 node radii out (`node_vertex` in lattice.wgsl), so the bars a
+/// marker is dialled on — the same units every ring radius on a node is in —
+/// resolve here, once, rather than the shader carrying a second copy of the
+/// convention for one more layer. The home sheet has no scale of its own, which
+/// is the sheet every marker stands on ([`derive_pluses`]).
+fn marker_world(view: &ViewConfig, uv: f32) -> f32 {
+    view.spacing * NODE_RADIUS_FACTOR * 1.8 * uv
+}
+
+/// How far a resting marker's light reaches from its crossing, in world units:
+/// the marker's own arm plus [`ViewConfig::marker_reach`].
+///
+/// The node's own rule one rung down — a node's light spans its outermost drawn
+/// edge plus the Reach — so a marker's pool is measured against the marker and
+/// the bar says only how far PAST it the light goes.
+///
+/// Resolved here rather than in the shader because both halves are view bars in
+/// quad uv and every marker shares them: one number for the whole field, which
+/// is what lets the light's own draw size its billboard without knowing what a
+/// marker is.
+pub(crate) fn derive_marker_span(view: &ViewConfig) -> f32 {
+    marker_world(
+        view,
+        view.plus_arm.clamp(0.0, PLUS_SIZE_MAX)
+            + view.marker_reach.clamp(0.0, crate::MARKER_REACH_MAX),
+    )
+}
+
 /// complement makes the two one crossing surface.
 pub(crate) fn derive_pluses(
     view: &ViewConfig,
     nodes: &[NodeInstance],
     ground: Vec4,
 ) -> Vec<PlusInstance> {
-    // uv 1 is 1.8 node radii out (`node_vertex` in lattice.wgsl), so the bar's
-    // quad-uv reading — the units every ring radius on a node is dialled in —
-    // resolves to a world length here, once, rather than the shader carrying a
-    // second copy of the convention for one more layer.
-    let radius = view.spacing * NODE_RADIUS_FACTOR * 1.8 * view.plus_arm.clamp(0.0, PLUS_SIZE_MAX);
+    let radius = marker_world(view, view.plus_arm.clamp(0.0, PLUS_SIZE_MAX));
     // 0 takes the markers away, and with them everything a resting lattice
     // draws but the node rings. Skipping the instances is the same picture the
     // shader would discard to, one draw earlier.

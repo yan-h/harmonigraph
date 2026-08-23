@@ -541,6 +541,7 @@ fn parity_scene() -> Scene {
         glow_gap_depth: 0.85,
         glow_wash: 0.15,
         marker_light: 0.10,
+        marker_span: 0.5,
         glow_blend: 0.5,
         // A row per node, which is what the nodes above are built with.
         glow_rows,
@@ -6561,6 +6562,58 @@ fn a_nodes_gap_dims_the_markers_pool() {
         "a full Gap left more than half the markers' light standing: \
          {held} against {open}",
     );
+}
+
+/// The Marker reach bar puts light further out: a wider span reaches pixels a
+/// narrower one leaves dark, and reaches every one the narrower one lit.
+///
+/// The span is the whole of what the bar moves — the billboard is sized to it
+/// and the falloff is spent across it (`vs_plus_glow`), so widening it stretches
+/// one shape rather than adding light at the middle. That the wide shot lights a
+/// SUPERSET is what says so: a bar that brightened as it widened would light
+/// more pixels too, and would not leave the narrow set intact.
+#[test]
+fn the_marker_reach_puts_light_further_out() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    let at = |span: f32| -> Scene {
+        let mut scene = parity_scene();
+        scene.nodes.clear();
+        scene.glow_reach = 0.8;
+        scene.glow_strength = 1.5;
+        scene.marker_light = 0.6;
+        scene.marker_span = span;
+        scene
+    };
+    let dark = shooter.shot(&{
+        let mut s = at(0.5);
+        s.marker_light = 0.0;
+        s
+    });
+    let narrow = shooter.shot(&at(0.35));
+    let wide = shooter.shot(&at(0.9));
+    // Where each span put light, against the same picture with none.
+    let lit = |shot: &[u8]| -> Vec<usize> {
+        (0..dark.len())
+            .step_by(4)
+            .filter(|&i| brightness(&shot[i..i + 3]) > brightness(&dark[i..i + 3]))
+            .collect()
+    };
+    let (near, far) = (lit(&narrow), lit(&wide));
+    assert!(!near.is_empty(), "the narrow span must light something");
+    assert!(
+        far.len() > near.len() * 2,
+        "widening the span from 0.35 to 0.9 lit {} against {}",
+        far.len(),
+        near.len(),
+    );
+    let missed = near
+        .iter()
+        .filter(|&&i| brightness(&wide[i..i + 3]) <= brightness(&dark[i..i + 3]))
+        .count();
+    assert_eq!(missed, 0, "the wider span left {missed} of the narrow pool's pixels dark");
 }
 
 /// A marker's pool is measured against the MARKER and not the Reach: the two

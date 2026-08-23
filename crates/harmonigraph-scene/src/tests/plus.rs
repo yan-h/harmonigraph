@@ -51,6 +51,60 @@ fn pluses_of_with(view: &ViewConfig, tracker: &NoteTracker) -> Vec<PlusInstance>
     scene_of(tracker, &Tuning::default(), view, &plain_frame(), 0.0).pluses
 }
 
+fn span_of(view: &ViewConfig) -> f32 {
+    scene_of(&NoteTracker::new(), &Tuning::default(), view, &plain_frame(), 0.0).marker_span
+}
+
+/// A marker's pool spans its own ARM plus the Marker reach, and takes nothing
+/// from the node Reach beside it.
+///
+/// The shape is the node's own one rung down — a node's light spans its
+/// outermost drawn edge plus the Reach — so a reach of 0 is a pool the size of
+/// the cross rather than no pool, and what turns the light off is its level.
+///
+/// The independence is the half worth pinning. The two distances are spent on
+/// wildly different numbers of lights: a few nodes sound at once, and every
+/// lattice position carries a marker that lights always, so the reach that
+/// turns a node's halo into a field turns the marker field into one flat wash.
+/// Sharing one bar between them is the change this test exists to fail.
+#[test]
+fn a_markers_pool_spans_its_arm_plus_its_own_reach() {
+    let at = |arm: f32, marker: f32, glow: f32| -> f32 {
+        span_of(&ViewConfig {
+            plus_arm: arm,
+            marker_reach: marker,
+            glow_reach: glow,
+            ..plus_view()
+        })
+    };
+    // One arm's world length, read off the marker itself rather than converted
+    // here: the same number the instance carries, so the sums below are in the
+    // units the pool is actually drawn in.
+    let arm = pluses_of(&ViewConfig { plus_arm: 0.2, ..plus_view() })[0].radius;
+    assert!(arm > 0.0, "the fixture must draw a marker to measure an arm by");
+    assert!(
+        (at(0.2, 0.0, 1.0) - arm).abs() < 1e-4,
+        "a reach of 0 must span the arm exactly: {} against {arm}",
+        at(0.2, 0.0, 1.0),
+    );
+    assert!(
+        (at(0.2, 0.2, 1.0) - arm * 2.0).abs() < 1e-4,
+        "an arm's worth of reach must double the span: {} against {}",
+        at(0.2, 0.2, 1.0),
+        arm * 2.0,
+    );
+    for glow in [0.0, GLOW_REACH_MAX] {
+        assert!(
+            (at(0.2, 0.3, glow) - at(0.2, 0.3, 1.0)).abs() < 1e-6,
+            "the node Reach at {glow} moved a marker's pool",
+        );
+    }
+    assert!(
+        (at(0.2, MARKER_REACH_MAX * 2.0, 1.0) - at(0.2, MARKER_REACH_MAX, 1.0)).abs() < 1e-6,
+        "a reach past the ceiling must clamp to it",
+    );
+}
+
 #[test]
 fn a_marker_stands_at_every_home_position_and_nowhere_else() {
     // The marker field IS the lattice's resting picture, so "one per home

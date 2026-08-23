@@ -401,7 +401,10 @@ struct Uniforms {
     /// The WASH. x: how much of the light standing at a node's pixel washes
     /// over the node's own INK (`Scene::glow_wash`), where `misc11.w` above is
     /// the GROUND's share of that same field. y: how brightly a resting marker
-    /// lights the position it stands at (`Scene::marker_light`). z/w unused.
+    /// lights the position it stands at (`Scene::marker_light`); z: how far that
+    /// light reaches from the marker's crossing, in WORLD units
+    /// (`Scene::marker_span`) — a length where every other dial here is a share,
+    /// because the pool's billboard is sized to it. w unused.
     ///
     /// The marker's light rides beside the wash because the two are the pair
     /// that decides what a resting position looks like — one lays a pool down,
@@ -1089,7 +1092,7 @@ impl LatticeCallback {
                     [0.0; 4]
                 },
                 misc13: if lights {
-                    [scene.glow_wash, scene.marker_light, 0.0, 0.0]
+                    [scene.glow_wash, scene.marker_light, scene.marker_span, 0.0]
                 } else {
                     [0.0; 4]
                 },

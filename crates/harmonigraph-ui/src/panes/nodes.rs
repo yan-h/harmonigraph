@@ -16,7 +16,8 @@ use crate::widgets::{button_row, choice_row, OctaveStrip, StackBar, ValueBar};
 use crate::SharedState;
 use harmonigraph_scene::{
     Pulse, SpectralReading, ViewConfig, GAP_MAX, GLOW_BALLISTICS_MAX, GLOW_GAP_MAX,
-    GLOW_REACH_MAX, GLOW_STRENGTH_MAX, MARK_DELAY_MAX, MIN_EXTRA_SIZE, PITCH_CEIL,
+    GLOW_REACH_MAX, GLOW_STRENGTH_MAX, MARKER_REACH_MAX, MARK_DELAY_MAX, MIN_EXTRA_SIZE,
+    PITCH_CEIL,
     PITCH_FLOOR, SPECTRAL_BALLISTICS_MAX, SPECTRAL_GATE_MAX, SPECTRAL_GATE_MIN,
     SPECTRAL_HYSTERESIS_MAX, SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN,
     SPECTRAL_WIDTH_MAX, SPECTRAL_WIDTH_MIN,
@@ -879,8 +880,27 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                  the Wash above — low leaves it a silhouette standing in the \
                  light, high melts it in. It does not take the Reach: there is \
                  a marker at every position and they all light at once, so \
-                 pools that wide screen into fog. They are sized to the marker, \
-                 and grow with its arm.",
+                 pools that wide screen into fog — the Marker reach below is \
+                 that distance on a bar of its own.",
+            );
+        // The pool's own distance, under the level that fills it: the Reach and
+        // Strength pair at the top of this section, asked again for the one
+        // light in the picture that is not a node's.
+        ValueBar::new(&mut view.marker_reach, 0.0..=MARKER_REACH_MAX, "Marker reach")
+            .show(ui)
+            .on_hover_text(
+                "How far a resting marker's pool reaches past the tips of its \
+                 arms, in the same units as the Reach at the top — so the two \
+                 numbers can be read against each other. The pool spans the \
+                 marker's own arm plus this, the way a node's light spans its \
+                 outermost edge plus the Reach, so 0 is a pool hugging the \
+                 cross rather than no pool at all; the Marker light above is \
+                 what turns it off. Its own bar because the two distances are \
+                 spent on wildly different numbers of lights: a few nodes sound \
+                 at once, and every lattice position carries a marker that \
+                 lights always — so the reach that turns a node's halo into a \
+                 field turns this one into a flat wash. Around 100% reaches a \
+                 neighbouring position.",
             );
         // The light's own clock, last, under everything it shapes. Its own pair
         // and not the note Fade in Note, because a halo is the slow part of the

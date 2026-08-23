@@ -166,7 +166,9 @@ struct Uniforms {
     misc12: vec4<f32>,
     // The WASH. x: how much of the light standing at a node's pixel washes over
     // the node's own INK (`glow_wash`), where `misc11.w` is the GROUND's share
-    // of that same field. y/z/w unused.
+    // of that same field. y: how brightly a resting marker lights the position
+    // it stands at (`marker_light`); z: how far that light reaches from the
+    // crossing, in WORLD units (`marker_span`). w unused.
     //
     // A row of its own because it is not a term of the standoff, close as it
     // reads to the depth: the Gap bars shape the field the GROUND is painted
@@ -3630,33 +3632,30 @@ fn fs_plus_scene(in: PlusVsOut) -> SceneOut {
 // is and under the same two blends, so the resting field is made of the same
 // light the notes are rather than of a second kind standing beside it.
 
-// How far a marker's pool reaches past its crossing, in ARMS.
+// How far a marker's pool reaches from its crossing, in WORLD units
+// (`u.misc13.z`): the marker's own arm plus the Marker reach bar, resolved for
+// the whole field on the CPU (`derive_marker_span` in harmonigraph-scene).
 //
-// A constant, and NOT the Reach — which is the tempting reading, the Reach being
-// where every other light in this picture stops. What makes it wrong is how many
-// emitters there are: the Reach is the distance ONE sounding node's light is
-// given, and how few nodes sound at once is what bounds where it lands. There is
-// a marker at every lattice position and all of them emit always, so pools each
-// reaching the Reach's several lattice steps screen together into one flat field
-// across the pane — fog, and the exact opposite of the structure the markers are
-// drawn for.
+// A bar of its own and NOT the Reach, which is the tempting reading, the Reach
+// being where every other light in this picture stops. What separates them is
+// how many emitters each distance is spent on: the Reach is the distance ONE
+// sounding node's light is given, and how few nodes sound at once is what bounds
+// where it lands. There is a marker at every lattice position and all of them
+// emit always, so the reach that makes a node's halo into a field makes the
+// marker field into one flat wash with the structure gone out of it.
 //
-// Measured against the MARKER instead, which is the same rule the node's own
-// span follows one rung down: a node's light is its own rim plus the Reach, and
-// this is the marker's own rim times a constant. It grows with the arm bar, so a
-// bigger cross stands in a bigger pool and the two stay one shape.
-//
-// The quad is exactly this wide, with nothing to spare and none needed: the
-// window shuts AT the span, so the fragment where the light reaches zero is the
-// one on the quad's own edge. Along the diagonals the corner is further out
-// still.
-const MARKER_LIGHT_SPAN: f32 = 2.5;
+// Already a length rather than a uv, because the pool's own draw has no node to
+// measure a uv against: `vs_plus_glow` sizes its billboard off this before it
+// knows which marker it is drawing.
+fn marker_span() -> f32 {
+    return max(u.misc13.z, 0.0);
+}
 
 struct PlusGlowVsOut {
     @builtin(position) clip_pos: vec4<f32>,
-    // Distance from the crossing as a fraction of one ARM, per axis — the
-    // reading `vs_plus` hands its own fragment stage, on a quad grown to hold
-    // the pool instead of the cross.
+    // Where this fragment stands in the pool, per axis, with 1 the span — the
+    // quad's own corner, handed straight on. NORMALISED, so the falloff below
+    // needs no length at all and the bar moves the light by moving the quad.
     @location(0) uv: vec2<f32>,
     // The marker's opacity, which the pool takes with the ink: a position whose
     // NAME is fading in hands both over together (`derive_pluses`), so the light
@@ -3675,13 +3674,16 @@ fn vs_plus_glow(@builtin(vertex_index) vertex_index: u32, inst: PlusInstance) ->
     let corner = corners[vertex_index];
     // Camera-facing on the same plane as the marker itself (`vs_plus`), so the
     // pool sits square on the cross under any orbit.
-    let reach = inst.pos_radius.w * MARKER_LIGHT_SPAN;
+    //
+    // The quad is exactly the span wide, with nothing to spare and none needed:
+    // the window shuts AT the span, so the fragment where the light reaches zero
+    // is the one on the quad's own edge, and every corner is further out still.
     let world = inst.pos_radius.xyz
-        + (u.cam_right.xyz * corner.x + u.cam_up.xyz * corner.y) * reach;
+        + (u.cam_right.xyz * corner.x + u.cam_up.xyz * corner.y) * marker_span();
 
     var out: PlusGlowVsOut;
     out.clip_pos = u.view_proj * vec4<f32>(world, 1.0);
-    out.uv = corner * MARKER_LIGHT_SPAN;
+    out.uv = corner;
     out.strength = inst.color.a;
     return out;
 }
@@ -3704,12 +3706,15 @@ fn vs_plus_glow(@builtin(vertex_index) vertex_index: u32, inst: PlusInstance) ->
 /// exactly the coupling this bar exists to break: a ground dialled to black
 /// would emit black, and the marker would go dark with the structure again.
 fn plus_glow_layer(in: PlusGlowVsOut) -> vec4<f32> {
+    // Already a fraction of the span (`vs_plus_glow`), which is what `glow_layer`
+    // spends a division to get: the node's `d` is a uv and its span a length in
+    // the same uv, and here the vertex stage has divided already.
     let d = length(in.uv);
     // The window, as `glow_layer` spells it: full to half the span, shut by the
     // end of it. Exactly 0 at the span, which is what lets the quad stop there.
-    let window = 1.0 - smoothstep(MARKER_LIGHT_SPAN * 0.5, MARKER_LIGHT_SPAN, d);
+    let window = 1.0 - smoothstep(0.5, 1.0, d);
     let rate = mix(GLOW_FALLOFF_TIGHT, GLOW_FALLOFF_FLAT, glow_feather());
-    let skirt = GLOW_BASE * exp(-rate * d / MARKER_LIGHT_SPAN) * window;
+    let skirt = GLOW_BASE * exp(-rate * d) * window;
     let alpha = clamp(
         skirt * marker_light() * in.strength * max(u.misc10.y, 0.0),
         0.0,
