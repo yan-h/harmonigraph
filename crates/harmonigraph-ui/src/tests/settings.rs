@@ -209,11 +209,21 @@ fn the_shape_bars_preview_is_the_curve_the_notes_run_on() {
     for ((name, value, curve), points) in curves.into_iter().zip(&paths[1..]) {
         let (first, last) = (points[0], points[points.len() - 1]);
         assert!(last.x > first.x, "the {name} line runs backwards");
-        let (floor, ceiling) = (first.y.max(last.y), first.y.min(last.y));
-        assert!(floor > ceiling, "the {name} line is flat, and calibrates nothing");
+        assert!(
+            (first.y - last.y).abs() > 0.5,
+            "the {name} line is flat, and calibrates nothing",
+        );
+        // The box off the two ENDS the curve itself has there, rather than off
+        // the track's own top and bottom: the standoff's recovery is a decay
+        // and arrives at the far end short of 1 (see `standoff_recovery`), so
+        // an end taken for the curve's extreme measures the inset instead of
+        // the shape.
+        let (c0, c1) = (curve(value, 0.0), curve(value, 1.0));
+        assert!((c1 - c0).abs() > 0.5, "the {name} curve is flat, and calibrates nothing");
+        let scale = (last.y - first.y) / (c1 - c0);
         for point in points {
             let p = (point.x - first.x) / (last.x - first.x);
-            let want = floor - (floor - ceiling) * curve(value, p).clamp(0.0, 1.0);
+            let want = first.y + scale * (curve(value, p).clamp(0.0, 1.0) - c0);
             assert!(
                 (point.y - want).abs() < 0.02,
                 "{p} along the {name} bar the line is at {} and its curve at {want}",
