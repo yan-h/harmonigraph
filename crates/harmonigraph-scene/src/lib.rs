@@ -216,14 +216,19 @@ pub const PLUS_SIZE_MAX: f32 = 0.9;
 /// [`GLOW_REACH_MAX`] below is in — so the two bars' numbers can be read
 /// against each other.
 ///
-/// HALF the node ceiling, and the difference is how many emitters there are. A
-/// uv of about one covers the gap to a neighbour, so eight is where a node's
-/// light stops being a halo and becomes a field — which is a picture worth
-/// asking for when three notes are sounding. Every lattice position carries a
-/// marker and all of them light at once, so the same eight here is not a field
-/// but a flat wash with the structure gone out of it. Four still lets a pool
-/// cross several neighbours, which is as far as the top of a bar needs to reach
-/// when everything past it is one grey.
+/// HALF the node ceiling, and the difference is how many emitters there are.
+/// Eight is where a NODE's light stops being a halo and becomes a field, which
+/// is a picture worth asking for when three notes are sounding; every lattice
+/// position carries a marker and all of them light at once, so the same eight
+/// here is not a field but a flat wash with the structure gone out of it.
+///
+/// The same number also buys much less here, and that is the trap in reading
+/// the two bars against each other: a neighbouring position is 2.22 uv away —
+/// one uv is 0.45 of a lattice step (`marker_world`) — and a marker's pool
+/// starts at its own crossing where a node's starts at a rim already about a uv
+/// out. Four spans a shade under two lattice steps, which puts a pool over the
+/// first ring of neighbours in every direction: as far as the top of a bar
+/// needs to reach when everything past it is one grey.
 pub const MARKER_REACH_MAX: f32 = 4.0;
 
 /// How far past a node's outermost drawn edge its glow may be asked to reach

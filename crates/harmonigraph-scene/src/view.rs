@@ -2729,8 +2729,8 @@ impl Default for ViewConfig {
             // cross.
             marker_light: 0.10,
             // A pool half again as wide as the fresh cross, which at the
-            // fresh arm (0.2) is a span of 0.5 — under the uv of about 1 that
-            // reaches a neighbour, so the fresh field is one lit position per
+            // fresh arm (0.2) is a span of 0.5 — under a quarter of the 2.22 uv
+            // to the next position, so the fresh field is one lit position per
             // marker with dark between them rather than a wash.
             marker_reach: 0.3,
             // The colour averaged half way round, which keeps a chord's hues

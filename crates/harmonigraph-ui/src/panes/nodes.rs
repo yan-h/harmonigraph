@@ -890,6 +890,13 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
         // Strength pair at the top of this section, asked again for the one
         // light in the picture that is not a node's.
         ValueBar::new(&mut view.marker_reach, 0.0..=MARKER_REACH_MAX, "Marker reach")
+            // The Reach's own readout and its own travel: two bars a person is
+            // told to read against each other have to be counted in the same
+            // thing and dialled at the same rate, and the useful end of this one
+            // is the bottom quarter.
+            .eased(true)
+            .decimals(3)
+            .display(|v| format!("{:.0}%", v * 100.0))
             .show(ui)
             .on_hover_text(
                 "How far a resting marker's pool reaches past the tips of its \
@@ -902,8 +909,10 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                  spent on wildly different numbers of lights: a few nodes sound \
                  at once, and every lattice position carries a marker that \
                  lights always — so the reach that turns a node's halo into a \
-                 field turns this one into a flat wash. Around 100% reaches a \
-                 neighbouring position.",
+                 field turns this one into a flat wash. Around 200% reaches a \
+                 neighbouring position — twice the Reach's number for the same \
+                 distance, because a pool starts here at the crossing and there \
+                 at the node's own edge, already a good way out.",
             );
         // The light's own clock, last, under everything it shapes. Its own pair
         // and not the note Fade in Note, because a halo is the slow part of the
