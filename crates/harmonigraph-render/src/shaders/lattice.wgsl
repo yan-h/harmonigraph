@@ -2663,9 +2663,10 @@ fn node_paint(in: VsOut) -> vec4<f32> {
     // ring drawn over that is a grey silhouette on a bright field.
     //
     // Read from the same coordinate as the light, off a layer written beside it
-    // in the same pass — and NOT computed here, though this is where it used to
-    // land. What a node holds off is a shape in the LIGHT, so the light's own
-    // draw is where it is answered (`fs_glow`); what is left here is the one
+    // in the same pass, and NOT computed here. What a node holds off is a shape
+    // in the LIGHT, and answering it here would bound it at what this node
+    // paints; the light's own draw is where it is asked (`fs_glow`), and what is
+    // left here is the one
     // multiply, and the composite under this node spells it identically
     // (blit.wgsl's `fs_glow_over`). Those two agreeing is the same contract the
     // Meld above keeps, and for the same reason.

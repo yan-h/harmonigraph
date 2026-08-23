@@ -6793,20 +6793,20 @@ fn the_gap_depth_says_how_much_light_a_ring_stands_off() {
 /// The Gap reaches as far as it says, and the Clearance is not a lid on it.
 ///
 /// The standoff is written into a layer of the LIGHT (`fs_glow`), so it dims
-/// the field wherever that field reaches. It used to be a factor on the ground
-/// a node's own clearing painted, which bounded it at the Clearance's reach —
+/// the field wherever that field reaches. A standoff carried instead by the
+/// ground a node's own clearing paints is bounded at the Clearance's reach —
 /// solid inward, where the clearing fills every footprint to the node's centre,
 /// and gone a fraction of a node-radius outward, where the clearing has faded
-/// out. A Gap wider than the Clearance was half a dial: it ate inward and did
-/// nothing outward.
+/// out — which makes a Gap wider than the Clearance half a dial: it eats inward
+/// and does nothing outward.
 ///
-/// So the probe sits OUTSIDE the clearing altogether — an order of magnitude
-/// further from the ring than the Clearance reaches — and the two claims are
-/// what pin the change. The standoff dims it, which is the light being held off
-/// where no node paints. And dialling the Clearance to nothing does not move
-/// it: what holds the light off there is the Gap alone, so the pixel is
-/// identical with a clearing and with none. Before this the second shot was the
-/// only one either way, both being the undimmed field.
+/// So the probe sits OUTSIDE the clearing altogether — five times further from
+/// the ring than the Clearance reaches — and the two claims are what pin the
+/// difference. The standoff dims it, which is the light being held off where no
+/// node paints. And dialling the Clearance to nothing does not move it: what
+/// holds the light off there is the Gap alone, so the pixel is identical with a
+/// clearing and with none. Under the bounded shape neither shot moves, both
+/// being the undimmed field.
 ///
 /// The Clearance is deliberately not 0 in the first shot. A node that clears
 /// nothing is the easy case — there is no lid to prove the standoff has got out
@@ -6818,8 +6818,9 @@ fn the_gap_reaches_past_the_clearance_the_node_cuts() {
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
     };
-    // A narrow clearing under a wide gap, which is the pair the old shape could
-    // not draw. The fade is left at the full gap, the fresh pairing, so the
+    // A narrow clearing under a wide gap, which is the pair a standoff bounded
+    // by the clearing cannot draw. The fade is left at the full gap, the fresh
+    // pairing, so the
     // probe reads the ramp rather than a band edge.
     const CLEARANCE: f32 = 0.02;
     const GAP: f32 = 0.5;
