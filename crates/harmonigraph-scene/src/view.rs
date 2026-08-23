@@ -1169,10 +1169,21 @@ pub struct ViewConfig {
     /// The standoff: how far past each RING a node draws its clearing dims the
     /// light standing under it, in the same quad UV units
     /// [`ring_gap`](Self::ring_gap) reads in — the far end of the gap, where
-    /// the light is fully back. With [`glow_gap_soft`](Self::glow_gap_soft) it
-    /// is ONE control, the Glow section's Gap bar, on exactly the terms the
-    /// Clearance pair ([`sevens_gutter`](Self::sevens_gutter)) is one: solid
-    /// out to `gap - soft`, gone by `gap`.
+    /// the light is back to a fiftieth of what the ring holds off. With
+    /// [`glow_gap_soft`](Self::glow_gap_soft) it is ONE control, the Glow
+    /// section's Gap bar, on the terms the Clearance pair
+    /// ([`sevens_gutter`](Self::sevens_gutter)) is one: solid out to
+    /// `gap - soft`, all but gone by `gap`.
+    ///
+    /// ALL BUT, and the difference from the Clearance's own "gone" is the
+    /// point: what is spent over the fade is a DECAY rather than a ramp, so
+    /// there is no distance at which the standoff stops (`standoff_coverage`
+    /// in lattice.wgsl). A ramp landing on nothing puts a closed contour into
+    /// a field whose every other length is an exponential, and a circle is
+    /// what the eye finds in a smooth field however gently the ramp meets it —
+    /// which is the dark disc with a rim on it that a strong glow shows,
+    /// its halo out there being flat enough to have no gradient of its own for
+    /// the fade's end to hide in.
     ///
     /// Without it the light is at its brightest exactly where the rings are —
     /// the falloff is measured from the node's centre, so both sides of a ring
@@ -1234,26 +1245,27 @@ pub struct ViewConfig {
     ///
     /// Inert while [`glow_reach`](Self::glow_reach) is 0.
     pub glow_gap_soft: f32,
-    /// How the standoff's fade is skewed across the width
-    /// [`glow_gap_soft`](Self::glow_gap_soft) gives it, 0..=1: 0 gives the
-    /// light back closest to the ring and trails the rest away, 0.5 the plain
-    /// symmetric ramp, 1 holds the ring dark to the end of that width.
+    /// How the standoff's decay is shaped across the width
+    /// [`glow_gap_soft`](Self::glow_gap_soft) gives it, 0..=1: 0 is a plain
+    /// exponential, steepest where it meets the ink and shallower every step
+    /// after; 0.5 the one that spends the fade most evenly, steepest inside
+    /// the band rather than at either end of it; 1 holds the ring dark most of
+    /// the way out and gives the light back over the last of the width.
     ///
     /// The SHAPE knob to that bar's width, the way
     /// [`glow_feather`](Self::glow_feather) is to
-    /// [`glow_reach`](Self::glow_reach)'s distance. A symmetric ramp is
-    /// steepest exactly at the fade's middle and flat at both ends of its own
-    /// width, so a wide fade spends its first half nearly solid and reads as a
-    /// dark annulus with a soft edge — the very thing the width was widened to
-    /// avoid. Below the middle the dark stays tight against the ring and the
-    /// recovery is a long shallow tail with no edge anywhere in it, which is a
-    /// ring standing in shade rather than in a band.
+    /// [`glow_reach`](Self::glow_reach)'s distance. At the top the fade spends
+    /// its first half nearly solid and reads as a dark annulus with a soft
+    /// edge — the thing the width was widened to avoid. At the bottom the dark
+    /// stays tight against the ring and the recovery is a long shallow tail,
+    /// which is a ring standing in shade rather than in a band.
     ///
-    /// It moves no boundary: the fade covers the same width at every setting
-    /// (see `standoff_coverage` in lattice.wgsl), so the Gap bar's two handles
-    /// still say where the standoff is solid to and where the light is fully
-    /// back. This says only where between them the light is given back, and
-    /// the bar draws that curve on itself ([`standoff_recovery`](crate::standoff_recovery)).
+    /// It moves no boundary: the decay spends the same amount over the same
+    /// width at every setting (see `standoff_coverage` in lattice.wgsl), so
+    /// the Gap bar's two handles still say where the standoff is solid to and
+    /// where it is all but done. This says only how it is spent between them,
+    /// and the bar draws that curve on itself
+    /// ([`standoff_recovery`](crate::standoff_recovery)).
     ///
     /// It is dialled against [`glow_gap_depth`](Self::glow_gap_depth) rather
     /// than alone: the tail is the shallow end of the fade, so a depth well
@@ -1263,7 +1275,16 @@ pub struct ViewConfig {
     /// Inert while [`glow_reach`](Self::glow_reach) is 0.
     pub glow_gap_shape: f32,
     /// How much of the light the standoff takes away where it stands, 0..=1 —
-    /// every ring's coverage scaled once by this.
+    /// the factor the light is left with under a ring, spent in STOPS across
+    /// every ring's own coverage.
+    ///
+    /// In stops and not in proportion, which is what makes the fade worth
+    /// giving a width to: sight answers ratios, so a factor walked evenly in
+    /// VALUE spends most of what can be SEEN of it in the first fraction of
+    /// that width — at 0.85, half the visible swing is gone by a fifth of the
+    /// way out — and the pool then reads as a dark ring hugging the ink with an
+    /// edge on it however wide the Gap is dialled. See `glow_shade` in
+    /// lattice.wgsl.
     ///
     /// 1 is a hole: where the standoff is solid, the ground comes back bare,
     /// exactly the frame with no glow in it, and across its fade — and the
