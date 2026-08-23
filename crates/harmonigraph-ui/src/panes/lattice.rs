@@ -937,6 +937,61 @@ mod tests {
         );
     }
 
+    /// The level a name is DRAWN at and the level a marker cross-fades out on
+    /// are one rule, and a departure is where they can come apart: the reserve
+    /// that holds a departing name up to what its record takes over at lives in
+    /// `label_strength`, while the marker's opacity is the complement of
+    /// [`name_level`](harmonigraph_scene::NodeInstance::name_level), which is a
+    /// second spelling of the same rule. A position carries one mark; two
+    /// spellings is the one way it can carry two.
+    ///
+    /// Measured through the same derive as the reserve's own test rather than
+    /// off a hand-built node, because the disagreement needs a state only a
+    /// release reaches — on the home sheet, under `Past`, with the trail not
+    /// written until the frame the release ends. Sampling before or after that
+    /// window is what leaves the pair looking equal.
+    #[test]
+    fn a_departing_name_and_the_marker_under_it_are_one_rule() {
+        let mut state = fresh();
+        state.frame_params.fade_time = 1.0;
+        state.tracker.handle_event(NoteEvent::on(0.0, 0, 60, 1.0));
+        state.tracker.handle_event(NoteEvent::off(1.0, 0, 60));
+        let scene = derive_scene(
+            &state.tracker,
+            &state.tuning,
+            &state.view,
+            &state.view.reach(),
+            &state.frame_params,
+            state.camera,
+            None,
+            1.9,
+        );
+        let names = state.view.note_names;
+        assert_eq!(names, NoteNames::Past, "the reserve is Past's alone");
+        let node = scene.nodes.iter().find(|n| n.activation > 0.0).expect("the note still lights");
+        assert!(node.departing && node.on_home, "the reserve wants a departure on the home sheet");
+        assert_eq!(node.trail, 0.0, "the record is not written until the release ends");
+        assert_eq!(
+            node.name_level(&state.view),
+            label_strength(node, names),
+            "the marker reads a departing name at {} while the pass draws it at {}",
+            node.name_level(&state.view),
+            label_strength(node, names),
+        );
+        // The half a level cannot say on its own: a name drawn whole leaves NO
+        // marker under it, rather than one shipped just short of full.
+        let standing = scene
+            .pluses
+            .iter()
+            .find(|marker| marker.pos == node.world_pos)
+            .map_or(0.0, |marker| marker.strength);
+        assert_eq!(
+            standing, 0.0,
+            "a marker stood at {standing} under a name drawn at {}",
+            label_strength(node, names),
+        );
+    }
+
     /// The learn badge is chrome about the WORKING view, not the picture —
     /// see [`lattice_pane`]'s own doc comment — so only the interactive copy
     /// draws it. [`draw_lattice`] gates it on `response` alone: the Render
