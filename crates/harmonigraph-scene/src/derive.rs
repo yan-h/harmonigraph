@@ -795,17 +795,26 @@ pub(crate) fn derive_pluses(
     // person can see; an alpha reads against whatever is behind, which here is
     // sometimes a halo.
     //
-    // The one thing that does move it is the NAME above it, and only while that
-    // name is on its way in or out: a marker gets what the name leaves, so the
-    // two hand the position over without it going empty or being claimed twice
-    // (`name_level`). Fully named is fully gone, and the instance is dropped
-    // rather than shipped at zero — a marker nothing can see is a draw nothing
-    // needs.
+    // What does move it is the position being CLAIMED — by the name above it,
+    // or by the note itself — and only while that claim is on its way in or
+    // out: a marker gets what the claim leaves, so the two hand the position
+    // over without it going empty or being held twice (`name_level`). Fully
+    // claimed is fully gone, and the instance is dropped rather than shipped at
+    // zero — a marker nothing can see is a draw nothing needs.
+    //
+    // WHICHEVER claims it harder rather than the two multiplied, which is what
+    // keeps the pair exact where they agree: under `Played` a name is drawn at
+    // the node's own activation, and a product would spend one handoff twice.
+    // The note's own claim is what the names leave uncovered when they are
+    // switched off, and it is needed there because a marker standing at a lit
+    // node's centre writes a standoff into the one place the picture keeps free
+    // of one (`plus_standoff` in lattice.wgsl,
+    // [`ViewConfig::glow_gap`](crate::ViewConfig::glow_gap)).
     nodes
         .iter()
         .filter(|n| n.on_home)
         .filter_map(|n| {
-            let clear = 1.0 - n.name_level(view);
+            let clear = 1.0 - n.name_level(view).max(n.activation);
             (clear > 0.0).then(|| PlusInstance {
                 pos: n.world_pos,
                 radius,

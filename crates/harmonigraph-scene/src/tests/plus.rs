@@ -412,6 +412,69 @@ fn a_marker_takes_back_what_a_names_fade_gives_up() {
     );
 }
 
+/// A sounding note claims the position it stands on, names or no names.
+///
+/// A marker's cross writes a standoff into the light (`plus_standoff` in
+/// lattice.wgsl), and the middle of a node is the one place the picture keeps
+/// free of one: inside the innermost ring nothing stands the light off, which
+/// is what lights the middle of a node whose innermost ring is an annulus
+/// ([`ViewConfig::glow_gap`]). A marker standing at the node's own centre cuts
+/// a cross-shaped bite out of that node's halo — measured at the fresh glow
+/// bars as a dark plus in every lit node, and gone when the standoff is.
+///
+/// Switching the Note names OFF is the whole of what reaches it, and is why
+/// this holds nothing about the fresh picture: under every Show mode a name
+/// already covers a sounding note, so there the two claims agree and the
+/// handoff is the one [`a_marker_takes_back_what_a_names_fade_gives_up`]
+/// measures. It is asked of whichever claims the position harder rather than
+/// of the two multiplied, which is what keeps that agreement exact.
+#[test]
+fn a_sounding_note_takes_the_marker_under_it_with_the_names_off() {
+    let view = ViewConfig { show_labels: false, ..plus_view() };
+    let frame = FrameParams { fade_time: 2.0, ..FrameParams::default() };
+    let mut tracker = NoteTracker::new();
+    tracker.handle_event(NoteEvent::on(0.0, 0, 60, 1.0));
+    tracker.handle_event(NoteEvent {
+        time: 4.0,
+        channel: 0,
+        note: 60,
+        kind: harmonigraph_core::NoteEventKind::Off,
+    });
+
+    let mut walk = vec![];
+    for now in [4.0f64, 5.0, 5.8, 5.999, 6.0, 6.5] {
+        let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, now);
+        let node = origin_node(&scene);
+        let standing = scene
+            .pluses
+            .iter()
+            .find(|p| p.pos == node.world_pos)
+            .map_or(0.0, |p| p.strength);
+        assert!(
+            (standing - (1.0 - node.activation)).abs() < 1e-5,
+            "at {now}s the note stands at {} and the marker at {standing}",
+            node.activation,
+        );
+        walk.push(standing);
+    }
+    assert!(walk[0] < 1e-5, "a marker stands in the middle of a sounding node's halo");
+    for pair in walk.windows(2) {
+        assert!(
+            (pair[1] - pair[0]).abs() < 0.55,
+            "the marker jumps back in rather than fading: {walk:?}",
+        );
+    }
+
+    // Every home position keeps its marker but the ones the note is sounding
+    // at, which under a 12-TET tuning is every spelling of its pitch class
+    // rather than the one it was struck as.
+    let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, 4.0);
+    let home = scene.nodes.iter().filter(|n| n.on_home).count();
+    let lit = scene.nodes.iter().filter(|n| n.on_home && n.activation > 0.0).count();
+    assert!(lit > 0 && lit < home, "the fixture must light some of the field and not all of it");
+    assert_eq!(scene.pluses.len(), home - lit, "the note took a marker it is not sounding at");
+}
+
 #[test]
 fn an_unlit_node_carries_the_idle_grey_and_draws_nothing() {
     // An idle node has no mark of its own: the marker standing at its position
