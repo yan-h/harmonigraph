@@ -411,24 +411,22 @@ fn a_marker_takes_back_what_a_names_fade_gives_up() {
     );
 }
 
-/// A sounding note claims the position it stands on, names or no names.
+/// The cross disappears if and only if a NAME is standing over it — so with the
+/// Note names switched off, a sounding note leaves every marker where it is.
 ///
-/// The claim is on what is DRAWN there, which is the whole of what a marker's
-/// ink answers to: a note sounding at a position is that position's own
-/// statement, and a cross standing in the middle of one is a second. What
-/// LIGHTS a node claims nothing here — a node ringing under no key keeps its
-/// cross whole ([`a_node_lit_by_no_key_keeps_its_cross_and_casts_no_shadow`]),
-/// and the light's own quarrel with a cross is settled on the marker's other
-/// term ([`PlusInstance::shade`]).
+/// A note reaches the marker through the name rather than beside it, and it
+/// does so under every Show mode: `name_level` is `activation.max(resting)`, so
+/// a sounding note is named at its own activation even under `Played`, where
+/// nothing rests. That is what makes the rule one term — asking the note a
+/// second time in `derive_pluses` would change this case alone, the one where
+/// there is no name to be present, and would read the rule backwards.
 ///
-/// Switching the Note names OFF is the whole of what reaches it, and is why
-/// this holds nothing about the fresh picture: under every Show mode a name
-/// already covers a sounding note, so there the two claims agree and the
-/// handoff is the one [`a_marker_takes_back_what_a_names_fade_gives_up`]
-/// measures. It is asked of whichever claims the position harder rather than
-/// of the two multiplied, which is what keeps that agreement exact.
+/// What the note's light does to the SHADOW under that standing cross is a
+/// separate term and a separate claim
+/// ([`a_markers_shadow_is_closed_by_the_light_over_it_not_by_its_notes_fade`]):
+/// the cross stands here, and it does not bite the halo it stands in.
 #[test]
-fn a_sounding_note_takes_the_marker_under_it_with_the_names_off() {
+fn a_sounding_note_leaves_its_marker_standing_with_the_names_off() {
     let view = ViewConfig { show_labels: false, ..plus_view() };
     let frame = FrameParams { fade_time: 2.0, ..FrameParams::default() };
     let mut tracker = NoteTracker::new();
@@ -440,7 +438,10 @@ fn a_sounding_note_takes_the_marker_under_it_with_the_names_off() {
         kind: harmonigraph_core::NoteEventKind::Off,
     });
 
-    let mut walk = vec![];
+    // Held, mid-release and long past it: the note moves through its whole
+    // range while the marker does not move at all.
+    let resting = pluses_of(&view)[0].strength;
+    assert!(resting > 0.0, "the fixture must draw markers at all");
     for now in [4.0f64, 5.0, 5.8, 5.999, 6.0, 6.5] {
         let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, now);
         let node = origin_node(&scene);
@@ -450,28 +451,19 @@ fn a_sounding_note_takes_the_marker_under_it_with_the_names_off() {
             .find(|p| p.pos == node.world_pos)
             .map_or(0.0, |p| p.strength);
         assert!(
-            (standing - (1.0 - node.activation)).abs() < 1e-5,
-            "at {now}s the note stands at {} and the marker at {standing}",
+            (standing - resting).abs() < 1e-5,
+            "at {now}s the note stands at {} and moved the marker to {standing} from {resting}",
             node.activation,
-        );
-        walk.push(standing);
-    }
-    assert!(walk[0] < 1e-5, "a marker stands at a position its own note is sounding");
-    for pair in walk.windows(2) {
-        assert!(
-            (pair[1] - pair[0]).abs() < 0.55,
-            "the marker jumps back in rather than fading: {walk:?}",
         );
     }
 
-    // Every home position keeps its marker but the ones the note is sounding
-    // at, which under a 12-TET tuning is every spelling of its pitch class
-    // rather than the one it was struck as.
+    // And it took none of the field either, which is the same rule counted
+    // rather than measured.
     let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, 4.0);
     let home = scene.nodes.iter().filter(|n| n.on_home).count();
     let lit = scene.nodes.iter().filter(|n| n.on_home && n.activation > 0.0).count();
-    assert!(lit > 0 && lit < home, "the fixture must light some of the field and not all of it");
-    assert_eq!(scene.pluses.len(), home - lit, "the note took a marker it is not sounding at");
+    assert!(lit > 0, "the fixture must light some of the field, or it proves nothing");
+    assert_eq!(scene.pluses.len(), home, "a sounding note took a marker with no name to take it");
 }
 
 #[test]
