@@ -405,13 +405,15 @@ fn glow_gap_soft() -> f32 {
 }
 
 // How the standoff's fade is skewed across its own width (`u.misc11.z`), as the
-// exponent `standoff_coverage` raises its ramp to: 0 gives the light back closest
-// to the ring and trails the rest away, 0.5 the plain symmetric ramp, 1 holds
-// the ring dark and gives the light back over the last of the width.
+// exponent `standoff_coverage` raises its decay to: 0 is a plain exponential,
+// 0.5 the one that spends the fade most evenly — steepest inside the band
+// rather than at either end of it — and 1 holds the ring dark and gives the
+// light back over the last of the width.
 //
-// A geometric mix, so the bar is even-handed: each half of it is the same
-// factor away from the neutral middle, where a linear mix between an exponent
-// of a quarter and one of four would spend seven eighths of the bar above 1.
+// A geometric mix between the two ends, so the bar is even-handed: each half of
+// it is the same FACTOR away from the middle, which is why the middle lands on
+// 2. A linear mix between an exponent of 1 and one of 4 would put two thirds of
+// the bar above 2.
 fn glow_gap_shape() -> f32 {
     let t = clamp(u.misc11.z, 0.0, 1.0);
     return GAP_SHAPE_TRAIL * pow(GAP_SHAPE_HOLD / GAP_SHAPE_TRAIL, t);
@@ -1865,10 +1867,10 @@ fn spectral_ring(in: VsOut, oct: OctRing, uv: vec2<f32>, band: f32, aa: f32) -> 
 // two move together).
 const GLOW_LOBE_KAPPA: f32 = 4.0;
 
-// An unlit node draws no marker, no trail mark and no placeholder of its own.
-// What says a node position is there is the grid: the lines around it stop
-// short of it on every side, leaving a gap exactly where its disc would
-// light. So every DISC on screen is a note.
+// An unlit node's own billboard paints no disc, no trail mark and no
+// placeholder. What says the position is there is the MARKER standing at it,
+// which is a separate instance drawn under the home sheet (`fs_plus`) rather
+// than anything this node paints. So every DISC on screen is a note.
 //
 // The audio ring is the one thing an idle node does paint, and it is not the
 // node speaking — it is the analyzer, drawn on the node's own ground (see
@@ -2163,10 +2165,12 @@ fn slice_gap_distance(uv: vec2<f32>, d: f32, oct: OctRing) -> f32 {
 /// there is nothing else in the field for a step here to hide behind.
 ///
 /// `soft` is the width taken, and it is the view's Clearance fade. That is
-/// a floor and not a coupling: what it buys is one screen-constant soft width
-/// per node, converted out of pixels in the vertex stage exactly once, where a
-/// constant in uv would go sub-pixel at one zoom and swallow the gap at
-/// another. The Gap's own fade is the larger of the two at the fresh view and
+/// a floor and not a coupling: what it buys is one soft width for every node,
+/// taken in the uv of a full-size node and divided by the
+/// sheet's scale once in the vertex stage (`out.soft`), so one width is the
+/// same fraction of a node's own radius on every sheet it is drawn at.
+///
+/// The Gap's own fade is the larger of the two at the fresh view and
 /// binds there; the floor is what a person dragging that fade to nothing lands
 /// on.
 ///
@@ -2377,8 +2381,8 @@ fn node_geom(in: VsOut) -> NodeGeom {
     // An idle node paints NOTHING but its audio ring and the hole that ring
     // clears — no glyphs (a ghost needs presence), no mark rings (their own
     // levels gate them), and no marker
-    // of its own: the grid's gap around the position is what says a node is
-    // there. Everything below still computes all of that and multiplies it away,
+    // of its own — the cross at the position is its own instance (`fs_plus`),
+    // not this node's to paint. Everything below still computes all of that and multiplies it away,
     // which on a lattice where most nodes are idle most of the time is most of
     // the fragment work in the frame. The three levels and the octave word are
     // exactly the terms those gates read, so this branch discards what the full
@@ -2398,8 +2402,9 @@ fn node_geom(in: VsOut) -> NodeGeom {
     // Its CLEARING is the exception's own exception, and it is a wider band than
     // the ring: the hole a layer punches is filled to the node's center and
     // reaches one gutter past the layer (`node_clearing`), so an idle node's
-    // fragments are worth keeping out to there. Skipping them is what left a
-    // ringing node with no note drawing its ring over an uncut grid.
+    // fragments are worth keeping out to there. Skipping them would leave a
+    // ringing node with no note drawing its ring over a marker field its own
+    // hole never cut.
     let audio_annulus = spectral_radii();
     let ring_draws = audio_annulus.y > audio_annulus.x;
     let in_audio_ring = ring_draws
@@ -2452,8 +2457,8 @@ fn node_ink(in: VsOut, d: f32, aa: f32, field_step: f32, oct: OctRing) -> vec4<f
     // it is the one light a node has — nothing here paints a halo.
     //
     // The ground the rings composite onto is therefore empty, and that IS the
-    // picture where every layer is off: the grid's gap around the position is
-    // what says a node is there.
+    // picture where every layer is off: the marker standing at the position is
+    // what says a node is there, and it is drawn under this pass.
     let presence = activation;
     var base_alpha = 0.0;
     var base_rgb = vec3<f32>(0.0);
