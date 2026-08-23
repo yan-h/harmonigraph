@@ -277,7 +277,7 @@ pub const GLOW_FALLOFF_FLAT: f32 = 0.25;
 /// (`GAP_SHAPE_TRAIL`/`HOLD`) on the same terms as the pair above — the shader
 /// holds the rationale, including why the two are reciprocals, and the render
 /// crate asserts the copies agree. What this copy draws is the bar's preview
-/// ([`moat_recovery`]).
+/// ([`standoff_recovery`]).
 pub const GAP_SHAPE_TRAIL: f32 = 0.25;
 pub const GAP_SHAPE_HOLD: f32 = 4.0;
 
@@ -313,10 +313,10 @@ pub fn glow_skirt(feather: f32, p: f32) -> f32 {
 /// direction the fade runs in — the ring's edge at the left, the halo at the
 /// right.
 ///
-/// A copy of `moat_coverage`'s ramp and the exponent `glow_gap_shape` raises
+/// A copy of `standoff_coverage`'s ramp and the exponent `glow_gap_shape` raises
 /// it to, on the terms [`glow_skirt`] states, and held to the shader's text
 /// the same way (`the_gap_curve_bars_preview_is_the_ramp_the_shader_runs`).
-pub fn moat_recovery(shape: f32, p: f32) -> f32 {
+pub fn standoff_recovery(shape: f32, p: f32) -> f32 {
     let exponent = GAP_SHAPE_TRAIL * (GAP_SHAPE_HOLD / GAP_SHAPE_TRAIL).powf(shape.clamp(0.0, 1.0));
     smoothstep(p).powf(exponent)
 }

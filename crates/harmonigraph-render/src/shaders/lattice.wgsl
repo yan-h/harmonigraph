@@ -133,7 +133,7 @@ struct Uniforms {
     // The STANDOFF's four dials. x: how far past each ring a node holds the
     // light off, in the node's own uv; y: how much of that is spent fading the
     // light back in, measured back from where the gap ends; z: how that fade is
-    // skewed across its own width (see `moat_coverage`), 0 giving the light
+    // skewed across its own width (see `standoff_coverage`), 0 giving the light
     // back closest to the ring and 1 holding the ring dark to the end of it;
     // w: how much of the light it takes where it stands, 1 clearing to the bare
     // ground.
@@ -214,7 +214,7 @@ const GLOW_BASE: f32 = 0.8;
 const GLOW_FALLOFF_TIGHT: f32 = 3.0;
 const GLOW_FALLOFF_FLAT: f32 = 0.25;
 // The two ends of the Gap curve bar, as the exponent the standoff's own ramp is
-// raised to across the Gap bar's fade (`moat_coverage`). Mirrored in
+// raised to across the Gap bar's fade (`standoff_coverage`). Mirrored in
 // harmonigraph-scene on the Feather pair's terms above.
 //
 // TRAIL is the shadow: the light starts coming back almost at the ring and
@@ -315,7 +315,7 @@ fn glow_gap_soft() -> f32 {
 }
 
 // How the standoff's fade is skewed across its own width (`u.misc11.z`), as the
-// exponent `moat_coverage` raises its ramp to: 0 gives the light back closest
+// exponent `standoff_coverage` raises its ramp to: 0 gives the light back closest
 // to the ring and trails the rest away, 0.5 the plain symmetric ramp, 1 holds
 // the ring dark and gives the light back over the last of the width.
 //
@@ -1952,7 +1952,7 @@ fn annulus_distance(d: f32, inner: f32, outer: f32) -> f32 {
 /// (see [`gutter_coverage`]), and this keeps the whole of the clearing's
 /// arithmetic free of derivatives — as free of them as the light it reads
 /// back.
-fn moat_soft(in: VsOut) -> f32 {
+fn standoff_soft(in: VsOut) -> f32 {
     return max(in.soft, glow_gap_soft());
 }
 
@@ -1989,7 +1989,7 @@ fn moat_soft(in: VsOut) -> f32 {
 /// together, but a curve below the middle spends most of its width on the far
 /// side, where the light being recovered is the halo's. A ring wants its dark
 /// close and its edge nowhere, and a symmetric ramp cannot give both.
-fn moat_coverage(sd: f32, soft: f32) -> f32 {
+fn standoff_coverage(sd: f32, soft: f32) -> f32 {
     let edge = clearing_edge(glow_gap());
     let inner = clamp(edge - soft, 0.0, edge - 0.001);
     let ramp = smoothstep(inner, edge, sd);
@@ -2016,22 +2016,22 @@ fn moat_coverage(sd: f32, soft: f32) -> f32 {
 /// that is off, refused by the stack, attacking or releasing opens and closes
 /// its own standoff in step with the ink it stands off, and a layer nobody is
 /// drawing holds nothing off.
-fn glow_moat(in: VsOut, d: f32, oct: OctRing) -> f32 {
-    let soft = moat_soft(in);
+fn glow_standoff(in: VsOut, d: f32, oct: OctRing) -> f32 {
+    let soft = standoff_soft(in);
     var cov = 0.0;
     // The octave band, on the node's own envelope, as the annulus it is drawn
     // in: its slices, the gaps between them and the glyphs inside them all live
     // between these two radii, so this is the whole layer's footprint.
     if u.misc3.z > u.misc3.y {
         let ring = annulus_distance(d, u.misc3.y, u.misc3.z);
-        cov = moat_coverage(ring, soft) * clamp(in.params.x, 0.0, 1.0);
+        cov = standoff_coverage(ring, soft) * clamp(in.params.x, 0.0, 1.0);
     }
     // The audio ring, on ITS own: the view's Gate answered per node and carried
     // on the note Fade. A node nobody played wears one whenever the spectrum
     // reaches that gate, and this is the term that stands the light off it.
     if u.misc7.w > u.misc7.z {
         let ring = annulus_distance(d, u.misc7.z, u.misc7.w);
-        cov = max(cov, moat_coverage(ring, soft) * clamp(in.ring, 0.0, 1.0));
+        cov = max(cov, standoff_coverage(ring, soft) * clamp(in.ring, 0.0, 1.0));
     }
     let slots = in.marks.x | in.marks.y;
     if slots == 0u || u.misc5.w <= 0.0 {
@@ -2067,7 +2067,7 @@ fn glow_moat(in: VsOut, d: f32, oct: OctRing) -> f32 {
             // node's whole middle in shadow.
             let pie = sector_distance(in.uv, oct_sector(s, oct), strip_out);
             let sd = max(pie, strip_in - d);
-            cov = max(cov, moat_coverage(sd, soft) * clamp(level, 0.0, 1.0));
+            cov = max(cov, standoff_coverage(sd, soft) * clamp(level, 0.0, 1.0));
         }
     }
     return cov;
@@ -2498,7 +2498,7 @@ fn node_paint(in: VsOut) -> vec4<f32> {
     let edge = vec2<i32>(textureDimensions(glow_tex)) - vec2<i32>(1, 1);
     let light = textureLoad(glow_tex, min(vec2<i32>(in.clip_pos.xy), edge), 0);
     // The STANDOFF, which is where the Gap bars land: the light this node
-    // clears to is dimmed around every ring it draws (`glow_moat`), so a ring
+    // clears to is dimmed around every ring it draws (`glow_standoff`), so a ring
     // stands in a pool that brightens outward instead of on the flat maximum of
     // a falloff measured from the node's own centre. Without it the light is at
     // its brightest exactly where the rings are, on both of their sides, and
@@ -2529,11 +2529,11 @@ fn node_paint(in: VsOut) -> vec4<f32> {
     // them stand outside `EARLY_OUT`: a depth of 0 keeps every scrap of the
     // light by definition, and a clearing with no coverage paints none of the
     // ground it would have dimmed. Both are the whole quad's answer wherever
-    // they hold at all, where `glow_moat` is otherwise a walk over every mark
+    // they hold at all, where `glow_standoff` is otherwise a walk over every mark
     // per fragment for nothing.
     var keep = 1.0;
     if glow_gap_depth() > 0.0 && gutter_cov > 0.0 {
-        keep = 1.0 - glow_gap_depth() * glow_moat(in, d, oct);
+        keep = 1.0 - glow_gap_depth() * glow_standoff(in, d, oct);
     }
     let lit = light * keep;
     let ground = lit.rgb + u.background.rgb * (1.0 - lit.a);

@@ -204,7 +204,7 @@ fn the_shape_bars_preview_is_the_curve_the_notes_run_on() {
     type Curve = fn(f32, f32) -> f32;
     let curves: [(&str, f32, Curve); 2] = [
         ("Feather", view.glow_feather, harmonigraph_scene::glow_skirt),
-        ("Gap curve", view.glow_gap_shape, harmonigraph_scene::moat_recovery),
+        ("Gap curve", view.glow_gap_shape, harmonigraph_scene::standoff_recovery),
     ];
     for ((name, value, curve), points) in curves.into_iter().zip(&paths[1..]) {
         let (first, last) = (points[0], points[points.len() - 1]);

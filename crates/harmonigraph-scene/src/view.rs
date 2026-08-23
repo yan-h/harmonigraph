@@ -1222,10 +1222,10 @@ pub struct ViewConfig {
     /// ring standing in shade rather than in a band.
     ///
     /// It moves no boundary: the fade covers the same width at every setting
-    /// (see `moat_coverage` in lattice.wgsl), so the Gap bar's two handles
+    /// (see `standoff_coverage` in lattice.wgsl), so the Gap bar's two handles
     /// still say where the standoff is solid to and where the light is fully
     /// back. This says only where between them the light is given back, and
-    /// the bar draws that curve on itself ([`moat_recovery`](crate::moat_recovery)).
+    /// the bar draws that curve on itself ([`standoff_recovery`](crate::standoff_recovery)).
     ///
     /// It is dialled against [`glow_gap_depth`](Self::glow_gap_depth) rather
     /// than alone: the tail is the shallow end of the fade, so a depth well
@@ -2159,7 +2159,7 @@ impl ViewConfig {
         // Clearance pair's terms above: the fade is measured back from the
         // gap's end, so one wider than the gap is a low end off the bottom of
         // the axis, and it draws the same as one exactly as wide either way
-        // (`moat_coverage` floors it at the ring's edge).
+        // (`standoff_coverage` floors it at the ring's edge).
         self.glow_gap = finite_or(self.glow_gap, fresh.glow_gap).clamp(0.0, GLOW_GAP_MAX);
         self.glow_gap_soft =
             finite_or(self.glow_gap_soft, fresh.glow_gap_soft).clamp(0.0, self.glow_gap);

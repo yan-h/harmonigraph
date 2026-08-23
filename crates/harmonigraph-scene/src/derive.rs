@@ -609,7 +609,7 @@ pub fn derive_scene(
         // can fill.
         glow_gap: view.glow_gap.clamp(0.0, crate::GLOW_GAP_MAX),
         // To the axis rather than to the gap, as `sevens_soft` above is: a fade
-        // wider than its gap draws as one exactly as wide (`moat_coverage`
+        // wider than its gap draws as one exactly as wide (`standoff_coverage`
         // floors it at the ring's edge), and `sanitize` is where the stored
         // pair is held to the shape the bar can show.
         glow_gap_soft: view.glow_gap_soft.clamp(0.0, crate::GLOW_GAP_MAX),

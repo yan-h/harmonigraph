@@ -791,7 +791,7 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
         // back across the fade, from the ring's edge at the left to the halo at
         // the right.
         ValueBar::new(&mut view.glow_gap_shape, 0.0..=1.0, "Gap curve")
-            .curve(harmonigraph_scene::moat_recovery)
+            .curve(harmonigraph_scene::standoff_recovery)
             .display(|v| format!("{:.0}%", v * 100.0))
             .show(ui)
             .on_hover_text(

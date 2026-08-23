@@ -204,7 +204,7 @@ fn the_feather_bars_preview_is_the_skirt_the_shader_draws() {
 
 /// The same contract for the Gap curve bar, whose preview is a copy of the
 /// standoff's ramp and the exponent it is raised to
-/// (`harmonigraph_scene::moat_recovery`).
+/// (`harmonigraph_scene::standoff_recovery`).
 #[test]
 fn the_gap_curve_bars_preview_is_the_ramp_the_shader_runs() {
     let needles = [
@@ -217,7 +217,7 @@ fn the_gap_curve_bars_preview_is_the_ramp_the_shader_runs() {
     for needle in &needles {
         assert!(
             SHADER_SRC.contains(needle),
-            "lattice.wgsl must contain `{needle}`: harmonigraph_scene::moat_recovery mirrors \
+            "lattice.wgsl must contain `{needle}`: harmonigraph_scene::standoff_recovery mirrors \
              the standoff's ramp to draw the Gap curve bar's preview, so a change to either is \
              a change to both",
         );
@@ -4680,7 +4680,7 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         scene.spectral.folded = true;
         scene
     };
-    // The STANDOFF around those same marked nodes, which is `glow_moat`'s own
+    // The STANDOFF around those same marked nodes, which is `glow_standoff`'s own
     // skip — the same one as `node_clearing`'s, over the same wedges, taken
     // once the band has held the pixel's light off in full. Two things have
     // to hold for the skip to be in the comparison at all, and neither is
