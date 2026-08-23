@@ -954,10 +954,10 @@ pub struct Scene {
     /// shuts it (see [`ViewConfig::glow_feather`]); already clamped to 0..=1.
     /// Inert while [`glow_reach`](Self::glow_reach) is 0.
     pub glow_feather: f32,
-    /// The standoff: how far past every ring a node's own clearing dims the
-    /// light standing under it, in the same quad UV units (see
-    /// [`ViewConfig::glow_gap`]); already clamped to [`GLOW_GAP_MAX`]. Inert
-    /// while [`glow_reach`](Self::glow_reach) is 0.
+    /// The standoff: how far past every ring a node dims the light its own
+    /// clearing paints, in the same quad UV units (see [`ViewConfig::glow_gap`]);
+    /// already clamped to [`GLOW_GAP_MAX`]. Inert while
+    /// [`glow_reach`](Self::glow_reach) is 0.
     pub glow_gap: f32,
     /// How much of that gap is spent fading the light back in, measured back
     /// from its end in the same units (see [`ViewConfig::glow_gap_soft`]);
@@ -972,6 +972,13 @@ pub struct Scene {
     /// How much of the light the standoff takes away where it stands (see
     /// [`ViewConfig::glow_gap_depth`]); already clamped to 0..=1.
     pub glow_gap_depth: f32,
+    /// How much of the light standing at a node's pixel washes over the node's
+    /// own INK (see [`ViewConfig::glow_wash`]); already clamped to 0..=1.
+    ///
+    /// The ground's share of that same field is
+    /// [`glow_gap_depth`](Self::glow_gap_depth), and the two are independent:
+    /// this reads the field RAW, so the Gap bars move it not at all.
+    pub glow_wash: f32,
     /// How widely a node's own ink is averaged into the colour of its light
     /// (see [`ViewConfig::glow_blend`]); already clamped to 0..=1.
     pub glow_blend: f32,

@@ -529,12 +529,13 @@ fn parity_scene() -> Scene {
         // The accent's own falloff, which is what every glow test here that
         // does not say otherwise is measuring.
         glow_feather: 0.0,
-        // The fresh standoff and the three shares that shape the light inside
-        // it, inert at reach 0 and here to say so.
+        // The fresh standoff and the shares that shape the light inside it and
+        // over the node's own ink, inert at reach 0 and here to say so.
         glow_gap: 0.16,
         glow_gap_soft: 0.16,
         glow_gap_shape: 0.5,
         glow_gap_depth: 0.85,
+        glow_wash: 0.15,
         glow_blend: 0.5,
         // A row per node, which is what the nodes above are built with.
         glow_rows,
@@ -6218,9 +6219,9 @@ fn a_lattice_with_no_node_grows_no_glow() {
     );
 }
 
-/// A node a nearer sheet's node COVERS shows nothing of itself on that node:
-/// not its rings, not its name, and not its halo. What the near node paints is
-/// exactly what it paints with nothing behind it at all.
+/// A node a nearer sheet's node COVERS cuts nothing out of it: not a ring, not
+/// its name, and not a shadow anywhere in the near node's halo. What a hidden
+/// node may do is BRIGHTEN, and that is the whole of what it may do.
 ///
 /// The case is a harmonic seventh over its home node, face on: the seventh's
 /// disc and knockout hide the home node entirely. Every node draws AFTER the
@@ -6229,16 +6230,31 @@ fn a_lattice_with_no_node_grows_no_glow() {
 /// layer laid over the near node's ink. Nothing in that field is subtractive,
 /// so there is nothing a hidden node could cut with even if it reached.
 ///
-/// Measured over the near node's own INK, and that set is found rather than
-/// described: a pixel where the near node's opaque paint lands is a pixel the
-/// same in the frame with the light on and the frame with it off, since the
-/// light is under the node and full alpha replaces it. Every other pixel of the
-/// node is its clearing, which paints the light over the ground on purpose —
-/// the halo behind it belongs there, and asking for it back would be asking
-/// for the hole this design exists to not have.
+/// Measured over the near node's own INK — the pixels its paint covers in full
+/// — and per CHANNEL, since that is the claim the wash rests on: the light a
+/// node's ink takes is a screen (`node_paint`), which can add to a channel and
+/// never take from one, so a far sheet's red halo cannot pull the green out of
+/// a white name in front of it.
+///
+/// It rests on the fixture's fresh WASH, that being what puts any light on a
+/// node's ink at all: at a wash of 0 the near node's ink is untouchable and
+/// there is nothing here to measure. The count of pixels the hidden node
+/// brightens is asserted for that reason, and says so when it is 0.
+///
+/// That set is found rather than described, and found on the GROUND rather than
+/// on the light, which reaches the ink too: a pixel the node paints opaquely is
+/// a pixel no ground shows through, so it is the pixel that does not move when
+/// the ground does. Two shots with the glow off and the darkest
+/// and brightest grounds there are agree exactly over that ink and nowhere else
+/// the node draws, the clearing painting the ground by definition. Every other
+/// pixel of the node is that clearing, which paints the light over the ground
+/// on purpose — the halo behind it belongs there, and asking for it back would
+/// be asking for the hole this design exists to not have.
 ///
 /// The hidden node is LIT and NAMED, both at the middle of the near node where
-/// the light is fullest and an escaped name would be most legible.
+/// the light is fullest and an escaped name would be most legible. The name is
+/// measured on its OWN footprint and not on the ink: a glyph lands in the empty
+/// middle the rings stand around, so no opaque pixel can carry that claim.
 #[test]
 fn a_node_under_a_nearer_sheets_node_cuts_nothing_out_of_its_light() {
     const SIZE: [u32; 2] = [256, 256];
@@ -6260,19 +6276,25 @@ fn a_node_under_a_nearer_sheets_node_cuts_nothing_out_of_its_light() {
         scene.nodes[0].gutter = 0.4;
         scene
     };
-    let mut both = near(0.8);
-    let mut far = both.nodes[0];
-    far.world_pos.z = -1.0;
-    // Smaller and off centre, so the whole of what it draws falls inside the
-    // near node's clearing while its halo reaches where the near node's light
-    // is PARTIAL — at the middle the light is full, and full light melded with
-    // anything is still full.
-    far.scale = 0.5;
-    far.world_pos.x += 0.4;
-    far.glow = harmonigraph_scene::GlowStep { level: 0.8, row: 1, mix: 1.0, marked: 0.0 };
-    far.color = glam::Vec4::new(0.9, 0.2, 0.2, 1.0);
-    both.nodes.push(far);
-    rows_per_node(&mut both);
+    let covering = |wash: f32| -> Scene {
+        let mut both = near(0.8);
+        both.glow_wash = wash;
+        let mut far = both.nodes[0];
+        far.world_pos.z = -1.0;
+        // Smaller and off centre, so the whole of what it draws falls inside
+        // the near node's clearing while its halo reaches where the near node's
+        // light is PARTIAL — at the middle the light is full, and full light
+        // melded with anything is still full.
+        far.scale = 0.5;
+        far.world_pos.x += 0.4;
+        far.glow = harmonigraph_scene::GlowStep { level: 0.8, row: 1, mix: 1.0, marked: 0.0 };
+        far.color = glam::Vec4::new(0.9, 0.2, 0.2, 1.0);
+        both.nodes.push(far);
+        rows_per_node(&mut both);
+        both
+    };
+    let fresh_wash = single_marked_node(0, 0).glow_wash;
+    let both = covering(fresh_wash);
     // The hidden node names itself, at the middle of the near node.
     let name = |node: u32| LatticeLabels {
         glyphs: vec![GlyphInstance {
@@ -6302,41 +6324,76 @@ fn a_node_under_a_nearer_sheets_node_cuts_nothing_out_of_its_light() {
         "the fixture puts the second node BEHIND the first, or it is covering rather than covered",
     );
 
-    let alone_off = shooter.shot(&near(0.0));
     let alone_on = shooter.shot(&near(0.8));
-    // ...and the near node's own light at the top of both its bars, which is
-    // what settles whether a pixel is ink or a faint far corner of the
-    // clearing: light too dim to move an 8-bit channel at one strength is not
-    // too dim at a wider reach and twice the strength, and a pixel untouched
-    // by BOTH is opaque paint.
-    let mut brightest = near(1.6);
-    brightest.glow_strength = 2.0;
-    let alone_bright = shooter.shot(&brightest);
+    // The two grounds, with the glow off so that the ground is the only thing
+    // moving. Black and white rather than two greys: the widest step there is
+    // leaves no pixel of the clearing agreeing across it by rounding, and a
+    // pixel too faint to differ even here is a pixel the pass discarded and the
+    // `drawn` test drops.
+    let mut on_ground = |bg: glam::Vec4| {
+        let mut scene = near(0.0);
+        scene.background = bg;
+        shooter.shot(&scene)
+    };
+    let dark_ground = on_ground(glam::Vec4::new(0.0, 0.0, 0.0, 1.0));
+    let pale_ground = on_ground(glam::Vec4::ONE);
     let covered = shooter.shot_with(&both, name(1));
     // The near node's opaque ink: drawn (so not the cleared black the pass
-    // starts from) and untouched by its own light (so neither its clearing nor
-    // the halo outside it).
-    let ink: Vec<usize> = (0..alone_off.len())
+    // starts from) and the same over either ground (so neither its clearing nor
+    // a soft edge of its own paint).
+    let ink: Vec<usize> = (0..alone_on.len())
         .step_by(4)
         .filter(|&i| {
-            alone_off[i..i + 4] != [0u8, 0, 0, 255]
-                && alone_off[i..i + 4] == alone_on[i..i + 4]
-                && alone_off[i..i + 4] == alone_bright[i..i + 4]
+            pale_ground[i..i + 4] != [0u8, 0, 0, 255]
+                && pale_ground[i..i + 4] == dark_ground[i..i + 4]
         })
         .collect();
     assert!(ink.len() > 500, "the near node painted {} opaque pixels", ink.len());
-    // Non-vacuous: the hidden node has to be reaching the picture SOMEWHERE,
-    // or a frame it cannot change is no evidence about where it cannot.
+    let moved = |cmp: fn(u8, u8) -> bool| {
+        ink.iter().filter(|&&i| (0..3).any(|c| cmp(covered[i + c], alone_on[i + c]))).count()
+    };
+    let dimmed = moved(|a, b| a < b);
+    // Non-vacuous over the INK itself, not merely somewhere in the frame: the
+    // hidden node's halo is part of the melded field the near node's own paint
+    // is washed with, so it DOES reach that paint, and "never darker" is being
+    // asked of pixels a hidden node actually moves. That reach is the tradeoff
+    // the melded field is taken for — see `node_paint`, where the alternative
+    // is a light pass per sheet.
     assert!(
-        differing_pixels(&alone_on, &covered) > 0,
-        "the hidden node changed nothing at all; the comparison is vacuous",
+        moved(|a, b| a > b) > 0,
+        "the hidden node moved none of the near node's {} opaque pixels; the comparison is vacuous",
+        ink.len(),
     );
-    let escaped = ink.iter().filter(|&&i| alone_on[i..i + 4] != covered[i..i + 4]).count();
+    assert_eq!(
+        dimmed,
+        0,
+        "a node hidden behind the near one darkened {dimmed} of its {} opaque pixels",
+        ink.len(),
+    );
+    // The NAME's own claim, which the ink set cannot carry at all: a glyph sits
+    // in the node's empty MIDDLE, where the rings stand around nothing and
+    // there is no opaque ink to move. So it is measured over the pixels a name
+    // actually covers, found by giving the same glyph to the NEAR node — whose
+    // name is drawn — and read against a shot of the same two nodes with nobody
+    // named. Both carry the hidden node's halo, so what differs between them is
+    // the name and only the name.
+    let unnamed = shooter.shot(&covering(fresh_wash));
+    let named_near = shooter.shot_with(&covering(fresh_wash), name(0));
+    let glyph: Vec<usize> = (0..unnamed.len())
+        .step_by(4)
+        .filter(|&i| named_near[i..i + 4] != unnamed[i..i + 4])
+        .collect();
+    assert!(
+        glyph.len() > 500,
+        "the fixture's name covers {} pixels; there is no name here to escape",
+        glyph.len(),
+    );
+    let escaped = glyph.iter().filter(|&&i| covered[i..i + 4] != unnamed[i..i + 4]).count();
     assert_eq!(
         escaped,
         0,
-        "a node hidden behind the near one reached {escaped} of its {} opaque pixels",
-        ink.len(),
+        "a hidden node's name reached {escaped} of the {} pixels it would cover were it drawn",
+        glyph.len(),
     );
 }
 
@@ -6429,13 +6486,19 @@ fn the_middle_of_a_node_is_where_its_light_is_fullest() {
 /// otherwise at nearly its fullest, the falloff being measured from the node's
 /// centre.
 ///
+/// The GROUND is the whole of what this bar moves, a node's own ink being the
+/// Wash bar's — [`a_ring_wears_the_wash_inside_its_own_dark_pool`] holds that
+/// boundary from the other side. So the probe sits outside the ink on purpose,
+/// and not merely for want of light there: a probe ON the ink would read
+/// nothing this bar does at any setting.
+///
 /// TWO claims, and the second is what makes the bar an A/B rather than a
 /// restyle. The depth takes light: the probe is darker at the fresh 85% than
-/// at 0, and no pixel anywhere in the frame is brighter, the standoff being a
-/// factor on light the clearing was going to paint anyway. And a depth of 0 is
-/// the whole feature off: the frame is byte for byte the same at any Gap,
-/// which is the one place the four dials can be proved not to leak into a
-/// picture that is supposed to have no standoff in it.
+/// at 0, and no pixel anywhere in the frame is brighter, the term the depth
+/// scales being a factor on light that was going to be laid down anyway. And a
+/// depth of 0 is the whole feature off: the frame is byte for byte the same at
+/// any Gap, which is the one place the four dials can be proved not to leak
+/// into a picture that is supposed to have no standoff in it.
 ///
 /// A Gap of 0 is deliberately NOT the off position and is not compared here: it
 /// is a standoff whose fade has collapsed onto the ring's own annulus, which is
@@ -6508,8 +6571,8 @@ fn the_gap_depth_says_how_much_light_a_ring_stands_off() {
         lit(&flat, probe) > lit(&dark, probe),
         "the fixture lights the probe no more than the glow off does; the comparison is vacuous",
     );
-    // A factor on the light the clearing paints, so it can only take: no pixel
-    // in the frame comes out brighter for it.
+    // A factor on light that was going to be laid down anyway, so it can only
+    // take: no pixel in the frame comes out brighter for it.
     let brighter = stood_off
         .chunks(4)
         .zip(flat.chunks(4))
@@ -6548,6 +6611,139 @@ fn the_gap_depth_says_how_much_light_a_ring_stands_off() {
             "at a depth of 0, {name} drew a different frame from the fresh gap",
         );
     }
+}
+
+/// A ring WEARS THE WASH inside a pool the Gap depth has cleared to the bare
+/// ground: the two are one field asked for twice, and the answers are free of
+/// each other.
+///
+/// The look the bar exists for. On one coupled dial a dark pool and a tinted
+/// ring are mutually exclusive — the light the ink would wear is exactly the
+/// light the standoff takes — so the first two claims below are measured at a
+/// DEPTH OF 1, where the ground around the ring is the frame with no glow in it
+/// at all and there is nothing left of the pool's light to tint anything with.
+///
+/// Three claims, and the third is the decoupling itself:
+///
+/// - A wash of 0 leaves the ink byte for byte what it is with the glow off,
+///   whatever light is standing at it. Byte-identical rather than nearly so
+///   because a factor of 0 on the light is no light: nothing is left to round.
+/// - A wash of 1 lifts it, and lifts more than half of it.
+/// - Moving the DEPTH moves the ink not at all, the wash reading the field
+///   before the standoff's factor reaches it. A wash carried on the standoff's
+///   remainder instead cannot say this at all, and that is the reason there is
+///   a second bar.
+///
+/// Every lift is measured as a lift and never a loss, which is the wash's own
+/// arithmetic (`node_paint`): the ink takes the light as a screen, so every
+/// channel it moves it moves up.
+///
+/// [`the_gap_depth_says_how_much_light_a_ring_stands_off`]'s fixture, whose
+/// probe is the other side of this boundary — that pixel is outside the node's
+/// ink and these are inside it, and neither bar answers for both.
+///
+/// The ink is found on the GROUND, as in
+/// [`a_node_under_a_nearer_sheets_node_cuts_nothing_out_of_its_light`]: a pixel
+/// the node paints opaquely is the pixel that does not move when the ground
+/// does.
+///
+/// That set is not exact, and the third claim is stated to survive it: a pixel
+/// the node paints at an alpha a hair under 1 carries a SUB-LSB sliver of
+/// ground, which a black-and-white probe rounds away and the depth still moves.
+/// The BOUND follows from how the set is chosen rather than from tuning —
+/// agreeing over both grounds forces that sliver's coefficient under 1/255, and
+/// the sliver is the only term the depth touches on such a pixel, so one byte
+/// is the most it can carry. A wash reading the standoff's remainder would move
+/// the ink by the light's own size instead, which is the scale the shot beside
+/// it supplies.
+#[test]
+fn a_ring_wears_the_wash_inside_its_own_dark_pool() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    let at = |reach: f32, depth: f32, wash: f32| -> Scene {
+        let mut scene = single_marked_node(0, 0);
+        scene.camera = harmonigraph_scene::Camera {
+            projection: harmonigraph_scene::Projection::Orthographic,
+            yaw: 0.0,
+            pitch: 0.0,
+            ..Default::default()
+        };
+        scene.glow_reach = reach;
+        scene.glow_strength = 1.5;
+        scene.glow_gap = 0.16;
+        // The fade the whole width of the gap, which is the fresh pair.
+        scene.glow_gap_soft = 0.16;
+        scene.glow_gap_depth = depth;
+        scene.glow_wash = wash;
+        scene.nodes[0].gutter = 0.16;
+        scene
+    };
+    let mut on_ground = |bg: glam::Vec4| {
+        let mut scene = at(0.0, 1.0, 0.0);
+        scene.background = bg;
+        shooter.shot(&scene)
+    };
+    let dark_ground = on_ground(glam::Vec4::new(0.0, 0.0, 0.0, 1.0));
+    let pale_ground = on_ground(glam::Vec4::ONE);
+    let ink: Vec<usize> = (0..pale_ground.len())
+        .step_by(4)
+        .filter(|&i| {
+            pale_ground[i..i + 4] != [0u8, 0, 0, 255]
+                && pale_ground[i..i + 4] == dark_ground[i..i + 4]
+        })
+        .collect();
+    assert!(ink.len() > 500, "the node painted {} opaque pixels", ink.len());
+
+    let off = shooter.shot(&at(0.0, 1.0, 1.0));
+    let dry = shooter.shot(&at(0.8, 1.0, 0.0));
+    let worn = shooter.shot(&at(0.8, 1.0, 1.0));
+    let open = shooter.shot(&at(0.8, 0.0, 1.0));
+    let moved = ink.iter().filter(|&&i| dry[i..i + 4] != off[i..i + 4]).count();
+    assert_eq!(
+        moved,
+        0,
+        "with no wash the glow reached {moved} of the ring's {} opaque pixels",
+        ink.len(),
+    );
+    let lifted = ink
+        .iter()
+        .filter(|&&i| brightness(&worn[i..i + 3]) > brightness(&off[i..i + 3]))
+        .count();
+    assert!(
+        lifted * 2 > ink.len(),
+        "inside a pool cleared to the bare ground, a full wash lifted {lifted} of the ring's {} \
+         opaque pixels",
+        ink.len(),
+    );
+    let dimmed =
+        ink.iter().filter(|&&i| (0..3).any(|c| worn[i + c] < off[i + c])).count();
+    assert_eq!(
+        dimmed,
+        0,
+        "the wash took light off {dimmed} of the ring's {} opaque pixels",
+        ink.len(),
+    );
+    // The furthest any one channel of the ink moves between two shots, which is
+    // what both halves of the last claim are read in.
+    let spread = |a: &[u8], b: &[u8]| {
+        ink.iter()
+            .map(|&i| (0..3).map(|c| a[i + c].abs_diff(b[i + c])).max().unwrap())
+            .max()
+            .unwrap()
+    };
+    let by_wash = spread(&worn, &dry);
+    let by_depth = spread(&worn, &open);
+    assert!(
+        by_wash > 20,
+        "the fixture's wash moves the ink by {by_wash}; there is nothing here to be free of",
+    );
+    assert!(
+        by_depth <= 1,
+        "dropping the depth moved the ink by {by_depth} against the wash's own {by_wash}: the \
+         wash is reading the standoff's remainder rather than the field",
+    );
 }
 
 /// A node wearing NOTHING BUT AN AUDIO RING glows.

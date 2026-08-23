@@ -645,9 +645,8 @@ fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBack
          Solid to the inner handle, faded out by the outer. 0 draws none.",
     );
     // The glow is NOT here, though it is the whole node's as everything above
-    // is: it has a section of its own directly below, being nine bars that
-    // answer four different questions about one light, and a heading is what
-    // lets each of them drop the "Glow" from its name.
+    // is: it has a section of its own directly below, and a heading is what
+    // lets every bar in it drop the "Glow" from its name.
 }
 
 /// Glow: the light a node gives off — the ONLY light it has, every layer of
@@ -657,13 +656,11 @@ fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBack
 ///
 /// **A section of its own, directly under Note**, and not the tail of it: a
 /// glow is the whole node's rather than any layer's, which is what Note is
-/// for, but it is also one feature with nine settings that answer four
-/// different questions — how far and how much, what colour, what it is held
-/// off, and how fast it follows the note. Nine bars all named "Glow …" at the
-/// foot of Note are a column of one word the eye has to skip past to find the
-/// one that differs; a heading says the word once. It leads the layers rather
-/// than following Shimmer because, like everything in Note, it is reached for
-/// more than any one layer is.
+/// for, but it is also one feature carrying a bar for every question asked of
+/// one light. A column of them all named "Glow …" at the foot of Note is one
+/// word the eye has to skip past to find the one that differs; a heading says
+/// the word once. It leads the layers rather than following Shimmer because,
+/// like everything in Note, it is reached for more than any one layer is.
 ///
 /// **Not with Bloom**, which it otherwise reads like, because the two are
 /// different settings of different things. Bloom is one number over every
@@ -778,10 +775,10 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
              radius. Dark to the inner handle, faded back in by the outer; drag \
              the inner to the left edge to fade the whole gap, which is what \
              keeps a wide gap from reading as a black ring. The node's own ink \
-             is untouched at any setting, and so is the picture outside its \
-             Clearance — the gap is the light the node's clearing paints, so it \
-             reaches exactly as far as that clearing does. Both handles at 0 \
-             lets the glow up to every edge. Double-click to restore.",
+             is untouched at any setting — what the ink wears is the Wash bar \
+             below — and so is the picture outside the node's Clearance, the \
+             gap being a factor on the light that clearing paints. Both handles \
+             at 0 lets the glow up to every edge. Double-click to restore.",
         );
         // The curve the fade runs on, directly under the bar that sets its
         // width, on the Reach/Feather arrangement above: a bar saying how far
@@ -811,11 +808,34 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
             .display(|v| format!("{:.0}%", v * 100.0))
             .show(ui)
             .on_hover_text(
-                "How much of the light the gap takes away. 100% clears to the \
-                 bare ground — where the gap is solid, the picture is exactly \
-                 what it is with the glow off — and lower leaves the rings \
-                 sitting in a dimmer pool of their own light rather than in a \
-                 void. 0% is the picture with no gap at all.",
+                "How much of the light the gap takes away, on the ground the \
+                 node's Clearance paints. 100% clears to the bare ground — \
+                 where the gap is solid, the ground is exactly what it is \
+                 with the glow off — and lower leaves the rings sitting in a \
+                 dimmer pool of their own light rather than in a void. 0% is \
+                 the picture with no gap at all. What the rings themselves \
+                 wear of that light is the Wash below, which this does not \
+                 touch.",
+            );
+        // The ink's own share of the same field, under the bar that says the
+        // ground's: the pair is one question asked twice, and the answers are
+        // free of each other on purpose — a dark pool with a tinted ring in it
+        // is a picture no single coupled dial can name.
+        ValueBar::new(&mut view.glow_wash, 0.0..=1.0, "Wash")
+            .display(|v| format!("{:.0}%", v * 100.0))
+            .show(ui)
+            .on_hover_text(
+                "How much of the light a node stands in washes over the node's \
+                 own ink — the rings, marks and glyphs it paints, the note \
+                 names on top being drawn clean whatever this says. 0% draws \
+                 the ink exactly as it is with the glow off; higher lifts a \
+                 silent slice's grey toward the colour of the halo around it, \
+                 so the node reads as a shape inside its light rather than a \
+                 silhouette cut out of it. It reads the light before the gap \
+                 takes any, so it is free of the depth above — a full depth \
+                 with a wash on it is a ring standing in a dark pool and still \
+                 wearing the halo's colour — and far enough up it inverts, the \
+                 ink brighter than the ground around it.",
             );
         // The light's own clock, last, under everything it shapes. Its own pair
         // and not the note Fade in Note, because a halo is the slow part of the

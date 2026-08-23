@@ -1091,9 +1091,8 @@ pub struct ViewConfig {
     /// ([`GLOW_REACH_MAX`]) is sized for that pair — several lattice steps,
     /// where every node's light overlaps its neighbourhood's.
     ///
-    /// It is the ONLY light a node has, the rings themselves being crisp
-    /// shapes: a view with this at 0 draws exactly the ink the ring stack
-    /// describes and nothing around it.
+    /// It is the ONLY light a node has: a view with this at 0 draws exactly the
+    /// ink the ring stack describes and nothing around it.
     ///
     /// Every node's glow is drawn into a target of its own, with SCREEN
     /// blending, so two neighbours' halos meld like light rather than summing
@@ -1101,7 +1100,9 @@ pub struct ViewConfig {
     /// target is one field across every sheet, laid down UNDER the lattice: the
     /// rings, the markers and the names are all drawn over it, and a node's own
     /// clearing paints the light standing at its pixel rather than bare ground,
-    /// so the middle of a node keeps the light its neighbours put there.
+    /// so the middle of a node keeps the light its neighbours put there. How
+    /// much of that field the node's own INK takes with it is
+    /// [`glow_wash`](Self::glow_wash)'s to say.
     ///
     /// Distinct from [`bloom_strength`](Self::bloom_strength) in what it
     /// measures: the bloom thresholds a finished PICTURE, so only the bright
@@ -1237,17 +1238,54 @@ pub struct ViewConfig {
     /// How much of the light the standoff takes away where it stands, 0..=1 —
     /// every ring's coverage scaled once by this.
     ///
-    /// 1 is a hole: where the standoff is solid, a pixel is cleared to the bare
-    /// ground, exactly the frame with no glow in it, and across its fade — and
-    /// the Clearance's, which it is floored at — to a blend of the two. Below
+    /// 1 is a hole: where the standoff is solid, the ground comes back bare,
+    /// exactly the frame with no glow in it, and across its fade — and the
+    /// Clearance's, which it is floored at — to a blend of the two. Below
     /// it the rings sit in a DIMMER POOL
     /// of their own light instead of in a void, which is the whole difference
     /// between a gap that reads as shade and one that reads as ink. 0 is the
     /// picture with no standoff at all, pixel for pixel, which is what makes
     /// this bar the A/B on the whole feature.
     ///
+    /// The GROUND's share of the light at a node's pixel, and that alone. What
+    /// the node's own INK takes of the same field is
+    /// [`glow_wash`](Self::glow_wash), on a bar of its own, so a ring can stand
+    /// in a pool this has cleared to the bare ground and still carry the colour
+    /// of the halo around it.
+    ///
     /// Inert while [`glow_reach`](Self::glow_reach) is 0.
     pub glow_gap_depth: f32,
+    /// How much of the light standing at a node's pixel washes over the node's
+    /// own INK, 0..=1 — the rings, the marks and the glyphs it draws, as
+    /// against the ground around them.
+    ///
+    /// The ink's share of the field, and the counterpart to
+    /// [`glow_gap_depth`](Self::glow_gap_depth), which says the same thing of
+    /// the ground the clearing paints. 0 is ink drawn exactly as the ring stack
+    /// describes it, pixel for pixel what it is with the glow off; 1 is the
+    /// whole field over it, a node melting into its own halo. Between them a
+    /// silent slice's grey lifts toward the colour of the light it stands in,
+    /// and the node reads as a shape INSIDE its light rather than a silhouette
+    /// cut out of it.
+    ///
+    /// A bar of its own rather than the depth's other half, which is what lets
+    /// both ends be asked for at once: a full depth carrying a wash is a ring
+    /// standing in a dark pool and still wearing the halo's colour, and no one
+    /// setting of a single coupled dial can say that. What the freedom costs is
+    /// that the pair can be dialled into an INVERSION — a lit ring inside a
+    /// pool the standoff has cleared to the bare ground — which is a picture
+    /// worth being able to ask for and not one to arrive at by accident.
+    ///
+    /// The RAW field and not the standoff's remainder — the Gap bars shape the
+    /// ground alone — so a wash reads the same whatever they are doing around
+    /// it, and turning the gap up cannot quietly take the ink's light with it.
+    ///
+    /// Laid over the ink as a SCREEN, so it can only ever brighten whoever laid
+    /// the light down; see `node_paint` in lattice.wgsl for why an over is
+    /// wrong over a melded field.
+    ///
+    /// Inert while [`glow_reach`](Self::glow_reach) is 0.
+    pub glow_wash: f32,
     /// How widely a node's own ink is averaged into the colour of its light.
     ///
     /// The glow's colour is not a formula naming its sources — it is what the
@@ -2169,11 +2207,12 @@ impl ViewConfig {
         // a bar reading 0..1 is what keeps its neutral point at the middle.
         self.glow_gap_shape =
             finite_or(self.glow_gap_shape, fresh.glow_gap_shape).clamp(0.0, 1.0);
-        // The four that are SHARES — of the light the standoff stands in, of
-        // the light's own peak, of a whole turn — so their range is the unit
-        // interval.
+        // The SHARES — of the light the standoff stands in, of the light a
+        // node's ink stands in, of the light's own peak, of a whole turn — so
+        // their range is the unit interval.
         self.glow_gap_depth =
             finite_or(self.glow_gap_depth, fresh.glow_gap_depth).clamp(0.0, 1.0);
+        self.glow_wash = finite_or(self.glow_wash, fresh.glow_wash).clamp(0.0, 1.0);
         self.glow_blend = finite_or(self.glow_blend, fresh.glow_blend).clamp(0.0, 1.0);
         // The light's own pair, in seconds, on the ring's rule: a bar's range,
         // and a poisoned number repaired to the fresh value rather than left
@@ -2485,6 +2524,11 @@ impl Default for ViewConfig {
             // in a dim pool of its own halo reads as shade, where the whole of
             // it taken away reads as a black annulus drawn round the node.
             glow_gap_depth: 0.85,
+            // One minus the depth above, which is exactly what that depth
+            // leaves at a ring's own annulus: a ring wearing the last of the
+            // light its gap does not take, which is what a single coupled dial
+            // draws and a place for either bar to be moved from.
+            glow_wash: 0.15,
             // The colour averaged half way round, which keeps a chord's hues
             // as arcs while a lone wedge still tints the whole halo.
             glow_blend: 0.5,
