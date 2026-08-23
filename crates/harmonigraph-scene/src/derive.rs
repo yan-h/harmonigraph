@@ -603,6 +603,7 @@ pub fn derive_scene(
         glow_reach: view.glow_reach.clamp(0.0, crate::GLOW_REACH_MAX),
         glow_strength: view.glow_strength.clamp(0.0, crate::GLOW_STRENGTH_MAX),
         glow_feather: view.glow_feather.clamp(0.0, 1.0),
+        glow_meld: view.glow_meld.clamp(0.0, 1.0),
         // The standoff on the same footing, a bar's range rather than a
         // billboard's: it is painted inside the clearing's own quad, so an
         // absurd gap is a shape nothing can show rather than a quad nothing
