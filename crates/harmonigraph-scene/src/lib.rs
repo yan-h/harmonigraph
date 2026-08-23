@@ -519,9 +519,14 @@ pub struct NodeInstance {
     ///
     /// A WIDTH and not a decision: whether a node clears, and how strongly, is
     /// per LAYER and settled in the shader, each layer's hole scaled by the
-    /// level that paints it. Gating this on the note instead is what left a
-    /// node wearing an audio ring with no key down — which the Gate hands out
-    /// freely — drawing that ring over an uncut marker.
+    /// level that paints it. Gating this on the note instead would leave a node
+    /// wearing an audio ring with no key down — which the Gate hands out freely
+    /// — drawing that ring over the sheets behind it with no hole to sit in.
+    ///
+    /// The hole is over the SHEETS and not over the resting field: a marker
+    /// standing where a node stands is drawn between the two halves of that
+    /// node (`GpuInstance::paint` in harmonigraph-render), so no clearing takes
+    /// a cross.
     pub gutter: f32,
     /// Signed cents from the home-sheet node this one shares a LETTER and an
     /// accidental with: `(threes - 2*(sevens - center), fives, center)`,

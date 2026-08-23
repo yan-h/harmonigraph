@@ -665,7 +665,23 @@ struct Instance {
     // the light's SIZE (`glow_rim`), and the bit it is carried from steps the
     // frame the marking voice is pruned.
     @location(12) glow: vec4<f32>,
+    // WHICH HALF of the node this instance draws. A home node is drawn twice
+    // with the resting markers between: its knockout first, so the hole hides
+    // the sheets behind the node without taking the cross the node stands on
+    // with them, then its ink (`from_scene`). Every other sheet draws WHOLE.
+    //
+    // The split is EXACT rather than close, being one premultiplied over
+    // factored into two: `ground*g` at alpha `g`, then `ink` at alpha `a`,
+    // composites to the `ink + ground*g*(1-a)` at alpha `a + g*(1-a)` a single
+    // draw writes.
+    @location(13) paint: f32,
 };
+
+// What `Instance::paint` says. A float because it crosses as a vertex attribute
+// either way.
+const PAINT_WHOLE: f32 = 0.0;
+const PAINT_INK: f32 = 1.0;
+const PAINT_CLEARING: f32 = 2.0;
 
 struct VsOut {
     @builtin(position) clip_pos: vec4<f32>,
@@ -715,6 +731,8 @@ struct VsOut {
     // is the last of them. It belongs with these two anyway — all three are
     // what the light carries, and `rim` is what the NODE is measured against.
     @location(15) @interpolate(flat) glow: vec3<f32>,
+    // Which half of the node this draw is painting (see `Instance::paint`).
+    @location(9) @interpolate(flat) paint: f32,
 };
 
 @vertex
@@ -813,6 +831,7 @@ fn node_vertex(vertex_index: u32, inst: Instance, extra: f32, light: bool) -> Vs
     out.gutter = gutter_uv;
     out.rim = rim;
     out.ring = inst.ring;
+    out.paint = inst.paint;
     // The shimmer's shared coordinate — see VsOut::field. Taken off the
     // CORNER's world position rather than the node's center, so the field
     // varies across the quad and the interpolator hands the fragment shader
@@ -2403,8 +2422,8 @@ fn node_geom(in: VsOut) -> NodeGeom {
     // the ring: the hole a layer punches is filled to the node's center and
     // reaches one gutter past the layer (`node_clearing`), so an idle node's
     // fragments are worth keeping out to there. Skipping them would leave a
-    // ringing node with no note drawing its ring over a marker field its own
-    // hole never cut.
+    // ringing node with no note drawing its ring straight onto the sheets
+    // behind it, the hole it owes them cut short at the ring's own edge.
     let audio_annulus = spectral_radii();
     let ring_draws = audio_annulus.y > audio_annulus.x;
     let in_audio_ring = ring_draws
@@ -2680,7 +2699,17 @@ fn node_ink(in: VsOut, d: f32, aa: f32, field_step: f32, oct: OctRing) -> vec4<f
 /// attachments they write it to.
 fn node_paint(in: VsOut) -> vec4<f32> {
     let g = node_geom(in);
-    let ink = node_ink(in, g.d, g.aa, g.field_step, g.oct);
+    // A clearing-only draw takes no ink, and skipping the call is the point of
+    // the branch rather than a saving on top of it: `node_ink` is the whole of
+    // what a node costs per fragment, and this instance is drawn over the same
+    // quad a second time. Safe to branch on because every length the ink is cut
+    // with arrives from `node_geom` (`aa`, `field_step`) — nothing under here
+    // asks the rasterizer how big the node is, so the derivatives are all taken
+    // outside.
+    var ink = vec4<f32>(0.0);
+    if in.paint != PAINT_CLEARING {
+        ink = node_ink(in, g.d, g.aa, g.field_step, g.oct);
+    }
     let active_alpha = ink.w;
     let active_rgb = ink.xyz;
     let d = g.d;
@@ -2727,7 +2756,7 @@ fn node_paint(in: VsOut) -> vec4<f32> {
     // that holds full strength to the last frame (which is what scaling the
     // width alone did) vanishes with an audible pop.
     var gutter_cov = 0.0;
-    if in.gutter > 0.0 {
+    if in.gutter > 0.0 && in.paint != PAINT_INK {
         gutter_cov = node_clearing(in, oct, d);
     }
     let final_alpha = active_alpha + gutter_cov * (1.0 - active_alpha);

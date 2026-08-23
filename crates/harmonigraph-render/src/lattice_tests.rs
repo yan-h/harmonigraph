@@ -2800,6 +2800,13 @@ fn a_node_wearing_only_an_audio_ring_clears_around_it() {
         "a node with no note and no ring still shipped, carrying a reach that would \
          clear a hole around ink nobody draws",
     );
+    // Its knockout goes with it. That half ships off a list of its own and so
+    // could be culled apart from the ink it belongs to, which would put a hole
+    // in the marker field around a node drawing nothing.
+    assert!(
+        quiet.clearings.is_empty(),
+        "a node the cull dropped still shipped the hole it would have cleared",
+    );
 }
 
 /// An octave band the stack switched off — the empty pair (0, 0) — paints
@@ -9905,5 +9912,181 @@ fn the_meld_reaches_the_light_a_node_paints_over_its_own_body() {
         brightness(&b) < brightness(&m),
         "the Meld did not reach what the node paints: its middle is {b:?} at 0 and {m:?} at \
          1, so this pixel took the screen either way while the ground around it did not",
+    );
+}
+
+
+/// A node the analyzer lit, with no key down, keeps the cross under it.
+///
+/// The cross goes when a NAME stands over it and at no other time
+/// (`derive_pluses`), and a node ringing under no key has no name to put there.
+/// What used to take it anyway was the node's own knockout, drawn over the
+/// markers because it drew after them: the Gate hands rings out freely, so
+/// every node the analyzer reached lost the mark of the position it stands on
+/// and kept the marker's standoff, a cross-shaped hole in the light with
+/// nothing standing in it.
+///
+/// Measured against the SAME node with the Clearance dialled off, which is the
+/// one setting where the hole was never painted — so the claim is that the
+/// Clearance no longer decides this, rather than that some ink survives.
+#[test]
+fn a_node_lit_by_no_key_keeps_the_cross_under_it() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut gpu) = Shooter::new(SIZE) else {
+        return;
+    };
+    // Silent but ringing: the Gate's own gift, and the case the knockout used
+    // to swallow. The light is on so there is something for a clearing to
+    // knock out and something for the marker's ink to be washed by.
+    let build = |gutter: f32, marker: bool| -> Scene {
+        let mut scene = clearing_node(0, 1.0, true, gutter);
+        scene.background = glam::Vec4::new(0.05, 0.05, 0.07, 1.0);
+        scene.glow_reach = 3.0;
+        scene.glow_strength = 2.0;
+        scene.glow_feather = 1.0;
+        scene.marker_light = 0.0;
+        let node = &mut scene.nodes[0];
+        node.activation = 0.0;
+        node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
+        node.glow.level = 1.0;
+        scene.pluses = if marker {
+            vec![one_marker(
+                glam::Vec3::ZERO,
+                0.35,
+                glam::Vec4::new(0.6, 0.6, 0.6, 1.0),
+                1.0,
+            )]
+        } else {
+            Vec::new()
+        };
+        scene
+    };
+    // What the cross covers, read where no clearing is painted at all.
+    let mut inked = |gutter: f32| -> Vec<usize> {
+        let with = gpu.shot(&build(gutter, true));
+        let without = gpu.shot(&build(gutter, false));
+        (0..with.len())
+            .step_by(4)
+            .filter(|&i| with[i..i + 4] != without[i..i + 4])
+            .collect()
+    };
+    let bare = inked(0.0);
+    assert!(
+        bare.len() > 50,
+        "the fixture draws no cross to lose: {} pixels",
+        bare.len(),
+    );
+    for gutter in [0.2f32, 0.5, 1.0] {
+        let cut = inked(gutter);
+        assert!(
+            cut.len() >= bare.len(),
+            "at a Clearance of {gutter} the ringing node took {} of the {} pixels its \
+             cross covers with the Clearance off",
+            bare.len() - cut.len(),
+            bare.len(),
+        );
+    }
+}
+
+/// Drawing a home node's knockout as a separate pass paints the picture the one
+/// draw it was split out of painted.
+///
+/// The split is a premultiplied over factored in two — `ground*g` at alpha `g`,
+/// then the ink at alpha `a`, against the `ink + ground*g*(1-a)` at alpha
+/// `a + g*(1-a)` a single draw writes — so it owes the same picture rather than
+/// a similar one, and the markers it makes room for are what it is spent on.
+///
+/// What it does NOT owe is the same bytes: an 8-bit target rounds once per
+/// composite, so a fragment written in two steps lands within a step or two of
+/// one written in one. That is the whole of the difference measured here, and
+/// the bound is what says so — a term dropped or double-counted moves a pixel
+/// by far more than the target can round it by.
+///
+/// The reference is the same node one hair off the home sheet, which draws
+/// WHOLE because only the home sheet is split. Under an orthographic camera
+/// looking down the sevens axis that hair moves nothing on screen: the
+/// billboard is built on `cam_right`/`cam_up`, both perpendicular to it, and
+/// the depth test is `Always`. The pair with no clearing at all checks that,
+/// and it is not decoration — under the fixture's own perspective camera the
+/// hair is a change of SIZE, and the test measured 2256 px of it.
+#[test]
+fn splitting_a_clearing_off_its_node_paints_the_same_picture() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut gpu) = Shooter::new(SIZE) else {
+        return;
+    };
+    let build = |z: f32, gutter: f32| -> Scene {
+        let mut scene = clearing_node(0, 1.0, true, gutter);
+        scene.camera = harmonigraph_scene::Camera {
+            projection: harmonigraph_scene::Projection::Orthographic,
+            yaw: 0.0,
+            pitch: 0.0,
+            ..Default::default()
+        };
+        scene.background = glam::Vec4::new(0.05, 0.05, 0.07, 1.0);
+        scene.glow_reach = 3.0;
+        scene.glow_strength = 2.0;
+        scene.glow_feather = 1.0;
+        // A WIDE fade on the hole, which is where the split has anything to get
+        // wrong: at full coverage a clearing repaints the ground it already
+        // stands on, so only the band where it is partial can tell one
+        // application from two. The fixture's own default is a hard edge.
+        scene.sevens_soft = 0.3;
+        // Nothing between the halves, so the only thing under test is whether
+        // the two of them add up.
+        scene.pluses.clear();
+        // Something BEHIND for the hole to hide, without which the clearing is
+        // invisible and this measures nothing: it repaints the ground it is
+        // already standing on, so painting it twice is a no-op and a term
+        // counted twice would pass. The sheet behind is what the hole is for.
+        // Bigger, so its rings land out in the fade the hole ends with. A
+        // behind node the same size as this one hides entirely under it, and
+        // then the clearing has nothing to cover in the band where its coverage
+        // is partial — which is the only band where painting it twice differs
+        // from painting it once.
+        let mut behind = scene.nodes[0];
+        behind.world_pos.z = -0.6;
+        behind.scale = 2.5;
+        behind.on_home = false;
+        behind.gutter = 0.0;
+        scene.nodes.push(behind);
+        let node = &mut scene.nodes[0];
+        node.world_pos.z = z;
+        // The size a home node draws at, kept while the depth moves: a sheet
+        // off home is drawn smaller, and this is measuring the split rather
+        // than the sevens layer.
+        node.scale = 1.0;
+        scene
+    };
+    let worst = |a: &[u8], b: &[u8]| -> i32 {
+        (0..a.len())
+            .map(|i| (a[i] as i32 - b[i] as i32).abs())
+            .max()
+            .unwrap_or(0)
+    };
+    let split = gpu.shot(&build(0.0, CLEAR_REACH));
+    let whole = gpu.shot(&build(0.001, CLEAR_REACH));
+
+    // The depth hair on its own, with no clearing for either to draw.
+    let flat_home = gpu.shot(&build(0.0, 0.0));
+    let flat_off = gpu.shot(&build(0.001, 0.0));
+    assert_eq!(
+        worst(&flat_home, &flat_off),
+        0,
+        "the reference is not the same node: the depth hair moved the picture on its own",
+    );
+    // Non-vacuous: the node has to be painting a clearing for the split to have
+    // anything to be exact about.
+    let cleared = (0..split.len())
+        .step_by(4)
+        .filter(|&i| split[i..i + 4] != flat_home[i..i + 4])
+        .count();
+    assert!(cleared > 100, "the fixture clears only {cleared} pixels; nothing is under test");
+
+    assert!(
+        worst(&split, &whole) <= 2,
+        "the split moved a channel by {} over the {cleared} pixels it clears, which is more \
+         than laying one fragment down in two steps can round it by",
+        worst(&split, &whole),
     );
 }
