@@ -645,9 +645,8 @@ fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBack
          Solid to the inner handle, faded out by the outer. 0 draws none.",
     );
     // The glow is NOT here, though it is the whole node's as everything above
-    // is: it has a section of its own directly below, being nine bars that
-    // answer four different questions about one light, and a heading is what
-    // lets each of them drop the "Glow" from its name.
+    // is: it has a section of its own directly below, and a heading is what
+    // lets every bar in it drop the "Glow" from its name.
 }
 
 /// Glow: the light a node gives off — the ONLY light it has, every layer of
@@ -657,13 +656,11 @@ fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBack
 ///
 /// **A section of its own, directly under Note**, and not the tail of it: a
 /// glow is the whole node's rather than any layer's, which is what Note is
-/// for, but it is also one feature with nine settings that answer four
-/// different questions — how far and how much, what colour, what it is held
-/// off, and how fast it follows the note. Nine bars all named "Glow …" at the
-/// foot of Note are a column of one word the eye has to skip past to find the
-/// one that differs; a heading says the word once. It leads the layers rather
-/// than following Shimmer because, like everything in Note, it is reached for
-/// more than any one layer is.
+/// for, but it is also one feature carrying a bar for every question asked of
+/// one light. A column of them all named "Glow …" at the foot of Note is one
+/// word the eye has to skip past to find the one that differs; a heading says
+/// the word once. It leads the layers rather than following Shimmer because,
+/// like everything in Note, it is reached for more than any one layer is.
 ///
 /// **Not with Bloom**, which it otherwise reads like, because the two are
 /// different settings of different things. Bloom is one number over every

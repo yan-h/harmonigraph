@@ -6494,7 +6494,7 @@ fn the_middle_of_a_node_is_where_its_light_is_fullest() {
 ///
 /// TWO claims, and the second is what makes the bar an A/B rather than a
 /// restyle. The depth takes light: the probe is darker at the fresh 85% than
-/// at 0, and no pixel anywhere in the frame is brighter, every term the depth
+/// at 0, and no pixel anywhere in the frame is brighter, the term the depth
 /// scales being a factor on light that was going to be laid down anyway. And a
 /// depth of 0 is the whole feature off: the frame is byte for byte the same at
 /// any Gap, which is the one place the four dials can be proved not to leak
@@ -6571,9 +6571,8 @@ fn the_gap_depth_says_how_much_light_a_ring_stands_off() {
         lit(&flat, probe) > lit(&dark, probe),
         "the fixture lights the probe no more than the glow off does; the comparison is vacuous",
     );
-    // A factor on light that was going to be laid down anyway, on the ground and
-    // on the ink alike, so it can only take: no pixel in the frame comes out
-    // brighter for it.
+    // A factor on light that was going to be laid down anyway, so it can only
+    // take: no pixel in the frame comes out brighter for it.
     let brighter = stood_off
         .chunks(4)
         .zip(flat.chunks(4))
@@ -6650,14 +6649,13 @@ fn the_gap_depth_says_how_much_light_a_ring_stands_off() {
 ///
 /// That set is not exact, and the third claim is stated to survive it: a pixel
 /// the node paints at an alpha a hair under 1 carries a SUB-LSB sliver of
-/// ground, black and white agree over it because the sliver rounds away, and
-/// the depth still moves it — ten of this fixture's pixels, by one byte. No
-/// probe can sort those out, since which of them round is decided by whatever
-/// the wash leaves under them, so the claim is a BOUND and not an equality,
-/// and it is calibrated against the wash's own effect in the same shots rather
-/// than against a number written here. One byte where the wash itself moves it
-/// by tens of them is the antialiasing; anything like the wash's own size is
-/// the coupling.
+/// ground, which a black-and-white probe rounds away and the depth still moves.
+/// The BOUND follows from how the set is chosen rather than from tuning —
+/// agreeing over both grounds forces that sliver's coefficient under 1/255, and
+/// the sliver is the only term the depth touches on such a pixel, so one byte
+/// is the most it can carry. A wash reading the standoff's remainder would move
+/// the ink by the light's own size instead, which is the scale the shot beside
+/// it supplies.
 #[test]
 fn a_ring_wears_the_wash_inside_its_own_dark_pool() {
     const SIZE: [u32; 2] = [256, 256];

@@ -1274,21 +1274,15 @@ pub struct ViewConfig {
     /// setting of a single coupled dial can say that. What the freedom costs is
     /// that the pair can be dialled into an INVERSION — a lit ring inside a
     /// pool the standoff has cleared to the bare ground — which is a picture
-    /// worth being able to ask for and not one to arrive at by accident. Hence
-    /// the fresh value: 1 minus the fresh depth, which is what that depth
-    /// leaves at a ring's own annulus, so the pair at rest draws what one
-    /// coupled dial would, and either bar is somewhere to go from there.
+    /// worth being able to ask for and not one to arrive at by accident.
     ///
     /// The RAW field and not the standoff's remainder — the Gap bars shape the
     /// ground alone — so a wash reads the same whatever they are doing around
     /// it, and turning the gap up cannot quietly take the ink's light with it.
     ///
-    /// A SCREEN over the ink (`node_paint` in lattice.wgsl) rather than an
-    /// over, because the field is MELDED across every sheet: the light at a
-    /// node's ink carries its neighbours' halos as much as its own, and an over
-    /// would let a saturated halo from behind take the ink's other channels
-    /// down, a white name under a red one coming out red. A screen can only
-    /// ever brighten, whoever laid the light down.
+    /// Laid over the ink as a SCREEN, so it can only ever brighten whoever laid
+    /// the light down; see `node_paint` in lattice.wgsl for why an over is
+    /// wrong over a melded field.
     ///
     /// Inert while [`glow_reach`](Self::glow_reach) is 0.
     pub glow_wash: f32,
@@ -2530,11 +2524,10 @@ impl Default for ViewConfig {
             // in a dim pool of its own halo reads as shade, where the whole of
             // it taken away reads as a black annulus drawn round the node.
             glow_gap_depth: 0.85,
-            // Exactly what that depth leaves at a ring's own annulus, so the
-            // fresh pair draws what a single coupled dial would: a ring wearing
-            // the last of the light its gap does not take. An addition to the
-            // fresh view rather than a restyle of it, and the two bars part
-            // company from there.
+            // One minus the depth above, which is exactly what that depth
+            // leaves at a ring's own annulus: a ring wearing the last of the
+            // light its gap does not take, which is what a single coupled dial
+            // draws and a place for either bar to be moved from.
             glow_wash: 0.15,
             // The colour averaged half way round, which keeps a chord's hues
             // as arcs while a lone wedge still tints the whole halo.

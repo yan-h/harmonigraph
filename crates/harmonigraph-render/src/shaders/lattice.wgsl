@@ -163,11 +163,10 @@ struct Uniforms {
     // the node's own INK (`glow_wash`), where `misc11.w` is the GROUND's share
     // of that same field. y/z/w unused.
     //
-    // Not one of the three slots free on the standoff's row, close as it sits
-    // to the depth beside it: the Gap bars shape what the clearing paints, and
-    // this reads the field raw, so a dial found among them would read as a term
-    // of the standoff — which is the coupling this bar exists to break. Zeroed
-    // whole with misc10, on the same rule.
+    // A row of its own because it is not a term of the standoff, close as it
+    // reads to the depth: the Gap bars shape what the clearing paints, and this
+    // reads the field raw, so a dial sitting among them would carry the
+    // coupling it exists to break. Zeroed whole with misc10, on the same rule.
     misc13: vec4<f32>,
     // The FREQUENCY color scheme's ramp: the analyzer's own gradient, the
     // table the spectrogram's cells and the Spiral pane's segments are read

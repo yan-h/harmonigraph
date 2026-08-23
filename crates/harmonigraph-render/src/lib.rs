@@ -391,12 +391,11 @@ struct Uniforms {
     /// over the node's own INK (`Scene::glow_wash`), where `misc11.w` above is
     /// the GROUND's share of that same field. y/z/w unused.
     ///
-    /// Not one of the three slots going begging on the standoff's row, close as
-    /// it sits to the depth beside it, because it is not a term of the
-    /// standoff: the Gap bars shape what the clearing paints, and this reads
-    /// the field raw. A reader finding it among them would be right to assume
-    /// the coupling this bar exists to break. Zeroed whole with `misc10`, on
-    /// the same rule — a wash with no light to lay down is a factor on nothing.
+    /// A row of its own because it is not a term of the standoff, close as it
+    /// reads to the depth: the Gap bars shape what the clearing paints, and
+    /// this reads the field raw, so a dial sitting among them would carry the
+    /// coupling it exists to break. Zeroed whole with `misc10`, on the same
+    /// rule — a wash with no light to lay down is a factor on nothing.
     misc13: [f32; 4],
     /// The FREQUENCY colour scheme's ramp — the analyzer's own gradient
     /// (`SpectrumConfig::spectrogram_gradient`) through `pitch_ramp_lut`, the
