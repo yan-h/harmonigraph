@@ -139,3 +139,23 @@ session in practice overrides to opus on most calls but not all — this repo's
 `diff-reviewer` has run on both, 3 spawns opus and 7 fable, deciding it fresh
 each time. Where a role must not vary, pin `model:` in its
 `.claude/agents/*.md` frontmatter and stop relying on the coin flip.
+
+## Re-deriving these numbers
+
+They come from the subagent transcripts at
+`~/.claude/projects/<proj>/<session>/subagents/agent-*.jsonl`, with the
+`agentType` in the sibling `.meta.json`. Two traps sit in that format, and
+both give plausible wrong answers rather than obvious ones:
+
+- **A line is one content BLOCK, not one response.** Thinking, text and each
+  `tool_use` are separate entries carrying the same `message.id` and the same
+  `usage`, so counting assistant lines counts one response two to four times.
+  Deduplicate on `message.id`. The tell that something is wrong is a high
+  share of text-only responses and almost no parallel tool calls, neither of
+  which a working agent produces.
+- **`usage` is a streaming snapshot.** Earlier lines of a response carry a
+  placeholder `output_tokens` of 1 or 3; only the last carries the total. Take
+  the max per id. Summing lines overcounts by single digits, but reading the
+  first undercounts by about 25x. A first value and a max are both immune to
+  the repetition, which is why startup and peak context survive either
+  mistake.
