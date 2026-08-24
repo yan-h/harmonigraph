@@ -666,9 +666,10 @@ struct Instance {
     // frame the marking voice is pruned.
     @location(12) glow: vec4<f32>,
     // WHICH HALF of the node this instance draws. A home node is drawn twice
-    // with the resting markers between: its knockout first, so the hole hides
-    // the sheets behind the node without taking the cross the node stands on
-    // with them, then its ink (`from_scene`). Every other sheet draws WHOLE.
+    // with the cross standing at its position between: its knockout first, so
+    // the hole hides the sheets behind and the nodes beside it without taking
+    // that cross with them, then its ink (`from_scene`). Every other sheet
+    // draws WHOLE.
     //
     // The split is EXACT rather than close, being one premultiplied over
     // factored into two: `ground*g` at alpha `g`, then `ink` at alpha `a`,

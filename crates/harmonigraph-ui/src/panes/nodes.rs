@@ -640,10 +640,12 @@ fn note_section(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBack
         |v| format!("{:.0}%", v * 100.0),
     )
     .on_hover_text(
-        "The dark gap a node clears around its own shape, over the resting \
-         markers and back sheets — around each layer it is drawing, including \
-         an audio ring with no note under it, as a share of the node's radius. \
-         Solid to the inner handle, faded out by the outer. 0 draws none.",
+        "The dark gap a node clears around its own shape, over everything \
+         behind it — the resting markers, the back sheets, and any node the \
+         tilt has put under this one — around each layer it is drawing, \
+         including an audio ring with no note under it, as a share of the \
+         node's radius. Solid to the inner handle, faded out by the outer. \
+         0 draws none.",
     );
     // The glow is NOT here, though it is the whole node's as everything above
     // is: it has a section of its own directly below, and a heading is what

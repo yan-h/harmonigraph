@@ -10090,3 +10090,99 @@ fn splitting_a_clearing_off_its_node_paints_the_same_picture() {
         worst(&split, &whole),
     );
 }
+
+/// How far apart the two nodes of the probe below stand, in world units, and
+/// the two reaches their hole is read at.
+///
+/// A shade over one node radius (`clearing_node` draws at 1.4), which is the
+/// spacing that puts the near node's own ink clear of the far node's while its
+/// CLEARING still lands well inside it. Closer and the two inks overlap, so
+/// what a reading counts is occlusion rather than the hole; further and the
+/// smaller reach never arrives.
+const BESIDE_APART: f32 = 1.2;
+const BESIDE_REACHES: [f32; 2] = [0.15, 0.35];
+
+/// A node's clearing hides the rings of the node BESIDE IT on its own sheet,
+/// and follows its bar while doing it.
+///
+/// Two nodes on one sheet overlap wherever the lattice is orbited — the sheet
+/// foreshortens under billboards that do not — and the hole the nearer one cuts
+/// is the whole of what tells the two apart there. Batching every home
+/// knockout ahead of every home ink leaves each hole under all of that ink,
+/// which is the bar going quiet on the picture it is most wanted in, and it is
+/// the shape of the order this walks (`HomeSeam`).
+///
+/// Read as the FAR node's own ink, taken where the near node paints nothing:
+/// the ground is the shot's own clear colour, so a clearing standing over empty
+/// lattice paints what is already there and the only pixels a reading can count
+/// are ink the hole took. Two reaches rather than one, because a knockout that
+/// lands but does not follow its bar is a hole that cannot be dialled — which
+/// is a picture indistinguishable from no hole at the one setting anybody
+/// checks.
+#[test]
+fn a_node_clears_the_rings_of_the_node_beside_it_on_its_own_sheet() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut gpu) = Shooter::new(SIZE) else {
+        return;
+    };
+    // The far node carries no gutter of its own, so nothing it does can move
+    // the reading; the near one carries the whole of what is under test.
+    let build = |gutter: f32, beside: bool| -> Scene {
+        let mut scene = clearing_node(0, 1.0, true, 0.0);
+        scene.camera = harmonigraph_scene::Camera {
+            projection: harmonigraph_scene::Projection::Orthographic,
+            yaw: 0.0,
+            pitch: 0.0,
+            ..Default::default()
+        };
+        // BLACK, which is the colour `Shooter::shot` clears to: a clearing
+        // repaints the ground, so over empty lattice it lands on the ground it
+        // is already standing on and changes nothing. The light is off for the
+        // same reason — a clearing paints the light back (`node_paint`), and a
+        // pixel it puts back is a pixel this cannot tell from one it took.
+        scene.background = glam::Vec4::new(0.0, 0.0, 0.0, 1.0);
+        scene.glow_reach = 0.0;
+        scene.glow_strength = 0.0;
+        scene.pluses.clear();
+        scene.sevens_soft = 0.0;
+        if beside {
+            let mut near = scene.nodes[0];
+            near.world_pos.x += BESIDE_APART;
+            near.gutter = gutter;
+            scene.nodes.push(near);
+        }
+        scene
+    };
+    let alone = gpu.shot(&build(0.0, false));
+    let flat = gpu.shot(&build(0.0, true));
+    // The far node's ink and nothing else: lit where it stands alone, and
+    // untouched by the near node standing beside it with its hole switched
+    // off. Anything the near node already covers is occlusion, which is not
+    // what the Clearance is for and would read the same with none.
+    let own: Vec<usize> = (0..alone.len())
+        .step_by(4)
+        .filter(|&i| brightness(&alone[i..i + 4]) > 24 && flat[i..i + 4] == alone[i..i + 4])
+        .collect();
+    assert!(
+        own.len() > 500,
+        "the fixture leaves only {} px of the far node for a hole to take",
+        own.len(),
+    );
+    let mut taken = |gutter: f32| -> usize {
+        let holed = gpu.shot(&build(gutter, true));
+        own.iter().filter(|&&i| holed[i..i + 4] != flat[i..i + 4]).count()
+    };
+    let [near, far] = BESIDE_REACHES;
+    let (short, long) = (taken(near), taken(far));
+    assert!(
+        short > 100,
+        "a Clearance of {near} took {short} px of the node beside it, out of the {} px \
+         of it standing in the open",
+        own.len(),
+    );
+    assert!(
+        long > short,
+        "the hole does not follow its bar: {short} px taken at a reach of {near} and \
+         {long} at {far}",
+    );
+}
