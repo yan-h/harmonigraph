@@ -72,14 +72,30 @@ One agent answers one QUESTION. Startup is a fixed 13.5k whatever you ask, so
 four related questions belong in one agent, not four — and an agent handed one
 question per file is paying startup per file.
 
-The opposite failure is the one that shows up as a 250k-context agent: not too
-many questions, but one question with no boundary ("review the codebase"). An
-agent needing 250k is mis-scoped, and the fix is to split the QUESTION — by
-subsystem, by failure mode, by reading — never to hand it fewer files and the
-same open mandate.
+The opposite failure is one question with no boundary ("review the codebase").
+The fix is to split the QUESTION — by subsystem, by failure mode, by reading —
+never to hand it fewer files and the same open mandate.
+
+**Count turns, not context.** Peak context is the lagging indicator: it tracks
+turns at roughly 1.3–1.5k per turn, so it only tells you an agent was
+over-scoped once it has finished and you have already paid. Measured here:
+
+| turns | median peak context |
+|---|---|
+| 1–49 | 65k |
+| 50–99 | 125k |
+| 100–199 | 199k |
+| 200+ | 305k |
 
 Aim for an agent that finishes in 30–100 turns. Past ~200 it has usually
-stopped answering and started exploring.
+stopped answering and started exploring — that is judgment rather than a
+measurement, since nothing here scores an agent's answer.
+
+Do not set a context ceiling instead. A subagent's peak is 142k at the median
+and 250k at p90, so any round number in that range is the tail of ordinary
+behaviour rather than a fault: `merge-auditor` alone has a 236k MEDIAN, because
+auditing a merge range honestly needs the material, while a mis-scoped
+`diff-reviewer` at 116k would sail under the same line.
 
 ## State the return contract in the prompt
 
