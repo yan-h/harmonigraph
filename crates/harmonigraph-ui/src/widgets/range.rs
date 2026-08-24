@@ -335,10 +335,10 @@ fn readout_lefts(row: ReadoutRow) -> (f32, f32) {
 /// Most bars only reach it while the low end is DRAGGED there: a bar that
 /// opens at the full axis stands its low handle a point clear of the name, and
 /// the Level range bar opens at 40% of its axis. The two
-/// [`fade_span`](RangeBar::fade_span) bars rest inside it, and the Clearance
-/// does so at a fresh install — its low end is where the gap stops being solid,
-/// which on a nearly-fully-soft default is 1.4% of the axis, so the thumb
-/// stands on the "C".
+/// [`fade_span`](RangeBar::fade_span) bars rest inside it, and the Shadow does
+/// so at a fresh install — its low end is where the shadow stops being solid,
+/// which on a fully-soft default is the bottom of the axis, so the thumb stands
+/// on the "S".
 ///
 /// **That costs no letter**, and it is why the fresh look does not have to be
 /// chosen around it. The name is painted a second time clipped to the thumb, in
@@ -398,8 +398,8 @@ impl<'a> RangeBar<'a> {
     /// the axis floor rather than at `low`, runs solid to `low`, and ramps out
     /// to nothing by `high`.
     ///
-    /// For the pairs that describe a soft edge — the lattice's knockout gutter
-    /// and the piano roll's note outline. Both are two distances from the same
+    /// For the pairs that describe a soft edge — the lattice's shadow and the
+    /// piano roll's note outline. Both are two distances from the same
     /// place (the node's rim, the note's edge), so they are already two points
     /// on one axis, and the ordinary two-handle reading of them is the true
     /// one: solid out to `low`, gone by `high`. What the fill adds is that the
@@ -413,7 +413,7 @@ impl<'a> RangeBar<'a> {
     /// fade, and the low end is the fade at a fixed reach. Which is the whole
     /// reason this is one CONTROL and not one NUMBER — a fade tied to its
     /// reach as a fraction would make a wider edge always a blurrier one, and
-    /// there would be no way to ask for a wide crisp gutter or a narrow soft
+    /// there would be no way to ask for a wide crisp edge or a narrow soft
     /// one.
     pub fn fade_span(mut self) -> Self {
         self.fade_span = true;
@@ -460,7 +460,7 @@ impl<'a> RangeBar<'a> {
         let (min, max) = (*self.range.start(), *self.range.end());
         // A [`fade_span`](RangeBar::fade_span) bar's values run the whole bar,
         // the way the octave strip's wheel does: its low end IS the bar's left
-        // end — a gutter of no softness at all, a note standing off nothing —
+        // end — a shadow of no softness at all, a note standing off nothing —
         // and a handle stopping a point clear of it reads as a control that
         // cannot reach its own floor. The handles are still drawn whole, by
         // clamping where they are PLACED rather than where they mean, which is
@@ -743,7 +743,7 @@ impl<'a> RangeBar<'a> {
         // numbers out too would give the placement somewhere soft to fail into
         // and cost that check its teeth. The name has no such option: it is
         // pinned to the left of the bar and a thumb comes to rest on it — which
-        // for the two `fade_span` bars and a fresh Clearance is where they OPEN.
+        // for the two `fade_span` bars and a fresh Shadow is where they OPEN.
         let grip_radius =
             CornerRadius::same(if self.fade_span { r } else { theme::scaled_points(2, scale) });
         for x in [lgx, hgx] {
@@ -1077,8 +1077,8 @@ mod tests {
 
     /// A [`RangeBar::fade_span`] bar is knocked out like any other, and it is
     /// the one that needs it most: the two of them rest with a thumb inside the
-    /// name's own share of the bar, and a fresh Clearance stands its low end on
-    /// the "C". Every other bar has to be dragged there.
+    /// name's own share of the bar, and a fresh Shadow stands its low end on
+    /// the "S". Every other bar has to be dragged there.
     ///
     /// It is also the bar that stretches the square clip furthest. Its thumb
     /// takes the BAR's corner rather than a grip's, which on a 6pt width epaint
@@ -1089,7 +1089,7 @@ mod tests {
     /// knockout happens, on the thumb, in the panel colour.
     #[test]
     fn a_fade_span_bars_name_is_knocked_out_where_its_thumb_rests_on_it() {
-        // A low end just inside the name, the way a fresh Clearance opens.
+        // A low end just inside the name, the way a fresh Shadow opens.
         let (mut lo, mut hi) = (AXIS.0 + 3.0, AXIS.0 + 20.0);
         let out = painted(300.0, |ui| {
             RangeBar::new(&mut lo, &mut hi, AXIS.0..=AXIS.1, NAME)
@@ -1635,7 +1635,7 @@ mod tests {
     }
 
     /// A fade bar's thumb reaches the end of the bar. Its axis runs the whole
-    /// bar for that — a low end at the axis floor is a gutter of no softness at
+    /// bar for that — a low end at the axis floor is an edge of no softness at
     /// all, an ordinary setting, and a thumb stopping a point clear of the edge
     /// says the control cannot reach it.
     ///

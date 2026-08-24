@@ -835,7 +835,7 @@ fn an_off_sheet_note_leaves_the_marker_field_alone() {
 /// Its shadow answers to the light instead, and the middle of a node is the one
 /// place the picture keeps free of a standoff: inside the innermost ring
 /// nothing holds the light off, which is what lights the centre of a node whose
-/// innermost ring is an annulus ([`ViewConfig::glow_gap`]). A cross standing
+/// innermost ring is an annulus ([`ViewConfig::shadow`]). A cross standing
 /// there would cut a plus-shaped bite out of the node's own halo, and it is
 /// reachable with no MIDI in the picture at all — every ringing node wearing a
 /// dark cross, permanently, under the default Show mode.

@@ -69,7 +69,7 @@ struct FrameVoice<'a> {
     /// axis position (see the mark color in [`derive_scene`]).
     color: Vec4,
     /// The note's own envelope, attack times what is left of the release:
-    /// what the disc, the glow, the gutter and the octave sector all draw at.
+    /// what the disc, the glow, the shadow and the octave sector all draw at.
     activation: f32,
     /// Whether this voice's departure has begun (see
     /// [`NodeInstance::departing`](crate::NodeInstance::departing)).
@@ -231,10 +231,6 @@ pub fn derive_scene(
     // biggest thing on screen (see `ViewConfig::sevens_size`). The floor
     // keeps a sheet from collapsing to an invisible speck at extent 4.
     let sevens_size = view.sevens_size.clamp(0.15, 1.0);
-    // Bounded well inside the billboard: the quad reaches QUAD_MARGIN (1.6)
-    // in uv, and the gutter has to finish inside it or it would be clipped
-    // square instead of ending on the node's own outline.
-    let sevens_gutter = view.sevens_gutter.clamp(0.0, 0.5);
     // The octave wheel is a pitch axis, so it is a property of the VIEW and is
     // built once: every node draws the same slice WIDTHS. Which octaves those
     // slices are, and how far the ring is turned to put them on their pitches,
@@ -456,42 +452,6 @@ pub fn derive_scene(
                 wrapped_cents(node_pc, tuning.pitch_class(namesake)),
             )
         };
-        // EVERY node that DRAWS clears what is behind it, the home sheet
-        // included. Leaving the home sheet out is what let the sheets
-        // behind it show straight through the gaps in a home node's body —
-        // a node is annuli with gaps between them, so "drawn over" covers
-        // very little — and neither sheet then read as being in front of the
-        // other.
-        //
-        // The home sheet's clearing cuts its own resting MARKER as well as the
-        // sheets behind it — a sounding node sits in a clean gap in the
-        // lattice rather than on top of it. That is reason enough on its
-        // own, so it does NOT wait for depth: on a flat lattice there are
-        // no sheets to hide, but the marker field is still there to be cut, and
-        // a gap in it is the look either way. (It was gated on the
-        // sevenths extent when the clearing was purely an inter-sheet
-        // device; a flat lattice then had to turn the gutter on by growing
-        // depth it didn't want.)
-        //
-        // The WIDTH is a constant of the view; the STRENGTH is per LAYER, and
-        // the shader is where it is applied — each layer's hole scaled by the
-        // same level that paints that layer, so a clearing fades out exactly as
-        // the ink in it does. Scaling the width by an envelope instead leaves
-        // the clearing fully opaque for the whole release and only narrows its
-        // soft edge, so the hole hangs around at full strength and then
-        // vanishes the instant the voice is pruned.
-        //
-        // Which is why this is not gated on `activation` here, though it reads
-        // like it should be: a node the keys never touched still draws its audio
-        // ring wherever the view's Gate lets it, and a node that draws ink owes
-        // that ink a hole. The gate for THIS field would have to be "does any
-        // layer draw", and the ring's half of that answer is not known yet —
-        // `Scene::wear_audio_rings` fills it in after the fold. So the width is
-        // handed over whole and the shader, which has every level, decides what
-        // clears. A node with no layer drawing at all clears nothing there, and
-        // is culled before it reaches the shader anyway.
-        let gutter = sevens_gutter;
-
         nodes.push(NodeInstance {
             lattice_pos: pos,
             world_pos,
@@ -502,7 +462,6 @@ pub fn derive_scene(
             hovered: hovered == Some(pos),
             on_home: pos.sevens == view.center_sevens,
             scale,
-            gutter,
             comma,
             cents: node_cents,
             melody_slots: melody.slots,
@@ -594,7 +553,31 @@ pub fn derive_scene(
         // lit layer rather than as light crossing a clear one, and below 0 the
         // crest narrows away to a spike too fine for any pixel to catch.
         shimmer_softness: view.shimmer_softness.clamp(0.0, 1.0),
-        sevens_soft: view.sevens_gutter_soft.clamp(0.0, 0.5),
+        // The shadow's reach, clamped here as well as in `sanitize` for the
+        // shells that never come through that door: every vertex stage grows
+        // its billboard by it, so a number from outside the bar is a quad the
+        // draw cannot fill.
+        //
+        // A WIDTH and not a decision: whether an element casts, and how
+        // strongly, is per LAYER and settled in the shader, each layer's share
+        // of the shadow scaled by the level that paints it. So it is not gated
+        // on `activation` here, though it reads like it should be — a node the
+        // keys never touched still draws its audio ring wherever the view's
+        // Gate lets it, and a node that draws ink owes that ink a shadow. The
+        // gate would have to be "does any layer draw", and the ring's half of
+        // that answer is not known yet (`Scene::wear_audio_rings` fills it in
+        // after the fold). Scaling the width by an envelope instead leaves the
+        // shadow fully opaque for the whole release and only narrows its soft
+        // edge, so it hangs around at full strength and then vanishes the
+        // instant the voice is pruned.
+        shadow: view.shadow.clamp(0.0, crate::SHADOW_MAX),
+        // To the axis rather than to the reach: a fade wider than its reach
+        // draws as one exactly as wide (both covers floor it at the shape they
+        // surround), and `sanitize` is where the stored pair is held to the
+        // shape the bar can show.
+        shadow_soft: view.shadow_soft.clamp(0.0, crate::SHADOW_MAX),
+        shadow_shape: view.shadow_shape.clamp(0.0, 1.0),
+        shadow_depth: view.shadow_depth.clamp(0.0, 1.0),
         pitch_lut: pitch_ramp_lut(view.pitch_gradient),
         darkest_pitch: frame.darkest_pitch,
         brightest_pitch: frame.brightest_pitch,
@@ -606,18 +589,6 @@ pub fn derive_scene(
         glow_reach: view.glow_reach.clamp(0.0, crate::GLOW_REACH_MAX),
         glow_strength: view.glow_strength.clamp(0.0, crate::GLOW_STRENGTH_MAX),
         glow_feather: view.glow_feather.clamp(0.0, 1.0),
-        // The standoff on the same footing, a bar's range rather than a
-        // billboard's: it is painted inside the clearing's own quad, so an
-        // absurd gap is a shape nothing can show rather than a quad nothing
-        // can fill.
-        glow_gap: view.glow_gap.clamp(0.0, crate::GLOW_GAP_MAX),
-        // To the axis rather than to the gap, as `sevens_soft` above is: a fade
-        // wider than its gap draws as one exactly as wide (`standoff_coverage`
-        // floors it at the ring's edge), and `sanitize` is where the stored
-        // pair is held to the shape the bar can show.
-        glow_gap_soft: view.glow_gap_soft.clamp(0.0, crate::GLOW_GAP_MAX),
-        glow_gap_shape: view.glow_gap_shape.clamp(0.0, 1.0),
-        glow_gap_depth: view.glow_gap_depth.clamp(0.0, 1.0),
         glow_wash: view.glow_wash.clamp(0.0, 1.0),
         marker_light: view.marker_light.clamp(0.0, 1.0),
         marker_span: derive_marker_span(view),

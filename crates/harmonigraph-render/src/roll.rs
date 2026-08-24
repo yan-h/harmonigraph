@@ -93,7 +93,7 @@ pub struct RollInstance {
     /// a hard edge, the whole reach to fade from the note's edge outward.
     ///
     /// Separate from the reach rather than a fraction of it, exactly as the
-    /// lattice's gutter and gutter fade are separate: tying the two makes a
+    /// lattice's shadow and its fade are separate: tying the two makes a
     /// wider outline always a blurrier one. Separate NUMBERS — the pane sets
     /// both on one bar, as two points on the axis running out from the note's
     /// edge.
@@ -1342,7 +1342,7 @@ mod tests {
     /// rather than ending it: solid where it meets the note, gone at the reach,
     /// and monotone between.
     ///
-    /// The pair is the lattice's knockout gutter's, and two numbers rather
+    /// The pair is the lattice's shadow's, and two numbers rather
     /// than one for the same reason — a fade tied to the reach makes a wider
     /// outline always a blurrier one. So this measures the fade against a
     /// hard-edged outline of the SAME reach: both must end in the same place,
@@ -1595,7 +1595,7 @@ mod tests {
     /// whole reach, from full coverage at the note's edge — rather than dimming
     /// the outline everywhere.
     ///
-    /// The same bound the lattice's gutter puts on its fade, and the same
+    /// The same bound the lattice's shadow puts on its fade, and the same
     /// reason: the coverage against the note is the one part that always has to
     /// be there, since that boundary is the whole point of the outline. Without
     /// the bound a fade dialled past the reach makes the note's edge translucent

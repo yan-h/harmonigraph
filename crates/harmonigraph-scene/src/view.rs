@@ -5,7 +5,7 @@
 use crate::spectral::SpectralReading;
 use crate::style::{Gradient, NoteNames, Pulse, SevensLabel};
 use crate::{
-    Camera, PLUS_SIZE_MAX, GAP_MAX, GLOW_BALLISTICS_MAX, GLOW_GAP_MAX,
+    Camera, PLUS_SIZE_MAX, GAP_MAX, GLOW_BALLISTICS_MAX, SHADOW_MAX,
     GLOW_REACH_MAX, GLOW_STRENGTH_MAX, MARKER_REACH_MAX, MARK_THICKNESS_MAX,
     MAX_DRAWN_NODES,
     NODE_RADIUS_FACTOR, RING_INNER_MAX, RING_WIDTH_MAX,
@@ -218,9 +218,10 @@ pub struct ViewConfig {
     // ---- The sevens layer ------------------------------------------------
     // How the sheets other than the home one draw. `sevens_size` and
     // `sevens_label` go inert while `extent_sevens` is 0, which is where a
-    // fresh view starts; `sevens_gutter` does NOT — it is named for this
-    // layer but cuts the marker under a sounding node at any extent (see its
-    // own doc below, and `a_flat_lattice_still_clears_its_marker`).
+    // fresh view starts. The Shadow family below sits with them because the
+    // overlap is what it buys the layer, and belongs to no layer at all: it
+    // cuts the marker under a sounding node on a flat lattice too (see
+    // `a_flat_lattice_still_clears_its_marker`).
     //
     // The problem all three settings answer: the 5-limit sheet wants its
     // pitch classes as large as they will go, and at the default spacing a
@@ -239,71 +240,175 @@ pub struct ViewConfig {
     /// against, so it stays the largest thing on screen whichever way the
     /// sevens axis runs.
     pub sevens_size: f32,
-    /// Width of the dark gutter a node clears around itself, in quad UV
-    /// units — the units a FULL-SIZE node uses, so the gap comes out the
-    /// same width on screen whatever size the node it belongs to draws at.
-    /// (The shader divides by the node's size factor to get there.) A gap
-    /// that shrank with its node read as a property of the note rather than
-    /// of the layer it sits on. 0 draws none.
+    /// How far past the shape it draws an element casts its SHADOW, in quad UV
+    /// units — the units a FULL-SIZE node uses. 0 casts none.
     ///
-    /// This is what lets the sevens layer OVERLAP the home sheet instead of
-    /// needing room of its own: the node punches its own footprint out of
-    /// whatever it crosses and sits in the hole, so a small node stays
-    /// legible over a large one. It costs no layout space at all, which is
-    /// the whole point — the alternative is shrinking the 5-limit sheet to
-    /// open up clearance, and the 5-limit sheet is what you came to look at.
+    /// The shadow is one distance spent on two covers, and both are the
+    /// element's own shape one reach out rather than a circle sized to hold it:
     ///
-    /// FOOTPRINT means the node's own shape, this far out from it, and not a
-    /// circle sized to hold it: a node reaching a melody mark on one octave
-    /// bulges over that wedge and hugs its rings everywhere else. A circle
-    /// answers with the widest thing the node reaches in ANY direction, which
-    /// on a marked node is a gap wider than itself all the way round — so the
-    /// hole stops reading as the node's and starts reading as empty space
-    /// somebody cut out.
+    ///  - the KNOCKOUT, over everything drawn BEHIND the element. This is what
+    ///    lets the sevens layer OVERLAP the home sheet instead of needing room
+    ///    of its own: the node punches its own footprint out of whatever it
+    ///    crosses and sits in the hole, so a small node stays legible over a
+    ///    large one. It costs no layout space at all, which is the whole point
+    ///    — the alternative is shrinking the 5-limit sheet to open up room, and
+    ///    the 5-limit sheet is what you came to look at.
+    ///  - the STANDOFF, over the LIGHT (`glow_shade` in lattice.wgsl). Without
+    ///    it the light is at its brightest exactly where the rings are — the
+    ///    falloff is measured from the node's centre, so both sides of a ring
+    ///    sit near the peak — and a ring drawn over that is a flat grey
+    ///    silhouette on a bright field. A ring standing in a pool that
+    ///    brightens outward is what the eye reads as the ring being the source
+    ///    of the light.
     ///
-    /// The shape is the shader's (`node_clearing`), off the same radii that
-    /// draw the layers, and it is built one LAYER at a time: each clears its
-    /// own footprint at the level it is drawn at, and the hole is whichever of
-    /// them claims a pixel most. Which is what lets a node wearing an audio
-    /// ring and no note clear at all — its ring's level is the gate's, where
-    /// the note's is nothing — and equally what stops that node clearing the
-    /// band-sized hole a node-wide level would give it. A layer nobody is
-    /// drawing clears nothing.
+    /// FOOTPRINT means the element's own shape and not a circle: a node
+    /// reaching a melody mark on one octave bulges over that wedge and hugs its
+    /// rings everywhere else. A circle answers with the widest thing the node
+    /// reaches in ANY direction, which on a marked node is a gap wider than
+    /// itself all the way round — so the hole stops reading as the node's and
+    /// starts reading as empty space somebody cut out.
     ///
-    /// It clears to TRANSPARENCY rather than to a color, so what shows through
+    /// Both shapes are the shader's, off the same radii that draw the layers,
+    /// and both are built one LAYER at a time, each carrying its own level: a
+    /// layer that is off, refused by the stack, attacking or releasing opens
+    /// and closes its own share of the shadow in step with the ink casting it.
+    /// Which is what lets a node wearing an audio ring and no note cast at all
+    /// — its ring's level is the gate's, where the note's is nothing — and
+    /// equally what stops that node casting the band-sized shadow a node-wide
+    /// level would give it. A layer nobody is drawing casts nothing.
+    ///
+    /// Where the two covers differ is what each is laid OVER, and that is one
+    /// difference of shape rather than of setting. The knockout is filled to
+    /// the element's centre and clears to TRANSPARENCY, so what shows through
     /// is whatever the pass is composited over — the pane's own fill in the
-    /// editor, the layout's ground offline. A color of its own would have to be
-    /// the same one the shell paints, and a hole that has to be told what it is
-    /// a hole in is one a shell can get wrong; this one cannot disagree.
+    /// editor, the layout's ground offline. (A colour of its own would have to
+    /// be the same one the shell paints, and a hole that has to be told what it
+    /// is a hole in is one a shell can get wrong; this one cannot disagree.)
+    /// The standoff is measured from each RING's own annulus and its slices, so
+    /// the light runs in to the middle of a node whose innermost ring is an
+    /// annulus, and comes back between one slice and the next: past an
+    /// [`octave_gap`](Self::octave_gap) of twice this, a gap between two slices
+    /// is wide enough to keep all of its own light.
     ///
-    /// It fades rather than ending at a rim, over a band of its own
-    /// ([`sevens_gutter_soft`](Self::sevens_gutter_soft)) — a hard edge
-    /// cutting across a lit ring reads as a bite taken out of it. And its
-    /// STRENGTH is each layer's own envelope, so a clearing fades out exactly
-    /// as the ink in it does while holding its width; a node drawing nothing
-    /// clears nothing at all.
+    /// It reaches the light wherever that light reaches, which is further than
+    /// its own element: the light is one field composited under the whole
+    /// lattice, so a node dims a NEIGHBOUR's halo standing in its rings exactly
+    /// as it dims its own. A resting MARKER's cross casts on the same bar, out
+    /// to the arm's solid length (`plus_standoff` in lattice.wgsl) — ink
+    /// standing in the light exactly as a ring is, and a lattice whose sounding
+    /// notes were dark-rimmed and whose resting field was not would be two
+    /// pictures laid over each other.
     ///
-    /// Named for the sevens layer it was built for, but not confined to it:
-    /// the home sheet clears too, and at any sevenths extent — with the
-    /// lattice flat there is no sheet behind to hide, but the resting markers
-    /// are still cut, which is a look worth having on its own.
-    pub sevens_gutter: f32,
-    /// How wide the clearing's fade is, same units — and deliberately NOT
-    /// derived from the reach above. Tying the two into one number (fade
-    /// pinned to twice the reach) means widening the gap also blurs it,
-    /// with no way to ask for a wide crisp one or a narrow soft one.
+    /// Not confined to the layer it sits with, and not gated on the light
+    /// either: a node cuts its shadow whatever the glow is doing, and with the
+    /// lattice flat there is no sheet behind to hide but the resting markers
+    /// are still cut.
     ///
-    /// One CONTROL is a different question from one number, and the Nodes
-    /// section's Clearance bar is one: both are distances from the node's rim, so
-    /// they are two points on one axis and the bar carries a handle at each.
+    /// The ceiling is [`SHADOW_MAX`], a whole radius where the two paddings
+    /// stop at [`GAP_MAX`]: what stops a standoff reading as a black RING
+    /// rather than as a lack of light is a dip broad enough to come off at the
+    /// rate the skirt does, and that is a distance a good deal wider than any
+    /// padding. It is the emitter's own billboard that has to hold the answer,
+    /// and every vertex shader in lattice.wgsl grows its quad by this so that
+    /// it does.
+    pub shadow: f32,
+    /// How wide the shadow's fade is, same units — and deliberately NOT derived
+    /// from the reach above. Tying the two into one number (fade pinned to
+    /// twice the reach) means widening the shadow also blurs it, with no way to
+    /// ask for a wide crisp one or a narrow soft one.
     ///
-    /// The clearing is solid out to `reach - fade` past the node's own body
-    /// and gone by `reach`, so the reach is exactly where it ends whatever the
-    /// fade does — both measured from that body rather than from a rim, so
-    /// they follow its shape (see [`sevens_gutter`](Self::sevens_gutter)).
-    /// A fade wider than the reach eats outward rather than inward: the body
-    /// itself is the one part that must always be cleared.
-    pub sevens_gutter_soft: f32,
+    /// One CONTROL is a different question from one number, and the Note
+    /// section's Shadow bar is one: both are distances from the element's own
+    /// shape, so they are two points on one axis and the bar carries a handle
+    /// at each. Held inside the reach (`sanitize`), because that is the shape
+    /// the bar draws: its low handle is where the fade starts and cannot stand
+    /// below the axis.
+    ///
+    /// The shadow is solid out to `reach - fade` past the element's own body
+    /// and all but gone by `reach`, so the reach is exactly where it ends
+    /// whatever the fade does. A fade wider than the reach eats outward rather
+    /// than inward: the body itself is the one part that must always be
+    /// covered.
+    ///
+    /// ALL BUT, on the light's side, and the difference from the knockout's own
+    /// "gone" is worth stating: what the standoff spends over the fade is a
+    /// DECAY rather than a ramp, so there is no distance at which it stops
+    /// (`standoff_coverage` in lattice.wgsl). A ramp landing on nothing puts a
+    /// closed contour into a field whose every other length is an exponential,
+    /// and a circle is what the eye finds in a smooth field however gently the
+    /// ramp meets it — which is the dark disc with a rim on it that a strong
+    /// glow shows, its halo out there being flat enough to have no gradient of
+    /// its own for the fade's end to hide in. A knockout is cut into the
+    /// picture instead, where its outer end is met by whatever the neighbouring
+    /// pixel already held, and a ramp is right there.
+    ///
+    /// A fade the whole width of the reach is the bar's low handle at 0 — no
+    /// solid band at all — and that is the one a wide shadow usually wants: a
+    /// solid band with a short edge, laid against a node's own dark rings, is
+    /// what the eye takes for a painted black annulus.
+    ///
+    /// On the light the fade sits on BOTH sides of a ring at once — the halo
+    /// outside it and the lit middle of the node inside it — because a ring is
+    /// measured from its own annulus (`annulus_distance` in lattice.wgsl) and
+    /// one band feathers both.
+    pub shadow_soft: f32,
+    /// How the standoff's decay is shaped across the width
+    /// [`shadow_soft`](Self::shadow_soft) gives it, 0..=1: 0 is a plain
+    /// exponential, steepest where it meets the ink and shallower every step
+    /// after; 0.5 the one that spends the fade most evenly, steepest inside the
+    /// band rather than at either end of it; 1 holds the ring dark most of the
+    /// way out and gives the light back over the last of the width.
+    ///
+    /// The SHAPE knob to that bar's width, the way
+    /// [`glow_feather`](Self::glow_feather) is to
+    /// [`glow_reach`](Self::glow_reach)'s distance. At the top the fade spends
+    /// its first half nearly solid and reads as a dark annulus with a soft edge
+    /// — the thing the width was widened to avoid. At the bottom the dark stays
+    /// tight against the ring and the recovery is a long shallow tail, which is
+    /// a ring standing in shade rather than in a band.
+    ///
+    /// It moves no boundary: the decay spends the same amount over the same
+    /// width at every setting (see `standoff_coverage` in lattice.wgsl), so the
+    /// Shadow bar's two handles still say where the shadow is solid to and
+    /// where it is all but done. This says only how it is spent between them,
+    /// and the bar draws that curve on itself
+    /// ([`standoff_recovery`](crate::standoff_recovery)).
+    ///
+    /// It is dialled against [`shadow_depth`](Self::shadow_depth) rather than
+    /// alone: the tail is the shallow end of the fade, so a depth well under 1
+    /// leaves it too faint to read at all, and a depth of 1 makes it a broad
+    /// void that eats the halo it trails into.
+    ///
+    /// The LIGHT's half of the shadow alone. The knockout is a ramp with
+    /// nothing to skew — it is cut into a picture rather than laid over a
+    /// smooth field — so it takes the two handles and no curve.
+    pub shadow_shape: f32,
+    /// How much of what it covers the shadow takes, 0..=1 — a hole at 1 and no
+    /// shadow at all at 0, which is what makes this bar the A/B on the whole
+    /// feature.
+    ///
+    /// Spent differently on each of the two covers, because they are laid over
+    /// different things. Over the picture behind, the knockout scales
+    /// LINEARLY: coverage is already a share of a destination, so half depth is
+    /// half the hole. Over the light it is spent in STOPS across every ring's
+    /// own coverage, because sight answers ratios — a factor walked evenly in
+    /// VALUE spends most of what can be SEEN of it in the first fraction of the
+    /// fade's width, and the pool then reads as a dark ring hugging the ink
+    /// with an edge on it however wide the shadow is dialled. See `gap_shade`
+    /// in lattice.wgsl.
+    ///
+    /// 1 is a hole either way: where the shadow is solid, what stands behind is
+    /// gone and the light is back to the bare ground, exactly the frame with no
+    /// glow in it. Below it the rings sit in a DIMMER POOL of their own light
+    /// instead of in a void, which is the whole difference between a shadow
+    /// that reads as shade and one that reads as ink.
+    ///
+    /// The GROUND's share of the light at an element's pixel, and that alone.
+    /// What the element's own INK takes of the same field is
+    /// [`glow_wash`](Self::glow_wash), on a bar of its own, so a ring can stand
+    /// in a pool this has cleared to the bare ground and still carry the colour
+    /// of the halo around it.
+    pub shadow_depth: f32,
     /// What text an off-sheet node's label carries (see [`SevensLabel`]).
     /// Only meaningful while `show_labels` is on.
     pub sevens_label: SevensLabel,
@@ -1168,154 +1273,6 @@ pub struct ViewConfig {
     ///
     /// Inert while [`glow_reach`](Self::glow_reach) is 0.
     pub glow_feather: f32,
-    /// The standoff: how far past each RING a node draws its clearing dims the
-    /// light standing under it, in the same quad UV units
-    /// [`ring_gap`](Self::ring_gap) reads in — the far end of the gap, where
-    /// the light is back to a fiftieth of what the ring holds off. With
-    /// [`glow_gap_soft`](Self::glow_gap_soft) it is ONE control, the Glow
-    /// section's Gap bar, on the terms the Clearance pair
-    /// ([`sevens_gutter`](Self::sevens_gutter)) is one: solid out to
-    /// `gap - soft`, all but gone by `gap`.
-    ///
-    /// ALL BUT, and the difference from the Clearance's own "gone" is the
-    /// point: what is spent over the fade is a DECAY rather than a ramp, so
-    /// there is no distance at which the standoff stops (`standoff_coverage`
-    /// in lattice.wgsl). A ramp landing on nothing puts a closed contour into
-    /// a field whose every other length is an exponential, and a circle is
-    /// what the eye finds in a smooth field however gently the ramp meets it —
-    /// which is the dark disc with a rim on it that a strong glow shows,
-    /// its halo out there being flat enough to have no gradient of its own for
-    /// the fade's end to hide in.
-    ///
-    /// Without it the light is at its brightest exactly where the rings are —
-    /// the falloff is measured from the node's centre, so both sides of a ring
-    /// sit near the peak — and a ring drawn over that is a flat grey
-    /// silhouette on a bright field. A ring standing in a pool that brightens
-    /// outward is what the eye reads as the ring being the source of the
-    /// light.
-    ///
-    /// It is a shape in the LIGHT and not a shape on a node: the light is one
-    /// field composited under the whole lattice, and the standoff is a second
-    /// field cut into it, written in the light's own draw and read back
-    /// wherever that light reaches the picture (`fs_glow` in lattice.wgsl).
-    /// Two things follow. A node dims the light it stands in whoever laid it
-    /// down, its NEIGHBOURS' halos included, that being what the melded field
-    /// holds; and it dims that light wherever the light reaches, not only
-    /// under its own Clearance — a node that clears nothing still stands its
-    /// rings off.
-    ///
-    /// On a node it is its RINGS, and a node draws nothing else: inside the
-    /// innermost ring the node stands nothing off, which is what lights the
-    /// middle of a node whose innermost ring is an annulus. Each ring
-    /// carries its own
-    /// level, so a layer that is off, refused by the stack, attacking or
-    /// releasing opens and closes its own standoff in step with the ink it
-    /// stands off. And a ring is its SLICES rather than a closed annulus, so
-    /// the light comes back between them as well as either side of them: past
-    /// an [`octave_gap`](Self::octave_gap) of twice this, a gap between two
-    /// slices is wide enough to keep all of its own light.
-    ///
-    /// A resting MARKER's cross stands the light off on this same bar, out to
-    /// the arm's solid length (`plus_standoff` in lattice.wgsl). It is ink
-    /// standing in the light exactly as a ring is, so a lattice whose sounding
-    /// notes are dark-rimmed and whose resting field is not would be two
-    /// pictures laid over each other; sharing the bar is what makes it one.
-    /// RESTING, and that is what keeps the middle above lit: a note claims the
-    /// position it sounds at for as long as it lasts (`derive_pluses`), so
-    /// there is no cross inside a lit node to cut one out of its own halo.
-    ///
-    /// The ceiling is [`GLOW_GAP_MAX`], a whole radius where the two paddings
-    /// stop at [`GAP_MAX`]: what stops a standoff reading as a black RING
-    /// rather than as a lack of light is a dip broad enough to come off at the
-    /// rate the skirt does, and that is a gap a good deal wider than any
-    /// padding. Nothing in the picture bounds it short of that: it is the
-    /// emitter's own billboard that has to hold the answer, and every vertex
-    /// shader the light draws through in lattice.wgsl grows its quad by this so
-    /// that it does.
-    ///
-    /// Inert while [`glow_reach`](Self::glow_reach) is 0: with no light to
-    /// stand off, a standoff is a dark ring painted for nothing.
-    pub glow_gap: f32,
-    /// How much of the standoff is spent fading the light back in, measured
-    /// back from where [`glow_gap`](Self::glow_gap) ends, in the same quad UV
-    /// units: the gap is solid out to `gap - soft` and the light is given back
-    /// over the rest. The Gap bar's low handle.
-    ///
-    /// Held inside the gap (`sanitize`), as the Clearance's fade is, because
-    /// that is the shape the bar draws: its low handle is where the fade
-    /// starts and cannot stand below the axis. A fade the whole width of the
-    /// gap is the bar's low handle at 0 — no solid band at all, the light
-    /// coming off a ring at one steady rate — and that is the one a wide gap
-    /// usually wants: a solid band with a short edge, laid against a node's
-    /// own dark rings, is what the eye takes for a painted black annulus.
-    ///
-    /// The fade sits on BOTH sides of a ring at once — the halo outside it and
-    /// the lit middle of the node inside it — because a ring is measured from
-    /// its own annulus (`annulus_distance` in lattice.wgsl) and one band
-    /// feathers both. At 0 all that is left under it is the
-    /// [`sevens_gutter_soft`](Self::sevens_gutter_soft) fade, which is an edge
-    /// a couple of screen pixels wide.
-    ///
-    /// Inert while [`glow_reach`](Self::glow_reach) is 0.
-    pub glow_gap_soft: f32,
-    /// How the standoff's decay is shaped across the width
-    /// [`glow_gap_soft`](Self::glow_gap_soft) gives it, 0..=1: 0 is a plain
-    /// exponential, steepest where it meets the ink and shallower every step
-    /// after; 0.5 the one that spends the fade most evenly, steepest inside
-    /// the band rather than at either end of it; 1 holds the ring dark most of
-    /// the way out and gives the light back over the last of the width.
-    ///
-    /// The SHAPE knob to that bar's width, the way
-    /// [`glow_feather`](Self::glow_feather) is to
-    /// [`glow_reach`](Self::glow_reach)'s distance. At the top the fade spends
-    /// its first half nearly solid and reads as a dark annulus with a soft
-    /// edge — the thing the width was widened to avoid. At the bottom the dark
-    /// stays tight against the ring and the recovery is a long shallow tail,
-    /// which is a ring standing in shade rather than in a band.
-    ///
-    /// It moves no boundary: the decay spends the same amount over the same
-    /// width at every setting (see `standoff_coverage` in lattice.wgsl), so
-    /// the Gap bar's two handles still say where the standoff is solid to and
-    /// where it is all but done. This says only how it is spent between them,
-    /// and the bar draws that curve on itself
-    /// ([`standoff_recovery`](crate::standoff_recovery)).
-    ///
-    /// It is dialled against [`glow_gap_depth`](Self::glow_gap_depth) rather
-    /// than alone: the tail is the shallow end of the fade, so a depth well
-    /// under 1 leaves it too faint to read at all, and a depth of 1 makes it a
-    /// broad void that eats the halo it trails into.
-    ///
-    /// Inert while [`glow_reach`](Self::glow_reach) is 0.
-    pub glow_gap_shape: f32,
-    /// How much of the light the standoff takes away where it stands, 0..=1 —
-    /// the factor the light is left with under a ring, spent in STOPS across
-    /// every ring's own coverage.
-    ///
-    /// In stops and not in proportion, which is what makes the fade worth
-    /// giving a width to: sight answers ratios, so a factor walked evenly in
-    /// VALUE spends most of what can be SEEN of it in the first fraction of
-    /// that width — at 0.85, half the visible swing is gone by a fifth of the
-    /// way out — and the pool then reads as a dark ring hugging the ink with an
-    /// edge on it however wide the Gap is dialled. See `glow_shade` in
-    /// lattice.wgsl.
-    ///
-    /// 1 is a hole: where the standoff is solid, the ground comes back bare,
-    /// exactly the frame with no glow in it, and across its fade — and the
-    /// Clearance's, which it is floored at — to a blend of the two. Below
-    /// it the rings sit in a DIMMER POOL
-    /// of their own light instead of in a void, which is the whole difference
-    /// between a gap that reads as shade and one that reads as ink. 0 is the
-    /// picture with no standoff at all, pixel for pixel, which is what makes
-    /// this bar the A/B on the whole feature.
-    ///
-    /// The GROUND's share of the light at a node's pixel, and that alone. What
-    /// the node's own INK takes of the same field is
-    /// [`glow_wash`](Self::glow_wash), on a bar of its own, so a ring can stand
-    /// in a pool this has cleared to the bare ground and still carry the colour
-    /// of the halo around it.
-    ///
-    /// Inert while [`glow_reach`](Self::glow_reach) is 0.
-    pub glow_gap_depth: f32,
     /// How much of the light standing at a pixel washes over the lattice's own
     /// INK there, 0..=1 — a node's rings, marks and glyphs, and the resting
     /// markers ([`plus_arm`](Self::plus_arm)) between them, as against the
@@ -1327,8 +1284,8 @@ pub struct ViewConfig {
     /// exactly the places the light is brightest.
     ///
     /// The ink's share of the field, and the counterpart to
-    /// [`glow_gap_depth`](Self::glow_gap_depth), which says the same thing of
-    /// the ground the clearing paints. 0 is ink drawn exactly as the ring stack
+    /// [`shadow_depth`](Self::shadow_depth), which says the same thing of the
+    /// ground the shadow covers. 0 is ink drawn exactly as the ring stack
     /// describes it, pixel for pixel what it is with the glow off; 1 is the
     /// whole field over it, a node melting into its own halo. Between them a
     /// silent slice's grey lifts toward the colour of the light it stands in,
@@ -1343,9 +1300,10 @@ pub struct ViewConfig {
     /// pool the standoff has cleared to the bare ground — which is a picture
     /// worth being able to ask for and not one to arrive at by accident.
     ///
-    /// The RAW field and not the standoff's remainder — the Gap bars shape the
-    /// ground alone — so a wash reads the same whatever they are doing around
-    /// it, and turning the gap up cannot quietly take the ink's light with it.
+    /// The RAW field and not the standoff's remainder — the Shadow bars shape
+    /// the ground alone — so a wash reads the same whatever they are doing
+    /// around it, and deepening the shadow cannot quietly take the ink's light
+    /// with it.
     ///
     /// Laid over the ink as a SCREEN, so it can only ever brighten whoever laid
     /// the light down; see `node_paint` in lattice.wgsl for why an over is
@@ -2250,16 +2208,25 @@ impl ViewConfig {
         // has no door here to need.
         self.fade_shape = finite_or(self.fade_shape, 0.0);
 
-        // The gutter and its fade, which are ONE control (the Note section's
-        // Clearance bar) over two numbers: the fade is a distance measured back
+        // The shadow and its fade, which are ONE control (the Note section's
+        // Shadow bar) over two numbers: the fade is a distance measured back
         // from the reach, so a fade wider than the reach is a low end off the
         // bottom of the axis. It draws as a fade over the whole reach either
-        // way — the shader floors it at the node's rim, which is the one part
-        // that must stay cleared — so holding it there costs the picture
-        // nothing and keeps the bar reading out the number the blob holds.
-        self.sevens_gutter = finite_or(self.sevens_gutter, fresh.sevens_gutter).clamp(0.0, 0.5);
-        self.sevens_gutter_soft = finite_or(self.sevens_gutter_soft, fresh.sevens_gutter_soft)
-            .clamp(0.0, self.sevens_gutter);
+        // way — both covers floor it at the shape they surround, which is the
+        // one part that must stay covered — so holding it there costs the
+        // picture nothing and keeps the bar reading out the number the blob
+        // holds.
+        self.shadow = finite_or(self.shadow, fresh.shadow).clamp(0.0, SHADOW_MAX);
+        self.shadow_soft =
+            finite_or(self.shadow_soft, fresh.shadow_soft).clamp(0.0, self.shadow);
+        // The shape the standoff's fade is spent in, which is a share of that
+        // fade's own WIDTH rather than a width itself — the exponent it maps to
+        // is the shader's business (`shadow_shape` in lattice.wgsl), and a bar
+        // reading 0..1 is what keeps its neutral point at the middle.
+        self.shadow_shape = finite_or(self.shadow_shape, fresh.shadow_shape).clamp(0.0, 1.0);
+        // A SHARE — of what the shadow's two covers stand over — so its range
+        // is the unit interval.
+        self.shadow_depth = finite_or(self.shadow_depth, fresh.shadow_depth).clamp(0.0, 1.0);
 
         // The spectral kernel's width, against that same hole and one more: it
         // is a DIVISOR in the fold's Gaussian, so a 0 from a hand-edited blob
@@ -2345,25 +2312,8 @@ impl ViewConfig {
         self.glow_strength =
             finite_or(self.glow_strength, fresh.glow_strength).clamp(0.0, GLOW_STRENGTH_MAX);
         self.glow_feather = finite_or(self.glow_feather, fresh.glow_feather).clamp(0.0, 1.0);
-        // The standoff and its fade, one control over two numbers on the
-        // Clearance pair's terms above: the fade is measured back from the
-        // gap's end, so one wider than the gap is a low end off the bottom of
-        // the axis, and it draws the same as one exactly as wide either way
-        // (`standoff_coverage` floors it at the ring's edge).
-        self.glow_gap = finite_or(self.glow_gap, fresh.glow_gap).clamp(0.0, GLOW_GAP_MAX);
-        self.glow_gap_soft =
-            finite_or(self.glow_gap_soft, fresh.glow_gap_soft).clamp(0.0, self.glow_gap);
-        // The shape the standoff's fade is spent in, which is a share of that
-        // fade's own WIDTH rather than a width itself — the exponent it maps
-        // to is the shader's business (`glow_gap_shape` in lattice.wgsl), and
-        // a bar reading 0..1 is what keeps its neutral point at the middle.
-        self.glow_gap_shape =
-            finite_or(self.glow_gap_shape, fresh.glow_gap_shape).clamp(0.0, 1.0);
-        // The SHARES — of the light the standoff stands in, of the light a
-        // node's ink stands in, of the light's own peak, of a whole turn — so
-        // their range is the unit interval.
-        self.glow_gap_depth =
-            finite_or(self.glow_gap_depth, fresh.glow_gap_depth).clamp(0.0, 1.0);
+        // The SHARES — of the light a node's ink stands in, of the light's own
+        // peak, of a whole turn — so their range is the unit interval.
         self.glow_wash = finite_or(self.glow_wash, fresh.glow_wash).clamp(0.0, 1.0);
         self.marker_light = finite_or(self.marker_light, fresh.marker_light).clamp(0.0, 1.0);
         self.marker_reach =
@@ -2471,8 +2421,26 @@ impl Default for ViewConfig {
             // On, even though the view opens flat (extent_sevens 0): the cut
             // sits ready for when depth opens rather than waiting to be
             // turned on with it, the way sevens_size still does.
-            sevens_gutter: 0.122_413_49,
-            sevens_gutter_soft: 0.122_413_49,
+            //
+            // A sixth of a radius past every shape it is cast off, faded over
+            // the whole of it — the Shadow bar's low handle at 0 — so the dark
+            // and the light either side of it read as one blur rather than as a
+            // cut through it: a solid band inside the fade, however short its
+            // edge, is what the eye takes for a black annulus drawn round the
+            // node.
+            shadow: 0.16,
+            shadow_soft: 0.16,
+            // The fade spent evenly across that width, which is the plain
+            // symmetric ramp: the bar's own middle, so either half of it is
+            // somewhere to go from a look that is already tuned.
+            shadow_shape: 0.5,
+            // The whole of what the shadow stands over, taken: the knockout is
+            // a hole down to the bare ground, which is what lets a small node
+            // read as sitting in front of a large one, and the light comes back
+            // to exactly the frame with no glow in it. What keeps that from
+            // reading as a black annulus is the width above rather than a depth
+            // held short of the end.
+            shadow_depth: 1.0,
             sevens_label: SevensLabel::Name,
             show_labels: true,
             // Where the music has been is most of what the lattice is for, so
@@ -2669,27 +2637,9 @@ impl Default for ViewConfig {
             // Flat off: the fresh light is an accent on each node, which is
             // what the rest of the fresh view is drawn to be read against.
             glow_feather: 0.0,
-            // A standoff a sixth of a radius past every ring and faded over the
-            // whole of it — the Gap bar's low handle at 0 — so the gap and the
-            // light either side of it read as one blur rather than as a cut
-            // through it: a solid band inside the gap, however short its edge,
-            // is what the eye takes for a black annulus drawn round the node.
-            glow_gap: 0.16,
-            glow_gap_soft: 0.16,
-            // The fade spent evenly across that width, which is the plain
-            // symmetric ramp: the bar's own middle, so the shape is an
-            // addition to the fresh view rather than a restyle of it, and
-            // either half of the bar is somewhere to go from a look that is
-            // already tuned.
-            glow_gap_shape: 0.5,
-            // Most of the light off around a ring, and not all of it: a ring
-            // in a dim pool of its own halo reads as shade, where the whole of
-            // it taken away reads as a black annulus drawn round the node.
-            glow_gap_depth: 0.85,
-            // One minus the depth above, which is exactly what that depth
-            // leaves at a ring's own annulus: a ring wearing the last of the
-            // light its gap does not take, which is what a single coupled dial
-            // draws and a place for either bar to be moved from.
+            // A ring wearing a sixth of the light standing at it, which is a
+            // ring carrying the colour of its own halo without melting into it,
+            // and a place for the bar to be moved from either way.
             glow_wash: 0.15,
             // The resting field's own light. Low, and the reason is what the
             // bar is for: a pool per lattice position is a hundred pools where

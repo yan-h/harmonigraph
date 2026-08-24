@@ -648,7 +648,7 @@ fn every_sounding_node_clears_what_is_behind_it_the_home_sheet_included() {
     // reads as being in front. Which layer the clearing is DRAWN in differs
     // — the home sheet's goes ahead of the markers, see the renderer — but
     // that is not this layer's business.
-    let view = ViewConfig { extent_sevens: 1, sevens_gutter: 0.2, ..plain_view() };
+    let view = ViewConfig { extent_sevens: 1, shadow: 0.2, ..plain_view() };
     let scene = scene_of(&held(60), &Tuning::default(), &view, &plain_frame(), 0.0);
 
     // C sounds, so every node whose pitch class is C lights — on the home
@@ -663,10 +663,10 @@ fn every_sounding_node_clears_what_is_behind_it_the_home_sheet_included() {
     // on `activation` for. `a_node_wearing_only_an_audio_ring_clears_around_it`
     // is that case in pixels, and it is a render test because the whole answer
     // is in the shader.
+    assert_eq!(scene.shadow, 0.2, "the reach is the view's, over every node it ships");
     let mut lit_home = 0;
     let mut lit_off = 0;
     for node in &scene.nodes {
-        assert_eq!(node.gutter, 0.2, "the reach is the view's, on every node it ships");
         if node.activation > 0.0 {
             if node.on_home {
                 lit_home += 1;
@@ -687,25 +687,24 @@ fn a_flat_lattice_still_clears_its_markers() {
     // sheet clears on a flat lattice exactly as it does on a deep one.
     // Gating it on the extent would make the look reachable only by growing
     // depth the view doesn't want.
-    let view = ViewConfig { extent_sevens: 0, sevens_gutter: 0.2, ..plain_view() };
+    let view = ViewConfig { extent_sevens: 0, shadow: 0.2, ..plain_view() };
     let scene = scene_of(&held(60), &Tuning::default(), &view, &plain_frame(), 0.0);
+    // The view's reach, over every node — see
+    // `every_sounding_node_clears_what_is_behind_it_the_home_sheet_included`
+    // for why this is not gated on the note here.
+    assert_eq!(scene.shadow, 0.2, "a home node carries the reach with no depth at all");
     let mut lit = 0;
     for node in &scene.nodes {
-        // The view's reach, on every node — see
-        // `every_sounding_node_clears_what_is_behind_it_the_home_sheet_included`
-        // for why this is not gated on the note here.
-        assert_eq!(node.gutter, 0.2, "a home node carries the reach with no depth at all");
         lit += usize::from(node.activation > 0.0);
     }
     assert!(lit > 0, "something is lit");
 }
 
 #[test]
-fn a_releasing_note_keeps_its_gutters_width() {
-    // `gutter` is the clearing's WIDTH, and it must not follow the
-    // envelope: the shader fades the clearing's STRENGTH by the same
-    // `activation` it paints the node with, and doing both would shrink
-    // the hole as it faded.
+fn a_releasing_note_keeps_its_shadows_width() {
+    // `shadow` is the WIDTH, and it must not follow the envelope: the shader
+    // fades the shadow's STRENGTH by the same `activation` it paints the node
+    // with, and doing both would shrink the hole as it faded.
     //
     // The regression this pins is the other way round, and much worse.
     // Scaling the width alone (the first cut) leaves the clearing fully
@@ -715,7 +714,7 @@ fn a_releasing_note_keeps_its_gutters_width() {
     // pop, which is exactly what it is.
     let view = ViewConfig {
         extent_sevens: 1,
-        sevens_gutter: 0.2,
+        shadow: 0.2,
         ..ViewConfig::default()
     };
     let frame = FrameParams { fade_time: 1.0, ..FrameParams::default() };
@@ -728,19 +727,20 @@ fn a_releasing_note_keeps_its_gutters_width() {
 
     let off_sheet = |now: f64| {
         let scene = scene_of(&tracker, &tuning, &view, &frame, now);
-        *scene
+        let node = *scene
             .nodes
             .iter()
             .find(|n| n.activation > 0.0 && n.lattice_pos.sevens != 0)
-            .expect("a lit off-sheet node")
+            .expect("a lit off-sheet node");
+        (node.activation, scene.shadow)
     };
     // A quarter and three quarters of the way through the release: the note
-    // is measurably dimmer, and the clearing is exactly as wide.
-    let early = off_sheet(1.25);
-    let late = off_sheet(1.75);
-    assert!(late.activation < early.activation, "the note really is fading");
-    assert_eq!(early.gutter, 0.2);
-    assert_eq!(late.gutter, 0.2, "the clearing holds its width through the fade");
+    // is measurably dimmer, and the shadow is exactly as wide.
+    let (early_activation, early_shadow) = off_sheet(1.25);
+    let (late_activation, late_shadow) = off_sheet(1.75);
+    assert!(late_activation < early_activation, "the note really is fading");
+    assert_eq!(early_shadow, 0.2);
+    assert_eq!(late_shadow, 0.2, "the shadow holds its width through the fade");
 }
 
 #[test]
@@ -801,7 +801,7 @@ fn the_comma_takes_the_short_way_round_the_octave() {
 fn ground_color_keeps_srgb_bytes_as_they_are() {
     // A straight divide by 255, NOT a gamma decode: every color the shader
     // handles is sRGB-encoded 0..1 (the offscreen target is a plain Unorm
-    // format), so decoding here would clear the gutter to a ground far
+    // format), so decoding here would clear the shadow to a ground far
     // darker than the pane it is supposed to disappear into.
     let c = crate::skin::ground_color((24, 25, 29));
     assert!((c.x - 24.0 / 255.0).abs() < 1e-6);

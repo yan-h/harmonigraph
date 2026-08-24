@@ -257,24 +257,24 @@ fn the_feather_bars_preview_is_the_skirt_the_shader_draws() {
     }
 }
 
-/// The same contract for the Gap curve bar, whose preview is a copy of the
+/// The same contract for the Shadow curve bar, whose preview is a copy of the
 /// standoff's ramp and the exponent it is raised to
 /// (`harmonigraph_scene::standoff_recovery`).
 #[test]
-fn the_gap_curve_bars_preview_is_the_ramp_the_shader_runs() {
+fn the_shadow_curve_bars_preview_is_the_ramp_the_shader_runs() {
     let needles = [
-        format!("const GAP_SHAPE_TRAIL: f32 = {:?};", harmonigraph_scene::GAP_SHAPE_TRAIL),
-        format!("const GAP_SHAPE_HOLD: f32 = {:?};", harmonigraph_scene::GAP_SHAPE_HOLD),
-        format!("const GAP_TAIL: f32 = {:?};", harmonigraph_scene::GAP_TAIL),
-        "return GAP_SHAPE_TRAIL * pow(GAP_SHAPE_HOLD / GAP_SHAPE_TRAIL, t);".to_owned(),
+        format!("const SHADOW_SHAPE_TRAIL: f32 = {:?};", harmonigraph_scene::SHADOW_SHAPE_TRAIL),
+        format!("const SHADOW_SHAPE_HOLD: f32 = {:?};", harmonigraph_scene::SHADOW_SHAPE_HOLD),
+        format!("const SHADOW_TAIL: f32 = {:?};", harmonigraph_scene::SHADOW_TAIL),
+        "return SHADOW_SHAPE_TRAIL * pow(SHADOW_SHAPE_HOLD / SHADOW_SHAPE_TRAIL, t);".to_owned(),
         "let u = max(sd - inner, 0.0) / (edge - inner);".to_owned(),
-        "return exp(-GAP_TAIL * pow(u, glow_gap_shape()));".to_owned(),
+        "return exp(-SHADOW_TAIL * pow(u, shadow_shape()));".to_owned(),
     ];
     for needle in &needles {
         assert!(
             SHADER_SRC.contains(needle),
             "lattice.wgsl must contain `{needle}`: harmonigraph_scene::standoff_recovery mirrors \
-             the standoff's ramp to draw the Gap curve bar's preview, so a change to either is \
+             the standoff's ramp to draw the Shadow curve bar's preview, so a change to either is \
              a change to both",
         );
     }
@@ -446,11 +446,9 @@ fn parity_scene() -> Scene {
             octaves,
             hovered: i == 1,
             on_home: i % 2 == 0,
-            // The off-sheet half draws small and knocks out, so the
-            // every-draw-path scene exercises both sevens-layer branches
-            // (the scaled billboard and the gutter's extra alpha) as well.
+            // The off-sheet half draws small, so the every-draw-path scene
+            // exercises the scaled billboard as well as the full-size one.
             scale: if i % 2 == 0 { 1.0 } else { 0.55 },
-            gutter: if i % 2 == 0 { 0.0 } else { 0.12 },
             comma: if i % 2 == 0 { 0.0 } else { -27.26 },
             cents: f * 190.0,
             // Exercise the mark paths: one node marked melody, one bass, and
@@ -505,7 +503,6 @@ fn parity_scene() -> Scene {
         lattice_ground: harmonigraph_scene::grey_of_lightness(
             harmonigraph_scene::ViewConfig::default().lattice_ground,
         ),
-        sevens_soft: 0.24,
         node_radius: 0.34,
         mark_thickness: 0.09,
         // Off: a single-instant parity image can't depend on which moment
@@ -572,12 +569,15 @@ fn parity_scene() -> Scene {
         // The accent's own falloff, which is what every glow test here that
         // does not say otherwise is measuring.
         glow_feather: 0.0,
-        // The fresh standoff and the shares that shape the light inside it and
-        // over the node's own ink, inert at reach 0 and here to say so.
-        glow_gap: 0.16,
-        glow_gap_soft: 0.16,
-        glow_gap_shape: 0.5,
-        glow_gap_depth: 0.85,
+        // The shadow, which is one setting over every node in the scene: how
+        // far past each shape it draws a node cuts what stands behind and holds
+        // its own light off, the fade spending the whole of that reach, the
+        // light's half of the fade spent evenly, and the whole of what it
+        // stands over taken — the fresh depth, so a hole here is a hole.
+        shadow: 0.12,
+        shadow_soft: 0.12,
+        shadow_shape: 0.5,
+        shadow_depth: 1.0,
         glow_wash: 0.15,
         marker_light: 0.10,
         marker_span: 0.5,
@@ -1525,7 +1525,6 @@ fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
         hovered: false,
         on_home: true,
         scale: 1.0,
-        gutter: 0.0,
         comma: 0.0,
         cents: 0.0,
         melody_slots,
@@ -1570,7 +1569,7 @@ fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
 /// A marker's unit IS the node's radius through this factor (`marker_world`
 /// against `NODE_RADIUS_FACTOR`, both in harmonigraph-scene's `derive.rs`), so
 /// a scene that sets one without the other is a scene `derive_scene` cannot
-/// build — and every Gap in it is two different world distances, one for a ring
+/// build — and every Shadow in it is two different world distances, one for a ring
 /// and one for a cross. Setting `node_radius` by hand is what re-opens that,
 /// which is why fixtures come through here instead.
 fn node_radius(scene: &mut Scene, radius: f32) {
@@ -2320,7 +2319,7 @@ fn a_mark_with_no_ring_under_it_reaches_the_nodes_centre() {
 }
 
 /// How far past its own body the clearing in the tests below reaches, in the uv
-/// of a full-size node, and — through `sevens_soft` at 0 — how gradually it
+/// of a full-size node, and — through `shadow_soft` at 0 — how gradually it
 /// gets there: not at all. A hard rim lands on a pixel or two, where the fade
 /// the app ships spreads it over the dozen a reading would then have to pick a
 /// level out of.
@@ -2358,7 +2357,7 @@ fn clearing_rings() -> harmonigraph_scene::RingStack {
 /// One node sitting in its own clearing at [`clearing_rings`]'s radii: `melody`
 /// names the slot its mark extends (0 for no mark), `ring` how much of its audio
 /// ring the view's Gate leaves it, `band` whether the octave band is on, and
-/// `gutter` the clearing's reach (0 for none).
+/// `gutter` the shadow's reach (0 for none).
 ///
 /// The node is drawn small enough for its clearing to fit in the frame — the
 /// hole reaches a third of a node past a mark that already stands outside every
@@ -2381,43 +2380,73 @@ fn clearing_node(melody: u32, ring: f32, band: bool, gutter: f32) -> Scene {
     // leaves it where it is.
     scene.rings_outer = if band { rings.band.1 } else { rings.audio.1 };
     scene.mark_inner = scene.rings_outer + rings.gap;
-    scene.sevens_soft = 0.0;
+    scene.shadow = gutter;
+    scene.shadow_soft = 0.0;
     let node = &mut scene.nodes[0];
-    node.gutter = gutter;
     node.audio_ring = ring;
     scene
 }
 
-/// [`clearing_node`] with a SHEET BEHIND IT, which is the only place a hole can
-/// be read at all: the pass cuts a clearing by making what stands behind
-/// transparent (`node_paint`), so a hole over empty lattice is invisible by
-/// construction and every reading below is the sheet giving way.
+/// How brightly the sheet behind the clearing probes draws its own ink, and so
+/// how deep the shadow IT casts is: every layer of it at an eighth.
+///
+/// The Shadow is one setting over the whole scene, so the sheet stands its own
+/// light off its own rings exactly as the node in front does — and at a full
+/// level that is the sheet blacking itself out over the very radii a hole is
+/// read at, in spokes between its slices. What closes it is the LEVEL each
+/// shadow term is scaled by ([`glow_shade`](lattice.wgsl)): an eighth leaves the
+/// sheet's own shadow a dip of an eighth in a field that is otherwise flat,
+/// while the light over that ink still saturates.
+const SHEET_INK: f32 = 0.12;
+
+/// [`clearing_node`] at [`CLEAR_REACH`] with a SHEET BEHIND IT, which is the
+/// only place a hole can be read at all: the pass cuts a clearing by making what
+/// stands behind transparent (`node_paint`), so a hole over empty lattice is
+/// invisible by construction and every reading below is the sheet giving way.
 ///
 /// The sheet is one node's LIGHT, dialled to saturate — the widest even field a
 /// scene can put behind another node, and flat within a few code values over
-/// every radius a hole here reaches. Its ink is a mark on every slot, so it
-/// lights the same whatever layers the node in front is wearing.
+/// every radius a hole here reaches. It wears every layer at [`SHEET_INK`] and
+/// a mark on every slot, so it lights the same whatever the node in front is
+/// wearing.
 ///
-/// Two settings of the node in FRONT are the fixture rather than the picture:
-/// it lays no light of its own and stands its rings off nothing, both of which
-/// land inside the hole and would be read as part of it.
-fn clearing_over_a_sheet(melody: u32, ring: f32, band: bool, gutter: f32) -> Scene {
-    let mut scene = clearing_node(melody, ring, band, gutter);
+/// One setting of the node in FRONT is the fixture rather than the picture: it
+/// lays no light of its own, which would land inside the hole and be read as
+/// part of it.
+fn clearing_over_a_sheet(melody: u32, ring: f32, band: bool) -> Scene {
+    let mut scene = clearing_node(melody, ring, band, CLEAR_REACH);
     scene.glow_reach = 3.0;
     scene.glow_strength = 8.0;
     scene.glow_feather = 1.0;
-    scene.glow_gap_depth = 0.0;
     scene.nodes[0].glow.level = 0.0;
     let mut sheet = scene.nodes[0];
     sheet.world_pos.z = -1.0;
-    sheet.gutter = 0.0;
+    sheet.activation = SHEET_INK;
+    sheet.octaves = [SHEET_INK; harmonigraph_scene::OCTAVE_SLOTS];
+    sheet.audio_ring = SHEET_INK;
     sheet.melody_slots = (1 << harmonigraph_scene::OCTAVE_SLOTS) - 1;
-    sheet.melody_level = 1.0;
+    sheet.melody_level = SHEET_INK;
     sheet.melody_color = glam::Vec4::ONE;
     sheet.glow = harmonigraph_scene::GlowStep { level: 1.0, row: 1, mix: 1.0, marked: 1.0 };
     scene.nodes.push(sheet);
     rows_per_node(&mut scene);
     scene
+}
+
+/// What the sheet in a [`clearing_over_a_sheet`] scene LOSES to the node
+/// standing in front of it: the hole, per pixel, in the same units
+/// [`light_over`] reads everywhere else.
+///
+/// Both shots are taken at one Shadow, the node in front being the only thing
+/// that moves. That is what the one shadow family costs a reading here: the
+/// reach moves every element's shadow at once, so a pair taken at two reaches
+/// carries the SHEET standing its own light off its own rings as well as the
+/// hole, and the two land at the same radii.
+fn hole_in_the_sheet(gpu: &mut Shooter, mut scene: Scene) -> Vec<f64> {
+    let both = gpu.shot(&scene);
+    scene.nodes.remove(0);
+    let sheet = gpu.shot(&scene);
+    light_over(&sheet, &both)
 }
 
 /// How far the light in `weights` reaches from the centre of the frame within
@@ -2451,8 +2480,8 @@ fn far_toward(weights: &[f64], size: [u32; 2], toward: f64, cone: f64) -> f64 {
 /// hole that says "this node is in front of that one" said it about a ring of
 /// empty lattice too. That is visible exactly where the clearing is for — over
 /// the sheets behind — and invisible in the node's own picture, which is why
-/// every reading here is off the difference the gutter makes rather than off
-/// the node.
+/// every reading here is off what the sheet behind loses to the node
+/// ([`hole_in_the_sheet`]) rather than off the node.
 #[test]
 fn a_clearing_bulges_over_the_mark_and_hugs_the_rings_everywhere_else() {
     const SIZE: [u32; 2] = [256, 256];
@@ -2461,11 +2490,6 @@ fn a_clearing_bulges_over_the_mark_and_hugs_the_rings_everywhere_else() {
     };
     let rings = clearing_rings();
     let mark_out = rings.mark_inner + rings.mark_thickness;
-
-    let bare_plain = gpu.shot(&clearing_over_a_sheet(0, 1.0, true, 0.0));
-    let holed_plain = gpu.shot(&clearing_over_a_sheet(0, 1.0, true, CLEAR_REACH));
-    let bare_marked = gpu.shot(&clearing_over_a_sheet(MIDDLE_C, 1.0, true, 0.0));
-    let holed_marked = gpu.shot(&clearing_over_a_sheet(MIDDLE_C, 1.0, true, CLEAR_REACH));
 
     // Which way the mark points, taken off the node with NOTHING behind it: a
     // mark is drawn over a sheet brighter than itself, so what it adds is a
@@ -2479,8 +2503,8 @@ fn a_clearing_bulges_over_the_mark_and_hugs_the_rings_everywhere_else() {
 
     // The hole is what the sheet behind LOSES, the clearing being cut by making
     // what stands behind transparent.
-    let plain = light_over(&bare_plain, &holed_plain);
-    let marked = light_over(&bare_marked, &holed_marked);
+    let plain = hole_in_the_sheet(&mut gpu, clearing_over_a_sheet(0, 1.0, true));
+    let marked = hole_in_the_sheet(&mut gpu, clearing_over_a_sheet(MIDDLE_C, 1.0, true));
     // A cone inside the wedge the mark extends — a full-size slice of the fresh
     // wheel is 55 degrees, so ±27 — and wide enough to hold the rounding the
     // dilation puts on its corners.
@@ -2563,8 +2587,8 @@ fn a_clearing_over_a_wedge_past_a_half_turn_covers_the_whole_wedge() {
          the widest is {:.1} deg",
         widest.to_degrees(),
     );
-    let lopsided = |melody: u32, gutter: f32| -> Scene {
-        let mut scene = clearing_over_a_sheet(melody, 1.0, true, gutter);
+    let lopsided = |melody: u32| -> Scene {
+        let mut scene = clearing_over_a_sheet(melody, 1.0, true);
         scene.octave_layout = wheel;
         scene
     };
@@ -2573,11 +2597,6 @@ fn a_clearing_over_a_wedge_past_a_half_turn_covers_the_whole_wedge() {
         scene.octave_layout = wheel;
         scene
     };
-
-    let bare_plain = gpu.shot(&lopsided(0, 0.0));
-    let holed_plain = gpu.shot(&lopsided(0, CLEAR_REACH));
-    let bare_marked = gpu.shot(&lopsided(MIDDLE_C, 0.0));
-    let holed_marked = gpu.shot(&lopsided(MIDDLE_C, CLEAR_REACH));
 
     // Which way the wide wedge points, taken off the node with nothing behind
     // it as the marked node's own extra ink (see
@@ -2588,8 +2607,8 @@ fn a_clearing_over_a_wedge_past_a_half_turn_covers_the_whole_wedge() {
     );
     assert!(mark.weight > 0.0, "the mark drew nothing to aim at");
 
-    let plain = light_over(&bare_plain, &holed_plain);
-    let marked = light_over(&bare_marked, &holed_marked);
+    let plain = hole_in_the_sheet(&mut gpu, lopsided(0));
+    let marked = hole_in_the_sheet(&mut gpu, lopsided(MIDDLE_C));
     // Narrow, because the two extras between them hold only what the full
     // slice leaves and the far reading has to stay inside that.
     const CONE: f64 = 8.0;
@@ -2658,14 +2677,17 @@ fn a_clearing_is_one_hole_covering_the_centre_and_every_ring() {
         ("every layer", MIDDLE_C, true, 1.0),
         ("the octave band alone", 0, true, 0.0),
     ] {
-        let bare = gpu.shot(&clearing_over_a_sheet(melody, ring, band, 0.0));
-        let holed = gpu.shot(&clearing_over_a_sheet(melody, ring, band, CLEAR_REACH));
+        let holed = gpu.shot(&clearing_over_a_sheet(melody, ring, band));
         let alone = gpu.shot(&{
-            let mut scene = clearing_over_a_sheet(melody, ring, band, CLEAR_REACH);
+            let mut scene = clearing_over_a_sheet(melody, ring, band);
             scene.nodes.pop();
             scene
         });
-        let reach = light_about_center(&light_over(&bare, &holed), SIZE).far;
+        let reach = light_about_center(
+            &hole_in_the_sheet(&mut gpu, clearing_over_a_sheet(melody, ring, band)),
+            SIZE,
+        )
+        .far;
         assert!(reach > 8.0, "{name}: no clearing to read, {reach:.1} px");
 
         let (cx, cy) = ((SIZE[0] - 1) as f64 / 2.0, (SIZE[1] - 1) as f64 / 2.0);
@@ -2725,12 +2747,17 @@ fn light_in_band(weights: &[f64], size: [u32; 2], lo: f64, hi: f64) -> f64 {
 /// node the Gate has closed clears only the core it is left with, and one part
 /// way through its fade clears the ring's WHOLE hole at part of its strength.
 ///
-/// Width from the layer, level from the layer's own fade — the same division the
-/// note's clearing has always run on, now per layer. The two halves are separate
-/// claims and they fail differently. A hole sized by the fade would sweep
-/// outward across the lattice as a ring arrives, which is the "node retreating"
-/// look the reach is deliberately held against; a hole at full strength from the
-/// first frame would pop.
+/// Width from the layer, strength from the layer's own fade — the same division
+/// the note's clearing has always run on, now per layer. The two halves are
+/// separate claims and they fail differently. A hole sized by the fade would
+/// sweep outward across the lattice as a ring arrives, which is the "node
+/// retreating" look the reach is deliberately held against; a hole at full
+/// strength from the first frame would pop.
+///
+/// The strength is read as a SHARE of what a whole ring takes rather than as the
+/// level itself: the fade scales both of the shadow's covers, and a pixel under
+/// both keeps what survives each in turn, so the share a half-worn ring takes is
+/// three quarters and not a half (see the assertion).
 #[test]
 fn a_clearing_follows_the_audio_ring_its_node_wears() {
     const SIZE: [u32; 2] = [256, 256];
@@ -2742,9 +2769,7 @@ fn a_clearing_follows_the_audio_ring_its_node_wears() {
     // The band off, so the audio ring is the layer the stack's cursor landed on
     // and this node's own gate is what its hole answers to.
     let hole = |gpu: &mut Shooter, ring: f32| -> (Vec<f64>, f64) {
-        let bare = gpu.shot(&clearing_over_a_sheet(0, ring, false, 0.0));
-        let holed = gpu.shot(&clearing_over_a_sheet(0, ring, false, CLEAR_REACH));
-        let cleared = light_over(&bare, &holed);
+        let cleared = hole_in_the_sheet(gpu, clearing_over_a_sheet(0, ring, false));
         let far = light_about_center(&cleared, SIZE).far;
         (cleared, far)
     };
@@ -2781,9 +2806,18 @@ fn a_clearing_follows_the_audio_ring_its_node_wears() {
         light_in_band(&closed, SIZE, lo, hi),
     );
     eprintln!("past the ring, {lo:.1}..{hi:.1} px: worn {lit:.0}, half {dim:.0}, closed {none:.0}");
+    // Three quarters and not a half, and the number is arithmetic rather than a
+    // measurement: BOTH covers carry the layer's level and both are solid out
+    // here, so a level of `L` leaves `1 - L` of the destination under the
+    // knockout and `1 - L * (1 - 1/1024)` under the standoff — the depth's own
+    // floor, spent whole at a coverage of one. A pixel under both keeps the
+    // product, so the hole is `1 - (1 - L)^2` to a thousandth. What this is set
+    // against is a hole that IGNORES the level, which reads 1.
+    let want = 1.0 - (1.0 - 0.5f64).powi(2);
     assert!(
-        lit > 0.0 && (dim / lit - 0.5).abs() < 0.05,
-        "half a ring cleared {dim:.0} of the {lit:.0} a whole one does",
+        lit > 0.0 && (dim / lit - want).abs() < 0.03,
+        "half a ring cleared {dim:.0} of the {lit:.0} a whole one does, where two covers \
+         each at half leave {want:.2}",
     );
     assert!(none < lit * 0.02, "a closed gate cleared {none:.0} past a ring it is not wearing");
 }
@@ -2817,22 +2851,19 @@ fn a_node_wearing_only_an_audio_ring_clears_around_it() {
         node.activation = 0.0;
         node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
     };
-    let silent = |ring: f32, gutter: f32| -> Scene {
-        let mut scene = clearing_over_a_sheet(0, ring, true, gutter);
+    let silent = |ring: f32| -> Scene {
+        let mut scene = clearing_over_a_sheet(0, ring, true);
         hush(&mut scene);
         scene
     };
-    let bare = gpu.shot(&silent(1.0, 0.0));
-    let holed = gpu.shot(&silent(1.0, CLEAR_REACH));
-    let cleared = light_over(&bare, &holed);
+    let cleared = hole_in_the_sheet(&mut gpu, silent(1.0));
     let hole = light_about_center(&cleared, SIZE);
     assert!(hole.weight > 0.0, "a node wearing an audio ring cleared nothing at all");
 
     // Calibrated on a node that IS played, where the hole is the band's and the
     // band's outer edge is a uv the stack states.
-    let played_bare = gpu.shot(&clearing_over_a_sheet(0, 1.0, true, 0.0));
-    let played = gpu.shot(&clearing_over_a_sheet(0, 1.0, true, CLEAR_REACH));
-    let played_far = light_about_center(&light_over(&played_bare, &played), SIZE).far;
+    let played = hole_in_the_sheet(&mut gpu, clearing_over_a_sheet(0, 1.0, true));
+    let played_far = light_about_center(&played, SIZE).far;
     let scale = played_far / (rings.band.1 + CLEAR_REACH) as f64;
     let want = (rings.audio.1 + CLEAR_REACH) as f64 * scale;
     eprintln!(
@@ -4606,7 +4637,7 @@ fn bloom_adds_light_over_the_plain_composite() {
 /// is drawn under. Both directions matter, and only one of them is obvious:
 /// forcing the home sheet to the bottom (so an off-sheet note could never be
 /// hidden by it) inverts the far half of the axis, and since the knockout
-/// gutter clears whatever was drawn before it, the sheet behind then takes a
+/// shadow covers whatever was drawn before it, the sheet behind then takes a
 /// bite out of the home sheet in front of it.
 #[test]
 fn sheets_draw_back_to_front_along_the_sevens_axis() {
@@ -4792,30 +4823,25 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         silent.bass_slots = 0;
         silent.melody_level = 0.0;
         silent.bass_level = 0.0;
-        // ...and a reach, which is the whole point of it: the idle branch keeps
-        // an idle node's fragments out to the edge of the hole its ring clears,
-        // and `parity_scene` hands its gutters to the off-sheet half — node 0,
-        // which this is a copy of, carries none. Without this the branch is
-        // compiled on both pipelines and never once decides anything, so the
-        // one spelling of `clearing_edge` it shares with the coverage is
-        // untested where a second spelling would show.
-        silent.gutter = 0.12;
+        // The idle branch keeps an idle node's fragments out to the edge of the
+        // hole its ring clears, which is what `parity_scene`'s own reach buys
+        // it. Without a reach in the scene the branch is compiled on both
+        // pipelines and never once decides anything, so the one spelling of
+        // `clearing_edge` it shares with the coverage is untested where a
+        // second spelling would show.
         silent.world_pos.x += 0.9;
         scene.nodes.push(silent);
         scene
     };
-    // A clearing around a MARKED node, which is `node_clearing`'s own
-    // skip: the clearing's shape is the rings' disc unioned with one wedge per
-    // mark, and inside that disc the walk over the wedges is skipped as an
-    // answer already arrived at. `parity_scene` hands its gutters and its marks
-    // to different halves of its nodes — the off-sheet ones clear, the marked
-    // ones are on the home sheet — so without this the two never meet on one
-    // node and the skip is never taken.
+    // A WIDE clearing, which is `node_clearing`'s own skip: the clearing's
+    // shape is the rings' disc unioned with one wedge per mark, and inside that
+    // disc the walk over the wedges is skipped as an answer already arrived at.
+    // At `parity_scene`'s own reach the disc does not swallow a whole node, so
+    // without this the skip is never taken.
     let clearing = || {
         let mut scene = parity_scene();
-        for node in &mut scene.nodes {
-            node.gutter = 0.16;
-        }
+        scene.shadow = 0.16;
+        scene.shadow_soft = 0.16;
         scene
     };
     // The ring's OTHER reading, which is the shader's second branch inside
@@ -4827,10 +4853,10 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         scene.spectral.folded = true;
         scene
     };
-    // The STANDOFF around those same marked nodes, which is `glow_standoff`'s own
+    // The STANDOFF around those same marked nodes, which is `the shadow`'s own
     // skip — the same one as `node_clearing`'s, over the same wedges, taken
     // once the band has held the pixel's light off in full. The REACH is what
-    // puts it in the comparison at all, and no fixture above has one: the Gap
+    // puts it in the comparison at all, and no fixture above has one: the Shadow
     // dials ride to the GPU only while the light does (`misc11` is zeroed at
     // reach 0), and there is no light draw to compare without a glow target
     // for it to write into. Both are the same switch, which is why one line
@@ -4867,13 +4893,13 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
     // `fs_plus_glow`'s early-out decides anything: inside the pool the light
     // keeps every fragment on its own, and a fragment the standoff holds and
     // the light does not exists only out here. Every fixture above sizes the
-    // marker's pool wider than its Gap, so without this the switch is compiled
+    // marker's pool wider than its Shadow, so without this the switch is compiled
     // on the markers and never once taken — a relaxation dropping the
     // standoff's term from it passes them all.
     let marker_standoff = || {
         let mut scene = standing_off();
-        scene.glow_gap = 1.0;
-        scene.glow_gap_soft = 1.0;
+        scene.shadow = 1.0;
+        scene.shadow_soft = 1.0;
         scene.marker_light = 0.5;
         scene
     };
@@ -5497,11 +5523,13 @@ fn one_node_behind_another() -> Scene {
     // overlap and the annulus never becomes opaque, which is the one property
     // the covering claim below is read off.
     node_radius(&mut scene, 0.5);
+    // No shadow: what is under test is one node's INK covering another's, and
+    // a hole cut round the near node would take the far one's label with it.
+    scene.shadow = 0.0;
     let mut near = scene.nodes[0];
     near.world_pos = STACK_AT.extend(0.0);
     near.activation = 1.0;
     near.scale = 1.0;
-    near.gutter = 0.0;
     near.hovered = false;
     near.on_home = true;
     let mut far = near;
@@ -6426,7 +6454,7 @@ fn a_resting_marker_lights_its_own_position() {
     assert_eq!(dimmed, 0, "a pool took light off the ground it landed on");
 }
 
-/// The Gap dims a marker's pool where it stands: the resting field parts around
+/// The Shadow dims a marker's pool where it stands: the resting field parts around
 /// what is drawn in it.
 ///
 /// It costs the marker's light no code of its own, and that is what is being
@@ -6443,7 +6471,7 @@ fn a_resting_marker_lights_its_own_position() {
 /// `a_marker_holds_a_nodes_halo_off_its_own_cross` is where a marker's own
 /// standoff is measured, on a fixture that separates it from the node's.
 ///
-/// Measured as the DIFFERENCE the markers make, at one Gap depth against
+/// Measured as the DIFFERENCE the markers make, at one Shadow depth against
 /// another. The node's own light changes with the depth too, so neither shot
 /// says anything on its own; what cancels is the node, since the pair at each
 /// depth differs in the markers' bar alone. A full depth leaves an eighth of
@@ -6467,9 +6495,9 @@ fn the_gap_dims_the_markers_pool() {
         scene.glow_reach = 1.6;
         scene.glow_strength = 1.5;
         scene.glow_feather = 1.0;
-        scene.glow_gap = 1.2;
-        scene.glow_gap_soft = 1.2;
-        scene.glow_gap_depth = depth;
+        scene.shadow = 1.2;
+        scene.shadow_soft = 1.2;
+        scene.shadow_depth = depth;
         scene.marker_light = light;
         // Four markers around the node, close enough to stand inside the
         // standoff it casts and clear of the ink it draws.
@@ -6491,7 +6519,7 @@ fn the_gap_dims_the_markers_pool() {
     assert!(open > 0, "the markers must light something with the gap open");
     assert!(
         held < open / 2,
-        "a full Gap left more than half the markers' light standing: \
+        "a full Shadow left more than half the markers' light standing: \
          {held} against {open}",
     );
 }
@@ -6614,9 +6642,9 @@ fn shadowed_markers(depth: f32, gap: f32, taper_start: f32) -> Scene {
     scene.glow_reach = 4.0;
     scene.glow_strength = 2.0;
     scene.glow_feather = 1.0;
-    scene.glow_gap = gap;
-    scene.glow_gap_soft = gap;
-    scene.glow_gap_depth = depth;
+    scene.shadow = gap;
+    scene.shadow_soft = gap;
+    scene.shadow_depth = depth;
     scene.marker_light = 0.0;
     scene.plus_taper_start = taper_start;
     // Four markers out where the node's halo still reaches and its own standoff
@@ -6659,17 +6687,17 @@ fn shadowed_ground(shooter: &mut Shooter, gap: f32, taper_start: f32) -> (Vec<us
         .filter(|&&i| brightness(&deep[i..i + 3]) < brightness(&deep_bare[i..i + 3]))
         .count();
     // The pair at a depth of 0 is the other half of every claim below: with the
-    // Gap shut a marker writes no standoff at all, and nothing else in the light
+    // Shadow shut a marker writes no standoff at all, and nothing else in the light
     // can subtract.
     let flat_dimmed = ground
         .iter()
         .filter(|&&i| brightness(&flat[i..i + 3]) < brightness(&flat_bare[i..i + 3]))
         .count();
-    assert_eq!(flat_dimmed, 0, "a marker took light off the ground at a Gap depth of 0");
+    assert_eq!(flat_dimmed, 0, "a marker took light off the ground at a Shadow depth of 0");
     (ground, dimmed)
 }
 
-/// A marker holds a NODE's halo off its cross, on the Gap bars the node's own
+/// A marker holds a NODE's halo off its cross, on the Shadow bars the node's own
 /// rings are held off by.
 ///
 /// The whole claim of the feature, and the reason the standoff rides in the
@@ -6680,7 +6708,7 @@ fn shadowed_ground(shooter: &mut Shooter, gap: f32, taper_start: f32) -> (Vec<us
 /// the composite does not read for the rest of the lattice.
 ///
 /// The pair at a depth of 0 is asserted inside [`shadowed_ground`]: with the
-/// Gap shut nothing here subtracts, which is what says the darkening measured
+/// Shadow shut nothing here subtracts, which is what says the darkening measured
 /// is the standoff and not the marker draw finding some other way to take light
 /// off the picture.
 #[test]
@@ -6697,7 +6725,7 @@ fn a_marker_holds_a_nodes_halo_off_its_own_cross() {
     );
     assert!(
         dimmed > 200,
-        "a full Gap depth darkened {dimmed} of the {} pixels the markers' ink never reaches",
+        "a full Shadow depth darkened {dimmed} of the {} pixels the markers' ink never reaches",
         ground.len(),
     );
 }
@@ -6706,14 +6734,14 @@ fn a_marker_holds_a_nodes_halo_off_its_own_cross() {
 /// the ink does not.
 ///
 /// The middle of a node is the one place the picture keeps free of a standoff —
-/// `glow_standoff` measures every ring from its own annulus, so the light runs
+/// `the shadow` measures every ring from its own annulus, so the light runs
 /// in to the centre — and a marker standing at that centre is the one thing
 /// that can write one there. The bite is real and this measures it both ways:
 /// the same frame with the marker's shadow open darkens hundreds of pixels of
 /// the node's own halo, and with it closed darkens none.
 ///
 /// `PlusInstance::shade` is what is moved between the two shots and nothing
-/// else — same ink, same arm, same Gap — so the ground is one set for both and
+/// else — same ink, same arm, same Shadow — so the ground is one set for both and
 /// the difference cannot be the marker's footprint moving. Which node is lit is
 /// not asked either: what closes the term is `Scene::shade_markers`, and the
 /// claim here is only that the shader spends it.
@@ -6783,20 +6811,20 @@ fn a_lit_node_keeps_the_halo_under_its_own_cross() {
     );
 }
 
-/// The Gap's WIDTH says how far a marker's shadow reaches, on the same bar it
+/// The Shadow's WIDTH says how far a marker's shadow reaches, on the same bar it
 /// says it to a node's rings.
 ///
 /// The depth alone would be a shadow of one size that could be dialled darker,
 /// which is not what the bar means anywhere else in the picture. A superset is
 /// what says the width stretches one shape rather than deepening it: every
-/// pixel a narrow Gap darkens, a wide one darkens too.
+/// pixel a narrow Shadow darkens, a wide one darkens too.
 ///
 /// On the markers' OWN pool, with no node in the frame — the only fixture where
-/// the Gap moves nothing but the marker's shadow. A node's standoff widens on
-/// the same bar and its layer is a `max`, so with one in frame a wider Gap
+/// the Shadow moves nothing but the marker's shadow. A node's standoff widens on
+/// the same bar and its layer is a `max`, so with one in frame a wider Shadow
 /// takes pixels off this count by covering them itself, and the superset would
 /// be measuring which of two shadows won rather than how far this one reaches.
-/// The pool is identical across every shot here, the Gap bars feeding the shade
+/// The pool is identical across every shot here, the Shadow bars feeding the shade
 /// alone, so one unshadowed frame answers for all of them.
 #[test]
 fn a_markers_shadow_reaches_as_far_as_the_gap_does() {
@@ -6809,7 +6837,7 @@ fn a_markers_shadow_reaches_as_far_as_the_gap_does() {
         scene.nodes.clear();
         scene.marker_light = 0.6;
         // A pool wider than the widest shadow measured, so what bounds the
-        // count is how far the Gap reaches and not where the light runs out.
+        // count is how far the Shadow reaches and not where the light runs out.
         scene.marker_span = 1.6;
         scene
     };
@@ -6824,15 +6852,15 @@ fn a_markers_shadow_reaches_as_far_as_the_gap_does() {
     assert!(total_light(&lit) > 0, "the fixture must light its markers");
     let narrow = dark(&mut shooter, 0.15);
     let wide = dark(&mut shooter, 1.2);
-    assert!(!narrow.is_empty(), "the narrow Gap must cast a shadow at all");
+    assert!(!narrow.is_empty(), "the narrow Shadow must cast a shadow at all");
     assert!(
         wide.len() > narrow.len() * 2,
-        "widening the Gap from 0.15 to 1.2 shadowed {} against {}",
+        "widening the Shadow from 0.15 to 1.2 shadowed {} against {}",
         wide.len(),
         narrow.len(),
     );
     let missed = narrow.difference(&wide).count();
-    assert_eq!(missed, 0, "the wider Gap left {missed} of the narrow shadow's pixels lit");
+    assert_eq!(missed, 0, "the wider Shadow left {missed} of the narrow shadow's pixels lit");
 }
 
 /// A marker's shadow is cast by the ink it HAS: the arm out to where its taper
@@ -6864,7 +6892,7 @@ fn a_markers_shadow_is_cast_by_the_arm_that_has_ink() {
     );
 }
 
-/// A lone square-ended marker at the origin, lit by its own pool, with the Gap
+/// A lone square-ended marker at the origin, lit by its own pool, with the Shadow
 /// dialled to `gap` and the standoff switched by `depth`.
 ///
 /// No node in the frame: what is measured below is the distance a marker's own
@@ -6885,17 +6913,17 @@ fn lone_shadowed_marker(arm: f32, gap: f32, depth: f32) -> Scene {
 /// has to sit well inside the frame.
 const LONE_SPAN: f32 = 3.0;
 
-/// One Gap is ONE distance: what a marker's shadow reaches past the ink casting
+/// One Shadow is ONE distance: what a marker's shadow reaches past the ink casting
 /// it is a world length off the bar, not a share of the cross.
 ///
-/// This is the whole of what sharing the node's Gap bar buys, and it is a claim
+/// This is the whole of what sharing the node's Shadow bar buys, and it is a claim
 /// no relative measurement can hold. The standoff is taken in the LIGHT's uv,
 /// where the box's half-extents carry the arm; taking it in the ARM's instead —
 /// the reading `plus_coverage` twenty lines away invites, half-extents of
 /// `misc5.y` and `misc5.x` with the distance divided by the arm — leaves every
-/// other shadow test here passing, each being monotone in the Gap, a superset,
+/// other shadow test here passing, each being monotone in the Shadow, a superset,
 /// or a comparison between two arms of one length. What it changes is that each
-/// marker's shadow scales with its own cross, so the lattice's Gap is as many
+/// marker's shadow scales with its own cross, so the lattice's Shadow is as many
 /// distances as there are marker sizes; only a frame holding two different arms
 /// can see it, and only against a world ruler.
 ///
@@ -6913,7 +6941,7 @@ const LONE_SPAN: f32 = 3.0;
 /// a "differs at all" reading is two different thresholds on the coverage
 /// compared against each other; one share is one contour of that coverage
 /// whatever light is under it. The claim is still a DIFFERENCE between the two
-/// arms under that one contour rather than either arm's reach against the Gap.
+/// arms under that one contour rather than either arm's reach against the Shadow.
 #[test]
 fn one_gap_is_one_distance_whatever_the_cross_it_stands_off() {
     const SIZE: [u32; 2] = [256, 256];
@@ -6971,7 +6999,7 @@ fn one_gap_is_one_distance_whatever_the_cross_it_stands_off() {
          {long_reach:.1}",
     );
 
-    // What the longer cross buys is its own extra ink and nothing else: the Gap
+    // What the longer cross buys is its own extra ink and nothing else: the Shadow
     // past the ink is one distance, so the two shadows differ by exactly the
     // two arms' difference.
     let grew = (long_reach - short_reach) / per_world;
@@ -6979,7 +7007,7 @@ fn one_gap_is_one_distance_whatever_the_cross_it_stands_off() {
     assert!(
         (grew - want).abs() < 0.12,
         "an arm {} longer pushed its shadow {grew:.2} further ({short_reach:.1}px to \
-         {long_reach:.1}px at {per_world:.1}px per world) — the Gap is being read as a \
+         {long_reach:.1}px at {per_world:.1}px per world) — the Shadow is being read as a \
          share of the ink",
         want,
     );
@@ -7030,7 +7058,7 @@ fn a_node_under_a_nearer_sheets_node_cuts_nothing_out_of_its_light() {
         scene.glow_strength = 1.5;
         // A clearing, so the near node's knockout covers the far node's ink
         // in the scene pass; what is measured is the light, not the knockout.
-        scene.nodes[0].gutter = 0.4;
+        scene.shadow = 0.4;
         scene
     };
     let covering = |wash: f32| -> Scene {
@@ -7183,7 +7211,7 @@ fn the_middle_of_a_node_is_where_its_light_is_fullest() {
         };
         scene.glow_reach = reach;
         scene.glow_strength = 1.5;
-        scene.nodes[0].gutter = 0.16;
+        scene.shadow = 0.16;
         scene
     };
     // The fixture's one node sits at the origin, which the camera is pointed
@@ -7207,7 +7235,6 @@ fn the_middle_of_a_node_is_where_its_light_is_fullest() {
     let mut far = flat.nodes[0];
     far.world_pos.z = -1.0;
     far.world_pos.x += 0.6;
-    far.gutter = 0.0;
     far.glow = harmonigraph_scene::GlowStep { level: 1.0, row: 1, mix: 1.0, marked: 0.0 };
     far.color = glam::Vec4::new(0.9, 0.2, 0.2, 1.0);
     let mut sheets = at(0.8);
@@ -7243,7 +7270,7 @@ fn the_middle_of_a_node_is_where_its_light_is_fullest() {
     );
 }
 
-/// A node STANDS ITS LIGHT OFF the rings it draws, and the Gap depth is the
+/// A node STANDS ITS LIGHT OFF the rings it draws, and the Shadow depth is the
 /// one switch on it.
 ///
 /// The standoff is a term of the node's own clearing rather than a hole cut in
@@ -7265,10 +7292,10 @@ fn the_middle_of_a_node_is_where_its_light_is_fullest() {
 /// at 0, and no pixel anywhere in the frame is brighter, the term the depth
 /// scales being a factor on light that was going to be laid down anyway. And a
 /// depth of 0 is the whole feature off: the frame is byte for byte the same at
-/// any Gap, which is the one place the four dials can be proved not to leak
+/// any Shadow, which is the one place the four dials can be proved not to leak
 /// into a picture that is supposed to have no standoff in it.
 ///
-/// A Gap of 0 is deliberately NOT the off position and is not compared here: it
+/// A Shadow of 0 is deliberately NOT the off position and is not compared here: it
 /// is a standoff whose fade has collapsed onto the ring's own annulus, which is
 /// a CRISPER one, not an absent one.
 ///
@@ -7279,7 +7306,7 @@ fn the_middle_of_a_node_is_where_its_light_is_fullest() {
 /// is the scale everything below is measured in, so the probe follows the
 /// fixture instead of naming a pixel.
 #[test]
-fn the_gap_depth_says_how_much_light_a_ring_stands_off() {
+fn the_shadow_depth_says_how_much_light_a_ring_stands_off() {
     const SIZE: [u32; 2] = [256, 256];
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
@@ -7294,11 +7321,10 @@ fn the_gap_depth_says_how_much_light_a_ring_stands_off() {
         };
         scene.glow_reach = reach;
         scene.glow_strength = 1.5;
-        scene.glow_gap = gap;
-        // The fade the whole width of the gap, which is the fresh pair.
-        scene.glow_gap_soft = gap;
-        scene.glow_gap_depth = depth;
-        scene.nodes[0].gutter = 0.16;
+        scene.shadow = gap;
+        // The fade the whole width of the reach, which is the fresh pair.
+        scene.shadow_soft = gap;
+        scene.shadow_depth = depth;
         scene
     };
     let row = SIZE[0] as usize;
@@ -7307,15 +7333,14 @@ fn the_gap_depth_says_how_much_light_a_ring_stands_off() {
     // The scale: the node's own ink with nothing around it. The clearing is off
     // for this shot alone — it paints the ground out past the ink, and what is
     // wanted here is where the INK stops.
-    let mut bare = at(0.0, 0.0, 0.0);
-    bare.nodes[0].gutter = 0.0;
+    let bare = at(0.0, 0.0, 0.0);
     let plain = shooter.shot(&bare);
     let inked = |px: &[u8], i: usize| px[i * 4..i * 4 + 4] != [0u8, 0, 0, 255];
     let band_px = (1..(SIZE[0] / 2) as usize)
         .rfind(|&x| inked(&plain, centre + x))
         .expect("the fixture's node must ink something along +x");
     assert!(band_px > 20, "the node inked only {band_px}px of radius; there is nothing to read");
-    // Half a Gap past the band's outer edge: the standoff is solid there and
+    // Half a Shadow past the band's outer edge: the standoff is solid there and
     // the node inks nothing, so the whole of the difference below is light.
     let probe = centre
         + (band_px as f32 * (1.0 + 0.08 / bare.rings_outer)).round() as usize;
@@ -7351,14 +7376,12 @@ fn the_gap_depth_says_how_much_light_a_ring_stands_off() {
     // The bar's top is the bare ground: where the standoff is solid, a depth of
     // 1 leaves the pixel exactly what it is with the glow off — not nearly,
     // since the clearing at full coverage replaces what is under it and a
-    // factor of 0 on the light is no light. BOTH fades are taken off for this
-    // pair of shots: the standoff's, and the clearing's it is floored at,
-    // which at the fresh width runs nearly the whole gutter — so the probe
-    // sits in a solid band rather than on either ramp.
+    // factor of 0 on the light is no light. The fade is taken off for this pair
+    // of shots — at the fresh width it runs nearly the whole reach — so the
+    // probe sits in a solid band rather than on the ramp.
     let solid = |reach: f32| {
         let mut scene = at(reach, 0.16, 1.0);
-        scene.glow_gap_soft = 0.0;
-        scene.sevens_soft = 0.0;
+        scene.shadow_soft = 0.0;
         scene
     };
     let bare_ground = shooter.shot(&solid(0.8));
@@ -7369,20 +7392,158 @@ fn the_gap_depth_says_how_much_light_a_ring_stands_off() {
         "at a depth of 1 the stood-off pixel is not the frame with no glow in it",
     );
 
-    // And the depth is the whole switch: at 0 the Gap and its curve reach the
-    // picture nowhere.
+    // And the depth is the whole switch, for BOTH of the shadow's covers: at 0
+    // the Shadow and its curve reach the picture nowhere.
+    //
+    // Over a SHEET, which is what the knockout needs to be visible at all — it
+    // is cut by making what stands behind transparent, so on the fixture above
+    // it would be a hole over nothing however wide it were dialled, and this
+    // sweep would pass with the knockout's own switch broken.
+    let over_a_sheet = |gap: f32, depth: f32| -> Scene {
+        let mut scene = at(0.8, gap, depth);
+        let mut sheet = scene.nodes[0];
+        sheet.world_pos.z = -1.0;
+        sheet.glow = harmonigraph_scene::GlowStep { level: 1.0, row: 1, mix: 1.0, marked: 1.0 };
+        scene.nodes.push(sheet);
+        rows_per_node(&mut scene);
+        scene
+    };
+    let fresh = shooter.shot(&over_a_sheet(0.16, 0.0));
     for (name, gap) in [("no gap", 0.0), ("a wide gap", 0.5)] {
-        let other = shooter.shot(&at(0.8, gap, 0.0));
+        // The fixture can SEE the reach: at a depth of 1 the same two gaps are
+        // different pictures, so the equality below is the depth's doing.
+        let seen = differing_pixels(&shooter.shot(&over_a_sheet(gap, 1.0)), &fresh);
+        assert!(
+            seen > 200,
+            "{name} moved only {seen} pixels at a depth of 1; the sweep below has nothing \
+             to be the absence of",
+        );
         assert_eq!(
-            differing_pixels(&other, &flat),
+            differing_pixels(&shooter.shot(&over_a_sheet(gap, 0.0)), &fresh),
             0,
             "at a depth of 0, {name} drew a different frame from the fresh gap",
         );
     }
 }
 
+/// ONE depth closes both of the shadow's covers.
+///
+/// The two are shaped differently and laid over different things — the KNOCKOUT
+/// is a ramp cut into what stands behind, the STANDOFF a decay laid over the
+/// light — so what has to be said about them together is that they are one
+/// setting and not two: at 0 there is no shadow in the picture at all, and at 1
+/// each is at its own top.
+///
+/// Each is read where the other cannot act, which is what makes this two claims
+/// rather than one number read twice:
+///
+/// - the knockout in the node's empty MIDDLE, over a sheet, with the node's own
+///   light OFF: over its middle that light is opaque
+///   ([`the_middle_of_a_node_is_where_its_light_is_fullest`]), so a lit middle
+///   reads the same at every depth and the sheet could never say which cover
+///   took it. A node with no light of its own still casts the shadow — the
+///   reading stands on that. The knockout fills every footprint to the centre
+///   where the standoff measures each ring from its own annulus, so the middle
+///   of a ring is the knockout's alone. At the top it takes the sheet WHOLE —
+///   the middle is then byte for byte the frame with no sheet in it — which is
+///   what "linear in the depth" means at 1.
+/// - the standoff around the ring of a LONE node, lit, where a knockout has
+///   nothing behind it to take at any setting.
+///
+/// A depth of 0 giving back the whole frame, at every reach, is
+/// [`the_shadow_depth_says_how_much_light_a_ring_stands_off`]'s sweep; what is
+/// added here is that the same 0 gives back the SHEET.
+#[test]
+fn one_depth_closes_both_of_the_shadows_covers() {
+    const SIZE: [u32; 2] = [256, 256];
+    /// A ring with an empty middle, so the two covers have somewhere to differ:
+    /// wide enough that the standoff, which reaches `inner - reach` inward, is
+    /// nowhere near the centre pixel the knockout is read at.
+    const RING: (f32, f32) = (0.5, 0.7);
+    let Some(mut gpu) = Shooter::new(SIZE) else {
+        return;
+    };
+    // `lit` is per reading: the knockout is read under a DARK node — ring
+    // only, no key down — and the standoff under the fixture's full ink,
+    // because the light it takes is that ink blurred.
+    let at = |depth: f32, sheet: bool, lit: bool| -> Scene {
+        let mut scene = clearing_node(0, 1.0, true, CLEAR_REACH);
+        // The fixture's one node sits at the origin; aimed straight on, the
+        // frame's centre is the node's.
+        scene.camera = harmonigraph_scene::Camera {
+            projection: harmonigraph_scene::Projection::Orthographic,
+            yaw: 0.0,
+            pitch: 0.0,
+            ..Default::default()
+        };
+        (scene.spectral.inner, scene.spectral.outer) = RING;
+        scene.shadow_depth = depth;
+        scene.glow_reach = 3.0;
+        scene.glow_strength = 2.0;
+        scene.glow_feather = 1.0;
+        scene.pluses.clear();
+        let node = &mut scene.nodes[0];
+        // Dark for the knockout reading: the middle has to hold no ink of the
+        // node's own, and a level over an empty strip row is a black light
+        // anyway (the ring folds into the LEVEL, never into the strip). Lit
+        // keeps the fixture's MIDI ink, which is what the light is made of.
+        if !lit {
+            node.activation = 0.0;
+            node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
+        }
+        node.glow.level = f32::from(lit);
+        if sheet {
+            // The sheet wears ink on every layer, [`clearing_over_a_sheet`]'s
+            // recipe: a level alone lights nothing — the light is the node's
+            // own ink blurred, and this node's strip row is empty.
+            let mut behind = scene.nodes[0];
+            behind.world_pos.z = -1.0;
+            behind.activation = SHEET_INK;
+            behind.octaves = [SHEET_INK; harmonigraph_scene::OCTAVE_SLOTS];
+            behind.audio_ring = SHEET_INK;
+            behind.melody_slots = (1 << harmonigraph_scene::OCTAVE_SLOTS) - 1;
+            behind.melody_level = SHEET_INK;
+            behind.melody_color = glam::Vec4::ONE;
+            behind.glow =
+                harmonigraph_scene::GlowStep { level: 1.0, row: 1, mix: 1.0, marked: 1.0 };
+            scene.nodes.push(behind);
+            rows_per_node(&mut scene);
+        }
+        scene
+    };
+    let middle = ((SIZE[1] / 2) as usize * SIZE[0] as usize + (SIZE[0] / 2) as usize) * 4;
+
+    // The knockout, in the node's own middle.
+    for (name, depth, hidden) in [("0", 0.0, false), ("1", 1.0, true)] {
+        let over = gpu.shot(&at(depth, true, false));
+        let lone = gpu.shot(&at(depth, false, false));
+        let same = over[middle..middle + 4] == lone[middle..middle + 4];
+        assert_eq!(
+            same, hidden,
+            "at a depth of {name} the sheet behind reads {:?} through the node's middle \
+             against the {:?} of no sheet at all",
+            &over[middle..middle + 4],
+            &lone[middle..middle + 4],
+        );
+    }
+
+    // ...and the standoff, on the lone node, off the same dial.
+    let flat = gpu.shot(&at(0.0, false, true));
+    let deep = gpu.shot(&at(1.0, false, true));
+    let dimmed = flat
+        .chunks(4)
+        .zip(deep.chunks(4))
+        .filter(|(a, b)| brightness(&b[..3]) < brightness(&a[..3]))
+        .count();
+    assert!(
+        dimmed > 500,
+        "the depth that took the sheet whole took light off only {dimmed} pixels of the lone \
+         node's own halo",
+    );
+}
+
 /// The standoff has no radius at which it stops: it is still taking light a
-/// tenth of a Gap PAST the Gap bar's outer handle, and less of it further out
+/// tenth of a Shadow PAST the Shadow bar's outer handle, and less of it further out
 /// again.
 ///
 /// The claim the picture rests on. A fade that lands on nothing at one distance
@@ -7421,18 +7582,17 @@ fn the_standoff_reaches_past_the_gap_it_is_dialled_to() {
         };
         scene.glow_reach = 2.5;
         scene.glow_strength = 2.0;
-        scene.glow_gap = GAP;
-        scene.glow_gap_soft = GAP;
-        scene.glow_gap_shape = 0.0;
-        scene.glow_gap_depth = depth;
-        scene.nodes[0].gutter = 0.0;
+        scene.shadow = GAP;
+        scene.shadow_soft = GAP;
+        scene.shadow_shape = 0.0;
+        scene.shadow_depth = depth;
         scene
     };
     let row = SIZE[0] as usize;
     let (cx, cy) = ((SIZE[0] / 2) as usize, (SIZE[1] / 2) as usize);
     let centre = cy * row + cx;
 
-    // The scale, as `the_gap_depth_says_how_much_light_a_ring_stands_off` takes
+    // The scale, as `the_shadow_depth_says_how_much_light_a_ring_stands_off` takes
     // it: the outermost pixel the node inks along +x is the band's outer edge,
     // which is `rings_outer` in the node's own uv.
     let bare = at(0.0);
@@ -7450,7 +7610,7 @@ fn the_standoff_reaches_past_the_gap_it_is_dialled_to() {
     let flat = shooter.shot(&at(0.0));
     let stood_off = shooter.shot(&at(1.0));
     // What the standoff took per lit pixel, over the ring of pixels standing
-    // between `from` and `to` Gaps out from the band's own edge.
+    // between `from` and `to` Shadows out from the band's own edge.
     let took = |from: f32, to: f32| -> (f64, usize) {
         let (mut sum, mut n) = (0i64, 0usize);
         for y in 0..SIZE[1] as usize {
@@ -7475,23 +7635,23 @@ fn the_standoff_reaches_past_the_gap_it_is_dialled_to() {
     assert!(near_n > 200 && far_n > 200, "the annuli hold {near_n} and {far_n} pixels to read");
     assert!(
         near > 0.5,
-        "the standoff stopped at the Gap's own handle: a tenth of a Gap past it, it took \
+        "the standoff stopped at the Shadow's own handle: a tenth of a Shadow past it, it took \
          {near:.2} of a code value per pixel",
     );
     assert!(
         far > 0.0 && far < near,
-        "the standoff took {far:.2} per pixel out at a Gap and a half against {near:.2} just \
+        "the standoff took {far:.2} per pixel out at a Shadow and a half against {near:.2} just \
          past one, which is a wider band rather than a decay",
     );
 }
 
-/// The Gap depth is a number of STOPS, spent geometrically across the fade, and
+/// The Shadow depth is a number of STOPS, spent geometrically across the fade, and
 /// not a share of the light taken off in proportion.
 ///
 /// What that buys is the whole of why the fade is worth spending on: sight
 /// answers ratios, so a factor walked evenly in VALUE spends most of what can
 /// be SEEN of it in the first fraction of its width, and the pool then reads as
-/// a dark ring hugging the ink with an edge on it whatever the Gap is dialled
+/// a dark ring hugging the ink with an edge on it whatever the Shadow is dialled
 /// to. See `glow_shade`, which is the one line this pins.
 ///
 /// Measured as a SQUARE, which is what makes it an identity rather than a
@@ -7523,10 +7683,9 @@ fn the_gap_depth_is_spent_in_stops_and_not_in_proportion() {
         };
         scene.glow_reach = 1.6;
         scene.glow_strength = 1.5;
-        scene.glow_gap = GAP;
-        scene.glow_gap_soft = GAP;
-        scene.glow_gap_depth = depth;
-        scene.nodes[0].gutter = 0.0;
+        scene.shadow = GAP;
+        scene.shadow_soft = GAP;
+        scene.shadow_depth = depth;
         scene
     };
     let row = SIZE[0] as usize;
@@ -7566,7 +7725,7 @@ fn the_gap_depth_is_spent_in_stops_and_not_in_proportion() {
         let got = l2 / l0;
         assert!(
             (got - want).abs() < 0.035,
-            "{p} of a Gap out the depth that leaves a quarter kept {got:.3} of the light \
+            "{p} of a Shadow out the depth that leaves a quarter kept {got:.3} of the light \
              where the depth that leaves a half, squared, is {want:.3}",
         );
         checked += 1;
@@ -7574,41 +7733,38 @@ fn the_gap_depth_is_spent_in_stops_and_not_in_proportion() {
     assert!(checked >= 4, "only {checked} probes had light to read; the test proves nothing");
 }
 
-/// The Gap reaches as far as it says, and the Clearance is not a lid on it.
+/// The standoff reaches as far as the Shadow bar says, out past the ink it is
+/// cast off.
 ///
-/// The standoff is written into a layer of the LIGHT (`fs_glow`), so it dims
-/// the field wherever that field reaches. A standoff carried instead by the
-/// ground a node's own clearing paints is bounded at the Clearance's reach —
-/// solid inward, where the clearing fills every footprint to the node's centre,
-/// and gone a fraction of a node-radius outward, where the clearing has faded
-/// out — which makes a Gap wider than the Clearance half a dial: it eats inward
-/// and does nothing outward.
+/// The standoff is laid over the node's own LIGHT (`node_paint`), so it dims
+/// that field wherever the field reaches. A standoff carried instead by the
+/// ground the knockout paints is bounded by that cover's own shape — solid
+/// inward, where it fills every footprint to the node's centre, and gone
+/// outward where it has faded out — which is half a dial: it eats inward and
+/// does nothing outward.
 ///
-/// So the probe sits OUTSIDE the clearing altogether — five times further from
-/// the ring than the Clearance reaches — and the two claims are what pin the
+/// So the probe sits outside every shape the node inks, with most of the
+/// standoff's own width still to come, and the two claims are what pin the
 /// difference. The standoff dims it, which is the light being held off where no
-/// node paints. And dialling the Clearance to nothing does not move it: what
-/// holds the light off there is the Gap alone, so the pixel is identical with a
-/// clearing and with none. Under the bounded shape neither shot moves, both
-/// being the undimmed field.
+/// node paints ink. And the depth is what moves it: at 0 the pixel is the
+/// undimmed field.
 ///
-/// The Clearance is deliberately not 0 in the first shot. A node that clears
-/// nothing is the easy case — there is no lid to prove the standoff has got out
-/// from under. The case worth pinning is a node whose clearing exists, ends,
-/// and does not take the standoff's reach with it.
+/// Nothing stands BEHIND this node, and that is what keeps the reading the
+/// standoff's alone now that one bar carries both of the shadow's covers: a
+/// knockout is cut by making what is behind transparent, so on a lone node it
+/// takes nothing at any reach or depth.
 #[test]
-fn the_gap_reaches_past_the_clearance_the_node_cuts() {
+fn the_shadow_reaches_past_the_ink_it_is_cast_off() {
     const SIZE: [u32; 2] = [256, 256];
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
     };
-    // A narrow clearing under a wide gap, which is the pair a standoff bounded
-    // by the clearing cannot draw. The fade is left at the full gap, the fresh
-    // pairing, so the
-    // probe reads the ramp rather than a band edge.
+    // A wide shadow, its fade the whole of its own reach — the fresh pairing —
+    // so the probe reads the ramp rather than a band edge. CLEARANCE is where
+    // the probe sits, a small fraction of that reach.
     const CLEARANCE: f32 = 0.02;
     const GAP: f32 = 0.5;
-    let at = |reach: f32, depth: f32, gutter: f32| -> Scene {
+    let at = |reach: f32, depth: f32, shadow: f32| -> Scene {
         let mut scene = single_marked_node(0, 0);
         scene.camera = harmonigraph_scene::Camera {
             projection: harmonigraph_scene::Projection::Orthographic,
@@ -7618,16 +7774,15 @@ fn the_gap_reaches_past_the_clearance_the_node_cuts() {
         };
         scene.glow_reach = reach;
         scene.glow_strength = 1.5;
-        scene.glow_gap = GAP;
-        scene.glow_gap_soft = GAP;
-        scene.glow_gap_depth = depth;
-        scene.nodes[0].gutter = gutter;
+        scene.shadow = shadow;
+        scene.shadow_soft = shadow;
+        scene.shadow_depth = depth;
         scene
     };
     let row = SIZE[0] as usize;
     let centre = (SIZE[1] / 2) as usize * row + (SIZE[0] / 2) as usize;
 
-    // The scale, as `the_gap_depth_says_how_much_light_a_ring_stands_off` takes
+    // The scale, as `the_shadow_depth_says_how_much_light_a_ring_stands_off` takes
     // it: the node's own ink with no clearing and no light, whose outermost lit
     // pixel along +x is `rings_outer` in the node's uv.
     let bare = at(0.0, 0.0, 0.0);
@@ -7638,11 +7793,10 @@ fn the_gap_reaches_past_the_clearance_the_node_cuts() {
         .expect("the fixture's node must ink something along +x");
     let per_uv = band_px as f32 / bare.rings_outer;
 
-    // Five times the Clearance out from the ink, and well inside the Gap: no
-    // clearing of this node reaches here at any level, and the standoff still
-    // has most of its own width left to spend.
+    // A tenth of a node out from the ink and well inside the reach, so the
+    // standoff still has most of its own width left to spend here.
     const PAST: f32 = CLEARANCE * 5.0;
-    const { assert!(PAST < GAP, "the probe has to sit inside the gap it is measuring") };
+    const { assert!(PAST < GAP, "the probe has to sit inside the reach it is measuring") };
     let probe = centre + (band_px as f32 + PAST * per_uv).round() as usize;
     assert!(
         !inked(&plain, probe),
@@ -7650,39 +7804,30 @@ fn the_gap_reaches_past_the_clearance_the_node_cuts() {
     );
 
     let lit = |px: &[u8], i: usize| brightness(&px[i * 4..i * 4 + 3]);
-    let stood_off = shooter.shot(&at(0.8, 0.85, CLEARANCE));
-    let flat = shooter.shot(&at(0.8, 0.0, CLEARANCE));
+    let stood_off = shooter.shot(&at(0.8, 0.85, GAP));
+    let flat = shooter.shot(&at(0.8, 0.0, GAP));
     assert!(
         lit(&stood_off, probe) < lit(&flat, probe),
-        "outside the clearing the standoff left the pixel at {} against {} with the depth at 0",
+        "past the ink the standoff left the pixel at {} against {} with the depth at 0",
         lit(&stood_off, probe),
         lit(&flat, probe),
     );
     // Non-vacuous: there has to be light out there to hold off.
-    let dark = shooter.shot(&at(0.0, 0.85, CLEARANCE));
+    let dark = shooter.shot(&at(0.0, 0.85, GAP));
     assert!(
         lit(&flat, probe) > lit(&dark, probe),
         "the fixture lights the probe no more than the glow off does; the comparison is vacuous",
     );
-
-    // ...and it is the Gap's own doing, not the clearing's: take the Clearance
-    // away entirely and the pixel does not move.
-    let clearless = shooter.shot(&at(0.8, 0.85, 0.0));
-    assert_eq!(
-        clearless[probe * 4..probe * 4 + 4],
-        stood_off[probe * 4..probe * 4 + 4],
-        "the standoff outside the clearing changed when the Clearance was dialled off",
-    );
 }
 
-/// The Gap reaches light this node never lit — a NEIGHBOUR's halo, out past
+/// The Shadow reaches light this node never lit — a NEIGHBOUR's halo, out past
 /// where its own light has shut.
 ///
 /// The standoff is written per node into a layer of the light (`fs_glow`), one
 /// quad per node, so what bounds it is that node's own billboard. The billboard
-/// is sized to hold the LIGHT — the lit rim plus the Reach — and the Gap is a
-/// length of its own with a ceiling of its own (`GLOW_GAP_MAX` against
-/// `GLOW_REACH_MAX`), so a Gap dialled past the Reach asks for a standoff out
+/// is sized to hold the LIGHT — the lit rim plus the Reach — and the Shadow is a
+/// length of its own with a ceiling of its own (`SHADOW_MAX` against
+/// `GLOW_REACH_MAX`), so a Shadow dialled past the Reach asks for a standoff out
 /// where this node draws no fragment at all. What an unheld bound looks like is
 /// not a wrong value but a DISCONTINUITY: the fade stops dead partway down its
 /// ramp, on a line that is straight and screen-aligned — `node_vertex` builds
@@ -7704,9 +7849,9 @@ fn the_gap_reaches_light_the_nodes_own_never_lit() {
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
     };
-    // The widest Gap the bar has against the fresh Reach — the pair that puts
+    // The widest Shadow the bar has against the fresh Reach — the pair that puts
     // the standoff outside the quad the light alone would size.
-    const GAP: f32 = harmonigraph_scene::GLOW_GAP_MAX;
+    const GAP: f32 = harmonigraph_scene::SHADOW_MAX;
     const REACH: f32 = 0.35;
     // Where the neighbour stands, and where the light is read, both in the
     // probed node's uv. The probe is past `QUAD_MARGIN` (1.6) and inside the
@@ -7728,13 +7873,12 @@ fn the_gap_reaches_light_the_nodes_own_never_lit() {
         // An even field, so the light is still worth something out at the bound
         // rather than an exponential's tail.
         scene.glow_feather = 1.0;
-        scene.glow_gap = GAP;
-        scene.glow_gap_soft = GAP;
+        scene.shadow = GAP;
+        scene.shadow_soft = GAP;
         // The fade held longest, which is what leaves a measurable share of the
         // standoff this far out.
-        scene.glow_gap_shape = 1.0;
-        scene.glow_gap_depth = depth;
-        scene.nodes[0].gutter = 0.0;
+        scene.shadow_shape = 1.0;
+        scene.shadow_depth = depth;
         scene
     };
     // ...and the neighbour that lights it. Dialled almost off, so every term of
@@ -7787,12 +7931,12 @@ fn the_gap_reaches_light_the_nodes_own_never_lit() {
         lit(&flat, probe),
     );
 
-    // And the Gap holds it off. A tenth is far under the share the bars ask for
+    // And the Shadow holds it off. A tenth is far under the share the bars ask for
     // here and far over what the neighbour's own hundredth of a standoff can
     // account for, so the threshold is the bound and not the arithmetic.
     assert!(
         lit(&gapped, probe) * 10 < lit(&flat, probe) * 9,
-        "the Gap left a neighbour's light at {} against {} with the depth at 0, so the \
+        "the Shadow left a neighbour's light at {} against {} with the depth at 0, so the \
          standoff stopped at this node's own billboard",
         lit(&gapped, probe),
         lit(&flat, probe),
@@ -7803,7 +7947,7 @@ fn the_gap_reaches_light_the_nodes_own_never_lit() {
 /// closed Octave gap and at the widest one — the two rings of shares every claim
 /// about the standoff following the slices is stated on.
 ///
-/// The share is `(lit - stood off) / lit` at a Gap depth of 1, which is the
+/// The share is `(lit - stood off) / lit` at a Shadow depth of 1, which is the
 /// standoff's own coverage and nothing else. Three things have to hold for that,
 /// and the fixtures below carry all three: the clearing the standoff rides is
 /// radial, so it contributes one constant factor around the turn; the light's
@@ -7852,8 +7996,7 @@ fn standoff_share_rings(
         y * row + (cx + r * a.cos()).floor() as usize
     };
 
-    let mut bare = at(0.0, 0.0, 0.0);
-    bare.nodes[0].gutter = 0.0;
+    let bare = at(0.0, 0.0, 0.0);
     let plain = shooter.shot(&bare);
     let inked = |px: &[u8], i: usize| px[i * 4..i * 4 + 4] != [0u8, 0, 0, 255];
     let ink_px = (0..angles)
@@ -7896,7 +8039,7 @@ fn standoff_share_rings(
 /// with gaps between them rather than a closed annulus.
 ///
 /// What this measures is the SHARE of the light one pixel loses to the standoff
-/// — `(lit - stood off) / lit` at a depth of 1 — taken at one radius half a Gap
+/// — `(lit - stood off) / lit` at a depth of 1 — taken at one radius half a Shadow
 /// outside the band, all the way round the node. That share is the standoff's
 /// own coverage and nothing else: the clearing carrying it is a disc
 /// (`node_clearing` reads the band as a rim), the light's falloff is radial
@@ -7906,7 +8049,7 @@ fn standoff_share_rings(
 /// TWO claims, and the second is what keeps the first from being a restyle.
 /// Against a CLOSED ring's share at the same pixel, a wide Octave gap keeps
 /// nearly all of its light in the middle of a gap — where the nearest ink is
-/// half a gap away, further off than the Gap reaches — and loses all of the
+/// half a gap away, further off than the Shadow reaches — and loses all of the
 /// same share as the closed ring over the middle of a slice, the ink there
 /// being no further off than the annulus itself. And with the gap closed the
 /// share is FLAT around the turn, which is the picture an angular term must not
@@ -7918,12 +8061,12 @@ fn standoff_share_rings(
 /// hence a budget rather than an equality, and the ratio in the first claim,
 /// which compares two shots at ONE pixel and so has no wobble in it at all.
 ///
-/// [`the_gap_depth_says_how_much_light_a_ring_stands_off`]'s fixture and its
+/// [`the_shadow_depth_says_how_much_light_a_ring_stands_off`]'s fixture and its
 /// probe radius, with no fade on the clearing so the probe sits in solid
 /// coverage and the share is the standoff's whole answer.
 #[test]
 fn the_standoff_follows_the_gaps_between_the_slices() {
-    // A big frame for a small measurement: the Gap's fade is 0.16 of a node's
+    // A big frame for a small measurement: the Shadow's fade is 0.16 of a node's
     // uv, so at 256 it spans some seven pixels and half of one of those is a
     // twentieth of the share below. The node is drawn at the same size in uv
     // whatever the frame, so the pixels are what buys the resolution.
@@ -7963,12 +8106,10 @@ fn the_standoff_follows_the_gaps_between_the_slices() {
         scene.octave_gap = octave_gap;
         scene.glow_reach = reach;
         scene.glow_strength = 1.5;
-        scene.glow_gap = GAP;
-        // The fade the whole width of the gap, which is the fresh pair.
-        scene.glow_gap_soft = GAP;
-        scene.glow_gap_depth = depth;
-        scene.nodes[0].gutter = GAP;
-        scene.sevens_soft = 0.0;
+        scene.shadow = GAP;
+        // The fade the whole width of the reach, which is the fresh pair.
+        scene.shadow_soft = GAP;
+        scene.shadow_depth = depth;
         scene
     };
     // The band's own outer edge is where this fixture's ink ends, and the Scene
@@ -8034,7 +8175,7 @@ fn the_standoff_follows_the_gaps_between_the_slices() {
 /// landed at.
 ///
 /// The AUDIO RING carries it, alone: the octave band is dialled off, so this is
-/// also the only test that reaches `glow_standoff`'s ring term at all
+/// also the only test that reaches `the shadow`'s ring term at all
 /// (`parity_scene` is silent, and a silent ring has no radii to stand off).
 #[test]
 fn a_slice_past_a_half_turn_is_stood_off_down_its_middle() {
@@ -8084,11 +8225,9 @@ fn a_slice_past_a_half_turn_is_stood_off_down_its_middle() {
         scene.octave_gap = octave_gap;
         scene.glow_reach = reach;
         scene.glow_strength = 1.5;
-        scene.glow_gap = GAP;
-        scene.glow_gap_soft = GAP;
-        scene.glow_gap_depth = depth;
-        scene.nodes[0].gutter = 0.16;
-        scene.sevens_soft = 0.0;
+        scene.shadow = GAP;
+        scene.shadow_soft = GAP;
+        scene.shadow_depth = depth;
         scene
     };
     // Inside half the widest gap, which is the only radius at which the two
@@ -8137,13 +8276,13 @@ fn a_slice_past_a_half_turn_is_stood_off_down_its_middle() {
 ///
 /// The measurement that separates the two is the middle of a gap between two
 /// marks: the nearest ink there is half an Octave gap away, and at the widest
-/// gap that is 0.2 against a Gap of 0.16, so the light has to be fully back.
+/// gap that is 0.2 against a Shadow of 0.16, so the light has to be fully back.
 /// Read off the boundary the two wedges share, which is where the un-eroded
 /// wedge puts its own edge and so reads as a distance of nothing.
 ///
 /// Every slot marked, and the band and the ring both dialled off: the strip is
 /// then a full ring of wedges cut by the one gap, which is what lets the same
-/// probe ring read it, and the marks are the only term `glow_standoff` has.
+/// probe ring read it, and the marks are the only term `the shadow` has.
 #[test]
 fn a_marks_standoff_stops_where_the_gap_cuts_its_sides() {
     const SIZE: [u32; 2] = [1024, 1024];
@@ -8179,14 +8318,12 @@ fn a_marks_standoff_stops_where_the_gap_cuts_its_sides() {
         scene.octave_gap = octave_gap;
         scene.glow_reach = reach;
         scene.glow_strength = 1.5;
-        scene.glow_gap = GAP;
-        scene.glow_gap_soft = GAP;
-        scene.glow_gap_depth = depth;
-        scene.nodes[0].gutter = GAP;
-        scene.sevens_soft = 0.0;
+        scene.shadow = GAP;
+        scene.shadow_soft = GAP;
+        scene.shadow_depth = depth;
         scene
     };
-    // Half an Octave gap has to outreach the Gap, or the light is held off in
+    // Half an Octave gap has to outreach the Shadow, or the light is held off in
     // the middle of a gap whatever the sides do.
     const {
         assert!(
@@ -8225,7 +8362,7 @@ fn a_marks_standoff_stops_where_the_gap_cuts_its_sides() {
     );
 }
 
-/// A ring WEARS THE WASH inside a pool the Gap depth has cleared to the bare
+/// A ring WEARS THE WASH inside a pool the Shadow depth has cleared to the bare
 /// ground: the two are one field asked for twice, and the answers are free of
 /// each other.
 ///
@@ -8250,16 +8387,23 @@ fn a_marks_standoff_stops_where_the_gap_cuts_its_sides() {
 /// arithmetic (`node_paint`): the ink takes the light as a screen, so every
 /// channel it moves it moves up.
 ///
-/// [`the_gap_depth_says_how_much_light_a_ring_stands_off`]'s fixture, whose
+/// [`the_shadow_depth_says_how_much_light_a_ring_stands_off`]'s fixture, whose
 /// probe is the other side of this boundary — that pixel is outside the node's
 /// ink and these are inside it, and neither bar answers for both.
 ///
 /// The ink is found BEHIND: a pixel the node paints opaquely is the pixel that
 /// does not move when what stands behind it does. What stands behind is one
 /// flat sheet swung from black to white under the node, and it is read with the
-/// glow off and the node's gutter at 0, so what the node writes at such a pixel
-/// is its ink's own alpha and nothing else — no light of its own to lay, no
-/// shadow, and no hole cut in the sheet.
+/// glow off and the node's shadow at a DEPTH of 0, so what the node writes at
+/// such a pixel is its ink's own alpha and nothing else — no light of its own to
+/// lay, no shadow, and no hole cut in the sheet.
+///
+/// The depth is the switch and a reach of 0 is not: a shadow with no reach still
+/// stands its light off each ring's own footprint in full (`clearing_edge`'s
+/// floor), so a set found at that setting is every ring's ANTI-ALIASED RIM as
+/// well as its opaque middle — pixels the shadow holds still rather than the
+/// ink, where `1 - ink.w` is worth code values rather than a sliver and the
+/// light below rides in on all of it.
 ///
 /// That set is not exact, and the third claim is stated to survive it. What
 /// agreeing over both behinds bounds is `1 - ink.w`, and it bounds it under
@@ -8289,12 +8433,11 @@ fn a_ring_wears_the_wash_inside_its_own_dark_pool() {
         };
         scene.glow_reach = reach;
         scene.glow_strength = 1.5;
-        scene.glow_gap = 0.16;
-        // The fade the whole width of the gap, which is the fresh pair.
-        scene.glow_gap_soft = 0.16;
-        scene.glow_gap_depth = depth;
+        scene.shadow = 0.16;
+        // The fade the whole width of the reach, which is the fresh pair.
+        scene.shadow_soft = 0.16;
+        scene.shadow_depth = depth;
         scene.glow_wash = wash;
-        scene.nodes[0].gutter = 0.16;
         scene
     };
     // The resting field draws under the nodes, so one marker is the sheet — at
@@ -8302,7 +8445,7 @@ fn a_ring_wears_the_wash_inside_its_own_dark_pool() {
     // the node's rings at every angle rather than along two axes.
     let mut behind = |ink: glam::Vec4, node: bool| -> Vec<u8> {
         let mut scene = at(0.0, 1.0, 0.0);
-        scene.nodes[0].gutter = 0.0;
+        scene.shadow_depth = 0.0;
         if !node {
             scene.nodes.clear();
         }
@@ -8405,7 +8548,7 @@ fn a_ring_wears_the_wash_inside_its_own_dark_pool() {
 /// than off the geometry, so a marker the node happened to cover leaves the set
 /// empty instead of quietly handing these claims to the node — and then
 /// narrowed to the ones the marker covers in FULL. What shows through its
-/// antialiased rim is the ground's share of the light, which is the Gap bars'
+/// antialiased rim is the ground's share of the light, which is the Shadow bars'
 /// answer and not this bar's.
 #[test]
 fn a_resting_marker_wears_the_wash_it_stands_in() {
@@ -9578,12 +9721,27 @@ fn a_nodes_light_takes_its_colour_from_the_frame_before() {
 /// and kept the marker's standoff, a cross-shaped hole in the light with
 /// nothing standing in it.
 ///
-/// Measured against the SAME node with the Clearance dialled off, which is the
-/// one setting where the hole was never painted — so the claim is that the
-/// Clearance no longer decides this, rather than that some ink survives.
+/// It is the KNOCKOUT that is asked, and the node's other cover has to be held
+/// off the cross for that to be a question at all: a node's standoff lands on
+/// the markers by design — it rides the ink half of a split node
+/// (`node_paint`), which draws after them — so a marker under a ring wide
+/// enough to reach it is covered whatever the draw order is. The two covers
+/// part company over the node's MIDDLE, the knockout filling every footprint to
+/// the centre where the standoff measures each ring from its own annulus, and
+/// that is what [`CROSS_RING`] is dialled for: the cross stands inside the hole
+/// and outside the shadow.
+///
+/// Measured against the SAME node at a reach of 0, where the knockout is that
+/// footprint and nothing more — so the claim is that the shadow's reach no
+/// longer decides this, rather than that some ink survives.
 #[test]
 fn a_node_lit_by_no_key_keeps_the_cross_under_it() {
     const SIZE: [u32; 2] = [256, 256];
+    /// The node's audio ring for this fixture: an annulus with an EMPTY MIDDLE,
+    /// wide enough that every Shadow below leaves the cross standing in it. The
+    /// standoff reaches `inner - reach` inward, the cross ends 0.15 uv out from
+    /// the node's centre, and the widest reach asked for is 0.3.
+    const CROSS_RING: (f32, f32) = (0.5, 0.7);
     let Some(mut gpu) = Shooter::new(SIZE) else {
         return;
     };
@@ -9596,6 +9754,7 @@ fn a_node_lit_by_no_key_keeps_the_cross_under_it() {
         scene.glow_strength = 2.0;
         scene.glow_feather = 1.0;
         scene.marker_light = 0.0;
+        (scene.spectral.inner, scene.spectral.outer) = CROSS_RING;
         let node = &mut scene.nodes[0];
         node.activation = 0.0;
         node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
@@ -9612,7 +9771,8 @@ fn a_node_lit_by_no_key_keeps_the_cross_under_it() {
         };
         scene
     };
-    // What the cross covers, read where no clearing is painted at all.
+    // What the cross covers, read at each reach as the difference the marker
+    // makes.
     let mut inked = |gutter: f32| -> Vec<usize> {
         let with = gpu.shot(&build(gutter, true));
         let without = gpu.shot(&build(gutter, false));
@@ -9621,18 +9781,22 @@ fn a_node_lit_by_no_key_keeps_the_cross_under_it() {
             .filter(|&i| with[i..i + 4] != without[i..i + 4])
             .collect()
     };
+    // A reach of 0 is already the case this is about: a cover of no width still
+    // clears every footprint the node draws in full (`clearing_edge`'s floor),
+    // and the ring's footprint is the disc the cross stands in. So the pair
+    // below asks whether a WIDER hole takes what that one leaves.
     let bare = inked(0.0);
     assert!(
         bare.len() > 50,
         "the fixture draws no cross to lose: {} pixels",
         bare.len(),
     );
-    for gutter in [0.2f32, 0.5, 1.0] {
+    for gutter in [0.1f32, 0.2, 0.3] {
         let cut = inked(gutter);
         assert!(
             cut.len() >= bare.len(),
-            "at a Clearance of {gutter} the ringing node took {} of the {} pixels its \
-             cross covers with the Clearance off",
+            "at a Shadow of {gutter} the ringing node took {} of the {} pixels its \
+             cross covers with the Shadow off",
             bare.len() - cut.len(),
             bare.len(),
         );
@@ -9664,14 +9828,14 @@ fn a_node_lit_by_no_key_keeps_the_cross_under_it() {
 /// That hair also decides SPLIT versus whole, and a home node ships its
 /// clearing half for its LIGHT as much as for its hole (`LatticeCallback`), so
 /// the two sides of the pair are two composites against one even with the
-/// Clearance dialled off — which is why they can differ by rounding at all. The
-/// geometry is therefore read at a Gap depth of 0, where the split composes in
+/// Shadow dialled off — which is why they can differ by rounding at all. The
+/// geometry is therefore read at a Shadow depth of 0, where the split composes in
 /// range and rounding is all that is left: the clearing half lays
 /// `light.rgb + D * (1 - L * (1 - s))` into the destination, which cannot pass
 /// 1 with `s` at 0 whatever stands behind it.
 ///
 /// With the depth dialled up it can, and Rgba8Unorm CLIPS what the ink half
-/// cannot bring back — some twenty code values of 255 on this fixture, whose
+/// cannot bring back — a dozen code values of 255 on this fixture, whose
 /// behind sheet is an all-white ring under a node lit at a Strength of 2. Only
 /// an HDR intermediate holds that, so the cost is stated rather than paid, and
 /// the second pair is what keeps it visible. It is a parity reading of its own
@@ -9698,7 +9862,7 @@ fn splitting_a_clearing_off_its_node_paints_the_same_picture() {
         // wrong: at full coverage a clearing repaints the ground it already
         // stands on, so only the band where it is partial can tell one
         // application from two. The fixture's own default is a hard edge.
-        scene.sevens_soft = 0.3;
+        scene.shadow_soft = 0.3;
         // Nothing between the halves, so the only thing under test is whether
         // the two of them add up.
         scene.pluses.clear();
@@ -9715,7 +9879,6 @@ fn splitting_a_clearing_off_its_node_paints_the_same_picture() {
         behind.world_pos.z = -0.6;
         behind.scale = 2.5;
         behind.on_home = false;
-        behind.gutter = 0.0;
         scene.nodes.push(behind);
         let node = &mut scene.nodes[0];
         node.world_pos.z = z;
@@ -9735,10 +9898,10 @@ fn splitting_a_clearing_off_its_node_paints_the_same_picture() {
     let whole = gpu.shot(&build(0.001, CLEAR_REACH));
 
     // The depth hair on its own, with no clearing for either to draw and the
-    // Gap depth out of the way, so the split's terms all compose in range.
+    // Shadow depth out of the way, so the split's terms all compose in range.
     let unshaded = |z: f32| -> Scene {
         let mut scene = build(z, 0.0);
-        scene.glow_gap_depth = 0.0;
+        scene.shadow_depth = 0.0;
         scene
     };
     let moved = worst(&gpu.shot(&unshaded(0.0)), &gpu.shot(&unshaded(0.001)));
@@ -9753,7 +9916,7 @@ fn splitting_a_clearing_off_its_node_paints_the_same_picture() {
     let clipped = worst(&flat_home, &flat_off);
     assert!(
         (3..=40).contains(&clipped),
-        "the split's own Gap depth moved a channel by {clipped} against the sheet behind: \
+        "the split's own Shadow depth moved a channel by {clipped} against the sheet behind: \
          under 3 the 8-bit intermediate has stopped clipping and this pin has nothing left \
          to say, over 40 a term of the split is being counted twice",
     );

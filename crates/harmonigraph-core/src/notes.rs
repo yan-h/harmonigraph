@@ -426,7 +426,7 @@ impl Voice {
     ///
     /// The single source of truth for how lit a voice is, and the chokepoint
     /// every layer of a node multiplies through — the core disc, its glow,
-    /// the octave sectors, the gutter it clears, and the piano roll. One
+    /// the octave sectors, the shadow it casts, and the piano roll. One
     /// function so a note cannot arrive at one rate and leave at another, nor
     /// have one layer disagree with the next about either.
     ///

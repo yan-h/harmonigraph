@@ -270,18 +270,18 @@ pub const GLOW_REACH_MAX: f32 = 8.0;
 /// which puts the middle of a node at saturation somewhere short of this.
 pub const GLOW_STRENGTH_MAX: f32 = 2.0;
 
-/// How far past each ring a node's clearing may be asked to stand the light
-/// off (see [`ViewConfig::glow_gap`]), in the quad UV units the layer sizes
-/// above are in — the far end of the Glow section's Gap bar, and with it the
-/// widest fade that bar can spend, the fade being held inside the gap.
+/// How far past the shape it draws an element's shadow may be asked to reach
+/// (see [`ViewConfig::shadow`]), in the quad UV units the layer sizes above are
+/// in — the far end of the Note section's Shadow bar, and with it the widest
+/// fade that bar can spend, the fade being held inside the reach.
 ///
 /// A whole node radius, where the two paddings above stop at [`GAP_MAX`]: a
 /// padding is room between two layers of one node and has no business being
-/// wider than a layer, but the standoff is a dip in the LIGHT, and what stops
-/// it reading as a black ring is a dip broad enough to come off at the rate
-/// the skirt does. One radius past every ring is a band wider than the whole
-/// ring stack it stands off, past which there is no more shape to soften.
-pub const GLOW_GAP_MAX: f32 = 1.0;
+/// wider than a layer, but the shadow is also a dip in the LIGHT, and what
+/// stops that reading as a black ring is a dip broad enough to come off at the
+/// rate the skirt does. One radius past every ring is a band wider than the
+/// whole ring stack it stands off, past which there is no more shape to soften.
+pub const SHADOW_MAX: f32 = 1.0;
 
 /// The two ends of the Glow section's Feather bar, as the rate the light's
 /// exponential comes off at across its own span. Mirrored in lattice.wgsl
@@ -292,18 +292,18 @@ pub const GLOW_GAP_MAX: f32 = 1.0;
 pub const GLOW_FALLOFF_TIGHT: f32 = 3.0;
 pub const GLOW_FALLOFF_FLAT: f32 = 0.25;
 
-/// The two ends of the Glow section's Gap curve bar, as the exponent the
+/// The two ends of the Note section's Shadow curve bar, as the exponent the
 /// standoff's decay is taken over across its own width. Mirrored in
-/// lattice.wgsl (`GAP_SHAPE_TRAIL`/`HOLD`) on the same terms as the pair above
-/// — the shader holds the rationale, including why the bar's middle lands on
-/// 2 — and the render crate asserts the copies agree. What this copy draws is
-/// the bar's preview ([`standoff_recovery`]).
-pub const GAP_SHAPE_TRAIL: f32 = 1.0;
-pub const GAP_SHAPE_HOLD: f32 = 4.0;
+/// lattice.wgsl (`SHADOW_SHAPE_TRAIL`/`HOLD`) on the same terms as the pair
+/// above — the shader holds the rationale, including why the bar's middle lands
+/// on 2 — and the render crate asserts the copies agree. What this copy draws
+/// is the bar's preview ([`standoff_recovery`]).
+pub const SHADOW_SHAPE_TRAIL: f32 = 1.0;
+pub const SHADOW_SHAPE_HOLD: f32 = 4.0;
 
-/// How many e-folds of the standoff the Gap's fade spends, mirrored from
-/// lattice.wgsl (`GAP_TAIL`), which holds the rationale.
-pub const GAP_TAIL: f32 = 4.0;
+/// How many e-folds of the standoff the shadow's fade spends, mirrored from
+/// lattice.wgsl (`SHADOW_TAIL`), which holds the rationale.
+pub const SHADOW_TAIL: f32 = 4.0;
 
 /// `smoothstep(0, 1, x)`, as WGSL spells it.
 fn smoothstep(x: f32) -> f32 {
@@ -332,22 +332,23 @@ pub fn glow_skirt(feather: f32, p: f32) -> f32 {
 }
 
 /// How much of its light a ring has given back `p` of the way across the
-/// standoff's fade, 0..=1, at `shape` ([`ViewConfig::glow_gap_shape`]): the Gap
+/// standoff's fade, 0..=1, at `shape` ([`ViewConfig::shadow_shape`]): the Shadow
 /// curve bar's preview, drawn as the light coming BACK because that is the
 /// direction the fade runs in — the ring's edge at the left, the halo at the
 /// right.
 ///
-/// A copy of `standoff_coverage`'s decay and the exponent `glow_gap_shape`
-/// takes it over, on the terms [`glow_skirt`] states, and held to the shader's
-/// text the same way (`the_gap_curve_bars_preview_is_the_ramp_the_shader_runs`).
+/// A copy of `standoff_coverage`'s decay and the exponent `shadow_shape` takes
+/// it over, on the terms [`glow_skirt`] states, and held to the shader's text
+/// the same way (`the_shadow_curve_bars_preview_is_the_ramp_the_shader_runs`).
 ///
 /// It does not reach 1 at the right-hand end, and that is the shape rather than
 /// a clipped preview: the fade is a decay with no width at which it lands on
-/// nothing (see `GAP_TAIL`), so the bar draws a curve still climbing where a
+/// nothing (see `SHADOW_TAIL`), so the bar draws a curve still climbing where a
 /// ramp would have arrived.
 pub fn standoff_recovery(shape: f32, p: f32) -> f32 {
-    let exponent = GAP_SHAPE_TRAIL * (GAP_SHAPE_HOLD / GAP_SHAPE_TRAIL).powf(shape.clamp(0.0, 1.0));
-    1.0 - (-GAP_TAIL * p.clamp(0.0, 1.0).powf(exponent)).exp()
+    let exponent =
+        SHADOW_SHAPE_TRAIL * (SHADOW_SHAPE_HOLD / SHADOW_SHAPE_TRAIL).powf(shape.clamp(0.0, 1.0));
+    1.0 - (-SHADOW_TAIL * p.clamp(0.0, 1.0).powf(exponent)).exp()
 }
 
 /// The longest attack or release the node glow offers, in seconds (see
@@ -512,22 +513,6 @@ pub struct NodeInstance {
     /// together — so every layer inside keeps its proportions and only the
     /// node's size on screen changes.
     pub scale: f32,
-    /// Width of the knockout gutter this node clears around itself, in quad
-    /// UV units (see [`ViewConfig::sevens_gutter`]). Every node the scene ships
-    /// carries it, the home sheet included and whatever depth the window holds;
-    /// 0 only when the gutter is off.
-    ///
-    /// A WIDTH and not a decision: whether a node clears, and how strongly, is
-    /// per LAYER and settled in the shader, each layer's hole scaled by the
-    /// level that paints it. Gating this on the note instead would leave a node
-    /// wearing an audio ring with no key down — which the Gate hands out freely
-    /// — drawing that ring over the sheets behind it with no hole to sit in.
-    ///
-    /// The hole is over the SHEETS and not over the resting field: a marker
-    /// standing where a node stands is drawn between the two halves of that
-    /// node (`GpuInstance::paint` in harmonigraph-render), so no clearing takes
-    /// a cross.
-    pub gutter: f32,
     /// Signed cents from the home-sheet node this one shares a LETTER and an
     /// accidental with: `(threes - 2*(sevens - center), fives, center)`,
     /// which is the position the letter walk lands on. Not the same NAME —
@@ -825,10 +810,10 @@ pub struct PlusInstance {
     /// cross whole, an analyzer ring being light a node WEARS rather than a
     /// claim on the position under it. The shadow answers to the light instead,
     /// whatever raised it: a node's middle is the one place the picture keeps
-    /// free of a standoff ([`glow_standoff`](crate::ViewConfig::glow_gap) is
-    /// measured from each ring's own annulus, so the light runs in to the
-    /// centre) and a cross standing there cuts the node's own halo whether a
-    /// key, a mark or a ring is what lit it.
+    /// free of a standoff (the [`shadow`](crate::ViewConfig::shadow) is measured
+    /// from each ring's own annulus, so the light runs in to the centre) and a
+    /// cross standing there cuts the node's own halo whether a key, a mark or a
+    /// ring is what lit it.
     ///
     /// Never above `strength`: ink that is not there casts nothing. That is
     /// also what keeps [`derive_pluses`](derive::derive_pluses) free to drop a
@@ -873,7 +858,7 @@ pub struct Scene {
     /// What the melody/bass marks stand off and what the node's billboard is
     /// sized on, so a node whose band is dialled away still wears its marks
     /// where its picture actually ends. The clearing is bounded by this and
-    /// measured per layer instead (see [`NodeInstance::gutter`]).
+    /// measured per layer instead (see [`shadow`](Self::shadow)).
     pub rings_outer: f32,
     /// Where the melody/bass mark strip starts (see
     /// [`RingStack::mark_inner`]) — a padding out from
@@ -978,11 +963,26 @@ pub struct Scene {
     /// Already clamped, and held short of 1 so the fade never collapses to a
     /// zero-width `smoothstep`.
     pub plus_taper_start: f32,
-    /// How wide the sevens knockout's fade is, in the uv of a full-size
-    /// node (see [`ViewConfig::sevens_gutter_soft`]). View-wide, as the reach
-    /// beside it is — what varies node to node is the STRENGTH, which the
-    /// shader takes per layer from that layer's own level. Already clamped.
-    pub sevens_soft: f32,
+    /// How far past the shape it draws an element's shadow reaches, in the uv
+    /// of a full-size node (see [`ViewConfig::shadow`]); already clamped to
+    /// [`SHADOW_MAX`].
+    ///
+    /// View-wide, and so are the three beside it — what varies node to node is
+    /// the STRENGTH, which the shader takes per layer from that layer's own
+    /// level. A node that draws nothing casts nothing.
+    pub shadow: f32,
+    /// How much of that reach is spent fading the shadow out, measured back
+    /// from its end in the same units (see [`ViewConfig::shadow_soft`]);
+    /// already clamped to the reach.
+    pub shadow_soft: f32,
+    /// How the standoff's decay is shaped across that width (see
+    /// [`ViewConfig::shadow_shape`]), 0 a plain exponential off the ring and 1
+    /// holding the ring dark to the end of that width; already clamped to
+    /// 0..=1. The knockout is a ramp and has no curve to it.
+    pub shadow_shape: f32,
+    /// How much the shadow takes of what it covers (see
+    /// [`ViewConfig::shadow_depth`]); already clamped to 0..=1.
+    pub shadow_depth: f32,
     /// How deep the melody/bass mark strip is, in quad UV units; 0 = off (see
     /// [`ViewConfig::mark_thickness`]). It starts one
     /// [`ViewConfig::ring_gap`] past [`rings_outer`](Self::rings_outer) — a
@@ -1032,30 +1032,12 @@ pub struct Scene {
     /// shuts it (see [`ViewConfig::glow_feather`]); already clamped to 0..=1.
     /// Inert while [`glow_reach`](Self::glow_reach) is 0.
     pub glow_feather: f32,
-    /// The standoff: how far past every ring a node dims the light standing
-    /// there, in the same quad UV units (see [`ViewConfig::glow_gap`]);
-    /// already clamped to [`GLOW_GAP_MAX`]. Inert while
-    /// [`glow_reach`](Self::glow_reach) is 0.
-    pub glow_gap: f32,
-    /// How much of that gap is spent fading the light back in, measured back
-    /// from its end in the same units (see [`ViewConfig::glow_gap_soft`]);
-    /// already clamped to the gap.
-    pub glow_gap_soft: f32,
-    /// How the standoff's decay is shaped across that width (see
-    /// [`ViewConfig::glow_gap_shape`]), 0 a plain exponential off the ring and
-    /// 1 holding the ring dark to the end of that width; already clamped to
-    /// 0..=1.
-    /// Inert while [`glow_reach`](Self::glow_reach) is 0.
-    pub glow_gap_shape: f32,
-    /// How much of the light the standoff takes away where it stands (see
-    /// [`ViewConfig::glow_gap_depth`]); already clamped to 0..=1.
-    pub glow_gap_depth: f32,
     /// How much of the light standing at a node's pixel washes over the node's
     /// own INK (see [`ViewConfig::glow_wash`]); already clamped to 0..=1.
     ///
     /// The ground's share of that same field is
-    /// [`glow_gap_depth`](Self::glow_gap_depth), and the two are independent:
-    /// this reads the field RAW, so the Gap bars move it not at all.
+    /// [`shadow_depth`](Self::shadow_depth), and the two are independent: this
+    /// reads the field RAW, so the Shadow bars move it not at all.
     pub glow_wash: f32,
     /// How brightly a resting marker lights the position it stands at (see
     /// [`ViewConfig::marker_light`]); already clamped to 0..=1.

@@ -138,7 +138,7 @@ fn every_settings_pane_scrolls_when_its_content_overflows() {
 /// the two — a rescale of how hard the setting bends, say — and the picture
 /// drifts from the lattice with this still green.
 ///
-/// The Glow section's Feather and Gap curve bars draw a line the same way, and
+/// The Feather and Shadow curve bars draw a line the same way, and
 /// are checked in the same pass: against the scene's own function of the
 /// view's own field, which is as near the picture as the CPU can get — those
 /// two curves run on the GPU, and the render crate is what holds the scene's
@@ -191,9 +191,9 @@ fn the_shape_bars_preview_is_the_curve_the_notes_run_on() {
         "a fresh view fades on a straight line; the test above proves nothing",
     );
 
-    // The Glow section's two, in the order the section lays them: the Feather
-    // drawing the light's falloff at the fresh feather, then the Gap curve
-    // drawing the standoff's recovery at the fresh curve. Each against the
+    // The other two, in the order the page lays them: Note's Shadow curve
+    // drawing the standoff's recovery at the fresh curve, then Glow's Feather
+    // drawing the light's falloff at the fresh feather. Each against the
     // scene's own function of the view's own field, so a bar handed the other's
     // curve, or its own curve of the wrong field, is caught here and nowhere
     // else — the widget draws whatever it is handed. Each line's own ends
@@ -203,8 +203,8 @@ fn the_shape_bars_preview_is_the_curve_the_notes_run_on() {
     let view = harmonigraph_scene::ViewConfig::default();
     type Curve = fn(f32, f32) -> f32;
     let curves: [(&str, f32, Curve); 2] = [
+        ("Shadow curve", view.shadow_shape, harmonigraph_scene::standoff_recovery),
         ("Feather", view.glow_feather, harmonigraph_scene::glow_skirt),
-        ("Gap curve", view.glow_gap_shape, harmonigraph_scene::standoff_recovery),
     ];
     for ((name, value, curve), points) in curves.into_iter().zip(&paths[1..]) {
         let (first, last) = (points[0], points[points.len() - 1]);

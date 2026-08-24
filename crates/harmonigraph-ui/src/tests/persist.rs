@@ -251,8 +251,8 @@ fn a_double_click_on_a_soft_edge_restores_the_fresh_pair() {
                     ui,
                     (reach, fade),
                     0.5,
-                    "Clearance",
-                    (fresh.sevens_gutter, fresh.sevens_gutter_soft),
+                    "Shadow",
+                    (fresh.shadow, fresh.shadow_soft),
                     |v| format!("{v:.2}"),
                 );
             },
@@ -272,12 +272,12 @@ fn a_double_click_on_a_soft_edge_restores_the_fresh_pair() {
     }
     assert_eq!(
         (reach, fade),
-        (fresh.sevens_gutter, fresh.sevens_gutter_soft),
+        (fresh.shadow, fresh.shadow_soft),
         "a double-click landed on ({reach}, {fade}) rather than the fresh pair",
     );
 }
 
-/// Every soft edge — the lattice's knockout gutter, the resting marker's arm
+/// Every soft edge — the lattice's shadow, the resting marker's arm
 /// and the taper on its ends, the roll's note outline, and the lead a held note
 /// carries over the now-line — opens on a pair its own bar can reach: a fade no
 /// wider than the reach it is measured back from.
@@ -296,12 +296,12 @@ fn a_blob_naming_a_fade_wider_than_its_edge_opens_on_one_that_fits() {
     let saved = state.save_persist();
     let edited = saved
         .replace(
-            &format!("sevens_gutter_soft:{:?},", state.view.sevens_gutter_soft),
-            "sevens_gutter_soft:0.5,",
+            &format!("shadow_soft:{:?},", state.view.shadow_soft),
+            "shadow_soft:0.5,",
         )
         .replace(
-            &format!("sevens_gutter:{:?},", state.view.sevens_gutter),
-            "sevens_gutter:0.1,",
+            &format!("shadow:{:?},", state.view.shadow),
+            "shadow:0.1,",
         )
         .replace(
             &format!("roll_outline_fade:{:?},", state.spectrum_config.roll_outline_fade),
@@ -329,9 +329,9 @@ fn a_blob_naming_a_fade_wider_than_its_edge_opens_on_one_that_fits() {
     let mut restored = fresh();
     restored.load_persist(&edited);
     assert_eq!(
-        (restored.view.sevens_gutter, restored.view.sevens_gutter_soft),
+        (restored.view.shadow, restored.view.shadow_soft),
         (0.1, 0.1),
-        "the gutter's fade opened wider than the gutter",
+        "the shadow's fade opened wider than the shadow",
     );
     assert_eq!(
         (restored.spectrum_config.roll_outline, restored.spectrum_config.roll_outline_fade),
@@ -372,8 +372,8 @@ fn a_blob_naming_a_fade_wider_than_its_edge_opens_on_one_that_fits() {
 #[test]
 fn a_blob_naming_a_nonsense_soft_edge_opens_on_a_drawable_one() {
     let cases: [(&str, &str, &str); 9] = [
-        ("sevens_gutter", "NaN", "a NaN gutter"),
-        ("sevens_gutter_soft", "NaN", "a NaN gutter fade"),
+        ("shadow", "NaN", "a NaN shadow"),
+        ("shadow_soft", "NaN", "a NaN shadow fade"),
         ("roll_outline", "inf", "an infinite outline"),
         ("roll_outline_fade", "NaN", "a NaN outline fade"),
         ("roll_lead", "NaN", "a NaN lead"),
@@ -390,8 +390,8 @@ fn a_blob_naming_a_nonsense_soft_edge_opens_on_a_drawable_one() {
         state.camera.yaw = 1.23;
         let saved = state.save_persist();
         let was = match key {
-            "sevens_gutter" => state.view.sevens_gutter,
-            "sevens_gutter_soft" => state.view.sevens_gutter_soft,
+            "shadow" => state.view.shadow,
+            "shadow_soft" => state.view.shadow_soft,
             "roll_outline" => state.spectrum_config.roll_outline,
             "roll_outline_fade" => state.spectrum_config.roll_outline_fade,
             "roll_lead" => state.spectrum_config.roll_lead,
@@ -408,8 +408,8 @@ fn a_blob_naming_a_nonsense_soft_edge_opens_on_a_drawable_one() {
         let view = &restored.view;
         let cfg = &restored.spectrum_config;
         for (name, v) in [
-            ("sevens_gutter", view.sevens_gutter),
-            ("sevens_gutter_soft", view.sevens_gutter_soft),
+            ("shadow", view.shadow),
+            ("shadow_soft", view.shadow_soft),
             ("roll_outline", cfg.roll_outline),
             ("roll_outline_fade", cfg.roll_outline_fade),
             ("roll_lead", cfg.roll_lead),
@@ -421,7 +421,7 @@ fn a_blob_naming_a_nonsense_soft_edge_opens_on_a_drawable_one() {
             assert!(v.is_finite(), "{hint}: `{name}` opened at {v}");
         }
         assert!(
-            view.sevens_gutter_soft <= view.sevens_gutter
+            view.shadow_soft <= view.shadow
                 && cfg.roll_outline_fade <= cfg.roll_outline
                 && cfg.roll_lead_fade <= cfg.roll_lead
                 && view.plus_taper <= view.plus_arm,

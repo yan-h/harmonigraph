@@ -229,9 +229,9 @@ pub(super) fn view_pane(ui: &mut egui::Ui, state: &mut SharedState) {
 /// shrink the home sheet — that is the picture — but to let the sevens layer sit
 /// ON it, smaller and clearing its own space.
 ///
-/// The Clearance bar itself is with the node settings, not here. It is cut by
-/// every sounding node on every sheet, so it is a property of the node rather
-/// than of this layer, whatever its field names say.
+/// The Shadow bar itself is with the node settings, not here. It is cut by
+/// every drawing node on every sheet, so it is a property of the node rather
+/// than of this layer.
 fn sevens_section(ui: &mut egui::Ui, state: &mut SharedState) {
     section(ui, "Sevenths");
     for (extent, range, label, hover) in [

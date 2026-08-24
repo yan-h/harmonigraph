@@ -20,7 +20,7 @@ pub(super) fn scene_of(
 /// later. Its other half is [`plain_frame`], which holds the duration.
 ///
 /// The suites that spread this are about what a SOUNDING note draws — the
-/// gutter it clears, the marker it cuts, the end it marks, what is left of it
+/// shadow it casts, the marker it cuts, the end it marks, what is left of it
 /// mid-release — and they say so by sampling at time 0 and by naming levels
 /// in fractions. Under the default envelope neither holds: time 0 is the one
 /// instant a note is guaranteed not to be drawn yet, and a curved fade is not

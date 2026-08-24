@@ -433,8 +433,8 @@ pub struct SpectrumConfig {
     /// How much of that reach the outline spends fading out, in points: 0 is a
     /// hard edge, and at or past the reach it fades over the whole of it.
     ///
-    /// Two numbers rather than one, exactly as the lattice's gutter and gutter
-    /// fade are two ([`harmonigraph_scene::ViewConfig::sevens_gutter_soft`]):
+    /// Two numbers rather than one, exactly as the lattice's shadow and its
+    /// fade are two ([`harmonigraph_scene::ViewConfig::shadow_soft`]):
     /// tying the fade to the reach makes a wider outline always a blurrier one,
     /// and how far a note stands off its background is a different question
     /// from how sharply it does. They share one CONTROL — the Analyzer section's
@@ -650,7 +650,7 @@ impl SpectrumConfig {
         self.note_name_scale = sane_scale(self.note_name_scale);
         // The outline and its fade, which are ONE control (the Analyzer section's
         // Outline bar) over two numbers, and held to the same bound for the
-        // same reason as the lattice's gutter pair
+        // same reason as the lattice's Shadow pair
         // ([`ViewConfig::sanitize`](harmonigraph_scene::ViewConfig::sanitize)):
         // the fade is measured back from the reach, so a fade wider than its
         // reach has no place on the axis to draw a handle. It draws as a fade

@@ -1013,7 +1013,7 @@ mod tests {
     /// past that it would be asking for an outline that never meets the note
     /// solid, which is the one thing the outline is for.
     ///
-    /// The same bound the lattice puts on its gutter fade, and the reason the
+    /// The same bound the lattice puts on its shadow's fade, and the reason the
     /// two are separate settings at all — a fade derived from the reach makes a
     /// wider outline always a blurrier one, so the roll takes both and clamps
     /// rather than deriving one from the other.

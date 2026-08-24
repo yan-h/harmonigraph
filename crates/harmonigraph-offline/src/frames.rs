@@ -396,33 +396,34 @@ mod tests {
         }
     }
 
-    /// The standoff against the CLEARANCE, written to `target/scratch/`: what a
-    /// wide Gap looks like over a node that clears almost nothing.
+    /// The SHADOW across its own axis, written to `target/scratch/`: what a
+    /// node's dark looks like as the one reach widens under it.
     ///
     /// A probe: it asserts nothing, the verdict being a look. That the light IS
     /// held off out there is measured exactly, by harmonigraph-render's
-    /// `the_gap_reaches_past_the_clearance_the_node_cuts`. What a number cannot
-    /// say is the thing this is for — whether a pool that outruns the hole its
-    /// node cuts still reads as that node's shadow, or as a dark ring floating
-    /// loose in the field with the lattice showing through it.
+    /// `the_shadow_reaches_past_the_ink_it_is_cast_off`. What a number cannot
+    /// say is the thing this is for — whether a shadow that outruns the ink
+    /// casting it still reads as that node's, or as a dark ring floating loose
+    /// in the field with the lattice showing through it.
     ///
-    /// The pairs are the two halves of the question. Down the CLEARANCE column
-    /// the hole shrinks under a fixed Gap, which is the reach a standoff carried
-    /// by the clearing would be bounded by; across the GAP row the pool grows
-    /// under a fixed hole, which is what the bar buys past that bound. The fresh
-    /// pair is shot first as the reference, being the one pairing where the two
-    /// shapes are close enough that a frame looking wrong is a regression rather
-    /// than the reach under test.
+    /// The shots walk the reach from the fresh setting to the bar's ceiling
+    /// under a wide Reach, and then close the light down to the fresh Reach at
+    /// the ceiling — the pairing where the shadow outruns the light that
+    /// carries it. That one is a shape the node's own billboard has to be grown
+    /// to hold (`vs_glow` in lattice.wgsl), so it is where a bound left unheld
+    /// would show, as a straight screen-aligned edge across the pool rather
+    /// than a pool that fades out. The fresh pair is shot first as the
+    /// reference.
     ///
     /// Reading conditions as [`the_node_glow_draws_a_picture`] sets them, and
     /// for the same reasons.
     ///
     /// ```text
-    /// cargo test -p harmonigraph-offline -- --ignored --nocapture standoff_clearance
+    /// cargo test -p harmonigraph-offline -- --ignored --nocapture the_shadow_reaches
     /// ```
     #[test]
     #[ignore = "a probe: writes PNGs and asserts nothing"]
-    fn the_standoff_clearance_pairs_draw_a_picture() {
+    fn the_shadow_reaches_draw_a_picture() {
         use harmonigraph_ui::{draw_pane, Layout, SharedState};
 
         const SIZE: [u32; 2] = [1200, 1000];
@@ -460,32 +461,24 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("a scratch directory");
 
         let fresh = harmonigraph_scene::ViewConfig::default();
-        // A wide Reach for the column and the row, so the pool has a field to
-        // be cut out of; and one shot at the FRESH Reach with the Gap at its
-        // ceiling, which is the pairing where the standoff outruns the light
-        // that carries it. That one is a shape the node's own billboard has to
-        // be grown to hold (`vs_glow` in lattice.wgsl), so it is where a bound
-        // left unheld would show — as a straight screen-aligned edge across
-        // the pool rather than a pool that fades out.
-        let shots: Vec<(f32, f32, f32)> = vec![
-            (fresh.sevens_gutter, fresh.glow_gap, 4.0),
-            (0.02, fresh.glow_gap, 4.0),
-            (0.02, 0.5, 4.0),
-            (0.02, 1.0, 4.0),
-            (fresh.sevens_gutter, 1.0, 4.0),
-            (fresh.sevens_gutter, 1.0, fresh.glow_reach),
+        // A wide Reach through the walk, so the pool has a field to be cut out
+        // of, and the fresh Reach on the last shot alone.
+        let shots: Vec<(f32, f32)> = vec![
+            (fresh.shadow, 4.0),
+            (0.02, 4.0),
+            (0.5, 4.0),
+            (1.0, 4.0),
+            (1.0, fresh.glow_reach),
         ];
         let home = state.camera;
-        for (clearance, gap, reach) in shots {
+        for (shadow, reach) in shots {
             state.camera = home;
             state.camera.zoom_by(2.5);
             state.view.glow_reach = reach;
-            state.view.sevens_gutter = clearance;
-            // The fade the whole width of each, which is the fresh pairing for
-            // both bars: what is varying here is the reach and not the ramp.
-            state.view.sevens_gutter_soft = clearance;
-            state.view.glow_gap = gap;
-            state.view.glow_gap_soft = gap;
+            state.view.shadow = shadow;
+            // The fade the whole width of the reach, which is the fresh
+            // pairing: what is varying here is the reach and not the ramp.
+            state.view.shadow_soft = shadow;
             let output = context.run_ui(
                 egui::RawInput {
                     screen_rect: Some(screen),
@@ -503,9 +496,8 @@ mod tests {
             let primitives = context.tessellate(output.shapes, PPP);
             let bytes = renderer.render(&primitives, &output.textures_delta, PPP, background);
             let path = dir.join(format!(
-                "standoff-clearance{:.0}-gap{:.0}-reach{:.0}.png",
-                clearance * 1000.0,
-                gap * 100.0,
+                "shadow{:.0}-reach{:.0}.png",
+                shadow * 100.0,
                 reach * 100.0,
             ));
             image::save_buffer(&path, &bytes, SIZE[0], SIZE[1], image::ExtendedColorType::Rgba8)
