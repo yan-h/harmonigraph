@@ -70,20 +70,13 @@ struct Uniforms {
     //    (0 off, then one index per pattern; see Pulse::shader_index), read
     //    by mark_pulse — NOT a free slot.
     misc6: vec4<f32>,
-    // The pane fill this pass is composited OVER: the surface BEHIND the
-    // lattice, not the grey the lattice's own at-rest structure is drawn IN
-    // (that is lattice_ground below, and the two are independent numbers).
-    // Only the sevens knockout reads it: without it the gutter can knock out
-    // only to black, which is darker than the pane and reads as a plate
-    // sitting ON the picture rather than a hole THROUGH it.
-    background: vec4<f32>,
     // The unlit ground a node's two rings stand on: one neutral grey, its
-    // brightness the view's own Ground bar. A colour the lattice DRAWS,
-    // where background above is only what it lands on — this grey is free to
-    // sit either side of the pane's own fill, and at the bottom of the bar it
-    // is black. Read by the OCTAVE band alone — a silent slice IS this
-    // colour, and a sounding one's pitch is painted over it. The audio ring
-    // beside it stands on the same grey by carrying it as entry 0 of
+    // brightness the view's own Ground bar. A colour the lattice DRAWS rather
+    // than one it lands on — the pane's own fill is behind this pass and never
+    // reaches it, this grey being free to sit either side of it, and at the
+    // bottom of the bar it is black. Read by the OCTAVE band alone — a silent
+    // slice IS this colour, and a sounding one's pitch is painted over it. The
+    // audio ring beside it stands on the same grey by carrying it as entry 0 of
     // spectral_lut, baked on the CPU from the same L*.
     lattice_ground: vec4<f32>,
     // The wheel. x: octaves one turn is cut into; y: the MIDI pitch at the top
@@ -2638,14 +2631,12 @@ fn node_paint(in: VsOut) -> vec4<f32> {
 
     // The node's own light at this pixel, and the shadow its rings cast
     // (`glow_shade`) — the Gap bars' answer, one decay off every ring,
-    // dilated by the Gap. The shadow rides the INK's half of a split node
-    // (`Instance::paint`), where the light rides the clearing's: the walk
-    // below shades the light once wherever the two land on one canvas.
+    // dilated by the Gap. BOTH halves of a split node read it: the ink half
+    // covers what stands behind with it, and the clearing half spends it on
+    // how much of the canvas its own light claims (`laid` below), which is
+    // what makes the two halves add up to the whole draw.
     let light = glow_layer(in, d);
-    var shade = 0.0;
-    if in.paint != PAINT_CLEARING {
-        shade = glow_shade(in, d, oct);
-    }
+    let shade = glow_shade(in, d, oct);
 
     // The knockout gutter, which every node the scene ships carries — the
     // reach is the view's constant, and what decides whether a hole appears is
@@ -2713,14 +2704,23 @@ fn node_paint(in: VsOut) -> vec4<f32> {
     // alone would have left.
     let washed = wash_over(ink.rgb, ink.w, light.rgb);
 
-    // The light lands ONCE: a split node's ink half stands over the light its
-    // clearing half laid down, so it takes the wash's reading of the light
-    // without laying the light itself a second time — its own cover then
-    // multiplies what is on the canvas by `1 - shade`, which is the same
-    // `lit` the whole draw composites, so the split is exact.
+    // The light lands ONCE, and a split node lands it on the CLEARING half:
+    // the ink half stands over what that half wrote, so it takes the wash's
+    // reading of the light without laying the light itself a second time.
+    //
+    // At the shade's alpha and the light's RAW rgb, which is the split's whole
+    // arithmetic. The ink half's `cover` multiplies the canvas by `1 - shade`,
+    // so the rgb takes the shade there — laying it shaded here would take it
+    // twice — while the alpha has to carry it already, or the light covers
+    // what stands behind as if nothing shadowed it. What the destination keeps
+    // is then `(1 - light.a * (1 - shade)) * (1 - clearing)` under this half
+    // and `(1 - ink.w) * (1 - shade)` under the ink's, whose product is the
+    // whole draw's own `1 - alpha`.
     var laid = lit;
     if in.paint == PAINT_INK {
         laid = vec4<f32>(0.0);
+    } else if in.paint == PAINT_CLEARING {
+        laid = vec4<f32>(light.rgb, light.a * (1.0 - shade));
     }
 
     // Ink over the node's own shaded light: the halo shows through wherever
@@ -2735,7 +2735,13 @@ fn node_paint(in: VsOut) -> vec4<f32> {
     // than max because they are two covers laid in sequence — the hole over
     // the shadow — and a pixel under both keeps what survives each in turn;
     // either at 1 covers the pixel whole, which is the end the two bars share.
-    let cover = 1.0 - (1.0 - shade) * (1.0 - clearing);
+    //
+    // The shade rides the INK's half of a split node (`Instance::paint`), so
+    // it lands on the resting markers drawn between the two: the clearing half
+    // has already spent it on its own light's alpha and would otherwise take
+    // it off what stands behind twice over.
+    let covering_shade = select(shade, 0.0, in.paint == PAINT_CLEARING);
+    let cover = 1.0 - (1.0 - covering_shade) * (1.0 - clearing);
     let alpha = content_a + cover * (1.0 - content_a);
 
     // Writing nothing is cheaper than blending it. The cut sits well under a

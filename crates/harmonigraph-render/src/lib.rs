@@ -295,22 +295,15 @@ struct Uniforms {
     /// (`Scene::sevens_soft`); w: the melody/bass marks' shimmer pattern
     /// (0 off, then one index per pattern — see `Pulse::shader_index`).
     misc6: [f32; 4],
-    /// The ground the lattice is drawn onto — the pane fill this pass gets
-    /// composited over — as the sevens knockout's target color. Without it
-    /// the gutter can only knock out to black, which on this skin is
-    /// several shades DARKER than the pane and so reads as a blob sitting
-    /// on the picture rather than as a hole through it. See
-    /// `Scene::background`.
-    background: [f32; 4],
     /// The unlit ground a node's two rings stand on (`Scene::lattice_ground`): the
     /// neutral grey the OCTAVE band's silent slices are, and the colour a
     /// sounding one's pitch is painted over as it fades.
     ///
-    /// A slot of its own beside `background` rather than three of the retired
-    /// scalars: it is a colour, the buffer's other colour has one, and a grey
-    /// split across the seam between two vec4s would be read by nothing that
-    /// wanted the halves apart. The audio ring's own copy of it is `t` = 0 of
-    /// `spectral_lut` below, baked on the CPU from the same `L*`.
+    /// A slot of its own rather than three of the retired scalars: it is a
+    /// colour, and a grey split across the seam between two vec4s would be
+    /// read by nothing that wanted the halves apart. The audio ring's own copy
+    /// of it is `t` = 0 of `spectral_lut` below, baked on the CPU from the
+    /// same `L*`.
     lattice_ground: [f32; 4],
     /// The wheel's pitch axis. x: octaves one turn is cut into
     /// (`OctaveLayout::span`); y: the MIDI pitch at the top of every node
@@ -1100,7 +1093,6 @@ impl LatticeCallback {
                     scene.mark_thickness,
                 ],
                 misc6: [0.0, 0.0, scene.sevens_soft, scene.pulse_marks.shader_index() as f32],
-                background: scene.background.to_array(),
                 lattice_ground: scene.lattice_ground.to_array(),
                 misc7: [
                     scene.octave_layout.span as f32,
