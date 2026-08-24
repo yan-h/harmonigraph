@@ -5,19 +5,24 @@ description: Decide what to delegate to a subagent and what to just do, and size
 
 # Delegation costs more than doing it. Know what you are buying.
 
-Measured over 433 subagent transcripts in this project:
+Measured over 434 subagent transcripts in this project:
 
 | | median | p75 | p95 |
 |---|---|---|---|
-| startup context before any work | 13.5k | 18k | — |
-| **output tokens the agent produces** | **45.8k** | 60.9k | 86.8k |
-| assistant turns it runs for | 83 | 120 | 196 |
+| startup context before any work | 13.6k | 18.1k | 27.1k |
+| **output tokens the agent produces** | **45.6k** | 60.4k | 85.5k |
+| model responses it runs for | 43 | 63 | 105 |
 | report landing back here | 1.5k | 4.5k | 6.3k |
+
+A **response** here is one API call's worth of model output — thinking, any
+text, and however many `tool_use` blocks ride along. It averages 1.15 tool
+calls, since parallel calls travel in a single response, so responses and tool
+calls are close but not equal.
 
 Against that, a `Read` result is 21 tokens at the median and 597 at p75; a
 `Bash` result is 126. So one delegation is worth roughly a hundred inline
 reads, and startup is the small half of it — the expense is that an agent
-with a mandate works for 83 turns whatever the size of the question.
+with a mandate works to its mandate whatever the size of the question.
 
 The 30:1 squeeze (46k of work returns as 1.5k) is real, and it is the whole
 point. But it is a squeeze on CONTEXT, not on tokens. Delegation buys exactly
@@ -50,7 +55,7 @@ Any ONE of these overrides the triggers and means do it here:
 
 - **You can name the file and the symbol.** Read it. This is the hard rule
   below.
-- **The result feeds your very next tool call.** An 83-turn round trip to
+- **The result feeds your very next tool call.** A 43-response round trip to
   unblock one decision is the wrong shape; you will sit idle for it.
 - **Briefing costs more than doing.** An agent starts blind. If the task only
   makes sense given half this conversation, writing that brief is the task.
@@ -68,7 +73,7 @@ write it.
 
 ## Size by question, not by file count
 
-One agent answers one QUESTION. Startup is a fixed 13.5k whatever you ask, so
+One agent answers one QUESTION. Startup is a fixed 13.6k whatever you ask, so
 four related questions belong in one agent, not four — and an agent handed one
 question per file is paying startup per file.
 
@@ -76,20 +81,26 @@ The opposite failure is one question with no boundary ("review the codebase").
 The fix is to split the QUESTION — by subsystem, by failure mode, by reading —
 never to hand it fewer files and the same open mandate.
 
-**Count turns, not context.** Peak context is the lagging indicator: it tracks
-turns at roughly 1.3–1.5k per turn, so it only tells you an agent was
+**Count responses, not context.** Peak context is the lagging indicator: it
+tracks responses at roughly 3.2k each, so it only tells you an agent was
 over-scoped once it has finished and you have already paid. Measured here:
 
-| turns | median peak context |
+| responses | median peak context |
 |---|---|
-| 1–49 | 65k |
-| 50–99 | 125k |
-| 100–199 | 199k |
-| 200+ | 305k |
+| 1–24 | 72k |
+| 25–49 | 126k |
+| 50–99 | 188k |
+| 100+ | 290k |
 
-Aim for an agent that finishes in 30–100 turns. Past ~200 it has usually
-stopped answering and started exploring — that is judgment rather than a
-measurement, since nothing here scores an agent's answer.
+Aim for an agent that finishes in 25–60 responses; the median is 43, and the
+work-shaped agents here sit inside that (`Explore` 31, `diff-reviewer` 35,
+`general-purpose` 46). Past ~100 — the p95 — it has usually stopped answering
+and started exploring, which is judgment rather than a measurement, since
+nothing here scores an agent's answer.
+
+`merge-auditor` runs 77 and is not mis-scoped; a question that is genuinely
+wider costs more responses, and the number is a prompt to check the boundary,
+not a budget to enforce.
 
 Do not set a context ceiling instead. A subagent's peak is 142k at the median
 and 250k at p90, so any round number in that range is the tail of ordinary
