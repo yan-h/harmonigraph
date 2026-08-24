@@ -6,15 +6,12 @@
 use super::*;
 use crate::gpu_harness::{headless_device, readback, render_to_texture};
 
-/// One marker for the fixtures below, casting the whole of the shadow its ink
-/// is worth.
+/// One marker for the fixtures below.
 ///
-/// `PlusInstance::shade` is the term `Scene::shade_markers` spends against the
-/// light standing over a marker, and none of these fixtures run that pass — a
-/// scene assembled by hand has whatever light it was given. Full here so the
-/// standoff is the ink's, which is what every measurement below is taken
-/// against; `lattice_pos` is the join that pass uses and nothing in the render
-/// path reads it, so the position these say is `pos`.
+/// `strength` is the whole marker — its ink, its pool and the shadow its cross
+/// writes into the light are one number — so a fixture that names it has named
+/// all three. `lattice_pos` is not read anywhere in the render path, so the
+/// position these markers say is `pos`.
 fn one_marker(
     pos: glam::Vec3,
     radius: f32,
@@ -27,7 +24,6 @@ fn one_marker(
         radius,
         color,
         strength,
-        shade: strength,
     }
 }
 
@@ -469,10 +465,6 @@ fn parity_scene() -> Scene {
             // The lattice pass draws the ring on every node it ships; the
             // gate is the fold's answer and there is no fold here.
             audio_ring: 1.0,
-            // Drawn at full and READING full: a fixture with a dialled-in
-            // annulus is the ungated picture, and the light asks this one
-            // (see `NodeInstance::ring_peak`).
-            ring_peak: 1.0,
             // A row per node in the order they are built, settled: the light's
             // own clock is the shell's pass and no shell has run here, so this
             // fixture is the picture with nothing carried — which is exactly
@@ -1530,10 +1522,6 @@ fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
         // The lattice pass draws the ring on every node it ships; the
         // gate is the fold's answer and there is no fold here.
         audio_ring: 1.0,
-        // Drawn at full and READING full: a fixture with a dialled-in
-        // annulus is the ungated picture, and the light asks this one
-        // (see `NodeInstance::ring_peak`).
-        ring_peak: 1.0,
         // Lit and settled on the strip's first row: one node, nothing carried,
         // and the light sized against whichever ends this fixture is wearing.
         glow: harmonigraph_scene::GlowStep {
@@ -6885,39 +6873,36 @@ fn a_marker_holds_a_nodes_halo_off_its_own_cross() {
     );
 }
 
-/// A node lit under its own cross keeps the halo there: the shadow closes and
-/// the ink does not.
+/// A cross's shadow is worth its ink: half a marker takes half the light off
+/// the halo it stands in, and a marker that is not there takes none.
 ///
-/// The middle of a node is the one place the picture keeps free of a standoff —
-/// `glow_standoff` measures every ring from its own annulus, so the light runs
-/// in to the centre — and a marker standing at that centre is the one thing
-/// that can write one there. The bite is real and this measures it both ways:
-/// the same frame with the marker's shadow open darkens hundreds of pixels of
-/// the node's own halo, and with it closed darkens none.
+/// This is the whole of what a marker hands the picture — one number, spent on
+/// the ink, the pool and the standoff alike (`PlusInstance::strength`) — and it
+/// is what a position handing itself back to a name looks like: the cross grows
+/// and the shadow under it grows on the same clock. A shadow closed against the
+/// LIGHT instead runs on the Glow release, so a cross fully back would stand
+/// with nothing under it for as long as the halo it stands in takes to leave.
 ///
-/// `PlusInstance::shade` is what is moved between the two shots and nothing
-/// else — same ink, same arm, same Gap — so the ground is one set for both and
-/// the difference cannot be the marker's footprint moving. Which node is lit is
-/// not asked either: what closes the term is `Scene::shade_markers`, and the
-/// claim here is only that the shader spends it.
+/// Measured on the light TAKEN rather than on a pixel count, which is what
+/// makes the middle of the ramp a claim rather than a rounding: a shallower
+/// shadow lightens the pixels it bites before it stops biting them, and an
+/// 8-bit count sees the second and not the first. The marker's own pool is
+/// pinned to 0 (`shadowed_markers`), so its opacity puts NO light into these
+/// pixels and the only thing it can do out there is take some away.
+///
+/// The excluded footprint is read at full ink, where it is largest — a fainter
+/// marker inks a subset of it — so one ground set answers for every shot.
 #[test]
-fn a_lit_node_keeps_the_halo_under_its_own_cross() {
+fn a_crosss_shadow_is_worth_its_ink() {
     const SIZE: [u32; 2] = [256, 256];
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
     };
     // One marker at the node's own centre, in a frame whose only light is that
     // node's (`shadowed_markers` pins `marker_light` to 0).
-    let at = |shade: f32, depth: f32| -> Scene {
+    let at = |strength: f32, depth: f32| -> Scene {
         let mut scene = shadowed_markers(depth, 0.8, 1.0);
-        scene.pluses = vec![harmonigraph_scene::PlusInstance {
-            lattice_pos: harmonigraph_core::LatticePos::ORIGIN,
-            pos: glam::Vec3::ZERO,
-            radius: 0.5,
-            color: scene.lattice_ground,
-            strength: 1.0,
-            shade,
-        }];
+        scene.pluses = vec![one_marker(glam::Vec3::ZERO, 0.5, scene.lattice_ground, strength)];
         scene
     };
     let bare = |shooter: &mut Shooter, depth: f32| {
@@ -6928,9 +6913,9 @@ fn a_lit_node_keeps_the_halo_under_its_own_cross() {
         })
     };
 
-    // The ink's own footprint, read where a marker writes ink and no standoff,
-    // and excluded from every count below: what is being measured is light the
-    // cross took off the picture around it, not the cross itself.
+    // The ink's own footprint, and everything it reaches excluded from the
+    // counts below: what is being measured is light the cross took off the
+    // picture around it, not the cross itself.
     let flat_bare = bare(&mut shooter, 0.0);
     let flat = shooter.shot(&at(1.0, 0.0));
     let ground: Vec<usize> = (0..flat.len())
@@ -6944,26 +6929,27 @@ fn a_lit_node_keeps_the_halo_under_its_own_cross() {
     );
 
     let deep_bare = bare(&mut shooter, 1.0);
-    let biting = shooter.shot(&at(1.0, 1.0));
-    let closed = shooter.shot(&at(0.0, 1.0));
-    let dimmed = |frame: &[u8]| {
+    let taken = |frame: &[u8]| -> i64 {
         ground
             .iter()
-            .filter(|&&i| brightness(&frame[i..i + 3]) < brightness(&deep_bare[i..i + 3]))
-            .count()
+            .map(|&i| {
+                (brightness(&deep_bare[i..i + 3]) - brightness(&frame[i..i + 3])).max(0)
+            })
+            .sum()
     };
+    let whole = taken(&shooter.shot(&at(1.0, 1.0)));
+    let half = taken(&shooter.shot(&at(0.5, 1.0)));
+    let none = taken(&shooter.shot(&at(0.0, 1.0)));
     assert!(
-        dimmed(&biting) > 200,
-        "an open shadow bit {} of the {} halo pixels around the cross — with none there is \
-         nothing for the closed shot to prove",
-        dimmed(&biting),
-        ground.len(),
+        whole > 0,
+        "a whole cross took no light off the halo it stands in — with none there is nothing \
+         for the rest of this to be a share of",
     );
-    assert_eq!(
-        dimmed(&closed),
-        0,
-        "a closed shadow still took light off the halo the node lit under its own cross",
+    assert!(
+        half > 0 && half < whole,
+        "half a cross took {half} of the {whole} a whole one takes, which is not a share of it",
     );
+    assert_eq!(none, 0, "a marker with no ink still took {none} of light off the halo");
 }
 
 /// The Gap's WIDTH says how far a marker's shadow reaches, on the same bar it
@@ -7909,7 +7895,6 @@ fn the_gap_reaches_light_the_nodes_own_never_lit() {
         lamp.world_pos = glam::Vec3::new(APART * scene.node_radius * 1.8, 0.0, 0.0);
         lamp.activation = 0.02;
         lamp.audio_ring = 0.0;
-        lamp.ring_peak = 0.0;
         lamp.glow.row = 1;
         lamp.glow.marked = 0.0;
         scene.nodes.push(lamp);
@@ -8185,16 +8170,17 @@ fn the_standoff_follows_the_gaps_between_the_slices() {
 /// the two shots agree on the shape, they agree whatever radius the pixel
 /// landed at.
 ///
-/// The AUDIO RING carries it, alone: the octave band is dialled off, so this is
-/// also the only test that reaches `glow_standoff`'s ring term at all
-/// (`parity_scene` is silent, and a silent ring has no radii to stand off).
+/// The OCTAVE BAND carries it, dialled in to the node's centre: the walk is
+/// shared by every term of `glow_standoff`, and the band is the layer that both
+/// stands light off and gives it off (`ink_at` leaves the analyzer's ring out of
+/// the light), so one layer can be the whole fixture.
 #[test]
 fn a_slice_past_a_half_turn_is_stood_off_down_its_middle() {
     const SIZE: [u32; 2] = [1024, 1024];
-    // Small against the ring's own radius, so the probe sits well inside half
+    // Small against the band's own radius, so the probe sits well inside half
     // the Octave gap with the fade still spending most of itself there.
     const GAP: f32 = 0.05;
-    const RING_OUTER: f32 = 0.15;
+    const BAND_OUTER: f32 = 0.15;
     const PAST: f32 = 0.01;
     const ANGLES: usize = 360;
     let Some(mut shooter) = Shooter::new(SIZE) else {
@@ -8217,22 +8203,16 @@ fn a_slice_past_a_half_turn_is_stood_off_down_its_middle() {
             harmonigraph_scene::DEFAULT_EXTRA_SIZE,
             harmonigraph_scene::DEFAULT_EXTRA_BLEND,
         );
-        // The band off, so the ring is the only thing standing light off and
-        // the only term the share below can be reading.
-        scene.outer_inner = 0.0;
-        scene.outer_outer = 0.0;
-        // ...and the ring reaching the node's centre, which is what puts its
-        // own footprint where the two readings differ.
+        // No analyzer at all, and the BAND reaching the node's centre: one layer
+        // standing the light off, and its footprint is where the two readings
+        // differ.
         scene.spectral.inner = 0.0;
-        scene.spectral.outer = RING_OUTER;
-        scene.spectral.lut = std::array::from_fn(|k| {
-            let t = k as f32 / (harmonigraph_scene::PITCH_LUT_N - 1) as f32;
-            glam::Vec4::new(t, 0.6 * t, 1.0 - t, 1.0)
-        });
-        // Loud and FLAT, so every wedge reads the same: the ring lights the
-        // halo by what it is measuring, and a comb would put the light's own
-        // pattern into the share.
-        scene.spectral.levels = Box::new([220; harmonigraph_scene::SPECTRAL_BUCKETS]);
+        scene.spectral.outer = 0.0;
+        scene.outer_inner = 0.0;
+        scene.outer_outer = BAND_OUTER;
+        // Every slice voiced, so each reads the same: a slice at a level of its
+        // own would put the light's own pattern into the share.
+        scene.nodes[0].octaves = [1.0; harmonigraph_scene::OCTAVE_SLOTS];
         scene.octave_gap = octave_gap;
         scene.glow_reach = reach;
         scene.glow_strength = 1.5;
@@ -8247,12 +8227,12 @@ fn a_slice_past_a_half_turn_is_stood_off_down_its_middle() {
     // readings can differ at all.
     const {
         assert!(
-            RING_OUTER + PAST < 0.5 * harmonigraph_scene::GAP_MAX,
+            BAND_OUTER + PAST < 0.5 * harmonigraph_scene::GAP_MAX,
             "the probe sits outside half an Octave gap, where every reading agrees",
         )
     };
     let (closed, wide) =
-        standoff_share_rings(&mut shooter, SIZE, &at, RING_OUTER, PAST, ANGLES);
+        standoff_share_rings(&mut shooter, SIZE, &at, BAND_OUTER, PAST, ANGLES);
 
     let least = closed.iter().fold(f64::MAX, |m, s| m.min(*s));
     assert!(
@@ -8635,32 +8615,43 @@ fn a_resting_marker_wears_the_wash_it_stands_in() {
     );
 }
 
-/// A node wearing NOTHING BUT AN AUDIO RING glows.
+/// A node wearing NOTHING BUT AN AUDIO RING gives off no light at all,
+/// whatever its ring is reading.
 ///
-/// Two halves, and each is a thing the first cut of this got wrong. The LEVEL
-/// is the largest of everything that draws ink, not the note's activation — a
-/// ring is the analyzer's reading rather than a voice's, so a node with no key
-/// down carries an activation of 0 and a ring at full. And the COLOUR falls
-/// back to the node's own pitch, because the octave word a chord's light is
-/// blended out of is empty here: there is no voice to take a hue from.
+/// A halo says something is being PLAYED at this position; the analyzer's ring
+/// says something is being heard in the room. One is the node's own voice and
+/// the other a reading it wears, so the ring is drawn and never shone — it is
+/// the one layer left out of both halves of the light, the level
+/// (`panes::glow_fade` in harmonigraph-ui) and the colour (`ink_at`).
 ///
-/// The ring is the one layer an idle node paints, so this is also the case that
-/// says the glow follows every layer that LIGHTS the node rather than the keys
-/// alone. What it does not say is that drawing a layer is enough — see
-/// [`a_ring_reading_nothing_gives_off_no_light`], where the same ring with
-/// nothing in it gives off nothing.
+/// Byte-identical with the Reach off, which is the whole claim: the light's
+/// draw runs over this node, writes nothing into its target, and the composite
+/// lays exactly nothing over the picture. Shot at a loud partial as well as at
+/// silence, because those are the two ways a ring could have held a light on —
+/// what is IN it, and merely that it is showing.
+///
+/// Non-vacuity is what the rest of the fixture is for: the ring has to be on
+/// screen, and its silent end has to be a grey the eye can see, or "no light"
+/// would be a claim about a frame with no ring in it.
 #[test]
-fn a_node_wearing_only_an_audio_ring_glows() {
+fn a_node_wearing_only_an_audio_ring_gives_off_no_light() {
     const SIZE: [u32; 2] = [256, 256];
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
     };
-    let at = |reach: f32| -> Scene {
-        // [`ringing_node`]'s fixture: a live analyzer, a partial sounding into
-        // one wedge, and no core at all — so the only thing on screen is the
-        // ring, and the only light around it is the glow's.
-        let mut scene =
-            ringing_node(None, Some(harmonigraph_scene::MIDDLE_C_SLOT as f32 * 12.0), PROBE_RANGE);
+    // [`ringing_node`] with no key down and no octave sounding: the band draws
+    // nothing at all and the node's whole picture is the analyzer's.
+    let at = |sounding: Option<f32>, reach: f32| -> Scene {
+        let mut scene = ringing_node(None, sounding, PROBE_RANGE);
+        // The app's ramp rather than the fixture's: its silent end PINNED to
+        // the ground, which is what makes an empty wedge a grey the eye reads
+        // as a ring rather than the black the probe's own ramp starts at
+        // (`harmonigraph_scene::ring_gradient`).
+        let ground = scene.lattice_ground;
+        scene.spectral.lut = std::array::from_fn(|k| {
+            let t = k as f32 / (harmonigraph_scene::PITCH_LUT_N - 1) as f32;
+            ground.lerp(glam::Vec4::ONE, t)
+        });
         let node = &mut scene.nodes[0];
         // Silence at the node, and the analyzer still reading: no key down, no
         // octave sounding, no mark at either end — and the ring at full, which
@@ -8675,30 +8666,32 @@ fn a_node_wearing_only_an_audio_ring_glows() {
         scene.glow_strength = 1.5;
         scene
     };
-    let off = shooter.shot(&at(0.0));
-    let on = shooter.shot(&at(0.8));
-    // The fixture draws its ring with no note at all, or "the ring alone glows"
-    // is being asked of a frame with no ring in it.
-    assert!(total_light(&off) > 0, "the fixture must draw its audio ring");
+    const PARTIAL: f32 = harmonigraph_scene::MIDDLE_C_SLOT as f32 * 12.0;
+
+    // Non-vacuous: the ring is ON SCREEN. Against the layer's own off switch
+    // rather than against `total_light`, which the node's clearing alone would
+    // satisfy — and safe as a one-layer diff only because this node draws
+    // nothing else: no key, no octave, no mark, so there is no layer outside
+    // the ring for its width to slide inward (the stack packs outward from the
+    // centre).
+    let loud_off = shooter.shot(&at(Some(PARTIAL), 0.0));
+    let mut ringless = at(Some(PARTIAL), 0.0);
+    (ringless.spectral.inner, ringless.spectral.outer) = (0.0, 0.0);
     assert!(
-        total_light(&on) > total_light(&off),
-        "a ringing node with no note gave off no light: {} against {}",
-        total_light(&on),
-        total_light(&off),
+        loud_off != shooter.shot(&ringless),
+        "the fixture drew no audio ring, so it cannot say a ring gives off nothing",
     );
-    // And OUTSIDE the ring, which is where a halo is: the ring's own annulus is
-    // drawn over the light, so what shows there is the ring rather than a glow.
-    let row = (SIZE[1] / 2) as usize;
-    let outside = (SIZE[0] as usize / 2..SIZE[0] as usize)
-        .filter(|&x| {
-            let i = row * SIZE[0] as usize + x;
-            brightness(&on[i * 4..i * 4 + 3]) > brightness(&off[i * 4..i * 4 + 3])
-        })
-        .count();
-    assert!(
-        outside >= 8,
-        "the ring's light reached {outside} pixels along the row out from the node",
-    );
+
+    for (what, sounding) in [("a partial", Some(PARTIAL)), ("silence", None)] {
+        let off = shooter.shot(&at(sounding, 0.0));
+        let on = shooter.shot(&at(sounding, 0.8));
+        assert!(
+            on == off,
+            "a ring reading {what} lit {} against {} with the glow off",
+            total_light(&on),
+            total_light(&off),
+        );
+    }
 }
 
 /// Two nodes' halos MELD where they overlap: brighter than either alone, and
@@ -8787,70 +8780,69 @@ fn two_nodes_light_melds_rather_than_summing() {
 
 /// One node lit in TWO colours no mixing of the other's table can reach: the
 /// pitch ramp flat RED, so every slice of the octave band is red however its
-/// octave is voiced, and the analyzer's ramp flat GREEN, so every wedge of the
-/// audio ring is green whatever the grid holds.
+/// octave is voiced, and the melody mark flat GREEN, so the strip past the
+/// rings is green wherever it is worn.
 ///
-/// The suite's usual ramps — a blue-to-red pitch sweep and a grey spectral one —
-/// overlap in every channel, so a halo drawn out of both would answer "somewhere
-/// between" and say nothing about which layer coloured it. With one channel
-/// apiece the halo's red against its green IS the two layers' share of it, which
-/// is what every claim below reads.
+/// The suite's usual ramps — a blue-to-red pitch sweep and the marks' own two
+/// hues — overlap in every channel, so a halo drawn out of both would answer
+/// "somewhere between" and say nothing about which layer coloured it. With one
+/// channel apiece the halo's red against its green IS the two layers' share of
+/// it, which is what every claim below reads.
 ///
-/// The core and the marks are off: two layers under test and nothing else
-/// putting ink on the node. Every octave sounds, so the band is one red ring
-/// rather than a lit slice among ghosts, and the node wears its ring in full.
-fn two_colour_node(band_width: f32, ring_width: f32) -> Scene {
+/// The band and the marks because they are the two LIT layers a node has: the
+/// audio ring is drawn and never shone (`ink_at`), so a fixture that reached
+/// for it would be asking which layer coloured a halo with a layer that colours
+/// none. It is left off here rather than left dark, so nothing in these shots
+/// stands light off that the claims are not about.
+///
+/// Every octave sounds, so the band is one red ring rather than a lit slice
+/// among ghosts, and the marks name every octave, so the strip is one green
+/// ring rather than a wedge.
+fn two_colour_node(band_width: f32, mark_width: f32) -> Scene {
     let fresh = harmonigraph_scene::ViewConfig::default();
     let mut scene = single_marked_node(0, 0);
-    // The probe's wide padding, exactly as [`ringing_node`] uses it: the angular
-    // gap is a constant chord, so a ring packed against the node's centre has
-    // its wedges eaten by that gap and paints almost nothing — which would make
-    // the ring's share of the light a reading of the padding rather than of its
-    // width.
+    // The probe's wide padding: the angular gap is a constant chord, so a layer
+    // packed against the node's centre has its sectors eaten by that gap and
+    // paints almost nothing — which would make that layer's share of the light
+    // a reading of the padding rather than of its width.
     let rings = harmonigraph_scene::ViewConfig {
         ring_inner: PROBE_INNER,
         ring_gap: PROBE_GAP,
-        spectral_ring_width: ring_width,
+        spectral_ring_width: 0.0,
         band_width,
-        mark_thickness: 0.0,
+        mark_thickness: mark_width,
         ..fresh.clone()
     }
     .rings();
-    scene.mark_thickness = 0.0;
     scene.outer_inner = rings.band.0;
     scene.outer_outer = rings.band.1;
     scene.rings_outer = rings.outer;
     scene.mark_inner = rings.mark_inner;
+    scene.mark_thickness = rings.mark_thickness;
     // A NARROW angular gap, where the radial one is the probe's wide one: the
     // sector gap is a constant Euclidean chord, so at the radii the innermost
     // ring occupies — it reaches the node's centre — the probe's own 0.12 would
-    // blank the ring's wedges outright and the light would carry none of its
+    // blank that layer's sectors outright and the light would carry none of its
     // colour.
     scene.octave_gap = 0.03;
     scene.pitch_lut = [glam::Vec4::new(1.0, 0.0, 0.0, 1.0); harmonigraph_scene::PITCH_LUT_N];
 
-    let mut paint = harmonigraph_scene::SpectralPaint::silent();
-    // FLAT rather than a ramp, so the ring's colour is the ring's colour at
-    // whatever the analyzer reads: what is being measured here is which layer
-    // the light took its hue from, not what the grid held.
-    paint.lut = [glam::Vec4::new(0.0, 1.0, 0.0, 1.0); harmonigraph_scene::PITCH_LUT_N];
-    // ...and a grid that is LOUD everywhere, which is what makes the wedges
-    // light at all: the halo weighs a wedge by the reading behind it (`ink_at`),
-    // so a silent grid draws a full green ring that gives off nothing. Loud
-    // across the whole axis rather than a partial at one pitch, so every wedge
-    // carries the same weight and the ring's share of the light is its WIDTH,
-    // which is what these claims read.
-    paint.levels.fill(255);
-    (paint.inner, paint.outer) = rings.audio;
-    paint.range = PROBE_RANGE;
-    scene.spectral = paint;
-
     let node = &mut scene.nodes[0];
     node.octaves = [1.0; harmonigraph_scene::OCTAVE_SLOTS];
     node.activation = 1.0;
+    // FLAT green rather than the fixture's two hues, so the strip's colour is
+    // the strip's colour wherever it is read: what is being measured here is
+    // which layer the light took its hue from.
+    node.melody_color = glam::Vec4::new(0.0, 1.0, 0.0, 1.0);
+    // Every slot named, so the strip closes into a ring — the shader draws a
+    // mark only on the slots the wheel is showing, so the extras cost nothing.
+    node.melody_slots = u32::MAX;
+    node.melody_level = 1.0;
+    node.bass_slots = 0;
+    node.bass_level = 0.0;
+    // No analyzer at all: `parity_scene` is silent, and an empty annulus is the
+    // ring layer's own off switch.
     node.audio_ring = 1.0;
-    (node.melody_slots, node.bass_slots) = (0, 0);
-    (node.melody_level, node.bass_level) = (0.0, 0.0);
 
     scene.glow_reach = 0.8;
     scene.glow_strength = 1.5;
@@ -9082,82 +9074,6 @@ fn a_slice_part_way_out_carries_that_much_of_the_light() {
     );
 }
 
-/// A node the audio ring is showing on with NOTHING sounding in it gives off no
-/// light at all.
-///
-/// The ring's colour ramp is pinned to the ground at its silent end, so a wedge
-/// reading nothing is that same grey — and a lattice whose Gate admits every
-/// node is hundreds of those. They are worth DRAWING (the ring says a node is
-/// there) and worth no light, so the analyzer's share of the halo is weighed by
-/// the reading behind each wedge (`ink_at`) and a ring of empty ones sums to
-/// nothing. `glow_layer` stops there rather than lighting a grey halo.
-///
-/// Byte-identical, which is the whole claim: the light's draw runs over this
-/// node, writes nothing into its target, and the composite lays exactly
-/// nothing over the picture. The same fixture with a partial in it is shot
-/// beside it, or "no light" would pass on a ring that never drew.
-#[test]
-fn a_ring_reading_nothing_gives_off_no_light() {
-    const SIZE: [u32; 2] = [256, 256];
-    let Some(mut shooter) = Shooter::new(SIZE) else {
-        return;
-    };
-    // [`ringing_node`] with no key down and no octave sounding: the band draws
-    // nothing at all and the node's whole picture is the analyzer's.
-    let at = |sounding: Option<f32>, reach: f32| -> Scene {
-        let mut scene = ringing_node(None, sounding, PROBE_RANGE);
-        // The app's ramp rather than the fixture's: its silent end PINNED to
-        // the ground, which is what makes an empty wedge a grey the eye reads
-        // as a ring rather than the black the probe's own ramp starts at
-        // (`harmonigraph_scene::ring_gradient`). The whole point here is a ring
-        // that is on screen and gives off nothing, so a silent end nobody can
-        // see would make the claim vacuous.
-        let ground = scene.lattice_ground;
-        scene.spectral.lut = std::array::from_fn(|k| {
-            let t = k as f32 / (harmonigraph_scene::PITCH_LUT_N - 1) as f32;
-            ground.lerp(glam::Vec4::ONE, t)
-        });
-        let node = &mut scene.nodes[0];
-        node.activation = 0.0;
-        node.melody_level = 0.0;
-        node.bass_level = 0.0;
-        node.melody_slots = 0;
-        node.bass_slots = 0;
-        node.audio_ring = 1.0;
-        scene.glow_reach = reach;
-        scene.glow_strength = 1.5;
-        scene
-    };
-    const PARTIAL: f32 = harmonigraph_scene::MIDDLE_C_SLOT as f32 * 12.0;
-    let quiet_off = shooter.shot(&at(None, 0.0));
-    let quiet_on = shooter.shot(&at(None, 0.8));
-    // Non-vacuous: the silent ring is ON SCREEN. Against the layer's own off
-    // switch rather than against `total_light`, which the node's clearing
-    // alone would satisfy — and safe as a one-layer diff only because this
-    // node draws nothing else: no key, no octave, no mark, so there is no
-    // layer outside the ring for its width to slide inward (the stack packs
-    // outward from the centre).
-    let mut ringless = at(None, 0.0);
-    (ringless.spectral.inner, ringless.spectral.outer) = (0.0, 0.0);
-    assert!(
-        quiet_off != shooter.shot(&ringless),
-        "the fixture drew no audio ring, so it cannot say a silent one gives off nothing",
-    );
-    let loud_off = shooter.shot(&at(Some(PARTIAL), 0.0));
-    let loud_on = shooter.shot(&at(Some(PARTIAL), 0.8));
-    assert!(
-        total_light(&loud_on) > total_light(&loud_off),
-        "a partial sounding into the ring gave off no light: {} against {}",
-        total_light(&loud_on),
-        total_light(&loud_off),
-    );
-    assert!(
-        quiet_on == quiet_off,
-        "a ring reading silence lit {} against {} with the glow off",
-        total_light(&quiet_on),
-        total_light(&quiet_off),
-    );
-}
 
 /// How much of the light a layer's colour owns is how much of the NODE that
 /// layer occupies: the same node with its octave band twice as wide glows
@@ -9218,35 +9134,32 @@ fn widening_a_layer_gives_its_colour_more_of_the_light() {
 /// At fbc6cd5 the twelfth carried 12% to 17% of the mean at every radius inside
 /// the node; the bound below is a quarter of that.
 ///
-/// A node wearing NOTHING BUT ITS AUDIO RING, which is the case the spokes were
-/// worst in, and the ink is the reason: the ring is cut into a wedge per
-/// octave, each reading the analyzer at its own pitch, which is the sharpest
-/// angular structure a node draws. The Spread is at the bottom of its bar,
-/// where the blur is tightest and a sampled one has the least room to hide.
+/// A node lit by its OCTAVE BAND ALONE, voiced every other octave, which is the
+/// sharpest angular structure the light reads: a slice per octave, alternately
+/// the pitch's own colour and a ghost that weighs nothing (`ink_at`), with the
+/// Octave gap cut between them. The Spread is at the bottom of its bar, where
+/// the blur is tightest and a sampled one has the least room to hide.
 #[test]
 fn a_nodes_light_has_no_ripple_the_ink_does_not() {
     const SIZE: [u32; 2] = [512, 512];
-    // Every radius here is out past the ring's own annulus (0..45 px at this
-    // node size), where the light is all there is and a spoke has nothing to
-    // hide behind. The ring reaches the node's centre, being the innermost
-    // layer of the stack, so there is no middle to read inside it.
-    const RADII: [f32; 5] = [55.0, 70.0, 85.0, 100.0, 115.0];
+    // Where to read, as multiples of where the node's own ink ends: out past
+    // every layer it draws, where the light is all there is and a spoke has
+    // nothing to hide behind, and inside the Reach, which carries the light
+    // rather further than the furthest of these.
+    const PAST: [f32; 5] = [1.15, 1.3, 1.45, 1.6, 1.75];
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
     };
     let at = |reach: f32| -> Scene {
-        // [`ringing_node`]'s fixture with the note taken out of it: a live
-        // analyzer, a partial sounding into one wedge, and no key down, so the
-        // only ink on the node is the ring's and the only light is the glow's.
-        let mut scene =
-            ringing_node(None, Some(harmonigraph_scene::MIDDLE_C_SLOT as f32 * 12.0), PROBE_RANGE);
+        // The band the node's only layer: no analyzer at all, no mark at either
+        // end, so the only ink on the node is the band's and the only light is
+        // the glow's.
+        let mut scene = two_colour_node(PROBE_BAND_WIDTH, 0.0);
+        // Alternating, so neighbouring slices differ as far as the ramp allows.
+        // The pitch table is flat, so what varies round the turn is which
+        // slices carry light at all.
         let node = &mut scene.nodes[0];
-        node.activation = 0.0;
-        node.melody_level = 0.0;
-        node.bass_level = 0.0;
-        node.melody_slots = 0;
-        node.bass_slots = 0;
-        node.audio_ring = 1.0;
+        node.octaves = std::array::from_fn(|i| f32::from(i % 2 == 0));
         scene.glow_reach = reach;
         scene.glow_strength = 1.5;
         scene.glow_blend = 0.0;
@@ -9258,7 +9171,25 @@ fn a_nodes_light_has_no_ripple_the_ink_does_not() {
     let off = shooter.shot(&at(0.0));
     let on = shooter.shot(&at(0.8));
 
-    for radius in RADII {
+    // Where the node's ink ends, measured rather than assumed: the radii below
+    // are shares of it, so a retune of the probe stack moves the probes with
+    // the picture instead of dropping them onto the node. The furthest inked
+    // pixel ANYWHERE rather than along one ray — half the slices here are
+    // ghosts drawn in the ground, so a ray that lands on one finds the node's
+    // edge nowhere near where it is.
+    let row = SIZE[0] as usize;
+    let (cx, cy) = (SIZE[0] as f32 / 2.0, SIZE[1] as f32 / 2.0);
+    let bare: [u8; 4] = off[0..4].try_into().expect("a frame has a first pixel");
+    let edge = (0..off.len() / 4)
+        .filter(|&i| off[i * 4..i * 4 + 4] != bare)
+        .map(|i| {
+            let (x, y) = ((i % row) as f32 + 0.5, (i / row) as f32 + 0.5);
+            (x - cx).hypot(y - cy)
+        })
+        .fold(0.0f32, f32::max);
+    assert!(edge > 10.0, "the node inked only {edge}px of radius; there is nothing to read");
+
+    for radius in PAST.map(|f| f * edge) {
         let lit = ring_profile(&on, SIZE, radius);
         let dark = ring_profile(&off, SIZE, radius);
         let mean = |p: &[f64]| p.iter().sum::<f64>() / p.len() as f64;
@@ -9387,9 +9318,9 @@ fn the_ink_strip_has_a_row_for_every_node() {
 /// read at the wrong offset would still be one row per node.
 ///
 /// Two nodes lit in colours no mixture of the other's could be mistaken for —
-/// [`two_colour_node`]'s two flat ramps, the band's red and the analyzer's
+/// [`two_colour_node`]'s two flat ramps, the band's red and the mark strip's
 /// green. The one already on screen wears the band alone and the one arriving
-/// wears the ring alone, so the added node's light is green exactly where the
+/// wears the mark alone, so the added node's light is green exactly where the
 /// other's is red.
 #[test]
 fn a_node_added_to_a_pane_lights_in_its_own_colour() {
@@ -9402,21 +9333,21 @@ fn a_node_added_to_a_pane_lights_in_its_own_colour() {
         let node = scene.nodes[0];
         let band = {
             let mut node = node;
-            node.audio_ring = 0.0;
+            node.melody_slots = 0;
+            node.melody_level = 0.0;
             node.world_pos = glam::Vec3::new(-1.8, 0.0, 0.0);
             node.lattice_pos = harmonigraph_core::LatticePos::new(-1, 0, 0);
             node
         };
-        let ring = {
+        let mark = {
             let mut node = node;
             node.activation = 0.0;
             node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
-            node.audio_ring = 1.0;
             node.world_pos = glam::Vec3::new(1.8, 0.0, 0.0);
             node.lattice_pos = harmonigraph_core::LatticePos::new(1, 0, 0);
             node
         };
-        scene.nodes = if arrived { vec![band, ring] } else { vec![band] };
+        scene.nodes = if arrived { vec![band, mark] } else { vec![band] };
         rows_per_node(&mut scene);
         scene
     };
@@ -9438,7 +9369,7 @@ fn a_node_added_to_a_pane_lights_in_its_own_colour() {
     assert!(added[1] > 0, "the added node lit nothing at all: {added:?}");
     assert!(
         added[1] > added[0] * 4,
-        "a node wearing only its audio ring lit {added:?} — that is the BAND's red, which is \
+        "a node wearing only its mark strip lit {added:?} — that is the BAND's red, which is \
          the other node's ink and so the other node's row of the strip",
     );
 }
@@ -9508,7 +9439,7 @@ fn harmonic(profile: &[f64], k: usize) -> f64 {
 /// frame.
 ///
 /// Two nodes, two layers, one colour each: the lit node draws the RED octave
-/// band and no ring, the unlit one draws the GREEN audio ring and nothing
+/// band and no mark, the unlit one draws the GREEN mark strip and nothing
 /// else. The lit node's halo has to stay red.
 #[test]
 fn a_node_with_no_light_writes_into_no_other_nodes_colour() {
@@ -9517,18 +9448,20 @@ fn a_node_with_no_light_writes_into_no_other_nodes_colour() {
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
     };
-    // The band red and the ring green, with the LIT node wearing only the
+    // The band red and the mark green, with the LIT node wearing only the
     // band — so every green pixel of light in the frame came off the other
-    // node's ink rather than out of this one's own ring.
+    // node's ink rather than out of this one's own strip.
     let scene = || -> Scene {
         let mut scene = two_colour_node(WIDTH, WIDTH);
-        scene.nodes[0].audio_ring = 0.0;
+        scene.nodes[0].melody_slots = 0;
+        scene.nodes[0].melody_level = 0.0;
         scene.nodes[0].glow.mix = 1.0;
         let mut idle = scene.nodes[0];
         idle.world_pos.x += 1.2;
         idle.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
         idle.activation = 0.0;
-        idle.audio_ring = 1.0;
+        idle.melody_slots = u32::MAX;
+        idle.melody_level = 1.0;
         // What `GlowFade` hands a node it gave no row to.
         idle.glow = harmonigraph_scene::GlowStep::default();
         scene.nodes.push(idle);
@@ -9551,7 +9484,7 @@ fn a_node_with_no_light_writes_into_no_other_nodes_colour() {
     );
     assert!(
         light[0] > light[1] * 4,
-        "the lit node's halo came out {light:?}: it is drawing the RED band and no ring, so \
+        "the lit node's halo came out {light:?}: it is drawing the RED band and no mark, so \
          the green is the idle node's ink settling into the row it was never given",
     );
 }

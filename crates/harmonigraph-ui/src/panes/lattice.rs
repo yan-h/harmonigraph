@@ -141,17 +141,11 @@ pub(crate) fn draw_lattice(
     // reading that reached into `derive_scene` would be a second path through
     // all of it.
     super::spectral_fold::apply(&mut scene, state, now);
-    // And the node glow's own clock, last: the light is assembled out of every
-    // layer's ink, the audio ring included, so what a node is lighting the
-    // picture with is not known until the pass above has said what its ring is
-    // doing. Per surface, because what this hands out is rows of that surface's
-    // own ink strip.
+    // And the node glow's own clock, last: a filter can only step a level the
+    // derivation has already written, and the light is stepped against what a
+    // node's MIDI layers say. Per surface, because what this hands out is rows
+    // of that surface's own ink strip.
     super::glow_fade::apply(&mut scene, state, surface, now);
-    // And the markers' shadows against that light, which is why this is behind
-    // both passes above rather than inside the derivation: a cross may not cut
-    // the halo of the node it stands in the middle of, and what a node is
-    // lighting the picture with is the line above's answer.
-    scene.shade_markers();
     // The ground the sevens knockout clears to. Only the shell knows what
     // this pass is composited over -- the fill the docked pane just painted
     // here, the render layout's own background offline -- so it is carried in
@@ -793,7 +787,6 @@ mod tests {
             // The lattice pass draws the ring on every node it ships; the
             // gate is the fold's answer and there is no fold here.
             audio_ring: 1.0,
-            ring_peak: 1.0,
             // Nothing here draws a glow, and the labels this fixture is for do
             // not read one: an unlit light on the first row.
             glow: harmonigraph_scene::GlowStep::default(),
