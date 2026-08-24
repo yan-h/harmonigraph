@@ -2388,6 +2388,38 @@ fn clearing_node(melody: u32, ring: f32, band: bool, gutter: f32) -> Scene {
     scene
 }
 
+/// [`clearing_node`] with a SHEET BEHIND IT, which is the only place a hole can
+/// be read at all: the pass cuts a clearing by making what stands behind
+/// transparent (`node_paint`), so a hole over empty lattice is invisible by
+/// construction and every reading below is the sheet giving way.
+///
+/// The sheet is one node's LIGHT, dialled to saturate — the widest even field a
+/// scene can put behind another node, and flat within a few code values over
+/// every radius a hole here reaches. Its ink is a mark on every slot, so it
+/// lights the same whatever layers the node in front is wearing.
+///
+/// Two settings of the node in FRONT are the fixture rather than the picture:
+/// it lays no light of its own and stands its rings off nothing, both of which
+/// land inside the hole and would be read as part of it.
+fn clearing_over_a_sheet(melody: u32, ring: f32, band: bool, gutter: f32) -> Scene {
+    let mut scene = clearing_node(melody, ring, band, gutter);
+    scene.glow_reach = 3.0;
+    scene.glow_strength = 8.0;
+    scene.glow_feather = 1.0;
+    scene.glow_gap_depth = 0.0;
+    scene.nodes[0].glow.level = 0.0;
+    let mut sheet = scene.nodes[0];
+    sheet.world_pos.z = -1.0;
+    sheet.gutter = 0.0;
+    sheet.melody_slots = (1 << harmonigraph_scene::OCTAVE_SLOTS) - 1;
+    sheet.melody_level = 1.0;
+    sheet.melody_color = glam::Vec4::ONE;
+    sheet.glow = harmonigraph_scene::GlowStep { level: 1.0, row: 1, mix: 1.0, marked: 1.0 };
+    scene.nodes.push(sheet);
+    rows_per_node(&mut scene);
+    scene
+}
+
 /// How far the light in `weights` reaches from the centre of the frame within
 /// `cone` degrees of `toward`, in pixels.
 ///
@@ -2418,9 +2450,9 @@ fn far_toward(weights: &[f64], size: [u32; 2], toward: f64, cone: f64) -> f64 {
 /// do: a marked node cleared a gap wider than itself all the way round, so a
 /// hole that says "this node is in front of that one" said it about a ring of
 /// empty lattice too. That is visible exactly where the clearing is for — over
-/// the resting markers and the sheets behind — and invisible in the node's own
-/// picture, which is why every reading here is off the difference the gutter
-/// makes rather than off the node.
+/// the sheets behind — and invisible in the node's own picture, which is why
+/// every reading here is off the difference the gutter makes rather than off
+/// the node.
 #[test]
 fn a_clearing_bulges_over_the_mark_and_hugs_the_rings_everywhere_else() {
     const SIZE: [u32; 2] = [256, 256];
@@ -2430,19 +2462,25 @@ fn a_clearing_bulges_over_the_mark_and_hugs_the_rings_everywhere_else() {
     let rings = clearing_rings();
     let mark_out = rings.mark_inner + rings.mark_thickness;
 
-    let bare_plain = gpu.shot(&clearing_node(0, 1.0, true, 0.0));
-    let holed_plain = gpu.shot(&clearing_node(0, 1.0, true, CLEAR_REACH));
-    let bare_marked = gpu.shot(&clearing_node(MIDDLE_C, 1.0, true, 0.0));
-    let holed_marked = gpu.shot(&clearing_node(MIDDLE_C, 1.0, true, CLEAR_REACH));
+    let bare_plain = gpu.shot(&clearing_over_a_sheet(0, 1.0, true, 0.0));
+    let holed_plain = gpu.shot(&clearing_over_a_sheet(0, 1.0, true, CLEAR_REACH));
+    let bare_marked = gpu.shot(&clearing_over_a_sheet(MIDDLE_C, 1.0, true, 0.0));
+    let holed_marked = gpu.shot(&clearing_over_a_sheet(MIDDLE_C, 1.0, true, CLEAR_REACH));
 
-    // Which way the mark points, taken off the picture: the marked node over the
-    // same node with its mark off.
-    let mark = light_about_center(&light_over(&bare_marked, &bare_plain), SIZE);
+    // Which way the mark points, taken off the node with NOTHING behind it: a
+    // mark is drawn over a sheet brighter than itself, so what it adds is a
+    // reading only the bare node gives. The node is the same one either way,
+    // so the angle carries.
+    let aim_plain = gpu.shot(&clearing_node(0, 1.0, true, 0.0));
+    let aim_marked = gpu.shot(&clearing_node(MIDDLE_C, 1.0, true, 0.0));
+    let mark = light_about_center(&light_over(&aim_marked, &aim_plain), SIZE);
     assert!(mark.weight > 0.0, "the mark drew nothing to aim at");
     let away = mark.angle + std::f64::consts::PI;
 
-    let plain = light_over(&holed_plain, &bare_plain);
-    let marked = light_over(&holed_marked, &bare_marked);
+    // The hole is what the sheet behind LOSES, the clearing being cut by making
+    // what stands behind transparent.
+    let plain = light_over(&bare_plain, &holed_plain);
+    let marked = light_over(&bare_marked, &holed_marked);
     // A cone inside the wedge the mark extends — a full-size slice of the fresh
     // wheel is 55 degrees, so ±27 — and wide enough to hold the rounding the
     // dilation puts on its corners.
@@ -2526,7 +2564,12 @@ fn a_clearing_over_a_wedge_past_a_half_turn_covers_the_whole_wedge() {
         widest.to_degrees(),
     );
     let lopsided = |melody: u32, gutter: f32| -> Scene {
-        let mut scene = clearing_node(melody, 1.0, true, gutter);
+        let mut scene = clearing_over_a_sheet(melody, 1.0, true, gutter);
+        scene.octave_layout = wheel;
+        scene
+    };
+    let bare_node = |melody: u32| -> Scene {
+        let mut scene = clearing_node(melody, 1.0, true, 0.0);
         scene.octave_layout = wheel;
         scene
     };
@@ -2536,17 +2579,23 @@ fn a_clearing_over_a_wedge_past_a_half_turn_covers_the_whole_wedge() {
     let bare_marked = gpu.shot(&lopsided(MIDDLE_C, 0.0));
     let holed_marked = gpu.shot(&lopsided(MIDDLE_C, CLEAR_REACH));
 
-    // Which way the wide wedge points, taken off the picture as the marked
-    // node's own extra ink.
-    let mark = light_about_center(&light_over(&bare_marked, &bare_plain), SIZE);
+    // Which way the wide wedge points, taken off the node with nothing behind
+    // it as the marked node's own extra ink (see
+    // `a_clearing_bulges_over_the_mark_and_hugs_the_rings_everywhere_else`).
+    let mark = light_about_center(
+        &light_over(&gpu.shot(&bare_node(MIDDLE_C)), &gpu.shot(&bare_node(0))),
+        SIZE,
+    );
     assert!(mark.weight > 0.0, "the mark drew nothing to aim at");
 
-    let plain = light_over(&holed_plain, &bare_plain);
-    let marked = light_over(&holed_marked, &bare_marked);
+    let plain = light_over(&bare_plain, &holed_plain);
+    let marked = light_over(&bare_marked, &holed_marked);
     // Narrow, because the two extras between them hold only what the full
     // slice leaves and the far reading has to stay inside that.
     const CONE: f64 = 8.0;
-    let scale = far_toward(&plain, SIZE, mark.angle, CONE) / (rings.outer + CLEAR_REACH) as f64;
+    let unmarked = far_toward(&plain, SIZE, mark.angle, CONE);
+    assert!(unmarked > 0.0, "no clearing to measure");
+    let scale = unmarked / (rings.outer + CLEAR_REACH) as f64;
     let strip = (mark_out - rings.outer) as f64 * scale;
 
     // The wedge's middle, then a quarter turn off it, then most of the way out
@@ -2580,11 +2629,20 @@ fn a_clearing_over_a_wedge_past_a_half_turn_covers_the_whole_wedge() {
 ///
 /// Read along rays out of the node's centre, which is the one sweep that does
 /// not need to know where the rim is in each direction — and the marked node's
-/// rim is a different radius over its mark than beside it. Everything from the
-/// centre out to whatever the ray last found is the node or the ground; a dark
-/// sample with light beyond it is a hole in the hole. (The shape is a union of
-/// parts that all reach the centre, and dilating one of those leaves it reaching
-/// the centre, so "no gap along any ray" is exactly the claim.)
+/// rim is a different radius over its mark than beside it. A sample where the
+/// sheet behind survives, with a sample the hole covered whole beyond it, is a
+/// hole in the hole. (The shape is a union of parts that all reach the centre,
+/// and dilating one of those leaves it reaching the centre, so "no gap along
+/// any ray" is exactly the claim.)
+///
+/// "Covered whole" is read against the same frame with the sheet LIFTED OUT of
+/// it and nothing else touched, so a pixel agreeing between the two is a pixel
+/// no sheet reaches — whether the hole took it or the node's own ink stands
+/// over it, both of which are the hole being filled. Byte equality is the
+/// reading, which is what taking the node's every other setting along buys: a
+/// node drawn over a wider quad softens its own edges over the same width of
+/// SCREEN and a different width of its uv, and that moves the ink by a code
+/// value at every rim it draws.
 #[test]
 fn a_clearing_is_one_hole_covering_the_centre_and_every_ring() {
     const SIZE: [u32; 2] = [256, 256];
@@ -2592,17 +2650,6 @@ fn a_clearing_is_one_hole_covering_the_centre_and_every_ring() {
         return;
     };
 
-    let staged = |melody: u32, band: bool, ring: f32, gutter: f32| -> Scene {
-        let mut scene = clearing_node(melody, ring, band, gutter);
-        // No markers. The ray below reads the picture for anything lit, and a marker
-        // sitting just outside the hole is a lit sample past its rim with
-        // bare pane between — which reads as a gap in the hole and is nothing
-        // of the kind. What the clearing cuts out of the marker field is a
-        // separate claim, and `a_node_wearing_only_an_audio_ring_clears_around_it`
-        // is where the added light is measured against it.
-        scene.pluses.clear();
-        scene
-    };
     // Everything a node can wear, and then the same node with its audio ring
     // gated shut — which leaves the octave band an annulus with the lattice
     // showing through the middle of it, the case the fill-to-the-centre rule
@@ -2611,47 +2658,53 @@ fn a_clearing_is_one_hole_covering_the_centre_and_every_ring() {
         ("every layer", MIDDLE_C, true, 1.0),
         ("the octave band alone", 0, true, 0.0),
     ] {
-        let bare = gpu.shot(&staged(melody, band, ring, 0.0));
-        let holed = gpu.shot(&staged(melody, band, ring, CLEAR_REACH));
-        let reach = light_about_center(&light_over(&holed, &bare), SIZE).far;
+        let bare = gpu.shot(&clearing_over_a_sheet(melody, ring, band, 0.0));
+        let holed = gpu.shot(&clearing_over_a_sheet(melody, ring, band, CLEAR_REACH));
+        let alone = gpu.shot(&{
+            let mut scene = clearing_over_a_sheet(melody, ring, band, CLEAR_REACH);
+            scene.nodes.pop();
+            scene
+        });
+        let reach = light_about_center(&light_over(&bare, &holed), SIZE).far;
         assert!(reach > 8.0, "{name}: no clearing to read, {reach:.1} px");
 
         let (cx, cy) = ((SIZE[0] - 1) as f64 / 2.0, (SIZE[1] - 1) as f64 / 2.0);
         // Half-pixel steps: a step of a whole one can straddle the rim and read
         // a gap the picture does not have.
         let steps = (reach * 2.0).ceil() as usize;
-        let lit = |r: f64, a: f64| -> bool {
+        let covered = |r: f64, a: f64| -> bool {
             let x = (cx + r * a.cos()).round();
             let y = (cy + r * a.sin()).round();
             let i = (y as usize * SIZE[0] as usize + x as usize) * 4;
-            brightness(&holed[i..i + 4]) >= 24
+            holed[i..i + 4] == alone[i..i + 4]
         };
         for turn in 0..360 {
             let a = (turn as f64).to_radians();
-            let Some(rim) = (0..=steps).rev().map(|s| s as f64 / 2.0).find(|&r| lit(r, a)) else {
+            let Some(rim) = (0..=steps).rev().map(|s| s as f64 / 2.0).find(|&r| covered(r, a))
+            else {
                 continue;
             };
             // Stopping two pixels short of the rim, which is the hole's own
             // anti-aliased edge: out there a lobe's angular boundary and the
-            // rounding of a sample to a pixel can disagree, so a single lit
-            // sample sits past a dark one and reads as a gap the picture does
-            // not have. Everything a gap in the hole would actually be is
+            // rounding of a sample to a pixel can disagree, so a single covered
+            // sample sits past an uncovered one and reads as a gap the picture
+            // does not have. Everything a gap in the hole would actually be is
             // inside this.
             let gap = (0..=((rim - 2.0).max(0.0) * 2.0) as usize)
                 .map(|s| s as f64 / 2.0)
-                .find(|&r| !lit(r, a));
+                .find(|&r| !covered(r, a));
             assert!(
                 gap.is_none(),
-                "{name}: at {turn} degrees the picture is dark {:.1} px out and lit \
-                 again at {rim:.1} px — the clearing has a hole in it",
+                "{name}: at {turn} degrees the sheet behind survives {:.1} px out and is \
+                 covered whole again at {rim:.1} px — the clearing has a hole in it",
                 gap.unwrap_or_default(),
             );
         }
     }
 }
 
-/// Mean added light over the pixels between `lo` and `hi` from the centre of the
-/// frame — how STRONGLY a ring of the clearing is cleared, where
+/// Mean of `weights` over the pixels between `lo` and `hi` from the centre of
+/// the frame — how STRONGLY a ring of the clearing is cleared, where
 /// [`far_toward`] and [`Light::far`] answer how far it reaches.
 fn light_in_band(weights: &[f64], size: [u32; 2], lo: f64, hi: f64) -> f64 {
     let (cx, cy) = ((size[0] - 1) as f64 / 2.0, (size[1] - 1) as f64 / 2.0);
@@ -2689,9 +2742,9 @@ fn a_clearing_follows_the_audio_ring_its_node_wears() {
     // The band off, so the audio ring is the layer the stack's cursor landed on
     // and this node's own gate is what its hole answers to.
     let hole = |gpu: &mut Shooter, ring: f32| -> (Vec<f64>, f64) {
-        let bare = gpu.shot(&clearing_node(0, ring, false, 0.0));
-        let holed = gpu.shot(&clearing_node(0, ring, false, CLEAR_REACH));
-        let cleared = light_over(&holed, &bare);
+        let bare = gpu.shot(&clearing_over_a_sheet(0, ring, false, 0.0));
+        let holed = gpu.shot(&clearing_over_a_sheet(0, ring, false, CLEAR_REACH));
+        let cleared = light_over(&bare, &holed);
         let far = light_about_center(&cleared, SIZE).far;
         (cleared, far)
     };
@@ -2719,8 +2772,8 @@ fn a_clearing_follows_the_audio_ring_its_node_wears() {
     );
 
     // Read where only the ring's own clearing lands: outside the ring's ink, so
-    // the node paints nothing there and the added light IS the hole, and inside
-    // the reach, so a hard-edged clearing covers all of it.
+    // the node paints nothing there and what the sheet loses IS the hole, and
+    // inside the reach, so a hard-edged clearing covers all of it.
     let (lo, hi) = (rings.audio.1 as f64 * scale + 3.0, worn_far - 3.0);
     let (lit, dim, none) = (
         light_in_band(&worn, SIZE, lo, hi),
@@ -2741,8 +2794,7 @@ fn a_clearing_follows_the_audio_ring_its_node_wears() {
 /// The ring is a window onto the spectrum rather than a level a node carries, so
 /// a node nobody played wears one wherever the view's Gate lets it. That is ink,
 /// and ink with no hole under it reads as painted ON the lattice rather than in
-/// front of it: the marker under it shows through the ring, and so do the
-/// sheets behind.
+/// front of it: the sheets behind show through the gaps in the ring.
 ///
 /// The other half is what such a node must NOT clear. Its band and its core are
 /// drawn at the note's level, which is nothing, so a hole sized to the layers
@@ -2760,24 +2812,27 @@ fn a_node_wearing_only_an_audio_ring_clears_around_it() {
     // Silent: no note, no octaves, no marks. What is left is the ring the gate
     // hands it, at `ring`, and the band is ON so the "clears what the view draws
     // rather than what this node draws" failure has room to show.
-    let silent = |ring: f32, gutter: f32| -> Scene {
-        let mut scene = clearing_node(0, ring, true, gutter);
+    let hush = |scene: &mut Scene| {
         let node = &mut scene.nodes[0];
         node.activation = 0.0;
         node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
+    };
+    let silent = |ring: f32, gutter: f32| -> Scene {
+        let mut scene = clearing_over_a_sheet(0, ring, true, gutter);
+        hush(&mut scene);
         scene
     };
     let bare = gpu.shot(&silent(1.0, 0.0));
     let holed = gpu.shot(&silent(1.0, CLEAR_REACH));
-    let cleared = light_over(&holed, &bare);
+    let cleared = light_over(&bare, &holed);
     let hole = light_about_center(&cleared, SIZE);
     assert!(hole.weight > 0.0, "a node wearing an audio ring cleared nothing at all");
 
     // Calibrated on a node that IS played, where the hole is the band's and the
     // band's outer edge is a uv the stack states.
-    let played_bare = gpu.shot(&clearing_node(0, 1.0, true, 0.0));
-    let played = gpu.shot(&clearing_node(0, 1.0, true, CLEAR_REACH));
-    let played_far = light_about_center(&light_over(&played, &played_bare), SIZE).far;
+    let played_bare = gpu.shot(&clearing_over_a_sheet(0, 1.0, true, 0.0));
+    let played = gpu.shot(&clearing_over_a_sheet(0, 1.0, true, CLEAR_REACH));
+    let played_far = light_about_center(&light_over(&played_bare, &played), SIZE).far;
     let scale = played_far / (rings.band.1 + CLEAR_REACH) as f64;
     let want = (rings.audio.1 + CLEAR_REACH) as f64 * scale;
     eprintln!(
@@ -2801,8 +2856,13 @@ fn a_node_wearing_only_an_audio_ring_clears_around_it() {
     // does. The shader's own half of the answer, a closed gate falling back to
     // the layers that ARE drawn, is measured in
     // `a_clearing_follows_the_audio_ring_its_node_wears`.
+    //
+    // Asked of the node ALONE, the sheet the readings above are taken over
+    // being a second node that ships whatever this one does.
+    let mut lone = clearing_node(0, 0.0, true, CLEAR_REACH);
+    hush(&mut lone);
     let quiet = LatticeCallback::from_scene(
-        &silent(0.0, CLEAR_REACH),
+        &lone,
         LatticeLabels::default(),
         egui::vec2(SIZE[0] as f32, SIZE[1] as f32),
         wgpu::TextureFormat::Rgba8Unorm,
@@ -6924,37 +6984,29 @@ fn one_gap_is_one_distance_whatever_the_cross_it_stands_off() {
         want,
     );
 }
-/// A node a nearer sheet's node COVERS cuts nothing out of it: not a ring, not
-/// its name, and not a shadow anywhere in the near node's halo. What a hidden
-/// node may do is BRIGHTEN, and that is the whole of what it may do.
+/// A node a nearer sheet's node COVERS reaches nothing of it: not a ring, not
+/// its name, and not a shadow anywhere in the near node's halo.
 ///
 /// The case is a harmonic seventh over its home node, face on: the seventh's
-/// disc and knockout hide the home node entirely. Every node draws AFTER the
-/// whole light, so a covered node's ink and name are simply covered, and its
-/// halo is one term of the melded field the near node stands on rather than a
-/// layer laid over the near node's ink. Nothing in that field is subtractive,
-/// so there is nothing a hidden node could cut with even if it reached.
+/// disc and knockout hide the home node entirely. Every element composites
+/// itself over the picture behind it in one premultiplied over (`node_paint`),
+/// and over the near node's opaque ink that node's own alpha is 1 — so a
+/// covered node has nothing left to reach those pixels with, in EITHER
+/// direction. Byte equality is the claim for that reason, rather than the
+/// weaker "never darker": a hidden node's light can no more add to the ink in
+/// front of it than its shadow can take from it.
 ///
-/// Measured over the near node's own INK — the pixels its paint covers in full
-/// — and per CHANNEL, since that is the claim the wash rests on: the light a
-/// node's ink takes is a screen (`node_paint`), which can add to a channel and
-/// never take from one, so a far sheet's red halo cannot pull the green out of
-/// a white name in front of it.
+/// The near node's opaque ink is found rather than described, and found on the
+/// GROUND rather than on the light, which reaches the ink too: a pixel the node
+/// paints opaquely is a pixel no ground shows through, so it is the pixel that
+/// does not move when the ground does. Two shots with the glow off and the
+/// darkest and brightest grounds there are agree exactly over that ink and
+/// nowhere else the node draws: a clearing is cut by making what stands behind
+/// TRANSPARENT, so every pixel of one carries the ground whole.
 ///
-/// It rests on the fixture's fresh WASH, that being what puts any light on a
-/// node's ink at all: at a wash of 0 the near node's ink is untouchable and
-/// there is nothing here to measure. The count of pixels the hidden node
-/// brightens is asserted for that reason, and says so when it is 0.
-///
-/// That set is found rather than described, and found on the GROUND rather than
-/// on the light, which reaches the ink too: a pixel the node paints opaquely is
-/// a pixel no ground shows through, so it is the pixel that does not move when
-/// the ground does. Two shots with the glow off and the darkest
-/// and brightest grounds there are agree exactly over that ink and nowhere else
-/// the node draws, the clearing painting the ground by definition. Every other
-/// pixel of the node is that clearing, which paints the light over the ground
-/// on purpose — the halo behind it belongs there, and asking for it back would
-/// be asking for the hole this design exists to not have.
+/// Non-vacuous on the hidden node's OWN draw, and it has to be: a node covered
+/// whole moves no pixel anywhere, so what says there is something here to cover
+/// is the count it paints with the near node lifted off it.
 ///
 /// The hidden node is LIT and NAMED, both at the middle of the near node where
 /// the light is fullest and an escaped name would be most legible. The name is
@@ -7048,25 +7100,25 @@ fn a_node_under_a_nearer_sheets_node_cuts_nothing_out_of_its_light() {
         .filter(|&i| pale_ground[i..i + 4] == dark_ground[i..i + 4])
         .collect();
     assert!(ink.len() > 500, "the near node painted {} opaque pixels", ink.len());
-    let moved = |cmp: fn(u8, u8) -> bool| {
-        ink.iter().filter(|&&i| (0..3).any(|c| cmp(covered[i + c], alone_on[i + c]))).count()
-    };
-    let dimmed = moved(|a, b| a < b);
-    // Non-vacuous over the INK itself, not merely somewhere in the frame: the
-    // hidden node's halo is part of the melded field the near node's own paint
-    // is washed with, so it DOES reach that paint, and "never darker" is being
-    // asked of pixels a hidden node actually moves. That reach is the tradeoff
-    // the melded field is taken for — see `node_paint`, where the alternative
-    // is a light pass per sheet.
+    // Non-vacuous on the hidden node's OWN draw: a node covered whole moves
+    // nothing anywhere, so the count that says this is measuring something is
+    // what it paints with the near node lifted off it.
+    let hidden = shooter.shot(&{
+        let mut only = covering(fresh_wash);
+        only.nodes.remove(0);
+        only
+    });
+    let paints = hidden.chunks(4).filter(|px| brightness(px) > 0).count();
     assert!(
-        moved(|a, b| a > b) > 0,
-        "the hidden node moved none of the near node's {} opaque pixels; the comparison is vacuous",
-        ink.len(),
+        paints > 500,
+        "the hidden node paints {paints} pixels of its own; there is nothing here to cover",
     );
+    let reached = ink.iter().filter(|&&i| covered[i..i + 4] != alone_on[i..i + 4]).count();
     assert_eq!(
-        dimmed,
+        reached,
         0,
-        "a node hidden behind the near one darkened {dimmed} of its {} opaque pixels",
+        "a node hidden behind the near one reached {reached} of its {} opaque pixels, \
+         of the {paints} it paints on its own",
         ink.len(),
     );
     // The NAME's own claim, which the ink set cannot carry at all: a glyph sits
@@ -7096,7 +7148,8 @@ fn a_node_under_a_nearer_sheets_node_cuts_nothing_out_of_its_light() {
     );
 }
 
-/// The MIDDLE of a node glows, and a SHEET behind it makes it glow more.
+/// The MIDDLE of a node glows, and it stays the brightest thing in sight even
+/// where a SHEET BEHIND is lighting the ground beside it.
 ///
 /// Two halves, and the second is #435. The first: inside the innermost ring
 /// there is nothing painted at all — [`parity_scene`]'s octave band is an
@@ -7106,14 +7159,14 @@ fn a_node_under_a_nearer_sheets_node_cuts_nothing_out_of_its_light() {
 /// a neighbouring pixel, because the thing that must not happen is the middle
 /// going DARK: nothing else is drawn there to take the light's place.
 ///
-/// The second: a node on a sheet BEHIND adds its halo to the field, and a
-/// node's clearing paints that field over the ground (`node_paint`), so the
-/// near node's middle comes out brighter than it is with nothing behind it. A
-/// nearer node's body taking the light of the sheets behind off itself is what
-/// inverts this — its middle then holds its own light alone while the ground a
-/// few pixels away holds everyone's, and the node reads as a hole rather than
-/// as a lamp. The near node carries a CLEARING here for exactly that reason:
-/// its footprint is the surface such a pass would erase.
+/// The second: a node composites its own light over what stands behind it
+/// (`node_paint`), and over its own middle that light is opaque — so a node on
+/// a sheet BEHIND adds nothing there, while it plainly lights the ground
+/// outside the near node's clearing. #435 is about which of the two comes out
+/// brighter: a node whose own light does not carry its middle reads as a HOLE
+/// punched in the field its neighbours light. So the reading is the middle
+/// against that lit ground, and the sheet's reach past the hole is what makes
+/// it a comparison at all.
 #[test]
 fn the_middle_of_a_node_is_where_its_light_is_fullest() {
     const SIZE: [u32; 2] = [256, 256];
@@ -7165,12 +7218,28 @@ fn the_middle_of_a_node_is_where_its_light_is_fullest() {
 
     let one_sheet = shooter.shot(&flat);
     let two_sheets = shooter.shot(&sheets);
-    assert!(
-        middle(&two_sheets) > middle(&one_sheet),
-        "a sheet behind left the near node's middle at {} against {} with nothing behind it: \
-         its light is being taken off its own body",
+    // Where the sheet behind first reaches the picture, walking out along the
+    // row from the node's middle: inside the near node's clearing its light is
+    // taken off whatever it stands on, so this is the ground just past the
+    // hole — and it is the pixel a node reading as a hole is darker than.
+    let row = (SIZE[1] / 2) as usize * SIZE[0] as usize;
+    let px = |shot: &[u8], x: usize| brightness(&shot[(row + x) * 4..(row + x) * 4 + 3]);
+    let lit_ground = ((SIZE[0] / 2) as usize..SIZE[0] as usize)
+        .find(|&x| px(&two_sheets, x) > px(&one_sheet, x) + 8)
+        .expect("the sheet behind has to reach the ground beside the node");
+    assert_eq!(
         middle(&two_sheets),
         middle(&one_sheet),
+        "a sheet behind moved the near node's middle, where the node's own light stands at \
+         full: nothing behind it can reach that pixel",
+    );
+    assert!(
+        middle(&two_sheets) > px(&two_sheets, lit_ground),
+        "the near node's middle is {} against the {} the sheet behind puts on the ground \
+         {} px out: the node reads as a hole in the field rather than as a lamp",
+        middle(&two_sheets),
+        px(&two_sheets, lit_ground),
+        lit_ground - (SIZE[0] / 2) as usize,
     );
 }
 
