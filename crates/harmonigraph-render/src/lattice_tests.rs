@@ -500,9 +500,6 @@ fn parity_scene() -> Scene {
         nodes,
         camera: harmonigraph_scene::Camera::default(),
         now: 1.25,
-        // The ground the sevens knockout clears to; the half of this
-        // scene's nodes that carry a gutter exercise it.
-        background: harmonigraph_scene::skin::well_color(),
         // The grey the octave band's unsounding slices draw, at the fresh
         // view's own Ground — most of every node's band in this fixture.
         lattice_ground: harmonigraph_scene::grey_of_lightness(
@@ -623,6 +620,13 @@ struct Shooter {
     /// rather than one reused. The tests that used to name these by hand all
     /// counted up the same way, and none ever asked for a repeat.
     pane: u64,
+    /// What the target holds before the pass draws into it — the ground the
+    /// picture is composited over, the pane's own fill in the app
+    /// (`SharedState::background`). The pass knocks its clearings through to
+    /// TRANSPARENCY rather than painting a ground of its own, so this is the
+    /// only ground there is and a test that wants to tell opaque ink from a
+    /// clearing has to move it ([`shot_over`](Self::shot_over)).
+    ground: wgpu::Color,
 }
 
 impl Shooter {
@@ -637,6 +641,7 @@ impl Shooter {
             format: wgpu::TextureFormat::Rgba8Unorm,
             size,
             pane: 1,
+            ground: wgpu::Color::BLACK,
         })
     }
 
@@ -663,6 +668,16 @@ impl Shooter {
     /// for it.
     fn shot_again(&mut self, scene: &Scene) -> Vec<u8> {
         self.draw(scene, LatticeLabels::default())
+    }
+
+    /// [`shot`](Self::shot) over a ground of the caller's choosing (see
+    /// [`ground`](Self::ground)). The ground goes back to black after, a
+    /// fixture being settled unless it says otherwise.
+    fn shot_over(&mut self, scene: &Scene, ground: wgpu::Color) -> Vec<u8> {
+        self.ground = ground;
+        let px = self.shot(scene);
+        self.ground = wgpu::Color::BLACK;
+        px
     }
 
     fn draw(&mut self, scene: &Scene, labels: LatticeLabels) -> Vec<u8> {
@@ -702,7 +717,7 @@ impl Shooter {
             &self.queue,
             size,
             self.format,
-            wgpu::Color::BLACK,
+            self.ground,
             |pass| {
                 cb.paint(
                     egui::PaintCallbackInfo {
@@ -1546,13 +1561,21 @@ fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
     scene.pluses.clear();
     // Fill a good share of the frame, so the measurements below are
     // about the mark's design rather than about pixel quantization.
-    scene.node_radius = 1.1;
-    // The one uv both fields are in (`marker_world`): a marker's unit IS the
-    // node's radius through this factor, so a scene that sets one and not the
-    // other is a scene `derive_scene` cannot build — and every Gap in it is two
-    // different world distances, one for a ring and one for a cross.
-    scene.marker_unit = scene.node_radius * 1.8;
+    node_radius(&mut scene, 1.1);
     scene
+}
+
+/// Size a fixture's nodes, keeping its marker field in the one uv both are in.
+///
+/// A marker's unit IS the node's radius through this factor (`marker_world`
+/// against `NODE_RADIUS_FACTOR`, both in harmonigraph-scene's `derive.rs`), so
+/// a scene that sets one without the other is a scene `derive_scene` cannot
+/// build — and every Gap in it is two different world distances, one for a ring
+/// and one for a cross. Setting `node_radius` by hand is what re-opens that,
+/// which is why fixtures come through here instead.
+fn node_radius(scene: &mut Scene, radius: f32) {
+    scene.node_radius = radius;
+    scene.marker_unit = radius * 1.8;
 }
 
 /// Hand every node in a scene its own row of the ink strip, and size the strip
@@ -2337,19 +2360,13 @@ fn clearing_rings() -> harmonigraph_scene::RingStack {
 /// ring the view's Gate leaves it, `band` whether the octave band is on, and
 /// `gutter` the clearing's reach (0 for none).
 ///
-/// The ground is WHITE where the app clears to the pane's own panel: every
-/// reading below is "what changed when the gutter was turned on", and a bright
-/// ground makes that the whole range of a channel at a cleared pixel instead of
-/// a few levels over black.
-///
 /// The node is drawn small enough for its clearing to fit in the frame — the
 /// hole reaches a third of a node past a mark that already stands outside every
 /// ring.
 fn clearing_node(melody: u32, ring: f32, band: bool, gutter: f32) -> Scene {
     let rings = clearing_rings();
     let mut scene = single_marked_node(melody, 0);
-    scene.background = glam::Vec4::ONE;
-    scene.node_radius = 1.4;
+    node_radius(&mut scene, 1.4);
     scene.octave_gap = PROBE_GAP;
     scene.mark_thickness = rings.mark_thickness;
     // The audio ring drawn off an all-zero grid: the ramp's floor across the
@@ -4403,7 +4420,7 @@ fn the_lights_colour_seams_run_at_one_width_from_its_edge_to_the_centre() {
     // is light and nothing else.
     scene.mark_thickness = 0.0;
     scene.spectral = harmonigraph_scene::SpectralPaint::silent();
-    scene.node_radius = 1.6;
+    node_radius(&mut scene, 1.6);
     scene.glow_reach = 0.8;
     scene.glow_strength = 1.5;
     // Each octave's hue kept as its own arc rather than averaged round the
@@ -5419,7 +5436,7 @@ fn one_node_behind_another() -> Scene {
     // A band's two soft edges are screen-constant, so on a small node they
     // overlap and the annulus never becomes opaque, which is the one property
     // the covering claim below is read off.
-    scene.node_radius = 0.5;
+    node_radius(&mut scene, 0.5);
     let mut near = scene.nodes[0];
     near.world_pos = STACK_AT.extend(0.0);
     near.activation = 1.0;
@@ -6824,10 +6841,19 @@ const LONE_SPAN: f32 = 3.0;
 ///
 /// The ruler is the pool's own edge: `plus_glow_layer`'s window shuts exactly
 /// at the span, so the outermost lit pixel stands at [`LONE_SPAN`] world and
-/// every length below is read through that. The shadow's own edge is a
-/// threshold on a decay (`standoff_coverage` never reaches zero), which is why
-/// the claim is a DIFFERENCE between two arms under one threshold rather than
-/// either arm's reach against the Gap.
+/// every length below is read through that.
+///
+/// The shadow's own edge is read as a CONTOUR OF THE SHARE it takes — the
+/// outermost place it keeps half the light — and not as the outermost pixel
+/// that differs at all. `standoff_coverage` never reaches zero, so it spends its
+/// last e-folds under the target's own quantum, and out there which pixel
+/// differs is where the light's value happens to fall against a rounding
+/// boundary rather than how far the shadow reaches. The two arms' edges stand in
+/// different amounts of light (the pool falls off and neither arm moves it), so
+/// a "differs at all" reading is two different thresholds on the coverage
+/// compared against each other; one share is one contour of that coverage
+/// whatever light is under it. The claim is still a DIFFERENCE between the two
+/// arms under that one contour rather than either arm's reach against the Gap.
 #[test]
 fn one_gap_is_one_distance_whatever_the_cross_it_stands_off() {
     const SIZE: [u32; 2] = [256, 256];
@@ -6843,49 +6869,58 @@ fn one_gap_is_one_distance_whatever_the_cross_it_stands_off() {
         let i = (row * SIZE[0] as usize + x) * 4;
         brightness(&buf[i..i + 3])
     };
-    // The outermost column on the centre row where `hot` reads darker than
-    // `cold`, walking out from the marker's own centre.
-    let edge = |hot: &[u8], cold: &[u8]| -> usize {
-        let mut out = mid;
-        for x in mid..SIZE[0] as usize {
-            if at(hot, x) < at(cold, x) {
-                out = x;
-            }
-        }
-        out
-    };
 
-    // The ruler: the pool's edge against a frame with no marker in it.
+    // The ruler: the pool's edge against a frame with no marker in it, which is
+    // the outermost column the marker puts any light in at all.
     let bare = shooter.shot(&{
         let mut s = lone_shadowed_marker(SHORT, GAP, 0.0);
         s.pluses.clear();
         s
     });
     let flat_short = shooter.shot(&lone_shadowed_marker(SHORT, GAP, 0.0));
-    let pool = edge(&bare, &flat_short);
+    let pool = (mid..SIZE[0] as usize)
+        .rfind(|&x| at(&bare, x) < at(&flat_short, x))
+        .expect("the marker must light something on the centre row");
     assert!(
         pool > mid + 20 && pool < SIZE[0] as usize - 2,
         "the pool's edge has to stand inside the frame to be a ruler, not at {pool}",
     );
     let per_world = (pool - mid) as f32 / LONE_SPAN;
 
+    // Where the shadow still keeps half the light, walking IN from the pool's
+    // edge: past the ink the share climbs from nothing back to one, so the first
+    // column under a half is the outermost one the contour crosses. Read across
+    // that column rather than at it, which is what takes the grid's own half
+    // pixel out of a length two shots at different radii are subtracted in.
+    let half_light = |deep: &[u8], flat: &[u8]| -> f32 {
+        let share = |x: usize| at(deep, x) as f32 / at(flat, x).max(1) as f32;
+        let x = (mid..pool)
+            .rfind(|&x| share(x) < 0.5)
+            .expect("the shadow must take half the light somewhere on the row");
+        x as f32 + (0.5 - share(x)) / (share(x + 1) - share(x))
+    };
+
     let flat_long = shooter.shot(&lone_shadowed_marker(LONG, GAP, 0.0));
-    let short_reach = edge(&shooter.shot(&lone_shadowed_marker(SHORT, GAP, 1.0)), &flat_short);
-    let long_reach = edge(&shooter.shot(&lone_shadowed_marker(LONG, GAP, 1.0)), &flat_long);
+    let short_reach =
+        half_light(&shooter.shot(&lone_shadowed_marker(SHORT, GAP, 1.0)), &flat_short);
+    let long_reach =
+        half_light(&shooter.shot(&lone_shadowed_marker(LONG, GAP, 1.0)), &flat_long);
     assert!(
-        long_reach > short_reach && short_reach > mid,
-        "both arms must cast a shadow, the longer one further: {short_reach} and {long_reach}",
+        long_reach > short_reach && short_reach > mid as f32,
+        "both arms must cast a shadow, the longer one further: {short_reach:.1} and \
+         {long_reach:.1}",
     );
 
     // What the longer cross buys is its own extra ink and nothing else: the Gap
     // past the ink is one distance, so the two shadows differ by exactly the
     // two arms' difference.
-    let grew = (long_reach - short_reach) as f32 / per_world;
+    let grew = (long_reach - short_reach) / per_world;
     let want = LONG - SHORT;
     assert!(
         (grew - want).abs() < 0.12,
-        "an arm {} longer pushed its shadow {grew:.2} further ({short_reach}px to {long_reach}px \
-         at {per_world:.1}px per world) — the Gap is being read as a share of the ink",
+        "an arm {} longer pushed its shadow {grew:.2} further ({short_reach:.1}px to \
+         {long_reach:.1}px at {per_world:.1}px per world) — the Gap is being read as a \
+         share of the ink",
         want,
     );
 }
@@ -7000,23 +7035,17 @@ fn a_node_under_a_nearer_sheets_node_cuts_nothing_out_of_its_light() {
     // leaves no pixel of the clearing agreeing across it by rounding, and a
     // pixel too faint to differ even here is a pixel the pass discarded and the
     // `drawn` test drops.
-    let mut on_ground = |bg: glam::Vec4| {
-        let mut scene = near(0.0);
-        scene.background = bg;
-        shooter.shot(&scene)
-    };
-    let dark_ground = on_ground(glam::Vec4::new(0.0, 0.0, 0.0, 1.0));
-    let pale_ground = on_ground(glam::Vec4::ONE);
+    let mut on_ground = |ground: wgpu::Color| shooter.shot_over(&near(0.0), ground);
+    let dark_ground = on_ground(wgpu::Color::BLACK);
+    let pale_ground = on_ground(wgpu::Color::WHITE);
     let covered = shooter.shot_with(&both, name(1));
-    // The near node's opaque ink: drawn (so not the cleared black the pass
-    // starts from) and the same over either ground (so neither its clearing nor
-    // a soft edge of its own paint).
+    // The near node's opaque ink: the same over either ground, which is one
+    // reading and not two — a pixel the node does not cover opaquely shows some
+    // of the widest step there is, whether it is undrawn, a clearing, or a soft
+    // edge of the node's own paint.
     let ink: Vec<usize> = (0..alone_on.len())
         .step_by(4)
-        .filter(|&i| {
-            pale_ground[i..i + 4] != [0u8, 0, 0, 255]
-                && pale_ground[i..i + 4] == dark_ground[i..i + 4]
-        })
+        .filter(|&i| pale_ground[i..i + 4] == dark_ground[i..i + 4])
         .collect();
     assert!(ink.len() > 500, "the near node painted {} opaque pixels", ink.len());
     let moved = |cmp: fn(u8, u8) -> bool| {
@@ -7716,8 +7745,15 @@ fn the_gap_reaches_light_the_nodes_own_never_lit() {
 /// `ink_uv` is where the fixture's own ink ends in the node's uv, and `past` how
 /// far outside it to read. The scale between the two is taken from a calibration
 /// shot rather than assumed: the ink is found at a CLOSED gap, which is the
-/// widest it is ever drawn, and that same shot is what proves the probe ring
-/// clears it at every angle.
+/// widest it is ever drawn.
+///
+/// It is found ALL THE WAY ROUND, and that is what makes one reading do both
+/// jobs — set the scale and clear the probe ring. A node's outermost edge is a
+/// soft band the width of a pixel or two, and where that band's last fraction
+/// lands in the 8-bit target is a matter of a code value: the same edge reads a
+/// pixel further out at one angle than at another. A radius taken along ONE ray
+/// and then scaled by a `past` narrower than that wobble puts the probe inside
+/// the band at some other angle.
 ///
 /// A ratio between the two rings at ONE pixel is the strongest reading it
 /// supports, and the reason is the pixel grid: the ring lands on integer pixels
@@ -7740,23 +7776,26 @@ fn standoff_share_rings(
     // probe ring is centred on the node rather than half a pixel off it.
     let cx = 0.5 * size[0] as f32;
     let cy = 0.5 * size[1] as f32;
-    let centre = (size[1] / 2) as usize * row + (size[0] / 2) as usize;
+    let ray = |k: usize, r: f32| -> usize {
+        let a = std::f32::consts::TAU * k as f32 / angles as f32;
+        // The framebuffer's rows run down where the node's own uv runs up.
+        let y = (cy - r * a.sin()).floor() as usize;
+        y * row + (cx + r * a.cos()).floor() as usize
+    };
 
     let mut bare = at(0.0, 0.0, 0.0);
     bare.nodes[0].gutter = 0.0;
     let plain = shooter.shot(&bare);
     let inked = |px: &[u8], i: usize| px[i * 4..i * 4 + 4] != [0u8, 0, 0, 255];
-    let ink_px = (1..(size[0] / 2) as usize)
-        .rfind(|&x| inked(&plain, centre + x))
-        .expect("the fixture's node must ink something along +x");
+    let ink_px = (0..angles)
+        .filter_map(|k| {
+            (1..(size[0] / 2) as usize).rfind(|&r| inked(&plain, ray(k, r as f32)))
+        })
+        .max()
+        .expect("the fixture's node must ink something");
     assert!(ink_px > 20, "the node inked only {ink_px}px of radius; there is nothing to read");
     let probe_px = ink_px as f32 * (1.0 + past / ink_uv);
-    let probe = |k: usize| -> usize {
-        let a = std::f32::consts::TAU * k as f32 / angles as f32;
-        // The framebuffer's rows run down where the node's own uv runs up.
-        let y = (cy - probe_px * a.sin()).floor() as usize;
-        y * row + (cx + probe_px * a.cos()).floor() as usize
-    };
+    let probe = |k: usize| -> usize { ray(k, probe_px) };
     for k in 0..angles {
         assert!(
             !inked(&plain, probe(k)),
@@ -8146,23 +8185,28 @@ fn a_marks_standoff_stops_where_the_gap_cuts_its_sides() {
 /// probe is the other side of this boundary — that pixel is outside the node's
 /// ink and these are inside it, and neither bar answers for both.
 ///
-/// The ink is found on the GROUND, as in
-/// [`a_node_under_a_nearer_sheets_node_cuts_nothing_out_of_its_light`]: a pixel
-/// the node paints opaquely is the pixel that does not move when the ground
-/// does.
+/// The ink is found BEHIND: a pixel the node paints opaquely is the pixel that
+/// does not move when what stands behind it does. What stands behind is one
+/// flat sheet swung from black to white under the node, and it is read with the
+/// glow off and the node's gutter at 0, so what the node writes at such a pixel
+/// is its ink's own alpha and nothing else — no light of its own to lay, no
+/// shadow, and no hole cut in the sheet.
 ///
-/// That set is not exact, and the third claim is stated to survive it: a pixel
-/// the node paints at an alpha a hair under 1 carries a SUB-LSB sliver of
-/// ground, which a black-and-white probe rounds away and the depth still moves.
-/// The BOUND follows from how the set is chosen rather than from tuning —
-/// agreeing over both grounds forces that sliver's coefficient under 1/255, and
-/// the sliver is the only term the depth touches on such a pixel, so one byte
-/// is the most it can carry. A wash reading the standoff's remainder would move
+/// That set is not exact, and the third claim is stated to survive it. What
+/// agreeing over both behinds bounds is `1 - ink.w`, and it bounds it under
+/// 1/255 rather than at 0: a pixel the node paints at an alpha a hair under 1
+/// carries a SUB-LSB sliver of the sheet, which the swing rounds away and the
+/// depth still moves. `1 - ink.w` is also the coefficient the light rides in on
+/// (`laid.rgb * (1 - ink.w)`, `node_paint`), so one byte is the most the depth
+/// can carry on such a pixel. A wash reading the standoff's remainder would move
 /// the ink by the light's own size instead, which is the scale the shot beside
 /// it supplies.
 #[test]
 fn a_ring_wears_the_wash_inside_its_own_dark_pool() {
     const SIZE: [u32; 2] = [256, 256];
+    // One arm's half-extent as a filled square, in world: wider than the node's
+    // outermost ring, so the sheet stands behind every radius the node inks.
+    const SHEET_ARM: f32 = 2.4;
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
     };
@@ -8184,21 +8228,34 @@ fn a_ring_wears_the_wash_inside_its_own_dark_pool() {
         scene.nodes[0].gutter = 0.16;
         scene
     };
-    let mut on_ground = |bg: glam::Vec4| {
+    // The resting field draws under the nodes, so one marker is the sheet — at
+    // the top of the width bar, where the cross is a filled square and covers
+    // the node's rings at every angle rather than along two axes.
+    let mut behind = |ink: glam::Vec4, node: bool| -> Vec<u8> {
         let mut scene = at(0.0, 1.0, 0.0);
-        scene.background = bg;
+        scene.nodes[0].gutter = 0.0;
+        if !node {
+            scene.nodes.clear();
+        }
+        scene.plus_half_width = 1.0;
+        scene.pluses = vec![one_marker(glam::Vec3::ZERO, SHEET_ARM, ink, 1.0)];
         shooter.shot(&scene)
     };
-    let dark_ground = on_ground(glam::Vec4::new(0.0, 0.0, 0.0, 1.0));
-    let pale_ground = on_ground(glam::Vec4::ONE);
-    let ink: Vec<usize> = (0..pale_ground.len())
+    const DARK: glam::Vec4 = glam::Vec4::new(0.0, 0.0, 0.0, 1.0);
+    let (bare_dark, bare_pale) = (behind(DARK, false), behind(glam::Vec4::ONE, false));
+    let (over_dark, over_pale) = (behind(DARK, true), behind(glam::Vec4::ONE, true));
+    let ink: Vec<usize> = (0..over_pale.len())
         .step_by(4)
         .filter(|&i| {
-            pale_ground[i..i + 4] != [0u8, 0, 0, 255]
-                && pale_ground[i..i + 4] == dark_ground[i..i + 4]
+            // The sheet has to move at this pixel before the node covering it
+            // can be said to hold it still, which is what keeps a pixel outside
+            // the sheet — where the two behinds agree by having nothing in them
+            // — out of the set.
+            bare_pale[i..i + 4] != bare_dark[i..i + 4]
+                && over_pale[i..i + 4] == over_dark[i..i + 4]
         })
         .collect();
-    assert!(ink.len() > 500, "the node painted {} opaque pixels", ink.len());
+    assert!(ink.len() > 1000, "the node painted {} opaque pixels", ink.len());
 
     let off = shooter.shot(&at(0.0, 1.0, 1.0));
     let dry = shooter.shot(&at(0.8, 1.0, 0.0));
@@ -8988,7 +9045,7 @@ fn a_nodes_light_has_no_ripple_the_ink_does_not() {
         scene.glow_blend = 0.0;
         // Big enough that a circle inside the node is hundreds of pixels round,
         // which is what resolving a ripple at these rates takes.
-        scene.node_radius = 1.6;
+        node_radius(&mut scene, 1.6);
         scene
     };
     let off = shooter.shot(&at(0.0));
@@ -9466,7 +9523,6 @@ fn a_node_lit_by_no_key_keeps_the_cross_under_it() {
     // knock out and something for the marker's ink to be washed by.
     let build = |gutter: f32, marker: bool| -> Scene {
         let mut scene = clearing_node(0, 1.0, true, gutter);
-        scene.background = glam::Vec4::new(0.05, 0.05, 0.07, 1.0);
         scene.glow_reach = 3.0;
         scene.glow_strength = 2.0;
         scene.glow_feather = 1.0;
@@ -9535,6 +9591,23 @@ fn a_node_lit_by_no_key_keeps_the_cross_under_it() {
 /// the depth test is `Always`. The pair with no clearing at all checks that,
 /// and it is not decoration — under the fixture's own perspective camera the
 /// hair is a change of SIZE, and the test measured 2256 px of it.
+///
+/// That hair also decides SPLIT versus whole, and a home node ships its
+/// clearing half for its LIGHT as much as for its hole (`LatticeCallback`), so
+/// the two sides of the pair are two composites against one even with the
+/// Clearance dialled off — which is why they can differ by rounding at all. The
+/// geometry is therefore read at a Gap depth of 0, where the split composes in
+/// range and rounding is all that is left: the clearing half lays
+/// `light.rgb + D * (1 - L * (1 - s))` into the destination, which cannot pass
+/// 1 with `s` at 0 whatever stands behind it.
+///
+/// With the depth dialled up it can, and Rgba8Unorm CLIPS what the ink half
+/// cannot bring back — some twenty code values of 255 on this fixture, whose
+/// behind sheet is an all-white ring under a node lit at a Strength of 2. Only
+/// an HDR intermediate holds that, so the cost is stated rather than paid, and
+/// the second pair is what keeps it visible. It is a parity reading of its own
+/// as well: the clearing the comparison above draws is what hides the bright
+/// sheet, so this is the one pair where the saturating term is on show.
 #[test]
 fn splitting_a_clearing_off_its_node_paints_the_same_picture() {
     const SIZE: [u32; 2] = [256, 256];
@@ -9549,7 +9622,6 @@ fn splitting_a_clearing_off_its_node_paints_the_same_picture() {
             pitch: 0.0,
             ..Default::default()
         };
-        scene.background = glam::Vec4::new(0.05, 0.05, 0.07, 1.0);
         scene.glow_reach = 3.0;
         scene.glow_strength = 2.0;
         scene.glow_feather = 1.0;
@@ -9593,13 +9665,28 @@ fn splitting_a_clearing_off_its_node_paints_the_same_picture() {
     let split = gpu.shot(&build(0.0, CLEAR_REACH));
     let whole = gpu.shot(&build(0.001, CLEAR_REACH));
 
+    // The depth hair on its own, with no clearing for either to draw and the
+    // Gap depth out of the way, so the split's terms all compose in range.
+    let unshaded = |z: f32| -> Scene {
+        let mut scene = build(z, 0.0);
+        scene.glow_gap_depth = 0.0;
+        scene
+    };
+    let moved = worst(&gpu.shot(&unshaded(0.0)), &gpu.shot(&unshaded(0.001)));
+    assert!(
+        moved <= 2,
+        "the reference is not the same node: the depth hair moved a channel by {moved} with \
+         nothing for the split to saturate on",
+    );
     // The depth hair on its own, with no clearing for either to draw.
     let flat_home = gpu.shot(&build(0.0, 0.0));
     let flat_off = gpu.shot(&build(0.001, 0.0));
-    assert_eq!(
-        worst(&flat_home, &flat_off),
-        0,
-        "the reference is not the same node: the depth hair moved the picture on its own",
+    let clipped = worst(&flat_home, &flat_off);
+    assert!(
+        (3..=40).contains(&clipped),
+        "the split's own Gap depth moved a channel by {clipped} against the sheet behind: \
+         under 3 the 8-bit intermediate has stopped clipping and this pin has nothing left \
+         to say, over 40 a term of the split is being counted twice",
     );
     // Non-vacuous: the node has to be painting a clearing for the split to have
     // anything to be exact about.

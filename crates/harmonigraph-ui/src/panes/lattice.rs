@@ -67,15 +67,11 @@ pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64)
     // dock's own tab body through instead put it a rung up, reading as a
     // lighter card beside the analyzer.
     //
-    // Painted from the SAME value handed to the knockout, which is the whole
-    // reason to take it off `state` rather than off the theme: offline the
-    // ground is the render layout's, not the skin's, and a fill that went to
-    // the theme for it would stand the picture on one color while its cleared
-    // discs cleared to another.
-    let background = state.background;
+    // Taken off `state` rather than off the theme because offline the ground is
+    // the render layout's, not the skin's (see `SharedState::background`).
     ui.painter().rect_filled(rect, 0.0, state.background_ink());
     let stats = Some(state.instruments.lattice_stats.clone());
-    draw_lattice(ui, rect, state, now, 0, background, Some(&response), stats);
+    draw_lattice(ui, rect, state, now, 0, Some(&response), stats);
 }
 
 /// The lattice's shared draw sequence: derive the scene, pick when this is
@@ -83,23 +79,20 @@ pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64)
 /// frame to its paint callback. Both [`lattice_pane`] and the Render
 /// preview's second live copy of the lattice
 /// (`panes::render::preview_lattice`) run this — they differ only in which
-/// GPU pane id this copy claims (`surface`, see [`pane_id`]), what the
-/// sevens knockout clears to (`background`), and where the frame's GPU stats
-/// land (`stats`).
+/// GPU pane id this copy claims (`surface`, see [`pane_id`]) and where the
+/// frame's GPU stats land (`stats`).
 ///
 /// `response` is `None` for a non-interactive copy: showing a hover,
 /// picking, and the learn badge all answer to a pointer, and the preview
 /// has none of its own — its camera is framed in the Lattice tab, not here
 /// — so all three are skipped together rather than by three flags that
 /// could disagree.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn draw_lattice(
     ui: &mut egui::Ui,
     rect: egui::Rect,
     state: &mut SharedState,
     now: f64,
     surface: usize,
-    background: glam::Vec4,
     response: Option<&egui::Response>,
     stats: Option<std::sync::Arc<harmonigraph_render::LatticeStats>>,
 ) {
@@ -152,11 +145,6 @@ pub(crate) fn draw_lattice(
     // the halo of the node it stands in the middle of, and what a node is
     // lighting the picture with is the line above's answer.
     scene.shade_markers();
-    // The ground the sevens knockout clears to. Only the shell knows what
-    // this pass is composited over -- the fill the docked pane just painted
-    // here, the render layout's own background offline -- so it is carried in
-    // by the caller rather than assumed by the scene.
-    scene.background = background;
 
     // Picking updates the *shared* hover state, one frame behind the scene
     // it was derived from (imperceptible, standard for immediate mode). Only
@@ -1011,13 +999,13 @@ mod tests {
         let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(300.0, 300.0));
 
         let without = frame_full(&ctx, screen, |ui| {
-            draw_lattice(ui, rect, &mut state, 0.0, 0, glam::Vec4::ZERO, None, None);
+            draw_lattice(ui, rect, &mut state, 0.0, 0, None, None);
         })
         .shapes
         .len();
         let with = frame_full(&ctx, screen, |ui| {
             let (_, response) = ui.allocate_exact_size(rect.size(), egui::Sense::hover());
-            draw_lattice(ui, rect, &mut state, 0.0, 0, glam::Vec4::ZERO, Some(&response), None);
+            draw_lattice(ui, rect, &mut state, 0.0, 0, Some(&response), None);
         })
         .shapes
         .len();
@@ -1041,13 +1029,13 @@ mod tests {
         let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(300.0, 300.0));
 
         let _ = frame_full(&ctx, screen, |ui| {
-            draw_lattice(ui, rect, &mut state, 0.0, 1, glam::Vec4::ZERO, None, None);
+            draw_lattice(ui, rect, &mut state, 0.0, 1, None, None);
         });
         assert_eq!(state.drawn_this_frame, None, "the preview published a window");
 
         let _ = frame_full(&ctx, screen, |ui| {
             let (_, response) = ui.allocate_exact_size(rect.size(), egui::Sense::hover());
-            draw_lattice(ui, rect, &mut state, 0.0, 0, glam::Vec4::ZERO, Some(&response), None);
+            draw_lattice(ui, rect, &mut state, 0.0, 0, Some(&response), None);
         });
         assert_eq!(
             state.drawn_this_frame,
@@ -1073,7 +1061,7 @@ mod tests {
         // No response: nothing picks, so the docked pane's last hover must
         // survive a preview frame drawn in between.
         let _ = frame_full(&ctx, screen, |ui| {
-            draw_lattice(ui, rect, &mut state, 0.0, 0, glam::Vec4::ZERO, None, None);
+            draw_lattice(ui, rect, &mut state, 0.0, 0, None, None);
         });
         assert_eq!(state.hovered, Some(home), "a non-interactive copy must not touch the hover");
 
@@ -1081,7 +1069,7 @@ mod tests {
         // reads "not hovering, not dragging", which clears it.
         let _ = frame_full(&ctx, screen, |ui| {
             let (_, response) = ui.allocate_exact_size(rect.size(), egui::Sense::hover());
-            draw_lattice(ui, rect, &mut state, 0.0, 0, glam::Vec4::ZERO, Some(&response), None);
+            draw_lattice(ui, rect, &mut state, 0.0, 0, Some(&response), None);
         });
         assert_eq!(state.hovered, None, "the interactive copy should pick, and clear a stale hover");
     }

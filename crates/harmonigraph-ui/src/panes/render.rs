@@ -420,14 +420,7 @@ fn preview_lattice(ui: &mut egui::Ui, rect: egui::Rect, state: &mut SharedState,
     if rect.width() < 1.0 || rect.height() < 1.0 {
         return;
     }
-    // The preview is a picture of the RENDER, so its knockouts clear to the
-    // render layout's background rather than to the panel this preview
-    // happens to sit on — the same color `harmonigraph-offline` will clear to.
-    let background = harmonigraph_scene::skin::ground_color(
-        Layout::split(state.take.render_config.frame.lattice, state.take.render_config.frame.split)
-            .background,
-    );
-    super::lattice::draw_lattice(ui, rect, state, now, 1, background, None, None);
+    super::lattice::draw_lattice(ui, rect, state, now, 1, None, None);
 }
 
 /// Capturing a take: the switch, what it is doing, and the clear that gives it

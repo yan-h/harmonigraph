@@ -692,15 +692,14 @@ fn the_window_the_lattice_drew_reaches_the_panes_that_describe_it() {
     );
 }
 
-/// The lattice pane stands on a ground it paints itself, and paints the same
-/// one the sevens knockout is handed.
+/// The lattice pane stands on a ground it paints itself.
 ///
-/// Both claims in one test on purpose. A fill and a knockout ground that
-/// disagree do not show up as a bug: a cleared disc a shade off what surrounds
-/// it reads as a dimmer node, so the picture looks plausible and stays wrong.
-/// What holds the two together is that neither can move without failing here.
+/// The pass clears its holes through to transparency, so whatever the pane
+/// shows through them is whatever it was composited over — and a pane that
+/// paints nothing is composited over the dock's own tab body, which is a rung
+/// lighter than the recessed grey every other picture pane paints.
 #[test]
-fn the_lattice_pane_paints_the_ground_its_knockout_is_handed() {
+fn the_lattice_pane_paints_a_ground_of_its_own() {
     let mut state = fresh();
     let screen = egui::vec2(600.0, 500.0);
     let shapes = super::probe::painted_full(screen, |ui| {

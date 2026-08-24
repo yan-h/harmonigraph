@@ -270,12 +270,11 @@ pub struct ViewConfig {
     /// band-sized hole a node-wide level would give it. A layer nobody is
     /// drawing clears nothing.
     ///
-    /// It clears to the GROUND the pass is composited over, which the shell
-    /// hands in (see [`Scene::background`](crate::Scene::background)). With
-    /// no color of its own a premultiplied layer knocks out to black, which is
-    /// darker still than the well the pane stands on, so the clearing
-    /// announces itself as a plate sitting on the picture rather than
-    /// disappearing into the ground.
+    /// It clears to TRANSPARENCY rather than to a color, so what shows through
+    /// is whatever the pass is composited over — the pane's own fill in the
+    /// editor, the layout's ground offline. A color of its own would have to be
+    /// the same one the shell paints, and a hole that has to be told what it is
+    /// a hole in is one a shell can get wrong; this one cannot disagree.
     ///
     /// It fades rather than ending at a rim, over a band of its own
     /// ([`sevens_gutter_soft`](Self::sevens_gutter_soft)) — a hard edge
