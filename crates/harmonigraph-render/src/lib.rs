@@ -625,23 +625,21 @@ struct GpuPlus {
     pos_radius: [f32; 4],
     /// rgb: the marker's own ink, a: its opacity. Both come off one resolve of
     /// `ViewConfig::marker_ink`, so a marker at rest is that grey exactly; the
-    /// alpha is under one otherwise, a name or the note itself claiming the
-    /// position over it (`derive_pluses`).
+    /// alpha is under one otherwise, a name claiming the position over it
+    /// (`derive_pluses`).
+    ///
+    /// The alpha is the whole marker's and not only its ink's — the pool it
+    /// gives off and the standoff its cross writes into the light are the same
+    /// number (`PlusInstance::strength`), so a position handing itself over to
+    /// a name hands all three over together.
     color: [f32; 4],
-    /// How much of this marker's shadow stands (`PlusInstance::shade`). Its own
-    /// attribute rather than a share of `color.a`, because the two part company
-    /// over any node lit by something that does not claim the position: the ink
-    /// answers to what is drawn there, the shadow to what is lit there.
-    shade: f32,
 }
 
 impl GpuPlus {
     const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
         array_stride: std::mem::size_of::<GpuPlus>() as u64,
         step_mode: wgpu::VertexStepMode::Instance,
-        attributes: &wgpu::vertex_attr_array![
-            0 => Float32x4, 1 => Float32x4, 2 => Float32
-        ],
+        attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4],
     };
 }
 
@@ -1155,7 +1153,6 @@ impl LatticeCallback {
         let to_plus = |d: &harmonigraph_scene::PlusInstance| GpuPlus {
             pos_radius: [d.pos.x, d.pos.y, d.pos.z, d.radius],
             color: [d.color.x, d.color.y, d.color.z, d.strength],
-            shade: d.shade,
         };
         let held: std::collections::HashSet<u32> = home_pluses.iter().copied().collect();
         let mut pluses: Vec<GpuPlus> = scene

@@ -1780,37 +1780,18 @@ struct RingInk {
     /// How much of the point that wedge covers, the node's own ring presence
     /// taken out of it.
     cov: f32,
-    /// The analyzer's own reading in that wedge, 0..1 — how LIT the ring is
-    /// here, which is the quantity its color is a ramp over.
-    ///
-    /// Carried beside the color rather than left implicit in it, because the
-    /// ramp's silent end is the ground (see below) and a colour alone cannot
-    /// say whether a wedge is grey because nothing is sounding there or grey
-    /// because the Ground bar put a lit reading at that L*. [`ink_at`] weighs
-    /// the ring's share of a node's LIGHT by this, so a wedge reading nothing
-    /// lights nothing.
-    level: f32,
 };
 
-/// Coverage, color and level of the audio ring at this fragment.
+/// Coverage and color of the audio ring at this fragment.
 ///
-/// `uv` is WHERE the ring is read: the fragment's own for the node draw, and a
-/// point on the ring's own annulus where the glow asks what this node is
-/// putting down in one direction (`ink_at`). One body for the two, so the light
-/// is lit out of the ring's own reading and its own ramp rather than out of
-/// a second mapping.
-///
-/// `band` is that point's RADIAL coverage, held by the caller exactly as
-/// [`outer_glyph`]'s is and for the second of the same two reasons. The node
-/// draw takes it once for every slot with [`glyph_band`]; the glow reads the
-/// annulus at its own middle, where the layer's radial extent is already the
-/// WEIGHT it carries, and asking for it twice would count a thin ring's width
-/// against itself.
+/// `band` is the fragment's RADIAL coverage, held by the caller exactly as
+/// [`outer_glyph`]'s is: the walk below is angular, so the one edge crossing a
+/// radius is taken once, outside it, with [`glyph_band`].
 fn spectral_ring(in: VsOut, oct: OctRing, uv: vec2<f32>, band: f32, aa: f32) -> RingInk {
     let radii = spectral_radii();
     // Off, or an annulus dialled inside out: nothing to draw either way.
     if radii.y <= radii.x {
-        return RingInk(vec3<f32>(0.0), 0.0, 0.0);
+        return RingInk(vec3<f32>(0.0), 0.0);
     }
     // ...and this node's own gate: the layer is on, and nothing this ring would
     // show reaches the level the view asks for — nor has the node been played,
@@ -1819,13 +1800,13 @@ fn spectral_ring(in: VsOut, oct: OctRing, uv: vec2<f32>, band: f32, aa: f32) -> 
     // rediscovered here, since the question is about the node's whole ring and
     // this is one fragment of one wedge of it.
     if in.ring <= 0.0 {
-        return RingInk(vec3<f32>(0.0), 0.0, 0.0);
+        return RingInk(vec3<f32>(0.0), 0.0);
     }
     // The ring is a narrow annulus in a billboard reaching QUAD_MARGIN, so
     // most fragments are outside it — and the whole slot walk below answers
     // zero for every one of them. The same skip the band's own loop takes.
     if EARLY_OUT && band <= 0.0 {
-        return RingInk(vec3<f32>(0.0), 0.0, 0.0);
+        return RingInk(vec3<f32>(0.0), 0.0);
     }
     // Which wedge owns this pixel, and how much of it. The color is settled
     // AFTER the walk rather than inside it: one fragment is one reading of the
@@ -1845,7 +1826,7 @@ fn spectral_ring(in: VsOut, oct: OctRing, uv: vec2<f32>, band: f32, aa: f32) -> 
         }
     }
     if cov <= 0.0 {
-        return RingInk(vec3<f32>(0.0), 0.0, 0.0);
+        return RingInk(vec3<f32>(0.0), 0.0);
     }
     // WHERE in the wedge the grid is read, which is the whole of what the two
     // readings differ by. The fold answers one number for the octave, so every
@@ -1867,7 +1848,7 @@ fn spectral_ring(in: VsOut, oct: OctRing, uv: vec2<f32>, band: f32, aa: f32) -> 
     // either: how loud this wedge is and how much of the node's ring is showing
     // are two questions, and the light asks the first one alone.
     let level = spectrum_at(pitch);
-    return RingInk(spectral_lut_color(level), cov * in.ring, level);
+    return RingInk(spectral_lut_color(level), cov * in.ring);
 }
 
 // ---- How tightly a node's octaves pack -------------------------------------
@@ -2849,11 +2830,9 @@ struct PlusInstance {
     // xyz: the position's world center, w: the length of one arm in world
     // units, crossing to tip.
     @location(0) pos_radius: vec4<f32>,
-    // rgb: the marker's own ink, a: this marker's opacity.
+    // rgb: the marker's own ink, a: this marker's opacity — which is also what
+    // its pool and its shadow are worth (`PlusInstance::strength`).
     @location(1) color: vec4<f32>,
-    // How much of this marker's shadow stands, which the ink pass does not read
-    // and `plus_standoff` does.
-    @location(2) shade: f32,
 };
 
 struct PlusVsOut {
@@ -3113,34 +3092,41 @@ fn ink_arc(r: f32) -> f32 {
     return r * TAU / f32(INK_STRIP_N);
 }
 
-/// The light a node's DRAWN layers give off in the direction `angle`: `xyz`
-/// every layer's colour times the weight it carries there, and `w` those
+/// The light a node's MIDI layers give off in the direction `angle`: `xyz`
+/// every such layer's colour times the weight it carries there, and `w` those
 /// weights summed. Not a colour on its own — [`fs_ink_blur`] is what
 /// normalises it.
 ///
 /// **A generalised reading of what is ON the node**, and that is the whole
 /// design. The light is not assembled out of a formula naming its sources, so
-/// there is no source to forget: every layer states its colour here through the
-/// SAME function that draws it, sampled on that layer's own radius, and a layer
-/// added to the node is lit by adding a term rather than by a case in a hue
-/// picker. It also moves as the picture does — a wedge the analyzer lights, a
-/// slice a key lights, a mark arriving — because it is that picture, read.
+/// there is no source to forget: every layer that shines states its colour here
+/// through the SAME function that draws it, sampled on that layer's own radius,
+/// and a layer added to the node is lit by adding a term rather than by a case
+/// in a hue picker. It also moves as the picture does — a slice a key lights, a
+/// mark arriving — because it is that picture, read.
+///
+/// **The AUDIO RING is not one of them.** A node's light says something is
+/// being PLAYED here, and the analyzer's ring says something is being heard in
+/// the room — one is the node's own voice and the other is a reading it wears,
+/// so the ring is drawn and never shone. It is the one layer left out of this
+/// walk, and out of the level beside it (`panes::glow_fade` in harmonigraph-ui,
+/// where the same rule decides how bright a light is); a node whose every drawn
+/// layer is a ring gives off nothing at all.
 ///
 /// **Each layer's share is how much LIGHT it puts on the node**: how lit it is
 /// at this angle times the radial WIDTH the ring stack handed it, which is 0
 /// for a layer switched off or refused the room. So widening the octave band on
 /// the Layers bar moves the light toward the band's colours and narrowing the
-/// audio ring takes the analyzer's back out of it, with no knob of its own.
+/// mark strip takes the melody's back out of it, with no knob of its own.
 ///
-/// **What a layer is drawing in the GROUND weighs nothing**, and the two rings
-/// reach that state in the one colour the Ground bar sets: an unlit octave
-/// slice is `u.lattice_ground` exactly, and the spectral ramp's silent end is
-/// pinned onto it. Both are BACKDROP — they carry a ring's shape around the
-/// bright part of it, which is a thing to draw and not a thing to shine — so
-/// the halo round a note voiced in one octave is that octave's own colour
-/// instead of a tenth of it under nine tenths of grey, and a node whose every
-/// layer is resting gives off nothing at all rather than a grey haze (see
-/// [`glow_layer`], which stops on a `w` of 0).
+/// **What a layer is drawing in the GROUND weighs nothing**, and the octave
+/// band reaches that state in the one colour the Ground bar sets: an unlit
+/// slice is `u.lattice_ground` exactly. That is BACKDROP — it carries the
+/// ring's shape around the bright part of it, which is a thing to draw and not
+/// a thing to shine — so the halo round a note voiced in one octave is that
+/// octave's own colour instead of a tenth of it under nine tenths of grey, and
+/// a node whose every layer is resting gives off nothing at all rather than a
+/// grey haze (see [`glow_layer`], which stops on a `w` of 0).
 ///
 /// It costs the light a way of saying "there is something here" about a node
 /// nothing is sounding on. That is the LATTICE's job — the markers say where
@@ -3150,26 +3136,6 @@ fn ink_at(in: VsOut, oct: OctRing, angle: f32) -> vec4<f32> {
     let dir = vec2<f32>(cos(angle), sin(angle));
     var rgb = vec3<f32>(0.0);
     var wsum = 0.0;
-
-    // The audio ring, read on its own annulus: `spectral_ring` whole, so the
-    // wedge that owns this direction, the pitch it reads the grid at and the
-    // ramp it paints that level in are all the ring's own.
-    let audio = spectral_radii();
-    if audio.y > audio.x && in.ring > 0.0 {
-        let mid = 0.5 * (audio.x + audio.y);
-        // Read at the annulus's own middle and at full radial coverage: the
-        // ring's WIDTH is the weight below, and letting `glyph_band` soften the
-        // reading as well would count a narrow ring against itself twice.
-        let ink = spectral_ring(in, oct, dir * mid, 1.0, ink_arc(mid));
-        // The wedge's own reading in the weight, so the analyzer's share of the
-        // light is what it is MEASURING and not merely that a ring is showing:
-        // a wedge with nothing in it is drawn at the ramp's silent end, which
-        // is the ground, and a ring of those is the grey a resting node has no
-        // business shining.
-        let w = ink.cov * ink.level * (audio.y - audio.x);
-        rgb = rgb + ink.color * w;
-        wsum = wsum + w;
-    }
 
     // The octave band: whichever slice owns this direction, at the colour and
     // opacity that slice paints — a lit slot's pitch, a silent one's ground, a
@@ -3740,15 +3706,11 @@ struct PlusGlowVsOut {
     // cross out from. Carried per instance because the arm is, one bar setting
     // every marker's or not.
     @location(1) @interpolate(flat) arm: f32,
-    // The marker's opacity, which the pool takes with the ink: a position whose
-    // NAME is fading in hands the two over together (`derive_pluses`), so the
-    // light does not outlive the cross standing in it.
+    // The marker's opacity, which the pool and the SHADOW take with the ink: a
+    // position whose NAME is fading in hands all three over together
+    // (`derive_pluses`), so neither the light standing in a cross nor the
+    // standoff it writes can outlive the cross itself.
     @location(2) @interpolate(flat) strength: f32,
-    // What [`plus_standoff`] closes on, which is the opacity above spent
-    // against the light standing over this marker (`PlusInstance::shade`). It
-    // never exceeds `strength`, so the cross outliving its own shadow is the
-    // only way round the two can come apart.
-    @location(3) @interpolate(flat) shade: f32,
 };
 
 @vertex
@@ -3789,7 +3751,6 @@ fn vs_plus_glow(@builtin(vertex_index) vertex_index: u32, inst: PlusInstance) ->
     out.uv = corner * margin;
     out.arm = arm;
     out.strength = inst.color.a;
-    out.shade = inst.shade;
     return out;
 }
 
@@ -3860,14 +3821,12 @@ fn plus_glow_layer(in: PlusGlowVsOut) -> vec4<f32> {
 /// every fragment outside an arm reads the ink it stands off as absent and a
 /// square-ended marker gets no shadow at all.
 ///
-/// Closed by [`PlusGlowVsOut::shade`] and not by the opacity, which is the one
-/// place a marker's shadow and its ink part company: a position fading in has
-/// no ink yet and holds nothing off, and a node LIT under its own cross holds
-/// nothing off either — the middle of a node is the one place the picture keeps
-/// free of a standoff ([`glow_standoff`] measures every ring from its own
-/// annulus so the light runs in to the centre), and a cross may not be what
-/// writes one there. A neighbour's spill is still held off: what the term is
-/// closed against is the node this marker stands under.
+/// Closed by the marker's own OPACITY, the one number a marker hands over: ink
+/// that is not there holds nothing off, and ink half way in holds half. So a
+/// position handing itself back as a name fades off it grows its cross and the
+/// shadow under that cross on one clock, where a shadow closed against the
+/// LIGHT instead arrives on the Glow release — seconds behind a cross that is
+/// already whole, and for no reason the picture shows.
 fn plus_standoff(in: PlusGlowVsOut) -> f32 {
     // An arm of 0 draws no markers (`derive_pluses`). The marker draw is left
     // to say so by its own quad collapsing; this one's does not, the Gap
@@ -3890,7 +3849,7 @@ fn plus_standoff(in: PlusGlowVsOut) -> f32 {
     // carries for a node: markers stand on the home sheet alone
     // (`derive_pluses`), and the home sheet has no scale of its own.
     let soft = standoff_soft(u.misc6.z);
-    return standoff_coverage(sd, soft) * clamp(in.shade, 0.0, 1.0);
+    return standoff_coverage(sd, soft) * clamp(in.strength, 0.0, 1.0);
 }
 
 /// How much of the light standing here this marker holds off, as

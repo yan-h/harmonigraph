@@ -759,11 +759,13 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
             .show(ui)
             .on_hover_text(
                 "How far round the node its own colours are averaged into the \
-                 colour of its light. The glow is what the node is DRAWING, \
-                 blurred round it — every layer's colour weighted by how lit it \
-                 is and how wide the Layers bar made it — so 0% keeps each \
-                 sector's colour a distinct arc and 100% averages the node \
-                 into one tint.",
+                 colour of its light. The glow is what the node is PLAYING, \
+                 blurred round it — the octave band's colours and the melody \
+                 and bass marks', each weighted by how lit it is and how wide \
+                 the Layers bar made it, with the audio ring left out: a ring \
+                 is what the room is doing rather than the note, so it is drawn \
+                 and never shone. 0% keeps each sector's colour a distinct arc \
+                 and 100% averages the node into one tint.",
             );
         // The standoff, beneath the light it holds off: ONE bar for how far the
         // light is held off each ring and how much of that is spent fading it
@@ -918,8 +920,8 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
             );
         // The light's own clock, last, under everything it shapes. Its own pair
         // and not the note Fade in Note, because a halo is the slow part of the
-        // picture: on the layers' envelopes it flickers with the marks and the
-        // audio ring, and both of those are meant to be fast.
+        // picture: on the layers' envelopes it flickers with the marks, which
+        // are meant to be fast.
         ValueBar::new(&mut view.glow_attack, 0.0..=GLOW_BALLISTICS_MAX, "Attack")
             .display(ms_readout)
             .show(ui)

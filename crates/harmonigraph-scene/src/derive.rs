@@ -519,12 +519,12 @@ pub fn derive_scene(
             // audio channel arrives empty here and `Scene::wear_audio_rings` is
             // what answers this once the shell's fold has filled it.
             audio_ring: 1.0,
-            ring_peak: 1.0,
-            // The light UNCARRIED: what the MIDI layers say right now, on this
-            // node's own row of a strip one row per node tall, taken whole.
-            // The audio ring is left out of the level for the same reason it
-            // arrives at 1 above — nothing here has measured it — and the
-            // shell's `panes::glow_fade` is what settles both.
+            // The light UNCARRIED: what the layers that give light off say
+            // right now, on this node's own row of a strip one row per node
+            // tall, taken whole. That is the MIDI layers and only them — an
+            // audio ring is a layer a node WEARS rather than one it shines
+            // with (`panes::glow_fade` in harmonigraph-ui) — and the shell's
+            // pass is what puts this on the Glow attack and release.
             glow: GlowStep {
                 level: activation.max(melody.level).max(bass.level),
                 row: nodes.len() as u32,
@@ -817,11 +817,12 @@ pub(crate) fn derive_pluses(
     // rule read backwards.
     //
     // So an analyzer ring moves this by nothing, having no name to put over a
-    // position. The light's own quarrel with a cross — the standoff one writes
-    // into a lit node's middle — is settled on the marker's other term instead
-    // ([`PlusInstance::shade`](crate::PlusInstance::shade)), which is closed
-    // against every layer and is what keeps a returning cross from biting a
-    // halo the note's own fade has outlived.
+    // position. Nor does the LIGHT standing over one, and that is the same rule
+    // read on the marker's SHADOW: the standoff a cross writes into the light
+    // rides this one number with the ink (`PlusInstance::strength`), so the two
+    // fade in together as the name hands the position back. A shadow closed on
+    // the light instead is a cross arriving whole with nothing under it and a
+    // shadow easing in seconds behind it, on a clock nothing on screen explains.
     nodes
         .iter()
         .filter(|n| n.on_home)
@@ -835,12 +836,6 @@ pub(crate) fn derive_pluses(
                     radius,
                     color: ink,
                     strength,
-                    // The MIDI layers' light, which is the whole of what has
-                    // been measured this far into the frame (see
-                    // `NodeInstance::glow`). `Scene::shade_markers` settles it
-                    // against the carried level once the fold and the glow's
-                    // own clock have run.
-                    shade: strength * (1.0 - n.glow.level.clamp(0.0, 1.0)),
                 }
             })
         })

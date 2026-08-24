@@ -1369,13 +1369,6 @@ mod tests {
     /// silence included, which is the whole reading at once and what the bar's
     /// off position has to give back through the real pass rather than only in
     /// `harmonigraph_scene`'s own units.
-    ///
-    /// And every one of those rings READS nothing, which is the other half of
-    /// the pass and the half the node's light asks for: a wedge with silence in
-    /// it is drawn at the ramp's silent end, which is the ground, so a halo
-    /// assembled out of one has no colour to be
-    /// (`panes::glow_fade`, and `ink_at` in lattice.wgsl). The two fields
-    /// disagreeing here is the whole reason there are two.
     #[test]
     fn the_gates_floor_rings_every_node() {
         let mut state = fresh();
@@ -1386,26 +1379,6 @@ mod tests {
             "a gate at its floor held back {} nodes",
             scene.nodes.iter().filter(|n| n.audio_ring < 1.0).count(),
         );
-        assert!(
-            scene.nodes.iter().all(|n| n.ring_peak == 0.0),
-            "{} of {} silent rings read something",
-            scene.nodes.iter().filter(|n| n.ring_peak > 0.0).count(),
-            scene.nodes.len(),
-        );
-
-        // ...and a tone puts a reading in the rings of the class that hears it,
-        // so the field is measured rather than pinned at nothing.
-        state.spectrum_config.attack = 0.0;
-        state.spectrum_config.release = 0.0;
-        let cfg = state.spectrum_config;
-        // A moment PAST the silent frame above: `scene_of` reads at 1.0, and
-        // the pass steps against a moment rather than a duration, so a second
-        // read at that same clock moves nothing.
-        state.spectrum.push_samples(&sine(60.0), 1, SR, 2.0, &cfg);
-        let heard = scene_of_at(&mut state, 2.0);
-        let cs = |n: &&harmonigraph_scene::NodeInstance| n.cents.min(1200.0 - n.cents) < 5.0;
-        let peak = heard.nodes.iter().filter(cs).map(|n| n.ring_peak).fold(0.0f32, f32::max);
-        assert!(peak > 0.5, "a full-scale middle C left the C nodes reading {peak}");
     }
 
     /// A probe at a bucket's own centre reads that bucket, not a blend of it
