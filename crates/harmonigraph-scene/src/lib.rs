@@ -637,25 +637,6 @@ pub struct NodeInstance {
     /// fixture — and there the ungated picture is the one that cannot be
     /// mistaken for a bug.
     pub audio_ring: f32,
-    /// The loudest reading anywhere in this node's ring, 0..1 — how LIT the
-    /// ring is, where [`audio_ring`](Self::audio_ring) beside it is how much of
-    /// the ring is SHOWING.
-    ///
-    /// Two questions, and the node's light needs the second one. A ring is
-    /// drawn wherever the Gate admits the node, and at the Gate's floor that is
-    /// every node in the window, silence included — the ungated picture, which
-    /// is a setting rather than a fault. Every wedge of such a ring is the
-    /// ramp's silent end, which is the ground, and the light weighs ink drawn
-    /// in the ground at nothing (`ink_at` in lattice.wgsl). So a light held on
-    /// by `audio_ring` alone is a light with no colour to be, and
-    /// `panes::glow_fade` reads this instead.
-    ///
-    /// Arrives at 1 out of [`derive_scene`] for the same reason `audio_ring`
-    /// does, and is answered by the same pass ([`Scene::wear_audio_rings`]):
-    /// nothing in this crate reads audio, so a scene derived without the
-    /// shell's fold behind it is one where nothing has been measured and
-    /// nothing can be held back.
-    pub ring_peak: f32,
     /// The node's own light, as far as the light is concerned: how bright it
     /// is, which row of the frame's ink strip is this node's, and how much of
     /// this frame's reading the pair of them take (see [`GlowStep`]).
@@ -796,9 +777,8 @@ impl NodeInstance {
 /// nodes, and the whole of what an unplayed lattice draws.
 #[derive(Clone, Copy, Debug)]
 pub struct PlusInstance {
-    /// Which lattice position this marker stands at, so the passes BEHIND
-    /// `derive_scene` can find the node under it ([`Scene::shade_markers`]).
-    /// Never uploaded — [`pos`](Self::pos) is what the GPU is given.
+    /// Which lattice position this marker stands at. Never uploaded —
+    /// [`pos`](Self::pos) is what the GPU is given.
     pub lattice_pos: LatticePos,
     /// The position's own world center.
     pub pos: Vec3,
@@ -812,34 +792,17 @@ pub struct PlusInstance {
     /// that convention.
     pub radius: f32,
     pub color: Vec4,
-    /// The marker's opacity.
+    /// The marker's opacity — its ink, its own pool of light, and the standoff
+    /// its cross writes into the light around it (`plus_standoff` in
+    /// lattice.wgsl), all three at once.
+    ///
+    /// ONE number for all of them, which is the rule about a cross and its
+    /// shadow: they arrive and leave together, so a position handing itself
+    /// over to a name never shows a cross with no shadow under it nor a shadow
+    /// under no cross. The shadow a cross casts is worth exactly the cross,
+    /// which is also what lets [`derive_pluses`](derive::derive_pluses) drop a
+    /// fully-claimed marker outright rather than ship one that still shades.
     pub strength: f32,
-    /// How much of this marker's SHADOW stands, 0..=1 — what
-    /// [`strength`](Self::strength) is to its ink and its pool, for the
-    /// standoff its cross writes into the light (`plus_standoff` in
-    /// lattice.wgsl).
-    ///
-    /// Its own number because the ink and the shadow answer to different
-    /// things. The ink is claimed by what is DRAWN at the position — a name
-    /// over it, or the note itself — and a node lit by anything else keeps its
-    /// cross whole, an analyzer ring being light a node WEARS rather than a
-    /// claim on the position under it. The shadow answers to the light instead,
-    /// whatever raised it: a node's middle is the one place the picture keeps
-    /// free of a standoff ([`glow_standoff`](crate::ViewConfig::glow_gap) is
-    /// measured from each ring's own annulus, so the light runs in to the
-    /// centre) and a cross standing there cuts the node's own halo whether a
-    /// key, a mark or a ring is what lit it.
-    ///
-    /// Never above `strength`: ink that is not there casts nothing. That is
-    /// also what keeps [`derive_pluses`](derive::derive_pluses) free to drop a
-    /// fully-claimed marker outright, rather than ship one whose shadow
-    /// outlives its cross.
-    ///
-    /// Closed against the CARRIED light, which is not known at derive time —
-    /// the audio ring is folded in behind it and the level outlives a note's
-    /// own activation — so [`Scene::shade_markers`] is what settles this and
-    /// what `derive_scene` leaves here is the MIDI layers' answer alone.
-    pub shade: f32,
 }
 
 /// Everything the renderer needs for one frame.
@@ -1156,8 +1119,7 @@ impl Scene {
     /// Decide how much of the audio ring each node wears — [`SpectralPaint::gate`]
     /// against what its wedges reach, carried on `env` by `fade`, and floored by
     /// the node's own envelope — and write it into
-    /// [`NodeInstance::audio_ring`], with what its wedges actually READ beside
-    /// it in [`NodeInstance::ring_peak`].
+    /// [`NodeInstance::audio_ring`].
     ///
     /// Run after the levels are measured in, which is the whole reason it is a
     /// pass of its own rather than part of [`derive_scene`]: nothing in this
@@ -1196,43 +1158,6 @@ impl Scene {
             // the node's disc and its clearing are drawn at, so the ring leaves
             // exactly with the rest of the node rather than a slot at a time.
             node.audio_ring = fade.level(layout, node.cents).max(node.activation);
-            // The gate's own peak, off the same gate the fade is carrying:
-            // how loud this node's ring is, where the line above is how much
-            // of it is showing. The light needs the first (see
-            // [`NodeInstance::ring_peak`]); the drawn ring needs the second.
-            node.ring_peak = gate.peak(layout, node.cents);
-        }
-    }
-
-    /// Close each marker's shadow against the light standing over it
-    /// ([`PlusInstance::shade`]), which is the last thing about a marker that
-    /// `derive_scene` cannot answer: the level it is closed against carries the
-    /// audio ring in and outlives a note's own activation, and both arrive
-    /// behind the derivation (`panes::glow_fade` in harmonigraph-ui, which is
-    /// the pass this must follow — its own caller runs the two in order).
-    ///
-    /// What closes is this marker's shadow against the node it STANDS UNDER,
-    /// which is the whole of the rule and not a shorthand for it: a marker goes
-    /// on holding a neighbour's spill off its cross exactly as before. The
-    /// light a cross may not cut is the light of the node it is standing in the
-    /// middle of.
-    ///
-    /// Idempotent, and safe to skip: a scene nothing calls this on draws the
-    /// shadow the MIDI layers asked for, which is what a key down alone would
-    /// have said.
-    pub fn shade_markers(&mut self) {
-        let nodes = &self.nodes;
-        // Both lists are in node order and the markers are a subset of the
-        // nodes (`derive_pluses` filters and keeps the order), so the two walk
-        // together in one pass rather than a lookup per marker.
-        let mut at = 0usize;
-        for plus in &mut self.pluses {
-            while nodes.get(at).is_some_and(|n| n.lattice_pos != plus.lattice_pos) {
-                at += 1;
-            }
-            let Some(node) = nodes.get(at) else { break };
-            plus.shade = plus.strength * (1.0 - node.glow.level.clamp(0.0, 1.0));
-            at += 1;
         }
     }
 }
