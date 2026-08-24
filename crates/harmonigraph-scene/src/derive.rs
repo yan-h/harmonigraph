@@ -463,15 +463,19 @@ pub fn derive_scene(
         // very little — and neither sheet then read as being in front of the
         // other.
         //
-        // The home sheet's clearing cuts its own resting MARKER as well as the
-        // sheets behind it — a sounding node sits in a clean gap in the
-        // lattice rather than on top of it. That is reason enough on its
-        // own, so it does NOT wait for depth: on a flat lattice there are
-        // no sheets to hide, but the marker field is still there to be cut, and
-        // a gap in it is the look either way. (It was gated on the
-        // sevenths extent when the clearing was purely an inter-sheet
-        // device; a flat lattice then had to turn the gutter on by growing
-        // depth it didn't want.)
+        // The clearing cuts the resting MARKER FIELD and the nodes beside it on
+        // its own sheet as well as the sheets behind — a sounding node sits in
+        // a clean gap in the lattice rather than on top of it. That is reason
+        // enough on its own, so it does NOT wait for depth: on a flat lattice
+        // there are no sheets to hide, but the field is still there to be cut,
+        // and so is any node the camera's tilt has put under this one. (It was
+        // gated on the sevenths extent when the clearing was purely an
+        // inter-sheet device; a flat lattice then had to turn the gutter on by
+        // growing depth it didn't want.)
+        //
+        // The one thing it does not cut is the cross at its OWN position, which
+        // is not behind the node but AT it. That is a question of draw order
+        // and is settled there (`HomeSeam` in harmonigraph-render).
         //
         // The WIDTH is a constant of the view; the STRENGTH is per LAYER, and
         // the shader is where it is applied — each layer's hole scaled by the
