@@ -1045,11 +1045,6 @@ pub struct Scene {
     /// shuts it (see [`ViewConfig::glow_feather`]); already clamped to 0..=1.
     /// Inert while [`glow_reach`](Self::glow_reach) is 0.
     pub glow_feather: f32,
-    /// How much two nodes' overlapping light adds up, 1 screening the halos
-    /// together and 0 leaving an overlap as bright as the brighter node alone
-    /// (see [`ViewConfig::glow_meld`]); already clamped to 0..=1. Inert while
-    /// [`glow_reach`](Self::glow_reach) is 0.
-    pub glow_meld: f32,
     /// The standoff: how far past every ring a node dims the light standing
     /// there, in the same quad UV units (see [`ViewConfig::glow_gap`]);
     /// already clamped to [`GLOW_GAP_MAX`]. Inert while
