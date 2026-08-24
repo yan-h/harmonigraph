@@ -253,13 +253,17 @@ pub struct ViewConfig {
     /// the whole point — the alternative is shrinking the 5-limit sheet to
     /// open up clearance, and the 5-limit sheet is what you came to look at.
     ///
-    /// FOOTPRINT means the node's own shape, this far out from it, and not a
-    /// circle sized to hold it: a node reaching a melody mark on one octave
-    /// bulges over that wedge and hugs its rings everywhere else. A circle
-    /// answers with the widest thing the node reaches in ANY direction, which
-    /// on a marked node is a gap wider than itself all the way round — so the
-    /// hole stops reading as the node's and starts reading as empty space
-    /// somebody cut out.
+    /// FOOTPRINT means the RINGS the node draws, this far out from them, and
+    /// not a circle sized to hold them: a node reaching a melody mark on one
+    /// octave bulges over that wedge and hugs its rings everywhere else, and
+    /// the empty middle those rings stand around clears nothing at all. A
+    /// circle answers with the widest thing the node reaches in ANY direction,
+    /// which on a marked node is a gap wider than itself all the way round —
+    /// so the hole stops reading as the node's and starts reading as empty
+    /// space somebody cut out. Filled to the centre it is worse still: a node
+    /// is then an opaque disc the size of its outermost ring, and a ring
+    /// passing behind another node's middle is erased with nothing but its own
+    /// shadow in the light left to say it was there.
     ///
     /// The shape is the shader's (`node_clearing`), off the same radii that
     /// draw the layers, and it is built one LAYER at a time: each clears its
@@ -298,12 +302,14 @@ pub struct ViewConfig {
     /// section's Clearance bar is one: both are distances from the node's rim, so
     /// they are two points on one axis and the bar carries a handle at each.
     ///
-    /// The clearing is solid out to `reach - fade` past the node's own body
+    /// The clearing is solid out to `reach - fade` past the node's own rings
     /// and gone by `reach`, so the reach is exactly where it ends whatever the
-    /// fade does — both measured from that body rather than from a rim, so
+    /// fade does — both measured from those rings rather than from a rim, so
     /// they follow its shape (see [`sevens_gutter`](Self::sevens_gutter)).
-    /// A fade wider than the reach eats outward rather than inward: the body
-    /// itself is the one part that must always be cleared.
+    /// A fade wider than the reach eats outward rather than inward: the rings
+    /// themselves are the one part that must always be cleared. Inward is the
+    /// same ramp on the far side of the same ring, so a wide reach eats into
+    /// the node's middle and a narrow one leaves the whole of it.
     pub sevens_gutter_soft: f32,
     /// What text an off-sheet node's label carries (see [`SevensLabel`]).
     /// Only meaningful while `show_labels` is on.

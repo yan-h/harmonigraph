@@ -2542,67 +2542,121 @@ fn a_clearing_over_a_wedge_past_a_half_turn_covers_the_whole_wedge() {
     }
 }
 
-/// The clearing is one HOLE the node sits in — filled in to its centre, across
-/// the gaps between its rings and between one sector and the next — rather than
-/// a stencil of the node's ink.
+/// The fresh view's own stack, which unlike [`clearing_rings`] is seated a good
+/// way OFF the node's centre ([`ViewConfig::ring_inner`](harmonigraph_scene::ViewConfig))
+/// and so leaves the empty middle the readings below are about.
 ///
-/// Both halves matter and they fail differently. A clearing that followed the
-/// ink would leave the lattice showing through every gap on the node, which
-/// reads as neither a hole nor a node; and the node whose rings leave the widest
-/// hole in the middle is the one with no core at all, where the ink is an
-/// annulus and its middle is the marker standing under it.
+/// The probe stack seats itself at 0, where the innermost ring is a disc and a
+/// node has no middle at all — which is what the other clearing tests want,
+/// their readings being about a layer's thickness. Nothing here reads one.
+fn middled_rings() -> harmonigraph_scene::RingStack {
+    harmonigraph_scene::ViewConfig::default().rings()
+}
+
+/// [`clearing_node`] re-seated on [`middled_rings`], so the node it stages has
+/// an empty middle.
+fn middled_node(melody: u32, ring: f32, band: bool, gutter: f32) -> Scene {
+    let rings = middled_rings();
+    let mut scene = clearing_node(melody, ring, band, gutter);
+    (scene.spectral.inner, scene.spectral.outer) = rings.audio;
+    (scene.outer_inner, scene.outer_outer) = if band { rings.band } else { (0.0, 0.0) };
+    scene.rings_outer = if band { rings.band.1 } else { rings.audio.1 };
+    scene.mark_inner = scene.rings_outer + rings.gap;
+    scene.mark_thickness = rings.mark_thickness;
+    // No markers. The ray sweep below reads the picture for anything lit, and a
+    // marker sitting just outside the hole is a lit sample past its rim with
+    // bare pane between — which reads as a gap in the hole and is nothing of
+    // the kind. What the clearing cuts out of the marker field is a separate
+    // claim, and `a_node_wearing_only_an_audio_ring_clears_around_it` is where
+    // the added light is measured against it.
+    scene.pluses.clear();
+    scene
+}
+
+/// The clearing is the node's RINGS dilated by the reach, and it is a HOLE
+/// across them: continuous from the innermost ring's inner edge outward, over
+/// the gaps between one ring and the next and between one sector and the next,
+/// and stopping one reach short of that inner edge rather than running on to
+/// the node's centre.
 ///
-/// Read along rays out of the node's centre, which is the one sweep that does
-/// not need to know where the rim is in each direction — and the marked node's
-/// rim is a different radius over its mark than beside it. Everything from the
-/// centre out to whatever the ray last found is the node or the ground; a dark
-/// sample with light beyond it is a hole in the hole. (The shape is a union of
-/// parts that all reach the centre, and dilating one of those leaves it reaching
-/// the centre, so "no gap along any ray" is exactly the claim.)
+/// Both halves fail differently, and one reading catches both.
+///
+/// Filled INWARD, a node is an opaque disc the size of its outermost ring: a
+/// node standing anywhere in that circle is erased down to the ground and the
+/// light over it, however far off the front node's own rings it stands. That is
+/// most of what a node covers, the fresh middle being over half its radius, and
+/// it is the picture the Clearance exists to avoid rather than to make.
+///
+/// Cut back to the INK instead, the lattice would show through every gap on the
+/// node, which reads as neither a hole nor a node.
+///
+/// So the two numbers are where the hole STARTS and whether it has a gap in it.
+/// The first is read off the clearing's own footprint — the difference the
+/// gutter makes, over a ground the fixture paints white — and calibrated in the
+/// same picture, its outer edge being a uv the stack states. The second is read
+/// along rays out of the node's centre, the one sweep that does not need to
+/// know where the rim is in each direction: everything from the hole's inner
+/// edge out to whatever the ray last found is the node or the ground, and a
+/// dark sample with light beyond it is a hole in the hole.
 #[test]
-fn a_clearing_is_one_hole_covering_the_centre_and_every_ring() {
+fn a_clearing_covers_every_ring_and_leaves_the_middle_alone() {
     const SIZE: [u32; 2] = [256, 256];
     let Some(mut gpu) = Shooter::new(SIZE) else {
         return;
     };
-
-    let staged = |melody: u32, band: bool, ring: f32, gutter: f32| -> Scene {
-        let mut scene = clearing_node(melody, ring, band, gutter);
-        // No markers. The ray below reads the picture for anything lit, and a marker
-        // sitting just outside the hole is a lit sample past its rim with
-        // bare pane between — which reads as a gap in the hole and is nothing
-        // of the kind. What the clearing cuts out of the marker field is a
-        // separate claim, and `a_node_wearing_only_an_audio_ring_clears_around_it`
-        // is where the added light is measured against it.
-        scene.pluses.clear();
-        scene
-    };
+    let rings = middled_rings();
     // Everything a node can wear, and then the same node with its audio ring
-    // gated shut — which leaves the octave band an annulus with the lattice
-    // showing through the middle of it, the case the fill-to-the-centre rule
-    // is for.
-    for (name, melody, band, ring) in [
-        ("every layer", MIDDLE_C, true, 1.0),
-        ("the octave band alone", 0, true, 0.0),
+    // gated shut — which leaves the octave band the innermost thing drawn, and
+    // so a middle wider by the whole of the ring's slot.
+    for (name, melody, ring, first, last) in [
+        ("every layer", MIDDLE_C, 1.0, rings.inner, rings.mark_inner + rings.mark_thickness),
+        ("the octave band alone", 0, 0.0, rings.band.0, rings.band.1),
     ] {
-        let bare = gpu.shot(&staged(melody, band, ring, 0.0));
-        let holed = gpu.shot(&staged(melody, band, ring, CLEAR_REACH));
-        let reach = light_about_center(&light_over(&holed, &bare), SIZE).far;
-        assert!(reach > 8.0, "{name}: no clearing to read, {reach:.1} px");
+        let bare = gpu.shot(&middled_node(melody, ring, true, 0.0));
+        let holed = gpu.shot(&middled_node(melody, ring, true, CLEAR_REACH));
+        let hole = light_about_center(&light_over(&holed, &bare), SIZE);
+        assert!(hole.far > 8.0, "{name}: no clearing to read, {:.1} px", hole.far);
+
+        // Pixels per uv, off the hole's own outer edge: the furthest the
+        // clearing reaches is the outermost layer this node wears, one reach
+        // out. Taken from the picture rather than from the camera, exactly as
+        // `a_clearing_bulges_over_the_mark_and_hugs_the_rings_everywhere_else`
+        // does.
+        let scale = hole.far / (last + CLEAR_REACH) as f64;
+        let want = (first - CLEAR_REACH) as f64 * scale;
+        eprintln!(
+            "{name}: the hole runs {:.1}..{:.1} px, the rings {:.1}..{:.1} px at \
+             {scale:.1} px/uv",
+            hole.near,
+            hole.far,
+            first as f64 * scale,
+            last as f64 * scale,
+        );
+        assert!(
+            (hole.near - want).abs() < 2.5,
+            "{name}: the hole starts {:.1} px out, not the {want:.1} px that is one reach \
+             inside the innermost ring — at 0 it is filled to the node's centre",
+            hole.near,
+        );
 
         let (cx, cy) = ((SIZE[0] - 1) as f64 / 2.0, (SIZE[1] - 1) as f64 / 2.0);
         // Half-pixel steps: a step of a whole one can straddle the rim and read
         // a gap the picture does not have.
-        let steps = (reach * 2.0).ceil() as usize;
+        let steps = (hole.far * 2.0).ceil() as usize;
         let lit = |r: f64, a: f64| -> bool {
             let x = (cx + r * a.cos()).round();
             let y = (cy + r * a.sin()).round();
             let i = (y as usize * SIZE[0] as usize + x as usize) * 4;
             brightness(&holed[i..i + 4]) >= 24
         };
+        // From two pixels inside the hole's own inner edge, which is where the
+        // sweep's claim starts — the middle beneath it is the picture behind
+        // showing through, and is the assertion above.
+        let from = ((want + 2.0).max(0.0) * 2.0) as usize;
         for turn in 0..360 {
             let a = (turn as f64).to_radians();
-            let Some(rim) = (0..=steps).rev().map(|s| s as f64 / 2.0).find(|&r| lit(r, a)) else {
+            let Some(rim) = (from..=steps).rev().map(|s| s as f64 / 2.0).find(|&r| lit(r, a))
+            else {
                 continue;
             };
             // Stopping two pixels short of the rim, which is the hole's own
@@ -2611,13 +2665,13 @@ fn a_clearing_is_one_hole_covering_the_centre_and_every_ring() {
             // sample sits past a dark one and reads as a gap the picture does
             // not have. Everything a gap in the hole would actually be is
             // inside this.
-            let gap = (0..=((rim - 2.0).max(0.0) * 2.0) as usize)
+            let gap = (from..=((rim - 2.0).max(0.0) * 2.0) as usize)
                 .map(|s| s as f64 / 2.0)
                 .find(|&r| !lit(r, a));
             assert!(
                 gap.is_none(),
                 "{name}: at {turn} degrees the picture is dark {:.1} px out and lit \
-                 again at {rim:.1} px — the clearing has a hole in it",
+                 again at {rim:.1} px — the clearing has a gap across its rings",
                 gap.unwrap_or_default(),
             );
         }
@@ -7135,9 +7189,9 @@ fn one_gap_is_one_distance_whatever_the_cross_it_stands_off() {
         want,
     );
 }
-/// A node a nearer sheet's node COVERS cuts nothing out of it: not a ring, not
-/// its name, and not a shadow anywhere in the near node's halo. What a hidden
-/// node may do is BRIGHTEN, and that is the whole of what it may do.
+/// A node a nearer sheet's node COVERS cuts nothing out of it: not a ring, and
+/// not a shadow anywhere in the near node's halo. What a hidden node may do is
+/// BRIGHTEN, and that is the whole of what it may do.
 ///
 /// The case is a harmonic seventh over its home node, face on: the seventh's
 /// disc and knockout hide the home node entirely. Every node draws AFTER the
@@ -7168,9 +7222,17 @@ fn one_gap_is_one_distance_whatever_the_cross_it_stands_off() {
 /// be asking for the hole this design exists to not have.
 ///
 /// The hidden node is LIT and NAMED, both at the middle of the near node where
-/// the light is fullest and an escaped name would be most legible. The name is
-/// measured on its OWN footprint and not on the ink: a glyph lands in the empty
-/// middle the rings stand around, so no opaque pixel can carry that claim.
+/// the light is fullest. The name is measured on its OWN footprint and not on
+/// the ink: a glyph lands in the empty middle the rings stand around, so no
+/// opaque pixel can carry that claim.
+///
+/// And that middle is where the near node's knockout STOPS: a clearing is the
+/// rings a node draws, one reach out (`node_clearing`), so a hidden node's name
+/// standing in the middle of the node in front of it is not hidden by it. That
+/// is the last block below, and it is a fact about the knockout rather than a
+/// claim about names: what hides a name is INK, and a node has none in its
+/// middle. Hiding a covered node's name outright would need a mechanism of its
+/// own, and the knockout is not it.
 #[test]
 fn a_node_under_a_nearer_sheets_node_cuts_nothing_out_of_its_light() {
     const SIZE: [u32; 2] = [256, 256];
@@ -7286,8 +7348,8 @@ fn a_node_under_a_nearer_sheets_node_cuts_nothing_out_of_its_light() {
         "a node hidden behind the near one darkened {dimmed} of its {} opaque pixels",
         ink.len(),
     );
-    // The NAME's own claim, which the ink set cannot carry at all: a glyph sits
-    // in the node's empty MIDDLE, where the rings stand around nothing and
+    // The NAME's own reading, which the ink set cannot carry at all: a glyph
+    // sits in the node's empty MIDDLE, where the rings stand around nothing and
     // there is no opaque ink to move. So it is measured over the pixels a name
     // actually covers, found by giving the same glyph to the NEAR node — whose
     // name is drawn — and read against a shot of the same two nodes with nobody
@@ -7301,14 +7363,17 @@ fn a_node_under_a_nearer_sheets_node_cuts_nothing_out_of_its_light() {
         .collect();
     assert!(
         glyph.len() > 500,
-        "the fixture's name covers {} pixels; there is no name here to escape",
+        "the fixture's name covers {} pixels; there is no name here to read",
         glyph.len(),
     );
-    let escaped = glyph.iter().filter(|&&i| covered[i..i + 4] != unnamed[i..i + 4]).count();
-    assert_eq!(
-        escaped,
-        0,
-        "a hidden node's name reached {escaped} of the {} pixels it would cover were it drawn",
+    // Most of it, not all: the near node's rings reach over the edge of the
+    // glyph's box and cover what lands on them, which is the ink doing the
+    // hiding and is the whole of what still does.
+    let through = glyph.iter().filter(|&&i| covered[i..i + 4] != unnamed[i..i + 4]).count();
+    assert!(
+        through * 2 > glyph.len(),
+        "a hidden node's name reached {through} of the {} pixels it covers — the knockout is \
+         filling the near node's middle again, and the name behind it with it",
         glyph.len(),
     );
 }

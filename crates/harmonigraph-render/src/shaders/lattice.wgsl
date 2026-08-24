@@ -489,17 +489,6 @@ fn marker_light() -> f32 {
     return clamp(u.misc13.y, 0.0, 1.0);
 }
 
-// How far the MIDI layers reach, in the node's uv: the octave band's outer edge,
-// and 0 on a node whose band is dialled off. A disc about the node's center, so
-// this one radius says everything about where the layer reaches — which is what
-// the clearing wants, the hole being that footprint filled to the center.
-fn midi_rim() -> f32 {
-    if u.misc3.z > u.misc3.y {
-        return max(u.misc3.z, 0.0);
-    }
-    return 0.0;
-}
-
 // The node's own outermost feature in ANY direction: a MARK where this node is
 // wearing one — both marks ride the strip just past the outermost ring — and
 // the outermost ring's own edge (u.misc3.w, the stack's cursor) where it is not.
@@ -509,10 +498,12 @@ fn midi_rim() -> f32 {
 //
 // A circle the whole node fits inside, which is what a billboard and an early-
 // out want. What SHAPE it fills that circle with is `node_clearing`, and the two
-// answer differently on two things: a mark is one wedge, so a marked node
-// reaches its strip in that wedge's direction alone; and a layer this node draws
-// nothing of clears nothing, where the circle holds room for it either way. Both
-// are a bound being loose, which costs a little fill and no correctness.
+// answer differently on three things: a mark is one wedge, so a marked node
+// reaches its strip in that wedge's direction alone; a layer this node draws
+// nothing of clears nothing, where the circle holds room for it either way; and
+// the circle is filled where the hole is a set of annuli, so the node's own
+// middle is inside this bound and outside every term of that. All three are a
+// bound being loose, which costs a little fill and no correctness.
 fn node_rim(marked: bool) -> f32 {
     var rim = max(u.misc3.w, 0.0);
     if marked && u.misc5.w > 0.0 {
@@ -1961,9 +1952,10 @@ fn mark_extension(slots: u32, ring: OctRing, uv: vec2<f32>, strip: f32, aa: f32)
 // outside it the distance to the nearest point of it.
 //
 // A PIE — apex at the node's center, closed by an arc — where the layer that
-// wedge belongs to is drawn as an annular sector. The clearing is a hole the
-// node sits IN rather than a stencil of its ink, so every layer contributes
-// the whole of what it covers, filled inward.
+// wedge belongs to is drawn as an annular sector. Its two callers each cut the
+// pie back to the strip themselves, by intersecting this with everything past
+// the strip's inner edge; what is shared is the ANGULAR half of the shape,
+// which is the part with a case in it.
 fn sector_distance(uv: vec2<f32>, edges: vec2<f32>, r: f32) -> f32 {
     // Into the wedge's own frame — its middle up the y axis — and folded onto
     // one side of that middle, which turns its two edges into one edge lying
@@ -1995,6 +1987,11 @@ fn sector_distance(uv: vec2<f32>, edges: vec2<f32>, r: f32) -> f32 {
 // across the footprint and out to `reach - soft`, gone by `reach`. A fade wider
 // than the reach eats outward rather than inward: the footprint itself is the
 // one part that always has to be cleared.
+//
+// `sd` is a distance out of a layer in EVERY direction, the inward one
+// included, so the ramp that eases the hole off outside a ring is the same one
+// that eases it off inside the ring's own middle. What the layer covers is what
+// gets cleared; a ring does not own the circle it encloses.
 fn gutter_coverage(sd: f32, reach: f32, soft: f32) -> f32 {
     // The inner end is floored AT the footprint, and 0 rather than something
     // smaller for a reason worth stating: a layer's own ink is cleared in full
@@ -2030,20 +2027,30 @@ fn gutter_coverage(sd: f32, reach: f32, soft: f32) -> f32 {
 // full size; a layer leaving takes it back down. Nothing steps, and no layer's
 // fade drags another's hole with it.
 //
-// Each layer's shape is FILLED to the node's center, so the gaps between one
-// ring and the next, and between one sector and the next, are inside the hole:
-// this is one hole the node sits in, and a hole with the lattice showing
-// through its middle reads as neither a hole nor a node.
+// Each layer's shape is its own ANNULUS, dilated by the reach, and not that
+// annulus filled to the node's centre. A node hides what stands behind the
+// RINGS it draws and nothing else, so the middle a node leaves empty is empty
+// to see through: the picture behind reads on through it, and what says which
+// sheet is in front is the ring, which is the part of a node that has ink in
+// it. Filling inward instead makes a node an opaque disc the size of its
+// outermost ring, and the node behind it — however far off its centre stands —
+// is erased down to the ground plus whatever light was standing there.
+//
+// The same shape `glow_standoff` measures, and for a reason the two share:
+// the middle of a node is the one place its light is wanted whole, so a
+// standoff filled inward would put the node's own halo out. The Shadow bars
+// read as one family exactly to the degree these two agree.
 fn node_clearing(in: VsOut, oct: OctRing, d: f32) -> f32 {
     let reach = in.gutter;
     let soft = in.soft;
     var cov = 0.0;
-    // The MIDI layers, on the node's own envelope. A disc, so its distance is
-    // the plain radius; 0 where the view draws neither, which is a node whose
-    // whole picture is its ring and its marks.
-    let midi = midi_rim();
-    if midi > 0.0 {
-        cov = gutter_coverage(d - midi, reach, soft) * clamp(in.params.x, 0.0, 1.0);
+    // The octave band, on the node's own envelope: the annulus its slices and
+    // the glyphs inside them are drawn between. Skipped where the view draws no
+    // band at all, which is a node whose whole picture is its ring and its
+    // marks.
+    if u.misc3.z > u.misc3.y {
+        cov = gutter_coverage(annulus_distance(d, u.misc3.y, u.misc3.z), reach, soft)
+            * clamp(in.params.x, 0.0, 1.0);
     }
     // The audio ring, on ITS own: the layer's width bar says whether there is a
     // ring at all, and `Instance::ring` how much of one this node wears — which
@@ -2051,7 +2058,11 @@ fn node_clearing(in: VsOut, oct: OctRing, d: f32) -> f32 {
     // nobody played wears one whenever the spectrum reaches that gate, and this
     // is the term that gives it a hole.
     if u.misc7.w > u.misc7.z {
-        cov = max(cov, gutter_coverage(d - u.misc7.w, reach, soft) * clamp(in.ring, 0.0, 1.0));
+        cov = max(
+            cov,
+            gutter_coverage(annulus_distance(d, u.misc7.z, u.misc7.w), reach, soft)
+                * clamp(in.ring, 0.0, 1.0),
+        );
     }
     // Every slot either mark names, each on the level of the voice that took
     // it. A mark reaches for octaves the packing may not show and the ring may
@@ -2061,13 +2072,13 @@ fn node_clearing(in: VsOut, oct: OctRing, d: f32) -> f32 {
     if slots == 0u || u.misc5.w <= 0.0 {
         return cov;
     }
-    // Nothing below can raise a pixel already cleared in full, and that is the
-    // node's whole interior on anything the keys have lit — the widest part of
-    // the hole, skipping the walk. Exact rather than an approximation, since
-    // coverage is capped at one, which is what lets the parity test hold it.
+    // Nothing below can raise a pixel already cleared in full — the same skip
+    // `glow_standoff` takes, and exact for the same reason: coverage is
+    // capped at one, which is what lets the parity test hold it.
     if EARLY_OUT && cov >= 1.0 {
         return cov;
     }
+    let strip_in = u.misc4.y;
     let strip_out = u.misc4.y + u.misc5.w;
     let top = oct.base + i32(oct_span()) - 1;
     for (var i = 0u; i < OCTAVE_SLOTS; i = i + 1u) {
@@ -2084,7 +2095,14 @@ fn node_clearing(in: VsOut, oct: OctRing, d: f32) -> f32 {
             select(0.0, in.params.z, (in.marks.y & bit) != 0u),
         );
         if level > 0.0 {
-            let wedge = sector_distance(in.uv, oct_sector(s, oct), strip_out);
+            // The mark is an annular SECTOR: the pie `sector_distance`
+            // measures, intersected with everything past the strip's inner
+            // edge. Filled to the centre instead, one mark would clear the
+            // node's whole middle and every other layer's hole with it — the
+            // one wedge the node reaches furthest in deciding the shape of a
+            // hole the other layers are read off their own radii for.
+            let pie = sector_distance(in.uv, oct_sector(s, oct), strip_out);
+            let wedge = max(pie, strip_in - d);
             cov = max(cov, gutter_coverage(wedge, reach, soft) * clamp(level, 0.0, 1.0));
         }
     }
@@ -2245,13 +2263,15 @@ fn standoff_coverage(sd: f32, soft: f32) -> f32 {
 /// [`vs_glow`] grows the billboard by it.
 ///
 /// A RING — the octave band, the audio ring, a mark's sector — is measured from
-/// its own ANNULUS rather than filled to the node's centre the way
-/// [`node_clearing`] fills every footprint it walks. That is the whole of what
-/// makes the middle of a node glow: with nothing inside the innermost ring
-/// claiming the pixel, the light runs in to the centre and stops one Gap short
-/// of that ring's inner edge. A knockout wants the opposite — a hole with the
-/// lattice showing through its middle reads as neither a hole nor a node —
-/// which is why this cannot be [`node_clearing`] asked for another reach.
+/// its own ANNULUS. That is the whole of what makes the middle of a node glow:
+/// with nothing inside the innermost ring claiming the pixel, the light runs in
+/// to the centre and stops one Gap short of that ring's inner edge.
+///
+/// [`node_clearing`] measures the same annuli, which is what makes the two
+/// Shadow bars one family: what a node holds the light off is what it hides,
+/// and neither is the empty circle its innermost ring encloses. What is still
+/// its own function is the FALLOFF — a decay here against that one's ramp — and
+/// the slice walk below, which the knockout has no use for.
 ///
 /// A ring that reaches the centre itself has no such middle, its own annulus
 /// being a disc: the standoff then covers what it covers, and the light is a
@@ -2401,11 +2421,11 @@ fn node_geom(in: VsOut) -> NodeGeom {
     // closed is culled on the CPU and never reaches this shader at all.
     //
     // Its CLEARING is the exception's own exception, and it is a wider band than
-    // the ring: the hole a layer punches is filled to the node's center and
-    // reaches one gutter past the layer (`node_clearing`), so an idle node's
-    // fragments are worth keeping out to there. Skipping them would leave a
-    // ringing node with no note drawing its ring straight onto the sheets
-    // behind it, the hole it owes them cut short at the ring's own edge.
+    // the ring: the hole a layer punches is that layer's own annulus dilated by
+    // one gutter (`node_clearing`), so an idle node's fragments are worth
+    // keeping over that band. Skipping them would leave a ringing node with no
+    // note drawing its ring straight onto the sheets behind it, the hole it
+    // owes them cut short at the ring's own edge.
     let audio_annulus = spectral_radii();
     let ring_draws = audio_annulus.y > audio_annulus.x;
     let in_audio_ring = ring_draws
@@ -2414,6 +2434,7 @@ fn node_geom(in: VsOut) -> NodeGeom {
     let in_ring_clearing = ring_draws
         && in.gutter > 0.0
         && in.ring > 0.0
+        && d >= audio_annulus.x - clearing_edge(in.gutter)
         && d <= audio_annulus.y + clearing_edge(in.gutter);
     if EARLY_OUT
         && !in_audio_ring
@@ -2445,9 +2466,9 @@ fn node_geom(in: VsOut) -> NodeGeom {
 /// knocks in everyone else's are two readable pieces rather than one function
 /// of three hundred lines: what a layer paints is decided here, and what it
 /// CLEARS is decided once, uniformly, over every layer at the end. The two
-/// answers are different shapes — a layer's ink is its own annulus or sector,
-/// its hole is that shape filled to the node's centre and dilated — and reading
-/// them together is what made the second easy to get wrong.
+/// answers are different shapes — a layer's ink is a set of slices cut out of
+/// its annulus, its hole is that whole annulus dilated by the reach — and
+/// reading them together is what made the second easy to get wrong.
 fn node_ink(in: VsOut, d: f32, aa: f32, field_step: f32, oct: OctRing) -> vec4<f32> {
     let activation = in.params.x;
 
@@ -2717,13 +2738,14 @@ fn node_paint(in: VsOut) -> vec4<f32> {
     //    a lit ring reads as a bite taken out of it; a gradient reads as the
     //    small node sitting in front. The clearing is solid across the
     //    node's own footprint and eases off over the reach the setting buys.
-    //  - It is the node's own SHAPE, one reach out, layer by layer
+    //  - It is the node's own RINGS, one reach out, layer by layer
     //    (`node_clearing`). A circle big enough to hold the node holds a good
     //    deal else besides: a node wearing one mark reaches its strip in one
     //    wedge, and a node wearing nothing but an audio ring reaches only that
     //    ring, so a circle that fits either clears a gap wider than the node,
     //    and what a hole says about which sheet is in front it then says about
-    //    empty space.
+    //    empty space — the node's own empty middle included, which is the
+    //    widest such space there is.
     //
     // Compositing it UNDER the node's own paint is what the `(1 - active_alpha)`
     // term says: the ground fills the part of the quad the node itself leaves
