@@ -270,18 +270,20 @@ fn a_label_takes_its_own_nodes_place_in_the_order() {
 
     assert_eq!(call.instances.len(), 2, "only the two sounding nodes ship an instance");
     assert_eq!(
-        call.seams,
+        call.draws,
         vec![
-            // Both silent nodes: nothing has been drawn yet, and two labels
-            // at one seam are one uninterrupted draw. They are behind the
-            // home sheet, so they are also behind the markers.
-            GlyphSeam { at: 0, start: 0, count: 2, after_pluses: false, sheet: 0 },
-            // The home sheet's own name, after its disc.
-            GlyphSeam { at: 1, start: 2, count: 1, after_pluses: true, sheet: 1 },
+            // Both silent nodes: nothing has been drawn yet, and two names on
+            // one sheet are one uninterrupted draw.
+            Draw::Label(0, 2),
+            // The home sheet's own node — its knockout, its disc, its name.
+            Draw::Clearing(0),
+            Draw::Nodes(0, 1),
+            Draw::Label(2, 3),
             // And the near sheet's, after everything.
-            GlyphSeam { at: 2, start: 3, count: 1, after_pluses: true, sheet: 2 },
+            Draw::Nodes(1, 2),
+            Draw::Label(3, 4),
         ],
-        "a label goes after its own node, over the instances that ship",
+        "a name goes after its own node, over the instances that ship",
     );
     assert_eq!(
         call.glyphs.iter().map(|g| g.rect[0]).collect::<Vec<_>>(),
@@ -290,26 +292,22 @@ fn a_label_takes_its_own_nodes_place_in_the_order() {
     );
 }
 
-/// Two names sharing a seam from different sheets draw nearer-last, and as
-/// two draws — the one tie `at` and the side of the markers cannot break.
+/// Two names landing next to each other in the order from different sheets are
+/// two draws, the nearer last — a merge is for one sheet only.
 ///
-/// The last node of one sheet to ship and a node culled at the head of the
-/// next sheet land on one `at`, the cull having moved nothing; with both
-/// sheets on the same side of the markers, nothing else in the seam tells
-/// them apart. The sort's fallback is then the order the labels ARRIVE in,
-/// which is the scene's node order — lattice order, fixed whichever way the
-/// camera is turned — so the farther sheet's name draws over the nearer's
-/// whenever its node happens to come later in the lattice. And the two merge
-/// into one rim-then-fill draw, so the nearer name's rim no longer separates
-/// its glyphs from the farther name's fill where the two overlap, which on a
-/// face-on sevens lattice they do exactly: a sevens node sits on top of its
-/// home node.
+/// Adjacent names merge into a single rim-then-fill draw, which is what stops
+/// two neighbouring letters darkening each other's ink where their rims
+/// overlap. Across a sheet boundary that is the wrong answer: the nearer name's
+/// rim is meant to separate its glyphs from the farther name's fill, and on a
+/// face-on sevens lattice the two overlap exactly, a sevens node sitting on top
+/// of its home node.
 ///
-/// The state is an ordinary one: a home node sounding with a silent node on
-/// the sheet in front of it hovered. The hovered node draws nothing and is
-/// named all the same.
+/// The state is an ordinary one: a home node sounding with a silent node on the
+/// sheet in front of it hovered. The hovered node draws nothing and is named
+/// all the same, so the two names land side by side in the walk with nothing
+/// between them to break the run.
 #[test]
-fn two_names_on_one_seam_from_different_sheets_draw_the_nearer_last_and_apart() {
+fn two_adjacent_names_from_different_sheets_draw_the_nearer_last_and_apart() {
     let mut scene = parity_scene();
     scene.camera = harmonigraph_scene::Camera {
         projection: harmonigraph_scene::Projection::Orthographic,
@@ -330,10 +328,10 @@ fn two_names_on_one_seam_from_different_sheets_draw_the_nearer_last_and_apart() 
         on_home: z == 0.0,
         ..scene.nodes[0]
     };
-    // The near sheet's node FIRST in the scene, so that lattice order and
-    // depth order disagree: drawn back to front it is home, then near; the
-    // home node ships and the silent near one does not, so both seams sit at
-    // 1, past the markers.
+    // The near sheet's node FIRST in the scene, so that lattice order and depth
+    // order disagree: drawn back to front it is home, then near. The home node
+    // ships and the silent near one does not, so the two names come out of the
+    // walk with nothing between them.
     scene.nodes = vec![node(1.0, 0.0), node(0.0, 1.0)];
     let (near, home) = (0u32, 1u32);
     let glyph =
@@ -355,44 +353,34 @@ fn two_names_on_one_seam_from_different_sheets_draw_the_nearer_last_and_apart() 
     );
 
     assert_eq!(call.instances.len(), 1, "only the sounding home node ships an instance");
-    assert!(
-        call.seams.iter().all(|s| s.at == 1 && s.after_pluses)
-            && call.seams.iter().map(|s| s.count).sum::<u32>() == 2,
-        "the two names share a seam, on the same side of the markers — the fixture \
-         has to produce the tie for the assertions below to be about anything: {:?}",
-        call.seams,
+    assert_eq!(
+        call.draws,
+        vec![Draw::Clearing(0), Draw::Nodes(0, 1), Draw::Label(0, 1), Draw::Label(1, 2)],
+        "names from different sheets are two draws, the nearer's rim on the other's fill",
     );
     assert_eq!(
         call.glyphs.iter().map(|g| g.rect[0]).collect::<Vec<_>>(),
         vec![1.0, 0.0],
         "the home sheet's name draws first and the nearer sheet's over it",
     );
-    assert_eq!(
-        call.seams.iter().map(|s| (s.start, s.count)).collect::<Vec<_>>(),
-        vec![(0, 1), (1, 1)],
-        "names from different sheets are two draws, the nearer's rim on the other's fill",
-    );
 }
 
-/// A name on a node that ships no disc still draws over the markers, not
-/// under them — the case where the two runs meet at the same number.
+/// A name on a node that ships no disc still draws over the markers standing
+/// behind it, not under them.
 ///
-/// `pluses_at` is where the markers go, counted over the instances that SHIP.
-/// The sheets behind the home one draw before them and the home sheet after,
-/// so the boundary between the two runs is exactly `pluses_at`. A node that
-/// paints nothing ships nothing, which leaves its seam sitting on the
-/// boundary rather than past it: with every node on the home sheet — the
-/// stock `extent_sevens: 0` — the far run is empty, `pluses_at` is 0, and the
-/// first home node to be culled takes seam 0 as well. Reading the side off
-/// `at > pluses_at` then files that node's name with the sheets BEHIND the
-/// markers, and they are painted over the name.
+/// The cull is what makes this worth pinning: a node that paints nothing ships
+/// no instance, so it moves nothing in the buffers, and every scheme that gives
+/// a name its place by counting instances has such a node's name landing on the
+/// same number as whatever was drawn before it. Reading a side off that number
+/// files the name with the markers rather than after them, and they are then
+/// painted over it. The walk has no number to read: the name is emitted where
+/// the node is, so it lands after every draw that came before.
 ///
-/// The state is the plugin's resting one, which is what makes it worth a
-/// test of its own: stock view, nothing played, hover any node. An idle node
-/// draws nothing at all, and a hovered node is named whether or not it
-/// draws.
+/// The state is the plugin's resting one, which is what makes it worth a test
+/// of its own: stock view, nothing played, hover any node. An idle node draws
+/// nothing at all, and a hovered node is named whether or not it draws.
 #[test]
-fn a_culled_home_nodes_name_draws_over_the_markers_it_shares_a_seam_with() {
+fn a_culled_home_nodes_name_draws_over_the_markers_behind_it() {
     let mut scene = parity_scene();
     scene.camera = harmonigraph_scene::Camera {
         projection: harmonigraph_scene::Projection::Orthographic,
@@ -414,8 +402,8 @@ fn a_culled_home_nodes_name_draws_over_the_markers_it_shares_a_seam_with() {
         on_home: true,
         ..scene.nodes[0]
     };
-    // The hovered one is silent and first, so it is culled before anything
-    // has shipped and its seam is 0 — the same number as `pluses_at`.
+    // The hovered one is silent and first, so it is culled before anything at
+    // all has shipped — the case where a count has nothing to distinguish.
     scene.nodes = vec![node(0.0), node(1.0)];
     let glyph = GlyphInstance { rect: [0.0, 0.0, 1.0, 1.0], ..crate::text::tests::glyph() };
     let call = LatticeCallback::from_scene(
@@ -435,11 +423,12 @@ fn a_culled_home_nodes_name_draws_over_the_markers_it_shares_a_seam_with() {
     );
 
     assert!(!scene.pluses.is_empty(), "the fixture needs a marker for the name to be covered BY");
-    assert_eq!(call.pluses_at, 0, "with one sheet there is nothing to draw before the pluses");
-    assert_eq!(
-        call.seams,
-        vec![GlyphSeam { at: 0, start: 0, count: 1, after_pluses: true, sheet: 0 }],
-        "a home node's name draws after the pluses even when the cull leaves it on pluses_at",
+    let named = call.draws.iter().position(|d| matches!(d, Draw::Label(..)));
+    let marked = call.draws.iter().position(|d| matches!(d, Draw::Pluses(..)));
+    assert!(
+        marked < named && named.is_some(),
+        "a culled home node's name draws after the markers behind it: {:?}",
+        call.draws,
     );
 }
 

@@ -764,23 +764,21 @@ fn each_thing_that_makes_a_node_sounding_keeps_it_alone() {
     }
 }
 
-/// The markers' place in the draw order is counted over the nodes actually
-/// shipped, not over the ones the scene held.
+/// A node culled behind the home sheet moves no marker: the markers still go
+/// over the sheets behind home and under the home sheet itself.
 ///
-/// `pluses_at` is the seam between the sheets BEHIND the home sheet and the
-/// home sheet itself, and the whole argument for it is in `from_scene`: put
-/// the markers under everything and a node on a sheet behind the home one
-/// punches its clearing through the home markers. Culling breaks the old
-/// expression silently, because `split` indexes the list before the cull —
-/// with the sheets behind home mostly idle, `split` runs past the end of the
-/// kept run, `prepare`'s `.min(instance_count)` pins the markers to the very
-/// end, and it draws over every node instead of under the home sheet.
+/// The argument for that placement is in `from_scene`: put the markers under
+/// everything and a node on a sheet behind the home one punches its clearing
+/// through them, which is a hole in the layer they are supposed to be hidden
+/// by. What makes it worth a test is the CULL — a node that paints nothing
+/// ships no instance, so any expression of the placement that counts nodes has
+/// to count the ones that ship rather than the ones the scene held, and the two
+/// part company at the first idle node.
 ///
 /// One lit node behind home and one on it, with an idle node behind home
-/// between them: the seam has to land at 1, and it is `split` (2) that says
-/// otherwise.
+/// between them.
 #[test]
-fn the_marker_seam_counts_the_nodes_that_ship() {
+fn a_culled_node_behind_home_moves_no_marker() {
     let mut scene = idle_scene();
     scene.nodes.truncate(3);
     for node in &mut scene.nodes {
@@ -808,8 +806,142 @@ fn the_marker_seam_counts_the_nodes_that_ship() {
     );
     assert_eq!(call.instances.len(), 2, "the idle node behind home is culled");
     assert_eq!(
-        call.pluses_at, 1,
-        "the markers draw after the one sheet-behind node that ships, not after \
-         the two the scene held",
+        call.draws.first(),
+        Some(&Draw::Nodes(0, 1)),
+        "the one sheet-behind node that ships draws first: {:?}",
+        call.draws,
+    );
+    assert!(
+        matches!(call.draws.get(1), Some(Draw::Pluses(..))),
+        "and the markers next — the idle node between them shipped nothing to move: {:?}",
+        call.draws,
+    );
+}
+
+/// A marker standing NEARER the eye than a node covers that node, and one
+/// standing behind it does not.
+///
+/// This is the whole of what putting the markers in the depth walk buys, and it
+/// is invisible under every camera anyone checks first. A node and a marker are
+/// both camera-facing billboards at a fixed world size while the sheet they
+/// stand on foreshortens, so face-on a node's disc reaches about its own cell
+/// and the only cross under it is its own — every other cross is clear of it,
+/// and drawing the whole field under the whole sheet is a picture no pixel can
+/// tell from this one. Tilt the sheet and one disc spans a dozen positions
+/// while the billboard does not shrink with them, so a batched field puts every
+/// cross it covers behind a node that is in front of half of them.
+///
+/// Two home nodes, one at each end of the tilted sheet, each with its own cross
+/// and only the FAR one lit — so the near node ships no instance of its own and
+/// the only thing that can order its cross against the far node's ink is the
+/// walk. Read off the order rather than off pixels: what the picture does with
+/// a marker over a disc is the marker shader's business and is measured with
+/// the rest of it, while what this is about is which of the two goes down last.
+#[test]
+fn a_marker_nearer_the_eye_than_a_node_draws_after_it() {
+    let mut scene = idle_scene();
+    scene.nodes.truncate(2);
+    // Nearly edge-on, which is the regime the order shows in at all.
+    scene.camera = harmonigraph_scene::Camera {
+        projection: harmonigraph_scene::Projection::Perspective,
+        yaw: 0.0,
+        pitch: 1.4,
+        ..Default::default()
+    };
+    // Both on the home sheet and both marked, at their own lattice positions so
+    // each claims its own cross. Apart along Y, which the tilt turns into
+    // depth: the pitch is positive, so the eye is above the sheet looking down
+    // and +Y is the NEAR end of it. The lit node goes at the far end.
+    let far = harmonigraph_core::LatticePos::new(0, -1, 0);
+    let near = harmonigraph_core::LatticePos::new(0, 1, 0);
+    for (node, (pos, y, activation)) in
+        scene.nodes.iter_mut().zip([(far, -3.0, 1.0), (near, 3.0, 0.0)])
+    {
+        node.world_pos = glam::Vec3::new(0.0, y, 0.0);
+        node.lattice_pos = pos;
+        node.on_home = true;
+        node.activation = activation;
+        node.trail = 0.0;
+    }
+    scene.pluses = [far, near]
+        .into_iter()
+        .zip([-3.0f32, 3.0])
+        .map(|(lattice_pos, y)| harmonigraph_scene::PlusInstance {
+            lattice_pos,
+            ..one_marker(glam::Vec3::new(0.0, y, 0.0), 0.2, scene.lattice_ground, 1.0)
+        })
+        .collect();
+
+    let call = LatticeCallback::from_scene(
+        &scene,
+        LatticeLabels::default(),
+        egui::vec2(256.0, 256.0),
+        wgpu::TextureFormat::Rgba8Unorm,
+        41,
+        None,
+    );
+
+    // Non-vacuous three ways: both crosses reached the buffer, the lit node
+    // shipped the one instance there is to cover, and neither cross is loose —
+    // a loose one keeps the field's old place and would prove nothing.
+    assert_eq!(call.pluses.len(), 2, "both crosses ship: {:?}", call.draws);
+    assert_eq!(call.instances.len(), 1, "only the lit node ships an instance: {:?}", call.draws);
+    assert_eq!(
+        call.draws,
+        vec![
+            // The far node: its knockout, its own cross, its ink.
+            Draw::Clearing(0),
+            Draw::Pluses(0, 1),
+            Draw::Nodes(0, 1),
+            // Then the near position, which draws nothing but its cross — over
+            // the node behind it, which is the point.
+            Draw::Pluses(1, 2),
+        ],
+        "the near cross draws after the far node's ink, and the far cross before it",
+    );
+}
+
+/// A resting lattice is still ONE marker draw, however many crosses it holds.
+///
+/// What the depth walk costs is a break in the marker run at every home node
+/// that ships something to break it with, and an idle position ships nothing —
+/// so the field a still lattice draws coalesces exactly as the single batch it
+/// replaced did. The cost is bounded by the SOUNDING nodes, which is the same
+/// number the pass already pays a knockout and an ink draw each for.
+#[test]
+fn a_resting_lattice_ships_one_marker_draw() {
+    let mut scene = idle_scene();
+    // Nothing sounding and no trail either: every node culled, and every one of
+    // them marked at its own lattice position.
+    for (i, node) in scene.nodes.iter_mut().enumerate() {
+        node.trail = 0.0;
+        node.on_home = true;
+        node.lattice_pos = harmonigraph_core::LatticePos::new(i as i32, 0, 0);
+        node.world_pos = glam::Vec3::new(i as f32, 0.0, 0.0);
+    }
+    scene.pluses = scene
+        .nodes
+        .iter()
+        .map(|n| harmonigraph_scene::PlusInstance {
+            lattice_pos: n.lattice_pos,
+            ..one_marker(n.world_pos, 0.2, scene.lattice_ground, 1.0)
+        })
+        .collect();
+
+    let call = LatticeCallback::from_scene(
+        &scene,
+        LatticeLabels::default(),
+        egui::vec2(256.0, 256.0),
+        wgpu::TextureFormat::Rgba8Unorm,
+        42,
+        None,
+    );
+
+    assert!(call.pluses.len() > 4, "the fixture needs a field to coalesce: {:?}", call.draws);
+    assert_eq!(call.instances.len(), 0, "an idle lattice ships no node");
+    assert_eq!(
+        call.draws,
+        vec![Draw::Pluses(0, call.pluses.len() as u32)],
+        "every cross is one run, the same batch the field used to be",
     );
 }

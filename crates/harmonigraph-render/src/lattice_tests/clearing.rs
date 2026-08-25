@@ -691,7 +691,7 @@ const BESIDE_REACHES: [f32; 2] = [0.15, 0.35];
 /// is the whole of what tells the two apart there. Batching every home
 /// knockout ahead of every home ink leaves each hole under all of that ink,
 /// which is the bar going quiet on the picture it is most wanted in, and it is
-/// the shape of the order this walks (`HomeSeam`).
+/// the shape of the order this walks (`Draw`).
 ///
 /// Read as the FAR node's own ink, taken where the near node paints nothing:
 /// the ground is the shot's own clear colour, so a clearing standing over empty
