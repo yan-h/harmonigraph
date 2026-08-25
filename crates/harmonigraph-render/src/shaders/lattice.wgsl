@@ -286,12 +286,14 @@ const GAP_SHAPE_PLAIN: f32 = 1.0;
 // stands at a fiftieth of the standoff and the rest of it is spent inside the
 // band.
 //
-// The coverage under that handle is a DECAY and not a ramp that lands on zero,
-// which is what the number is for: a ramp with a finite SUPPORT ends at a
+// The coverage under that handle is a DECAY and not a ramp landing on zero at
+// it, which is what the number is for: a ramp ending AT the handle ends at a
 // circle of one radius, and a closed contour is the shape the eye picks out of
 // a smooth field best, however gently the ramp meets it — see `glow_layer`,
 // where every other length in the light is an exponential and so has no such
-// radius to find.
+// radius to find. What ends the tail instead is `GAP_STOP`, a couple of Gaps
+// out, where the decay is under the eye's own threshold rather than at a
+// fiftieth of the standoff.
 //
 // Four rather than the `ln(255)` that would put the handle under one code
 // value of the target. A decay steep enough to be invisible at the handle is
@@ -300,6 +302,34 @@ const GAP_SHAPE_PLAIN: f32 = 1.0;
 // at the handle instead is a fiftieth, under the Gap depth, on a curve still
 // falling — a gradient rather than an edge at any width.
 const GAP_TAIL: f32 = 4.0;
+// How many Gap widths out from a ring the standoff's own window has shut, and
+// with it how far past every ring the two glow billboards reach
+// (`glow_gap_stop`).
+//
+// A decay has no radius at which it stops and a quad does, so this is where
+// that difference is settled rather than left to the billboard: the coverage is
+// windowed to nothing at exactly the radius each quad is sized to, and there is
+// no fragment where the two disagree. Left to the billboard the tail is cut at
+// whatever value it happens to hold there, which is a hard step at a
+// SCREEN-ALIGNED square — the standoff is a decay precisely to keep a closed
+// contour out of a smooth field, and a square is a worse one than the circle it
+// was avoiding.
+//
+// TWO, so the window is `glow_layer`'s exactly — full to half its span, shut by
+// the end of it, zero-sloped at both — laid over the fade's outer handle at the
+// half. Inside the Gap nothing moves at any exponent: the bar's two handles say
+// what they have always said, and what this ends is the tail past them.
+//
+// Two rather than further out, and the EXPONENT is what decides that. The decay
+// is under half a code value of the deepest light at `u = (ln(1/eps)/T)^(1/p)`,
+// which for a shade of 0.5/255 at a depth of 1 is 2.0 at the plain exponential
+// and 17.4 at GAP_SHAPE_RIND. So at the bar's ceiling the window falls entirely
+// inside what was already invisible and the picture is unmoved, and at its
+// floor a quad honest enough to hold the raw tail would be seventeen Gaps wide
+// — most of a pane, at a Gap dialled anywhere near GLOW_GAP_MAX. The tail below
+// the exponential is a shape worth having and its full support is not
+// affordable; this is where the two are traded.
+const GAP_STOP: f32 = 2.0;
 // The darkest the standoff is allowed to leave the light, as the factor it
 // keeps.
 //
@@ -406,6 +436,25 @@ const INK_STRIP_N: u32 = 64u;
 // what it stands off is the node's own layers, which shrink with the node too.
 fn glow_gap() -> f32 {
     return max(u.misc11.x, 0.0);
+}
+
+// How far past a node's ink the standoff reaches AT ALL, in the same uv: the
+// Gap, out to where `standoff_coverage`'s own window has shut it (`GAP_STOP`).
+//
+// What both glow billboards are sized to hold — `vs_glow` for a node's rings and
+// `vs_plus_glow` for a marker's cross — so that every fragment the coverage is
+// nonzero at is one the quad has, and the quad's own edge falls where the
+// coverage is 0.
+//
+// Zero with the glow, `u.misc11` being zeroed whole there, and zero at a Gap
+// DEPTH of 0, so it grows no quad where there is no standoff to hold. The depth
+// is `glow_shade`'s own off switch and it is exact here for the same reason it
+// is there — a depth of 0 keeps every scrap of the light by definition — which
+// is what makes the depth the whole switch: with it at 0 the Gap moves not even
+// a billboard, and the frame is byte for byte the one with no standoff in it at
+// every width (`the_gap_depth_says_how_much_light_a_ring_stands_off`).
+fn glow_gap_stop() -> f32 {
+    return select(0.0, glow_gap() * GAP_STOP, glow_gap_depth() > 0.0);
 }
 
 // How much of the standoff is spent fading the light back in (`u.misc11.y`), in
@@ -754,8 +803,9 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
 /// The GLOW's billboard: the same node, on a quad grown to hold everything this
 /// pass writes. Two lengths reach past the node, and the quad is sized to the
 /// larger — `glow_layer` shuts the window at the light's own rim ([`glow_rim`])
-/// plus the Reach, and [`glow_shade`] stands the light off every ring out to the
-/// Gap. The margin below is that with room to spare.
+/// plus the Reach, and [`glow_shade`] stands the light off every ring out to
+/// where the standoff's own window has shut ([`glow_gap_stop`]). The margin
+/// below is that with room to spare.
 ///
 /// The GAP is in it because the standoff is answered for the LIGHT AT A PIXEL
 /// rather than for this node's own light: a node holds its rings off a
@@ -773,7 +823,7 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
 /// world distance either way and nothing inside the node moves.
 @vertex
 fn vs_glow(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
-    return node_vertex(vertex_index, inst, max(max(u.misc10.x, 0.0), glow_gap()), true);
+    return node_vertex(vertex_index, inst, max(max(u.misc10.x, 0.0), glow_gap_stop()), true);
 }
 
 /// One node's billboard, with `extra` uv of headroom past what the node itself
@@ -2263,11 +2313,44 @@ fn standoff_soft(soft: f32) -> f32 {
 /// but a curve below the middle spends most of its width on the far side, where
 /// the light being recovered is the halo's. A ring wants its dark close and its
 /// edge nowhere, and a symmetric ramp cannot give both.
+///
+/// The decay is brought to an end by a window of its own out at [`GAP_STOP`],
+/// which is what the tail is allowed to cost rather than a shape anyone dials.
+/// A decay is unbounded and a billboard is not, so the alternative is not an
+/// endless tail but a tail cut off at the quad — and THAT contour is a
+/// screen-aligned square, which is the one shape a field like this must not
+/// have. The window's own reach is what the two glow billboards are sized to
+/// ([`glow_gap_stop`]), so the coverage is exactly 0 where each of them ends.
 fn standoff_coverage(sd: f32, soft: f32) -> f32 {
     let edge = clearing_edge(glow_gap());
     let inner = clamp(edge - soft, 0.0, edge - 0.001);
     let u = max(sd - inner, 0.0) / (edge - inner);
-    return exp(-GAP_TAIL * pow(u, glow_gap_shape()));
+    return exp(-GAP_TAIL * pow(u, glow_gap_shape())) * (1.0 - smoothstep(1.0, GAP_STOP, u));
+}
+
+/// What a ring at `level` holds off `sd` out from its own annulus: the Gap depth
+/// spent over [`standoff_coverage`], then closed by the level of the ink casting
+/// it.
+///
+/// The level lands on the SHADE and not on the coverage, and that is the whole
+/// of it: the coverage is an EXPONENT ([`gap_shade`]), so a level spent there is
+/// a number of stops rather than a share of the light — at a depth of 1 a ring
+/// a tenth of the way through its release still holds off half of what it held
+/// off whole, and one at a fiftieth still holds off a seventh. What that draws
+/// is a node whose ink has faded out of a halo that is still bright, with the
+/// node's own footprint standing in it as a black silhouette until the last
+/// frames, when the exponential lets go all at once.
+///
+/// On the shade it is what [`node_clearing`]'s levels already are: the ink's
+/// own alpha, so ink at half strength holds off half the light and ink that is
+/// gone holds off none. That is also the one reading the picture can be held
+/// to, a ring's shadow being the thing the ring casts.
+///
+/// It costs the depth's mapping once per term rather than once per fragment,
+/// which is what buying the right domain costs here: the levels differ per term,
+/// so there is no order in which one mapping can answer for all of them.
+fn ring_shade(sd: f32, soft: f32, level: f32) -> f32 {
+    return gap_shade(standoff_coverage(sd, soft)) * clamp(level, 0.0, 1.0);
 }
 
 /// How much of the light standing here this node holds off: every RING it
@@ -2306,36 +2389,43 @@ fn standoff_coverage(sd: f32, soft: f32) -> f32 {
 /// Each term carries its own level, exactly as [`node_clearing`]'s do: a layer
 /// that is off, refused by the stack, attacking or releasing opens and closes
 /// its own standoff in step with the ink it stands off, and a layer nobody is
-/// drawing holds nothing off.
+/// drawing holds nothing off. WHERE that level lands is [`ring_shade`]'s
+/// business, and it is the difference between a release and a black silhouette.
+///
+/// So what a term answers is already the SHADE, and the max is taken over
+/// those: the mapping is monotone, so the deepest standoff at a pixel still
+/// wins, and it is the one operator the levels leave commutative — a max over
+/// coverages, with a level on each, is a max over nothing the picture means.
 fn glow_standoff(in: VsOut, d: f32, oct: OctRing) -> f32 {
     let soft = standoff_soft(in.soft);
     // The one angular length on the node, taken once for every term below.
     let gap = slice_gap_distance(in.uv, d, oct);
-    var cov = 0.0;
+    var shade = 0.0;
     // The octave band, on the node's own envelope, between the two radii its
     // slices and the glyphs inside them are drawn in — every slice of it, since
     // a silent one is the backdrop and the backdrop is drawn at the node's
     // presence.
     if u.misc3.z > u.misc3.y {
         let ring = max(annulus_distance(d, u.misc3.y, u.misc3.z), gap);
-        cov = standoff_coverage(ring, soft) * clamp(in.params.x, 0.0, 1.0);
+        shade = ring_shade(ring, soft, in.params.x);
     }
     // The audio ring, on ITS own: the view's Gate answered per node and carried
     // on the note Fade. A node nobody played wears one whenever the spectrum
     // reaches that gate, and this is the term that stands the light off it.
     if u.misc7.w > u.misc7.z {
         let ring = max(annulus_distance(d, u.misc7.z, u.misc7.w), gap);
-        cov = max(cov, standoff_coverage(ring, soft) * clamp(in.ring, 0.0, 1.0));
+        shade = max(shade, ring_shade(ring, soft, in.ring));
     }
     let slots = in.marks.x | in.marks.y;
     if slots == 0u || u.misc5.w <= 0.0 {
-        return cov;
+        return shade;
     }
     // Nothing below can raise a pixel already held off in full — the same skip
-    // [`node_clearing`] takes, and exact for the same reason: coverage is
-    // capped at one.
-    if EARLY_OUT && cov >= 1.0 {
-        return cov;
+    // [`node_clearing`] takes, and exact for the same reason: a coverage of one
+    // at a level of one is the deepest any term can answer, and [`gap_shade`] is
+    // where that lands.
+    if EARLY_OUT && shade >= gap_shade(1.0) {
+        return shade;
     }
     let strip_in = u.misc4.y;
     let strip_out = u.misc4.y + u.misc5.w;
@@ -2362,10 +2452,10 @@ fn glow_standoff(in: VsOut, d: f32, oct: OctRing) -> f32 {
             // middle in shadow.
             let pie = sector_distance(in.uv, oct_sector(s, oct), strip_out);
             let sd = max(max(pie, strip_in - d), gap);
-            cov = max(cov, standoff_coverage(sd, soft) * clamp(level, 0.0, 1.0));
+            shade = max(shade, ring_shade(sd, soft, level));
         }
     }
-    return cov;
+    return shade;
 }
 
 /// The three derivatives-and-geometry answers every layer of a node is drawn
@@ -3558,17 +3648,17 @@ struct GlowOut {
 /// emitter, and monotone in it, so a `max` over what each of them holds off is
 /// still a `max` over the shade they write.
 ///
-/// Its own function because both draws that write the third attachment end
-/// here — a node's rings ([`glow_shade`]) and a marker's cross
-/// ([`plus_shade`]) — and what makes the Gap bars ONE setting across the two
-/// is that they meet at this mapping rather than each spending the depth their
-/// own way.
+/// Its own function because every ring that writes the third attachment ends
+/// here — [`ring_shade`] is the one caller, and both draws reach it through
+/// that — and what makes the Gap bars ONE setting across a node's rings and a
+/// marker's cross is that they meet at this mapping rather than each spending
+/// the depth their own way.
 fn gap_shade(cov: f32) -> f32 {
     return 1.0 - pow(max(1.0 - glow_gap_depth(), GAP_KEEP_FLOOR), clamp(cov, 0.0, 1.0));
 }
 
 /// How much of the light standing here this node's rings hold off:
-/// [`glow_standoff`] under [`gap_shade`].
+/// [`glow_standoff`], which is already the depth spent per ring.
 ///
 /// The exit a depth of 0 buys is stated here rather than inside the mapping,
 /// which is where the walk it skips lives. It is EXACT rather than an
@@ -3581,7 +3671,7 @@ fn glow_shade(in: VsOut, d: f32) -> f32 {
     if glow_gap_depth() <= 0.0 {
         return 0.0;
     }
-    return gap_shade(glow_standoff(in, d, oct_ring(in.cents)));
+    return glow_standoff(in, d, oct_ring(in.cents));
 }
 
 /// The light draw, and the standoff cut into it. No depth in it: this is a pass
@@ -3773,15 +3863,14 @@ fn vs_plus_glow(@builtin(vertex_index) vertex_index: u32, inst: PlusInstance) ->
     // Two lengths reach past the crossing and the quad is sized to the larger,
     // which is `vs_glow`'s rule for a node and holds here for the same reason:
     // the light shuts at the span, and the standoff holds the light off out to
-    // one Gap past the cross. The two are independent bars, so neither bounds
-    // the other, and a Gap outside a quad sized to the span alone is a fade cut
-    // off partway down — a screen-aligned step, the quad being built from
-    // `cam_right`/`cam_up`.
+    // where its own window has shut ([`glow_gap_stop`]). The two are independent
+    // bars, so neither bounds the other, and a standoff outside a quad sized to
+    // the span alone is a fade cut off partway down — a screen-aligned step, the
+    // quad being built from `cam_right`/`cam_up`.
     //
-    // Exact rather than generous either way: the window is 0 AT the span, and
-    // `standoff_coverage` is still decaying at the Gap's end but under
-    // [`GAP_TAIL`] e-folds by then, which is the same bound `vs_glow` accepts.
-    let margin = max(marker_span_uv(), arm + glow_gap());
+    // Exact rather than generous at both: the light's window is 0 AT the span,
+    // and the standoff's is 0 at the stop.
+    let margin = max(marker_span_uv(), arm + glow_gap_stop());
     // Camera-facing on the same plane as the marker itself (`vs_plus`), so the
     // pool sits square on the cross under any orbit.
     let world = inst.pos_radius.xyz
@@ -3837,8 +3926,9 @@ fn plus_glow_layer(in: PlusGlowVsOut) -> vec4<f32> {
     return vec4<f32>(vec3<f32>(alpha), alpha);
 }
 
-/// How much of the light standing here this marker's cross holds off, before
-/// the depth is spent over it ([`gap_shade`]).
+/// How much of the light standing here this marker's cross holds off: its own
+/// distance field under [`ring_shade`], which is the same Gap bars a node's
+/// rings are stood off on and the same place the depth is spent.
 ///
 /// The CROSS's own distance field, which is [`plus_coverage`]'s — the same fold
 /// onto one box, so the shadow is the shape the marker draws rather than a disc
@@ -3890,11 +3980,12 @@ fn plus_standoff(in: PlusGlowVsOut) -> f32 {
     // carries for a node: markers stand on the home sheet alone
     // (`derive_pluses`), and the home sheet has no scale of its own.
     let soft = standoff_soft(u.misc6.z);
-    return standoff_coverage(sd, soft) * clamp(in.strength, 0.0, 1.0);
+    return ring_shade(sd, soft, in.strength);
 }
 
 /// How much of the light standing here this marker holds off, as
-/// [`glow_shade_tex`] carries it: [`plus_standoff`] under [`gap_shade`].
+/// [`glow_shade_tex`] carries it: [`plus_standoff`], which is already the depth
+/// spent over the cross.
 ///
 /// [`glow_shade`]'s twin, down to the exit a depth of 0 buys, which here skips
 /// a distance field rather than a walk over every mark.
@@ -3902,7 +3993,7 @@ fn plus_shade(in: PlusGlowVsOut) -> f32 {
     if glow_gap_depth() <= 0.0 {
         return 0.0;
     }
-    return gap_shade(plus_standoff(in));
+    return plus_standoff(in);
 }
 
 @fragment

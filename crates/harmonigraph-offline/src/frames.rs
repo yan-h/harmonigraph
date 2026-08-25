@@ -1141,4 +1141,126 @@ mod tests {
             eprintln!("{}", path.canonicalize().unwrap_or(path.clone()).display());
         }
     }
+
+    /// **A released note letting go of its light**, written to
+    /// `target/scratch/`: one frame per moment of one note's release, across
+    /// the Gap depth and the Gap curve.
+    ///
+    /// A probe: it asserts nothing, the verdict being a look. What it is for is
+    /// the one thing the stills beside it cannot show — a picture that is right
+    /// while a note is held and wrong on the way out. The two clocks are why
+    /// there is such a picture at all: a node's layers run on the note Fade and
+    /// its light runs on the Glow release (`panes::glow_fade` in
+    /// harmonigraph-ui), so every release has a stretch of full halo over
+    /// fading ink, and whatever the two do to each other happens there and
+    /// nowhere else.
+    ///
+    /// The DEPTH and the CURVE are the pair swept because they are the two the
+    /// stretch is worst at: the depth decides how much light the ink's own
+    /// shadow is worth (`ring_shade` in lattice.wgsl), and the curve decides how
+    /// far past the ink that shadow is still worth anything (`GAP_STOP`). Each
+    /// is shot at its top and at the fresh setting, the fresh pair first as the
+    /// reference.
+    ///
+    /// Reading conditions as [`the_node_glow_draws_a_picture`] sets them, with
+    /// the two clocks left RUNNING rather than switched off, which is the whole
+    /// subject here.
+    ///
+    /// ```text
+    /// cargo test -p harmonigraph-offline -- --ignored --nocapture released_note
+    /// ```
+    #[test]
+    #[ignore = "a probe: writes PNGs and asserts nothing"]
+    fn a_released_note_lets_go_of_its_light() {
+        use harmonigraph_ui::{draw_pane, Layout, SharedState};
+
+        const SIZE: [u32; 2] = [900, 900];
+        const PPP: f32 = 2.0;
+        const STEP: f64 = 1.0 / 30.0;
+        // Long enough that the note is settled at full before it is let go: the
+        // Fade's attack runs the same second its release does, and a shot of a
+        // note still arriving says nothing about one leaving.
+        const OFF: f64 = 1.5;
+
+        let Some(mut renderer) = Renderer::new(SIZE) else {
+            eprintln!("no usable GPU adapter; nothing rendered");
+            return;
+        };
+        let context = egui::Context::default();
+        harmonigraph_ui::theme::apply_theme(&context);
+        context.set_pixels_per_point(PPP);
+
+        let layout = Layout::preset("lattice").expect("the lattice preset");
+        let points = egui::vec2(SIZE[0] as f32 / PPP, SIZE[1] as f32 / PPP);
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, points);
+        let placements = layout.resolve(points);
+        let background =
+            egui::Color32::from_rgb(layout.background.0, layout.background.1, layout.background.2);
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/scratch");
+        std::fs::create_dir_all(&dir).expect("a scratch directory");
+
+        // (tag, depth, curve). The first is the fresh pair, as the reference.
+        let shots: Vec<(&str, f32, f32)> = vec![
+            ("fresh", 0.85, 1.0),
+            ("deep", 1.0, 1.0),
+            ("rind", 1.0, 0.0),
+            ("rind85", 0.85, 0.0),
+        ];
+        // Moments of the release, and one of the hold ahead of it as the
+        // reference.
+        let want: Vec<f64> =
+            [-0.05, 0.1, 0.25, 0.4, 0.6, 0.9, 1.5, 2.5].iter().map(|t| OFF + t).collect();
+
+        for (tag, depth, curve) in shots {
+            let mut state = SharedState::new(FORMAT);
+            state.set_background((24, 25, 29));
+            state.view.glow_reach = 1.5;
+            state.view.glow_strength = 1.0;
+            state.view.glow_gap = 0.16;
+            state.view.glow_gap_soft = 0.16;
+            state.view.glow_gap_depth = depth;
+            state.view.glow_gap_shape = curve;
+            state.camera.zoom_by(2.0);
+            state.tracker.handle_event(harmonigraph_core::NoteEvent::on(0.0, 0, 60, 1.0));
+            let mut released = false;
+            let mut now = 0.0f64;
+            let mut shot = 0usize;
+            while shot < want.len() {
+                if !released && now >= OFF {
+                    state.tracker.handle_event(harmonigraph_core::NoteEvent::off(now, 0, 60));
+                    released = true;
+                }
+                let output = context.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(screen),
+                        time: Some(now),
+                        max_texture_side: Some(renderer.max_texture_side()),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        for (pane, rect) in &placements {
+                            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(*rect));
+                            draw_pane(&mut child, *pane, &mut state, now);
+                        }
+                    },
+                );
+                let primitives = context.tessellate(output.shapes, PPP);
+                let bytes = renderer.render(&primitives, &output.textures_delta, PPP, background);
+                if now + STEP * 0.5 >= want[shot] {
+                    let path = dir.join(format!("release-{tag}-t{:03.0}.png", (now - OFF) * 100.0));
+                    image::save_buffer(
+                        &path,
+                        &bytes,
+                        SIZE[0],
+                        SIZE[1],
+                        image::ExtendedColorType::Rgba8,
+                    )
+                    .expect("write the png");
+                    eprintln!("{}", path.canonicalize().unwrap_or(path.clone()).display());
+                    shot += 1;
+                }
+                now += STEP;
+            }
+        }
+    }
 }

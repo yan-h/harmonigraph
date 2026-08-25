@@ -1209,14 +1209,17 @@ pub struct ViewConfig {
     /// `gap - soft`, all but gone by `gap`.
     ///
     /// ALL BUT, and the difference from the Clearance's own "gone" is the
-    /// point: what is spent over the fade is a DECAY rather than a ramp, so
-    /// there is no distance at which the standoff stops (`standoff_coverage`
-    /// in lattice.wgsl). A ramp landing on nothing puts a closed contour into
-    /// a field whose every other length is an exponential, and a circle is
-    /// what the eye finds in a smooth field however gently the ramp meets it —
-    /// which is the dark disc with a rim on it that a strong glow shows,
-    /// its halo out there being flat enough to have no gradient of its own for
-    /// the fade's end to hide in.
+    /// point: what is spent over the fade is a DECAY rather than a ramp, so the
+    /// standoff goes on past the bar's own handle rather than stopping at it
+    /// (`standoff_coverage` in lattice.wgsl). A ramp landing on nothing puts a
+    /// closed contour into a field whose every other length is an exponential,
+    /// and a circle is what the eye finds in a smooth field however gently the
+    /// ramp meets it — which is the dark disc with a rim on it that a strong
+    /// glow shows, its halo out there being flat enough to have no gradient of
+    /// its own for the fade's end to hide in. The tail is brought to an end a
+    /// couple of Gaps out all the same, where a billboard would otherwise cut
+    /// it at a square (`GAP_STOP`); what is left standing at the handle itself
+    /// is unmoved by that at any curve.
     ///
     /// Without it the light is at its brightest exactly where the rings are —
     /// the falloff is measured from the node's centre, so both sides of a ring

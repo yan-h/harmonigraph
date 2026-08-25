@@ -311,17 +311,25 @@ fn a_marker_holds_a_nodes_halo_off_its_own_cross() {
 ///
 /// The excluded footprint is read at full ink, where it is largest — a fainter
 /// marker inks a subset of it — so one ground set answers for every shot.
+///
+/// The marker stands OUT in the node's halo and not at the node's own centre,
+/// which is `shadowed_markers`' delicate number and the one thing this fixture
+/// cannot do without: the shade layer is a `max`, so a cross standing inside
+/// the node's own standoff can only be read where it holds off MORE than the
+/// node does — and a half-strength one holds off less than that, which reads
+/// as a marker with no shadow at all rather than as one with half.
 #[test]
 fn a_crosss_shadow_is_worth_its_ink() {
     const SIZE: [u32; 2] = [256, 256];
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
     };
-    // One marker at the node's own centre, in a frame whose only light is that
+    // One marker out in the node's halo, in a frame whose only light is that
     // node's (`shadowed_markers` pins `marker_light` to 0).
     let at = |strength: f32, depth: f32| -> Scene {
         let mut scene = shadowed_markers(depth, 0.8, 1.0);
-        scene.pluses = vec![one_marker(glam::Vec3::ZERO, 0.5, scene.lattice_ground, strength)];
+        scene.pluses =
+            vec![one_marker(glam::Vec3::new(2.6, 0.0, 0.0), 0.4, scene.lattice_ground, strength)];
         scene
     };
     let bare = |shooter: &mut Shooter, depth: f32| {

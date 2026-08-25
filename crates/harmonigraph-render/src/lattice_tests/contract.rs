@@ -230,6 +230,12 @@ fn the_feather_bars_preview_is_the_skirt_the_shader_draws() {
 /// The same contract for the Gap curve bar, whose preview is a copy of the
 /// standoff's ramp and the exponent it is raised to
 /// (`harmonigraph_scene::standoff_recovery`).
+///
+/// The preview draws the bar's own width alone — `p` runs 0..=1, which is the
+/// fade between the Gap's two handles — so the window the shader shuts its tail
+/// with is 1 across every point it draws and does not appear in the copy. It is
+/// pinned here all the same: the day that window moves inside the fade is the
+/// day the preview stops being the shape.
 #[test]
 fn the_gap_curve_bars_preview_is_the_ramp_the_shader_runs() {
     let needles = [
@@ -238,7 +244,9 @@ fn the_gap_curve_bars_preview_is_the_ramp_the_shader_runs() {
         format!("const GAP_TAIL: f32 = {:?};", harmonigraph_scene::GAP_TAIL),
         "return GAP_SHAPE_RIND * pow(GAP_SHAPE_PLAIN / GAP_SHAPE_RIND, t);".to_owned(),
         "let u = max(sd - inner, 0.0) / (edge - inner);".to_owned(),
-        "return exp(-GAP_TAIL * pow(u, glow_gap_shape()));".to_owned(),
+        "return exp(-GAP_TAIL * pow(u, glow_gap_shape())) * (1.0 - smoothstep(1.0, GAP_STOP, u));"
+            .to_owned(),
+        "const GAP_STOP: f32 = 2.0;".to_owned(),
     ];
     for needle in &needles {
         assert!(

@@ -140,9 +140,13 @@ fn the_gap_depth_says_how_much_light_a_ring_stands_off() {
     }
 }
 
-/// The standoff has no radius at which it stops: it is still taking light a
-/// tenth of a Gap PAST the Gap bar's outer handle, and less of it further out
-/// again.
+/// The standoff does not stop at the handle it is dialled to: it is still
+/// taking light a tenth of a Gap PAST the Gap bar's outer handle, and less of
+/// it further out again.
+///
+/// Where it DOES end is a couple of Gaps out, far enough past this to be a
+/// different question — [`the_standoff_ends_before_its_own_billboard`] is that
+/// one, and the two together are the whole shape of the tail.
 ///
 /// The claim the picture rests on. A fade that lands on nothing at one distance
 /// puts a closed contour into a field that has no other — every length in the
@@ -241,6 +245,213 @@ fn the_standoff_reaches_past_the_gap_it_is_dialled_to() {
         far > 0.0 && far < near,
         "the standoff took {far:.2} per pixel out at a Gap and a half against {near:.2} just \
          past one, which is a wider band rather than a decay",
+    );
+}
+
+/// The standoff ENDS before the billboard it is drawn on does: past
+/// [`GAP_STOP`] Gaps from the node's outermost ink there is no bite left at
+/// all, at the curve's floor where the tail is fattest.
+///
+/// The other half of the decay's claim, and the half a quad forces on it. A
+/// decay has no radius at which it stops and a billboard does, so a tail still
+/// worth a code value where the quad ends is CUT there — and the contour that
+/// leaves behind is a screen-aligned square, which is a worse one than the
+/// circle the decay is a decay to avoid. It is not a small effect either: the
+/// depth is spent as an exponent, so a coverage of a two-hundredth at the
+/// quad's edge is a tenth of the light taken off in one pixel.
+///
+/// The curve's FLOOR is where this bites, and the ceiling is why it was ever
+/// safe to leave: `exp(-T u^p)` is under half a code value of the deepest light
+/// by two Gaps at the plain exponential and by seventeen at GAP_SHAPE_RIND, so
+/// the tail below the exponential is the one the quad cannot afford to hold
+/// honestly. `standoff_coverage`'s own window is what ends it, and
+/// `glow_gap_stop` is what sizes both billboards to hold what is left.
+///
+/// Measured from the outermost pixel the node inks in ANY direction, which is
+/// what makes the annulus outside every ring the node draws rather than outside
+/// the one the scale is read off. EXACTLY zero out there rather than small: the
+/// window lands on nothing, so the two shots are the same bytes, and a claim
+/// about a contour wants the boundary itself rather than a bound on it.
+#[test]
+fn the_standoff_ends_before_its_own_billboard() {
+    const SIZE: [u32; 2] = [256, 256];
+    const GAP: f32 = 0.34;
+    // Mirrors lattice.wgsl's own `GAP_STOP`, which is where the window shuts.
+    const STOP: f32 = 2.0;
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    let at = |depth: f32| -> Scene {
+        let mut scene = single_marked_node(0, 0);
+        scene.camera = harmonigraph_scene::Camera {
+            projection: harmonigraph_scene::Projection::Orthographic,
+            yaw: 0.0,
+            pitch: 0.0,
+            ..Default::default()
+        };
+        scene.glow_reach = 2.5;
+        scene.glow_strength = 2.0;
+        // The flat falloff, so the halo out where the window shuts is a smooth
+        // field with no gradient of its own for a step to hide in.
+        scene.glow_feather = 1.0;
+        scene.glow_gap = GAP;
+        scene.glow_gap_soft = GAP;
+        scene.glow_gap_shape = 0.0;
+        scene.glow_gap_depth = depth;
+        scene.nodes[0].gutter = 0.0;
+        scene
+    };
+    let row = SIZE[0] as usize;
+    let (cx, cy) = ((SIZE[0] / 2) as usize, (SIZE[1] / 2) as usize);
+
+    // The scale, and the ink mask with it: the node with no light at all.
+    let bare = at(0.0);
+    let plain = shooter.shot(&{
+        let mut scene = at(0.0);
+        scene.glow_reach = 0.0;
+        scene
+    });
+    let inked = |px: &[u8], i: usize| px[i * 4..i * 4 + 4] != [0u8, 0, 0, 255];
+    let radius = |x: usize, y: usize| {
+        let (dx, dy) = (x as f32 - cx as f32, y as f32 - cy as f32);
+        (dx * dx + dy * dy).sqrt()
+    };
+    // The node's outermost ink in ANY direction, so the annulus below stands
+    // outside every ring it draws and not merely outside the widest one along
+    // one ray.
+    let mut ink_px = 0.0f32;
+    for y in 0..SIZE[1] as usize {
+        for x in 0..SIZE[0] as usize {
+            if inked(&plain, y * row + x) {
+                ink_px = ink_px.max(radius(x, y));
+            }
+        }
+    }
+    assert!(ink_px > 20.0, "the node inked only {ink_px}px of radius; there is nothing to read");
+    let gap_px = ink_px * GAP / bare.rings_outer;
+
+    let flat = shooter.shot(&at(0.0));
+    let stood_off = shooter.shot(&at(1.0));
+    // Pixels the standoff took light from, over the ring standing between
+    // `from` and `to` Gaps out from the node's outermost ink.
+    let bitten = |from: f32, to: f32| -> (usize, usize) {
+        let (mut bit, mut n) = (0usize, 0usize);
+        for y in 0..SIZE[1] as usize {
+            for x in 0..SIZE[0] as usize {
+                let i = y * row + x;
+                let g = (radius(x, y) - ink_px) / gap_px;
+                if g < from || g >= to {
+                    continue;
+                }
+                n += 1;
+                if flat[i * 4..i * 4 + 4] != stood_off[i * 4..i * 4 + 4] {
+                    bit += 1;
+                }
+            }
+        }
+        (bit, n)
+    };
+
+    // Non-vacuous: inside the window there is a bite to have ended.
+    let (near, near_n) = bitten(1.1, 1.6);
+    assert!(near_n > 200, "the inner annulus holds {near_n} pixels to read");
+    assert!(
+        near > near_n / 2,
+        "the standoff bit {near} of the {near_n} pixels between a Gap and a Gap and a half, so \
+         there is nothing here for the window to be the end of",
+    );
+    // And past the window it has ended, in every direction the frame reaches —
+    // the corners of the billboard included, which is where a cut tail shows
+    // first.
+    let (past, past_n) = bitten(STOP + 0.05, 1e9);
+    assert!(past_n > 500, "the outer annulus holds {past_n} pixels to read");
+    assert_eq!(
+        past, 0,
+        "the standoff took light from {past} of the {past_n} pixels standing more than \
+         {STOP} Gaps out from the node's ink, which is a tail the billboard has to cut",
+    );
+}
+
+/// A ring's shadow is worth its ink: a node half way through its release holds
+/// off about half the light its whole ink holds off.
+///
+/// The claim a release rests on, and the one the Gap depth's own domain breaks
+/// if the level is spent in it. The depth is a number of STOPS ([`gap_shade`]),
+/// so a level multiplying the COVERAGE is a level multiplying an exponent: at
+/// the depth's top a ring a tenth of the way through its release still holds
+/// off half of what it held off whole, and one at a fiftieth still holds off a
+/// seventh. What that draws is the bug this pins — a node whose rings have
+/// faded out of a halo that is still bright, standing in it as a black
+/// silhouette until the last frames, when the exponential lets go all at once.
+///
+/// On the SHADE the level is what `node_clearing`'s already is: the ink's own
+/// alpha. See [`ring_shade`], which is the one line this pins.
+///
+/// The LIGHT is held at full while the ink fades, which is not a contrivance
+/// but the case in hand: a node's light runs on the Glow release and its layers
+/// run on the note Fade (`panes::glow_fade` in harmonigraph-ui), so every
+/// release has a stretch of exactly this — full halo, fading ink.
+///
+/// Measured on the light TAKEN, over the pixels the node's ink never reaches at
+/// either level: the two shots with the depth at 0 differ in the ink alone, so
+/// where they agree the whole of the difference at depth 1 is the standoff.
+#[test]
+fn a_rings_shadow_is_worth_its_ink() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    // The node's every drawn layer at `level`, its light left at full.
+    let at = |level: f32, depth: f32| -> Scene {
+        let mut scene = single_marked_node(0, 0);
+        scene.camera = harmonigraph_scene::Camera {
+            projection: harmonigraph_scene::Projection::Orthographic,
+            yaw: 0.0,
+            pitch: 0.0,
+            ..Default::default()
+        };
+        scene.glow_reach = 2.5;
+        scene.glow_strength = 2.0;
+        scene.glow_feather = 1.0;
+        scene.glow_gap = 0.34;
+        scene.glow_gap_soft = 0.34;
+        scene.glow_gap_depth = depth;
+        scene.nodes[0].activation = level;
+        scene.nodes[0].audio_ring = level;
+        scene
+    };
+
+    let flat_whole = shooter.shot(&at(1.0, 0.0));
+    let flat_half = shooter.shot(&at(0.5, 0.0));
+    // The ground both levels leave alone: with no standoff the two frames
+    // differ in the node's own ink and nowhere else, so where they agree
+    // neither level has inked anything.
+    let ground: Vec<usize> = (0..flat_whole.len())
+        .step_by(4)
+        .filter(|&i| flat_whole[i..i + 4] == flat_half[i..i + 4])
+        .collect();
+    assert!(
+        ground.len() > 1000,
+        "the fixture must leave halo for a bite to land in, not {}",
+        ground.len(),
+    );
+
+    let taken = |frame: &[u8]| -> i64 {
+        ground
+            .iter()
+            .map(|&i| (brightness(&flat_whole[i..i + 3]) - brightness(&frame[i..i + 3])).max(0))
+            .sum()
+    };
+    let whole = taken(&shooter.shot(&at(1.0, 1.0)));
+    let half = taken(&shooter.shot(&at(0.5, 1.0)));
+    assert!(whole > 1000, "a whole ring took only {whole} of light off the halo it stands in");
+    // A share and not a stop: half the ink, half the light. The bound is loose
+    // on both sides against the 8-bit target, and tight enough that the level
+    // spent as an exponent — which leaves 0.997 of the whole at this depth —
+    // is nowhere near it.
+    assert!(
+        half * 10 > whole * 4 && half * 10 < whole * 6,
+        "half a ring took {half} of the {whole} a whole one takes, which is not half of it",
     );
 }
 
