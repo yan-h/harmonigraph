@@ -79,27 +79,21 @@ the main repo root, so it silently builds main. The bundle looks fresh and
 contains none of the branch's changes. `load-plugin.sh` and
 `update-plugin.sh` exist to sidestep this.
 
-## House style: hand-formatted; comments present-tense and at their own site
+## House style: comments present-tense and at their own site
 
-Three conventions here are invisible to the build — nothing fails when you
-break any of them, and all three are easy to break by reflex.
+**Formatting is not something to think about.** Run `cargo fmt --all`;
+`rustfmt.toml` holds the settings and `ci.sh` checks them, so the style is
+decided mechanically and a session spends no attention on it. If the output
+is ever wrong, change the config rather than hand-formatting around it — a
+`#[rustfmt::skip]` where a hand-built table has to keep its columns, and the
+tree currently needs none.
 
-**Never run `cargo fmt`.** There is no `rustfmt.toml`, and the tree has
-never been through rustfmt, so rustfmt's idea of this code and the code
-have drifted a long way apart: `cargo fmt --check` wants on the order of
-1800 changes across all but a handful of the files in `crates/`. Measure
-it rather than trusting that figure —
-`cargo fmt --all --check | grep -c '^Diff in '` — because an exact count
-goes stale on any merge that adds a file, and two audits running have now
-spent a finding restating one. Running it once would bury whatever you
-actually changed under a whole-tree reformat that no reviewer can read
-past, which is why this is a ban rather than a preference. Match the
-surrounding style by hand, and wrap only the lines you write — about 100
-columns, which is where the tree sits. That is a habit, not a limit to
-enforce: around 50 lines already exceed it and the longest runs to 155, and
-rewrapping code you are only passing through costs a reviewer the same way
-`cargo fmt` does, in miniature. To catch only your own long lines, run
-`awk 'length>100'` over the lines you added; leave pre-existing ones alone.
+Two things the formatter does NOT do. It does not wrap **comment prose**, so
+that stays a habit: keep it near 100 columns, where the config puts code.
+And it does not touch the `.wgsl` shaders at all.
+
+The two conventions below are the ones still invisible to the build — nothing
+fails when you break either, and both are easy to break by reflex.
 
 **Comments state the current constraint, in the present tense.** A comment
 describing the delta from a previous version rots: once that version is a
@@ -182,8 +176,9 @@ this rule exists to stop growing, not a norm to match; a new comment earns
 its place by stating a constraint, not by reaching the surrounding average.
 Both comment rules are habits to maintain rather than a one-time cleanup —
 new PRs regenerate both patterns — and neither is a mandate for a
-whole-tree rewrite, which is unreviewable for the same reason `cargo fmt`
-is banned.
+whole-tree rewrite. Comments carry the rationale, so rewriting them in bulk
+is a change of content dressed as a sweep, and no reviewer can read past it
+to find the sentences that actually moved.
 
 ## Backwards compatibility is not a constraint
 

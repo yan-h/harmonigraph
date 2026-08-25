@@ -77,10 +77,9 @@ credibility of its weakest entry.
 Do not report:
 
 - Anything a compiler, clippy, or `ci.sh` catches. Those run on push.
-- Wrapping you would have done differently. The codebase is hand-formatted,
-  so there is no formatter to be out of step with. A diff that looks like it
-  was run through `cargo fmt` anyway *is* a finding — CLAUDE.md says why —
-  but a line you would have broken in another place is not.
+- Anything about formatting at all. `ci.sh` runs `cargo fmt --all --check`,
+  so the layout of the diff is settled before you see it and a line you would
+  have broken elsewhere is rustfmt's choice, not the author's.
 - Missing tests or docs in general, absent a specific path that is now
   reachable and unexercised.
 - Pre-existing behaviour the diff merely moved or re-indented.
