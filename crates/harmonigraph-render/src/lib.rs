@@ -296,8 +296,7 @@ struct Uniforms {
     /// x/y unused — they carried the trail's mark style and strength, from
     /// when a memory was a change to the idle marker rather than a kept note
     /// name. Retired in place.
-    /// z: the sevens knockout's fade width, in the uv of a full-size node
-    /// (`Scene::sevens_soft`); w: the melody/bass marks' shimmer pattern
+    /// z: unused; w: the melody/bass marks' shimmer pattern
     /// (0 off, then one index per pattern — see `Pulse::shader_index`).
     misc6: [f32; 4],
     /// The ground the lattice is drawn onto — the pane fill this pass gets
@@ -368,21 +367,29 @@ struct Uniforms {
     /// here, and lattice.wgsl throughout. A strength of 0 is a glow that draws
     /// nothing, and the three shapes beside it have nothing to shape.
     misc10: [f32; 4],
-    /// The STANDOFF's four dials — the light a node's own clearing dims where
-    /// it stands over a ring, which is a shape the node paints rather than a
-    /// hole in the light (`node_paint` in lattice.wgsl). x: how far past each
-    /// ring it reaches, in the same quad UV units (`Scene::glow_gap`); y: how
-    /// much of that is spent fading the light back in (`Scene::glow_gap_soft`);
-    /// z: how the fade is skewed across that width (`Scene::glow_gap_shape`);
-    /// w: how much of the light it takes where it stands
-    /// (`Scene::glow_gap_depth`), off the ground the clearing paints — what the
-    /// node's own ink takes of that same field is `misc13` below.
+    /// The GAP's four dials — one shape, read twice: as the hole a node cuts in
+    /// everything drawn behind it (`node_clearing` in lattice.wgsl), and as the
+    /// light that same shape dims where it stands over a ring (`glow_standoff`).
+    /// x: how far past each ring it reaches, in the same quad UV units
+    /// (`Scene::glow_gap`); y: how much of that is spent fading it back off
+    /// (`Scene::glow_gap_soft`); z: how the fade is skewed across that width
+    /// (`Scene::glow_gap_shape`); w: how much of the LIGHT it takes where it
+    /// stands (`Scene::glow_gap_depth`), off the ground the clearing paints —
+    /// what the node's own ink takes of that same field is `misc13` below.
     ///
     /// A row of its own rather than four slots scattered over the two beside
     /// it, because the four are one control: the Gap bar's two handles, the
-    /// curve across them, and the depth the finished coverage is scaled by.
-    /// Zeroed whole with `misc10`, on the same rule — a standoff with no light
-    /// to stand off is a dark ring painted for nothing.
+    /// curve across them, and the depth the finished coverage is scaled by on
+    /// the light's side.
+    ///
+    /// NOT zeroed with `misc10`, which is where this row parts company with
+    /// every other one under the glow: the hole is a shape a node cuts whether
+    /// or not there is a light in the picture, so zeroing this with the light
+    /// would take every node's knockout off with it — sheets interpenetrating,
+    /// and the resting markers uncut — the moment the Reach reached 0. What is
+    /// zeroed instead is nothing, `glow_gap` being its own off switch on both
+    /// sides (`glow_gap()` in lattice.wgsl), and the depth is the light's
+    /// (`glow_shade`).
     misc11: [f32; 4],
     /// The node glow's plumbing row, which is not a dial. x: how many rows this
     /// frame's ink strip has (`Scene::glow_rows`) — the one thing
@@ -507,10 +514,9 @@ struct GpuInstance {
     /// indicator it points at.
     melody_color: [f32; 4],
     bass_color: [f32; 4],
-    /// The sevens layer, packed: x = billboard size factor (1 on the home
-    /// sheet), y = knockout gutter width in uv units (0 on the home sheet).
-    /// See `NodeInstance::scale` / `::gutter`.
-    sevens: [f32; 2],
+    /// Billboard size factor: 1 on the home sheet, smaller with every step off
+    /// it (`NodeInstance::scale`).
+    scale: f32,
     /// How much of the audio ring this node wears, 0..=1: the gate's answer for
     /// its wedges carried on the note Fade, floored by the node's own envelope
     /// (`NodeInstance::audio_ring`).
@@ -576,7 +582,7 @@ impl GpuInstance {
         attributes: &wgpu::vertex_attr_array![
             0 => Float32x3, 1 => Float32x4, 2 => Float32x3, 3 => Uint32x3,
             4 => Float32, 6 => Uint32x2,
-            7 => Float32x4, 8 => Float32x4, 10 => Float32x2, 11 => Float32,
+            7 => Float32x4, 8 => Float32x4, 10 => Float32, 11 => Float32,
             12 => Float32x4, 13 => Float32
         ],
     };
@@ -943,7 +949,7 @@ impl LatticeCallback {
         // sheet depth 0 — behind it is positive, in front negative. Sorting
         // by that above is what makes the home sheet one contiguous run,
         // under every projection rather than only the face-on one.
-        let to_gpu = |n: &harmonigraph_scene::NodeInstance, gutter: f32| GpuInstance {
+        let to_gpu = |n: &harmonigraph_scene::NodeInstance| GpuInstance {
             world_pos: n.world_pos.to_array(),
             color: n.color.to_array(),
             params: [n.activation, n.melody_level, n.bass_level],
@@ -952,7 +958,7 @@ impl LatticeCallback {
             marks: [n.melody_slots, n.bass_slots],
             melody_color: n.melody_color.to_array(),
             bass_color: n.bass_color.to_array(),
-            sevens: [n.scale, gutter],
+            scale: n.scale,
             ring: n.audio_ring,
             glow: [n.glow.level, n.glow.row as f32, n.glow.mix, n.glow.marked],
             paint: PAINT_WHOLE,
@@ -1037,7 +1043,7 @@ impl LatticeCallback {
                      paint: f32| {
             for &(_, _, i) in ns {
                 let node = &scene.nodes[i];
-                let instance = to_gpu(node, node.gutter);
+                let instance = to_gpu(node);
                 if paints(&instance) {
                     out.push(GpuInstance { paint, ..instance });
                 }
@@ -1097,15 +1103,15 @@ impl LatticeCallback {
         let mut home_pluses = Vec::new();
         for &(_, _, i) in &order[split..home_end] {
             let node = &scene.nodes[i];
-            let instance = to_gpu(node, node.gutter);
+            let instance = to_gpu(node);
             if paints(&instance) {
-                // Both extra draws hang off the node's own gutter, so a view
-                // with the Clearance dialled off ships neither and the pass is
-                // the single batched marker draw it has always been. The cull
-                // is the ink's, since the two are one node — a node that paints
-                // nothing clears nothing either, every layer's hole being
-                // scaled by the level that paints it (`node_clearing`).
-                if node.gutter > 0.0 {
+                // Both extra draws hang off the Gap, so a view with it dialled
+                // off ships neither and the pass is the single batched marker
+                // draw it has always been. The cull is the ink's, since the two
+                // are one node — a node that paints nothing clears nothing
+                // either, every layer's hole being scaled by the level that
+                // paints it (`node_clearing`).
+                if scene.glow_gap > 0.0 {
                     let plus = plus_of[i];
                     if plus != u32::MAX {
                         home_pluses.push(plus);
@@ -1189,7 +1195,7 @@ impl LatticeCallback {
                     scene.octave_gap,
                     scene.mark_thickness,
                 ],
-                misc6: [0.0, 0.0, scene.sevens_soft, scene.pulse_marks.shader_index() as f32],
+                misc6: [0.0, 0.0, 0.0, scene.pulse_marks.shader_index() as f32],
                 background: scene.background.to_array(),
                 lattice_ground: scene.lattice_ground.to_array(),
                 misc7: [
@@ -1219,16 +1225,16 @@ impl LatticeCallback {
                 } else {
                     [0.0; 4]
                 },
-                misc11: if lights {
-                    [
-                        scene.glow_gap,
-                        scene.glow_gap_soft,
-                        scene.glow_gap_shape,
-                        scene.glow_gap_depth,
-                    ]
-                } else {
-                    [0.0; 4]
-                },
+                // Packed whatever `lights` says — see `Uniforms::misc11`. The
+                // glow-only readers are all inside the glow pass, which
+                // `glow_draws` skips entirely, so what a light-less frame does
+                // with this row is cut its holes with it and nothing else.
+                misc11: [
+                    scene.glow_gap,
+                    scene.glow_gap_soft,
+                    scene.glow_gap_shape,
+                    scene.glow_gap_depth,
+                ],
                 misc12: if lights {
                     [scene.glow_rows.max(1) as f32, 0.0, 0.0, 0.0]
                 } else {
@@ -1300,7 +1306,9 @@ impl LatticeCallback {
     /// spread it over and a strength to draw it at, which `from_scene` has
     /// already reduced to one number. False and nothing is allocated, encoded
     /// or composited: no target, no pass, and a node's clearing reading the
-    /// stand-in transparent texture rather than a light.
+    /// stand-in transparent texture rather than a light. The clearing itself
+    /// still cuts — its shape is the Gap's, which this does not gate (see
+    /// [`Uniforms::misc11`]).
     fn glow_draws(&self) -> bool {
         self.uniforms.misc10[0] > 0.0
     }

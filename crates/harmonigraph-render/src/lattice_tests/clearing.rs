@@ -231,6 +231,15 @@ fn middled_node(melody: u32, ring: f32, band: bool, gutter: f32) -> Scene {
 /// Cut back to the INK instead, the lattice would show through every gap on the
 /// node, which reads as neither a hole nor a node.
 ///
+/// RADIALLY, which is the direction this sweep reads and the one the Gap closes:
+/// the padding between one ring and the next is a length the Gap outreaches at
+/// the fixture's own settings, so the hole is one band across the whole stack.
+/// The ANGULAR direction is the other question and is answered the other way —
+/// the hole is cut back to the slices there, and a padding wide enough to
+/// outreach the Gap opens it (`a_wide_octave_gap_opens_the_hole_in_the_sectors
+/// _the_node_leaves_empty`). This fixture sits at the shipped Octave gap, where
+/// the gaps are a fraction of a Gap wide and the hole closes over every one.
+///
 /// So the two numbers are where the hole STARTS and whether it has a gap in it.
 /// The first is read off the clearing's own footprint — the difference the
 /// gutter makes, over a ground the fixture paints white — and calibrated in the
@@ -604,8 +613,8 @@ fn splitting_a_clearing_off_its_node_paints_the_same_picture() {
         // A WIDE fade on the hole, which is where the split has anything to get
         // wrong: at full coverage a clearing repaints the ground it already
         // stands on, so only the band where it is partial can tell one
-        // application from two. The fixture's own default is a hard edge.
-        scene.sevens_soft = 0.3;
+        // application from two. The fixture's own default is a hairline.
+        scene.glow_gap_soft = 0.3;
         // Nothing between the halves, so the only thing under test is whether
         // the two of them add up.
         scene.pluses.clear();
@@ -618,11 +627,13 @@ fn splitting_a_clearing_off_its_node_paints_the_same_picture() {
         // then the clearing has nothing to cover in the band where its coverage
         // is partial — which is the only band where painting it twice differs
         // from painting it once.
+        // It clears at the same Gap this one does, that being the view's — its
+        // own hole lands on the ground behind it and moves nothing either shot
+        // reads, both shots carrying it identically.
         let mut behind = scene.nodes[0];
         behind.world_pos.z = -0.6;
         behind.scale = 2.5;
         behind.on_home = false;
-        behind.gutter = 0.0;
         scene.nodes.push(behind);
         let node = &mut scene.nodes[0];
         node.world_pos.z = z;
@@ -689,16 +700,25 @@ const BESIDE_REACHES: [f32; 2] = [0.15, 0.35];
 /// lands but does not follow its bar is a hole that cannot be dialled — which
 /// is a picture indistinguishable from no hole at the one setting anybody
 /// checks.
+///
+/// With the GLOW OFF, and that is load-bearing rather than tidiness: the Gap is
+/// the light's row of uniforms (`Uniforms::misc11` in harmonigraph-render), and
+/// every other row under the glow is zeroed whole where the Reach is 0. Zeroed
+/// with them this row would take every node's hole off with the light — sheets
+/// interpenetrating, the marker field uncut — and nothing in a picture with no
+/// glow in it would say why. Both reaches here are measured at a Reach and a
+/// Strength of 0, so that is the frame this is read in.
 #[test]
 fn a_node_clears_the_rings_of_the_node_beside_it_on_its_own_sheet() {
     const SIZE: [u32; 2] = [256, 256];
     let Some(mut gpu) = Shooter::new(SIZE) else {
         return;
     };
-    // The far node carries no gutter of its own, so nothing it does can move
-    // the reading; the near one carries the whole of what is under test.
-    let build = |gutter: f32, beside: bool| -> Scene {
-        let mut scene = clearing_node(0, 1.0, true, 0.0);
+    // Both nodes clear at the same reach, the Gap being the view's, and only
+    // the NEAR one's hole can move the reading: the far node's own lands on the
+    // shot's black ground, which is what a clearing paints there anyway.
+    let build = |gap: f32, beside: bool| -> Scene {
+        let mut scene = clearing_node(0, 1.0, true, gap);
         scene.camera = harmonigraph_scene::Camera {
             projection: harmonigraph_scene::Projection::Orthographic,
             yaw: 0.0,
@@ -714,11 +734,9 @@ fn a_node_clears_the_rings_of_the_node_beside_it_on_its_own_sheet() {
         scene.glow_reach = 0.0;
         scene.glow_strength = 0.0;
         scene.pluses.clear();
-        scene.sevens_soft = 0.0;
         if beside {
             let mut near = scene.nodes[0];
             near.world_pos.x += BESIDE_APART;
-            near.gutter = gutter;
             scene.nodes.push(near);
         }
         scene
@@ -755,4 +773,129 @@ fn a_node_clears_the_rings_of_the_node_beside_it_on_its_own_sheet() {
         "the hole does not follow its bar: {short} px taken at a reach of {near} and \
          {long} at {far}",
     );
+}
+
+/// How wide an Octave gap the sweep below opens the hole at, and the Gap it
+/// cuts that hole with.
+///
+/// The pair is what makes the reading possible at all: a slice's own gap has to
+/// outreach the hole around the ink beside it, or the two lobes of the clearing
+/// either side of a boundary meet across it and the hole is a closed annulus
+/// however empty the sector is. Half the Octave gap against one Gap is that
+/// condition (`slice_gap_half` and `standoff_coverage` in lattice.wgsl), so the
+/// gap is dialled to a good deal more than twice the Gap rather than to the two
+/// being close.
+///
+/// The Gap is narrower than [`CLEAR_REACH`] for the same reason, and it is the
+/// only fixture here that does not take the file's own reach: at that reach the
+/// Octave gap this asks for is past what the bar can be dragged to.
+const SLICE_OCTAVE_GAP: f32 = 0.40;
+const SLICE_CLEAR_GAP: f32 = 0.08;
+
+/// At a wide Octave gap a node's hole OPENS in the sectors it is empty in: what
+/// it hides is the ink it draws, and not the annulus that ink is drawn in.
+///
+/// A ring is slices with gaps between them. Measured off the closed annulus the
+/// hole is one unbroken band whatever the padding, so a node dialled to a wide
+/// Octave gap lays a solid ring of ground across everything behind it in the
+/// very sectors it is painting nothing — a shadow cast by ink that is not there,
+/// and worst exactly where the picture behind matters most, since a wide gap is
+/// dialled to let that picture through. The walk that cuts it is
+/// `slice_gap_distance`, shared with the standoff so the hole and the shadow
+/// over it open together.
+///
+/// Two radii, and they are different questions. The INK is read across the
+/// band's own middle, where a slice is opaque and a gap is bare — that is which
+/// sectors the node is drawing. The HOLE is read just outside the band's outer
+/// edge, where the node paints nothing at any angle so the clearing is the only
+/// thing that can be there; inside the band the ink is composited over its own
+/// hole (`node_paint`) and covers it.
+///
+/// The claim is the implication and not a correlation: every angle the hole is
+/// open at is an angle the node inks nothing at. The converse is deliberately
+/// NOT claimed — the hole is the ink DILATED by the Gap, so it closes over the
+/// narrow end of each gap and is open across fewer angles than the ink is
+/// absent from. A test asserting both would be asserting the reach is zero.
+///
+/// The closed-gap shot is what keeps it from passing on a hole that is simply
+/// broken: with the padding at 0 the ring is one annulus, and the hole has to be
+/// unbroken all the way round.
+#[test]
+fn a_wide_octave_gap_opens_the_hole_in_the_sectors_the_node_leaves_empty() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut gpu) = Shooter::new(SIZE) else {
+        return;
+    };
+    let rings = clearing_rings();
+    let build = |octave_gap: f32, gap: f32| -> Scene {
+        let mut scene = clearing_node(0, 0.0, true, gap);
+        scene.camera = harmonigraph_scene::Camera {
+            projection: harmonigraph_scene::Projection::Orthographic,
+            yaw: 0.0,
+            pitch: 0.0,
+            ..Default::default()
+        };
+        scene.octave_gap = octave_gap;
+        scene.pluses.clear();
+        scene
+    };
+
+    for (name, octave_gap, want_open) in
+        [("a closed gap", 0.0, false), ("a wide gap", SLICE_OCTAVE_GAP, true)]
+    {
+        let bare = gpu.shot(&build(octave_gap, 0.0));
+        let holed = gpu.shot(&build(octave_gap, SLICE_CLEAR_GAP));
+        let added = light_over(&holed, &bare);
+        let hole = light_about_center(&added, SIZE);
+        assert!(hole.far > 8.0, "{name}: no clearing to read, {:.1} px", hole.far);
+        // Pixels per uv off the hole's own outer edge, as every reading in this
+        // file takes it: the furthest the clearing reaches is the band's outer
+        // edge one Gap out.
+        let scale = hole.far / (rings.band.1 + SLICE_CLEAR_GAP) as f64;
+        let ink_r = 0.5 * (rings.band.0 + rings.band.1) as f64 * scale;
+        // Two fifths of a Gap past the band, which is inside the solid part of
+        // the hole and outside every layer the node draws.
+        let hole_r = (rings.band.1 + 0.4 * SLICE_CLEAR_GAP) as f64 * scale;
+
+        let (cx, cy) = ((SIZE[0] - 1) as f64 / 2.0, (SIZE[1] - 1) as f64 / 2.0);
+        let at = |px: &[f64], r: f64, a: f64| -> f64 {
+            let x = (cx + r * a.cos()).round() as usize;
+            let y = (cy + r * a.sin()).round() as usize;
+            px[y * SIZE[0] as usize + x]
+        };
+        let ink: Vec<f64> = bare.chunks(4).map(|p| brightness(p) as f64).collect();
+
+        let mut open = 0;
+        let mut over_ink = Vec::new();
+        for turn in 0..360 {
+            let a = (turn as f64).to_radians();
+            // A hole clears to WHITE over a black shot, so a cleared angle is
+            // most of a channel and an open one is none of it; half is far from
+            // either and reads the same on any rounding.
+            if at(&added, hole_r, a) < 0.5 * 3.0 * 255.0 {
+                open += 1;
+                if at(&ink, ink_r, a) > 24.0 {
+                    over_ink.push(turn);
+                }
+            }
+        }
+        assert!(
+            over_ink.is_empty(),
+            "{name}: the hole is open at {} degrees the node inks a slice at ({over_ink:?}), \
+             so what opened is a bite out of a slice rather than the sector beside it",
+            over_ink.len(),
+        );
+        if want_open {
+            assert!(
+                (20..340).contains(&open),
+                "{name}: the hole is open at {open} of 360 angles, which is a ring that is \
+                 either whole or gone rather than one cut by its slices",
+            );
+        } else {
+            assert_eq!(
+                open, 0,
+                "{name}: with no padding the ring is one annulus, and the hole broke anyway",
+            );
+        }
+    }
 }

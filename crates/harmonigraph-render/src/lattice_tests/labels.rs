@@ -40,7 +40,6 @@ fn one_node_behind_another() -> Scene {
     near.world_pos = STACK_AT.extend(0.0);
     near.activation = 1.0;
     near.scale = 1.0;
-    near.gutter = 0.0;
     near.hovered = false;
     near.on_home = true;
     let mut far = near;

@@ -68,7 +68,7 @@ fn a_ring_wears_the_wash_inside_its_own_dark_pool() {
         scene.glow_gap_soft = 0.16;
         scene.glow_gap_depth = depth;
         scene.glow_wash = wash;
-        scene.nodes[0].gutter = 0.16;
+        scene.glow_gap = 0.16;
         scene
     };
     let mut on_ground = |bg: glam::Vec4| {

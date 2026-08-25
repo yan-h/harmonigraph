@@ -73,30 +73,20 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         silent.bass_slots = 0;
         silent.melody_level = 0.0;
         silent.bass_level = 0.0;
-        // ...and a reach, which is the whole point of it: the idle branch keeps
-        // an idle node's fragments out to the edge of the hole its ring clears,
-        // and `parity_scene` hands its gutters to the off-sheet half — node 0,
-        // which this is a copy of, carries none. Without this the branch is
-        // compiled on both pipelines and never once decides anything, so the
-        // one spelling of `clearing_edge` it shares with the coverage is
-        // untested where a second spelling would show.
-        silent.gutter = 0.12;
         silent.world_pos.x += 0.9;
         scene.nodes.push(silent);
         scene
     };
-    // A clearing around a MARKED node, which is `node_clearing`'s own
-    // skip: the clearing's shape is the rings' disc unioned with one wedge per
-    // mark, and inside that disc the walk over the wedges is skipped as an
-    // answer already arrived at. `parity_scene` hands its gutters and its marks
-    // to different halves of its nodes — the off-sheet ones clear, the marked
-    // ones are on the home sheet — so without this the two never meet on one
-    // node and the skip is never taken.
+    // A WIDER clearing than the fixture's own, which is what reaches
+    // `node_clearing`'s skip: the clearing's shape is the rings' disc unioned
+    // with one wedge per mark, and inside that disc the walk over the wedges is
+    // skipped as an answer already arrived at. At the Gap `parity_scene` ships,
+    // a marked node's wedge stands outside the disc over most of its own
+    // sector, so the skip is compiled on both pipelines and rarely decides
+    // anything; a reach this wide swallows the strip and takes it.
     let clearing = || {
         let mut scene = parity_scene();
-        for node in &mut scene.nodes {
-            node.gutter = 0.16;
-        }
+        scene.glow_gap = 0.6;
         scene
     };
     // The ring's OTHER reading, which is the shader's second branch inside

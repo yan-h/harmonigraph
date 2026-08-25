@@ -515,22 +515,6 @@ pub struct NodeInstance {
     /// together — so every layer inside keeps its proportions and only the
     /// node's size on screen changes.
     pub scale: f32,
-    /// Width of the knockout gutter this node clears around itself, in quad
-    /// UV units (see [`ViewConfig::sevens_gutter`]). Every node the scene ships
-    /// carries it, the home sheet included and whatever depth the window holds;
-    /// 0 only when the gutter is off.
-    ///
-    /// A WIDTH and not a decision: whether a node clears, and how strongly, is
-    /// per LAYER and settled in the shader, each layer's hole scaled by the
-    /// level that paints it. Gating this on the note instead would leave a node
-    /// wearing an audio ring with no key down — which the Gate hands out freely
-    /// — drawing that ring over the sheets behind it with no hole to sit in.
-    ///
-    /// The hole is over the SHEETS and not over the resting field: a marker
-    /// standing where a node stands is drawn between the two halves of that
-    /// node (`GpuInstance::paint` in harmonigraph-render), so no clearing takes
-    /// a cross.
-    pub gutter: f32,
     /// Signed cents from the home-sheet node this one shares a LETTER and an
     /// accidental with: `(threes - 2*(sevens - center), fives, center)`,
     /// which is the position the letter walk lands on. Not the same NAME —
@@ -839,7 +823,7 @@ pub struct Scene {
     /// What the melody/bass marks stand off and what the node's billboard is
     /// sized on, so a node whose band is dialled away still wears its marks
     /// where its picture actually ends. The clearing is bounded by this and
-    /// measured per layer instead (see [`NodeInstance::gutter`]).
+    /// measured per layer instead (`node_clearing` in lattice.wgsl).
     pub rings_outer: f32,
     /// Where the melody/bass mark strip starts (see
     /// [`RingStack::mark_inner`]) — a padding out from
@@ -944,11 +928,6 @@ pub struct Scene {
     /// Already clamped, and held short of 1 so the fade never collapses to a
     /// zero-width `smoothstep`.
     pub plus_taper_start: f32,
-    /// How wide the sevens knockout's fade is, in the uv of a full-size
-    /// node (see [`ViewConfig::sevens_gutter_soft`]). View-wide, as the reach
-    /// beside it is — what varies node to node is the STRENGTH, which the
-    /// shader takes per layer from that layer's own level. Already clamped.
-    pub sevens_soft: f32,
     /// The ground the lattice is drawn onto: the pane fill this pass gets
     /// composited over, which is the skin's `well` — the recessed grey the
     /// lattice pane paints its own rect with, as every other picture pane

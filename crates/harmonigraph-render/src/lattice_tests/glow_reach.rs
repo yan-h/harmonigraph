@@ -389,7 +389,7 @@ fn a_node_under_a_nearer_sheets_node_cuts_nothing_out_of_its_light() {
         scene.glow_strength = 1.5;
         // A clearing, so the near node's knockout covers the far node's ink
         // in the scene pass; what is measured is the light, not the knockout.
-        scene.nodes[0].gutter = 0.4;
+        scene.glow_gap = 0.4;
         scene
     };
     let covering = |wash: f32| -> Scene {
@@ -549,7 +549,7 @@ fn the_middle_of_a_node_is_where_its_light_is_fullest() {
         };
         scene.glow_reach = reach;
         scene.glow_strength = 1.5;
-        scene.nodes[0].gutter = 0.16;
+        scene.glow_gap = 0.16;
         scene
     };
     // The fixture's one node sits at the origin, which the camera is pointed
@@ -573,7 +573,6 @@ fn the_middle_of_a_node_is_where_its_light_is_fullest() {
     let mut far = flat.nodes[0];
     far.world_pos.z = -1.0;
     far.world_pos.x += 0.6;
-    far.gutter = 0.0;
     far.glow = harmonigraph_scene::GlowStep { level: 1.0, row: 1, mix: 1.0, marked: 0.0 };
     far.color = glam::Vec4::new(0.9, 0.2, 0.2, 1.0);
     let mut sheets = at(0.8);
