@@ -2157,14 +2157,16 @@ fn gutter_coverage(sd: f32, reach: f32, soft: f32) -> f32 {
 // full size; a layer leaving takes it back down. Nothing steps, and no layer's
 // fade drags another's hole with it.
 //
-// Each layer's shape is its own ANNULUS, dilated by the reach, and not that
-// annulus filled to the node's centre. A node hides what stands behind the
-// RINGS it draws and nothing else, so the middle a node leaves empty is empty
-// to see through: the picture behind reads on through it, and what says which
-// sheet is in front is the ring, which is the part of a node that has ink in
-// it. Filling inward instead makes a node an opaque disc the size of its
+// Each layer's shape is its own ANNULUS cut by its own SLICES, dilated by the
+// reach, and not that annulus filled to the node's centre. A node hides what
+// stands behind the ink it draws and nothing else, so both the middle it leaves
+// empty and the gaps between its slices are empty to see through: the picture
+// behind reads on through them, and what says which sheet is in front is the
+// ink. Filling inward instead makes a node an opaque disc the size of its
 // outermost ring, and the node behind it — however far off its centre stands —
-// is erased down to the ground plus whatever light was standing there.
+// is erased down to the ground plus whatever light was standing there; taking
+// the annulus whole instead does the same thing round the turn, and costs most
+// of one at any Octave gap worth dialling.
 //
 // The same shape `glow_standoff` measures, and for a reason the two share:
 // the middle of a node is the one place its light is wanted whole, so a
@@ -2173,13 +2175,23 @@ fn gutter_coverage(sd: f32, reach: f32, soft: f32) -> f32 {
 fn node_clearing(in: VsOut, oct: OctRing, d: f32) -> f32 {
     let reach = in.gutter;
     let soft = in.soft;
+    // The one angular length shared by the layers drawn at every slice, taken
+    // once for both of them — `glow_standoff`'s own walk, and here for the same
+    // reason it is there. A ring is slices with gaps between them, so a hole
+    // measured off the closed annulus alone is a hole the shape of the ring the
+    // ink is drawn IN rather than of the ink. At the Octave gap the view ships
+    // the two are within a pixel of each other; at a wide one the annulus is
+    // most of a turn the node paints nothing in, and clearing it lays a solid
+    // band of ground across whatever stands behind, in exactly the sectors the
+    // node is not drawing. The marks have their own, per wedge.
+    let slice = slice_gap_distance(in.uv, d, oct);
     var cov = 0.0;
     // The octave band, on the node's own envelope: the annulus its slices and
     // the glyphs inside them are drawn between. Skipped where the view draws no
     // band at all, which is a node whose whole picture is its ring and its
     // marks.
     if u.misc3.z > u.misc3.y {
-        cov = gutter_coverage(annulus_distance(d, u.misc3.y, u.misc3.z), reach, soft)
+        cov = gutter_coverage(max(annulus_distance(d, u.misc3.y, u.misc3.z), slice), reach, soft)
             * clamp(in.params.x, 0.0, 1.0);
     }
     // The audio ring, on ITS own: the layer's width bar says whether there is a
@@ -2190,7 +2202,7 @@ fn node_clearing(in: VsOut, oct: OctRing, d: f32) -> f32 {
     if u.misc7.w > u.misc7.z {
         cov = max(
             cov,
-            gutter_coverage(annulus_distance(d, u.misc7.z, u.misc7.w), reach, soft)
+            gutter_coverage(max(annulus_distance(d, u.misc7.z, u.misc7.w), slice), reach, soft)
                 * clamp(in.ring, 0.0, 1.0),
         );
     }
@@ -2225,14 +2237,22 @@ fn node_clearing(in: VsOut, oct: OctRing, d: f32) -> f32 {
             select(0.0, in.params.z, (in.marks.y & bit) != 0u),
         );
         if level > 0.0 {
-            // The mark is an annular SECTOR: the pie `sector_distance`
-            // measures, intersected with everything past the strip's inner
-            // edge. Filled to the centre instead, one mark would clear the
-            // node's whole middle and every other layer's hole with it — the
-            // one wedge the node reaches furthest in deciding the shape of a
-            // hole the other layers are read off their own radii for.
-            let pie = sector_distance(in.uv, oct_sector(s, oct), strip_out);
-            let wedge = max(pie, strip_in - d);
+            // The mark is an annular SECTOR: the pie `sector_pie` measures,
+            // intersected with everything past the strip's inner edge and with
+            // the gap its own sides are cut back by. Filled to the centre
+            // instead, one mark would clear the node's whole middle and every
+            // other layer's hole with it — the one wedge the node reaches
+            // furthest in deciding the shape of a hole the other layers are
+            // read off their own radii for.
+            //
+            // Its OWN sides, off the same fold the pie is taken in, and not the
+            // walk above: a mark is drawn at some of the node's slices rather
+            // than all of them, and that walk answers for whichever slice is
+            // nearest whether this mark has any part in it (see
+            // `slice_side_distance`).
+            let fold = sector_fold(in.uv, oct_sector(s, oct));
+            let pie = sector_pie(fold, strip_out);
+            let wedge = max(max(pie, strip_in - d), slice_side_distance(fold));
             cov = max(cov, gutter_coverage(wedge, reach, soft) * clamp(level, 0.0, 1.0));
         }
     }
@@ -2435,11 +2455,11 @@ fn ring_shade(sd: f32, soft: f32, level: f32) -> f32 {
 /// with nothing inside the innermost ring claiming the pixel, the light runs in
 /// to the centre and stops one Gap short of that ring's inner edge.
 ///
-/// [`node_clearing`] measures the same annuli, which is what makes the two
-/// Shadow bars one family: what a node holds the light off is what it hides,
-/// and neither is the empty circle its innermost ring encloses. What is still
-/// its own function is the FALLOFF — a decay here against that one's ramp — and
-/// the slice walk below, which the knockout has no use for.
+/// [`node_clearing`] measures the same annuli and cuts them by the same slices,
+/// which is what makes the two Shadow bars one family: what a node holds the
+/// light off is what it hides, and neither is the empty circle its innermost
+/// ring encloses. What is still its own function is the FALLOFF — a decay here
+/// against that one's ramp.
 ///
 /// A ring that reaches the centre itself has no such middle, its own annulus
 /// being a disc: the standoff then covers what it covers, and the light is a
