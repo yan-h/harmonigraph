@@ -1263,4 +1263,110 @@ mod tests {
             }
         }
     }
+
+    /// The Clearance against a wide OCTAVE GAP, written to `target/scratch/`:
+    /// what a node clears in the sectors it is drawing nothing in.
+    ///
+    /// A probe: it asserts nothing, the verdict being a look. What a number
+    /// cannot say is whether a node whose hole is cut back to its slices still
+    /// reads as one object standing in front, or as a set of unrelated marks
+    /// with the sheet behind coming through between them — which is the whole
+    /// question the slice term in `node_clearing` settles.
+    ///
+    /// The reading conditions, which are the expensive part: the sheets pulled
+    /// to a cabinet shear of 0.10, so a back node stands within half a radius
+    /// of a front one and there is an occlusion question at all — at the shear
+    /// the view ships they miss each other entirely; the names off, since the
+    /// claim is about which RING is in front; the light's own clock off, so one
+    /// frame is the whole picture; and the DAW's ground rather than the
+    /// preset's near-black.
+    ///
+    /// `PROBE_TAG` names the shots, which is what makes a BEFORE and an AFTER
+    /// of one look: drop the `slice` term out of `node_clearing`, shoot under
+    /// one tag, restore and shoot under another.
+    ///
+    /// ```text
+    /// cargo test -p harmonigraph-offline -- --ignored --nocapture octave_gap_clearance
+    /// ```
+    #[test]
+    #[ignore = "a probe: writes PNGs and asserts nothing"]
+    fn octave_gap_clearance_probe() {
+        use harmonigraph_ui::{draw_pane, Layout, SharedState};
+
+        const SIZE: [u32; 2] = [1200, 1000];
+        const PPP: f32 = 2.0;
+        const NOW: f64 = 1.0;
+
+        let Some(mut renderer) = Renderer::new(SIZE) else {
+            eprintln!("no usable GPU adapter; nothing rendered");
+            return;
+        };
+        let context = egui::Context::default();
+        harmonigraph_ui::theme::apply_theme(&context);
+        context.set_pixels_per_point(PPP);
+
+        let layout = Layout::preset("lattice").expect("the lattice preset");
+        let mut state = SharedState::new(FORMAT);
+        state.set_background((24, 25, 29));
+        state.frame_params.fade_time = 0.0;
+        state.view.glow_attack = 0.0;
+        state.view.glow_release = 0.0;
+        state.view.glow_strength = 0.6;
+        state.view.extent_sevens = 1;
+        state.view.show_labels = false;
+        for note in [55u8, 60, 64, 67, 71] {
+            state.tracker.handle_event(harmonigraph_core::NoteEvent::on(0.0, 0, note, 1.0));
+        }
+
+        let points = egui::vec2(SIZE[0] as f32 / PPP, SIZE[1] as f32 / PPP);
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, points);
+        let placements = layout.resolve(points);
+        let background =
+            egui::Color32::from_rgb(layout.background.0, layout.background.1, layout.background.2);
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/scratch");
+        std::fs::create_dir_all(&dir).expect("a scratch directory");
+
+        let tag = std::env::var("PROBE_TAG").unwrap_or_else(|_| "base".to_string());
+        let fresh = harmonigraph_scene::ViewConfig::default();
+        // (tag, octave gap, clearance)
+        let shots: Vec<(&str, f32, f32)> = vec![
+            ("a-oct05-clear", fresh.octave_gap, fresh.sevens_gutter),
+            ("b-oct40-clear", 0.40, fresh.sevens_gutter),
+            ("c-oct40-noclear", 0.40, 0.0),
+            ("d-oct20-clear", 0.20, fresh.sevens_gutter),
+            ("e-oct10-clear", 0.10, fresh.sevens_gutter),
+            ("f-oct15-clear", 0.15, fresh.sevens_gutter),
+            ("g-oct25-clear", 0.25, fresh.sevens_gutter),
+            ("h-oct30-clear", 0.30, fresh.sevens_gutter),
+        ];
+        let home = state.camera;
+        for (shot, octave_gap, clearance) in shots {
+            state.camera = home;
+            state.camera.zoom_by(3.5);
+            state.camera.cabinet_scale = 0.10;
+            state.view.octave_gap = octave_gap;
+            state.view.sevens_gutter = clearance;
+            state.view.sevens_gutter_soft = clearance;
+            let output = context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    time: Some(NOW),
+                    max_texture_side: Some(renderer.max_texture_side()),
+                    ..Default::default()
+                },
+                |ui| {
+                    for (pane, rect) in &placements {
+                        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(*rect));
+                        draw_pane(&mut child, *pane, &mut state, NOW);
+                    }
+                },
+            );
+            let primitives = context.tessellate(output.shapes, PPP);
+            let bytes = renderer.render(&primitives, &output.textures_delta, PPP, background);
+            let path = dir.join(format!("octgap-{tag}-{shot}.png"));
+            image::save_buffer(&path, &bytes, SIZE[0], SIZE[1], image::ExtendedColorType::Rgba8)
+                .expect("write the png");
+            eprintln!("{}", path.canonicalize().unwrap_or(path.clone()).display());
+        }
+    }
 }

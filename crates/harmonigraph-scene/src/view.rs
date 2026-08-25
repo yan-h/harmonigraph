@@ -252,17 +252,26 @@ pub struct ViewConfig {
     /// the whole point — the alternative is shrinking the 5-limit sheet to
     /// open up clearance, and the 5-limit sheet is what you came to look at.
     ///
-    /// FOOTPRINT means the RINGS the node draws, this far out from them, and
-    /// not a circle sized to hold them: a node reaching a melody mark on one
-    /// octave bulges over that wedge and hugs its rings everywhere else, and
-    /// the empty middle those rings stand around clears nothing at all. A
-    /// circle answers with the widest thing the node reaches in ANY direction,
-    /// which on a marked node is a gap wider than itself all the way round —
-    /// so the hole stops reading as the node's and starts reading as empty
-    /// space somebody cut out. Filled to the centre it is worse still: a node
-    /// is then an opaque disc the size of its outermost ring, and a ring
-    /// passing behind another node's middle is erased with nothing but its own
-    /// shadow in the light left to say it was there.
+    /// FOOTPRINT means the INK the node draws, this far out from it, and not a
+    /// circle sized to hold it: a node reaching a melody mark on one octave
+    /// bulges over that wedge and hugs its rings everywhere else, and the empty
+    /// middle those rings stand around clears nothing at all. A circle answers
+    /// with the widest thing the node reaches in ANY direction, which on a
+    /// marked node is a gap wider than itself all the way round — so the hole
+    /// stops reading as the node's and starts reading as empty space somebody
+    /// cut out. Filled to the centre it is worse still: a node is then an
+    /// opaque disc the size of its outermost ring, and a ring passing behind
+    /// another node's middle is erased with nothing but its own shadow in the
+    /// light left to say it was there.
+    ///
+    /// Ink and not the ANNULUS the ink is drawn in, which is the same argument
+    /// taken round the turn: a ring is slices with gaps between them, and the
+    /// gaps are [`octave_gap`](Self::octave_gap) wide. Measured off the closed
+    /// annulus a node clears the whole turn whatever it is drawing, so a wide
+    /// Octave gap lays a solid band of ground over what stands behind in the
+    /// very sectors the node is empty — a dark ring cast by ink that is not
+    /// there. The slices are cut out of it exactly as the standoff cuts them
+    /// (`glow_standoff`), which at the shipped gap moves no pixel at all.
     ///
     /// The shape is the shader's (`node_clearing`), off the same radii that
     /// draw the layers, and it is built one LAYER at a time: each clears its
