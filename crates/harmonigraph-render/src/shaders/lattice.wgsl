@@ -2026,25 +2026,86 @@ fn mark_extension(slots: u32, ring: OctRing, uv: vec2<f32>, strip: f32, aa: f32)
 // the strip's inner edge; what is shared is the ANGULAR half of the shape,
 // which is the part with a case in it.
 fn sector_distance(uv: vec2<f32>, edges: vec2<f32>, r: f32) -> f32 {
-    // Into the wedge's own frame — its middle up the y axis — and folded onto
-    // one side of that middle, which turns its two edges into one edge lying
-    // `half` off the fold. The wedge's edges arrive counter-clockwise first and
-    // the walk between them is clockwise, so their difference is its width.
+    return sector_pie(sector_fold(uv, edges), r);
+}
+
+// One wedge's own frame, which both readings below are taken in.
+struct SectorFold {
+    // The fragment, with the wedge's middle up the y axis and its two edges
+    // folded onto one.
+    q: vec2<f32>,
+    // That edge's direction, half the wedge's width off the middle.
+    e: vec2<f32>,
+}
+
+// `uv` into the wedge's own frame — its middle up the y axis — folded onto one
+// side of that middle, which turns its two edges into one edge lying `half` off
+// the fold. The wedge's edges arrive counter-clockwise first and the walk
+// between them is clockwise, so their difference is its width.
+//
+// A step of its own because a mark asks TWO questions of one wedge — how far its
+// pie is, and how far its gap-cut sides are — and a fold each would be two
+// constructions to keep in step as well as a second `sin`/`cos` pair per marked
+// slot per fragment.
+fn sector_fold(uv: vec2<f32>, edges: vec2<f32>) -> SectorFold {
     let mid = 0.5 * (edges.x + edges.y);
     let half = clamp(0.5 * (edges.x - edges.y), 0.0, TAU * 0.5);
     let c = cos(mid);
     let s = sin(mid);
-    let q = vec2<f32>(abs(uv.y * c - uv.x * s), uv.x * c + uv.y * s);
-    // The two features a pie has: its arc, and the straight edge running from
-    // the center out to it. Which one is nearest is which SIDE of that edge the
-    // point falls — inside the wedge the arc is the only way out, outside it the
-    // edge is. `sign` is what says which, so a wedge past a half turn (which the
-    // extras can hand out — see `outer_glyph`) needs no case of its own: the
-    // fold puts the point on the far side of one edge either way.
-    let e = vec2<f32>(sin(half), cos(half));
-    let arc = length(q) - r;
-    let edge = length(q - e * clamp(dot(q, e), 0.0, r));
-    return max(arc, edge * sign(e.y * q.x - e.x * q.y));
+    return SectorFold(
+        vec2<f32>(abs(uv.y * c - uv.x * s), uv.x * c + uv.y * s),
+        vec2<f32>(sin(half), cos(half)),
+    );
+}
+
+// Distance out of the pie `f` folds, out to radius `r`.
+//
+// The two features a pie has: its arc, and the straight edge running from the
+// center out to it. Which one is nearest is which SIDE of that edge the point
+// falls — inside the wedge the arc is the only way out, outside it the edge is.
+// The sign is what says which, so a wedge past a half turn (which the extras can
+// hand out — see `outer_glyph`) needs no case of its own: the fold puts the
+// point on the far side of one edge either way.
+fn sector_pie(f: SectorFold, r: f32) -> f32 {
+    let arc = length(f.q) - r;
+    let edge = length(f.q - f.e * clamp(dot(f.q, f.e), 0.0, r));
+    return max(arc, edge * sign(sector_side(f)));
+}
+
+// Signed perpendicular distance from the folded point to its wedge's edge LINE:
+// negative inside the wedge, positive outside it.
+fn sector_side(f: SectorFold) -> f32 {
+    return f.e.y * f.q.x - f.e.x * f.q.y;
+}
+
+// Distance out of ONE slice's ink across its SIDES, signed: the wedge `f` folds
+// with half an Octave gap taken off each side, negative inside what is left and
+// outside it the perpendicular distance to that cut.
+//
+// The angular half of the footprint of a layer drawn at SOME of a node's slices,
+// where `slice_gap_distance` is that answer for a layer drawn at every one. The
+// two agree wherever the nearest boundary is this wedge's own, and they part
+// exactly where they must: the walk answers "how far out of the nearest SLICE",
+// so at a boundary this wedge has no part in it hands back half a gap however
+// far off this wedge's ink is. A mark reading the walk therefore stands the
+// light off down boundaries it does not draw at, one shadow per boundary its pie
+// is still within a Gap of — which is
+// `a_mark_stands_no_light_off_a_boundary_it_does_not_draw_at`.
+//
+// Half a gap is ADDED rather than the wedge narrowed by an angle, because the
+// gap is a band of constant thickness laid along the boundary ray and not a
+// constant-angle wedge (see `slice_gap_half`). The cut is a perpendicular offset
+// of the edge, and on a signed distance that is a constant.
+//
+// Cut only on the side the edge actually runs to, which is `outer_glyph`'s own
+// gate and holds for the same reason: the boundary LINE passes just as close on
+// the far side of the node, where a slice past a half turn has no edge at all. A
+// hard step where the ink's is soft, the light taking no derivatives anywhere
+// (see `fs_glow`); it stands where `dot(q, e)` changes sign, a quarter turn off
+// the wedge's middle, so it is either far outside the ink (a narrow wedge) or
+// deep enough inside it that the coverage is already solid (a wide one).
+fn slice_side_distance(f: SectorFold) -> f32 {
+    return sector_side(f) + select(0.0, slice_gap_half(), dot(f.q, f.e) > 0.0);
 }
 
 // How much of the destination one layer's knockout clears, `sd` out from that
@@ -2190,8 +2251,13 @@ fn annulus_distance(d: f32, inner: f32, outer: f32) -> f32 {
 ///
 /// The ANGULAR half of a ring's footprint, where [`annulus_distance`] is the
 /// radial one; [`glow_standoff`] intersects the two with a `max`. One walk
-/// answers it for every layer at once, since one number cuts every angular
-/// slice on the node (see [`slice_gap_half`]).
+/// answers it for every RING at once, since one number cuts every angular slice
+/// on the node (see [`slice_gap_half`]) and a ring is drawn at all of them.
+///
+/// A layer drawn at only SOME of them is answered off its own wedge instead
+/// ([`slice_side_distance`]): the nearest slice to a fragment is the wrong slice
+/// to measure once the layer is not in every one, and the walk has no way to
+/// know which it landed on.
 ///
 /// Measured to the boundary RAYS rather than to each slice in turn, which is
 /// what keeps it one walk instead of `span` distance fields: the gaps are
@@ -2381,10 +2447,16 @@ fn ring_shade(sd: f32, soft: f32, level: f32) -> f32 {
 ///
 /// It is measured ACROSS the ring as well as along it: a ring is slices with
 /// gaps between them, not a closed annulus, so every term is that annulus
-/// intersected with [`slice_gap_distance`]. Without it a node stands the light
-/// off the whole turn at every gap width — a dark ring under a set of slices
-/// that may be nowhere near each other — and the gaps the picture is drawn with
-/// would be the one length on the node the light cannot see.
+/// intersected with an angular one. Without it a node stands the light off the
+/// whole turn at every gap width — a dark ring under a set of slices that may be
+/// nowhere near each other — and the gaps the picture is drawn with would be the
+/// one length on the node the light cannot see.
+///
+/// WHICH angular one turns on how many of the node's slices the layer is drawn
+/// at. A ring is drawn at all of them, so one walk to the nearest boundary
+/// answers for the whole ring at once ([`slice_gap_distance`]); a mark is drawn
+/// at the slices two voices took, so it is answered off its own wedge instead
+/// ([`slice_side_distance`]), a boundary it has no part in being no edge of its.
 ///
 /// Each term carries its own level, exactly as [`node_clearing`]'s do: a layer
 /// that is off, refused by the stack, attacking or releasing opens and closes
@@ -2398,7 +2470,8 @@ fn ring_shade(sd: f32, soft: f32, level: f32) -> f32 {
 /// coverages, with a level on each, is a max over nothing the picture means.
 fn glow_standoff(in: VsOut, d: f32, oct: OctRing) -> f32 {
     let soft = standoff_soft(in.soft);
-    // The one angular length on the node, taken once for every term below.
+    // The one angular length shared by the layers drawn at every slice, taken
+    // once for both of them. The marks have their own, per wedge.
     let gap = slice_gap_distance(in.uv, d, oct);
     var shade = 0.0;
     // The octave band, on the node's own envelope, between the two radii its
@@ -2444,14 +2517,21 @@ fn glow_standoff(in: VsOut, d: f32, oct: OctRing) -> f32 {
             select(0.0, in.params.z, (in.marks.y & bit) != 0u),
         );
         if level > 0.0 {
-            // The mark is an annular SECTOR, which is the pie `sector_distance`
+            // The mark is an annular SECTOR, which is the pie `sector_pie`
             // measures intersected with everything past the strip's inner edge
             // and with the gap its own sides are cut back by — a max of the
             // three distances, the way an intersection of fields always is.
             // Filled to the centre instead, one mark would put the node's whole
             // middle in shadow.
-            let pie = sector_distance(in.uv, oct_sector(s, oct), strip_out);
-            let sd = max(max(pie, strip_in - d), gap);
+            //
+            // Its OWN sides, off the same fold the pie is taken in, and not the
+            // walk above: a mark is drawn at some of the node's slices rather
+            // than all of them, and the walk answers for whichever slice is
+            // nearest whether this mark has any part in it (see
+            // `slice_side_distance`).
+            let fold = sector_fold(in.uv, oct_sector(s, oct));
+            let pie = sector_pie(fold, strip_out);
+            let sd = max(max(pie, strip_in - d), slice_side_distance(fold));
             shade = max(shade, ring_shade(sd, soft, level));
         }
     }
