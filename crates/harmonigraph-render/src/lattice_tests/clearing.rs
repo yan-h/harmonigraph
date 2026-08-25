@@ -899,3 +899,78 @@ fn a_wide_octave_gap_opens_the_hole_in_the_sectors_the_node_leaves_empty() {
         }
     }
 }
+
+/// How far off the home sheet the reading below puts its second node, as the
+/// size factor `derive_scene` hands a node one step out
+/// ([`ViewConfig::sevens_size`](harmonigraph_scene::ViewConfig)).
+///
+/// Well under 1, where the view ships AT 1: a factor near it makes the two
+/// answers below agree to within the pixel grid's own wobble, and the fresh view
+/// is the one setting at which this claim cannot be read at all.
+const OFF_SHEET_SIZE: f32 = 0.5;
+
+/// A node's hole SHRINKS with the node: it is a share of the node's radius, so
+/// an off-sheet node clears in proportion to what it draws.
+///
+/// The Gap is dialled as a fraction of a node's radius, which is what quad uv is
+/// — the same unit the Ring gap and the Octave gap beside it read in — and the
+/// hole is that reach around the node's own ink. So the whole picture a node
+/// draws scales as one thing, and a sheet stepped back is the home sheet drawn
+/// smaller rather than a smaller node wearing a full-size margin.
+///
+/// The alternative is a constant width ON SCREEN, which is what the retired
+/// Clearance was: the shader divided the setting by the node's size factor, so a
+/// half-size node cleared a full-size gap. Two arguments for the share, and the
+/// second is the one that decides it. A gap that does not shrink reads as a
+/// property of the sheet rather than of the node, and at a small `sevens_size`
+/// it is most of what an off-sheet node covers — the ink is a quarter of the
+/// area and the margin round it is the rest. And the Gap is ONE length for the
+/// hole and the shadow over it (`glow_gap` in lattice.wgsl); the shadow was
+/// always the node's own share, so a hole in screen units would be the two
+/// disagreeing on every sheet but the home one.
+///
+/// Read as a RATIO of the two holes' outer radii rather than against a computed
+/// radius, so nothing here has to know the camera: both shots are the same node
+/// under the same projection, and the size factor is the only thing between
+/// them.
+#[test]
+fn an_off_sheet_node_clears_in_proportion_to_its_own_size() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut gpu) = Shooter::new(SIZE) else {
+        return;
+    };
+    let build = |scale: f32, gap: f32| -> Scene {
+        let mut scene = clearing_node(0, 0.0, true, gap);
+        scene.camera = harmonigraph_scene::Camera {
+            projection: harmonigraph_scene::Projection::Orthographic,
+            yaw: 0.0,
+            pitch: 0.0,
+            ..Default::default()
+        };
+        scene.pluses.clear();
+        scene.nodes[0].scale = scale;
+        scene
+    };
+    let far_of = |gpu: &mut Shooter, scale: f32| -> f64 {
+        let bare = gpu.shot(&build(scale, 0.0));
+        let holed = gpu.shot(&build(scale, CLEAR_REACH));
+        light_about_center(&light_over(&holed, &bare), SIZE).far
+    };
+    let home = far_of(&mut gpu, 1.0);
+    let off = far_of(&mut gpu, OFF_SHEET_SIZE);
+    assert!(home > 20.0, "the home node's hole is only {home:.1} px; there is nothing to scale");
+
+    let want = f64::from(OFF_SHEET_SIZE);
+    let got = off / home;
+    // A pixel either side of each radius, which is what a hole's own edge lands
+    // on: the ratio carries both, and at this size factor that is a couple of
+    // percent against the fifty the constant-width answer would be out by.
+    let slack = 2.0 / home + 2.0 * want / home;
+    assert!(
+        (got - want).abs() < slack,
+        "the off-sheet hole reaches {off:.1} px against the home sheet's {home:.1}, a ratio \
+         of {got:.3} where the node is drawn at {want} — a hole held to a constant width on \
+         screen comes out ABOVE the size factor, the margin being the one part of the \
+         picture that did not shrink",
+    );
+}
