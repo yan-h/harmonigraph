@@ -405,19 +405,15 @@ struct Uniforms {
     misc12: [f32; 4],
     /// The WASH. x: how much of the light standing at a node's pixel washes
     /// over the node's own INK (`Scene::glow_wash`), where `misc11.w` above is
-    /// the GROUND's share of that same field. y: how brightly a resting marker
-    /// lights the position it stands at (`Scene::marker_light`); z: how far that
-    /// light reaches from the marker's crossing, in WORLD units
-    /// (`Scene::marker_span`) — a length where every other dial here is a share,
-    /// because the pool's billboard is sized to it; w: one quad uv as a world
-    /// length on the markers' sheet (`Scene::marker_unit`), which is what the
-    /// pool's draw converts between its own world lengths and the uv the Gap it
-    /// stands the light off by is dialled in.
+    /// the GROUND's share of that same field. y: one quad uv as a world length
+    /// on the markers' sheet (`Scene::marker_unit`), which is what the markers'
+    /// standoff draw converts between its own world lengths and the uv the Gap
+    /// it holds the light off by is dialled in. z/w unused.
     ///
-    /// The marker's light rides beside the wash because the two are the pair
-    /// that decides what a resting position looks like — one lays a pool down,
-    /// the other says how much of it the cross wears — and neither is a term of
-    /// the standoff above.
+    /// A row of its own because the wash is not a term of the standoff above:
+    /// the Gap bars shape the field the GROUND is painted from and this reads
+    /// that same field raw, so a dial sitting among them would carry the
+    /// coupling it exists to break.
     ///
     /// A row of its own because it is not a term of the standoff, close as it
     /// reads to the depth: the Gap bars shape what the clearing paints, and
@@ -1241,7 +1237,7 @@ impl LatticeCallback {
                     [0.0; 4]
                 },
                 misc13: if lights {
-                    [scene.glow_wash, scene.marker_light, scene.marker_span, scene.marker_unit]
+                    [scene.glow_wash, scene.marker_unit, 0.0, 0.0]
                 } else {
                     [0.0; 4]
                 },
@@ -1327,9 +1323,8 @@ struct LatticeResources {
     /// The node glow's own pass: one draw over the node instance buffer, into
     /// a target of the glow's own (see [`create_glow_pipeline`]).
     glow_pipeline: wgpu::RenderPipeline,
-    /// The resting markers' light, into that same target and under the same
-    /// blends — the other half of what the glow pass draws
-    /// (see [`create_glow_pipelines`]).
+    /// The shadow the resting markers cast into that same target — the other
+    /// half of what the glow pass draws (see [`create_glow_pipelines`]).
     plus_glow_pipeline: wgpu::RenderPipeline,
     /// The colour it draws in, settled ahead of it: the ink read round every
     /// node, then blurred (see [`create_ink_strip_pipelines`]).
@@ -2378,14 +2373,12 @@ fn create_pipelines(
 }
 
 /// Both pipelines that write the glow's target, from one source: the nodes'
-/// light and the resting markers'.
+/// light and the shadow the resting markers cast into it.
 ///
 /// They travel together for the reason the scene's pair does — one pass, one set
 /// of attachments, so a pipeline built for it is built for both — and for one
-/// more of their own: they are the same light. A marker's pool is `glow_layer`'s
-/// falloff with the node's part taken out (`plus_glow_layer` in lattice.wgsl),
-/// and building them apart is how the two would come to disagree about what
-/// light in this picture looks like.
+/// more of their own: the marker's draw writes the same third attachment a
+/// node's rings write their standoff into, on the same Gap bars.
 fn create_glow_pipelines(
     device: &wgpu::Device,
     shader_src: &str,
@@ -2458,11 +2451,11 @@ fn create_glow_pipelines(
 /// **No depth.** The pass this draws into carries none: it is the glow's own,
 /// ahead of the scene's, and a screen blend has no order to defend.
 ///
-/// **Two pipelines, one target state.** The nodes' light and the resting
-/// markers' are the same light — same three attachments, same three blends —
-/// and differ only in what they are drawn over: one instance buffer of nodes,
-/// one of markers. `entries` and `buffers` are the whole of that difference,
-/// which is what keeps a marker's pool from being a second kind of light by
+/// **Two pipelines, one target state.** The nodes' light and the markers'
+/// standoff write the same three attachments under the same three blends, and
+/// differ only in what they are drawn over: one instance buffer of nodes, one of
+/// markers. `entries` and `buffers` are the whole of that difference, which is
+/// what keeps a cross's shadow from landing on different terms than a ring's by
 /// drifting a blend.
 fn create_glow_pipeline(
     device: &wgpu::Device,
@@ -3633,18 +3626,16 @@ impl CallbackTrait for LatticeCallback {
                     pass.set_pipeline(&resources.glow_pipeline);
                     pass.draw(0..4, 0..pane.instance_count);
                 }
-                // The resting markers, into the same three attachments: a pool
-                // at every home position melding with the node halos above
-                // rather than summing with them, and the standoff each cross
-                // holds that light off by. It draws in the same pass because it
-                // is the same field — one light with one shadow cut into it,
-                // laid down under the whole lattice, and a marker arriving in a
-                // pass of its own would be a second layer for the composite and
-                // every clearing to read.
+                // The resting markers, into the same three attachments: the
+                // standoff each cross holds the light above off by. It draws in
+                // the same pass because it is the same field — one light with
+                // one shadow cut into it, laid down under the whole lattice,
+                // and a marker arriving in a pass of its own would be a second
+                // layer for the composite and every clearing to read.
                 //
                 // Order-free like the node draw beside it, on the same
-                // guarantee: both blends are commutative, so nothing decides
-                // which of a marker and a node reaches a pixel first.
+                // guarantee: the shade blend is `max`, so nothing decides which
+                // of a marker and a node reaches a pixel first.
                 //
                 // Both groups set here rather than left over from the draw
                 // above, which is skipped whenever every node is culled — a

@@ -16,7 +16,7 @@ use crate::widgets::{button_row, choice_row, OctaveStrip, StackBar, ValueBar};
 use crate::SharedState;
 use harmonigraph_scene::{
     Pulse, SpectralReading, ViewConfig, GAP_MAX, GLOW_BALLISTICS_MAX, GLOW_GAP_MAX, GLOW_REACH_MAX,
-    GLOW_STRENGTH_MAX, MARKER_REACH_MAX, MARK_DELAY_MAX, MIN_EXTRA_SIZE, PITCH_CEIL, PITCH_FLOOR,
+    GLOW_STRENGTH_MAX, MARK_DELAY_MAX, MIN_EXTRA_SIZE, PITCH_CEIL, PITCH_FLOOR,
     SPECTRAL_BALLISTICS_MAX, SPECTRAL_GATE_MAX, SPECTRAL_GATE_MIN, SPECTRAL_HYSTERESIS_MAX,
     SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN, SPECTRAL_WIDTH_MAX, SPECTRAL_WIDTH_MIN,
 };
@@ -825,61 +825,6 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                  standing in a dark pool and still wearing the halo's colour — \
                  and far enough up it inverts, the ink brighter than the \
                  ground around it.",
-            );
-        // The resting field's own light, under the Wash that decides how much
-        // of it the cross wears. Here rather than beside the marker's arm bars
-        // because it is a light and not a shape: it is written into the same
-        // target a node's halo is, it dies with the Reach above, and what it is
-        // dialled against is everything in this section.
-        ValueBar::new(&mut view.marker_light, 0.0..=1.0, "Marker light")
-            .display(|v| format!("{:.0}%", v * 100.0))
-            .show(ui)
-            .on_hover_text(
-                "How brightly a resting marker lights the position it stands \
-                 at — the pool around the cross, the cross itself being the \
-                 Marker ink bar's on the At rest section. The two are the \
-                 marker's two ways of being found in a dark picture and they \
-                 read differently: ink is a shape at the position, light is a \
-                 presence around it that carries at a distance. It is the same \
-                 light the notes give off: it melds with their halos instead of summing, \
-                 the Feather shapes it and the Strength scales it, and the Gap \
-                 holds it off ink the way it holds a note's light off its \
-                 rings: the resting field parts around a sounding note, and \
-                 each cross stands in a dark standoff of its own. How much of its \
-                 own pool the cross wears is \
-                 the Wash above — low leaves it a silhouette standing in the \
-                 light, high melts it in. It does not take the Reach: there is \
-                 a marker at every position and they all light at once, so \
-                 pools that wide screen into fog — the Marker reach below is \
-                 that distance on a bar of its own.",
-            );
-        // The pool's own distance, under the level that fills it: the Reach and
-        // Strength pair at the top of this section, asked again for the one
-        // light in the picture that is not a node's.
-        ValueBar::new(&mut view.marker_reach, 0.0..=MARKER_REACH_MAX, "Marker reach")
-            // The Reach's own readout and its own travel: two bars a person is
-            // told to read against each other have to be counted in the same
-            // thing and dialled at the same rate, and the useful end of this one
-            // is the bottom quarter.
-            .eased(true)
-            .decimals(3)
-            .display(|v| format!("{:.0}%", v * 100.0))
-            .show(ui)
-            .on_hover_text(
-                "How far a resting marker's pool reaches past the tips of its \
-                 arms, in the same units as the Reach at the top — so the two \
-                 numbers can be read against each other. The pool spans the \
-                 marker's own arm plus this, the way a node's light spans its \
-                 outermost edge plus the Reach, so 0 is a pool hugging the \
-                 cross rather than no pool at all; the Marker light above is \
-                 what turns it off. Its own bar because the two distances are \
-                 spent on wildly different numbers of lights: a few nodes sound \
-                 at once, and every lattice position carries a marker that \
-                 lights always — so the reach that turns a node's halo into a \
-                 field turns this one into a flat wash. Around 200% reaches a \
-                 neighbouring position — twice the Reach's number for the same \
-                 distance, because a pool starts here at the crossing and there \
-                 at the node's own edge, already a good way out.",
             );
         // The light's own clock, last, under everything it shapes. Its own pair
         // and not the note Fade in Note, because a halo is the slow part of the

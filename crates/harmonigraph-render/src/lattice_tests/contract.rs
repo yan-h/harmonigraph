@@ -180,10 +180,9 @@ fn the_shaders_ink_strip_is_as_wide_as_the_texture_it_is_drawn_into() {
 /// held to the shader's text: the two rates the bar mixes between and the two
 /// lines that spend them. A preview that drifted from the picture would be
 /// worse than none, and nothing on screen would show the drift.
-/// One WGSL function's text, from its `fn` line to the start of the next. What
-/// a needle asked of the whole file cannot say is WHICH copy answered it, and
-/// the skirt is spelled twice on purpose — once for a node's light and once
-/// for a marker's.
+/// One WGSL function's text, from its `fn` line to the start of the next: what
+/// pins a needle to the function that has to carry it, where the same line asked
+/// of the whole file is answered by any copy of it anywhere.
 fn wgsl_fn_body(name: &str) -> &'static str {
     let open = format!("\nfn {name}(");
     let at = SHADER_SRC.find(&open).unwrap_or_else(|| panic!("lattice.wgsl has no `fn {name}`"));
@@ -205,25 +204,22 @@ fn the_feather_bars_preview_is_the_skirt_the_shader_draws() {
              is a change to both",
         );
     }
-    // Asked of EACH function that spends them, not of the file. A node's light
-    // and a marker's pool carry the same three lines term for term, so a needle
-    // put to the whole file is answered by whichever copy still has it, and the
-    // other is free to drift — the preview then draws a curve one of the two
-    // does not, with nothing on screen showing it.
-    for shape in ["glow_layer", "plus_glow_layer"] {
-        let body = wgsl_fn_body(shape);
-        for needle in [
-            "let rate = mix(GLOW_FALLOFF_TIGHT, GLOW_FALLOFF_FLAT, glow_feather());",
-            "let window = 1.0 - smoothstep(span * 0.5, span, d);",
-            "let skirt = GLOW_BASE * exp(-rate * d / span) * window;",
-        ] {
-            assert!(
-                body.contains(needle),
-                "`fn {shape}` must contain `{needle}`: harmonigraph_scene::glow_skirt mirrors \
-                 the skirt line for line to draw the Feather bar's preview, and both lights \
-                 run on that one shape, so a change to any of the three is a change to all",
-            );
-        }
+    // Asked of the function that spends them, not of the file: the constants
+    // above are declared at the top and a needle put to the whole text is
+    // answered by the declaration itself, whatever the light does with it.
+    let shape = "glow_layer";
+    let body = wgsl_fn_body(shape);
+    for needle in [
+        "let rate = mix(GLOW_FALLOFF_TIGHT, GLOW_FALLOFF_FLAT, glow_feather());",
+        "let window = 1.0 - smoothstep(span * 0.5, span, d);",
+        "let skirt = GLOW_BASE * exp(-rate * d / span) * window;",
+    ] {
+        assert!(
+            body.contains(needle),
+            "`fn {shape}` must contain `{needle}`: harmonigraph_scene::glow_skirt mirrors \
+             the skirt line for line to draw the Feather bar's preview, so a change to \
+             either is a change to both",
+        );
     }
 }
 

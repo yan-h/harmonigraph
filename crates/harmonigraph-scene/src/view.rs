@@ -6,8 +6,8 @@ use crate::spectral::SpectralReading;
 use crate::style::{Gradient, NoteNames, Pulse, SevensLabel};
 use crate::{
     Camera, GAP_MAX, GLOW_BALLISTICS_MAX, GLOW_GAP_MAX, GLOW_REACH_MAX, GLOW_STRENGTH_MAX,
-    MARKER_REACH_MAX, MARK_THICKNESS_MAX, MAX_DRAWN_NODES, NODE_RADIUS_FACTOR, PLUS_SIZE_MAX,
-    RING_INNER_MAX, RING_WIDTH_MAX,
+    MARK_THICKNESS_MAX, MAX_DRAWN_NODES, NODE_RADIUS_FACTOR, PLUS_SIZE_MAX, RING_INNER_MAX,
+    RING_WIDTH_MAX,
 };
 use harmonigraph_core::{coords, Comma, Envelope, LatticePos, Tempered};
 
@@ -424,10 +424,8 @@ pub struct ViewConfig {
     /// remembered amount.
     ///
     /// **Neutral**, for [`lattice_ground`](Self::lattice_ground)'s reason —
-    /// hue in this picture is the music's. The marker's own LIGHT is
-    /// [`marker_light`](Self::marker_light), a separate thing entirely: this is
-    /// the ink, that is what the ink stands in. There is no off position and
-    /// none is needed — [`plus_arm`](Self::plus_arm) at 0 takes the field away.
+    /// hue in this picture is the music's. There is no off position and none is
+    /// needed — [`plus_arm`](Self::plus_arm) at 0 takes the field away.
     pub marker_ink: f32,
     /// How many octaves one turn of a node covers at FULL SIZE (see
     /// [`octaves`](crate::octaves)), 1..=11 — not how many it draws, which is
@@ -1359,66 +1357,6 @@ pub struct ViewConfig {
     ///
     /// Inert while [`glow_reach`](Self::glow_reach) is 0.
     pub glow_wash: f32,
-    /// How brightly a resting MARKER lights the position it stands at, 0..=1 —
-    /// the pool it sits in, as against the cross itself, which is
-    /// [`marker_ink`](Self::marker_ink)'s to say.
-    ///
-    /// A marker with this at 0 is ink and nothing else, and its whole
-    /// brightness is that bar's. The two are the marker's two ways of being
-    /// visible in a dark picture and they read differently: ink is a shape at
-    /// the position, light is a presence around it, and a field of pools with
-    /// the glow's Feather wide is structure at a distance that no brightness of
-    /// ink gives.
-    ///
-    /// NEUTRAL, and white rather than the marker's own grey: the ink carries no
-    /// hue by construction, so a pool of the same hue is a pool of none, and
-    /// taking the colour from the ink instead would couple the two — ink
-    /// dialled to black would emit black.
-    ///
-    /// The same LIGHT the nodes give off, and not a second kind of one: it is
-    /// written into the same target under the same two blends, so it melds with
-    /// a node's halo rather than summing with it; it is shaped by
-    /// [`glow_feather`](Self::glow_feather) and scaled by
-    /// [`glow_strength`](Self::glow_strength) like any other light in the
-    /// picture; a node's standoff dims it where it stands, so the resting field
-    /// parts around a sounding note; and the marker's own ink then wears it
-    /// through [`glow_wash`](Self::glow_wash), which is the bar that decides
-    /// whether the cross reads as a silhouette in its pool or melts into it.
-    ///
-    /// How FAR that pool goes is [`marker_reach`](Self::marker_reach), on a bar
-    /// of its own and not [`glow_reach`](Self::glow_reach).
-    ///
-    /// Inert while [`glow_reach`](Self::glow_reach) is 0, the light having no
-    /// target to be written into at all.
-    pub marker_light: f32,
-    /// How far a resting marker's pool reaches past the tips of its arms, in
-    /// the same quad UV units [`glow_reach`](Self::glow_reach) is in — so the
-    /// two numbers say the same thing and can be read against each other.
-    ///
-    /// The marker's span is its own arm PLUS this, which is exactly the shape
-    /// [`glow_reach`](Self::glow_reach) has one rung up: a node's light spans
-    /// its own outermost edge plus the Reach. So 0 is a pool hugging the cross
-    /// rather than no pool at all — what turns the light off is
-    /// [`marker_light`](Self::marker_light), as a level of 0 turns off any
-    /// layer here.
-    ///
-    /// A BAR OF ITS OWN rather than the Reach shared, and the reason is how many
-    /// emitters each distance is spent on. The Reach is the distance one
-    /// SOUNDING node's light is given, and how few nodes sound at once is what
-    /// bounds where it lands; there is a marker at every lattice position and
-    /// all of them light always, so the reach that makes a node's halo into a
-    /// field makes the marker field into one flat wash with the structure gone
-    /// out of it. The two wants are far enough apart that no single number
-    /// serves them, which is the same argument
-    /// [`marker_light`](Self::marker_light) makes against the Ground one rung
-    /// down.
-    ///
-    /// Its ceiling is [`MARKER_REACH_MAX`], half the node's for that reason.
-    ///
-    /// Inert while [`glow_reach`](Self::glow_reach) is 0, or while
-    /// [`marker_light`](Self::marker_light) is — a distance with no light to
-    /// spend over it.
-    pub marker_reach: f32,
     /// How widely a node's own ink is averaged into the colour of its light.
     ///
     /// The glow's colour is not a formula naming its sources — it is what the
@@ -2359,9 +2297,6 @@ impl ViewConfig {
         // their range is the unit interval.
         self.glow_gap_depth = finite_or(self.glow_gap_depth, fresh.glow_gap_depth).clamp(0.0, 1.0);
         self.glow_wash = finite_or(self.glow_wash, fresh.glow_wash).clamp(0.0, 1.0);
-        self.marker_light = finite_or(self.marker_light, fresh.marker_light).clamp(0.0, 1.0);
-        self.marker_reach =
-            finite_or(self.marker_reach, fresh.marker_reach).clamp(0.0, MARKER_REACH_MAX);
         self.glow_blend = finite_or(self.glow_blend, fresh.glow_blend).clamp(0.0, 1.0);
         // The light's own pair, in seconds, on the ring's rule: a bar's range,
         // and a poisoned number repaired to the fresh value rather than left
@@ -2693,12 +2628,10 @@ impl Default for ViewConfig {
             // stands in light rather than on a flat ground, and short of the
             // fresh ground's own brightness, which is still what draws the
             // cross.
-            marker_light: 0.10,
             // A pool half again as wide as the fresh cross, which at the
             // fresh arm (0.2) is a span of 0.5 — under a quarter of the 2.22 uv
             // to the next position, so the fresh field is one lit position per
             // marker with dark between them rather than a wash.
-            marker_reach: 0.3,
             // The colour averaged half way round, which keeps a chord's hues
             // as arcs while a lone wedge still tints the whole halo.
             glow_blend: 0.5,

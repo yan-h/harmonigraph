@@ -51,20 +51,16 @@ fn pluses_of_with(view: &ViewConfig, tracker: &NoteTracker) -> Vec<PlusInstance>
     scene_of(tracker, &Tuning::default(), view, &plain_frame(), 0.0).pluses
 }
 
-fn span_of(view: &ViewConfig) -> f32 {
-    scene_of(&NoteTracker::new(), &Tuning::default(), view, &plain_frame(), 0.0).marker_span
-}
-
 fn unit_of(view: &ViewConfig) -> f32 {
     scene_of(&NoteTracker::new(), &Tuning::default(), view, &plain_frame(), 0.0).marker_unit
 }
 
 /// `marker_unit` converts the marker field between the world its draws are in
-/// and the quad uv its bars are dialled in — an arm and a pool both read back as
-/// the number the bar behind them holds.
+/// and the quad uv its bars are dialled in — an arm reads back as the number
+/// the bar behind it holds.
 ///
-/// The shader's own reason for wanting it: the markers' light draw is handed
-/// world lengths (a billboard, and an arm per instance) and holds that light off
+/// The shader's own reason for wanting it: the markers' standoff draw is handed
+/// world lengths (a billboard, and an arm per instance) and holds the light off
 /// by the Gap, which is a node's bar and so in uv. One of the two has to be
 /// converted, and the conversion is the SCENE's rather than any marker's —
 /// carrying it over is what keeps `lattice.wgsl` from spelling the uv rule a
@@ -75,16 +71,11 @@ fn unit_of(view: &ViewConfig) -> f32 {
 /// at a different Gap than every node's, on one bar.
 #[test]
 fn the_marker_unit_is_what_reads_a_markers_world_back_as_its_bars() {
-    let view = ViewConfig { plus_arm: 0.2, marker_reach: 0.3, ..plus_view() };
+    let view = ViewConfig { plus_arm: 0.2, ..plus_view() };
     let unit = unit_of(&view);
     assert!(unit > 0.0, "the field must have a unit to be measured in");
     let arm = pluses_of(&view)[0].radius;
     assert!((arm / unit - 0.2).abs() < 1e-4, "an arm of 0.2 read back as {}", arm / unit,);
-    assert!(
-        (span_of(&view) / unit - 0.5).abs() < 1e-4,
-        "an arm of 0.2 and a reach of 0.3 spanned {}",
-        span_of(&view) / unit,
-    );
     // The spacing is the one view bar under it, and it scales the field whole:
     // both lengths move with the unit, so the bars read the same at either.
     let wide = ViewConfig { spacing: view.spacing * 3.0, ..view.clone() };
@@ -97,56 +88,6 @@ fn the_marker_unit_is_what_reads_a_markers_world_back_as_its_bars() {
         (pluses_of(&wide)[0].radius / unit_of(&wide) - 0.2).abs() < 1e-4,
         "a wider lattice read its own arm back as {}",
         pluses_of(&wide)[0].radius / unit_of(&wide),
-    );
-}
-
-/// A marker's pool spans its own ARM plus the Marker reach, and takes nothing
-/// from the node Reach beside it.
-///
-/// The shape is the node's own one rung down — a node's light spans its
-/// outermost drawn edge plus the Reach — so a reach of 0 is a pool the size of
-/// the cross rather than no pool, and what turns the light off is its level.
-///
-/// The independence is the half worth pinning. The two distances are spent on
-/// wildly different numbers of lights: a few nodes sound at once, and every
-/// lattice position carries a marker that lights always, so the reach that
-/// turns a node's halo into a field turns the marker field into one flat wash.
-/// Sharing one bar between them is the change this test exists to fail.
-#[test]
-fn a_markers_pool_spans_its_arm_plus_its_own_reach() {
-    let at = |arm: f32, marker: f32, glow: f32| -> f32 {
-        span_of(&ViewConfig {
-            plus_arm: arm,
-            marker_reach: marker,
-            glow_reach: glow,
-            ..plus_view()
-        })
-    };
-    // One arm's world length, read off the marker itself rather than converted
-    // here: the same number the instance carries, so the sums below are in the
-    // units the pool is actually drawn in.
-    let arm = pluses_of(&ViewConfig { plus_arm: 0.2, ..plus_view() })[0].radius;
-    assert!(arm > 0.0, "the fixture must draw a marker to measure an arm by");
-    assert!(
-        (at(0.2, 0.0, 1.0) - arm).abs() < 1e-4,
-        "a reach of 0 must span the arm exactly: {} against {arm}",
-        at(0.2, 0.0, 1.0),
-    );
-    assert!(
-        (at(0.2, 0.2, 1.0) - arm * 2.0).abs() < 1e-4,
-        "an arm's worth of reach must double the span: {} against {}",
-        at(0.2, 0.2, 1.0),
-        arm * 2.0,
-    );
-    for glow in [0.0, GLOW_REACH_MAX] {
-        assert!(
-            (at(0.2, 0.3, glow) - at(0.2, 0.3, 1.0)).abs() < 1e-6,
-            "the node Reach at {glow} moved a marker's pool",
-        );
-    }
-    assert!(
-        (at(0.2, MARKER_REACH_MAX * 2.0, 1.0) - at(0.2, MARKER_REACH_MAX, 1.0)).abs() < 1e-6,
-        "a reach past the ceiling must clamp to it",
     );
 }
 

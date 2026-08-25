@@ -214,8 +214,6 @@ pub(super) fn parity_scene() -> Scene {
         glow_gap_shape: 1.0,
         glow_gap_depth: 0.85,
         glow_wash: 0.15,
-        marker_light: 0.10,
-        marker_span: 0.5,
         // `node_radius` above through the uv rule both fields are in
         // (`marker_world`), so the span and the arms below read as the quad uv
         // every glow bar is dialled in.
@@ -843,12 +841,10 @@ pub(super) fn idle_scene() -> Scene {
 }
 
 /// The lattice a marker's shadow is measured on: one node lighting the whole
-/// pane, and four markers standing in that light with none of their own.
+/// pane, and four markers standing in that light.
 ///
-/// `marker_light` at 0 throughout, which is what makes every one of these a
-/// claim about the SHADOW: the only light in the frame is the node's, so a
-/// pixel the markers darken is a pixel where a marker held a node's halo off —
-/// the melded field, and not a pool the marker laid down itself.
+/// The only light in the frame is the node's, so a pixel the markers darken is
+/// a pixel where a marker held a node's halo off — the melded field.
 pub(super) fn shadowed_markers(depth: f32, gap: f32, taper_start: f32) -> Scene {
     let mut scene = single_marked_node(0, 0);
     scene.camera = harmonigraph_scene::Camera {
@@ -865,7 +861,6 @@ pub(super) fn shadowed_markers(depth: f32, gap: f32, taper_start: f32) -> Scene 
     scene.glow_gap = gap;
     scene.glow_gap_soft = gap;
     scene.glow_gap_depth = depth;
-    scene.marker_light = 0.0;
     scene.plus_taper_start = taper_start;
     // Four markers out where the node's halo still reaches and its own standoff
     // does not. The distance is the fixture's one delicate number: the shade
@@ -878,26 +873,29 @@ pub(super) fn shadowed_markers(depth: f32, gap: f32, taper_start: f32) -> Scene 
     scene
 }
 
-/// A lone square-ended marker at the origin, lit by its own pool, with the Gap
+/// ONE square-ended marker standing out in the node's halo, with the Gap
 /// dialled to `gap` and the standoff switched by `depth`.
 ///
-/// No node in the frame: what is measured below is the distance a marker's own
-/// shadow reaches past its own ink, and a node's standoff shares the shade
-/// layer through a `max` that would answer for it wherever the two overlap.
+/// [`shadowed_markers`] with its four crosses replaced by one, so a reading can
+/// walk out from a single cross along the centre row and meet nothing else. The
+/// marker keeps that fixture's distance from the node ([`LONE_OFFSET`]): the
+/// shade layer is a `max`, so a cross standing inside the node's own standoff
+/// adds nothing to it and the shadow measured would be the node's.
+///
+/// It stands to the node's RIGHT, which is where a reading walks: away from the
+/// node, so the half of the frame being measured holds no other ink and no
+/// other shadow.
 pub(super) fn lone_shadowed_marker(arm: f32, gap: f32, depth: f32) -> Scene {
     let mut scene = shadowed_markers(depth, gap, 1.0);
-    scene.nodes.clear();
-    scene.marker_light = 0.9;
-    scene.marker_span = LONE_SPAN;
-    scene.pluses = vec![one_marker(glam::Vec3::ZERO, arm, scene.lattice_ground, 1.0)];
+    scene.pluses =
+        vec![one_marker(glam::Vec3::new(LONE_OFFSET, 0.0, 0.0), arm, scene.lattice_ground, 1.0)];
     scene
 }
 
-/// The pool [`lone_shadowed_marker`] lights, in world units. Wider than any shadow
-/// measured through it, so what bounds a reading is where the standoff runs out
-/// and not where the light does — and it is the calibration below, so it also
-/// has to sit well inside the frame.
-pub(super) const LONE_SPAN: f32 = 3.0;
+/// How far along the centre row [`lone_shadowed_marker`]'s cross stands from the
+/// node lighting it, in world units — [`shadowed_markers`]' own distance, and
+/// delicate for that fixture's reason.
+pub(super) const LONE_OFFSET: f32 = 2.6;
 
 /// The amplitude of the `k`th angular harmonic of a profile — how much of it is
 /// a ripple that goes round the turn exactly `k` times.
