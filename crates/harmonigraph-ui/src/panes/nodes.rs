@@ -807,15 +807,17 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
             .on_hover_text(
                 "Where inside the Gap's fade the light is given back, drawn as \
                  the light coming back from the ring's edge out to the halo. \
-                 50% spends it evenly, which is steepest in the middle and \
-                 leaves a wide fade reading as a dark annulus with a soft edge. \
-                 Lower gives the light back closest to the ring and trails the \
-                 rest away over a long tail, so the dark hugs the ring and has \
-                 no edge anywhere; higher holds the ring dark and lets the \
-                 light back over the last of the fade. It moves no boundary — \
-                 the Gap's handles still say where the standoff is. Dial it \
-                 with the depth below: a tail is the faint end of the fade, so \
-                 a shallow depth loses it and a full one turns it into a void.",
+                 100% comes off the ring at the rate the light itself comes \
+                 off everything, so the gap and the halo read as one blur, and \
+                 it is the top because past it the shade turns over at a \
+                 radius and reads as an annulus drawn round the node. Lower \
+                 gives the light back nearer the ink and leaves the rest of \
+                 the width a haze, until the dark is a rind on the ring — with \
+                 the fade set narrower than the gap, that handing-back is a \
+                 hard circle where the fade begins. It moves no boundary — the \
+                 Gap's handles still say where the standoff is. Dial it with \
+                 the depth below: a tail is the faint end of the fade, so a \
+                 shallow depth loses it and a full one turns it into a void.",
             );
         ValueBar::new(&mut view.glow_gap_depth, 0.0..=1.0, "Gap depth")
             .display(|v| format!("{:.0}%", v * 100.0))

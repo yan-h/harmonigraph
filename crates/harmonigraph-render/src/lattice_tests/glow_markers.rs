@@ -468,7 +468,15 @@ fn a_markers_shadow_is_cast_by_the_arm_that_has_ink() {
 #[test]
 fn one_gap_is_one_distance_whatever_the_cross_it_stands_off() {
     const SIZE: [u32; 2] = [256, 256];
-    const GAP: f32 = 0.5;
+    // Narrow enough that the longer arm's shadow finishes well inside the pool
+    // [`LONE_SPAN`] rules it against, which is a condition on the READING and
+    // not on the claim: the edge below is where a difference crosses the 8-bit
+    // floor, and out where the pool is already dim the deeper of two shadows
+    // crosses it early, so two reaches that differ by an arm's length are
+    // measured as differing by less. A Gap wide enough to push the long arm's
+    // shadow within a dozen pixels of that edge reads the two as 0.32 apart
+    // rather than 0.55, with nothing about the standoff having changed.
+    const GAP: f32 = 0.30;
     const SHORT: f32 = 0.35;
     const LONG: f32 = 0.9;
     let Some(mut shooter) = Shooter::new(SIZE) else {

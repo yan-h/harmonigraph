@@ -1025,4 +1025,120 @@ mod tests {
             eprintln!("{}", path.canonicalize().unwrap_or(path.clone()).display());
         }
     }
+
+    /// The Gap curve across the whole of its bar, written to `target/scratch/`:
+    /// what each half of it does to the shade a ring stands in.
+    ///
+    /// A probe: it asserts nothing, the verdict being a look. That the curve
+    /// moves no handle is measured exactly, by harmonigraph-render's
+    /// `the_standoff_reaches_past_the_gap_it_is_dialled_to`. What a number
+    /// cannot say is which of these shapes is a ring standing in shade and
+    /// which is a black annulus drawn round a node — the question the bar
+    /// exists to be dragged through.
+    ///
+    /// The last pair is the low end's own cost, and the only reading here that
+    /// takes two shots to make: a fade NARROWER than its gap has open field
+    /// where the decay begins, so the vertical an exponent under one leaves
+    /// there is a circle in the light rather than a line along the ink (see
+    /// `GAP_SHAPE_RIND` in lattice.wgsl). Both ends of the bar are shot at that
+    /// pairing, which is what makes the circle findable at all.
+    ///
+    /// Reading conditions as [`the_node_glow_draws_a_picture`] sets them, and
+    /// for the same reasons, plus one note off it: the shade is what is being
+    /// read, so the shots carry no labels — a name sits over the middle of a
+    /// node and takes the inner half of the shade with it.
+    ///
+    /// ```text
+    /// cargo test -p harmonigraph-offline -- --ignored --nocapture the_gap_curve
+    /// ```
+    #[test]
+    #[ignore = "a probe: writes PNGs and asserts nothing"]
+    fn the_gap_curve_draws_a_picture() {
+        use harmonigraph_ui::{draw_pane, Layout, SharedState};
+
+        const SIZE: [u32; 2] = [1200, 1000];
+        const PPP: f32 = 2.0;
+        const NOW: f64 = 1.0;
+
+        let Some(mut renderer) = Renderer::new(SIZE) else {
+            eprintln!("no usable GPU adapter; nothing rendered");
+            return;
+        };
+        let context = egui::Context::default();
+        harmonigraph_ui::theme::apply_theme(&context);
+        context.set_pixels_per_point(PPP);
+
+        let layout = Layout::preset("lattice").expect("the lattice preset");
+        let mut state = SharedState::new(FORMAT);
+        state.set_background((24, 25, 29));
+        state.frame_params.fade_time = 0.0;
+        state.view.glow_attack = 0.0;
+        state.view.glow_release = 0.0;
+        state.view.show_labels = false;
+        state.view.show_cents = false;
+        // One note, so the shade around this node's rings is this node's own
+        // and not a neighbour's halo laid into it.
+        state.tracker.handle_event(harmonigraph_core::NoteEvent::on(0.0, 0, 60, 1.0));
+
+        let points = egui::vec2(SIZE[0] as f32 / PPP, SIZE[1] as f32 / PPP);
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, points);
+        let placements = layout.resolve(points);
+        let background =
+            egui::Color32::from_rgb(layout.background.0, layout.background.1, layout.background.2);
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/scratch");
+        std::fs::create_dir_all(&dir).expect("a scratch directory");
+        let tag = std::env::var("PROBE_TAG").unwrap_or_else(|_| "gap-curve".to_owned());
+
+        let fresh = harmonigraph_scene::ViewConfig::default();
+        // (shape, gap, fade). The bar in quarters at the fresh pairing, then
+        // its floor and its ceiling again over a fade a quarter of its gap.
+        let shots: Vec<(f32, f32, f32)> = vec![
+            (0.0, fresh.glow_gap, fresh.glow_gap_soft),
+            (0.25, fresh.glow_gap, fresh.glow_gap_soft),
+            (0.5, fresh.glow_gap, fresh.glow_gap_soft),
+            (0.75, fresh.glow_gap, fresh.glow_gap_soft),
+            (1.0, fresh.glow_gap, fresh.glow_gap_soft),
+            (0.0, 0.48, 0.12),
+            (1.0, 0.48, 0.12),
+        ];
+        let home = state.camera;
+        for (shape, gap, soft) in shots {
+            state.camera = home;
+            // One node across a good part of the frame: the whole of what this
+            // bar draws lies inside a gap, and a gap is a share of a radius.
+            state.camera.zoom_by(3.5);
+            // The light up, since the shade is a factor ON it and a dim halo
+            // has no gradient for a shape to be read out of.
+            state.view.glow_reach = 2.0;
+            state.view.glow_strength = 1.4;
+            state.view.glow_gap = gap;
+            state.view.glow_gap_soft = soft;
+            state.view.glow_gap_shape = shape;
+            let output = context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    time: Some(NOW),
+                    max_texture_side: Some(renderer.max_texture_side()),
+                    ..Default::default()
+                },
+                |ui| {
+                    for (pane, rect) in &placements {
+                        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(*rect));
+                        draw_pane(&mut child, *pane, &mut state, NOW);
+                    }
+                },
+            );
+            let primitives = context.tessellate(output.shapes, PPP);
+            let bytes = renderer.render(&primitives, &output.textures_delta, PPP, background);
+            let path = dir.join(format!(
+                "{tag}-shape{:.0}-gap{:.0}-fade{:.0}.png",
+                shape * 100.0,
+                gap * 100.0,
+                soft * 100.0,
+            ));
+            image::save_buffer(&path, &bytes, SIZE[0], SIZE[1], image::ExtendedColorType::Rgba8)
+                .expect("write the png");
+            eprintln!("{}", path.canonicalize().unwrap_or(path.clone()).display());
+        }
+    }
 }

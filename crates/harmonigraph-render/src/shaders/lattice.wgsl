@@ -238,29 +238,49 @@ const GLOW_FALLOFF_FLAT: f32 = 0.25;
 // taken over across the Gap bar's fade (`standoff_coverage`). Mirrored in
 // harmonigraph-scene on the Feather pair's terms above.
 //
-// TRAIL is the shadow: a plain exponential in the distance out from the ring,
-// steepest where it meets the ink and shallower every step after, so the dark
-// hugs the ring and the recovery has no edge in it anywhere. HOLD is the band:
-// a super-exponential that holds the light off nearly whole most of the way
-// out and gives it back over the last of the width, which is a defined
-// annulus with a soft outer edge.
+// RIND is the thin skin: the light is back almost the moment it leaves the ink
+// and the rest of the width carries a haze, so the dark has no width of its
+// own. PLAIN is the exponential, and it is the CEILING rather than a setting
+// in the middle of a range, because an exponent of one is where this family
+// stops being a decay and starts being a band.
 //
-// A FACTOR OF FOUR, and the number worth knowing is the one in the middle: a
-// geometric mix between them puts an exponent of exactly 2 at the bar's own
-// middle, which is the shape that spends the fade most evenly — the one whose
-// steepest point sits inside the band rather than at either end of it.
-// Retuning one end alone slides that neutral point off the middle and every
-// view tuned against it with it, so the pair moves together or not at all.
+// Exactly there, and the derivative says so. `exp(-T u^p)` has an interior
+// inflection at `u = ((p-1)/(T p))^(1/p)`, which is real only for p above one:
+// at or under one the coverage is steepest where it leaves the ring and
+// shallower every step after, and over one it turns over at a radius that
+// marches outward with the exponent — 0.07 of the fade at 1.2, a third of it
+// at 2, two thirds at 4. That turn is a KNEE, and a knee at a fixed radius is
+// the closed contour the eye picks out of a smooth field, which is the whole
+// reason the standoff is a decay and not the ramp it replaced (see `GAP_TAIL`).
+// Carry the exponent far enough and the family arrives back at that ramp
+// exactly: the coverage goes to 1 across the whole fade and to `exp(-T)` at
+// its end, which is a hard step at the outer handle.
 //
-// Both are at or ABOVE one, and TRAIL is the one that could be talked down.
-// `pow` is an `exp2(y * log2(x))` on the hardware, so an exponent of 0 against
-// the distance's own 0 at the solid end of the band is `0 * -inf` — a NaN
+// So the bar spends its whole length UNDER the exponential, a factor of four
+// of it, and the light a node stands off never has an edge in it at any
+// setting.
+//
+// RIND is a QUARTER rather than the 0 the family would allow. `pow` is an
+// `exp2(y * log2(x))` on the hardware, so an exponent of 0 against the
+// distance's own 0 at the solid end of the band is `0 * -inf` — a NaN
 // coverage, and a NaN scaling the light a node clears to is a node whose
-// clearing is gone with nothing on screen to say why. Under one the decay is
-// vertical where it leaves the ring, which spends the standoff in a width the
-// Gap bar cannot show and reads as the hard edge this shape exists to avoid.
-const GAP_SHAPE_TRAIL: f32 = 1.0;
-const GAP_SHAPE_HOLD: f32 = 4.0;
+// clearing is gone with nothing on screen to say why. WHICH of the numbers
+// above 0 is then a choice: the exponent has no floor of its own, and the
+// picture goes on moving about as far per halving as the top of the bar does
+// per quarter. A quarter of the ceiling is a range wide enough to take the
+// shade off a ring altogether and short enough to stay a dial rather than a
+// switch.
+//
+// What the low end costs is a slope: under an exponent of one the decay leaves
+// the solid band vertically, and a vertical at a fixed radius is a crease —
+// the one thing a fade laid over this light must not draw. It draws none at
+// the pairing the bar ships in, where the fade is the whole width of its gap:
+// the solid band has no width there, so what the vertical meets is the ring's
+// own ink edge, and an edge laid along an edge is invisible. A fade NARROWER
+// than its gap stands that crease out in the open field instead, and there the
+// low end of the bar is a shape to avoid rather than one to reach for.
+const GAP_SHAPE_RIND: f32 = 0.25;
+const GAP_SHAPE_PLAIN: f32 = 1.0;
 // How far down `standoff_coverage` is carried by the outer end of the Gap's
 // fade, as the exponent of the decay there: four e-folds, so the outer handle
 // stands at a fiftieth of the standoff and the rest of it is spent inside the
@@ -405,18 +425,17 @@ fn glow_gap_soft() -> f32 {
 }
 
 // How the standoff's fade is skewed across its own width (`u.misc11.z`), as the
-// exponent `standoff_coverage` raises its decay to: 0 is a plain exponential,
-// 0.5 the one that spends the fade most evenly — steepest inside the band
-// rather than at either end of it — and 1 holds the ring dark and gives the
-// light back over the last of the width.
+// exponent `standoff_coverage` raises its decay to: 1 is a plain exponential
+// and everything under it gives the light back nearer the ink, 0 handing it
+// back inside the ink and leaving the rest of the width a haze.
 //
-// A geometric mix between the two ends, so the bar is even-handed: each half of
-// it is the same FACTOR away from the middle, which is why the middle lands on
-// 2. A linear mix between an exponent of 1 and one of 4 would put two thirds of
-// the bar above 2.
+// A geometric mix between the two ends, so equal drags are equal FACTORS: the
+// bar's middle lands on half an exponent. A linear mix would spend most of the
+// bar in the top quarter of the range, where the shapes are hardest to tell
+// apart.
 fn glow_gap_shape() -> f32 {
     let t = clamp(u.misc11.z, 0.0, 1.0);
-    return GAP_SHAPE_TRAIL * pow(GAP_SHAPE_HOLD / GAP_SHAPE_TRAIL, t);
+    return GAP_SHAPE_RIND * pow(GAP_SHAPE_PLAIN / GAP_SHAPE_RIND, t);
 }
 
 // How much of the light the standoff takes away where it stands (`u.misc11.w`):
