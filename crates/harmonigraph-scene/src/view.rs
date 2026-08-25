@@ -1290,19 +1290,25 @@ pub struct ViewConfig {
     /// Inert while [`glow_reach`](Self::glow_reach) is 0.
     pub glow_gap_soft: f32,
     /// How the standoff's decay is shaped across the width
-    /// [`glow_gap_soft`](Self::glow_gap_soft) gives it, 0..=1: 0 is a plain
+    /// [`glow_gap_soft`](Self::glow_gap_soft) gives it, 0..=1: 0.5 is a plain
     /// exponential, steepest where it meets the ink and shallower every step
-    /// after; 0.5 the one that spends the fade most evenly, steepest inside
-    /// the band rather than at either end of it; 1 holds the ring dark most of
-    /// the way out and gives the light back over the last of the width.
+    /// after; below that the light is back inside the ink and the rest of the
+    /// width carries a haze; 1 holds the ring dark most of the way out and
+    /// gives the light back over the last of the width.
     ///
     /// The SHAPE knob to that bar's width, the way
     /// [`glow_feather`](Self::glow_feather) is to
     /// [`glow_reach`](Self::glow_reach)'s distance. At the top the fade spends
     /// its first half nearly solid and reads as a dark annulus with a soft
     /// edge — the thing the width was widened to avoid. At the bottom the dark
-    /// stays tight against the ring and the recovery is a long shallow tail,
-    /// which is a ring standing in shade rather than in a band.
+    /// is a rind on the ink with the width behind it barely shaded at all,
+    /// which is a ring the light stands against rather than one standing in
+    /// shade.
+    ///
+    /// The bottom half is the half with a cost, and what it costs is stated at
+    /// `GAP_SHAPE_TRAIL` in lattice.wgsl: it holds the light off vertically
+    /// where the fade begins, which is a crease at a fixed radius wherever the
+    /// fade is narrower than the gap it sits in.
     ///
     /// It moves no boundary: the decay spends the same amount over the same
     /// width at every setting (see `standoff_coverage` in lattice.wgsl), so
@@ -2712,12 +2718,12 @@ impl Default for ViewConfig {
             // is what the eye takes for a black annulus drawn round the node.
             glow_gap: 0.16,
             glow_gap_soft: 0.16,
-            // The fade spent evenly across that width, which is the plain
-            // symmetric ramp: the bar's own middle, so the shape is an
-            // addition to the fresh view rather than a restyle of it, and
-            // either half of the bar is somewhere to go from a look that is
-            // already tuned.
-            glow_gap_shape: 0.5,
+            // The fade spent evenly across that width, the exponent that
+            // spends it most evenly being 2 — three quarters of the way up a
+            // bar whose middle is the plain exponential (`GAP_SHAPE_TRAIL` in
+            // lattice.wgsl). Both halves of the bar are somewhere to go from
+            // it, which is what the value is picked for.
+            glow_gap_shape: 0.75,
             // Most of the light off around a ring, and not all of it: a ring
             // in a dim pool of its own halo reads as shade, where the whole of
             // it taken away reads as a black annulus drawn round the node.

@@ -292,9 +292,10 @@ pub const GLOW_FALLOFF_FLAT: f32 = 0.25;
 /// standoff's decay is taken over across its own width. Mirrored in
 /// lattice.wgsl (`GAP_SHAPE_TRAIL`/`HOLD`) on the same terms as the pair above
 /// — the shader holds the rationale, including why the bar's middle lands on
-/// 2 — and the render crate asserts the copies agree. What this copy draws is
-/// the bar's preview ([`standoff_recovery`]).
-pub const GAP_SHAPE_TRAIL: f32 = 1.0;
+/// the plain exponential and what the half below it costs — and the render
+/// crate asserts the copies agree. What this copy draws is the bar's preview
+/// ([`standoff_recovery`]).
+pub const GAP_SHAPE_TRAIL: f32 = 0.25;
 pub const GAP_SHAPE_HOLD: f32 = 4.0;
 
 /// How many e-folds of the standoff the Gap's fade spends, mirrored from
@@ -332,6 +333,11 @@ pub fn glow_skirt(feather: f32, p: f32) -> f32 {
 /// curve bar's preview, drawn as the light coming BACK because that is the
 /// direction the fade runs in — the ring's edge at the left, the halo at the
 /// right.
+///
+/// The low half of the bar draws a curve that is nearly a step at the left,
+/// which is the shape rather than a clipped preview: an exponent under one
+/// gives the light back inside the ink and leaves the rest of the width to a
+/// haze.
 ///
 /// A copy of `standoff_coverage`'s decay and the exponent `glow_gap_shape`
 /// takes it over, on the terms [`glow_skirt`] states, and held to the shader's
@@ -1019,9 +1025,9 @@ pub struct Scene {
     /// already clamped to the gap.
     pub glow_gap_soft: f32,
     /// How the standoff's decay is shaped across that width (see
-    /// [`ViewConfig::glow_gap_shape`]), 0 a plain exponential off the ring and
-    /// 1 holding the ring dark to the end of that width; already clamped to
-    /// 0..=1.
+    /// [`ViewConfig::glow_gap_shape`]), 0.5 a plain exponential off the ring
+    /// and 1 holding the ring dark to the end of that width; already clamped
+    /// to 0..=1.
     /// Inert while [`glow_reach`](Self::glow_reach) is 0.
     pub glow_gap_shape: f32,
     /// How much of the light the standoff takes away where it stands (see
