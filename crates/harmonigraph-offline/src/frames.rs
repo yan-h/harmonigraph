@@ -1348,4 +1348,217 @@ mod tests {
             eprintln!("{}", path.canonicalize().unwrap_or(path.clone()).display());
         }
     }
+
+    /// Where a node's light GOES when something is drawn over it: the glow's
+    /// own contribution at every pixel, read off a pair of frames that differ
+    /// in nothing but the Strength.
+    ///
+    /// `on - off` is the light exactly — the same instances paint the same ink
+    /// either way, the Clearance being gated on the Gap and not on the Strength
+    /// — so the difference isolates what the light adds. An ink pixel and a
+    /// ground pixel a few pixels apart stand in the same field, so what the two
+    /// get of it is the COMPOSITING and not the falloff.
+    ///
+    /// ```text
+    /// cargo test -p harmonigraph-offline -- --ignored --nocapture glow_over_ink
+    /// ```
+    #[test]
+    #[ignore = "a probe: writes PNGs and prints numbers"]
+    fn the_glow_over_ink_probe() {
+        use harmonigraph_ui::{draw_pane, Layout, SharedState};
+
+        const SIZE: [u32; 2] = [1200, 1000];
+        const PPP: f32 = 2.0;
+        const NOW: f64 = 1.0;
+        const BG: [u8; 3] = [24, 25, 29];
+
+        let Some(mut renderer) = Renderer::new(SIZE) else {
+            eprintln!("no usable GPU adapter; nothing rendered");
+            return;
+        };
+        let context = egui::Context::default();
+        harmonigraph_ui::theme::apply_theme(&context);
+        context.set_pixels_per_point(PPP);
+
+        let layout = Layout::preset("lattice").expect("the lattice preset");
+        let points = egui::vec2(SIZE[0] as f32 / PPP, SIZE[1] as f32 / PPP);
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, points);
+        let placements = layout.resolve(points);
+        let background = egui::Color32::from_rgb(BG[0], BG[1], BG[2]);
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/scratch");
+        std::fs::create_dir_all(&dir).expect("a scratch directory");
+
+        let shoot = |renderer: &mut Renderer, lit: bool| -> Vec<u8> {
+            let mut state = SharedState::new(FORMAT);
+            state.set_background((BG[0], BG[1], BG[2]));
+            state.frame_params.fade_time = 0.0;
+            state.view.glow_attack = 0.0;
+            state.view.glow_release = 0.0;
+            state.view.extent_sevens = 1;
+            // A Reach wide enough that a node's halo lands on its NEIGHBOUR,
+            // which is the whole subject, at a Strength that does not clip the
+            // ground to white — a reading taken on a clipped ground is a
+            // reading of the clamp.
+            state.view.glow_reach =
+                std::env::var("PROBE_REACH").ok().and_then(|s| s.parse().ok()).unwrap_or(1.5);
+            let strength =
+                std::env::var("PROBE_STRENGTH").ok().and_then(|s| s.parse().ok()).unwrap_or(0.6);
+            // A Strength of 0 is what makes the pair a subtraction: the glow
+            // pass drops out and every other draw is untouched, the Clearance
+            // included, so the ONLY difference between the two frames is light.
+            state.view.glow_strength = if lit { strength } else { 0.0 };
+            for note in [55u8, 60, 64, 67, 71] {
+                state.tracker.handle_event(harmonigraph_core::NoteEvent::on(0.0, 0, note, 1.0));
+            }
+            state.camera.zoom_by(2.5);
+            let output = context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    time: Some(NOW),
+                    max_texture_side: Some(renderer.max_texture_side()),
+                    ..Default::default()
+                },
+                |ui| {
+                    for (pane, rect) in &placements {
+                        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(*rect));
+                        draw_pane(&mut child, *pane, &mut state, NOW);
+                    }
+                },
+            );
+            let primitives = context.tessellate(output.shapes, PPP);
+            renderer.render(&primitives, &output.textures_delta, PPP, background)
+        };
+
+        let on = shoot(&mut renderer, true);
+        let off = shoot(&mut renderer, false);
+
+        let (w, h) = (SIZE[0] as usize, SIZE[1] as usize);
+        let luma =
+            |px: &[u8]| 0.2126 * px[0] as f32 + 0.7152 * px[1] as f32 + 0.0722 * px[2] as f32;
+        let at = |buf: &[u8], x: usize, y: usize| {
+            let i = (y * w + x) * 4;
+            luma(&buf[i..i + 4])
+        };
+        let bg_luma = luma(&BG);
+
+        let mut ink = vec![false; w * h];
+        for y in 0..h {
+            for x in 0..w {
+                ink[y * w + x] = (at(&off, x, y) - bg_luma).abs() > 6.0;
+            }
+        }
+        let interior = |mask: bool, x: usize, y: usize| {
+            if x < 2 || y < 2 || x + 2 >= w || y + 2 >= h {
+                return false;
+            }
+            for dy in -2i32..=2 {
+                for dx in -2i32..=2 {
+                    let (nx, ny) = ((x as i32 + dx) as usize, (y as i32 + dy) as usize);
+                    if ink[ny * w + nx] != mask {
+                        return false;
+                    }
+                }
+            }
+            true
+        };
+
+        let mut pairs: Vec<(f32, f32, f32, f32)> = Vec::new();
+        for y in 8..h - 8 {
+            for x in 8..w - 8 {
+                if !interior(true, x, y) {
+                    continue;
+                }
+                let mut best: Option<(usize, usize)> = None;
+                'find: for r in 3..=6i32 {
+                    for dy in -r..=r {
+                        for dx in -r..=r {
+                            if dx.abs().max(dy.abs()) != r {
+                                continue;
+                            }
+                            let (nx, ny) = ((x as i32 + dx) as usize, (y as i32 + dy) as usize);
+                            if interior(false, nx, ny) {
+                                best = Some((nx, ny));
+                                break 'find;
+                            }
+                        }
+                    }
+                }
+                let Some((gx, gy)) = best else { continue };
+                let ink_gain = at(&on, x, y) - at(&off, x, y);
+                let ground_gain = at(&on, gx, gy) - at(&off, gx, gy);
+                if ground_gain > 4.0 {
+                    pairs.push((ink_gain, ground_gain, at(&on, x, y), at(&on, gx, gy)));
+                }
+            }
+        }
+
+        let n = pairs.len() as f32;
+        let mean_ink: f32 = pairs.iter().map(|p| p.0).sum::<f32>() / n;
+        let mean_ground: f32 = pairs.iter().map(|p| p.1).sum::<f32>() / n;
+        let mut ratios: Vec<f32> = pairs.iter().map(|p| p.0 / p.1).collect();
+        ratios.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        eprintln!("matched pairs:            {}", pairs.len());
+        eprintln!("mean glow gain on INK:    {mean_ink:.2}/255");
+        eprintln!("mean glow gain on GROUND: {mean_ground:.2}/255");
+        eprintln!("mean ratio ink/ground:    {:.3}", mean_ink / mean_ground);
+        eprintln!("median per-pair ratio:    {:.3}", ratios[ratios.len() / 2]);
+        eprintln!(
+            "lit-frame luma: ink {:.1}/255, ground {:.1}/255",
+            pairs.iter().map(|p| p.2).sum::<f32>() / n,
+            pairs.iter().map(|p| p.3).sum::<f32>() / n,
+        );
+        eprintln!(
+            "ratio deciles:            {:?}",
+            (1..10)
+                .map(|d| (ratios[ratios.len() * d / 10] * 1000.0).round() / 1000.0)
+                .collect::<Vec<_>>()
+        );
+
+        let mut lifted = [0usize; 2];
+        let mut total = [0usize; 2];
+        for y in 3..h - 3 {
+            for x in 3..w - 3 {
+                let c = if interior(true, x, y) {
+                    0
+                } else if interior(false, x, y) {
+                    1
+                } else {
+                    continue;
+                };
+                total[c] += 1;
+                if at(&on, x, y) - at(&off, x, y) > 2.0 {
+                    lifted[c] += 1;
+                }
+            }
+        }
+        eprintln!(
+            "lifted >2/255: ink {}/{} ({:.1}%), ground {}/{} ({:.1}%)",
+            lifted[0],
+            total[0],
+            100.0 * lifted[0] as f32 / total[0] as f32,
+            lifted[1],
+            total[1],
+            100.0 * lifted[1] as f32 / total[1] as f32,
+        );
+
+        let mut contrib = vec![0u8; w * h * 4];
+        for i in 0..w * h {
+            for c in 0..3 {
+                let d = on[i * 4 + c] as f32 - off[i * 4 + c] as f32;
+                contrib[i * 4 + c] = (d * 4.0).clamp(0.0, 255.0) as u8;
+            }
+            contrib[i * 4 + 3] = 255;
+        }
+        let shots = [
+            ("glow-on", on.as_slice()),
+            ("glow-off", off.as_slice()),
+            ("glow-contrib", contrib.as_slice()),
+        ];
+        for (name, buf) in shots {
+            let path = dir.join(format!("{name}.png"));
+            image::save_buffer(&path, buf, SIZE[0], SIZE[1], image::ExtendedColorType::Rgba8)
+                .expect("write the png");
+            eprintln!("{}", path.display());
+        }
+    }
 }
