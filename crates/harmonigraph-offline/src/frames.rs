@@ -443,7 +443,7 @@ mod tests {
         let tag = std::env::var("PROBE_TAG").unwrap_or_else(|_| "after".to_string());
 
         let home = state.camera;
-        for gap in [0.05f32, 0.2, 0.4] {
+        for gap in [0.05f32, 0.1, 0.2] {
             state.camera = home;
             state.camera.zoom_by(3.5);
             state.view.octave_gap = gap;
@@ -1217,13 +1217,13 @@ mod tests {
         // number for the hole and the shadow laid over it.
         let shots: Vec<(&str, f32, f32)> = vec![
             ("a-oct05-clear", fresh.octave_gap, fresh.glow_shadow),
-            ("b-oct40-clear", 0.40, fresh.glow_shadow),
-            ("c-oct40-noclear", 0.40, 0.0),
-            ("d-oct20-clear", 0.20, fresh.glow_shadow),
-            ("e-oct10-clear", 0.10, fresh.glow_shadow),
-            ("f-oct15-clear", 0.15, fresh.glow_shadow),
-            ("g-oct25-clear", 0.25, fresh.glow_shadow),
-            ("h-oct30-clear", 0.30, fresh.glow_shadow),
+            ("b-oct20-clear", 0.20, fresh.glow_shadow),
+            ("c-oct20-noclear", 0.20, 0.0),
+            ("d-oct10-clear", 0.10, fresh.glow_shadow),
+            ("e-oct025-clear", 0.025, fresh.glow_shadow),
+            ("f-oct075-clear", 0.075, fresh.glow_shadow),
+            ("g-oct125-clear", 0.125, fresh.glow_shadow),
+            ("h-oct15-clear", 0.15, fresh.glow_shadow),
         ];
         let home = state.camera;
         for (shot, octave_gap, shadow) in shots {

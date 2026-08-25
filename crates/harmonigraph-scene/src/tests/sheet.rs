@@ -74,15 +74,15 @@ fn the_octave_gap_reaches_the_scene_and_is_clamped() {
     // it survives as its own number rather than as a shader constant. (The
     // radial one reaches the picture as the radii themselves — that is
     // `the_rings_stack_outward_from_the_centre` below.)
-    let view = ViewConfig { octave_gap: 0.2, ..ViewConfig::default() };
+    let view = ViewConfig { octave_gap: 0.1, ..ViewConfig::default() };
     let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, &plain_frame(), 0.0);
-    assert_eq!(scene.octave_gap, 0.2);
+    assert_eq!(scene.octave_gap, 0.1);
 
     // The cap is what a hand-edited blob is held to: anything past a fraction
     // of a turn erases every sector on the node.
     let wild = ViewConfig { octave_gap: 5.0, ..ViewConfig::default() };
     let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &wild, &plain_frame(), 0.0);
-    assert!(scene.octave_gap <= 0.4, "got {}", scene.octave_gap);
+    assert!(scene.octave_gap <= GAP_MAX, "got {}", scene.octave_gap);
 }
 
 /// The two paddings are two settings all the way to the scene: neither one
@@ -124,9 +124,10 @@ fn the_two_gaps_are_independent_at_the_scene() {
 #[test]
 fn a_wild_radial_gap_is_clamped_and_the_stack_stops_at_the_ring_that_fits() {
     // The cap on the radial padding is no guarantee that the stack still fits —
-    // at GAP_MAX the paddings alone are more than the quad, so the band's slot
-    // ends past the node's edge and the layer comes out off.
-    let wild = ViewConfig { ring_gap: 5.0, ..ViewConfig::default() };
+    // paired with a stack that starts as far out as `ring_inner` goes, GAP_MAX
+    // is enough padding to put the band's slot past the node's edge, and the
+    // layer comes out off.
+    let wild = ViewConfig { ring_gap: 5.0, ring_inner: RING_INNER_MAX, ..ViewConfig::default() };
     let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &wild, &plain_frame(), 0.0);
     // What the refused slot comes out AS, which is the whole of how a layer
     // says it is not drawn: the empty pair. An inside-out pair (the slot's own
