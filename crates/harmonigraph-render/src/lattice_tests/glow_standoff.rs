@@ -771,11 +771,12 @@ fn standoff_share_rings(
 /// TWO claims, and the second is what keeps the first from being a restyle.
 /// Against a CLOSED ring's share at the same pixel, a wide Octave gap keeps
 /// nearly all of its light in the middle of a gap — where the nearest ink is
-/// half a gap away, further off than the Shadow reaches — and loses all of the
-/// same share as the closed ring over the middle of a slice, the ink there
-/// being no further off than the annulus itself. And with the gap closed the
-/// share is FLAT around the turn, which is the picture an angular term must not
-/// be able to touch: a dark band no setting on the node asked for.
+/// half a gap away, further off than the Shadow reaches, the fixture's Shadow
+/// being kept inside half of `GAP_MAX` — and loses all of the same share as
+/// the closed ring over the middle of a slice, the ink there being no further
+/// off than the annulus itself. And with the gap closed the share is FLAT
+/// around the turn, which is the picture an angular term must not be able to
+/// touch: a dark band no setting on the node asked for.
 ///
 /// Per pixel is what makes the tolerance on that flatness a tight one. The
 /// probe ring lands on integer pixels, so its radius wobbles by up to half of
@@ -788,12 +789,12 @@ fn standoff_share_rings(
 /// coverage and the share is the standoff's whole answer.
 #[test]
 fn the_standoff_follows_the_gaps_between_the_slices() {
-    // A big frame for a small measurement: the Shadow's fade is 0.16 of a node's
-    // uv, so at 256 it spans some seven pixels and half of one of those is a
-    // twentieth of the share below. The node is drawn at the same size in uv
-    // whatever the frame, so the pixels are what buys the resolution.
+    // A big frame for a small measurement, and a Shadow kept inside half of
+    // GAP_MAX so the wide gap's middle sits further from the ink than the
+    // Shadow reaches. The node is drawn at the same size in uv whatever the
+    // frame, so the pixels are what buys the resolution.
     const SIZE: [u32; 2] = [1024, 1024];
-    const SHADOW: f32 = 0.16;
+    const SHADOW: f32 = 0.08;
     // Enough of them that one lands near the middle of a gap and one near the
     // middle of a slice, at every wheel the view can be dialled to.
     const ANGLES: usize = 360;
@@ -902,12 +903,14 @@ fn the_standoff_follows_the_gaps_between_the_slices() {
 /// the light), so one layer can be the whole fixture.
 #[test]
 fn a_slice_past_a_half_turn_is_stood_off_down_its_middle() {
-    const SIZE: [u32; 2] = [1024, 1024];
+    // Twice the other fixtures' resolution: the probe now sits inside half of a
+    // narrower GAP_MAX, and the ink needs the extra pixels to still resolve.
+    const SIZE: [u32; 2] = [2048, 2048];
     // Small against the band's own radius, so the probe sits well inside half
     // the Octave gap with the fade still spending most of itself there.
-    const SHADOW: f32 = 0.05;
-    const BAND_OUTER: f32 = 0.15;
-    const PAST: f32 = 0.01;
+    const SHADOW: f32 = 0.025;
+    const BAND_OUTER: f32 = 0.075;
+    const PAST: f32 = 0.005;
     const ANGLES: usize = 360;
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
@@ -992,7 +995,7 @@ fn a_slice_past_a_half_turn_is_stood_off_down_its_middle() {
 ///
 /// The measurement that separates the two is the middle of a gap between two
 /// marks: the nearest ink there is half an Octave gap away, and at the widest
-/// gap that is 0.2 against a Shadow of 0.16, so the light has to be fully back.
+/// gap that is 0.1 against a Shadow of 0.08, so the light has to be fully back.
 /// Read off the boundary the two wedges share, which is where the un-eroded
 /// wedge puts its own edge and so reads as a distance of nothing.
 ///
@@ -1002,7 +1005,7 @@ fn a_slice_past_a_half_turn_is_stood_off_down_its_middle() {
 #[test]
 fn a_marks_standoff_stops_where_the_gap_cuts_its_sides() {
     const SIZE: [u32; 2] = [1024, 1024];
-    const SHADOW: f32 = 0.16;
+    const SHADOW: f32 = 0.08;
     const STRIP_IN: f32 = 0.5;
     const STRIP_THICK: f32 = 0.12;
     const ANGLES: usize = 360;
