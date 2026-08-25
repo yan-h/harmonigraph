@@ -1255,4 +1255,97 @@ mod tests {
             eprintln!("{}", path.canonicalize().unwrap_or(path.clone()).display());
         }
     }
+    /// The marker field under a tilted camera, written to `target/scratch/` —
+    /// the picture the draw order is for.
+    ///
+    /// A probe: it asserts nothing, the verdict being a look. What it is a look
+    /// AT is which crosses a node's disc covers. Nodes and markers are both
+    /// camera-facing billboards at a fixed world size while the sheet they
+    /// stand on foreshortens, so face-on a node's disc reaches about its own
+    /// cell and the only cross under it is its own — tilt the sheet and one
+    /// disc spans a dozen positions, most of them NEARER the eye than the node.
+    ///
+    /// Five cameras, and the first two are the control: cabinet and a gentle
+    /// perspective, where the whole field could be drawn under the whole sheet
+    /// and no pixel would know. The other three are where the order shows.
+    ///
+    /// The names are OFF, a marker being what a name replaces
+    /// (`derive_pluses`): with them on, every position this is about is named
+    /// and ships no cross at all. The ground is the skin's panel rather than
+    /// the preset's near-black, which is what the field is actually read
+    /// against.
+    ///
+    /// ```text
+    /// cargo test -p harmonigraph-offline -- --ignored --nocapture marker_depth
+    /// ```
+    #[test]
+    #[ignore = "a probe: writes PNGs and asserts nothing"]
+    fn the_marker_depth_order_draws_a_picture() {
+        use harmonigraph_ui::{draw_pane, Layout, SharedState};
+
+        const SIZE: [u32; 2] = [1200, 1000];
+        const PPP: f32 = 2.0;
+        const NOW: f64 = 1.0;
+
+        let Some(mut renderer) = Renderer::new(SIZE) else {
+            eprintln!("no usable GPU adapter; nothing rendered");
+            return;
+        };
+        let context = egui::Context::default();
+        harmonigraph_ui::theme::apply_theme(&context);
+        context.set_pixels_per_point(PPP);
+
+        let layout = Layout::preset("lattice").expect("the lattice preset");
+        let points = egui::vec2(SIZE[0] as f32 / PPP, SIZE[1] as f32 / PPP);
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, points);
+        let placements = layout.resolve(points);
+        let background =
+            egui::Color32::from_rgb(layout.background.0, layout.background.1, layout.background.2);
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/scratch");
+        std::fs::create_dir_all(&dir).expect("a scratch directory");
+
+        for (tag, pitch, yaw) in [
+            ("cabinet", 0.3f32, 0.4f32),
+            ("flat", 0.3, 0.4),
+            ("tilt", 1.15, 0.4),
+            ("edge", 1.42, 0.4),
+            ("yaw", 0.3, 1.42),
+        ] {
+            let mut state = SharedState::new(FORMAT);
+            state.view.show_labels = false;
+            state.set_background((24, 25, 29));
+            state.frame_params.fade_time = 0.0;
+            for note in [55u8, 60, 64, 67, 71] {
+                state.tracker.handle_event(harmonigraph_core::NoteEvent::on(0.0, 0, note, 1.0));
+            }
+            state.camera.projection = if tag == "cabinet" {
+                harmonigraph_scene::Projection::Cabinet
+            } else {
+                harmonigraph_scene::Projection::Perspective
+            };
+            state.camera.pitch = pitch;
+            state.camera.yaw = yaw;
+            state.camera.zoom_by(1.6);
+            let output = context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    time: Some(NOW),
+                    max_texture_side: Some(renderer.max_texture_side()),
+                    ..Default::default()
+                },
+                |ui| {
+                    for (pane, rect) in &placements {
+                        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(*rect));
+                        draw_pane(&mut child, *pane, &mut state, NOW);
+                    }
+                },
+            );
+            let primitives = context.tessellate(output.shapes, PPP);
+            let bytes = renderer.render(&primitives, &output.textures_delta, PPP, background);
+            let path = dir.join(format!("marker-depth-{tag}.png"));
+            image::save_buffer(&path, &bytes, SIZE[0], SIZE[1], image::ExtendedColorType::Rgba8)
+                .expect("write the png");
+            eprintln!("{}", path.canonicalize().unwrap_or(path.clone()).display());
+        }
+    }
 }

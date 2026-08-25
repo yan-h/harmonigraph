@@ -709,21 +709,13 @@ pub fn lattice_paint_callback(
 /// Per-frame, per-pane draw data, computed on the UI thread.
 struct LatticeCallback {
     instances: Vec<GpuInstance>,
-    /// Index into `instances` where the markers are drawn (see `from_scene`).
-    pluses_at: u32,
     /// The home sheet's knockouts, one per node that clears, in the order
-    /// their nodes are drawn (see [`PAINT_CLEARING`] and [`HomeSeam`]).
+    /// their nodes are drawn (see [`PAINT_CLEARING`] and [`Draw::Clearing`]).
     clearings: Vec<GpuInstance>,
-    /// Where each of those knockouts falls in the node run, and which cross
-    /// waits behind it.
-    home_seams: Vec<HomeSeam>,
-    /// Where the crosses that wait start in `pluses`; everything under it is
-    /// the resting field, drawn in one batch at `pluses_at`.
-    plus_split: u32,
-    /// Every label's glyphs, in the order the pass draws them, and where each
-    /// label falls in the node run (see [`GlyphSeam`]).
+    /// Every label's glyphs, in the order the pass draws them.
     glyphs: Vec<GlyphInstance>,
-    seams: Vec<GlyphSeam>,
+    /// The scene pass's whole order, back to front — see [`Draw`].
+    draws: Vec<Draw>,
     /// The halo's rings, and the two sheets on the frames either has moved.
     rings: [TextRing; 2],
     atlas: Option<FontAtlas>,
@@ -748,125 +740,76 @@ struct LatticeCallback {
 /// texture it renders into. See [`BloomChain::run`].
 type BloomStep<'a> = (&'a wgpu::RenderPipeline, &'a wgpu::BindGroup, &'a wgpu::TextureView);
 
-/// One home node's two extra draws, and where the run stops to make room for
-/// them: its own knockout, and the resting cross standing at its position.
+/// One draw the scene pass makes. The pass is a walk over a list of these,
+/// back to front, and every index in one addresses the pane's own buffers.
 ///
-/// Both go in front of the node's ink, in that order, which is what puts a
-/// node's hole over the rings behind it and under the mark of the position it
-/// stands on. See `LatticeCallback::from_scene` for why that spacing is the
-/// whole of the feature.
+/// The order is MATERIALISED rather than reconstructed. Everything the pass
+/// draws — the nodes, the home sheet's knockouts, the markers and the names —
+/// is depth-sorted once, in `LatticeCallback::from_scene`, and the sequence
+/// falls out of that one walk. What that buys is that there is no second
+/// expression of the order to keep in step with the first: a draw goes where
+/// the walk put it, so nothing has to be told which side of anything else it
+/// belongs on.
+///
+/// The alternative is what this replaces, and it is worth naming because it
+/// looks cheaper. Carrying an INDEX into the node run per marker, knockout and
+/// name — "how many nodes go in front of me" — costs one tiebreak per
+/// collision, and the collisions are unavoidable: a node that paints nothing
+/// ships no instance, so it moves no index, and the draws either side of it
+/// land on the same number while belonging on opposite sides.
+///
+/// Depth is what the reader is being shown, so depth is what the order
+/// follows. See `from_scene` for the sort and for the spacing inside one node.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct HomeSeam {
-    /// How many node instances go in front of both draws — the index of this
-    /// node's own ink.
-    at: u32,
-    /// Which knockout, by index into `clearings`.
-    clearing: u32,
-    /// Which cross, by index into `pluses`, or `u32::MAX` where a name stands
-    /// at the position and no cross is shipped.
-    plus: u32,
+enum Draw {
+    /// A run of node instances, as a range into `instances`.
+    Nodes(u32, u32),
+    /// One home node's knockout, by index into `clearings`.
+    Clearing(u32),
+    /// A run of markers, as a range into `pluses`.
+    Pluses(u32, u32),
+    /// One name's glyphs, as a range into `glyphs`: its rim, then its fill.
+    ///
+    /// Per NAME rather than over the whole frame, which is what interleaving
+    /// costs and all it costs: two neighbouring letters otherwise darken each
+    /// other's ink where their rims overlap, and two names on different nodes
+    /// overlapping is the nearer one sitting on the other. Adjacent names on
+    /// ONE sheet merge into a single entry, being one uninterrupted draw;
+    /// across a sheet boundary they do not, the nearer sheet's rim being meant
+    /// to fall on the other's fill.
+    Label(u32, u32),
 }
 
-/// One label's glyphs, and where they are drawn: `at` is how many node
-/// instances go in front of them.
+/// Add node instance `at` to the run this list ends with, or start a new one.
 ///
-/// A label sits immediately after the node it names, so the nodes drawn
-/// after it — everything nearer — cover it exactly as they cover each other.
-/// Labels sharing a seam on one sheet are one entry, since they are one
-/// uninterrupted draw.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct GlyphSeam {
-    at: u32,
-    start: u32,
-    count: u32,
-    /// Whether the node this names is in the home run, which draws AFTER the
-    /// markers — carried rather than inferred from `at`, because the two runs
-    /// meet at `pluses_at` and a culled node sits on the boundary without
-    /// having moved it. The last far-sheet node to ship and a home node
-    /// culled before any home node ships both land on `at == pluses_at`, and
-    /// they belong on opposite sides of the marker run.
-    after_pluses: bool,
-    /// Which sheet the node this names is on — its run index in the sorted
-    /// order, back to front. The one tie `at` and the side of the markers
-    /// leave: the last node of one sheet to ship and a node culled at the
-    /// head of the next share an `at`, and the nearer sheet's name draws
-    /// after, as its own draw rather than merged into the other's.
-    sheet: u32,
+/// A run is exactly a stretch of instances the walk did not interrupt: the
+/// buffers are filled in draw order, so "the last draw ends where this one
+/// starts" is the whole test.
+fn push_node(draws: &mut Vec<Draw>, at: u32) {
+    match draws.last_mut() {
+        Some(Draw::Nodes(_, end)) if *end == at => *end = at + 1,
+        _ => draws.push(Draw::Nodes(at, at + 1)),
+    }
 }
 
-/// Where one node's label goes: a [`GlyphSeam`] before its glyphs are known.
-#[derive(Clone, Copy, Debug)]
-struct Seam {
-    at: u32,
-    after_pluses: bool,
-    sheet: u32,
+/// The same for one marker — see [`push_node`].
+fn push_plus(draws: &mut Vec<Draw>, at: u32) {
+    match draws.last_mut() {
+        Some(Draw::Pluses(_, end)) if *end == at => *end = at + 1,
+        _ => draws.push(Draw::Pluses(at, at + 1)),
+    }
 }
 
-/// Put every label at its node's place in the draw order: the glyphs
-/// regrouped into the order the pass wants them, and the seams that say
-/// where each group goes.
+/// The markers no node stands at, drawn where the whole field used to be:
+/// over the sheets behind the home one, under the home sheet itself.
 ///
-/// `seam_of` is per node of the scene, as `from_scene` counted it. A label
-/// naming a node that is not in the scene is dropped rather than guessed at,
-/// and its glyphs go with it — the caller and the scene disagreeing about
-/// how many nodes there are is a bug in the caller, and drawing the name
-/// somewhere arbitrary would hide it.
-fn place_labels(
-    glyphs: Vec<GlyphInstance>,
-    labels: &[Label],
-    seam_of: &[Seam],
-) -> (Vec<GlyphInstance>, Vec<GlyphSeam>) {
-    // Where each label's glyphs sit in what the caller handed over, paired
-    // with the seam they are going to. The cursor advances over labels the
-    // scene has no node for as much as over the rest: the run lengths are
-    // what say which glyphs are whose.
-    let mut cursor = 0usize;
-    let mut runs: Vec<(Seam, usize, usize)> = Vec::with_capacity(labels.len());
-    for label in labels {
-        let start = cursor;
-        let count = label.glyphs as usize;
-        cursor = (cursor + count).min(glyphs.len());
-        if let Some(&seam) = seam_of.get(label.node as usize) {
-            runs.push((seam, start, cursor - start));
-        }
+/// See `from_scene` for what makes a marker loose and why it can only be one
+/// the caller built by hand.
+fn push_loose(draws: &mut Vec<Draw>, pluses: &mut Vec<GpuPlus>, loose: &[GpuPlus]) {
+    for &plus in loose {
+        push_plus(draws, pluses.len() as u32);
+        pluses.push(plus);
     }
-    // Stable, so two labels at one seam keep the order they were drawn in —
-    // which is the order the nodes are in, and the only thing that decides
-    // between two names sharing a pixel. By the side of the markers before the
-    // count, so the two labels that share `pluses_at` from opposite runs sort
-    // the way they draw rather than by which node came first. The sheet
-    // last, for the same boundary: the last node of one sheet to ship and a
-    // node culled at the head of the next share an `at`, and the nearer
-    // sheet's name draws after. Without it the fallback is the scene's node
-    // order, which is lattice order and does not turn with the camera.
-    runs.sort_by_key(|&(seam, _, _)| (seam.at, seam.after_pluses, seam.sheet));
-
-    let mut placed = Vec::with_capacity(glyphs.len());
-    let mut seams: Vec<GlyphSeam> = Vec::new();
-    for (Seam { at, after_pluses, sheet }, start, count) in runs {
-        if count == 0 {
-            continue;
-        }
-        let first = placed.len() as u32;
-        placed.extend_from_slice(&glyphs[start..start + count]);
-        // Merged only with a seam on the SAME side of the markers and the
-        // same sheet: two labels at one `at` are one uninterrupted draw,
-        // unless the markers go between them or they are at different
-        // depths — two names from different sheets overlapping is the nearer
-        // one sitting on the other, which takes its rim drawn over the other's
-        // fill (see `label` in `paint`).
-        match seams.last_mut() {
-            Some(last)
-                if last.at == at && last.after_pluses == after_pluses && last.sheet == sheet =>
-            {
-                last.count += count as u32
-            }
-            _ => {
-                seams.push(GlyphSeam { at, start: first, count: count as u32, after_pluses, sheet })
-            }
-        }
-    }
-    (placed, seams)
 }
 
 impl LatticeCallback {
@@ -925,26 +868,6 @@ impl LatticeCallback {
             .collect();
         order.sort_by(|a, b| b.0.total_cmp(&a.0).then(b.1.total_cmp(&a.1)));
 
-        // The markers belong to the home sheet — that is the only sheet that
-        // draws any — so their place in the order is between the sheets behind
-        // it and the home sheet itself. Under it, a node on a sheet BEHIND
-        // the home one punches its clearing through the home markers, putting
-        // a hole in the layer that is supposed to be hiding it.
-        //
-        // The home sheet then draws after the field, each node twice
-        // (`GpuInstance::paint`): its KNOCKOUT, then its ink, with the cross
-        // standing at its own position laid between the two. A cross goes when
-        // a NAME stands over it and at no other time (`derive_pluses`), and a
-        // node wearing an audio ring has no name to put there — so a knockout
-        // drawn over that cross took the mark of the position off every node
-        // the Gate lit, leaving the marker's own standoff behind in the light
-        // with nothing standing in it. See `HomeSeam` for why the spacing is
-        // per node rather than two batches.
-        //
-        // World z is measured from the home sheet, so its whole run sits at
-        // sheet depth 0 — behind it is positive, in front negative. Sorting
-        // by that above is what makes the home sheet one contiguous run,
-        // under every projection rather than only the face-on one.
         let to_gpu = |n: &harmonigraph_scene::NodeInstance| GpuInstance {
             world_pos: n.world_pos.to_array(),
             color: n.color.to_array(),
@@ -1012,44 +935,20 @@ impl LatticeCallback {
                 || g.params[2] > 0.0
                 || (g.octaves[0] | g.octaves[1] | g.octaves[2]) != 0
         };
-        // Where a node's own label goes, per node: after everything drawn up
-        // to and including that node, counted over the KEPT instances. Not its
-        // index in the sorted list — the cull above drops a node that can paint
-        // nothing, and such a node can still carry a label (a hovered idle one
-        // draws no disc and is named all the same), so the two part company at
-        // the first culled node.
-        //
-        // And which SHEET it is on, as a run index into the sorted order:
-        // what tells two labels apart when the cull leaves them on one seam
-        // (see `place_labels`). Runs of one sheet depth are contiguous because
-        // that depth is the sort's first key.
-        let mut sheet_of = vec![0u32; scene.nodes.len()];
-        let mut sheet_count = 0u32;
-        for (k, &(plane, _, i)) in order.iter().enumerate() {
-            if k == 0 || order[k - 1].0 != plane {
-                sheet_count += 1;
-            }
-            sheet_of[i] = sheet_count - 1;
-        }
-        let mut seam_of = vec![Seam { at: 0, after_pluses: false, sheet: 0 }; scene.nodes.len()];
-        let drawn = |out: &mut Vec<GpuInstance>,
-                     seam_of: &mut [Seam],
-                     ns: &[(f32, f32, usize)],
-                     after_pluses: bool,
-                     paint: f32| {
-            for &(_, _, i) in ns {
-                let node = &scene.nodes[i];
-                let instance = to_gpu(node);
-                if paints(&instance) {
-                    out.push(GpuInstance { paint, ..instance });
-                }
-                seam_of[i] = Seam { at: out.len() as u32, after_pluses, sheet: sheet_of[i] };
-            }
-        };
         // Which marker stands at each node's position, by index into
-        // `scene.pluses` — the crosses are derived off the home nodes
-        // (`derive_pluses`), so every one of them has a node here, and the
-        // lattice position is what ties the two lists together.
+        // `scene.pluses`. The crosses are derived off the home nodes
+        // (`derive_pluses`), so in the plugin every one of them has a node here
+        // and the lattice position is what ties the two lists together. That
+        // link is what gives a marker its DEPTH: it stands exactly where its
+        // node stands, so the sorted order the nodes are walked in is the
+        // order the markers want too.
+        //
+        // A marker at a position no home node holds is LOOSE, having no node to
+        // take a depth from. It keeps the place the whole field used to have —
+        // over the sheets behind home, under the home sheet — which is the one
+        // place a marker of unknown depth cannot be wrong by more than a sheet.
+        // Two home nodes claiming one lattice position is the other way in
+        // here, the map keeping the last of them.
         let mut plus_of = vec![u32::MAX; scene.nodes.len()];
         let node_at: std::collections::HashMap<_, usize> = scene
             .nodes
@@ -1063,109 +962,151 @@ impl LatticeCallback {
                 plus_of[i] = p as u32;
             }
         }
-        let mut instances = Vec::with_capacity(order.len());
-        drawn(&mut instances, &mut seam_of, &order[..split], false, PAINT_WHOLE);
-        // Where the markers are drawn inside that run: after the sheets BEHIND
-        // the home one, counted over the kept instances rather than `split`,
-        // which indexes the list before the cull.
-        let pluses_at = instances.len() as u32;
-        // The home sheet, node by node, each one's KNOCKOUT ahead of its own
-        // ink and the cross standing at its position between the two
-        // (`HomeSeam`). Three things ride on that spacing, and no coarser
-        // order gives all three.
-        //
-        // A home node clears the home nodes BEHIND IT, which is what the
-        // Clearance is for wherever two nodes overlap on one sheet — every
-        // orbited camera, where the sheet foreshortens under billboards that
-        // do not. Batching the knockouts ahead of the ink puts every hole
-        // under every ring, so the bar goes quiet on the picture it is most
-        // wanted in.
-        //
-        // A node does NOT clear the cross it stands on. That cross is not
-        // behind the node, it is AT it, and a hole punched over it takes the
-        // mark of the position while leaving the marker's standoff in the
-        // light — a cross-shaped hole with nothing standing in it
-        // (`a_node_lit_by_no_key_keeps_the_cross_under_it`). Drawn after that
-        // node's own knockout and before its ink, the cross keeps the rule it
-        // is meant to keep: it goes when a NAME stands over it and at no
-        // other time (`derive_pluses`).
-        //
-        // It still clears every OTHER cross, which is the marker field being
-        // hidden by a node in front of it — the same occlusion the field takes
-        // from the sheets in front, and what puts a sounding node in a clean
-        // gap in the lattice rather than on top of it.
-        let mut clearings = Vec::new();
-        let mut home_seams = Vec::new();
-        let mut home_pluses = Vec::new();
-        for &(_, _, i) in &order[split..home_end] {
-            let node = &scene.nodes[i];
-            let instance = to_gpu(node);
-            if paints(&instance) {
-                // Both extra draws hang off the Shadow, so a view with it dialled
-                // off ships neither and the pass is the single batched marker
-                // draw it has always been. The cull is the ink's, since the two
-                // are one node — a node that paints nothing clears nothing
-                // either, every layer's hole being scaled by the level that
-                // paints it (`node_clearing`).
-                if scene.glow_shadow > 0.0 {
-                    let plus = plus_of[i];
-                    if plus != u32::MAX {
-                        home_pluses.push(plus);
-                    }
-                    home_seams.push(HomeSeam {
-                        at: instances.len() as u32,
-                        clearing: clearings.len() as u32,
-                        // Its place in the run of held crosses; `plus_split`
-                        // shifts that into the buffer below, once the run's
-                        // own start is known.
-                        plus: if plus == u32::MAX {
-                            u32::MAX
-                        } else {
-                            home_pluses.len() as u32 - 1
-                        },
-                    });
-                    clearings.push(GpuInstance { paint: PAINT_CLEARING, ..instance });
-                }
-                instances.push(GpuInstance { paint: PAINT_INK, ..instance });
+        // Read back off `plus_of` rather than written beside it: a position two
+        // markers name has only the last of them in the map, and the first is
+        // then claimed by nobody and has to stay loose or it is never drawn.
+        let mut claimed = vec![false; scene.pluses.len()];
+        for &p in &plus_of {
+            if p != u32::MAX {
+                claimed[p as usize] = true;
             }
-            seam_of[i] =
-                Seam { at: instances.len() as u32, after_pluses: true, sheet: sheet_of[i] };
         }
-        drawn(&mut instances, &mut seam_of, &order[home_end..], true, PAINT_WHOLE);
-        let (glyphs, seams) = place_labels(labels.glyphs, &labels.labels, &seam_of);
-
-        // The markers draw under the nodes, in two runs: the field at
-        // `pluses_at`, and after it the crosses that wait for their own node's
-        // knockout. `plus_split` is where the second run starts, and a
-        // `HomeSeam`'s `plus` indexes into it.
         let to_plus = |d: &harmonigraph_scene::PlusInstance| GpuPlus {
             pos_radius: [d.pos.x, d.pos.y, d.pos.z, d.radius],
             color: [d.color.x, d.color.y, d.color.z, d.strength],
         };
-        let held: std::collections::HashSet<u32> = home_pluses.iter().copied().collect();
-        let mut pluses: Vec<GpuPlus> = scene
+        let loose: Vec<GpuPlus> = scene
             .pluses
             .iter()
             .enumerate()
-            .filter(|(p, _)| !held.contains(&(*p as u32)))
+            .filter(|(p, _)| !claimed[*p])
             .map(|(_, d)| to_plus(d))
             .collect();
-        let plus_split = pluses.len() as u32;
-        pluses.extend(home_pluses.iter().map(|&p| to_plus(&scene.pluses[p as usize])));
-        for seam in &mut home_seams {
-            if seam.plus != u32::MAX {
-                seam.plus += plus_split;
+
+        // Where each name's glyphs sit in what the caller handed over, per
+        // node, so the walk below can put a name at its own node's place in the
+        // order rather than working that place out again afterwards. The cursor
+        // advances over labels the scene has no node for as much as over the
+        // rest: the run lengths are what say which glyphs are whose, and a
+        // label naming a node that is not in the scene is dropped rather than
+        // drawn somewhere arbitrary — the caller and the scene disagreeing
+        // about how many nodes there are is a bug in the caller.
+        let mut glyphs_of = vec![(0u32, 0u32); scene.nodes.len()];
+        let mut taken = 0u32;
+        for label in &labels.labels {
+            let start = taken;
+            taken = (taken + label.glyphs).min(labels.glyphs.len() as u32);
+            if let Some(slot) = glyphs_of.get_mut(label.node as usize) {
+                *slot = (start, taken - start);
             }
+        }
+
+        // The one walk: every draw the pass makes, emitted in the order it
+        // makes them, filling the four buffers as it goes (see [`Draw`]).
+        //
+        // Inside ONE home node the spacing is its knockout, then the cross
+        // standing at its position, then its ink. Three things ride on that,
+        // and no coarser order gives all three.
+        //
+        // A home node clears the home nodes BEHIND IT, which is what the
+        // Clearance is for wherever two nodes overlap on one sheet — every
+        // orbited camera, where the sheet foreshortens under billboards that do
+        // not. Batching the knockouts ahead of the ink puts every hole under
+        // every ring, so the bar goes quiet on the picture it is most wanted in.
+        //
+        // A node does NOT clear the cross it stands on. That cross is not
+        // behind the node, it is AT it, and a hole punched over it takes the
+        // mark of the position while leaving the marker's standoff in the light
+        // — a cross-shaped hole with nothing standing in it
+        // (`a_node_lit_by_no_key_keeps_the_cross_under_it`). Drawn after that
+        // node's own knockout and before its ink, the cross keeps the rule it
+        // is meant to keep: it goes when a NAME stands over it and at no other
+        // time (`derive_pluses`). A node wearing an audio RING is where the two
+        // meet at all: it draws ink with no name over it, so it is the one node
+        // that carries a cross and a knockout at once.
+        //
+        // It still clears every cross BEHIND it, which is the marker field
+        // hidden by a node in front of it — the same occlusion the field takes
+        // from the sheets in front, and what puts a sounding node in a clean gap
+        // in the lattice rather than on top of it. A cross in FRONT of a node
+        // covers that node, which is the same rule read the other way and the
+        // reason the markers are in this walk at all. Face-on the case does not
+        // arise: a node's disc reaches about its own cell, so the only cross
+        // under it is its own, and drawing the whole field under the whole sheet
+        // is indistinguishable. Tilt the sheet and one disc spans a dozen
+        // positions while the billboard does not foreshorten with it, so every
+        // cross it covers is one the reader is being told is behind it — and
+        // most of them are not.
+        let mut instances = Vec::with_capacity(order.len());
+        let mut clearings = Vec::new();
+        let mut pluses = Vec::with_capacity(scene.pluses.len());
+        let mut glyphs = Vec::with_capacity(labels.glyphs.len());
+        let mut draws: Vec<Draw> = Vec::with_capacity(order.len());
+        // Which sheet the last name went on, as a run index into the sorted
+        // order. Runs of one sheet depth are contiguous, that depth being the
+        // sort's first key, and two names merge into one draw only inside one
+        // of them (see [`Draw::Label`]).
+        let mut label_sheet = u32::MAX;
+        let mut sheet = 0u32;
+        let mut loose_drawn = false;
+        for (k, &(_, _, i)) in order.iter().enumerate() {
+            if k > 0 && order[k - 1].0 != order[k].0 {
+                sheet += 1;
+            }
+            if k == split {
+                push_loose(&mut draws, &mut pluses, &loose);
+                loose_drawn = true;
+            }
+            let home = (split..home_end).contains(&k);
+            let instance = to_gpu(&scene.nodes[i]);
+            let ships = paints(&instance);
+            // The knockout hangs off the Shadow, so a view with it dialled off
+            // ships none. The cull is the ink's, since the two are one node — a
+            // node that paints nothing clears nothing either, every layer's
+            // hole being scaled by the level that paints it (`node_clearing`).
+            if ships && home && scene.glow_shadow > 0.0 {
+                draws.push(Draw::Clearing(clearings.len() as u32));
+                clearings.push(GpuInstance { paint: PAINT_CLEARING, ..instance });
+            }
+            // The cross, whether or not the node it stands on draws anything:
+            // an idle position is exactly where a marker does its work, and the
+            // node it belongs to is still what says how far off it is.
+            if plus_of[i] != u32::MAX {
+                push_plus(&mut draws, pluses.len() as u32);
+                pluses.push(to_plus(&scene.pluses[plus_of[i] as usize]));
+            }
+            if ships {
+                push_node(&mut draws, instances.len() as u32);
+                // The home sheet's nodes draw twice, so the second of the two
+                // takes the ink alone; every other sheet's node is one draw
+                // carrying both (`GpuInstance::paint`).
+                let paint = if home { PAINT_INK } else { PAINT_WHOLE };
+                instances.push(GpuInstance { paint, ..instance });
+            }
+            // The name, immediately after the node it names — so what covers a
+            // name is exactly what covers its node.
+            let (start, count) = glyphs_of[i];
+            if count > 0 {
+                let at = glyphs.len() as u32;
+                glyphs.extend_from_slice(&labels.glyphs[start as usize..(start + count) as usize]);
+                match draws.last_mut() {
+                    Some(Draw::Label(_, end)) if label_sheet == sheet => *end = at + count,
+                    _ => draws.push(Draw::Label(at, at + count)),
+                }
+                label_sheet = sheet;
+            }
+        }
+        // The home run can be empty and can run to the end of the order, in
+        // which case the walk never reached `split`.
+        if !loose_drawn {
+            push_loose(&mut draws, &mut pluses, &loose);
         }
 
         LatticeCallback {
             instances,
-            pluses_at,
             clearings,
-            home_seams,
-            plus_split,
             glyphs,
-            seams,
+            draws,
             rings: labels.rings,
             atlas: labels.atlas,
             marks: labels.marks,
@@ -1589,30 +1530,21 @@ struct PaneBuffers {
     instance_buffer: wgpu::Buffer,
     instance_capacity: usize,
     instance_count: u32,
-    /// Where the resting marker field is drawn inside the node run: instances
-    /// before this are the sheets behind the home one and must land under the
-    /// markers; the rest go over them. See `LatticeCallback::from_scene`.
-    pluses_at: u32,
-    /// The home sheet's knockouts, each drawn at its own node (`home_seams`).
-    /// A buffer of its own rather than more entries in the instance list, so
-    /// the glow, the strip and the cull go on seeing each node exactly once.
+    /// The home sheet's knockouts, each drawn at its own node
+    /// ([`Draw::Clearing`]). A buffer of its own rather than more entries in
+    /// the instance list, so the glow, the strip and the cull go on seeing
+    /// each node exactly once.
     clearing_buffer: wgpu::Buffer,
     clearing_capacity: usize,
-    /// Where each knockout falls in the node run, and which cross waits behind
-    /// it (see [`HomeSeam`]). Empty wherever the Clearance is off.
-    home_seams: Vec<HomeSeam>,
     plus_buffer: wgpu::Buffer,
     plus_capacity: usize,
     plus_count: u32,
-    /// Where the crosses a node's knockout waits for start in `plus_buffer`;
-    /// under it is the field drawn in one batch at `pluses_at`.
-    plus_split: u32,
-    /// This pane's labels: the glyphs, and where each label falls in the node
-    /// run above (see [`GlyphSeam`]).
     glyph_buffer: wgpu::Buffer,
     glyph_capacity: usize,
     glyph_count: u32,
-    seams: Vec<GlyphSeam>,
+    /// The scene pass's whole order (see [`Draw`]), held to what actually
+    /// reached the buffers above.
+    draws: Vec<Draw>,
     /// What the glyph shader is told about this pane: its size in points,
     /// the atlas's, and the rim's rings.
     glyph_uniform_buffer: wgpu::Buffer,
@@ -3134,7 +3066,6 @@ impl LatticeResources {
                     INITIAL_INSTANCE_CAPACITY,
                 ),
                 clearing_capacity: INITIAL_INSTANCE_CAPACITY,
-                home_seams: Vec::new(),
                 plus_buffer: create_vertex_buffer::<GpuPlus>(
                     device,
                     "lattice_pluses",
@@ -3142,8 +3073,6 @@ impl LatticeResources {
                 ),
                 plus_capacity: INITIAL_PLUS_CAPACITY,
                 plus_count: 0,
-                plus_split: 0,
-                pluses_at: 0,
                 glyph_buffer: create_vertex_buffer::<GlyphInstance>(
                     device,
                     "lattice_glyphs",
@@ -3151,7 +3080,7 @@ impl LatticeResources {
                 ),
                 glyph_capacity: INITIAL_GLYPH_CAPACITY,
                 glyph_count: 0,
-                seams: Vec::new(),
+                draws: Vec::new(),
                 glyph_uniform_buffer: device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("lattice_glyph_uniforms"),
                     size: std::mem::size_of::<text::TextUniforms>() as u64,
@@ -3394,7 +3323,6 @@ impl CallbackTrait for LatticeCallback {
             );
         }
         pane.instance_count = self.instances.len() as u32;
-        pane.pluses_at = self.pluses_at.min(pane.instance_count);
         if !self.instances.is_empty() {
             queue.write_buffer(&pane.instance_buffer, 0, bytemuck::cast_slice(&self.instances));
         }
@@ -3417,20 +3345,6 @@ impl CallbackTrait for LatticeCallback {
                 create_vertex_buffer::<GpuPlus>(device, "lattice_pluses", pane.plus_capacity);
         }
         pane.plus_count = self.pluses.len() as u32;
-        pane.plus_split = self.plus_split.min(pane.plus_count);
-        // Held to what actually reached the buffers, the way `pluses_at` is:
-        // every index here addresses one of three lists, and the pass draws
-        // ranges off them without a second look.
-        pane.home_seams = self
-            .home_seams
-            .iter()
-            .filter(|seam| {
-                seam.at <= pane.instance_count
-                    && (seam.clearing as usize) < self.clearings.len()
-                    && (seam.plus == u32::MAX || seam.plus < pane.plus_count)
-            })
-            .copied()
-            .collect();
         if !self.pluses.is_empty() {
             queue.write_buffer(&pane.plus_buffer, 0, bytemuck::cast_slice(&self.pluses));
         }
@@ -3452,8 +3366,6 @@ impl CallbackTrait for LatticeCallback {
                 );
             }
             pane.glyph_count = self.glyphs.len() as u32;
-            pane.seams.clear();
-            pane.seams.extend_from_slice(&self.seams);
             if !self.glyphs.is_empty() {
                 queue.write_buffer(&pane.glyph_buffer, 0, bytemuck::cast_slice(&self.glyphs));
                 // The glyphs' own points, not the screen's: the rects arrive
@@ -3479,8 +3391,20 @@ impl CallbackTrait for LatticeCallback {
             }
         } else {
             pane.glyph_count = 0;
-            pane.seams.clear();
         }
+
+        // The order, held to what actually reached the buffers: every index in
+        // a `Draw` addresses one of four lists and the pass draws off them
+        // without a second look, so a draw naming something they do not hold is
+        // dropped here rather than trusted there. The names go the same way
+        // when there is no atlas — nothing to sample.
+        pane.draws.clear();
+        pane.draws.extend(self.draws.iter().copied().filter(|draw| match *draw {
+            Draw::Nodes(a, b) => a < b && b <= pane.instance_count,
+            Draw::Clearing(i) => (i as usize) < self.clearings.len(),
+            Draw::Pluses(a, b) => a < b && b <= pane.plus_count,
+            Draw::Label(a, b) => a < b && b <= pane.glyph_count,
+        }));
 
         queue.write_buffer(&pane.uniform_buffer, 0, bytemuck::bytes_of(&self.uniforms));
         let write_ms = write_start.elapsed().as_secs_f32() * 1000.0;
@@ -3724,116 +3648,55 @@ impl CallbackTrait for LatticeCallback {
             let light =
                 offscreen.glow.as_ref().map_or(&resources.glow_dummy_bind_group, |g| &g.bind_group);
 
-            // The marker field sits at the home sheet's own depth, so it goes
-            // between the sheets behind it and the home sheet itself —
-            // NOT under everything. Under everything, a node on a sheet
-            // behind the home one punches its clearing through the marker
-            // field, which puts a hole in the layer it is supposed to be
-            // hidden by. `pluses_at` is where that seam falls.
-            let nodes = |pass: &mut wgpu::RenderPass<'_>, range: std::ops::Range<u32>| {
-                if range.is_empty() {
-                    return;
-                }
-                pass.set_pipeline(&resources.pipeline);
-                pass.set_bind_group(0, &pane.bind_group, &[]);
-                pass.set_bind_group(1, light, &[]);
-                pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
-                pass.draw(0..4, range);
-            };
-            let pluses = |pass: &mut wgpu::RenderPass<'_>, range: std::ops::Range<u32>| {
-                if range.is_empty() {
-                    return;
-                }
-                pass.set_pipeline(&resources.plus_pipeline);
-                pass.set_bind_group(0, &pane.bind_group, &[]);
-                pass.set_bind_group(1, light, &[]);
-                pass.set_vertex_buffer(0, pane.plus_buffer.slice(..));
-                pass.draw(0..4, range);
-            };
-            // One home node's knockout, then the cross standing at its
-            // position. Same pipeline and same bind groups as the nodes for the
-            // first of them: this IS that node, drawn for one of the two things
-            // it paints (`PAINT_CLEARING`). Between them is where the hole is a
-            // hole rather than a bite — over every ring the sheet has drawn so
-            // far, under the mark of the position the node stands on, and under
-            // its own ink, which the run draws next.
-            let home = |pass: &mut wgpu::RenderPass<'_>, seam: &HomeSeam| {
-                pass.set_pipeline(&resources.pipeline);
-                pass.set_bind_group(0, &pane.bind_group, &[]);
-                pass.set_bind_group(1, light, &[]);
-                pass.set_vertex_buffer(0, pane.clearing_buffer.slice(..));
-                pass.draw(0..4, seam.clearing..seam.clearing + 1);
-                if seam.plus != u32::MAX {
-                    pluses(pass, seam.plus..seam.plus + 1);
-                }
-            };
-            // The node run up to `end`, stopping at every home node that
-            // clears to lay its knockout and its cross down first.
-            let run = |pass: &mut wgpu::RenderPass<'_>,
-                       cursor: &mut u32,
-                       seam_i: &mut usize,
-                       end: u32| {
-                while let Some(seam) = pane.home_seams.get(*seam_i) {
-                    if seam.at >= end {
-                        break;
+            // The order, as `from_scene` laid it down (see [`Draw`]). One walk
+            // forward, back to front, with nothing here deciding what goes
+            // where — a name is covered by exactly what covers its node, a
+            // knockout falls between its node's two draws, and a cross covers
+            // the nodes behind it and no others, because that is where each of
+            // them was emitted.
+            for draw in &pane.draws {
+                match *draw {
+                    Draw::Nodes(a, b) => {
+                        pass.set_pipeline(&resources.pipeline);
+                        pass.set_bind_group(0, &pane.bind_group, &[]);
+                        pass.set_bind_group(1, light, &[]);
+                        pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
+                        pass.draw(0..4, a..b);
                     }
-                    nodes(pass, *cursor..seam.at);
-                    *cursor = seam.at;
-                    home(pass, seam);
-                    *seam_i += 1;
+                    // The same pipeline and the same bind groups as the nodes:
+                    // this IS one of them, drawn for one of the two things it
+                    // paints (`PAINT_CLEARING`).
+                    Draw::Clearing(i) => {
+                        pass.set_pipeline(&resources.pipeline);
+                        pass.set_bind_group(0, &pane.bind_group, &[]);
+                        pass.set_bind_group(1, light, &[]);
+                        pass.set_vertex_buffer(0, pane.clearing_buffer.slice(..));
+                        pass.draw(0..4, i..i + 1);
+                    }
+                    Draw::Pluses(a, b) => {
+                        pass.set_pipeline(&resources.plus_pipeline);
+                        pass.set_bind_group(0, &pane.bind_group, &[]);
+                        pass.set_bind_group(1, light, &[]);
+                        pass.set_vertex_buffer(0, pane.plus_buffer.slice(..));
+                        pass.draw(0..4, a..b);
+                    }
+                    // Every rim, then every fill. Stamping had that order for
+                    // free and the shader keeps it, because two neighbouring
+                    // letters otherwise darken each other's ink where their
+                    // rims overlap.
+                    Draw::Label(a, b) => {
+                        let Some(bind_group) = pane.glyph_bind_group.as_ref() else {
+                            continue;
+                        };
+                        pass.set_bind_group(0, bind_group, &[]);
+                        pass.set_vertex_buffer(0, pane.glyph_buffer.slice(..));
+                        pass.set_pipeline(&resources.glyph_rim_pipeline);
+                        pass.draw(0..4, a..b);
+                        pass.set_pipeline(&resources.glyph_fill_pipeline);
+                        pass.draw(0..4, a..b);
+                    }
                 }
-                nodes(pass, *cursor..end);
-                *cursor = (*cursor).max(end);
-            };
-            // One label, at its own place in the order: every rim, then every
-            // fill. Stamping had that order for free and the shader keeps it,
-            // because two neighbouring letters otherwise darken each other's
-            // ink where their rims overlap. Per LABEL rather than over the
-            // whole frame, which is what interleaving costs and all it costs:
-            // two names on different nodes overlapping is two labels at
-            // different depths, and the nearer one is meant to sit on the
-            // other.
-            let label = |pass: &mut wgpu::RenderPass<'_>, seam: &GlyphSeam| {
-                let Some(bind_group) = pane.glyph_bind_group.as_ref() else {
-                    return;
-                };
-                let range = seam.start..seam.start + seam.count;
-                pass.set_bind_group(0, bind_group, &[]);
-                pass.set_vertex_buffer(0, pane.glyph_buffer.slice(..));
-                pass.set_pipeline(&resources.glyph_rim_pipeline);
-                pass.draw(0..4, range.clone());
-                pass.set_pipeline(&resources.glyph_fill_pipeline);
-                pass.draw(0..4, range);
-            };
-
-            // The nodes, in order, with each label spliced in right after the
-            // node it names — so what covers a name is exactly what covers
-            // its node. The seams are sorted, so this walks forward once.
-            //
-            // Which side of the markers a label goes is the run its node was
-            // in, not how its seam compares to `pluses_at`: the runs MEET at that
-            // number, so the last far node to ship and a home node culled
-            // before any home node ships share it while belonging on
-            // opposite sides. A marker covers a name if and only if it is
-            // drawn after it, which is the same rule everything else in this
-            // pass follows.
-            let mut cursor = 0u32;
-            let mut home_i = 0usize;
-            let mut pluses_drawn = false;
-            for seam in &pane.seams {
-                if !pluses_drawn && seam.after_pluses {
-                    run(&mut pass, &mut cursor, &mut home_i, pane.pluses_at);
-                    pluses(&mut pass, 0..pane.plus_split);
-                    pluses_drawn = true;
-                }
-                run(&mut pass, &mut cursor, &mut home_i, seam.at);
-                label(&mut pass, seam);
             }
-            if !pluses_drawn {
-                run(&mut pass, &mut cursor, &mut home_i, pane.pluses_at);
-                pluses(&mut pass, 0..pane.plus_split);
-            }
-            run(&mut pass, &mut cursor, &mut home_i, pane.instance_count);
             drop(pass);
 
             // Skipped entirely at strength 0: the composite multiplies the

@@ -148,27 +148,30 @@ fn offscreen_composite_matches_direct_draw() {
     let light = &res.glow_dummy_bind_group;
     let pane = res.panes.get(&7).expect("prepare created the pane");
     let direct_tex = render_to_texture(&device, &queue, SIZE, format, clear, |pass| {
-        // The markers sit at the home sheet's depth, so they are drawn INSIDE
-        // the node run, at `pluses_at` — mirror that or the two paths differ
-        // by draw order rather than by the thing under test.
-        let nodes = |pass: &mut wgpu::RenderPass<'static>, range: std::ops::Range<u32>| {
-            if !range.is_empty() {
-                pass.set_pipeline(&node_pipeline);
-                pass.set_bind_group(0, &pane.bind_group, &[]);
-                pass.set_bind_group(1, light, &[]);
-                pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
-                pass.draw(0..4, range);
+        // The pane's own order, walked the same way `prepare` walks it — a
+        // second expression of it here would make the two paths differ by draw
+        // order rather than by the thing under test. The fixture carries no
+        // name and no knockout, so those two arms would be dead code standing
+        // in for a claim nothing here makes; they fail instead.
+        for draw in &pane.draws {
+            match *draw {
+                Draw::Nodes(a, b) => {
+                    pass.set_pipeline(&node_pipeline);
+                    pass.set_bind_group(0, &pane.bind_group, &[]);
+                    pass.set_bind_group(1, light, &[]);
+                    pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
+                    pass.draw(0..4, a..b);
+                }
+                Draw::Pluses(a, b) => {
+                    pass.set_pipeline(&plus_pipeline);
+                    pass.set_bind_group(0, &pane.bind_group, &[]);
+                    pass.set_bind_group(1, light, &[]);
+                    pass.set_vertex_buffer(0, pane.plus_buffer.slice(..));
+                    pass.draw(0..4, a..b);
+                }
+                other => panic!("the parity fixture drew a {other:?}, which this path cannot"),
             }
-        };
-        nodes(pass, 0..pane.pluses_at);
-        if pane.plus_count > 0 {
-            pass.set_pipeline(&plus_pipeline);
-            pass.set_bind_group(0, &pane.bind_group, &[]);
-            pass.set_bind_group(1, light, &[]);
-            pass.set_vertex_buffer(0, pane.plus_buffer.slice(..));
-            pass.draw(0..4, 0..pane.plus_count);
         }
-        nodes(pass, pane.pluses_at..pane.instance_count);
     });
 
     let composite = readback(&device, &queue, &composite_tex, SIZE);
