@@ -6,3 +6,7 @@
 # already wraps, so the formatter agrees with the tree instead of fighting it.
 max_width = 100
 use_small_heuristics = "Max"
+
+# Stable, and the tree already satisfies it -- set so that `x: x` in a struct
+# literal is a thing the formatter settles rather than a thing to notice.
+use_field_init_shorthand = true

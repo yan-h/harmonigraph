@@ -89,8 +89,20 @@ is ever wrong, change the config rather than hand-formatting around it — a
 tree currently needs none.
 
 Two things the formatter does NOT do. It does not wrap **comment prose**, so
-that stays a habit: keep it near 100 columns, where the config puts code.
-And it does not touch the `.wgsl` shaders at all.
+that stays a habit: keep it near 100 columns, where the config puts code. And
+it does not touch the `.wgsl` shaders at all.
+
+Don't go looking for a setting for the first one. `wrap_comments` and
+`comment_width` exist and would do it, but they are nightly-only, and a
+nightly-only key in `rustfmt.toml` is DROPPED with a warning rather than
+applied — so on the toolchain `rust-toolchain.toml` pins they do nothing.
+What makes this worth writing down is that they look like they work:
+`--config wrap_comments=true` on the COMMAND LINE bypasses the channel gate
+and reformats 468 hunks, which is not the path `cargo fmt` or `ci.sh` takes.
+`imports_granularity` and `group_imports` — one import per line, grouped
+std/external/crate, which would be worth having — are behind the same gate.
+Buying them means a second pinned toolchain that only rustfmt uses, and
+`cargo fmt` then being the wrong command to type.
 
 The two conventions below are the ones still invisible to the build — nothing
 fails when you break either, and both are easy to break by reflex.
